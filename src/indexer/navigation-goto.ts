@@ -34,7 +34,12 @@ import {
   unwrapNamedType,
   type ReceiverMemberScope,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import { getCallableArity, getCallArgumentCount, type CallableArity } from "../languages/callable-arity.js";
+import {
+  getCallableArity,
+  getCallArgumentCount,
+  memberLookupBinding,
+  type CallableArity,
+} from "../languages/callable-arity.js";
 import { getCompilationUnitPeers } from "./compilation-units.js";
 import { isSwiftCrossFileHiddenSharedOwnerMember } from "./declaration-visibility.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
@@ -1406,7 +1411,12 @@ async function getCallableArityForDef(index: ProjectIndex, def: SymbolDef): Prom
   const container = nearestMemberContainer(nameNode);
   let current: SyntaxNodeLike | null = nameNode;
   while (current && current !== container) {
-    const range = getCallableArity({ languageId: context.sup.id, source: context.source, declaration: current });
+    const range = getCallableArity({
+      languageId: context.sup.id,
+      source: context.source,
+      declaration: current,
+      binding: memberLookupBinding(context.sup.id),
+    });
     if (range) return range;
     current = current.parent;
   }

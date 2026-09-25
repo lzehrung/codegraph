@@ -86,7 +86,8 @@ const CSHARP_ROW: DeclarationVisibilityRow = {
     "event_field_declaration",
   ]),
   modifierNodeTypes: new Set(["modifier"]),
-  hiddenModifierTexts: new Set(["private"]),
+  // `file` (C# 11) restricts a top-level type to its declaring file, so it is never a peer export.
+  hiddenModifierTexts: new Set(["private", "file"]),
   namespaceHiddenModifierTexts: new Set(["internal"]),
   typeContainerTypes: new Set([
     "class_declaration",

@@ -540,6 +540,24 @@ describe("shared callable arity facts (#378 signature rows)", () => {
       [1, 1],
       "function",
     ],
+    // A C# extension method's `this` parameter is the receiver of `value.M()` and an explicit
+    // argument of `Ext.M(value)`; an ordinary static method has no receiver either way.
+    [
+      "Ext.cs",
+      "static class Ext { public static int Target(this string value, int n = 1) { return n; } }",
+      "Target",
+      [0, 1],
+      [1, 2],
+      "instance-method",
+    ],
+    [
+      "Ext.cs",
+      "static class Ext { public static int Target(string value, int n = 1) { return n; } }",
+      "Target",
+      [1, 2],
+      [1, 2],
+      "function",
+    ],
     ["lib.rs", "trait Runner { fn target(&self, value: i32); }\n", "target", [1, 1], [2, 2], "instance-method"],
     ["box.kt", "fun target(value: Int = 1): Int { return value }\n", "target", [0, 1], [0, 1], "function"],
     ["a.go", "package p\nfunc target(a, b string) {}\n", "target", [2, 2], [2, 2], "function"],
@@ -673,6 +691,26 @@ describe("impact call-form binding (#378 consumer behavior)", () => {
       afterSignature:
         "class Box { int target(Box this, int value) { return value; } int caller() { return this.target(1, 2); } }",
       callsiteNeedle: "this.target(1, 2)",
+      expectedStatus: "likely_mismatch",
+    },
+    {
+      label: "counts a C# extension receiver passed through its static class",
+      fileName: "Ext.cs",
+      after:
+        "static class Ext {\n  public static int target(this string value, int n) { return n; }\n  static int caller(string s) { return Ext.target(s, 2); }\n}\n",
+      beforeSignature: "  public static int target(this string value) { return 0; }",
+      afterSignature: "  public static int target(this string value, int n) { return n; }",
+      callsiteNeedle: "Ext.target(s, 2)",
+      expectedStatus: "compatible",
+    },
+    {
+      label: "still flags C# static-class extension calls missing the receiver",
+      fileName: "Ext.cs",
+      after:
+        "static class Ext {\n  public static int target(this string value, int n) { return n; }\n  static int caller(string s) { return Ext.target(2); }\n}\n",
+      beforeSignature: "  public static int target(this string value) { return 0; }",
+      afterSignature: "  public static int target(this string value, int n) { return n; }",
+      callsiteNeedle: "Ext.target(2)",
       expectedStatus: "likely_mismatch",
     },
     {

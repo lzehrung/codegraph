@@ -81,7 +81,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v18: constrained Swift extensions no longer donate members to unproven nominal owners.
 // v19: Swift constraint-token equivalence can restore peer call edges across formatting.
 // v20: C# verbatim namespace/type identifiers can merge shared-owner identities and call edges.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 20;
+// v21: C# `file` types lose cross-file edges; extension receivers change persisted member arity.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 21;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";

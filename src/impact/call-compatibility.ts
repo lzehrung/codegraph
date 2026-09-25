@@ -605,8 +605,9 @@ function ownerTypeNameOf(declaration: SyntaxNodeLike, source: string): string | 
  * Resolve which receiver binding form a callsite uses. Python bare calls reach the plain function
  * and pass the receiver explicitly; Python member calls on a provably class-valued receiver do the
  * same only for instance methods, because class and static methods bind (or declare) no instance
- * receiver. Rust `Type::target(...)` calls are unbound UFCS forms. Everything else supplies the
- * receiver through the call form.
+ * receiver. Rust `Type::target(...)` calls are unbound UFCS forms. A C# extension method called
+ * through its declaring static class (`Ext.M(value)`) passes the `this` receiver explicitly.
+ * Everything else supplies the receiver through the call form.
  */
 function callBindingForm(input: {
   languageId: string;
@@ -622,6 +623,11 @@ function callBindingForm(input: {
   const callee = callTargetNode(callNode);
   if (languageId === "rust") {
     return callee?.type === "scoped_identifier" ? "unbound" : "bound";
+  }
+  if (languageId === "csharp") {
+    const receiver = callee?.type === "member_access_expression" ? callee.childForFieldName("expression") : null;
+    const receiverText = receiver ? sliceText(receiver, source).trim() : "";
+    return ownerTypeName && receiverText === ownerTypeName ? "unbound" : "bound";
   }
   if (languageId !== "python" || !callee) {
     return "bound";

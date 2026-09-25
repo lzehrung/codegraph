@@ -108,8 +108,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 59 equates token-identical Swift constraints with differing trivia.
  * Epoch 60 equates C# verbatim namespace/type identifiers, resolves bare C# calls to partial
  * members in other parts, and reports partial coverage for unproven shared-owner units.
+ * Epoch 61 hides C# `file` types from other files and treats an extension method's `this`
+ * parameter as its receiver.
  */
-export const CORE_ALGORITHM_EPOCH = 60;
+export const CORE_ALGORITHM_EPOCH = 61;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

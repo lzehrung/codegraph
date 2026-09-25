@@ -1573,6 +1573,56 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  it("keeps C# file-local types inside their declaring file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-file-local-"));
+    try {
+      const declaring = [
+        "namespace P;",
+        "file class Target { public static void Run() {} }",
+        "class Local { Target Make() => new Target(); }",
+      ];
+      const outside = ["namespace P;", "class Use { Target Make() => new Target(); void Go() { Target.Run(); } }"];
+      const paths = await writeFixtureFiles(root, {
+        "A.cs": `${declaring.join("\n")}\n`,
+        "B.cs": `${outside.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const sameFile = await goToDefinition(index, {
+        file: paths["A.cs"]!,
+        line: 3,
+        column: columnOf(declaring, 3, "Target"),
+      });
+      expect(sameFile.status === "ok" && normalizePath(sameFile.definition.file)).toBe(paths["A.cs"]);
+      const crossFile = await goToDefinition(index, {
+        file: paths["B.cs"]!,
+        line: 2,
+        column: columnOf(outside, 2, "Target"),
+      });
+      expect(crossFile.status).toBe("not_found");
+
+      const references = await findReferences(index, {
+        file: paths["A.cs"]!,
+        line: 2,
+        column: columnOf(declaring, 2, "Target"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected file-local type references");
+      const files = new Set(references.references.map((ref) => normalizePath(ref.file)));
+      expect(files.has(paths["A.cs"]!)).toBe(true);
+      expect(files.has(paths["B.cs"]!)).toBe(false);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const edgesFromOutside = graph.edges.filter((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        return from && to && normalizePath(from.file) === paths["B.cs"] && normalizePath(to.file) === paths["A.cs"];
+      });
+      expect(edgesFromOutside).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not coalesce partials with different kinds or enclosing owners", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-kind-owner-"));
     try {

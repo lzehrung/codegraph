@@ -2496,6 +2496,29 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(callsiteTexts(graph, instance, local, files)).toBeNull();
   });
 
+  it("counts a C# extension receiver as an argument of static-class and bare calls", async () => {
+    const files = {
+      "Ext.cs": [
+        "class Box {}",
+        "static class Ext {",
+        "  public static int M(this Box value, int n = 1) { return n; }",
+        "  static int Inside(Box b) { return M(b, 2); }",
+        "  static int TooMany(Box b) { return M(b, 2, 3); }",
+        "}",
+        "class Use {",
+        "  int Qualified(Box b) { return Ext.M(b, 2); }",
+        "  int Missing() { return Ext.M(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cs-extension-", files);
+    const target = nodeIn(graph, "Ext.cs", "M");
+    expect(callsiteTexts(graph, target, nodeIn(graph, "Ext.cs", "Inside"), files)).toEqual(["M"]);
+    expect(callsiteTexts(graph, target, nodeIn(graph, "Ext.cs", "Qualified"), files)).toEqual(["M"]);
+    expect(callsiteTexts(graph, target, nodeIn(graph, "Ext.cs", "TooMany"), files)).toBeNull();
+    expect(callsiteTexts(graph, target, nodeIn(graph, "Ext.cs", "Missing"), files)).toBeNull();
+  });
+
   it("resolves a C# this receiver to a member instead of a same-named local function", async () => {
     const files: Record<string, string> = {
       "LocalMember.cs": [

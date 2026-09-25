@@ -18,7 +18,7 @@ import {
   selectCsharpPartialRepresentative,
 } from "../../indexer/shared-owner-identity.js";
 import type { LanguageSupport } from "../../languages.js";
-import { getCallableArity, getCallArgumentCount } from "../../languages/callable-arity.js";
+import { getCallableArity, getCallArgumentCount, memberLookupBinding } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import { getMemberAccessParts } from "../../util/member-access.js";
@@ -144,8 +144,7 @@ function mergeCppCallableShapes(...shapes: Array<CppCallableShape | null | undef
  * Accepted explicit-argument range of a member declaration from the shared callable
  * facts (default parameters, varargs, explicit receivers), or undefined when the
  * declaration shape is unknown or the language does not select members by call arity.
- * Bound calls never pass the receiver as an argument, so the shared bound default is
- * the graph's call form.
+ * The binding follows the call form member lookup resolves (see `memberLookupBinding`).
  */
 function acceptedMemberArityRange(
   context: EdgePassContext,
@@ -153,7 +152,12 @@ function acceptedMemberArityRange(
   source: string,
 ): MemberArityRange | undefined {
   if (!supportsReceiverMemberOverloads(context.sup.id)) return undefined;
-  const arity = getCallableArity({ languageId: context.sup.id, source, declaration: declarationNode });
+  const arity = getCallableArity({
+    languageId: context.sup.id,
+    source,
+    declaration: declarationNode,
+    binding: memberLookupBinding(context.sup.id),
+  });
   return arity ? { min: arity.minArgs, max: arity.maxArgs } : undefined;
 }
 

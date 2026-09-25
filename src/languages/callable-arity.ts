@@ -39,6 +39,16 @@ export type CallableArity = { minArgs: number; maxArgs: number | null };
 export type CallableBinding = "bound" | "unbound";
 
 /**
+ * Call form that receiver-member lookup (detailed graph and receiver navigation) resolves. Those
+ * consumers reach a C# extension method only through its declaring static class (`Ext.M(value)`)
+ * or a bare call inside it, never through the extended value (`value.M()`), so its `this`
+ * receiver is an explicit argument there. Every other language's member lookup binds the receiver.
+ */
+export function memberLookupBinding(languageId: string): CallableBinding {
+  return languageId === "csharp" ? "unbound" : "bound";
+}
+
+/**
  * What kind of callable a declaration is, for call-form binding decisions. `"instance-method"` and
  * `"class-method"` declarations have a receiver; `"static-method"` and `"function"` declarations do
  * not. Python decorators decide between the three method kinds.
@@ -359,8 +369,11 @@ export const CALLABLE_ARITY_LANGUAGE_PROFILES: Record<CallableArityLanguageId, C
   c: cFamilyProfile,
   cpp: cFamilyProfile,
   // `params` marks the rest parameter; the pinned grammar flattens `params` forms into list children.
+  // An extension method's leading `this T value` parameter (a `modifier` child spelled `this`) is its
+  // receiver: `value.M()` supplies it, while `Ext.M(value)` passes it explicitly.
   csharp: {
     ...GENERIC_PROFILE,
+    receiver: { ...GENERIC_PROFILE.receiver, firstParameterTypedPrefixes: ["this "] },
     parameterNodeTypes: ["parameter"],
     mergeParameterRuns: true,
     restWordPatterns: [/\bparams\b/],
