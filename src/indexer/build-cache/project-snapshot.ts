@@ -83,7 +83,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v20: C# verbatim namespace/type identifiers can merge shared-owner identities and call edges.
 // v21: C# `file` types lose cross-file edges; extension receivers change persisted member arity.
 // v22: C# verbatim namespace aliases (`@X` vs `X`) can add alias-qualified type and constructor edges.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 22;
+// v23: C# `file partial` owners in different files no longer share member and call edges.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 23;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";

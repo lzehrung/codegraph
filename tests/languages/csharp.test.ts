@@ -1676,6 +1676,58 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  it("keeps same-named C# file partial owners in different files separate", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-file-partial-"));
+    try {
+      const first = [
+        "namespace P;",
+        "file partial class Box { public void Helper() {} }",
+        "file partial class Box { void Same() { this.Helper(); Helper(); } }",
+      ];
+      const second = ["namespace P;", "file partial class Box { void Other() { this.Helper(); Helper(); } }"];
+      const paths = await writeFixtureFiles(root, {
+        "A.cs": `${first.join("\n")}\n`,
+        "B.cs": `${second.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const column of [first[2]!.indexOf("Helper") + 1, first[2]!.lastIndexOf("Helper") + 1]) {
+        const sameFile = await goToDefinition(index, { file: paths["A.cs"]!, line: 3, column });
+        expect(sameFile.status === "ok" && normalizePath(sameFile.definition.file)).toBe(paths["A.cs"]);
+      }
+      for (const column of [second[1]!.indexOf("Helper") + 1, second[1]!.lastIndexOf("Helper") + 1]) {
+        expect((await goToDefinition(index, { file: paths["B.cs"]!, line: 2, column })).status).toBe("not_found");
+      }
+
+      const references = await findReferences(index, {
+        file: paths["A.cs"]!,
+        line: 2,
+        column: first[1]!.indexOf("Helper") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected file partial member references");
+      const files = new Set(references.references.map((ref) => normalizePath(ref.file)));
+      expect(files.has(paths["B.cs"]!)).toBe(false);
+      expect(references.referenceCoverage?.state).toBe("complete");
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const crossFile = graph.edges.filter(
+        (edge) =>
+          normalizePath(graph.nodes.get(edge.from)?.file ?? "") === paths["B.cs"] &&
+          normalizePath(graph.nodes.get(edge.to)?.file ?? "") === paths["A.cs"],
+      );
+      expect(crossFile).toEqual([]);
+      const sameFileCalls = graph.edges.filter(
+        (edge) =>
+          edge.label === "calls" &&
+          graph.nodes.get(edge.from)?.name === "Same" &&
+          graph.nodes.get(edge.to)?.name === "Helper",
+      );
+      expect(sameFileCalls.length).toBeGreaterThan(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not coalesce partials with different kinds or enclosing owners", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-kind-owner-"));
     try {

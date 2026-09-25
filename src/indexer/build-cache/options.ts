@@ -111,8 +111,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 61 hides C# `file` types from other files and treats an extension method's `this`
  * parameter as its receiver.
  * Epoch 62 matches C# namespace aliases and alias-qualified members by identifier equality.
+ * Epoch 63 keeps C# `file partial` owners in different files as distinct shared owners.
  */
-export const CORE_ALGORITHM_EPOCH = 62;
+export const CORE_ALGORITHM_EPOCH = 63;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

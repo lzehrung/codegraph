@@ -14,6 +14,8 @@ import type { ProjectIndex, SymbolDef } from "./types.js";
  * Owner identity shared by C# `partial` type parts and Swift types/extensions.
  * C# includes declaration kind, own generic arity, and enclosing generic arities.
  * A Swift extension with a where clause cannot donate members to an unproven receiver.
+ * A C# 11 `file` type is scoped to its declaring file, so `fileLocalTo` holds that file and
+ * two same-path `file partial` owners in different files stay distinct types.
  */
 export type SharedOwnerIdentity = {
   languageId: string;
@@ -21,6 +23,7 @@ export type SharedOwnerIdentity = {
   declarationKind?: string;
   genericArity?: number;
   swiftConstraint?: string;
+  fileLocalTo?: string;
 };
 
 export const CSHARP_PARTIAL_CONTAINER_TYPES = new Set([
@@ -30,24 +33,38 @@ export const CSHARP_PARTIAL_CONTAINER_TYPES = new Set([
   "interface_declaration",
 ]);
 
-function csharpModifierIsPartial(node: SyntaxNodeLike, source: string): boolean {
+function csharpModifierHas(node: SyntaxNodeLike, source: string, keyword: string): boolean {
   const text = sliceText(node, source).trim();
-  return text === "partial" || text.split(/\s+/).includes("partial");
+  return text === keyword || text.split(/\s+/).includes(keyword);
 }
 
-function isCSharpPartialContainer(container: SyntaxNodeLike, source: string): boolean {
-  if (!CSHARP_PARTIAL_CONTAINER_TYPES.has(container.type)) return false;
+/** True when the declaration's own modifier list (not its body or bases) contains `keyword`. */
+function csharpContainerHasModifier(container: SyntaxNodeLike, source: string, keyword: string): boolean {
   const body = container.childForFieldName("body");
   for (const child of container.namedChildren ?? []) {
     if (body && child.id === body.id) continue;
     if (child.type === "declaration_list" || child.type === "class_body" || child.type === "base_list") {
       continue;
     }
-    if (child.type === "modifier" && csharpModifierIsPartial(child, source)) return true;
+    if (child.type === "modifier" && csharpModifierHas(child, source, keyword)) return true;
     if (child.type === "modifiers") {
       for (const nested of child.namedChildren ?? []) {
-        if (nested.type === "modifier" && csharpModifierIsPartial(nested, source)) return true;
+        if (nested.type === "modifier" && csharpModifierHas(nested, source, keyword)) return true;
       }
+    }
+  }
+  return false;
+}
+
+function isCSharpPartialContainer(container: SyntaxNodeLike, source: string): boolean {
+  return CSHARP_PARTIAL_CONTAINER_TYPES.has(container.type) && csharpContainerHasModifier(container, source, "partial");
+}
+
+/** A `file` modifier on the type or any enclosing type makes the owner file-local. */
+function csharpOwnerIsFileLocal(container: SyntaxNodeLike, source: string): boolean {
+  for (let current: SyntaxNodeLike | null = container; current; current = current.parent) {
+    if (CSHARP_PARTIAL_CONTAINER_TYPES.has(current.type) && csharpContainerHasModifier(current, source, "file")) {
+      return true;
     }
   }
   return false;
@@ -195,10 +212,15 @@ function getSwiftFullPath(container: SyntaxNodeLike, source: string): string | n
   return [...outer, ...nameParts].join(".");
 }
 
+/**
+ * `file` is the declaring file path. It is required to scope C# `file` owners and must be the
+ * same spelling for every part of one file (callers pass the module or peer file).
+ */
 export function getSharedOwnerIdentity(
   container: SyntaxNodeLike,
   source: string,
   languageId: string,
+  file: string,
 ): SharedOwnerIdentity | null {
   if (languageId === "csharp") {
     if (!isCSharpPartialContainer(container, source)) return null;
@@ -209,6 +231,7 @@ export function getSharedOwnerIdentity(
       fullPath,
       declarationKind: container.type,
       genericArity: csharpGenericArity(container),
+      ...(csharpOwnerIsFileLocal(container, source) ? { fileLocalTo: fileIdentityKey(file) } : {}),
     };
   }
   if (languageId === "swift") {
@@ -230,12 +253,13 @@ export function sharedOwnerCanUseMembers(left: SharedOwnerIdentity, right: Share
     left.fullPath === right.fullPath &&
     (left.declarationKind ?? "") === (right.declarationKind ?? "") &&
     (left.genericArity ?? 0) === (right.genericArity ?? 0) &&
+    (left.fileLocalTo ?? "") === (right.fileLocalTo ?? "") &&
     (right.swiftConstraint === undefined || left.swiftConstraint === right.swiftConstraint)
   );
 }
 
 function sharedOwnerIdentityKey(identity: SharedOwnerIdentity): string {
-  return `${identity.languageId}\0${identity.fullPath}\0${identity.declarationKind ?? ""}\0${identity.genericArity ?? 0}`;
+  return `${identity.languageId}\0${identity.fullPath}\0${identity.declarationKind ?? ""}\0${identity.genericArity ?? 0}\0${identity.fileLocalTo ?? ""}`;
 }
 
 function sourceForIdentity(index: ProjectIndex, file: string, fileKey: string): string | null {
@@ -328,7 +352,7 @@ function csharpPartialExportIdentity(index: ProjectIndex, def: SymbolDef): Share
     return null;
   }
   const container = csharpContainerAtRange(context.tree, def.range);
-  const identity = container ? getSharedOwnerIdentity(container, context.source, "csharp") : null;
+  const identity = container ? getSharedOwnerIdentity(container, context.source, "csharp", def.file) : null;
   cache.set(cacheKey, identity);
   return identity;
 }

@@ -121,9 +121,12 @@ export async function resolveSharedOwnerContainers(params: {
 }): Promise<SharedOwnerContainer[]> {
   const { index, ownerFile, ownerContainer, ownerSource, languageId } = params;
   if (languageId !== "csharp" && languageId !== "swift") return [];
-  const ownerIdentity = getSharedOwnerIdentity(ownerContainer, ownerSource, languageId);
+  const ownerIdentity = getSharedOwnerIdentity(ownerContainer, ownerSource, languageId, ownerFile);
   if (!ownerIdentity) return [];
-  const peers = getCompilationUnitPeers(index, ownerFile);
+  // A C# `file` owner has only same-file parts, so no other file is a candidate peer.
+  const peers = ownerIdentity.fileLocalTo
+    ? { files: new Set([ownerFile]), complete: true }
+    : getCompilationUnitPeers(index, ownerFile);
   const out: SharedOwnerContainer[] = [];
   const seen = new Set<string>();
   const ownerIsExtension = languageId === "swift" ? isSwiftExtensionContainer(ownerContainer, ownerSource) : false;
@@ -154,7 +157,7 @@ export async function resolveSharedOwnerContainers(params: {
       ) {
         continue;
       }
-      const identity = getSharedOwnerIdentity(container, peerContext.source, languageId);
+      const identity = getSharedOwnerIdentity(container, peerContext.source, languageId, peer.file);
       if (!identity || !sharedOwnerCanUseMembers(ownerIdentity, identity)) continue;
       if (languageId === "swift") {
         const peerIsExtension = isSwiftExtensionContainer(container, peerContext.source);
@@ -191,7 +194,10 @@ export async function sharedOwnerMemberUnitComplete(index: ProjectIndex, def: Sy
   if (languageId !== "csharp" && languageId !== "swift") return null;
   const nameNode = nameNodeForDef(context, def);
   const container = nameNode ? nearestMemberContainer(nameNode) : null;
-  if (!container || !getSharedOwnerIdentity(container, context.source, languageId)) return null;
+  const identity = container ? getSharedOwnerIdentity(container, context.source, languageId, def.file) : null;
+  if (!identity) return null;
+  // File-local owners have no parts in other files, so the reference set is complete.
+  if (identity.fileLocalTo) return true;
   return getCompilationUnitPeers(index, def.file).complete;
 }
 
