@@ -1538,6 +1538,59 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  it("matches verbatim namespace-alias spellings in navigation, references, and graph edges", async () => {
+    const cases = [
+      { name: "verbatim declaration", declaration: "using @X = P;", use: "X" },
+      { name: "verbatim use", declaration: "using X = P;", use: "@X" },
+    ];
+    for (const testCase of cases) {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-alias-"));
+      try {
+        const useLines = [
+          testCase.declaration,
+          `class Use { ${testCase.use}::Target Make() => new ${testCase.use}::Target(); }`,
+        ];
+        const decoyLines = ["using Y = P;", "class Decoy { X::Target Make() => new X::Target(); }"];
+        const paths = await writeFixtureFiles(root, {
+          "Target.cs": "namespace P;\npublic class Target {}\n",
+          "Use.cs": `${useLines.join("\n")}\n`,
+          "Decoy.cs": `${decoyLines.join("\n")}\n`,
+        });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const useColumn = useLines[1]!.lastIndexOf("Target") + 1;
+        const goto = await goToDefinition(index, { file: paths["Use.cs"]!, line: 2, column: useColumn });
+        expect(goto.status === "ok" && normalizePath(goto.definition.file), testCase.name).toBe(paths["Target.cs"]);
+        const decoy = await goToDefinition(index, {
+          file: paths["Decoy.cs"]!,
+          line: 2,
+          column: decoyLines[1]!.lastIndexOf("Target") + 1,
+        });
+        expect(decoy.status, testCase.name).toBe("not_found");
+
+        const references = await findReferences(index, { file: paths["Target.cs"]!, line: 2, column: 14 });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected alias-qualified references");
+        const sites = references.references.map((ref) => `${path.basename(ref.file)}:${ref.range.start.column}`);
+        expect(sites, testCase.name).toContain(`Use.cs:${useColumn}`);
+        expect(
+          sites.some((site) => site.startsWith("Decoy.cs:")),
+          testCase.name,
+        ).toBe(false);
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const instantiates = graph.edges.some(
+          (edge) =>
+            edge.label === "instantiates" &&
+            normalizePath(graph.nodes.get(edge.from)?.file ?? "") === paths["Use.cs"] &&
+            normalizePath(graph.nodes.get(edge.to)?.file ?? "") === paths["Target.cs"],
+        );
+        expect(instantiates, testCase.name).toBe(true);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("treats verbatim namespace identifiers as the same namespace", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-namespace-"));
     try {

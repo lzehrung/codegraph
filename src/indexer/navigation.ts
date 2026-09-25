@@ -1559,19 +1559,23 @@ export async function collectNamespaceMemberRefs(
   const tree = parsed.tree;
   const ranges: Range[] = [];
 
+  // Identifier equality follows the language rule, so C# `@X::@Target` matches alias `X` member `Target`.
+  const normalize = sup.normalizeIdentifier;
+  const normalizedNs = normalize(ns);
+  const normalizedMember = normalize(member);
   const walk = (node: SyntaxNodeLike): void => {
     if (isMemberAccessNode(sup, node)) {
       const { object: obj, property: prop } = getMemberAccessParts(sup, node);
       if (obj && prop && isMemberObjectIdentifier(obj.type) && isMemberReferencePropertyIdentifier(sup, prop.type)) {
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
-        if (objectName === ns && propertyName === member) {
+        if (normalize(objectName) === normalizedNs && normalize(propertyName) === normalizedMember) {
           const inAliasScope =
             sup.id !== "csharp" ||
             !namespaceImport ||
             !imports ||
             !namespaceImport.localRange ||
-            innermostNamespaceImport(imports, objectName, obj) === namespaceImport;
+            innermostNamespaceImport(imports, objectName, obj, normalize) === namespaceImport;
           if (inAliasScope) ranges.push(toRange(prop));
         }
       }

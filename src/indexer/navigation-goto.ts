@@ -325,19 +325,25 @@ export function csharpAliasQualifiedLookupName(
   if (!base || !isReceiverNameNode(CSHARP_SUPPORT, base.type) || !names.length) return raw;
   const alias = sliceText(base, source);
   if (alias === "global") return raw;
-  const imported = innermostNamespaceImport(imports, alias, base);
+  const imported = innermostNamespaceImport(imports, alias, base, CSHARP_SUPPORT.normalizeIdentifier);
   if (!imported) return raw;
   return `${imported.from}.${[...names].reverse().join(".")}`;
 }
 
+/**
+ * Innermost in-scope namespace import bound to `alias`. `normalize` applies the language's
+ * identifier equality (C# `@X` and `X` are one alias); the default compares exact spelling.
+ */
 export function innermostNamespaceImport(
   imports: readonly ImportBinding[],
   alias: string,
   useNode: SyntaxNodeLike,
+  normalize: (name: string) => string = (name) => name,
 ): ImportBinding | undefined {
+  const normalizedAlias = normalize(alias);
   const matches = imports.filter(
     (candidate): candidate is Extract<ImportBinding, { kind: "namespace" }> =>
-      candidate.kind === "namespace" && candidate.localNS === alias,
+      candidate.kind === "namespace" && normalize(candidate.localNS) === normalizedAlias,
   );
   if (!matches.length) return undefined;
   let root: SyntaxNodeLike = useNode;
@@ -427,10 +433,11 @@ export async function resolveMemberAccessDefinition(params: {
         }
       } else if (sup.id === "csharp") {
         if (aliasQualifier) {
-          if (exprName !== "global") imp = innermostNamespaceImport(mod.imports, exprName, expr);
+          if (exprName !== "global")
+            imp = innermostNamespaceImport(mod.imports, exprName, expr, sup.normalizeIdentifier);
           if (!imp) return null;
         } else {
-          imp = innermostNamespaceImport(mod.imports, exprName, expr);
+          imp = innermostNamespaceImport(mod.imports, exprName, expr, sup.normalizeIdentifier);
           if (!imp) {
             imp = mod.imports.find(
               (candidate) =>

@@ -352,7 +352,7 @@ export async function buildSymbolGraphDetailed(
                   const binding = findClosestScopeBinding(scopeIndex, alias, useNode, sup);
                   if (binding && binding.kind !== "namespace") return undefined;
                 }
-                const imported = innermostNamespaceImport(moduleEntry.imports, alias, useNode);
+                const imported = innermostNamespaceImport(moduleEntry.imports, alias, useNode, sup.normalizeIdentifier);
                 return typeof imported?.resolved === "string" ? imported.resolved : undefined;
               },
             }
