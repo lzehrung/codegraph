@@ -85,7 +85,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v22: C# verbatim namespace aliases (`@X` vs `X`) can add alias-qualified type and constructor edges.
 // v23: C# `file partial` owners in different files no longer share member and call edges.
 // v24: C# top-level types beside block namespaces become global-namespace peers with new edges.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 24;
+// v25: identical C# aliases in separate namespace blocks each resolve their own scoped uses.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 25;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";

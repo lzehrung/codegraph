@@ -82,7 +82,10 @@ export type ImportBindingRow = {
   maskTrivia?: StatementTriviaMask;
   /** Collapse whitespace around `.` after masking (C#, Java, Kotlin). */
   normalizeDots?: true;
-  /** Include the statement start offset in the override de-dupe key (Rust). */
+  /**
+   * Include the statement start offset in the override de-dupe key (C#, Rust). Required when the
+   * same statement text can appear in several scopes and each must keep its own range.
+   */
   statementKeyUsesOffset?: true;
   /** Named-range attribution treats unaliased `local === imported` as two tokens (C#). */
   alwaysAliased?: true;
@@ -620,6 +623,8 @@ export const IMPORT_BINDING_ROWS: Record<string, ImportBindingRow> = {
     maskTrivia: true,
     normalizeDots: true,
     alwaysAliased: true,
+    // `using X = P;` in two namespace blocks is two scoped aliases, each with its own range.
+    statementKeyUsesOffset: true,
   },
   go: {
     appendImplicit: appendGoImplicitBinding,

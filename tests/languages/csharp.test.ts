@@ -1617,6 +1617,66 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  it("keeps identical namespace aliases declared in separate namespace blocks", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-scoped-duplicate-alias-"));
+    try {
+      const useLines = [
+        "namespace A {",
+        "  using X = P;",
+        "  class First { X::Target Make() => new X::Target(); }",
+        "}",
+        "namespace B {",
+        "  using X = P;",
+        "  class Second { X::Target Make() => new X::Target(); }",
+        "}",
+        "namespace C {",
+        "  class Third { X::Target Make() => new X::Target(); }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": "namespace P;\npublic class Target {}\n",
+        "Use.cs": `${useLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const gotoLine = (line: number) =>
+        goToDefinition(index, { file: paths["Use.cs"]!, line, column: useLines[line - 1]!.lastIndexOf("Target") + 1 });
+      for (const line of [3, 7]) {
+        const result = await gotoLine(line);
+        expect(result.status === "ok" && normalizePath(result.definition.file), `line ${line}`).toBe(
+          paths["Target.cs"],
+        );
+      }
+      // Namespace C declares no alias, so the scoped aliases in A and B do not reach it.
+      expect((await gotoLine(10)).status).toBe("not_found");
+
+      const references = await findReferences(index, { file: paths["Target.cs"]!, line: 2, column: 14 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected scoped alias references");
+      const lines = new Set(
+        references.references
+          .filter((ref) => normalizePath(ref.file) === paths["Use.cs"])
+          .map((ref) => ref.range.start.line),
+      );
+      expect([...lines].sort((left, right) => left - right)).toEqual([3, 7]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = new Set(
+        graph.edges
+          .filter(
+            (edge) =>
+              edge.label === "instantiates" &&
+              graph.nodes.get(edge.to)?.name === "Target" &&
+              normalizePath(graph.nodes.get(edge.from)?.file ?? "") === paths["Use.cs"],
+          )
+          .map((edge) => edge.from),
+      );
+      // One `Make` in First and one in Second; Third has no alias in scope.
+      expect(callers.size).toBe(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("matches verbatim namespace-alias spellings in navigation, references, and graph edges", async () => {
     const cases = [
       { name: "verbatim declaration", declaration: "using @X = P;", use: "X" },

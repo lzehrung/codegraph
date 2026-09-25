@@ -114,8 +114,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 63 keeps C# `file partial` owners in different files as distinct shared owners.
  * Epoch 64 adds a C# global-namespace region for top-level types beside block namespaces and
  * uses qualified peers for C# shared-owner member coverage.
+ * Epoch 65 keeps one C# using-directive binding per statement offset, so identical aliases in
+ * separate namespace blocks each keep their own scope.
  */
-export const CORE_ALGORITHM_EPOCH = 64;
+export const CORE_ALGORITHM_EPOCH = 65;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
