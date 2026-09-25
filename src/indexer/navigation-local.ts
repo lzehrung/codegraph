@@ -16,18 +16,57 @@ import {
   type SymbolDef,
 } from "./types.js";
 
-/** Preserve an explicit C# namespace instead of resolving its final token as a bare name. */
-export function csharpLookupName(node: SyntaxNodeLike, source: string, fallback: string): string {
+/** Follow a C# name token through generic arguments and qualified-name segments. */
+export function csharpQualifiedNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
   let qualified = node;
-  while (
-    qualified.parent &&
-    (qualified.parent.type === "qualified_name" || qualified.parent.type === "alias_qualified_name") &&
-    qualified.parent.endIndex === qualified.endIndex
-  ) {
-    qualified = qualified.parent;
+  while (qualified.parent) {
+    const parent = qualified.parent;
+    if (parent.type === "generic_name") {
+      const name = parent.childForFieldName("name") ?? parent.namedChildren[0];
+      if (name && name.startIndex === qualified.startIndex && name.endIndex === qualified.endIndex) {
+        qualified = parent;
+        continue;
+      }
+    }
+    if (
+      (parent.type === "qualified_name" || parent.type === "alias_qualified_name") &&
+      parent.endIndex === qualified.endIndex
+    ) {
+      qualified = parent;
+      continue;
+    }
+    break;
   }
-  if (qualified.type !== "qualified_name" && qualified.type !== "alias_qualified_name") return fallback;
-  return source.slice(qualified.startIndex, qualified.endIndex).replace(/\s+/gu, "");
+  return qualified.type === "qualified_name" || qualified.type === "alias_qualified_name" ? qualified : null;
+}
+
+/** Preserve the full C# namespace or alias path, excluding generic type arguments. */
+export function csharpLookupName(node: SyntaxNodeLike, source: string, fallback: string): string {
+  const qualified = csharpQualifiedNameNode(node);
+  if (!qualified) return fallback;
+  const text = source.slice(qualified.startIndex, qualified.endIndex);
+  if (!text.includes("<")) return text.replace(/\s+/gu, "");
+  const argumentsNodes: SyntaxNodeLike[] = [];
+  const collect = (current: SyntaxNodeLike): void => {
+    if (current.type === "generic_name") {
+      const argumentsNode = (current.namedChildren ?? []).find((child) => child.type === "type_argument_list");
+      if (argumentsNode) argumentsNodes.push(argumentsNode);
+      return;
+    }
+    for (const child of current.namedChildren ?? []) {
+      if (child.type === "generic_name" || child.type === "qualified_name" || child.type === "alias_qualified_name") {
+        collect(child);
+      }
+    }
+  };
+  collect(qualified);
+  let result = "";
+  let from = qualified.startIndex;
+  for (const argumentsNode of argumentsNodes) {
+    result += source.slice(from, argumentsNode.startIndex);
+    from = argumentsNode.endIndex;
+  }
+  return (result + source.slice(from, qualified.endIndex)).replace(/\s+/gu, "");
 }
 
 export function findDeclarationNameNode(

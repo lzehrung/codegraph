@@ -3334,8 +3334,16 @@ describe("Find References", () => {
     it("includes namespace alias-qualified uses and excludes missing aliases and same-named decoys", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-qualified-refs-"));
       try {
-        const declared = ["namespace Project.Model {", "  public class Target {}", "}", ""].join("\n");
-        const decoy = ["namespace Other {", "  public class Target {}", "}", ""].join("\n");
+        const declared = [
+          "namespace Project.Model {",
+          "  public class Target {}",
+          "  public class Generic<T> {}",
+          "}",
+          "",
+        ].join("\n");
+        const decoy = ["namespace Other {", "  public class Target {}", "  public class Generic<T> {}", "}", ""].join(
+          "\n",
+        );
         const useLines = [
           "using X = Project.Model;",
           "class Use {",
@@ -3351,6 +3359,12 @@ describe("Find References", () => {
           "namespace B {",
           "  using X = Other;",
           "  class BUse { X::Target Make() => new X::Target(); }",
+          "}",
+          "class GenericUse {",
+          "  Project.Model.Generic<int> Dot() => new Project.Model.Generic<int>();",
+          "  global::Project.Model.Generic<int> Root() => new global::Project.Model.Generic<int>();",
+          "  X::Generic<int> Alias() => new X::Generic<int>();",
+          "  Missing::Generic<int> Missing() => new Missing::Generic<int>();",
           "}",
           "",
         ];
@@ -3378,6 +3392,15 @@ describe("Find References", () => {
           { file: decoyFile, line: 2, column: tokenColumn("  public class Target {}", "Target") },
           { file: useFile, line: 14, column: tokenColumn(useLines[13]!, "Target", 0) },
           { file: useFile, line: 14, column: tokenColumn(useLines[13]!, "Target", 1) },
+        ]);
+        await testFindReferences(index, declaredFile, 3, tokenColumn("  public class Generic<T> {}", "Generic"), [
+          { file: declaredFile, line: 3, column: tokenColumn("  public class Generic<T> {}", "Generic") },
+          { file: useFile, line: 17, column: tokenColumn(useLines[16]!, "Generic", 0) },
+          { file: useFile, line: 17, column: tokenColumn(useLines[16]!, "Generic", 1) },
+          { file: useFile, line: 18, column: tokenColumn(useLines[17]!, "Generic", 0) },
+          { file: useFile, line: 18, column: tokenColumn(useLines[17]!, "Generic", 1) },
+          { file: useFile, line: 19, column: tokenColumn(useLines[18]!, "Generic", 0) },
+          { file: useFile, line: 19, column: tokenColumn(useLines[18]!, "Generic", 1) },
         ]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });

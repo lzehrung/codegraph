@@ -37,7 +37,7 @@ import { getCallableArity, getCallArgumentCount, type CallableArity } from "../l
 import { getCompilationUnitPeers } from "./compilation-units.js";
 import { isSwiftCrossFileHiddenSharedOwnerMember } from "./declaration-visibility.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
-import { csharpLookupName } from "./navigation-local.js";
+import { csharpLookupName, csharpQualifiedNameNode } from "./navigation-local.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
@@ -275,29 +275,8 @@ export function csharpAliasQualifiedLookupName(
 ): string {
   const raw = csharpLookupName(node, source, fallback);
   if (raw.startsWith("global::")) return raw;
-  let chainNode = node;
-  while (chainNode.parent) {
-    const parent = chainNode.parent;
-    if (parent.type === "generic_name") {
-      const genericName = parent.childForFieldName("name") ?? parent.namedChildren[0];
-      if (genericName && (genericName.id === chainNode.id || genericName.startIndex === chainNode.startIndex)) {
-        chainNode = parent;
-        continue;
-      }
-      break;
-    }
-    if (
-      (parent.type === "qualified_name" || parent.type === "alias_qualified_name") &&
-      parent.endIndex === chainNode.endIndex
-    ) {
-      chainNode = parent;
-      continue;
-    }
-    break;
-  }
-  if (chainNode.type !== "qualified_name" && chainNode.type !== "alias_qualified_name") return raw;
-  const sourceForm = source.slice(chainNode.startIndex, chainNode.endIndex).replace(/\s+/gu, "");
-  if (sourceForm.startsWith("global::") || !sourceForm.includes("::")) return raw;
+  const chainNode = csharpQualifiedNameNode(node);
+  if (!chainNode || !raw.includes("::")) return raw;
   const names: string[] = [];
   let current: SyntaxNodeLike | null = chainNode;
   let base: SyntaxNodeLike | null = null;

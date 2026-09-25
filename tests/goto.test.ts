@@ -2586,12 +2586,14 @@ describe("Go to Definition", () => {
           "namespace Project.Model {",
           "  public class Target {}",
           "  public class Outer { public class Inner {} }",
+          "  public class Generic<T> {}",
           "}",
           "",
         ].join("\n");
         const decoy = [
           "namespace Other {",
           "  public class Target {}",
+          "  public class Generic<T> {}",
           "  public class X { public class Target {} }",
           "}",
           "",
@@ -2612,6 +2614,12 @@ describe("Go to Definition", () => {
           "namespace B {",
           "  using X = Other;",
           "  class BUse { X::Target Make() => new X::Target(); }",
+          "}",
+          "class GenericUse {",
+          "  Project.Model.Generic<int> Dot() => new Project.Model.Generic<int>();",
+          "  global::Project.Model.Generic<int> Root() => new global::Project.Model.Generic<int>();",
+          "  X::Generic<int> Alias() => new X::Generic<int>();",
+          "  Missing::Generic<int> Missing() => new Missing::Generic<int>();",
           "}",
           "",
         ];
@@ -2644,15 +2652,22 @@ describe("Go to Definition", () => {
         await testGoToDefinition(index, useFile, 7, columnOn(7, "Target", 0), undefined, undefined, "not_found");
         await testGoToDefinition(index, useFile, 11, columnOn(11, "Target", 0), declaredFile, 2);
         await testGoToDefinition(index, useFile, 15, columnOn(15, "Target", 0), decoyFile, 2);
+        await testGoToDefinition(index, useFile, 18, columnOn(18, "Generic", 0), declaredFile, 4);
+        await testGoToDefinition(index, useFile, 18, columnOn(18, "Generic", 1), declaredFile, 4);
+        await testGoToDefinition(index, useFile, 19, columnOn(19, "Generic", 0), declaredFile, 4);
+        await testGoToDefinition(index, useFile, 19, columnOn(19, "Generic", 1), declaredFile, 4);
+        await testGoToDefinition(index, useFile, 20, columnOn(20, "Generic", 0), declaredFile, 4);
+        await testGoToDefinition(index, useFile, 20, columnOn(20, "Generic", 1), declaredFile, 4);
+        await testGoToDefinition(index, useFile, 21, columnOn(21, "Generic", 1), undefined, undefined, "not_found");
 
         const graph = await buildSymbolGraphDetailed(index);
-        const constructedFrom = (targetFile: string): string[] =>
+        const constructedFrom = (targetFile: string, targetName = "Target"): string[] =>
           graph.edges
             .filter((edge) => {
               const node = graph.nodes.get(edge.to);
               return (
                 edge.label === "instantiates" &&
-                node?.name === "Target" &&
+                node?.name === targetName &&
                 fileIdentityKey(node.file) === fileIdentityKey(targetFile)
               );
             })
@@ -2661,6 +2676,8 @@ describe("Go to Definition", () => {
             .sort();
         expect(constructedFrom(declaredFile)).toEqual(["AliasMake", "DotMake", "Make", "RootMake"]);
         expect(constructedFrom(decoyFile)).toEqual(["Make"]);
+        expect(constructedFrom(declaredFile, "Generic")).toEqual(["Alias", "Dot", "Root"]);
+        expect(constructedFrom(decoyFile, "Generic")).toEqual([]);
         expect(
           graph.edges.some(
             (edge) => edge.label === "instantiates" && graph.nodes.get(edge.from)?.name === "MissingMake",
