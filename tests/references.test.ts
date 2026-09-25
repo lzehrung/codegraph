@@ -3406,6 +3406,55 @@ describe("Find References", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("keeps comment-trivia using alias references scoped and excludes leaks, decoys, and unknown aliases", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-trivia-refs-"));
+      try {
+        const declared = ["namespace Project.Model {", "  public class Target {}", "}", ""].join("\n");
+        const decoy = ["namespace Other {", "  public class Target {}", "}", ""].join("\n");
+        // A comment carrying `;` before the `=` must not truncate the using statement at the
+        // comment: the alias range has to survive so each `X` stays inside its own namespace.
+        const useLines = [
+          "namespace A {",
+          "  using X /* ; */ = Project.Model;",
+          "  using Y /* ; */ = Project.Model;",
+          "  class AUse { X::Target Make() => new X::Target(); }",
+          "}",
+          "namespace B {",
+          "  using X /* ; */ = Other;",
+          "  class BUse { X::Target Make() => new X::Target(); }",
+          "}",
+          "class Outside {",
+          "  Y::Target Leak() => new Y::Target();",
+          "  Missing::Target Unknown() => new Missing::Target();",
+          "}",
+          "",
+        ];
+        const declaredFile = path.join(root, "Declared.cs").replace(/\\/g, "/");
+        const decoyFile = path.join(root, "Decoy.cs").replace(/\\/g, "/");
+        const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+        await fsp.writeFile(declaredFile, declared, "utf8");
+        await fsp.writeFile(decoyFile, decoy, "utf8");
+        await fsp.writeFile(useFile, useLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [declaredFile, decoyFile, useFile]);
+
+        // Only AUse's in-scope uses join Project.Model.Target; BUse belongs to the decoy and
+        // `Y` outside namespace A must not leak into the set.
+        await testFindReferences(index, declaredFile, 2, tokenColumn("  public class Target {}", "Target"), [
+          { file: declaredFile, line: 2, column: tokenColumn("  public class Target {}", "Target") },
+          { file: useFile, line: 4, column: tokenColumn(useLines[3]!, "Target", 0) },
+          { file: useFile, line: 4, column: tokenColumn(useLines[3]!, "Target", 1) },
+        ]);
+        // The same-spelled decoy keeps only its own namespace B uses.
+        await testFindReferences(index, decoyFile, 2, tokenColumn("  public class Target {}", "Target"), [
+          { file: decoyFile, line: 2, column: tokenColumn("  public class Target {}", "Target") },
+          { file: useFile, line: 8, column: tokenColumn(useLines[7]!, "Target", 0) },
+          { file: useFile, line: 8, column: tokenColumn(useLines[7]!, "Target", 1) },
+        ]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("Java", () => {

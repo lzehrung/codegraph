@@ -136,8 +136,13 @@ function csharpUsingAliasLocalRange(
   alias: string,
 ): Range | undefined {
   if (statementStartIndex === undefined || !alias) return undefined;
-  const semicolon = source.indexOf(";", statementStartIndex);
-  const window = source.slice(statementStartIndex, semicolon < 0 ? source.length : semicolon + 1);
+  // Comments and string literals can carry `;` and sit between the alias and `=`
+  // (`using X /* ; */ = P;`), so both the statement boundary and the alias match run over
+  // trivia-masked text. Masking is one-for-one with the raw source (masked units become
+  // spaces, newlines survive), so every match offset is the raw-source offset.
+  const masked = maskImportBindingTrivia(source.slice(statementStartIndex), "csharp");
+  const semicolon = masked.indexOf(";");
+  const window = semicolon < 0 ? masked : masked.slice(0, semicolon + 1);
   const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = window.match(new RegExp(`\\busing\\s+(${escaped})\\s*=`));
   if (!match || match.index === undefined) return undefined;

@@ -235,6 +235,7 @@ export async function buildSymbolGraphDetailed(
   const receiverMemberArities = new Map<string, MemberArityRange>();
   const sharedOwnerPeers = new Map<string, Promise<SharedOwnerPeer[]>>();
   const sharedOwnerAnchors = new Map<string, string>();
+  const sharedOwnerAccessibleMembers = new Map<string, Set<string>>();
   const nodeAliases = new Map<string, string>();
   const ownershipParsedContexts = new Map<string, Promise<ParsedFileContext | null>>();
   const loadParsedFile = (file: string): Promise<ParsedFileContext | null> => {
@@ -479,6 +480,10 @@ export async function buildSymbolGraphDetailed(
         aliasToTargetDef,
         aliasToTargetModule,
         resolveIdentifier,
+        hasNonModuleBinding: (name: string, node: SyntaxNodeLike): boolean => {
+          const binding = findClosestScopeBinding(scopeIndex, name, node, sup);
+          return !!binding && scopeIndex.allScopes[0]?.map.get(binding.canonicalName) !== binding;
+        },
         resolveExportFrom,
         resolveMemberChainTarget,
         recordEdge,
@@ -487,6 +492,7 @@ export async function buildSymbolGraphDetailed(
         receiverMemberArities,
         sharedOwnerPeers,
         sharedOwnerAnchors,
+        sharedOwnerAccessibleMembers,
         nodeAliases,
         noteCallableName,
         loadParsedFile,
@@ -519,6 +525,7 @@ export async function buildSymbolGraphDetailed(
     nodeAliases,
     receiverMemberArities,
     sharedOwnerAnchors,
+    sharedOwnerAccessibleMembers,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

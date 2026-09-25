@@ -2687,6 +2687,67 @@ describe("Go to Definition", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("scopes comment-trivia using aliases to their declaration namespace and keeps decoys and unknown aliases unresolved", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-trivia-goto-"));
+      try {
+        const declared = ["namespace Project.Model {", "  public class Target {}", "}", ""].join("\n");
+        const decoy = ["namespace Other {", "  public class Target {}", "}", ""].join("\n");
+        // A comment carrying `;` before the `=` must not truncate the using statement at the
+        // comment: the alias range has to survive so each `X` stays inside its own namespace.
+        const useLines = [
+          "namespace A {",
+          "  using X /* ; */ = Project.Model;",
+          "  using Y /* ; */ = Project.Model;",
+          "  class AUse { X::Target Make() => new X::Target(); }",
+          "}",
+          "namespace B {",
+          "  using X /* ; */ = Other;",
+          "  class BUse { X::Target Make() => new X::Target(); }",
+          "}",
+          "class Outside {",
+          "  Y::Target Leak() => new Y::Target();",
+          "  Missing::Target Unknown() => new Missing::Target();",
+          "}",
+          "",
+        ];
+        const use = useLines.join("\n");
+        const declaredFile = path.join(root, "Declared.cs").replace(/\\/g, "/");
+        const decoyFile = path.join(root, "Decoy.cs").replace(/\\/g, "/");
+        const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+        await fsp.writeFile(declaredFile, declared, "utf8");
+        await fsp.writeFile(decoyFile, decoy, "utf8");
+        await fsp.writeFile(useFile, use, "utf8");
+        const index = await createTestIndexFromFiles(root, [declaredFile, decoyFile, useFile]);
+        const columnOn = (line: number, token: string, occurrence = 0): number => {
+          const text = useLines[line - 1];
+          if (!text) throw new Error(`missing line ${line}`);
+          let fromIndex = 0;
+          for (let index = 0; index <= occurrence; index += 1) {
+            const at = text.indexOf(token, fromIndex);
+            if (at < 0) throw new Error(`token ${token} not found on line ${line}`);
+            if (index === occurrence) return at + 1;
+            fromIndex = at + token.length;
+          }
+          throw new Error(`token ${token} not found on line ${line}`);
+        };
+
+        // AUse's `X` stays inside namespace A and reaches Project.Model.Target.
+        await testGoToDefinition(index, useFile, 4, columnOn(4, "Target", 0), declaredFile, 2);
+        await testGoToDefinition(index, useFile, 4, columnOn(4, "Target", 1), declaredFile, 2);
+        // BUse's same-spelled `X` resolves through namespace B to the decoy instead.
+        await testGoToDefinition(index, useFile, 8, columnOn(8, "Target", 0), decoyFile, 2);
+        await testGoToDefinition(index, useFile, 8, columnOn(8, "Target", 1), decoyFile, 2);
+        // `Y` is declared inside namespace A, so it must not leak to top-level `Outside`.
+        await testGoToDefinition(index, useFile, 11, columnOn(11, "Target", 0), undefined, undefined, "not_found");
+        await testGoToDefinition(index, useFile, 11, columnOn(11, "Target", 1), undefined, undefined, "not_found");
+        // An alias that is never declared stays unresolved.
+        await testGoToDefinition(index, useFile, 12, columnOn(12, "Target", 0), undefined, undefined, "not_found");
+        await testGoToDefinition(index, useFile, 12, columnOn(12, "Target", 1), undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("Ruby", () => {

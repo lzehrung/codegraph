@@ -11,8 +11,8 @@ import type { CallableSignature, CallsiteArguments } from "../types.js";
 
 /**
  * Source languages the structural extractor understands, declared and documented in
- * `./profiles.js` and filtered through the registry here: a stale id such as the old
- * `javascript`/`typescript`/`jsx` spellings can never be reported as supported.
+ * `src/languages/callable-arity.ts`. Registry filtering prevents stale ids such as the old
+ * `javascript`/`typescript`/`jsx` spellings from appearing as supported.
  * `tests/language-capability-registry.test.ts` asserts every declaration is registered.
  */
 export const callCompatibilityLanguageIdDeclarations: readonly string[] = CALLABLE_ARITY_LANGUAGE_ID_DECLARATIONS;

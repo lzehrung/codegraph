@@ -38,8 +38,10 @@ export type ReceiverCallCandidate = {
    */
   argumentCount: number | null;
   site: NonNullable<SymbolGraph["edges"][number]["site"]>;
-  /** Required static/instance scope; omitted candidates are classified from `site`. */
+  /** Required static/instance scope; omitted candidates are classified from site. */
   memberScope?: ReceiverMemberScope;
+  /** Free function to use only if a Swift receiver has no matching member. */
+  fallbackTargetId?: string | undefined;
 };
 
 /** Languages whose grammar distinguishes static members from instance members. */
@@ -63,6 +65,17 @@ const MEMBER_OVERLOAD_LANGUAGE_IDS: Record<string, true> = {
   ts: true,
   tsx: true,
 };
+
+/** Bare calls inside members can target a proven member even without an explicit receiver. */
+const IMPLICIT_SELF_MEMBER_CALL_LANGUAGES: Record<string, true> = {
+  csharp: true,
+  swift: true,
+};
+
+/** Whether a bare, receiver-less call inside a member function may target `this`/an inherited member. */
+export function supportsImplicitSelfMemberCalls(languageId: string): boolean {
+  return !!IMPLICIT_SELF_MEMBER_CALL_LANGUAGES[languageId];
+}
 
 /** Whether member lookup uses call arity to select or reject same-name declarations. */
 export function supportsReceiverMemberOverloads(languageId: string): boolean {
@@ -994,7 +1007,7 @@ export function declarationNodeIsStatic(node: SyntaxNodeLike, source: string): b
   }
 }
 
-function nodeInStaticMemberContext(node: SyntaxNodeLike, source: string): boolean {
+export function nodeInStaticMemberContext(node: SyntaxNodeLike, source: string): boolean {
   const container = nearestMemberContainer(node);
   if (!container) return false;
   let current: SyntaxNodeLike | null = node;
@@ -1398,6 +1411,7 @@ export function emitReceiverCallEdges(
   nodeAliases: ReadonlyMap<string, string> = new Map(),
   memberArities: ReadonlyMap<string, MemberArityRange> = new Map(),
   ownerAnchors: ReadonlyMap<string, string> = new Map(),
+  accessibleMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1420,6 +1434,10 @@ export function emitReceiverCallEdges(
     if (!label || !HIERARCHY_LABELS[label]) continue;
     pushUnique(supertypesByOwner, edge.from, edge.to);
     if (label === "extends") pushUnique(classAncestorsByOwner, edge.from, edge.to);
+  }
+  // Receiver-local access does not change the nominal type's membership edges.
+  for (const [ownerId, memberIds] of accessibleMembers) {
+    for (const memberId of memberIds) pushUnique(membersByOwner, ownerId, memberId);
   }
 
   const nextOwners = (ownerId: string, viaSupertypes: boolean): string[] => {
@@ -1494,8 +1512,12 @@ export function emitReceiverCallEdges(
       }
       level = next;
     }
-    if (receiverDisposition === "none" && existingTargets.size) {
-      rejectedCallSites.add(siteKey);
+    if (receiverDisposition === "none") {
+      if (candidate.fallbackTargetId && !existingTargets.size) {
+        recordEdge(candidate.callerId, candidate.fallbackTargetId, "calls", candidate.site);
+      } else if (existingTargets.size) {
+        rejectedCallSites.add(siteKey);
+      }
     }
   }
   const removed: SymbolGraph["edges"][number][] = [];

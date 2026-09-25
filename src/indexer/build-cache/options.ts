@@ -104,8 +104,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 55 ignores comments and string literals when identifying Go and JVM package peers.
  * Epoch 56 enforces Swift cross-file extension visibility and distinct nested C# generic owners.
  * Epoch 57 retains qualified C# paths through generic type arguments for navigation and references.
+ * Epoch 58 separates constrained Swift extensions from unproven shared-owner members.
  */
-export const CORE_ALGORITHM_EPOCH = 57;
+export const CORE_ALGORITHM_EPOCH = 58;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

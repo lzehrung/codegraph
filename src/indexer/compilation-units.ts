@@ -171,13 +171,14 @@ function collectCsharpNamespaceRegions(source: string): CsharpNamespaceRegion[] 
   return regions;
 }
 
-type PackageNameCaches = Record<"go" | "jvm", Map<string, string | null>>;
+type PackageDeclaration = { name: string | null; readable: boolean };
+type PackageNameCaches = Record<"go" | "jvm", Map<string, PackageDeclaration>>;
 const packageNameCaches = new WeakMap<ProjectIndex, PackageNameCaches>();
 
 function packageNameCacheFor(index: ProjectIndex): PackageNameCaches {
   let caches = packageNameCaches.get(index);
   if (!caches) {
-    caches = { go: new Map<string, string | null>(), jvm: new Map<string, string | null>() };
+    caches = { go: new Map<string, PackageDeclaration>(), jvm: new Map<string, PackageDeclaration>() };
     packageNameCaches.set(index, caches);
   }
   return caches;
@@ -204,16 +205,16 @@ function unitDeclarationSource(index: ProjectIndex, filePath: string, fileKey: s
  * The declared package name of a Go or JVM file, or `null` when the file declares none (or its
  * source cannot be read). Cached per index so unit facts are read at most once per snapshot.
  */
-export function getPackageDeclarationName(
+function packageDeclarationFor(
   index: ProjectIndex,
   filePath: string,
   languageId: "go" | "java" | "kotlin",
-): string | null {
+): PackageDeclaration {
   const fileKey = fileIdentityKey(filePath);
   const cache = languageId === "go" ? packageNameCacheFor(index).go : packageNameCacheFor(index).jvm;
   const cacheKey = languageId === "go" ? fileKey : `${languageId}::${fileKey}`;
   const cached = cache.get(cacheKey);
-  if (cached !== undefined) return cached;
+  if (cached) return cached;
   const source = unitDeclarationSource(index, filePath, fileKey);
   let packageName: string | null = null;
   if (source !== null) {
@@ -225,8 +226,18 @@ export function getPackageDeclarationName(
       packageName = pattern.exec(masked)?.[1] ?? null;
     }
   }
-  cache.set(cacheKey, packageName);
-  return packageName;
+  const declaration = { name: packageName, readable: source !== null };
+  cache.set(cacheKey, declaration);
+  return declaration;
+}
+
+/** The declared package name, or null when absent or unreadable. */
+export function getPackageDeclarationName(
+  index: ProjectIndex,
+  filePath: string,
+  languageId: "go" | "java" | "kotlin",
+): string | null {
+  return packageDeclarationFor(index, filePath, languageId).name;
 }
 
 /**
@@ -252,7 +263,7 @@ export function getCsharpNamespaceRegions(
 }
 
 type UnitIdentity =
-  | { kind: "package"; name: string | null }
+  | { kind: "package"; name: string | null; readable: boolean }
   | { kind: "namespaces"; regions: readonly CsharpNamespaceRegion[] | null }
   | { kind: "directory" }
   | { kind: "single-file" }
@@ -280,7 +291,8 @@ function unitFactFor(index: ProjectIndex, file: FileId): UnitFact {
   const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
   let identity: UnitIdentity;
   if (languageId === "go" || languageId === "java" || languageId === "kotlin") {
-    identity = { kind: "package", name: getPackageDeclarationName(index, file, languageId) };
+    const declaration = packageDeclarationFor(index, file, languageId);
+    identity = { kind: "package", name: declaration.name, readable: declaration.readable };
   } else if (languageId === "csharp") {
     identity = { kind: "namespaces", regions: getCsharpNamespaceRegions(index, file) };
   } else if (languageId === "swift") {
@@ -410,7 +422,247 @@ function identityCompatible(own: UnitIdentity, other: UnitIdentity): boolean {
   }
 }
 
-const unitPeerCaches = new WeakMap<ProjectIndex, Map<string, CompilationUnitPeers>>();
+type CsharpNamespaceIndex = {
+  /** Only directories with readable namespace facts contribute to bare-name completeness. */
+  directories: Set<string>;
+  globalDirs: Set<string>;
+  exactDirs: Map<string, Set<string>>;
+  descendantDirs: Map<string, Set<string>>;
+};
+
+type UnitFactIndex = {
+  /** Language group -> directory identity key -> files in that directory, from paths only. */
+  filesByGroupDir: Map<string, Map<string, FileId[]>>;
+  /** Language group -> directory identity key -> facts in that directory. */
+  byGroupDir: Map<string, Map<string, UnitFact[]>>;
+  /** Language group -> directory -> package name -> facts that declare that package. */
+  byGroupDirPackage: Map<string, Map<string, Map<string, UnitFact[]>>>;
+  /** Language group -> package name -> directories that declare it. */
+  packageDirs: Map<string, Map<string, Set<string>>>;
+  /** Language group -> directories containing an indexed source whose unit identity is unreadable. */
+  unreadableDirs: Map<string, Set<string>>;
+  csharpNamespaces: CsharpNamespaceIndex;
+  /** Language groups whose sources have been read into the fact maps. */
+  extractedGroups: Set<string>;
+  /** `${group}\0${dirKey}` directories whose sources have been read into the fact maps. */
+  extractedDirs: Set<string>;
+};
+
+type CachedUnitFactIndex = {
+  facts: UnitFactIndex;
+  peers: Map<string, CompilationUnitPeers>;
+  source: ProjectIndex["byFile"];
+  size: number;
+  languageExtensions: ProjectIndex["languageExtensions"];
+};
+
+const unitFactIndexes = new WeakMap<ProjectIndex, CachedUnitFactIndex>();
+
+function mapEntry<K, V>(map: Map<K, V>, key: K, create: () => V): V {
+  const existing = map.get(key);
+  if (existing) return existing;
+  const created = create();
+  map.set(key, created);
+  return created;
+}
+
+function recordCsharpNamespaces(
+  namespaces: CsharpNamespaceIndex,
+  dirKey: string,
+  regions: readonly CsharpNamespaceRegion[],
+): void {
+  namespaces.directories.add(dirKey);
+  if (!regions.length) namespaces.globalDirs.add(dirKey);
+  for (const region of regions) {
+    const name = region.name;
+    if (!name) {
+      namespaces.globalDirs.add(dirKey);
+      continue;
+    }
+    mapEntry(namespaces.exactDirs, name, () => new Set<string>()).add(dirKey);
+    let dot = name.indexOf(".");
+    while (dot >= 0) {
+      mapEntry(namespaces.descendantDirs, name.slice(0, dot), () => new Set<string>()).add(dirKey);
+      dot = name.indexOf(".", dot + 1);
+    }
+  }
+}
+
+function emptyCsharpNamespaces(): CsharpNamespaceIndex {
+  return {
+    directories: new Set<string>(),
+    globalDirs: new Set<string>(),
+    exactDirs: new Map<string, Set<string>>(),
+    descendantDirs: new Map<string, Set<string>>(),
+  };
+}
+
+function createUnitFactIndex(): UnitFactIndex {
+  return {
+    filesByGroupDir: new Map(),
+    byGroupDir: new Map(),
+    byGroupDirPackage: new Map(),
+    packageDirs: new Map(),
+    unreadableDirs: new Map(),
+    csharpNamespaces: emptyCsharpNamespaces(),
+    extractedGroups: new Set<string>(),
+    extractedDirs: new Set<string>(),
+  };
+}
+
+function recordUnitFact(grouped: UnitFactIndex, fact: UnitFact): void {
+  if (fact.identity.kind === "single-file" || fact.identity.kind === "unsupported") return;
+
+  mapEntry(
+    mapEntry(grouped.byGroupDir, fact.group, () => new Map()),
+    fact.dirKey,
+    () => [] as UnitFact[],
+  ).push(fact);
+  if (
+    (fact.identity.kind === "package" && !fact.identity.readable) ||
+    (fact.identity.kind === "namespaces" && fact.identity.regions === null)
+  ) {
+    mapEntry(grouped.unreadableDirs, fact.group, () => new Set<string>()).add(fact.dirKey);
+  }
+
+  if (fact.identity.kind === "package" && fact.identity.name !== null) {
+    const packageName = fact.identity.name;
+    mapEntry(
+      mapEntry(
+        mapEntry(grouped.byGroupDirPackage, fact.group, () => new Map()),
+        fact.dirKey,
+        () => new Map(),
+      ),
+      packageName,
+      () => [] as UnitFact[],
+    ).push(fact);
+    mapEntry(
+      mapEntry(grouped.packageDirs, fact.group, () => new Map()),
+      packageName,
+      () => new Set<string>(),
+    ).add(fact.dirKey);
+  }
+
+  if (fact.group === "csharp" && fact.identity.kind === "namespaces" && fact.identity.regions) {
+    recordCsharpNamespaces(grouped.csharpNamespaces, fact.dirKey, fact.identity.regions);
+  }
+}
+
+function extractedDirKey(group: string, dirKey: string): string {
+  return `${group}\0${dirKey}`;
+}
+
+function extractDirFacts(index: ProjectIndex, grouped: UnitFactIndex, group: string, dirKey: string): void {
+  const key = extractedDirKey(group, dirKey);
+  if (grouped.extractedDirs.has(key)) return;
+  grouped.extractedDirs.add(key);
+  for (const file of grouped.filesByGroupDir.get(group)?.get(dirKey) ?? []) {
+    recordUnitFact(grouped, unitFactFor(index, file));
+  }
+}
+
+function extractGroupFacts(index: ProjectIndex, grouped: UnitFactIndex, group: string): void {
+  if (grouped.extractedGroups.has(group)) return;
+  grouped.extractedGroups.add(group);
+  const dirs = grouped.filesByGroupDir.get(group);
+  if (!dirs) return;
+  for (const dirKey of dirs.keys()) {
+    extractDirFacts(index, grouped, group, dirKey);
+  }
+}
+
+function ensureFactsFor(index: ProjectIndex, grouped: UnitFactIndex, own: UnitFact): void {
+  // Swift completeness is a path question; skip source reads until a package or namespace
+  // identity actually needs them.
+  if (own.identity.kind === "directory") return;
+  // Go packages are directory-exact, so other Go directories are never peers and must not
+  // be opened just to build this file's set.
+  if (own.group === "go") {
+    extractDirFacts(index, grouped, own.group, own.dirKey);
+    return;
+  }
+  extractGroupFacts(index, grouped, own.group);
+}
+
+/**
+ * Group unit files once per `ProjectIndex` so each file's peer set is derived from a shared
+ * directory/package index instead of visiting every indexed module again.
+ *
+ * The grouping scan uses configured extensions and paths only. Package clauses and C# namespaces
+ * are read later, and only for the language group (and, for Go, directory) of the file whose
+ * peers were requested, so a Go lookup never opens JVM sources and a JVM lookup never opens
+ * Go sources. The cache is tied to the index's `byFile` map identity, size, and language
+ * extension mapping so a warm index that later gains, loses, or remaps files rebuilds instead
+ * of returning stale peers.
+ */
+function cachedUnitFactIndexFor(index: ProjectIndex): CachedUnitFactIndex {
+  const cached = unitFactIndexes.get(index);
+  if (
+    cached &&
+    cached.source === index.byFile &&
+    cached.size === index.byFile.size &&
+    cached.languageExtensions === index.languageExtensions
+  ) {
+    return cached;
+  }
+  if (cached && (cached.source !== index.byFile || cached.languageExtensions !== index.languageExtensions)) {
+    unitFactCaches.delete(index);
+    packageNameCaches.delete(index);
+    csharpRegionCaches.delete(index);
+  }
+
+  const facts = createUnitFactIndex();
+  for (const moduleEntry of index.byFile.values()) {
+    const languageId = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id;
+    if (!languageId || !IMPLICIT_UNIT_LANGUAGES[languageId]) continue;
+    const group = unitLanguageGroup(languageId);
+    const dirKey = fileIdentityKey(path.dirname(moduleEntry.file));
+    mapEntry(
+      mapEntry(facts.filesByGroupDir, group, () => new Map()),
+      dirKey,
+      () => [] as FileId[],
+    ).push(moduleEntry.file);
+  }
+
+  const built: CachedUnitFactIndex = {
+    facts,
+    peers: new Map<string, CompilationUnitPeers>(),
+    source: index.byFile,
+    size: index.byFile.size,
+    languageExtensions: index.languageExtensions,
+  };
+  unitFactIndexes.set(index, built);
+  return built;
+}
+
+function groupHasOtherDirectory(
+  dirs: { readonly size: number; has(key: string): boolean } | undefined,
+  dirKey: string,
+): boolean {
+  if (!dirs || dirs.size === 0) return false;
+  return dirs.size > 1 || !dirs.has(dirKey);
+}
+
+function csharpRelatedNamespaceOutside(
+  regions: readonly CsharpNamespaceRegion[],
+  ownDirKey: string,
+  namespaces: CsharpNamespaceIndex,
+): boolean {
+  if (!regions.length || regions.some((region) => !region.name)) {
+    return groupHasOtherDirectory(namespaces.directories, ownDirKey);
+  }
+  if (groupHasOtherDirectory(namespaces.globalDirs, ownDirKey)) return true;
+  for (const region of regions) {
+    let name = region.name;
+    while (name) {
+      if (groupHasOtherDirectory(namespaces.exactDirs.get(name), ownDirKey)) return true;
+      const dot = name.lastIndexOf(".");
+      name = dot < 0 ? "" : name.slice(0, dot);
+    }
+    if (groupHasOtherDirectory(namespaces.descendantDirs.get(region.name), ownDirKey)) return true;
+  }
+  return false;
+}
 
 /**
  * Every indexed file that shares a proven compilation unit with `file`, including `file`
@@ -430,23 +682,20 @@ export function getCompilationUnitPeers(
   file: FileId,
   options?: { csharpQualifiedName?: boolean },
 ): CompilationUnitPeers {
-  let cache = unitPeerCaches.get(index);
-  if (!cache) {
-    cache = new Map<string, CompilationUnitPeers>();
-    unitPeerCaches.set(index, cache);
-  }
+  const cached = cachedUnitFactIndexFor(index);
   const fileKey = fileIdentityKey(file);
   const cacheKey = options?.csharpQualifiedName ? `${fileKey}::qualified` : fileKey;
-  const cached = cache.get(cacheKey);
-  if (cached) return cached;
+  const previous = cached.peers.get(cacheKey);
+  if (previous) return previous;
 
-  const result = computeUnitPeers(index, unitFactFor(index, file), !!options?.csharpQualifiedName);
-  cache.set(cacheKey, result);
+  const result = computeUnitPeers(index, cached.facts, unitFactFor(index, file), !!options?.csharpQualifiedName);
+  cached.peers.set(cacheKey, result);
   return result;
 }
 
 function computeUnitPeers(
   index: ProjectIndex,
+  grouped: UnitFactIndex,
   own: UnitFact,
   includeUnrelatedCsharpDirectoryPeers = false,
 ): CompilationUnitPeers {
@@ -454,13 +703,11 @@ function computeUnitPeers(
   if (own.identity.kind === "single-file") return { files, complete: true };
   if (own.identity.kind === "unsupported") return { files, complete: false };
 
-  const groupFiles: UnitFact[] = [];
-  for (const moduleEntry of index.byFile.values()) {
-    const languageId = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id;
-    if (!languageId || unitLanguageGroup(languageId) !== own.group) continue;
-    if (own.group === "go" && fileIdentityKey(path.dirname(moduleEntry.file)) !== own.dirKey) continue;
-    groupFiles.push(unitFactFor(index, moduleEntry.file));
-  }
+  ensureFactsFor(index, grouped, own);
+  const dirFacts = grouped.byGroupDir.get(own.group)?.get(own.dirKey) ?? [];
+  const groupDirs = grouped.filesByGroupDir.get(own.group);
+  const unreadableDirs = grouped.unreadableDirs.get(own.group);
+  const hasUnreadablePeer = own.group === "go" ? !!unreadableDirs?.has(own.dirKey) : !!unreadableDirs?.size;
 
   if (own.identity.kind === "package") {
     if (own.identity.name === null) {
@@ -468,29 +715,26 @@ function computeUnitPeers(
       // historical whole-directory lookup in that case; the JVM unnamed package has no
       // provable membership beyond the file itself.
       if (own.group === "go") {
-        for (const fact of groupFiles) {
-          if (fact.dirKey === own.dirKey) files.add(fact.file);
-        }
+        for (const fact of dirFacts) files.add(fact.file);
       }
       return { files, complete: false };
     }
-    for (const fact of groupFiles) {
-      if (fact.dirKey === own.dirKey && identityCompatible(own.identity, fact.identity)) files.add(fact.file);
-    }
+    const packageFacts = grouped.byGroupDirPackage.get(own.group)?.get(own.dirKey)?.get(own.identity.name) ?? [];
+    for (const fact of packageFacts) files.add(fact.file);
     // Go packages are exactly one directory by language definition, so the directory is the
     // whole unit as long as the package clause is readable. A JVM package can span
     // directories (for example sibling source roots), so its unit is only proven while no
     // same-package file sits outside the directory this relation enumerates.
     const complete =
-      own.group === "go" ||
-      !groupFiles.some((fact) => fact.dirKey !== own.dirKey && identityCompatible(own.identity, fact.identity));
+      !hasUnreadablePeer &&
+      (own.group === "go" ||
+        !groupHasOtherDirectory(grouped.packageDirs.get(own.group)?.get(own.identity.name), own.dirKey));
     return { files, complete };
   }
 
   if (own.identity.kind === "namespaces") {
     if (!own.identity.regions) return { files, complete: false };
-    for (const fact of groupFiles) {
-      if (fact.dirKey !== own.dirKey) continue;
+    for (const fact of dirFacts) {
       if (
         includeUnrelatedCsharpDirectoryPeers &&
         fact.identity.kind === "namespaces" &&
@@ -501,23 +745,16 @@ function computeUnitPeers(
       }
       if (identityCompatible(own.identity, fact.identity)) files.add(fact.file);
     }
-    const complete = !groupFiles.some(
-      (fact) =>
-        fact.dirKey !== own.dirKey &&
-        (includeUnrelatedCsharpDirectoryPeers || identityCompatible(own.identity, fact.identity)),
-    );
+    const complete =
+      !hasUnreadablePeer &&
+      (includeUnrelatedCsharpDirectoryPeers
+        ? !groupHasOtherDirectory(groupDirs, own.dirKey)
+        : !csharpRelatedNamespaceOutside(own.identity.regions, own.dirKey, grouped.csharpNamespaces));
     return { files, complete };
   }
 
-  let complete = true;
-  for (const fact of groupFiles) {
-    if (fact.dirKey === own.dirKey) {
-      files.add(fact.file);
-    } else {
-      // Swift module membership is not declared in source; a same-module file outside the
-      // directory would belong to the same implicit unit but cannot be proven to.
-      complete = false;
-    }
-  }
-  return { files, complete };
+  for (const file of groupDirs?.get(own.dirKey) ?? []) files.add(file);
+  // Swift module membership is not declared in source; a same-module file outside the
+  // directory would belong to the same implicit unit but cannot be proven to.
+  return { files, complete: !groupHasOtherDirectory(groupDirs, own.dirKey) };
 }

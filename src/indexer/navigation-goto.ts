@@ -46,7 +46,7 @@ import {
   CSHARP_PARTIAL_CONTAINER_TYPES,
   getSharedOwnerIdentity,
   isSwiftExtensionContainer,
-  sharedOwnerIdentitiesEqual,
+  sharedOwnerCanUseMembers,
 } from "./shared-owner-identity.js";
 import {
   SymbolKind,
@@ -149,7 +149,7 @@ export async function resolveSharedOwnerContainers(params: {
         continue;
       }
       const identity = getSharedOwnerIdentity(container, peerContext.source, languageId);
-      if (!identity || !sharedOwnerIdentitiesEqual(ownerIdentity, identity)) continue;
+      if (!identity || !sharedOwnerCanUseMembers(ownerIdentity, identity)) continue;
       if (languageId === "swift") {
         const peerIsExtension = isSwiftExtensionContainer(container, peerContext.source);
         if (!ownerIsExtension && !peerIsExtension) continue;
@@ -594,6 +594,9 @@ export async function resolveMemberAccessDefinition(params: {
           });
         }
       }
+      // A failed `self` lookup is not a license to bind an unrelated same-file
+      // extension member by its bare name (including an unproven where clause).
+      if (sup.id === "swift") return { status: "not_found", reason: "No matching Swift member definition" };
     } else if (receiverKind === "supertype") {
       const memberDef = await resolveKeywordReceiverMember(
         index,
@@ -1119,6 +1122,24 @@ async function resolveKeywordReceiverMember(
   }
   return undefined;
 }
+/** Validate an unqualified Swift member against its actual lexical owner. */
+export async function resolveSwiftBareMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  name: string,
+  source: string,
+): Promise<SymbolDef | undefined> {
+  return resolveKeywordReceiverMember(
+    index,
+    mod,
+    node,
+    name,
+    "any",
+    false,
+    getCallArgumentCount({ languageId: "swift", source, call: node.parent ?? node }) ?? undefined,
+  );
+}
 
 export { supportsReceiverCallEdges, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
 
@@ -1553,10 +1574,13 @@ function appendDirectKeywordMembers(
   }
 }
 
-function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike, container: SyntaxNodeLike): boolean {
+export function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike, container: SyntaxNodeLike): boolean {
   if (nearestMemberContainer(declarationNode) !== container) return false;
+  let functionDepth = 0;
   let current: SyntaxNodeLike | null = declarationNode;
   while (current && current !== container) {
+    // Swift local functions can nest inside a member; only the outer function is a member.
+    if (current.type === "function_declaration" && ++functionDepth > 1) return false;
     const isMethodBody =
       (current.type === "block" || current.type === "compound_statement" || current.type === "statement_block") &&
       current.parent !== container;

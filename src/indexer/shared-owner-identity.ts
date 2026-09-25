@@ -11,15 +11,15 @@ import type { ProjectIndex, SymbolDef } from "./types.js";
 
 /**
  * Owner identity shared by C# `partial` type parts and Swift types/extensions.
- * C# includes declaration kind, own generic arity, and enclosing generic arities
- * so `Box` and `Box<T>`, `Outer.Inner` and `Outer<T>.Inner`, or a class and a
- * same-named struct, never match. Swift keeps path-only identity.
+ * C# includes declaration kind, own generic arity, and enclosing generic arities.
+ * A Swift extension with a where clause cannot donate members to an unproven receiver.
  */
 export type SharedOwnerIdentity = {
   languageId: string;
   fullPath: string;
   declarationKind?: string;
   genericArity?: number;
+  swiftConstraint?: string;
 };
 
 export const CSHARP_PARTIAL_CONTAINER_TYPES = new Set([
@@ -123,6 +123,15 @@ function swiftKeywordText(container: SyntaxNodeLike, source: string): string {
 export function isSwiftExtensionContainer(container: SyntaxNodeLike, source: string): boolean {
   return container.type === "class_declaration" && swiftKeywordText(container, source) === "extension";
 }
+function swiftConstraintKey(container: SyntaxNodeLike, source: string): string | null {
+  if (!isSwiftExtensionContainer(container, source)) return null;
+  const constraints = (container.namedChildren ?? []).find((child) => child.type === "type_constraints");
+  return constraints ? sliceText(constraints, source).trim() : null;
+}
+
+export function isSwiftConstrainedExtension(container: SyntaxNodeLike, source: string): boolean {
+  return swiftConstraintKey(container, source) !== null;
+}
 
 function isSwiftTypeContainer(container: SyntaxNodeLike, source: string): boolean {
   if (container.type !== "class_declaration") return false;
@@ -182,21 +191,24 @@ export function getSharedOwnerIdentity(
   }
   if (languageId === "swift") {
     if (isSwiftExtensionContainer(container, source) || isSwiftTypeContainer(container, source)) {
+      const swiftConstraint = swiftConstraintKey(container, source);
       const fullPath = getSwiftFullPath(container, source);
       if (!fullPath) return null;
-      return { languageId, fullPath };
+      return { languageId, fullPath, ...(swiftConstraint !== null ? { swiftConstraint } : {}) };
     }
     return null;
   }
   return null;
 }
 
-export function sharedOwnerIdentitiesEqual(left: SharedOwnerIdentity, right: SharedOwnerIdentity): boolean {
+/** The first owner can access members of the second owner without proving Swift constraints. */
+export function sharedOwnerCanUseMembers(left: SharedOwnerIdentity, right: SharedOwnerIdentity): boolean {
   return (
     left.languageId === right.languageId &&
     left.fullPath === right.fullPath &&
     (left.declarationKind ?? "") === (right.declarationKind ?? "") &&
-    (left.genericArity ?? 0) === (right.genericArity ?? 0)
+    (left.genericArity ?? 0) === (right.genericArity ?? 0) &&
+    (right.swiftConstraint === undefined || left.swiftConstraint === right.swiftConstraint)
   );
 }
 

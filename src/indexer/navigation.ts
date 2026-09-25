@@ -8,6 +8,7 @@ import {
   findCsharpPartialTypeEquivalents,
   innermostNamespaceImport,
   resolveMemberAccessDefinition,
+  resolveSwiftBareMember,
   supportsReceiverMemberNavigation,
 } from "./navigation-goto.js";
 import {
@@ -375,6 +376,16 @@ export async function goToDefinition(
       });
     }
     const local = findClosestBinding(scopeIndex, file, lookupName, node, sup, source);
+    if (
+      sup.id === "swift" &&
+      local &&
+      closestBinding &&
+      scopeIndex.allScopes[0]?.map.get(closestBinding.canonicalName) === closestBinding
+    ) {
+      // Method-local bindings still win; only module-level names yield to proven members.
+      const member = await resolveSwiftBareMember(index, mod, node, lookupName, source);
+      if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
+    }
     if (local) {
       return okGoToResult(index, local, {
         resolution: "exact",
@@ -411,9 +422,15 @@ export async function goToDefinition(
         cNamespace,
         node.startIndex,
       );
-      if (resolvedName) {
-        return resolvedName;
+      if (sup.id === "swift") {
+        // Inside a type, a proven member takes precedence over a same-named module function.
+        const visible = await resolveSwiftBareMember(index, mod, node, lookupName, source);
+        if (visible) return okGoToResult(index, visible, { resolution: "member-access", confidence: "medium" });
+        if (resolvedName?.status === "ok" && resolvedName.definition.isMember) {
+          return { status: "not_found", reason: "No matching Swift member definition" };
+        }
       }
+      if (resolvedName) return resolvedName;
     }
   }
 

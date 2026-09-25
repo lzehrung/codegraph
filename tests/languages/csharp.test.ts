@@ -958,6 +958,141 @@ describe("C# same-file namespace boundaries", () => {
   });
 });
 
+describe("C# same-file internal partial types", () => {
+  // r4100785497: hidden same-file `internal partial class Box` parts are omitted from
+  // exports. A use from a reopened namespace must coalesce proven-equivalent parts
+  // instead of treating them as competing locals, while a namespace decoy, a nested
+  // owner, and a cross-file internal use stay outside that lookup.
+  const lines = [
+    "namespace Q { internal partial class Box { public void Decoy() {} } }",
+    "namespace P { internal partial class Box { public void Helper() {} } }",
+    "namespace P { internal partial class Outer { internal partial class Box { Box NestedMake() => new Box(); } } }",
+    "namespace P { internal partial class Box {} }",
+    "namespace P { class Allowed { Box AllowedMake() => new Box(); } }",
+    "namespace Q { class DecoyUse { Box DecoyMake() => new Box(); } }",
+    "namespace R { class Rejected { Box RejectedMake() => new Box(); } }",
+  ];
+  const peerLines = ["namespace P { class Peer { Box PeerMake() => new Box(); } }"];
+
+  it("coalesces equivalent internal partials from a reopened namespace without crossing owners or files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-internal-partial-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Use.cs": `${lines.join("\n")}\n`,
+        "Peer.cs": `${peerLines.join("\n")}\n`,
+      });
+      const file = paths["Use.cs"]!;
+      const peerFile = paths["Peer.cs"]!;
+      const index = await buildProjectIndexFromFiles(root, [file, peerFile]);
+
+      const allowed = await goToDefinition(index, {
+        file,
+        line: 5,
+        column: columnOf(lines, 5, "new Box") + 4,
+      });
+      expect(allowed.status).toBe("ok");
+      if (allowed.status !== "ok") throw new Error("Expected the same-file internal partial Box");
+      expect(normalizePath(allowed.definition.file)).toBe(file);
+      expect(allowed.definition.range.start.line).toBe(2);
+
+      const decoy = await goToDefinition(index, {
+        file,
+        line: 6,
+        column: columnOf(lines, 6, "new Box") + 4,
+      });
+      expect(decoy.status).toBe("ok");
+      if (decoy.status !== "ok") throw new Error("Expected the decoy namespace Box");
+      expect(decoy.definition.range.start.line).toBe(1);
+
+      const nested = await goToDefinition(index, {
+        file,
+        line: 3,
+        column: columnOf(lines, 3, "new Box") + 4,
+      });
+      expect(nested.status).toBe("ok");
+      if (nested.status !== "ok") throw new Error("Expected the nested owner Box");
+      expect(nested.definition.range.start.line).toBe(3);
+
+      const rejected = await goToDefinition(index, {
+        file,
+        line: 7,
+        column: columnOf(lines, 7, "new Box") + 4,
+      });
+      expect(rejected.status).toBe("not_found");
+
+      const peer = await goToDefinition(index, {
+        file: peerFile,
+        line: 1,
+        column: columnOf(peerLines, 1, "new Box") + 4,
+      });
+      expect(peer.status).toBe("not_found");
+
+      const boxReferences = await findReferences(index, {
+        file,
+        line: 2,
+        column: columnOf(lines, 2, "class Box") + 6,
+      });
+      expect(boxReferences.status).toBe("ok");
+      if (boxReferences.status !== "ok") throw new Error("Expected internal partial Box references");
+      const boxSites = boxReferences.references.map(
+        (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
+      );
+      expect(boxSites).toContain(`${file}:2`);
+      expect(boxSites).toContain(`${file}:4`);
+      expect(boxSites).toContain(`${file}:5`);
+      expect(boxSites).not.toContain(`${file}:1`);
+      expect(boxSites).not.toContain(`${file}:3`);
+      expect(boxSites).not.toContain(`${file}:6`);
+      expect(boxSites).not.toContain(`${file}:7`);
+      expect(boxSites.some((site) => site.startsWith(`${peerFile}:`))).toBe(false);
+
+      const pBoxId = `${file}::Box::${allowed.definition.range.start.index ?? 0}`;
+      const qBoxId = `${file}::Box::${decoy.definition.range.start.index ?? 0}`;
+      const nestedBoxId = `${file}::Box::${nested.definition.range.start.index ?? 0}`;
+      const graph = await buildSymbolGraphDetailed(index);
+      const instantiations = graph.edges
+        .filter((edge) => edge.label === "instantiates")
+        .map((edge) => {
+          const toNode = graph.nodes.get(edge.to);
+          return {
+            from: graph.nodes.get(edge.from)?.name,
+            to: edge.to,
+            toFile: toNode ? normalizePath(toNode.file) : undefined,
+          };
+        });
+      expect(instantiations.some((edge) => edge.from === "AllowedMake" && edge.to === pBoxId)).toBe(true);
+      expect(instantiations.some((edge) => edge.from === "DecoyMake" && edge.to === qBoxId)).toBe(true);
+      expect(instantiations.some((edge) => edge.from === "NestedMake" && edge.to === nestedBoxId)).toBe(true);
+      expect(instantiations.some((edge) => edge.from === "RejectedMake")).toBe(false);
+      expect(instantiations.some((edge) => edge.from === "PeerMake")).toBe(false);
+      expect(instantiations.some((edge) => edge.toFile === peerFile)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not coalesce internal types that are not proven-equivalent parts", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-internal-partial-kind-"));
+    try {
+      const kindLines = [
+        "namespace P { internal partial class Box {} }",
+        "namespace P { internal partial struct Box {} }",
+        "namespace P { class KindUse { Box Make() => new Box(); } }",
+      ];
+      const paths = await writeFixtureFiles(root, { "Use.cs": `${kindLines.join("\n")}\n` });
+      const index = await buildProjectIndexFromFiles(root, [paths["Use.cs"]!]);
+      const result = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line: 3,
+        column: columnOf(kindLines, 3, "new Box") + 4,
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("C# partial class members across files", () => {
   // #378: members declared in one part file are the same owner as the call site in the other part
   // file, so navigation, references, and the detailed graph must all connect them. A third

@@ -463,4 +463,174 @@ describe("Swift same-module and shared-owner visibility", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("keeps constrained extension members off unproven receivers but resolves proven peers", async () => {
+    const baseLines = [
+      "struct Box<T> {",
+      "  func plain() {}",
+      "  func use() { self.constrainedOnly(); self.plain() }",
+      "  func bareUse() { constrainedOnly(); plain() }",
+      "  fileprivate func hidden() {}",
+      "}",
+      "extension Box where T == Int { func localOnly() {} }",
+    ];
+    const intLines = [
+      "extension Box where T == Int {",
+      "  func constrainedOnly() {}",
+      "  func invoke() { self.constrainedOnly(); self.plain(); self.extra(); self.stringOnly(); self.hidden() }",
+      "  func bareInvoke() { plain(); extra(); stringOnly() }",
+      "  func localShadow() { func extra() {}; extra() }",
+      "}",
+      "extension Box where T == String { func stringOnly() {} }",
+      "func extra() {}",
+    ];
+    const peerLines = ["extension Box where T == Int { func extra() {} }"];
+    const plainLines = ["extension Box {", "  func invoke() { self.plain(); self.constrainedOnly() }", "}"];
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-constrained-owner-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "A.swift": `${baseLines.join("\n")}\n`,
+        "B.swift": `${intLines.join("\n")}\n`,
+        "C.swift": `${peerLines.join("\n")}\n`,
+        "D.swift": `${plainLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const basePath = paths["A.swift"]!;
+      const intPath = paths["B.swift"]!;
+      const peerPath = paths["C.swift"]!;
+      const plainPath = paths["D.swift"]!;
+      for (const [file, lines, line, member] of [
+        [basePath, baseLines, 3, "constrainedOnly"],
+        [basePath, baseLines, 4, "constrainedOnly"],
+        [plainPath, plainLines, 2, "constrainedOnly"],
+        [intPath, intLines, 3, "stringOnly"],
+        [intPath, intLines, 3, "hidden"],
+        [intPath, intLines, 4, "stringOnly"],
+      ] as const) {
+        const result = await goToDefinition(index, { file, line, column: columnOf(lines, line, member) });
+        expect(result.status).toBe("not_found");
+      }
+      for (const [file, lines, line, member, target, targetLine] of [
+        [intPath, intLines, 3, "plain", basePath, 2],
+        [intPath, intLines, 3, "constrainedOnly", intPath, 2],
+        [intPath, intLines, 3, "extra", peerPath, 1],
+        [intPath, intLines, 4, "plain", basePath, 2],
+        [intPath, intLines, 4, "extra", peerPath, 1],
+        [plainPath, plainLines, 2, "plain", basePath, 2],
+        [basePath, baseLines, 4, "plain", basePath, 2],
+      ] as const) {
+        const result = await goToDefinition(index, { file, line, column: columnOf(lines, line, member) });
+        expect(result.status, file + ":" + line + " " + member).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected a proven Swift member");
+        expect(normalizePath(result.definition.file), file + ":" + line + " " + member).toBe(target);
+        expect(result.definition.range.start.line).toBe(targetLine);
+      }
+      const shadow = await goToDefinition(index, {
+        file: intPath,
+        line: 5,
+        column: intLines[4]!.lastIndexOf("extra") + 1,
+      });
+      expect(shadow.status).toBe("ok");
+      if (shadow.status !== "ok") throw new Error("Expected a method-local Swift function");
+      expect(shadow.definition.range.start.line).toBe(5);
+      const references = await findReferences(index, {
+        file: intPath,
+        line: 2,
+        column: columnOf(intLines, 2, "constrainedOnly"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected constrained Swift member references");
+      expect(
+        references.references.some(
+          (reference) => normalizePath(reference.file) === basePath && reference.range.start.line === 4,
+        ),
+      ).toBe(false);
+      const nominalReferences = await findReferences(index, {
+        file: basePath,
+        line: 2,
+        column: columnOf(baseLines, 2, "plain"),
+      });
+      expect(nominalReferences.status).toBe("ok");
+      if (nominalReferences.status !== "ok") throw new Error("Expected visible nominal member references");
+      expect(
+        nominalReferences.references.some(
+          (reference) => normalizePath(reference.file) === intPath && reference.range.start.line === 4,
+        ),
+      ).toBe(true);
+      const graph = await buildSymbolGraphDetailed(index);
+      const target = [...graph.nodes.values()].find(
+        (node) => node.name === "constrainedOnly" && normalizePath(node.file) === intPath,
+      );
+      const nominal = [...graph.nodes.values()].find(
+        (node) => node.name === "Box" && normalizePath(node.file) === basePath,
+      );
+      const baseUse = [...graph.nodes.values()].find(
+        (node) => node.name === "use" && normalizePath(node.file) === basePath,
+      );
+      const bareUse = [...graph.nodes.values()].find(
+        (node) => node.name === "bareUse" && normalizePath(node.file) === basePath,
+      );
+      const intInvoke = [...graph.nodes.values()].find(
+        (node) => node.name === "invoke" && normalizePath(node.file) === intPath,
+      );
+      const intBareInvoke = [...graph.nodes.values()].find(
+        (node) => node.name === "bareInvoke" && normalizePath(node.file) === intPath,
+      );
+      expect(target).toBeDefined();
+      expect(nominal).toBeDefined();
+      expect(baseUse).toBeDefined();
+      expect(bareUse).toBeDefined();
+      expect(intInvoke).toBeDefined();
+      expect(intBareInvoke).toBeDefined();
+      expect(
+        graph.edges.some((edge) => edge.from === target!.id && edge.to === nominal!.id && edge.label === "member_of"),
+      ).toBe(false);
+      expect(
+        graph.edges.some((edge) => edge.from === baseUse!.id && edge.to === target!.id && edge.label === "calls"),
+      ).toBe(false);
+      expect(
+        graph.edges.some((edge) => edge.from === bareUse!.id && edge.to === target!.id && edge.label === "calls"),
+      ).toBe(false);
+      expect(
+        graph.edges.some(
+          (edge) => edge.from === bareUse!.id && graph.nodes.get(edge.to)?.name === "plain" && edge.label === "calls",
+        ),
+      ).toBe(true);
+      const calls = graph.edges.filter((edge) => edge.from === intInvoke!.id && edge.label === "calls");
+      expect(calls.some((edge) => edge.to === target!.id)).toBe(true);
+      expect(
+        calls.some((edge) => {
+          const node = graph.nodes.get(edge.to);
+          return node?.name === "plain" && normalizePath(node.file) === basePath;
+        }),
+      ).toBe(true);
+      expect(
+        calls.some((edge) => {
+          const node = graph.nodes.get(edge.to);
+          return node?.name === "extra" && normalizePath(node.file) === peerPath;
+        }),
+      ).toBe(true);
+      expect(
+        calls.some((edge) => {
+          const node = graph.nodes.get(edge.to);
+          return node?.name === "extra" && normalizePath(node.file) === intPath;
+        }),
+      ).toBe(false);
+      expect(calls.some((edge) => graph.nodes.get(edge.to)?.name === "hidden")).toBe(false);
+      const bareCalls = graph.edges.filter((edge) => edge.from === intBareInvoke!.id && edge.label === "calls");
+      expect(
+        bareCalls.some((edge) => {
+          const node = graph.nodes.get(edge.to);
+          return node?.name === "extra" && normalizePath(node.file) === peerPath;
+        }),
+      ).toBe(true);
+      expect(
+        bareCalls.some((edge) => {
+          const node = graph.nodes.get(edge.to);
+          return node?.name === "extra" && normalizePath(node.file) === intPath;
+        }),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

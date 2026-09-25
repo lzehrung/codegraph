@@ -373,15 +373,17 @@ export function resolveExport(
     for (const target of names.localExports.get(canonicalName) ?? []) {
       if (
         matchesOptions(target, namespace) &&
+        // Nested types resolve through their owner, not as bare namespace names.
         (!filtersUseNamespace ||
-          isUnitBareNameVisible({
-            index,
-            declarationFile: target.file,
-            declaration: target.range,
-            useFile: file,
-            useIndex: referenceIndex,
-            ...(qualification !== undefined ? { qualification } : {}),
-          })) &&
+          (!target.isMember &&
+            isUnitBareNameVisible({
+              index,
+              declarationFile: target.file,
+              declaration: target.range,
+              useFile: file,
+              useIndex: referenceIndex,
+              ...(qualification !== undefined ? { qualification } : {}),
+            }))) &&
         !localCandidates.some((candidate) => sameSymbolDef(index, candidate, target))
       ) {
         localCandidates.push(target);
@@ -504,13 +506,19 @@ export function resolveExport(
         }
       }
     }
-    if (localFallbackCandidates.length === 1) {
-      const local = localFallbackCandidates[0]!;
+    // Hidden same-file C# types are omitted from exports, so equivalent internal
+    // `partial` parts both land here. Collapse them with the same shared-owner
+    // identity used for exported candidates before uniqueness is judged.
+    const uniqueLocalFallback = filtersUseNamespace
+      ? coalesceEquivalentCsharpPartialExports(index, localFallbackCandidates)
+      : localFallbackCandidates;
+    if (uniqueLocalFallback.length === 1) {
+      const local = uniqueLocalFallback[0]!;
       const result: ResolvedExport = { kind: "resolved", def: local };
       index.exportCache.set(key, result);
       return result;
     }
-    if (localFallbackCandidates.length) {
+    if (uniqueLocalFallback.length) {
       index.exportCache.set(key, null);
       return null;
     }

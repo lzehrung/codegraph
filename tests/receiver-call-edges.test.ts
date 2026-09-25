@@ -2476,6 +2476,26 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(memberOfTargets).toEqual([]);
   });
 
+  it("does not attribute instance calls from a local function inside a static C# method", async () => {
+    const files = {
+      "StaticLocal.cs": [
+        "class StaticLocal {",
+        "  void Instance() {}",
+        "  static void Shared() {}",
+        "  static void Run() { void Local() { Instance(); Shared(); } Local(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-cs-static-local-", files);
+    const local = nodeIn(graph, "StaticLocal.cs", "Local");
+    const run = nodeIn(graph, "StaticLocal.cs", "Run");
+    const shared = nodeIn(graph, "StaticLocal.cs", "Shared");
+    const instance = nodeIn(graph, "StaticLocal.cs", "Instance");
+    expect(callsiteTexts(graph, local, run, files)).toEqual(["Local"]);
+    expect(callsiteTexts(graph, shared, local, files)).toEqual(["Shared"]);
+    expect(callsiteTexts(graph, instance, local, files)).toBeNull();
+  });
+
   it("resolves a C# this receiver to a member instead of a same-named local function", async () => {
     const files: Record<string, string> = {
       "LocalMember.cs": [

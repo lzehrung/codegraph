@@ -78,7 +78,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v15: trivia-safe package peers can change cross-file detailed call edges.
 // v16: Swift extension visibility and nested C# partial owner identity change persisted call edges.
 // v17: qualified C# generic type uses can change persisted constructor/type edges.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 17;
+// v18: constrained Swift extensions no longer donate members to unproven nominal owners.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 18;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
