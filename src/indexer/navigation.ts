@@ -8,7 +8,8 @@ import {
   findCsharpPartialTypeEquivalents,
   innermostNamespaceImport,
   resolveMemberAccessDefinition,
-  resolveSwiftBareMember,
+  sharedOwnerMemberUnitComplete,
+  resolveImplicitSelfMember,
   supportsReceiverMemberNavigation,
 } from "./navigation-goto.js";
 import {
@@ -383,7 +384,7 @@ export async function goToDefinition(
       scopeIndex.allScopes[0]?.map.get(closestBinding.canonicalName) === closestBinding
     ) {
       // Method-local bindings still win; only module-level names yield to proven members.
-      const member = await resolveSwiftBareMember(index, mod, node, lookupName, source);
+      const member = await resolveImplicitSelfMember(index, mod, node, lookupName, source, sup.id);
       if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
     }
     if (local) {
@@ -422,11 +423,12 @@ export async function goToDefinition(
         cNamespace,
         node.startIndex,
       );
-      if (sup.id === "swift") {
-        // Inside a type, a proven member takes precedence over a same-named module function.
-        const visible = await resolveSwiftBareMember(index, mod, node, lookupName, source);
+      if (sup.id === "swift" || sup.id === "csharp") {
+        // Inside a type, a proven member takes precedence over a same-named module name. C#
+        // partial members declared in another file reach this path only as invocation callees.
+        const visible = await resolveImplicitSelfMember(index, mod, node, lookupName, source, sup.id);
         if (visible) return okGoToResult(index, visible, { resolution: "member-access", confidence: "medium" });
-        if (resolvedName?.status === "ok" && resolvedName.definition.isMember) {
+        if (sup.id === "swift" && resolvedName?.status === "ok" && resolvedName.definition.isMember) {
           return { status: "not_found", reason: "No matching Swift member definition" };
         }
       }
@@ -1174,7 +1176,16 @@ async function findReferencesInternal(
   }
 
   const scannedFiles = [definitionFile, ...candidateFiles, ...receiverScannedFiles];
-  const implicitUnitLanguage = !definition.isMember && IMPLICIT_UNIT_LANGUAGES[parsedContext.sup.id];
+  // Top-level implicit-unit names and C# partial / Swift shared-owner members are both bounded
+  // by the source-unit relation; an unproven boundary leaves their reference set partial.
+  const implicitUnitComplete =
+    !definition.isMember && IMPLICIT_UNIT_LANGUAGES[parsedContext.sup.id]
+      ? getCompilationUnitPeers(
+          index,
+          definitionFile,
+          parsedContext.sup.id === "csharp" ? { csharpQualifiedName: true } : undefined,
+        ).complete
+      : await sharedOwnerMemberUnitComplete(index, definition);
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,
     def: definition,
@@ -1195,17 +1206,8 @@ async function findReferencesInternal(
       },
       // An unproven compilation-unit boundary means the peer universe may extend beyond the
       // enumerated files, so coverage must not imply that every possible consumer was scanned.
-      ...(implicitUnitLanguage
-        ? {
-            implicitUnitPeers: {
-              applicable: true,
-              executed: getCompilationUnitPeers(
-                index,
-                definitionFile,
-                parsedContext.sup.id === "csharp" ? { csharpQualifiedName: true } : undefined,
-              ).complete,
-            },
-          }
+      ...(implicitUnitComplete !== null
+        ? { implicitUnitPeers: { applicable: true, executed: implicitUnitComplete } }
         : {}),
     }),
     strategyUnavailableFiles: [...receiverProofUnavailableFiles.values()],

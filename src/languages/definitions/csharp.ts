@@ -1,9 +1,7 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
 import { classifyByParentType, isNameFieldOnParent, nodeTypeIn } from "./shared.js";
-import { CSHARP_IDENTIFIER_FORMAT_SOURCE, hasNonAsciiCodePoint } from "../../util/identifiers.js";
-
-const CSHARP_IDENTIFIER_FORMAT_PATTERN = new RegExp(`[${CSHARP_IDENTIFIER_FORMAT_SOURCE}]`, "gu");
+import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
 
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
@@ -150,11 +148,6 @@ export const CSHARP_DEF: LanguageDefinition = {
       "parameter",
       "declaration_pattern",
     ]),
-  normalizeIdentifier: (name) => {
-    const withoutVerbatimPrefix = name.startsWith("@") ? name.slice(1) : name;
-    return hasNonAsciiCodePoint(withoutVerbatimPrefix)
-      ? withoutVerbatimPrefix.replace(CSHARP_IDENTIFIER_FORMAT_PATTERN, "")
-      : withoutVerbatimPrefix;
-  },
+  normalizeIdentifier: normalizeCsharpIdentifier,
 };
 registerLanguage(CSHARP_DEF);

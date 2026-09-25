@@ -5,6 +5,7 @@ import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText } from "../util/ast.js";
+import { normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { ProjectIndex, SymbolDef } from "./types.js";
@@ -52,9 +53,10 @@ function isCSharpPartialContainer(container: SyntaxNodeLike, source: string): bo
   return false;
 }
 
+/** Declared C# name with verbatim `@` and formatting characters removed, per identifier equality. */
 function csharpNameText(node: SyntaxNodeLike | null, source: string): string {
   if (!node) return "";
-  return sliceText(node, source).trim();
+  return normalizeCsharpQualifiedName(sliceText(node, source));
 }
 
 function csharpGenericArity(container: SyntaxNodeLike): number {

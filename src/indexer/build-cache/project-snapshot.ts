@@ -80,7 +80,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v17: qualified C# generic type uses can change persisted constructor/type edges.
 // v18: constrained Swift extensions no longer donate members to unproven nominal owners.
 // v19: Swift constraint-token equivalence can restore peer call edges across formatting.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 19;
+// v20: C# verbatim namespace/type identifiers can merge shared-owner identities and call edges.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 20;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";

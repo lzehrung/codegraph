@@ -29,6 +29,7 @@ import {
   keywordReceiverCrossesDynamicBoundary,
   isUnprovenHeritageExpression,
   keywordReceiverMemberScope,
+  nodeInStaticMemberContext,
   receiverConstructorExpression,
   unwrapNamedType,
   type ReceiverMemberScope,
@@ -161,6 +162,32 @@ export async function resolveSharedOwnerContainers(params: {
     }
   }
   return out;
+}
+
+/**
+ * Unit-boundary completeness for a C# partial or Swift type/extension member. Its other
+ * owner parts, and therefore its uses, are bounded by `getCompilationUnitPeers`, so an
+ * unproven unit boundary leaves the member's reference set incomplete. Returns null when
+ * the member's owner cannot be shared across files.
+ */
+export async function sharedOwnerMemberUnitComplete(index: ProjectIndex, def: SymbolDef): Promise<boolean | null> {
+  if (!def.isMember) return null;
+  let context: ParsedFileContext;
+  try {
+    context = await ensureParsedContext(
+      def.file,
+      index.parsed?.get(fileIdentityKey(def.file)),
+      index.languageExtensions,
+    );
+  } catch {
+    return null;
+  }
+  const languageId = context.sup.id;
+  if (languageId !== "csharp" && languageId !== "swift") return null;
+  const nameNode = nameNodeForDef(context, def);
+  const container = nameNode ? nearestMemberContainer(nameNode) : null;
+  if (!container || !getSharedOwnerIdentity(container, context.source, languageId)) return null;
+  return getCompilationUnitPeers(index, def.file).complete;
 }
 
 /**
@@ -1122,22 +1149,37 @@ async function resolveKeywordReceiverMember(
   }
   return undefined;
 }
-/** Validate an unqualified Swift member against its actual lexical owner. */
-export async function resolveSwiftBareMember(
+/**
+ * Validate an unqualified member use against its actual lexical owner, including shared
+ * owner parts in other files. Swift checks every bare name; C# checks only invocation
+ * callees, matching the detailed graph's implicit-self call candidates. A C# static
+ * context reaches only static members.
+ */
+export async function resolveImplicitSelfMember(
   index: ProjectIndex,
   mod: ModuleIndex,
   node: SyntaxNodeLike,
   name: string,
   source: string,
+  languageId: string,
 ): Promise<SymbolDef | undefined> {
+  const call = node.parent ?? node;
+  if (languageId === "csharp") {
+    const callee = call.type === "invocation_expression" ? call.childForFieldName("function") : null;
+    if (!callee || callee.startIndex !== node.startIndex || callee.endIndex !== node.endIndex) return undefined;
+  } else if (languageId !== "swift") {
+    return undefined;
+  }
+  const memberScope: ReceiverMemberScope =
+    languageId === "csharp" && nodeInStaticMemberContext(node, source) ? "static" : "any";
   return resolveKeywordReceiverMember(
     index,
     mod,
     node,
     name,
-    "any",
+    memberScope,
     false,
-    getCallArgumentCount({ languageId: "swift", source, call: node.parent ?? node }) ?? undefined,
+    getCallArgumentCount({ languageId, source, call }) ?? undefined,
   );
 }
 

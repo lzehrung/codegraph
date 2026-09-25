@@ -3,7 +3,7 @@ import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import type { FileId } from "../types.js";
-import { foldPhpIdentifierCase } from "../util/identifiers.js";
+import { foldPhpIdentifierCase, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import {
   getCompilationUnitPeers,
@@ -340,7 +340,8 @@ export function resolveExport(
     let qualification: string | undefined;
     let unqualifiedName = name;
     if (separator >= 0) {
-      qualification = name.slice(0, separator);
+      // `@P.Target` and `P.Target` name the same namespace path.
+      qualification = normalizeCsharpQualifiedName(name.slice(0, separator));
       unqualifiedName = name.slice(separator + 1);
     } else if (filtersUseNamespace && name.startsWith("global::")) {
       qualification = "global::";

@@ -1457,6 +1457,122 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  it("resolves bare calls to members of another partial part and keeps them in its reference set", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-bare-"));
+    try {
+      const declaring = [
+        "namespace P;",
+        "public partial class Box {",
+        "  public void Helper() {}",
+        "  public static void Shared() {}",
+        "}",
+      ];
+      const callerLines = [
+        "namespace P;",
+        "public partial class Box {",
+        "  void Use() { Helper(); }",
+        "  static void StaticUse() { Helper(); Shared(); }",
+        "  void Shadow() { void Helper() {} Helper(); }",
+        "}",
+      ];
+      const unrelated = ["namespace P;", "class Other {", "  void Use() { Helper(); }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "Box.A.cs": `${declaring.join("\n")}\n`,
+        "Box.B.cs": `${callerLines.join("\n")}\n`,
+        "Other.cs": `${unrelated.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const at = (file: string, lines: readonly string[], line: number, token: string, last = false) => {
+        const text = lines[line - 1]!;
+        return { file: paths[file]!, line, column: (last ? text.lastIndexOf(token) : text.indexOf(token)) + 1 };
+      };
+
+      const instanceCall = await goToDefinition(index, at("Box.B.cs", callerLines, 3, "Helper"));
+      expect(instanceCall.status).toBe("ok");
+      if (instanceCall.status !== "ok") throw new Error("Expected the partial member");
+      expect(normalizePath(instanceCall.definition.file)).toBe(paths["Box.A.cs"]);
+      expect(instanceCall.definition.range.start.line).toBe(3);
+
+      // A static context reaches only static members; the shadowing local function still wins.
+      expect((await goToDefinition(index, at("Box.B.cs", callerLines, 4, "Helper"))).status).toBe("not_found");
+      const staticCall = await goToDefinition(index, at("Box.B.cs", callerLines, 4, "Shared"));
+      expect(staticCall.status === "ok" && normalizePath(staticCall.definition.file)).toBe(paths["Box.A.cs"]);
+      const shadow = await goToDefinition(index, at("Box.B.cs", callerLines, 5, "Helper", true));
+      expect(shadow.status === "ok" && normalizePath(shadow.definition.file)).toBe(paths["Box.B.cs"]);
+      // A same-namespace class that is not a partial part does not gain the member.
+      expect((await goToDefinition(index, at("Other.cs", unrelated, 3, "Helper"))).status).toBe("not_found");
+
+      const references = await findReferences(index, at("Box.A.cs", declaring, 3, "Helper"));
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected partial member references");
+      const sites = references.references.map((ref) => `${path.basename(ref.file)}:${ref.range.start.line}`);
+      expect(sites).toContain("Box.B.cs:3");
+      expect(sites).not.toContain("Box.B.cs:4");
+      expect(sites).not.toContain("Box.B.cs:5");
+      expect(sites).not.toContain("Other.cs:3");
+      expect(references.referenceCoverage?.state).toBe("complete");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial member coverage when another partial part can sit outside the directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-coverage-"));
+    try {
+      const declaring = ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "a/Box.A.cs": `${declaring.join("\n")}\n`,
+        "b/Box.B.cs": "namespace P;\npublic partial class Box {\n  void Use() { Helper(); }\n}\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const references = await findReferences(index, {
+        file: paths["a/Box.A.cs"]!,
+        line: 3,
+        column: columnOf(declaring, 3, "Helper"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected partial member references");
+      expect(references.referenceCoverage).toMatchObject({ state: "partial", reasons: ["strategy_unavailable"] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats verbatim namespace identifiers as the same namespace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-namespace-"));
+    try {
+      const useLines = [
+        "namespace P;",
+        "public partial class Box {",
+        "  void Use() { this.Helper(); }",
+        "  Target Make() => new Target();",
+        "}",
+      ];
+      const decoy = ["namespace Q;", "public class Target {}"];
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": "namespace @P;\npublic class Target {}\n",
+        "Box.A.cs": "namespace @P;\npublic partial class @Box {\n  public void Helper() {}\n}\n",
+        "Box.B.cs": `${useLines.join("\n")}\n`,
+        "Decoy.cs": `${decoy.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const type = await goToDefinition(index, {
+        file: paths["Box.B.cs"]!,
+        line: 4,
+        column: columnOf(useLines, 4, "Target"),
+      });
+      expect(type.status === "ok" && normalizePath(type.definition.file)).toBe(paths["Target.cs"]);
+      const member = await goToDefinition(index, {
+        file: paths["Box.B.cs"]!,
+        line: 3,
+        column: columnOf(useLines, 3, "Helper"),
+      });
+      expect(member.status === "ok" && normalizePath(member.definition.file)).toBe(paths["Box.A.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not coalesce partials with different kinds or enclosing owners", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-kind-owner-"));
     try {

@@ -7,6 +7,7 @@ import {
   GO_IDENTIFIER_SOURCE,
   JAVA_IDENTIFIER_SOURCE,
   KOTLIN_IDENTIFIER_SOURCE,
+  normalizeCsharpQualifiedName,
 } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
@@ -140,7 +141,8 @@ function collectCsharpNamespaceRegions(source: string): CsharpNamespaceRegion[] 
     }
     const namespaceName = match[1];
     if (!namespaceName) continue;
-    const normalized = namespaceName.replace(/\s+/gu, "");
+    // `namespace @P` and `namespace P` declare one namespace; compare normalized segments.
+    const normalized = normalizeCsharpQualifiedName(namespaceName);
     const terminator = masked[matchIndex + match[0].length - 1];
     cursor = matchIndex + match[0].length;
     if (terminator !== "{") {

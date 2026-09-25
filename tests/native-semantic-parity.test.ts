@@ -2156,19 +2156,25 @@ nativeDescribe("native semantic coverage", () => {
 
     for (const peerCase of peerCases) {
       const gotoLines = peerCase.files[peerCase.goto.file]!;
-      const goto = await goToDefinition(cold, {
+      const gotoRequest = {
         file: normalizeFile(path.join(root, peerCase.goto.file)),
         line: peerCase.goto.line,
         column: columnAt(gotoLines, peerCase.goto.line, peerCase.goto.token),
-      });
-      expect(goto.status, `${peerCase.name}: navigation`).toBe("ok");
-      if (goto.status !== "ok") throw new Error(`${peerCase.name}: navigation did not resolve`);
-      expect(relativeFile(root, goto.definition.file), `${peerCase.name}: navigation target file`).toBe(
-        peerCase.goto.expectedFile,
-      );
-      expect(goto.definition.range.start.line, `${peerCase.name}: navigation target line`).toBe(
-        peerCase.goto.expectedLine,
-      );
+      };
+      for (const [phase, index] of [
+        ["cold", cold],
+        ["warm", warm],
+      ] as const) {
+        const goto = await goToDefinition(index, gotoRequest);
+        expect(goto.status, `${peerCase.name}: ${phase} navigation`).toBe("ok");
+        if (goto.status !== "ok") throw new Error(`${peerCase.name}: ${phase} navigation did not resolve`);
+        expect(relativeFile(root, goto.definition.file), `${peerCase.name}: ${phase} navigation target file`).toBe(
+          peerCase.goto.expectedFile,
+        );
+        expect(goto.definition.range.start.line, `${peerCase.name}: ${phase} navigation target line`).toBe(
+          peerCase.goto.expectedLine,
+        );
+      }
 
       const referenceLines = peerCase.files[peerCase.references.file]!;
       const referenceRequest = {

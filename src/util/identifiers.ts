@@ -49,6 +49,28 @@ export const JAVA_IDENTIFIER_IGNORABLE_SOURCE = String.raw`\p{Cf}\u0000-\u0008\u
 /** C# formatting characters permitted in identifier-part-character. */
 export const CSHARP_IDENTIFIER_FORMAT_SOURCE = String.raw`\p{Cf}`;
 
+const CSHARP_IDENTIFIER_FORMAT_PATTERN = new RegExp(`[${CSHARP_IDENTIFIER_FORMAT_SOURCE}]`, "gu");
+
+/**
+ * C# identifier equality: a verbatim `@` prefix and formatting characters (Cf) do not change
+ * the identifier, so `@P` and `P` name the same namespace, type, or member.
+ */
+export function normalizeCsharpIdentifier(name: string): string {
+  const withoutVerbatimPrefix = name.startsWith("@") ? name.slice(1) : name;
+  return hasNonAsciiCodePoint(withoutVerbatimPrefix)
+    ? withoutVerbatimPrefix.replace(CSHARP_IDENTIFIER_FORMAT_PATTERN, "")
+    : withoutVerbatimPrefix;
+}
+
+/** Normalizes each dotted segment of a C# namespace or type path; a `global::` prefix is kept. */
+export function normalizeCsharpQualifiedName(text: string): string {
+  const compact = text.replace(/\s+/gu, "");
+  const globalPrefix = compact.startsWith("global::") ? "global::" : "";
+  const body = compact.slice(globalPrefix.length);
+  if (!body) return globalPrefix;
+  return globalPrefix + body.split(".").map(normalizeCsharpIdentifier).join(".");
+}
+
 /**
  * Java identifiers (`Character.isJavaIdentifierStart`/`isJavaIdentifierPart`) permit a
  * Unicode letter (Lu/Ll/Lt/Lm/Lo), a letter-number (Nl, e.g. Roman numerals), a currency
