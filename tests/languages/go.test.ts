@@ -320,7 +320,7 @@ describe("Go same-package peer visibility", () => {
   // found through the package compilation unit and must not leak into a same-named declaration
   // in another package.
   const sharedLines = ["package p", "", "func Shared() int { return 1 }"];
-  const useLines = ["package p", "", "func Use() int { return Shared() }"];
+  const useLines = ["/*", "package q", "*/", "package p", "", "func Use() int { return Shared() }"];
   const decoyLines = ["package q", "", "func Shared() int { return 2 }", "", "func UseDecoy() int { return Shared() }"];
   const subLines = ["package sub", "", "func Helper() int { return 3 }"];
   const aliasedLines = [
@@ -348,8 +348,8 @@ describe("Go same-package peer visibility", () => {
 
       const goto = await goToDefinition(index, {
         file: usePath,
-        line: 3,
-        column: columnOf(useLines, 3, "Shared"),
+        line: 6,
+        column: columnOf(useLines, 6, "Shared"),
       });
       expect(goto.status).toBe("ok");
       if (goto.status !== "ok") throw new Error("Expected the same-package sibling declaration");
@@ -367,7 +367,7 @@ describe("Go same-package peer visibility", () => {
         (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
       );
       expect(sites).toContain(`${sharedPath}:3`);
-      expect(sites).toContain(`${usePath}:3`);
+      expect(sites).toContain(`${usePath}:6`);
       expect(references.references.some((reference) => normalizePath(reference.file) === decoyPath)).toBe(false);
 
       const decoyReferences = await findReferences(index, {

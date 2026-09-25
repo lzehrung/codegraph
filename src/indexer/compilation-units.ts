@@ -217,11 +217,12 @@ export function getPackageDeclarationName(
   const source = unitDeclarationSource(index, filePath, fileKey);
   let packageName: string | null = null;
   if (source !== null) {
+    const masked = maskTrivia(source, languageId);
     if (languageId === "go") {
-      packageName = GO_PACKAGE_PATTERN.exec(source)?.[1] ?? null;
+      packageName = GO_PACKAGE_PATTERN.exec(masked)?.[1] ?? null;
     } else {
       const pattern = languageId === "kotlin" ? KOTLIN_PACKAGE_NAME_PATTERN : JAVA_PACKAGE_NAME_PATTERN;
-      packageName = pattern.exec(source)?.[1] ?? null;
+      packageName = pattern.exec(masked)?.[1] ?? null;
     }
   }
   cache.set(cacheKey, packageName);

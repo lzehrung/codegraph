@@ -6,7 +6,7 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 37017 | 40668 |   91.02% |
+| Lines     | 37016 | 40669 |   91.02% |
 | Functions |  5910 |  6277 |   94.15% |
 | Branches  | 28704 | 35921 |   79.91% |
 

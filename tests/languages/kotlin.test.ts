@@ -526,7 +526,7 @@ describe("Kotlin same-package sibling classes", () => {
   // return type and constructed with a capitalized call must resolve and be referenced without
   // any import, while a same-named class in another package must stay out of both results.
   const targetLines = ["package p", "", "class Target"];
-  const useLines = ["package p", "", "class Use {", "  fun make(): Target = Target()", "}"];
+  const useLines = ["/*", "package q", "*/", "package p", "", "class Use {", "  fun make(): Target = Target()", "}"];
   const decoyTargetLines = ["package q", "", "class Target"];
   const decoyUseLines = ["package q", "", "class UseDecoy {", "  fun make(): Target = Target()", "}"];
 
@@ -545,8 +545,8 @@ describe("Kotlin same-package sibling classes", () => {
       const decoyPath = paths["q/Target.kt"]!;
 
       for (const [line, token] of [
-        [4, "Target"],
-        [4, "Target()"],
+        [7, "Target"],
+        [7, "Target()"],
       ] as const) {
         const goto = await goToDefinition(index, {
           file: usePath,
@@ -569,7 +569,7 @@ describe("Kotlin same-package sibling classes", () => {
       const sites = references.references.map(
         (reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`,
       );
-      expect(sites).toContain(`${usePath}:4`);
+      expect(sites).toContain(`${usePath}:7`);
       expect(references.references.some((reference) => normalizePath(reference.file) === decoyPath)).toBe(false);
 
       const decoyReferences = await findReferences(index, {
