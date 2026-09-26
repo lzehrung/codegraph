@@ -36,7 +36,13 @@ export const ECMASCRIPT_DECLARATION_NAME_PARENTS = [
   "function_expression",
 ] as const;
 
-export const ECMASCRIPT_BLOCK_SCOPE_TYPES = ["program", "block", "class_body", "class_static_block"] as const;
+export const ECMASCRIPT_BLOCK_SCOPE_TYPES = [
+  "program",
+  "statement_block",
+  "block",
+  "class_body",
+  "class_static_block",
+] as const;
 
 export const ECMASCRIPT_FUNCTION_SCOPE_TYPES = [
   "function_declaration",

@@ -108,6 +108,7 @@ const SCOPE_NODE_LIST_FIELDS = [
   "memberContainerTypes",
   "memberFunctionTypes",
   "moduleRootTypes",
+  "nonLexicalMemberPropertyTypes",
   "parameterParents",
   "patternBindingTypes",
   "shortVariableDeclarationTypes",
@@ -117,10 +118,18 @@ const SCOPE_NODE_LIST_FIELDS = [
   "unnamedFunctionScopeTypes",
   "variableDeclarationTypes",
   "variableDeclaratorTypes",
+  "variableScopeBoundaryTypes",
+  "wholeScopeDeclarationTypes",
 ] as const satisfies ReadonlyArray<keyof ScopeNodeRow>;
 
 /** Row fields that hold a call or declaration shape rather than a bare node-type list. */
-const SCOPE_NODE_SHAPE_FIELDS = new Set<string>(["requireCall", "namelessVariableDeclaration", "scopedEnum"]);
+const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
+  "requireCall",
+  "namelessVariableDeclaration",
+  "scopedEnum",
+  "variableTargetScopeKinds",
+  "wholeScopeKinds",
+]);
 
 function declaredNodeTypeLists(row: ScopeNodeRow): Array<{ field: string; types: ReadonlySet<string> }> {
   const lists: Array<{ field: string; types: ReadonlySet<string> }> = [];
