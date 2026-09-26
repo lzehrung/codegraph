@@ -263,6 +263,29 @@ describe("H11: source-side name in an aliased Python import", () => {
       },
     );
   });
+
+  it("never resolves the aliased import's source spelling as a bare, unbound identifier elsewhere in the file", async () => {
+    // `from a import helper as h` binds only `h`; a bare `helper()` anywhere else in the file is
+    // unbound (a NameError at runtime) and must stay not_found, even though `helper` is exactly
+    // the import's own source-side spelling.
+    const source = "from a import helper as h\n\nh()\nhelper()\n";
+    await withFixture("cg-audit-h11-unbound-", { "a.py": aSource, "b.py": source }, async (_root, f) => {
+      const index = await buildProjectIndex(_root, { cache: "off" });
+      const importToken = await goToDefinition(index, { file: f("b.py"), line: 1, column: columnOf(source, 1, "helper") });
+      expect(importToken.status).toBe("ok");
+      const aliasUse = await goToDefinition(index, { file: f("b.py"), line: 3, column: columnOf(source, 3, "h") });
+      expect(aliasUse.status).toBe("ok");
+      const unboundUse = await goToDefinition(index, { file: f("b.py"), line: 4, column: columnOf(source, 4, "helper") });
+      expect(unboundUse.status).toBe("not_found");
+
+      const refs = await findReferences(index, { file: f("a.py"), line: 1, column: columnOf(aSource, 1, "helper") });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") return;
+      expect(refs.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(f("b.py")) && reference.range.start.line === 4)).toBe(
+        false,
+      );
+    });
+  });
 });
 
 describe("H12 (Python): super() through a proven base class", () => {
