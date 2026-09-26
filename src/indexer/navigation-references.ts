@@ -27,6 +27,7 @@ import { getCompilationUnitPeers } from "./compilation-units.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
+import { AMBIGUOUS_STAR_IMPORT_REASON } from "./star-import-precedence.js";
 import {
   SymbolKind,
   type ExportEntry,
@@ -574,7 +575,7 @@ export type VerifiedNamedNodeReference = {
 type ReferenceDefinitionResolver = (
   params: { file: string; line: number; column: number },
   parsed: ParsedFileContext,
-) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>;
+) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance; reason?: string }>;
 
 async function receiverProofUnavailable(
   fileId: FileId,
@@ -740,13 +741,13 @@ export async function collectVerifiedNamedNodeReferences(
     }
     // A same-name node that direct resolution and every language-specific fallback both failed
     // to place is not provably unrelated: report the file so coverage cannot silently claim
-    // `complete` while this occurrence's status stays unknown.
-    if (
-      !recoveredByLanguageFallback &&
-      onReceiverProofUnavailable &&
-      (await receiverProofUnavailable(fileId, parsed, range, resolveDefinition))
-    ) {
-      onReceiverProofUnavailable(fileId);
+    // `complete` while this occurrence's status stays unknown. An ambiguous star import is
+    // the same kind of gap: the use was seen and cannot be attributed to one definition.
+    if (!recoveredByLanguageFallback && onReceiverProofUnavailable) {
+      const ambiguousStarImport = resolved.reason === AMBIGUOUS_STAR_IMPORT_REASON;
+      if (ambiguousStarImport || (await receiverProofUnavailable(fileId, parsed, range, resolveDefinition))) {
+        onReceiverProofUnavailable(fileId);
+      }
     }
   }
   return verified;
@@ -927,9 +928,7 @@ function getIndexedReferenceCandidateFiles(
     if (
       moduleIndex.imports.some(
         (imp) =>
-          (imp.kind === "star" ||
-            imp.kind === "namespace" ||
-            (imp.kind === "named" && imp.mechanism === "python")) &&
+          (imp.kind === "star" || imp.kind === "namespace" || (imp.kind === "named" && imp.mechanism === "python")) &&
           importCanReferenceDefinition(index, imp, def, exportedNames, languageId),
       )
     ) {

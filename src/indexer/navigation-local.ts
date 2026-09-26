@@ -1,6 +1,6 @@
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import type { FileId } from "../types.js";
+import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
@@ -8,8 +8,17 @@ import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
 import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
 import {
+  AMBIGUOUS_STAR_IMPORT_REASON,
+  decideStarImportCandidates,
+  isExpandedStarBinding,
+  resolveStarImportedDefinition,
+  starImportPrecedence,
+  type StarImportCandidate,
+} from "./star-import-precedence.js";
+import {
   SymbolKind,
   type GoToResult,
+  type ImportBinding,
   type ModuleIndex,
   type ProjectIndex,
   type ResolvedExport,
@@ -214,6 +223,30 @@ export function toModuleRef(resolved?: FileId | { external: string }): string | 
   return typeof resolved === "string" ? resolved : resolved.external;
 }
 
+function importBindingCoversIndex(imp: ImportBinding, index: number): boolean {
+  const ranges: Range[] = [];
+  if ((imp.kind === "named" || imp.kind === "default" || imp.kind === "namespace") && imp.localRange) {
+    ranges.push(imp.localRange);
+  }
+  if (imp.kind === "named" && imp.importedRange) ranges.push(imp.importedRange);
+  return ranges.some((range) => {
+    const start = range.start.index;
+    const end = range.end.index;
+    return start !== undefined && end !== undefined && index >= start && index < end;
+  });
+}
+
+function starImportGoTo(index: ProjectIndex, imp: ImportBinding, def: SymbolDef, name: string): GoToResult {
+  return okGoToResult(index, def, {
+    via: {
+      ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+      exportedName: name,
+    },
+    resolution: "import-star",
+    confidence: "medium",
+  });
+}
+
 export function resolveNamedDefinition(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -236,15 +269,21 @@ export function resolveNamedDefinition(
       : undefined;
   const suppressCppUnqualifiedLocalExport = support.id === "cpp" && !name.includes("::");
   let hit: ResolvedExport | null = null;
+  // Java: single-type import, then a same-package class, then an on-demand wildcard.
+  // resolveExport's compilation-unit hit is the same-package class, so it must wait
+  // until explicit imports have had a chance to win and must still beat star imports.
+  const deferJavaSamePackage = support.id === "java";
   if (!suppressCppUnqualifiedLocalExport) {
     hit =
       directExport && directExport.type === "local"
         ? { kind: "resolved", def: directExport.target }
-        : resolveExport(index, file, name, {
-            allowLocalFallback: support.membersAreImplicitlyInScope,
-            ...(cNamespace ? { cNamespace } : {}),
-            ...(support.id === "csharp" && referenceIndex !== undefined ? { referenceIndex } : {}),
-          });
+        : deferJavaSamePackage
+          ? null
+          : resolveExport(index, file, name, {
+              allowLocalFallback: support.membersAreImplicitlyInScope,
+              ...(cNamespace ? { cNamespace } : {}),
+              ...(support.id === "csharp" && referenceIndex !== undefined ? { referenceIndex } : {}),
+            });
   }
   if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {
     const importedFrom =
@@ -267,11 +306,31 @@ export function resolveNamedDefinition(
     }
   }
 
+  const precedence = starImportPrecedence(support.id);
+  const starCandidates: StarImportCandidate[] = [];
+  let lastWinsResult: GoToResult | null = null;
+  const acceptBinding = (result: GoToResult, imp: ImportBinding): GoToResult | null => {
+    // A click on the binding's own token names that import, not a later rebinding.
+    if (precedence === "last-wins" && referenceIndex !== undefined && importBindingCoversIndex(imp, referenceIndex)) {
+      return result;
+    }
+    if (precedence === "last-wins") {
+      lastWinsResult = result;
+      return null;
+    }
+    return result;
+  };
+
   for (const imp of mod.imports) {
+    // Star expansion republishes the same names. Judging those copies as explicit
+    // imports would hide a second star import behind the first expanded binding.
+    if (isExpandedStarBinding(imp, mod.imports)) continue;
+
+    let matched: GoToResult | null = null;
     if (imp.kind === "default" && support.normalizeIdentifier(imp.local) === normalizedName) {
       const result = resolveImported(index, imp, "default");
       if (result && !("namespace" in result)) {
-        return okGoToResult(index, result, {
+        matched = okGoToResult(index, result, {
           via: {
             ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
             exportedName: "default",
@@ -283,7 +342,7 @@ export function resolveNamedDefinition(
     } else if (imp.kind === "named" && support.normalizeIdentifier(imp.local) === normalizedName) {
       const result = resolveImported(index, imp, imp.imported, cNamespace ? { cNamespace } : undefined);
       if (result && !("namespace" in result)) {
-        return okGoToResult(index, result, {
+        matched = okGoToResult(index, result, {
           via: {
             ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
             exportedName: imp.imported,
@@ -293,28 +352,22 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "star") {
-      // Ruby star expansion already publishes exported constants. Local fallback would
-      // resurrect a nested class as a bare name the exports query omitted.
-      const result = resolveImported(index, imp, name, {
-        ...(cNamespace ? { cNamespace } : {}),
-        ...(support.id === "ruby" ? { allowLocalFallback: false } : {}),
-      });
-      if (result && !("namespace" in result)) {
-        return okGoToResult(index, result, {
-          via: {
-            ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
-            exportedName: name,
-          },
-          resolution: "import-star",
-          confidence: "medium",
-        });
+      const def = resolveStarImportedDefinition(index, imp, name, support.id, cNamespace);
+      if (def) {
+        const starResult = starImportGoTo(index, imp, def, name);
+        if (precedence === "last-wins") {
+          const taken = acceptBinding(starResult, imp);
+          if (taken) return taken;
+        } else {
+          starCandidates.push({ imp, def });
+        }
       }
     } else if (imp.kind === "namespace" && support.normalizeIdentifier(imp.localNS) === normalizedName) {
       const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
       if (imp.mechanism === "cjs" && targetFile) {
         const classValue = cjsRequireValueBinding(index, targetFile);
         if (classValue) {
-          return okGoToResult(index, classValue, {
+          matched = okGoToResult(index, classValue, {
             via: {
               ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
               exportedName: classValue.localName,
@@ -324,19 +377,25 @@ export function resolveNamedDefinition(
           });
         }
       }
-      const targetMod = targetFile ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
-      const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
-      if (firstExport) {
-        return okGoToResult(index, firstExport.target, {
-          via: {
-            ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
-            exportedName: firstExport.exportedAs,
-          },
-          resolution: "namespace",
-          confidence: "medium",
-        });
+      if (!matched) {
+        const targetMod = targetFile ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
+        const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
+        if (firstExport) {
+          matched = okGoToResult(index, firstExport.target, {
+            via: {
+              ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+              exportedName: firstExport.exportedAs,
+            },
+            resolution: "namespace",
+            confidence: "medium",
+          });
+        }
       }
     }
+
+    if (!matched) continue;
+    const taken = acceptBinding(matched, imp);
+    if (taken) return taken;
   }
 
   // A local binding name always wins above so a grouped import's own aliases never collide with
@@ -369,6 +428,42 @@ export function resolveNamedDefinition(
           confidence: "high",
         });
       }
+    }
+  }
+
+  if (precedence === "last-wins") {
+    if (lastWinsResult) return lastWinsResult;
+  } else {
+    if (deferJavaSamePackage) {
+      const unitHit = resolveExport(index, file, name, {
+        allowLocalFallback: support.membersAreImplicitlyInScope,
+      });
+      if (unitHit?.kind === "resolved" && (!requiresExplicitReceiver || !unitHit.def.isMember)) {
+        return okGoToResult(index, unitHit.def, {
+          via: { exportedName: name },
+          resolution: "exact",
+          confidence: "high",
+        });
+      }
+      if (unitHit?.kind === "namespace") {
+        const targetMod = index.byFile.get(fileIdentityKey(unitHit.file));
+        const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
+        if (firstExport) {
+          return okGoToResult(index, firstExport.target, {
+            via: { exportedName: name },
+            resolution: "namespace",
+            confidence: "medium",
+          });
+        }
+      }
+    }
+    if (!starCandidates.length) return null;
+    const decision = decideStarImportCandidates(index, support.id, starCandidates, file);
+    if (decision.status === "ambiguous") {
+      return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
+    }
+    if (decision.status === "resolved") {
+      return starImportGoTo(index, decision.imp, decision.definition, name);
     }
   }
 
