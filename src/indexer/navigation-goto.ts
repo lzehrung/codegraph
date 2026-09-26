@@ -12,6 +12,7 @@ import {
   isMemberAccessNode,
   isReceiverNameNode,
   memberAccessTraversalTypes,
+  receiverKeywordText,
 } from "../util/member-access.js";
 import {
   keywordReceiverKind,
@@ -43,14 +44,23 @@ import {
   type CallableArity,
 } from "../languages/callable-arity.js";
 import { getCompilationUnitPeers } from "./compilation-units.js";
-import { isExportedDeclaration, isGoExportedMemberName, isSwiftCrossFileHiddenSharedOwnerMember } from "./declaration-visibility.js";
+import {
+  isExportedDeclaration,
+  isGoExportedMemberName,
+  isSwiftCrossFileHiddenSharedOwnerMember,
+} from "./declaration-visibility.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { csharpLookupName, csharpQualifiedNameNode } from "./navigation-local.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
 import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./php-namespace-symbols.js";
-import { resolveExport, resolveImported, resolvePhpExportByImportType } from "./navigation-resolve.js";
+import {
+  resolveExport,
+  resolveImported,
+  resolvePhpExportByImportType,
+  resolvePythonSubmodule,
+} from "./navigation-resolve.js";
 import {
   CSHARP_PARTIAL_CONTAINER_TYPES,
   getSharedOwnerIdentity,
@@ -519,6 +529,27 @@ export async function resolveMemberAccessDefinition(params: {
     }
 
     if (optionalMemberTypes.has(expr.type)) {
+      // A Python unaliased dotted import (`import a.b`) binds only the first segment `a`,
+      // resolved to the leaf module `a.b` names; the source can only ever repeat that whole
+      // dotted phrase to reach it again (`a.b.symbol(...)`), never a bare intermediate segment
+      // on its own. Recognize that literal phrase up front so the chain walk below lands on the
+      // leaf module the import machinery already resolved, instead of treating each dot as an
+      // ordinary member-access hop and failing on the segment duplicating the import's spelling.
+      if (sup.id === "python") {
+        const dottedText = sliceText(expr, source);
+        if (dottedText.includes(".")) {
+          const dottedImport = mod.imports.find(
+            (imp) =>
+              imp.kind === "namespace" &&
+              imp.mechanism === "python" &&
+              imp.from === dottedText &&
+              typeof imp.resolved === "string",
+          );
+          if (dottedImport && typeof dottedImport.resolved === "string") {
+            return { kind: "namespace", file: dottedImport.resolved.replace(/\\/g, "/") };
+          }
+        }
+      }
       const parts = getMemberAccessParts(sup, expr);
       const subObj = parts.object;
       let subProp = parts.property;
@@ -530,7 +561,16 @@ export async function resolveMemberAccessDefinition(params: {
         const memberName = sliceText(subProp, source);
         if (base?.kind === "namespace") {
           if (!isGoExportedMemberName(sup.id, memberName)) return null;
-          return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
+          const hit = resolveExport(index, base.file, memberName, { allowLocalFallback: false });
+          if (hit) return hit;
+          // A resolved package/namespace file with no matching export may still have an
+          // unimported submodule of that exact name, mirroring the same fallback `resolveImported`
+          // already applies for a direct import binding.
+          if (sup.id === "python") {
+            const submodule = resolvePythonSubmodule(base.file, memberName);
+            if (submodule) return { kind: "namespace", file: submodule };
+          }
+          return null;
         }
         if (base?.kind === "resolved") {
           if (sup.id === "java" || sup.id === "csharp") {
@@ -1895,8 +1935,10 @@ async function resolvePythonReceiverMember(
 ): Promise<SymbolDef | undefined> {
   const classRef = await pythonReceiverClassRef(index, mod, node, obj, source, sup, resolveExpression);
   if (!classRef) return undefined;
-  return lookupPythonClassMember(index, classRef, member);
+  return lookupPythonClassMember(index, classRef.ref, member, classRef.startAtSupertype);
 }
+
+type PythonReceiverClassRef = { ref: PythonClassRef; startAtSupertype: boolean };
 
 async function pythonReceiverClassRef(
   index: ProjectIndex,
@@ -1906,9 +1948,10 @@ async function pythonReceiverClassRef(
   source: string,
   sup: LanguageSupport,
   resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
-): Promise<PythonClassRef | null> {
-  const receiverName = sliceText(obj, source);
-  if (receiverName === "self" || receiverName === "cls") {
+): Promise<PythonReceiverClassRef | null> {
+  const receiverName = receiverKeywordText(sup, obj, source);
+  const keywordKind = keywordReceiverKind(sup.id, receiverName);
+  if (keywordKind) {
     const container = findEnclosingClassContainer(node);
     if (!container) return null;
     const nameNode = container.childForFieldName("name");
@@ -1927,7 +1970,8 @@ async function pythonReceiverClassRef(
       );
     });
     if (!def) return null;
-    return pythonClassRefFromDef(index, def);
+    const ref = await pythonClassRefFromDef(index, def);
+    return ref ? { ref, startAtSupertype: keywordKind === "supertype" } : null;
   }
 
   let classDef: SymbolDef | undefined;
@@ -1945,7 +1989,8 @@ async function pythonReceiverClassRef(
     }
   }
   if (!classDef) return null;
-  return pythonClassRefFromDef(index, classDef);
+  const ref = await pythonClassRefFromDef(index, classDef);
+  return ref ? { ref, startAtSupertype: false } : null;
 }
 
 async function pythonClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promise<PythonClassRef | null> {
@@ -2085,11 +2130,13 @@ async function lookupPythonClassMember(
   index: ProjectIndex,
   start: PythonClassRef,
   member: string,
+  startAtSupertype = false,
 ): Promise<SymbolDef | undefined> {
-  const own = pythonMembersOnClass(start, member);
-  if (own.length === 1) return own[0];
-  if (own.length > 1) return undefined;
-
+  if (!startAtSupertype) {
+    const own = pythonMembersOnClass(start, member);
+    if (own.length === 1) return own[0];
+    if (own.length > 1) return undefined;
+  }
   let level = await pythonBaseClassRefs(index, start);
   const visited = new Set<string>([pythonClassKey(start.def), ...level.map((base) => pythonClassKey(base.def))]);
   for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {

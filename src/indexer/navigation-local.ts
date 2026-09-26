@@ -321,5 +321,38 @@ export function resolveNamedDefinition(
     }
   }
 
+  // A local binding name always wins above so a grouped import's own aliases never collide with
+  // each other. An aliased import's source spelling is not itself a bound name anywhere in the
+  // file (Python: `from a import helper as h` binds only `h`; a bare `helper()` elsewhere is
+  // unbound and must stay not_found), so only resolve it when the click falls inside that exact
+  // import statement's own source-name token, never by re-matching the spelling anywhere else.
+  if (referenceIndex !== undefined) {
+    for (const imp of mod.imports) {
+      if (
+        imp.kind !== "named" ||
+        imp.local === imp.imported ||
+        support.normalizeIdentifier(imp.imported) !== normalizedName ||
+        !imp.importedRange ||
+        imp.importedRange.start.index === undefined ||
+        imp.importedRange.end.index === undefined ||
+        referenceIndex < imp.importedRange.start.index ||
+        referenceIndex >= imp.importedRange.end.index
+      ) {
+        continue;
+      }
+      const result = resolveImported(index, imp, imp.imported, cNamespace ? { cNamespace } : undefined);
+      if (result && !("namespace" in result)) {
+        return okGoToResult(index, result, {
+          via: {
+            ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+            exportedName: imp.imported,
+          },
+          resolution: "import",
+          confidence: "high",
+        });
+      }
+    }
+  }
+
   return null;
 }

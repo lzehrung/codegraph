@@ -968,7 +968,12 @@ async function findReferencesInternal(
       for (const exportedName of exportedNames) {
         if (hasReachedCollectionLimit()) break;
         if (imp.kind === "namespace") {
-          if (!isGoExportedMemberName(supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.id, exportedName)) {
+          if (
+            !isGoExportedMemberName(
+              supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.id,
+              exportedName,
+            )
+          ) {
             continue;
           }
           const hit = resolveExport(index, targetFile, exportedName, exportOptions);
@@ -981,9 +986,16 @@ async function findReferencesInternal(
                 );
           if (!matchesDef) continue;
           const parsed = await ensureCandidateParsed();
+          // A python multi-segment dotted import (`import a.b`) binds only the first segment
+          // `a`; the source only ever repeats the whole dotted phrase to reach the resolved
+          // leaf module again (`a.b.symbol(...)`), never the bound local name alone. An aliased
+          // import (`import a.b as c`) binds that whole phrase to `c` directly instead, so `c`
+          // alone is the correct single-hop search name, same as any other namespace alias.
+          const namespaceSearchName =
+            imp.mechanism === "python" && imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS;
           const ranges = await collectNamespaceMemberRefs(
             fileId,
-            imp.localNS,
+            namespaceSearchName,
             exportedName,
             parsed,
             index.languageExtensions,
@@ -1052,6 +1064,39 @@ async function findReferencesInternal(
             // Structural visibility alone cannot attribute the import token.
             matchesDef = true;
           }
+          // A python `from pkg import name` binds `name` from the package's own namespace.
+          // Usually that is a real re-exported symbol (handled above); when the package has no
+          // such export, Python's own import system falls back to treating `name` as an
+          // implicit submodule attribute instead. Reuse the namespace-style dotted scan the
+          // `imp.kind === "namespace"` branch above runs, rather than the bare-identifier scan
+          // this branch runs next, so a same-name use through the bound local still counts.
+          if (!matchesDef && imp.kind === "named" && imp.mechanism === "python") {
+            const importedResult = resolveImported(index, imp, exported, exportOptions);
+            const submoduleFile =
+              importedResult && "namespace" in importedResult ? importedResult.namespace : undefined;
+            if (
+              submoduleFile &&
+              [definition, ...equivalentDefinitions].some(
+                (candidate) => fileIdentityKey(submoduleFile) === fileIdentityKey(candidate.file),
+              )
+            ) {
+              const parsed = await ensureCandidateParsed();
+              const ranges = await collectNamespaceMemberRefs(
+                fileId,
+                imp.local,
+                exportedName,
+                parsed,
+                index.languageExtensions,
+                undefined,
+                module.imports,
+              );
+              for (const range of ranges) {
+                if (hasReachedCollectionLimit()) break;
+                pushRef({ file: fileId, range, via: { import: imp, namespaceMember: exportedName } });
+              }
+              continue;
+            }
+          }
           if (!matchesDef) {
             // The requested export slot itself does not exist at all (as opposed to existing
             // and structurally naming a different, already-proven definition): the binding may
@@ -1074,7 +1119,8 @@ async function findReferencesInternal(
                 (params, parsed) => goToDefinition(index, params, parsed),
                 remainingReferences,
                 verifiedReferenceFilter(fileId),
-                (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
+                (unavailableFile) =>
+                  receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
                 equivalentDefinitions,
               );
               for (const { range, provenance, via } of ranges) {
@@ -1649,10 +1695,17 @@ export async function collectNamespaceMemberRefs(
   const walk = (node: SyntaxNodeLike): void => {
     if (isMemberAccessNode(sup, node)) {
       const { object: obj, property: prop } = getMemberAccessParts(sup, node);
-      if (obj && prop && isMemberObjectIdentifier(obj.type) && isMemberReferencePropertyIdentifier(sup, prop.type)) {
+      if (obj && prop && isMemberReferencePropertyIdentifier(sup, prop.type)) {
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
-        if (normalize(objectName) === normalizedNs && normalize(propertyName) === normalizedMember) {
+        // A python multi-segment dotted import (`import a.b`) binds only the first segment;
+        // the source only ever repeats the whole dotted phrase to reach the resolved leaf
+        // module again, so `ns` can be that literal phrase and `obj` a compound chain rather
+        // than the single bare identifier every other caller passes.
+        const objectMatches = normalizedNs.includes(".")
+          ? normalize(objectName) === normalizedNs
+          : isMemberObjectIdentifier(obj.type) && normalize(objectName) === normalizedNs;
+        if (objectMatches && normalize(propertyName) === normalizedMember) {
           const inAliasScope =
             sup.id !== "csharp" ||
             !namespaceImport ||

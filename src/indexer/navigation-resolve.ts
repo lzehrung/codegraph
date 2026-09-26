@@ -280,7 +280,7 @@ function resolveSiblingPackageExport(
   return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
-function resolvePythonSubmodule(targetFile: string, exportedName: string): FileId | null {
+export function resolvePythonSubmodule(targetFile: string, exportedName: string): FileId | null {
   let baseDir: string;
   try {
     const targetStat = fs.statSync(targetFile);

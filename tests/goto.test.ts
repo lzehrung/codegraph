@@ -808,7 +808,7 @@ describe("Go to Definition", () => {
       }
     });
 
-    it("keeps a real Python submodule as a namespace import", async () => {
+    it("keeps a real Python submodule reachable through a from-import binding", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-submodule-import-"));
       const packageDir = path.join(root, "package");
       const packageFile = path.join(packageDir, "__init__.py").replace(/\\/g, "/");
@@ -818,15 +818,21 @@ describe("Go to Definition", () => {
         await fsp.mkdir(packageDir);
         await fsp.writeFile(packageFile, "", "utf8");
         await fsp.writeFile(childFile, "value = 1\n", "utf8");
-        await fsp.writeFile(mainFile, "from package import child\n", "utf8");
+        const mainSource = "from package import child\n\nchild.value\n";
+        await fsp.writeFile(mainFile, mainSource, "utf8");
 
         const index = await createTestIndexFromFiles(root, [packageFile, childFile, mainFile]);
-        const mainModule = index.byFile.get(fileIdentityKey(mainFile));
-        const binding = mainModule?.imports.find((candidate) => candidate.kind === "namespace");
-
-        expect(binding?.kind).toBe("namespace");
-        if (!binding || binding.kind !== "namespace") return;
-        expect(binding.resolved).toBe(childFile);
+        // `child` has no real symbol of its own name in `package/__init__.py`, so the binding
+        // still resolves through the submodule fallback regardless of its internal import kind.
+        const result = await goToDefinition(index, {
+          file: mainFile,
+          line: 3,
+          column: mainSource.split("\n")[2]!.indexOf("value") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(childFile));
+        expect(result.definition.range.start.line).toBe(1);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
