@@ -22,10 +22,20 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - PHP: class, function, and method names match without regard to letter case, as PHP does, so references include differently cased uses and code in the global namespace. Class, function, and constant imports with the same name stay separate.
 - Swift: members of a constrained extension, such as `extension Box where T == Int`, are no longer offered on every `Box`.
 - Zig: functions imported through `@import` resolve, and only `pub` declarations are visible to other files.
+- TypeScript and JavaScript: overloaded functions resolve from other files. Default-exported classes, `module.exports`, `const util = require("./util")`, and `await import("./lazy")` bindings resolve member calls such as `util.helper()`. A use of a name declared later in the same file is found by references in every language.
+- Java, Kotlin, C#, Swift, and C++: member calls on a parameter or local with a declared type (`void use(Greeter g) { g.hello(); }`, `Box b; b.run();`) resolve. Kotlin companion-object factories and extension functions resolve, and an instance method called through the type name no longer does.
+- Python: `import pkg.mod` then `pkg.mod.foo()` resolves, a class named like its own file is found through a package re-export, and `super().method()` reaches a known base class.
+- Ruby and PHP: `Widget.new` on a class from another file, cross-file inheritance and mixins, `new self()`, PHP 8 promoted constructor properties, and same-namespace PHP classes without a `use` line now resolve. A class nested in a Ruby module is no longer mistaken for a top-level class of the same name.
+- Rust, Go, and C: `super::Type`, workspace and path dependencies (including `workspace = true`), glob imports, and `impl` methods resolve and appear in call graphs. Go no longer resolves unexported names from another package. A C function's header declaration and its definition share one reference list.
+- When two wildcard imports provide the same name, codegraph follows each language's rule (Python: the last import wins; Java, Kotlin, and Rust: an explicit import wins) and otherwise reports the name as ambiguous instead of picking one.
+- Go-to-definition, find references, and call graphs now give the same answer for the same use.
+- A warm disk-cache build picks up a newly added file that an existing import can now resolve to, including Python absolute imports, quoted C and C++ includes, and tsconfig path aliases.
+- Package-manifest lookups for unresolved imports no longer read outside `--root` when the project has no Git repository.
 
 ### Changed
 
 - `referenceCoverage` reports `partial` instead of `complete` when codegraph could not check every possible use, with the new reasons `strategy_unavailable` and `name_equivalence_unavailable`. Rename previews and impact treat these results as incomplete.
+- Agent sessions with `freshness: { policy: "manual" }` report `{ state: "unchecked" }` from `checkFreshness()` instead of claiming `fresh` without checking. Code that handles every freshness state must handle `unchecked`.
 - Existing caches are rebuilt on the first run after upgrading, so that run takes longer than usual.
 
 ## [2.3.31] - 2026-09-21
