@@ -1,7 +1,11 @@
 import type { ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "../../indexer/types.js";
 import type { ImportBinding } from "../../indexer/types.js";
 import { phpNamedImportRole } from "../../indexer/import-types.js";
-import { resolveImported } from "../../indexer/navigation-resolve.js";
+import {
+  cjsRequireValueBinding,
+  memberContainerForDefinition,
+  resolveImported,
+} from "../../indexer/navigation-resolve.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 
 export type ImportAliasMaps = {
@@ -64,11 +68,18 @@ export function buildImportAliasMaps(
     } else if (imp.kind === "default") {
       const defaultExport = resolveExportFrom(targetFile, "default");
       const fallbackExport = targetModule.exports.find((entry) => entry.type === "local")?.target;
-      const def = defaultExport ?? fallbackExport;
+      const raw = defaultExport ?? fallbackExport;
+      const container = raw ? memberContainerForDefinition(index, raw) : undefined;
+      const def = container ?? raw;
       if (def) aliasToTargetDef.set(imp.local, def);
       aliasToTargetModule.set(imp.local, targetFile);
     } else if (imp.kind === "namespace") {
-      aliasToTargetModule.set(imp.localNS, targetFile);
+      const classValue = imp.mechanism === "cjs" ? cjsRequireValueBinding(index, targetFile) : undefined;
+      if (classValue) {
+        aliasToTargetDef.set(imp.localNS, classValue);
+      } else {
+        aliasToTargetModule.set(imp.localNS, targetFile);
+      }
     }
   }
 

@@ -314,6 +314,47 @@ function resolvePythonSubmodule(targetFile: string, exportedName: string): FileI
   return null;
 }
 
+function declaresMemberKind(def: SymbolDef): boolean {
+  return def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
+}
+
+/**
+ * A default-export wrapper keeps `SymbolKind.Default` so the export name stays `default`.
+ * Member lookup needs the class, interface, or type alias that wrapper was copied from.
+ */
+export function memberContainerForDefinition(index: ProjectIndex, def: SymbolDef): SymbolDef | undefined {
+  if (declaresMemberKind(def)) return def;
+  if (def.kind !== SymbolKind.Default) return undefined;
+  const moduleEntry = index.byFile.get(fileIdentityKey(def.file));
+  if (!moduleEntry) return undefined;
+  const sameRange = moduleEntry.locals.filter(
+    (local) =>
+      declaresMemberKind(local) &&
+      local.range.start.line === def.range.start.line &&
+      local.range.start.column === def.range.start.column,
+  );
+  if (sameRange.length === 1) return sameRange[0];
+  const sameName = moduleEntry.locals.filter((local) => declaresMemberKind(local) && local.localName === def.localName);
+  return sameName.length === 1 ? sameName[0] : undefined;
+}
+
+/**
+ * `require()` and `import x = require()` return the module value when the file assigns
+ * `module.exports` or `export =`. A default-exported class with other named exports stays a
+ * namespace, matching Node's interop object. Named `exports.helper = ...` has no module value.
+ */
+export function cjsRequireValueBinding(index: ProjectIndex, targetFile: FileId): SymbolDef | undefined {
+  const resolved = resolveExport(index, targetFile, "default");
+  if (resolved?.kind !== "resolved") return undefined;
+  const classValue = memberContainerForDefinition(index, resolved.def);
+  const moduleEntry = index.byFile.get(fileIdentityKey(targetFile));
+  const hasNamedExport = moduleEntry?.exports.some(
+    (entry) => entry.type === "local" && entry.exportedAs !== "default" && !entry.target.isMember,
+  );
+  if (hasNamedExport && classValue) return undefined;
+  return classValue ?? resolved.def;
+}
+
 export function resolveExport(
   index: ProjectIndex,
   file: FileId,

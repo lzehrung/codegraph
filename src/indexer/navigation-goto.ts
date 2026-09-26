@@ -19,6 +19,7 @@ import {
   supportsReceiverMemberNavigation,
 } from "../util/member-access-tables.js";
 import { cppCallableShapeForNode } from "./cpp-callables.js";
+import { earliestSymbolDef, typescriptCallableRoleAt } from "./ts-callables.js";
 import {
   cppOutOfLineOwnerPath,
   cppQualifiedNameSegments,
@@ -47,7 +48,13 @@ import { csharpLookupName, csharpQualifiedNameNode } from "./navigation-local.js
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
-import { resolveExport, resolveImported, resolvePhpExportByImportType } from "./navigation-resolve.js";
+import {
+  cjsRequireValueBinding,
+  memberContainerForDefinition,
+  resolveExport,
+  resolveImported,
+  resolvePhpExportByImportType,
+} from "./navigation-resolve.js";
 import {
   CSHARP_PARTIAL_CONTAINER_TYPES,
   getSharedOwnerIdentity,
@@ -455,13 +462,22 @@ export async function resolveMemberAccessDefinition(params: {
           }
         }
       } else {
-        imp = mod.imports.find((candidate) => {
-          if (candidate.kind === "named" || candidate.kind === "default") return candidate.local === exprName;
-          return candidate.kind === "namespace" && candidate.localNS === exprName;
-        });
+        imp = mod.imports.find(
+          (candidate) => (candidate.kind === "named" || candidate.kind === "default") && candidate.local === exprName,
+        );
+        if (!imp && isJsTsLanguage(sup.id)) {
+          imp = innermostNamespaceImport(mod.imports, exprName, expr);
+        }
+        if (!imp) {
+          imp = mod.imports.find((candidate) => candidate.kind === "namespace" && candidate.localNS === exprName);
+        }
       }
       if (imp) {
         if (imp.kind === "namespace") {
+          if (imp.mechanism === "cjs" && typeof imp.resolved === "string") {
+            const classValue = cjsRequireValueBinding(index, imp.resolved);
+            if (classValue) return { kind: "resolved", def: classValue };
+          }
           return {
             kind: "namespace",
             file: typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : imp.resolved?.external || "",
@@ -476,7 +492,8 @@ export async function resolveMemberAccessDefinition(params: {
           if ("namespace" in result) {
             return { kind: "namespace", file: result.namespace };
           }
-          return { kind: "resolved", def: result };
+          const container = asMemberContainer(index, result);
+          return { kind: "resolved", def: container ?? result };
         }
       }
 
@@ -903,19 +920,7 @@ function collectDeclaredBaseTypes(
 }
 
 function asMemberContainer(index: ProjectIndex, def: SymbolDef): SymbolDef | undefined {
-  if (declaresMembers(def)) return def;
-  if (def.kind !== SymbolKind.Default) return undefined;
-  const module = index.byFile.get(fileIdentityKey(def.file));
-  if (!module) return undefined;
-  const sameRange = module.locals.filter(
-    (local) =>
-      declaresMembers(local) &&
-      local.range.start.line === def.range.start.line &&
-      local.range.start.column === def.range.start.column,
-  );
-  if (sameRange.length === 1) return sameRange[0];
-  const sameName = module.locals.filter((local) => declaresMembers(local) && local.localName === def.localName);
-  return sameName.length === 1 ? sameName[0] : undefined;
+  return memberContainerForDefinition(index, def);
 }
 
 function importedMemberContainer(
@@ -1258,9 +1263,10 @@ async function resolveReceiverDefinition(
       }
     }
     const result = await resolveExpression(constructor);
-    if (result?.kind === "resolved" && declaresMembers(result.def)) {
+    const constructed = result?.kind === "resolved" ? asMemberContainer(index, result.def) : undefined;
+    if (constructed) {
       return {
-        def: result.def,
+        def: constructed,
         memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
       };
     }
@@ -1272,12 +1278,13 @@ async function resolveReceiverDefinition(
     }
   }
   const direct = await resolveExpression(obj);
-  if (direct?.kind === "resolved" && declaresMembers(direct.def)) {
-    if (isJsTsLanguage(sup.id) && direct.def.kind === SymbolKind.TypeAlias) {
-      return { def: direct.def, memberScope: "any", runtimeTypeOnly: true };
+  const directContainer = direct?.kind === "resolved" ? asMemberContainer(index, direct.def) : undefined;
+  if (directContainer) {
+    if (isJsTsLanguage(sup.id) && directContainer.kind === SymbolKind.TypeAlias) {
+      return { def: directContainer, memberScope: "any", runtimeTypeOnly: true };
     }
     const memberScope = hasStaticMemberDistinction(sup.id) ? "static" : "any";
-    return { def: direct.def, memberScope };
+    return { def: directContainer, memberScope };
   }
   if (isJsTsLanguage(sup.id) && isReceiverNameNode(sup, obj.type)) {
     return null;
@@ -1474,13 +1481,50 @@ function uniqueReceiverMemberCandidates(candidates: readonly SymbolDef[]): Symbo
   return unique;
 }
 
-async function selectReceiverMemberCandidates(
+async function collapseTypeScriptOverloadCandidates(
+  index: ProjectIndex,
+  candidates: readonly SymbolDef[],
+): Promise<SymbolDef[]> {
+  if (candidates.length < 2) return [...candidates];
+  const file = candidates[0]?.file;
+  if (!file || candidates.some((candidate) => candidate.file !== file)) return [...candidates];
+  const context = await ensureParsedContext(file, undefined, index.languageExtensions);
+  if (!isJsTsLanguage(context.sup.id)) return [...candidates];
+  const roles = candidates.map((candidate) => ({
+    candidate,
+    role: typescriptCallableRoleAt(
+      context.tree,
+      candidate.range.start.index ?? 0,
+      candidate.range.end.index ?? candidate.range.start.index ?? 0,
+    ),
+  }));
+  if (roles.every((item) => item.role === "other")) return [...candidates];
+  const implementations = roles.filter((item) => item.role === "implementation").map((item) => item.candidate);
+  if (implementations.length === 1) return implementations;
+  if (implementations.length > 1) {
+    return roles.filter((item) => item.role !== "signature").map((item) => item.candidate);
+  }
+  const signatures = roles.filter((item) => item.role === "signature").map((item) => item.candidate);
+  if (signatures.length === 0) return [...candidates];
+  return [earliestSymbolDef(signatures)];
+}
+
+function selectReceiverMemberCandidates(
   index: ProjectIndex,
   candidates: readonly SymbolDef[],
   knownArgumentCount?: number,
   allowUniqueArityMismatch = true,
 ): Promise<SymbolDef | undefined> {
-  const unique = uniqueReceiverMemberCandidates(candidates);
+  return selectCollapsedReceiverMemberCandidates(index, candidates, knownArgumentCount, allowUniqueArityMismatch);
+}
+
+async function selectCollapsedReceiverMemberCandidates(
+  index: ProjectIndex,
+  candidates: readonly SymbolDef[],
+  knownArgumentCount?: number,
+  allowUniqueArityMismatch = true,
+): Promise<SymbolDef | undefined> {
+  const unique = uniqueReceiverMemberCandidates(await collapseTypeScriptOverloadCandidates(index, candidates));
   if (unique.length === 1 && (allowUniqueArityMismatch || knownArgumentCount === undefined)) return unique[0];
   if (knownArgumentCount === undefined) return undefined;
   const matches: SymbolDef[] = [];

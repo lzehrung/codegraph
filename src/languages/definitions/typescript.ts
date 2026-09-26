@@ -135,7 +135,9 @@ const BASE_GRAPH = {
   importBindings: `
     (import_statement) @stmt
     (import_statement (string) @from) @stmt
-    (import_statement (import_require_clause (identifier) @def (string) @from)) @stmt
+    (import_statement (import_require_clause (identifier) @ns (string) @from) @cjs) @stmt
+    ((lexical_declaration (variable_declarator name: (identifier) @ns value: (await_expression (call_expression function: (import) arguments: (arguments (string) @from))))) @stmt)
+    ((variable_declaration (variable_declarator name: (identifier) @ns value: (await_expression (call_expression function: (import) arguments: (arguments (string) @from))))) @stmt)
     (import_statement (import_clause (identifier) @def) (string) @from) @stmt
     (import_statement (import_clause (named_imports (import_specifier "type"? @type_kw name: (identifier) @iname alias: (identifier) @alias))) (string) @from) @stmt
     (import_statement (import_clause (named_imports (import_specifier "type"? @type_kw name: (identifier) @iname !alias))) (string) @from) @stmt

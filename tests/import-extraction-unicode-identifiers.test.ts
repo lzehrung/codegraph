@@ -281,8 +281,8 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         typeOnly: false,
       },
       {
-        kind: "default",
-        local: "defaultAlias\u200c",
+        kind: "namespace",
+        localNS: "defaultAlias\u200c",
         from: "default",
         localRange: rangeForToken(source, "defaultAlias\u200c"),
         resolved: { external: "default" },
@@ -310,8 +310,8 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
         mechanism: "cjs",
       },
       {
-        kind: "default",
-        local: "equalsAlias\u200d",
+        kind: "namespace",
+        localNS: "equalsAlias\u200d",
         from: "equals",
         localRange: rangeForToken(source, "equalsAlias\u200d"),
         resolved: { external: "equals" },

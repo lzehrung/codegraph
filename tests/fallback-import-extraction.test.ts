@@ -96,7 +96,7 @@ nativeTsDescribe("native TypeScript import binding recovery", () => {
       const index = await buildProjectIndexFromFiles(root, [main, dep]);
       const mod = index.byFile.get(fileIdentityKey(main));
       expect(mod?.imports).toEqual([
-        expect.objectContaining({ kind: "default", local: "dep", from: "./dep", mechanism: "cjs" }),
+        expect.objectContaining({ kind: "namespace", localNS: "dep", from: "./dep", mechanism: "cjs" }),
       ]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -118,7 +118,7 @@ nativeTsDescribe("native TypeScript import binding recovery", () => {
       const index = await buildProjectIndexFromFiles(root, [main, dep], { native: "off" });
       const mod = index.byFile.get(fileIdentityKey(main));
       expect(mod?.imports).toEqual([
-        expect.objectContaining({ kind: "default", local: "depRef", from: "./dep", mechanism: "cjs" }),
+        expect.objectContaining({ kind: "namespace", localNS: "depRef", from: "./dep", mechanism: "cjs" }),
       ]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -165,7 +165,7 @@ nativeTsDescribe("native TypeScript import binding recovery", () => {
         importedRange: rangeForToken(source, "epsilon"),
         localRange: rangeForToken(source, "zeta"),
       },
-      "default:cjsDefault:": { localRange: rangeForToken(source, "cjsDefault") },
+      "namespace:cjsDefault:": { localRange: rangeForToken(source, "cjsDefault") },
       "named:cjsLocal:cjsTarget": {
         importedRange: rangeForToken(source, "cjsTarget"),
         localRange: rangeForToken(source, "cjsLocal"),
@@ -380,7 +380,7 @@ describe("Import extraction fallback reporting", () => {
     const normalizedDep = dep.replace(/\\/g, "/");
     const mod = index.byFile.get(fileIdentityKey(normalizedMain));
     const importBinding = mod?.imports.find(
-      (entry) => entry.kind === "default" && entry.local === "util" && entry.from === "./dep",
+      (entry) => entry.kind === "namespace" && entry.localNS === "util" && entry.from === "./dep",
     );
     const edge = index.graph.edges.find(
       (entry) => entry.from === normalizedMain && entry.to.type === "file" && entry.to.path === normalizedDep,
@@ -457,7 +457,7 @@ describe("Import extraction fallback reporting", () => {
           importedRange: rangeForToken(source, "zeta"),
           localRange: rangeForToken(source, "zeta"),
         },
-        "default:cjsDefault:": { localRange: rangeForToken(source, "cjsDefault") },
+        "namespace:cjsDefault:": { localRange: rangeForToken(source, "cjsDefault") },
         "named:cjsLocal:cjsTarget": {
           importedRange: rangeForToken(source, "cjsTarget"),
           localRange: rangeForToken(source, "cjsLocal"),

@@ -4,6 +4,7 @@ import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { declarationKindToBindingKind } from "./declarations.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
+import { typescriptCallableRole } from "./ts-callables.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
@@ -216,6 +217,20 @@ export function buildScopeIndexFromSource(
         cppFunctionCollisionGroups.add(collisions);
         preserveExtraBinding(existing);
       }
+      if (support.id === "ts" || support.id === "tsx") {
+        const existingRole = existing.node ? typescriptCallableRole(existing.node) : "other";
+        const nextRole = typescriptCallableRole(nameNode);
+        if (existingRole === "implementation" && nextRole === "signature") {
+          preserveExtraBinding(binding);
+          return;
+        }
+        if (existingRole === "signature" && nextRole === "implementation") {
+          preserveExtraBinding(existing);
+        } else if (existingRole === "signature" && nextRole === "signature") {
+          preserveExtraBinding(binding);
+          return;
+        }
+      }
     }
     target.map.set(key, binding);
     const cppNamespace = cppNamespacePathByMap.get(target.map);
@@ -269,6 +284,18 @@ export function buildScopeIndexFromSource(
       addBindingToScope(pattern, kind);
       return;
     }
+    if (
+      (support.id === "javascript" || support.id === "ts" || support.id === "tsx") &&
+      (pattern.type === "required_parameter" ||
+        pattern.type === "optional_parameter" ||
+        pattern.type === "rest_parameter")
+    ) {
+      for (const child of pattern.namedChildren) {
+        if (child.type === "type_annotation") continue;
+        addPatternDecls(child, kind, addBindingToScope);
+      }
+      return;
+    }
     // Parameter nodes put names and types as siblings. Walking the whole subtree
     // would register type-position identifiers (`int`, `T`, package qualifiers).
     if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
@@ -289,6 +316,14 @@ export function buildScopeIndexFromSource(
     for (const child of pattern.namedChildren) {
       addPatternDecls(child, kind, addBindingToScope);
     }
+  };
+
+  const isAwaitedDynamicImport = (node: SyntaxNodeLike | null): boolean => {
+    if (!node || node.type !== "await_expression") return false;
+    const call = node.namedChildren.find((child) => child.type === "call_expression");
+    if (!call) return false;
+    const callee = call.childForFieldName("function") ?? call.child(0);
+    return callee?.type === "import";
   };
 
   const isStaticRequireCall = (node: SyntaxNodeLike | null): boolean => {
@@ -377,8 +412,9 @@ export function buildScopeIndexFromSource(
         const name = child.childForFieldName("name");
         const value = child.childForFieldName("value");
         if (name) {
-          if (isStaticRequireCall(value)) addUnsupportedRequirePatternDecls(name, addBindingToScope);
-          else addPatternDecls(name, "local", addBindingToScope);
+          if (isStaticRequireCall(value) || isAwaitedDynamicImport(value)) {
+            addUnsupportedRequirePatternDecls(name, addBindingToScope);
+          } else addPatternDecls(name, "local", addBindingToScope);
         }
       } else if (row.assignmentIdentifierTypes?.has(child.type) && row.assignmentDeclarationTypes?.has(node.type)) {
         addBindingToScope(child, "local");

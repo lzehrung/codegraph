@@ -10,7 +10,13 @@ import {
 } from "../native/tree-sitter-native.js";
 import { IMPLICIT_UNIT_LANGUAGES } from "../indexer/compilation-units.js";
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
-import { resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
+import { cjsRequireValueBinding, resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
+import {
+  earliestSymbolDef,
+  typescriptCallableContainerKey,
+  typescriptCallableRoleAt,
+} from "../indexer/ts-callables.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
 import { csharpAliasQualifiedLookupName, innermostNamespaceImport } from "../indexer/navigation-goto.js";
 import {
@@ -127,6 +133,44 @@ function recordCallableDeclarationAliases(
     const group = cppEquivalentCallableBindings(binding);
     for (const candidate of group) handled.add(candidate);
     recordGroup(group);
+  }
+}
+
+function recordTypeScriptCallableAliases(
+  moduleEntry: ModuleIndex,
+  languageId: string,
+  tree: SyntaxTreeLike,
+  nodeAliases: Map<string, string>,
+): void {
+  if (languageId !== "ts" && languageId !== "tsx") return;
+  const groups = new Map<string, SymbolDef[]>();
+  for (const local of moduleEntry.locals) {
+    if (local.kind !== SymbolKind.Function) continue;
+    const start = local.range.start.index ?? 0;
+    const end = local.range.end.index ?? start;
+    const role = typescriptCallableRoleAt(tree, start, end);
+    if (role === "other") continue;
+    const key = `${typescriptCallableContainerKey(tree, start, end)}\0${local.localName}`;
+    const group = groups.get(key) ?? [];
+    group.push(local);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const implementations = group.filter((local) => {
+      const start = local.range.start.index ?? 0;
+      const end = local.range.end.index ?? start;
+      return typescriptCallableRoleAt(tree, start, end) === "implementation";
+    });
+    let canonical: SymbolDef | undefined;
+    if (implementations.length === 1) canonical = implementations[0];
+    else if (implementations.length === 0) canonical = earliestSymbolDef(group);
+    if (!canonical) continue;
+    const canonicalId = defNodeId(canonical);
+    for (const local of group) {
+      const id = defNodeId(local);
+      if (id !== canonicalId) nodeAliases.set(id, canonicalId);
+    }
   }
 }
 
@@ -345,7 +389,7 @@ export async function buildSymbolGraphDetailed(
         constStringOf,
         aliasToTargetModule,
         resolveMemberPathFromModule,
-        ...(sup.id === "zig" || sup.id === "csharp"
+        ...(sup.id === "zig" || sup.id === "csharp" || isJsTsLanguage(sup.id)
           ? {
               resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
                 if (sup.id === "zig") {
@@ -353,7 +397,17 @@ export async function buildSymbolGraphDetailed(
                   if (binding && binding.kind !== "namespace") return undefined;
                 }
                 const imported = innermostNamespaceImport(moduleEntry.imports, alias, useNode, sup.normalizeIdentifier);
-                return typeof imported?.resolved === "string" ? imported.resolved : undefined;
+                if (
+                  isJsTsLanguage(sup.id) &&
+                  imported?.mechanism === "cjs" &&
+                  typeof imported.resolved === "string" &&
+                  cjsRequireValueBinding(index, imported.resolved)
+                ) {
+                  return undefined;
+                }
+                if (typeof imported?.resolved === "string") return imported.resolved;
+                if (isJsTsLanguage(sup.id)) return aliasToTargetModule.get(alias);
+                return undefined;
               },
             }
           : {}),
@@ -363,6 +417,7 @@ export async function buildSymbolGraphDetailed(
 
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
       recordCallableDeclarationAliases(moduleEntry, sup.id, scopeIndex.all, nodeAliases);
+      recordTypeScriptCallableAliases(moduleEntry, sup.id, tree, nodeAliases);
       const cppParsedByFile = sup.id === "cpp" ? new Map<string, ParsedFileContext>() : null;
       if (cppParsedByFile) {
         cppParsedByFile.set(fileIdentityKey(file), { source: src, tree, sup });
