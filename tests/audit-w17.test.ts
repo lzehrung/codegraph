@@ -112,9 +112,15 @@ describe("star-import precedence (W17)", () => {
       expect(references.status).toBe("ok");
       if (references.status !== "ok") continue;
       expect(references.referenceCoverage?.state).toBe("complete");
+      const siteLabel = (file: string): string => {
+        const normalized = file.replace(/\\/g, "/");
+        for (const known of ["pkg_a/base.rb", "pkg_b/base.rb"]) {
+          if (normalized.endsWith(known)) return known;
+        }
+        return path.basename(file);
+      };
       const sites = references.references.map(
-        (reference) =>
-          `${reference.file.replace(/\\/g, "/").endsWith("pkg_a/base.rb") ? "pkg_a/base.rb" : reference.file.replace(/\\/g, "/").endsWith("pkg_b/base.rb") ? "pkg_b/base.rb" : path.basename(reference.file)}:${reference.range.start.line}`,
+        (reference) => `${siteLabel(reference.file)}:${reference.range.start.line}`,
       );
       expect(sites).toContain("pkg_a/base.rb:1");
       expect(sites).toContain("pkg_b/base.rb:1");
