@@ -132,6 +132,17 @@ const CPP_MEMBER_CONTAINER_TYPES: Record<string, true> = {
   union_specifier: true,
 };
 
+/**
+ * Container nodes whose declared members belong to the *enclosing* member container for
+ * direct-member lookup, rather than forming a separate nested type. Kotlin's unnamed
+ * `companion object { ... }` block is the language's static-member mechanism: `create()`
+ * declared inside one is a member of the enclosing class, reachable as `Outer.create()`,
+ * not a member of a distinct "Companion" type the indexer would need to name separately.
+ */
+export const TRANSPARENT_MEMBER_CONTAINER_TYPES: Record<string, true> = {
+  companion_object: true,
+};
+
 /** Nodes holding a call's argument list across the supported grammars. */
 export const CALL_ARGUMENT_NODE_TYPES: Record<string, true> = {
   argument_list: true,
@@ -168,6 +179,9 @@ const VALUE_BINDING_TYPES: Record<string, true> = {
   assignment_expression: true,
   assignment_statement: true,
   class_parameter: true,
+  // C/C++ local variable statement (`Box b;`, `Box* p = raw;`); the declared type sits
+  // beside the declarator, unlike other grammars' dedicated `variable_declaration` node.
+  declaration: true,
   formal_parameter: true,
   init_declarator: true,
   let_declaration: true,
@@ -262,6 +276,8 @@ const BINDING_DECLARATION_TYPES = new Set([
   "property_declaration",
   "local_variable_declaration",
   "local_declaration_statement",
+  // C/C++ local variable statement, e.g. `Box b;`, `Box* p = raw;`, `Box w{5};`.
+  "declaration",
 ]);
 
 const RUBY_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${XID_IDENTIFIER_SOURCE}`;
@@ -458,6 +474,14 @@ function containsIndex(node: SyntaxNodeLike, index: number): boolean {
 }
 
 function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  // A dedicated `type` field (C#'s `object_creation_expression`, C/C++'s `new_expression`) can
+  // wrap a qualified (`Outer.Inner`) or generic (`Box<int>`) shape the fallback scan below never
+  // matches; a language without that field (TS/PHP's `constructor` field, or none) falls through.
+  const typeField = node.childForFieldName("type");
+  if (typeField) {
+    const unwrapped = unwrapNamedType(typeField, sup);
+    if (unwrapped) return unwrapped;
+  }
   const constructor = node.childForFieldName("constructor") ?? node.child(0);
   if (constructor && isReceiverNameNode(sup, constructor.type)) {
     return constructor;
@@ -496,6 +520,15 @@ export function unwrapNamedType(node: SyntaxNodeLike, sup: LanguageSupport): Syn
       current = current.childForFieldName("type") ?? current.namedChildren[0] ?? null;
       continue;
     }
+    if (current.type === "qualified_name") {
+      // C#'s `Outer.Inner` names the nested type by its last segment. PHP also parses a
+      // namespaced name as `qualified_name`, but as one flat token with no `name` field, so an
+      // absent field leaves `current` as that whole node instead of nulling the result out.
+      const segment = current.childForFieldName("name");
+      if (!segment) break;
+      current = segment;
+      continue;
+    }
     break;
   }
   if (!current) return null;
@@ -503,6 +536,21 @@ export function unwrapNamedType(node: SyntaxNodeLike, sup: LanguageSupport): Syn
     return current;
   }
   return null;
+}
+
+/**
+ * Kotlin extension-function receiver type, e.g. `Widget` in `fun Widget.describe(): String`.
+ * The receiver type is an unfielded `user_type` positioned before the function's own `name`;
+ * an ordinary function or class member declares no such node.
+ */
+export function kotlinExtensionReceiverTypeNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  if (node.type !== "function_declaration") return null;
+  const nameNode = node.childForFieldName("name");
+  if (!nameNode) return null;
+  const receiverType = node.namedChildren.find(
+    (child) => child.startIndex < nameNode.startIndex && (child.type === "user_type" || child.type === "nullable_type"),
+  );
+  return receiverType ? unwrapNamedType(receiverType, sup) : null;
 }
 
 function capitalizedCallTypeName(expr: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {

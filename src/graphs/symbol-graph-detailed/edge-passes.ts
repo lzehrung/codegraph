@@ -43,6 +43,7 @@ import {
   cppQualifiedNameSegments,
   declaresMembers,
   isUnprovenHeritageExpression,
+  kotlinExtensionReceiverTypeNode,
   nearestMemberContainer,
   nodeInStaticMemberContext,
   receiverCallAccess,
@@ -460,11 +461,27 @@ function memberScopeForDefinition(
     return declarationNodeIsStatic(outOfLineDeclaration.node, outOfLineDeclaration.source) ? "static" : "instance";
   }
   if (cppOutOfLine) return "any";
+  // Kotlin has no `static` keyword; a `companion object { ... }` member is the language's
+  // static-equivalent mechanism (reachable as `Outer.member()`), so it must register "static"
+  // itself rather than fall through to the keyword-based check below, which never fires for
+  // Kotlin and would otherwise leave every Kotlin member "instance" indistinguishably.
+  if (context.sup.id === "kotlin" && isKotlinCompanionObjectMember(fn.node)) return "static";
   const declarationNode =
     fn.node.parent?.type === "public_field_definition" || fn.node.parent?.type === "field_definition"
       ? fn.node.parent
       : fn.node;
   return declarationNodeIsStatic(declarationNode, context.source) ? "static" : "instance";
+}
+
+/** Whether `node` is lexically declared inside its own nearest enclosing `companion object`. */
+function isKotlinCompanionObjectMember(node: SyntaxNodeLike): boolean {
+  let current: SyntaxNodeLike | null = node.parent;
+  while (current) {
+    if (current.type === "companion_object") return true;
+    if (current.type === "class_declaration") return false;
+    current = current.parent;
+  }
+  return false;
 }
 
 type MemberOwner = { def: SymbolDef; container: SyntaxNodeLike | null; cppOutOfLine: boolean };
@@ -498,6 +515,14 @@ async function memberOwner(
       ? await resolveCppQualifiedMemberContainer(context.index, context.moduleEntry, ownerPath, context.loadParsedFile)
       : null;
     return def ? { def, container: null, cppOutOfLine: true } : null;
+  }
+  if (context.sup.id === "kotlin") {
+    // `fun Widget.describe()` is a top-level declaration outside Widget's own body, so it is
+    // never one of `owners` above; its receiver-type prefix is the only proof of ownership.
+    const receiverTypeNode = kotlinExtensionReceiverTypeNode(fn.node, context.sup);
+    if (!receiverTypeNode) return null;
+    const def = resolveNamedType(context, sliceText(receiverTypeNode, context.source), receiverTypeNode);
+    return def ? { def, container: null, cppOutOfLine: false } : null;
   }
   if (context.sup.id !== "zig") return null;
   const container = nearestMemberContainer(fn.node);
