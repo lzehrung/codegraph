@@ -202,10 +202,24 @@ async function applyCsharpStatementOverride(
     if (typeof resolved !== "string" && fromParts.length > 1) {
       const fallbackFrom = fromParts.slice(0, -1).join(".");
       if (fallbackFrom) {
-        const fallbackResolved = await context.resolveFrom(fallbackFrom);
-        if (typeof fallbackResolved === "string") {
+        // The full path isn't itself a declared namespace (checked above): `using PT = N.Point;`
+        // names a TYPE (`Point`) inside namespace `N`, not a namespace itself. Resolving the
+        // parent path as a namespace finds `Point`'s declaring file so `imported` below (`Point`)
+        // resolves the same way a plain `using N;` peer reference already does.
+        const fallbackNamespaceTargets = await resolveCsharpNamespaceImportPaths(
+          context.projectRoot,
+          fallbackFrom,
+          context.file,
+        );
+        if (fallbackNamespaceTargets.length === 1) {
           fromValue = fallbackFrom;
-          resolved = fallbackResolved;
+          resolved = fallbackNamespaceTargets[0]!.replace(/\\/g, "/");
+        } else {
+          const fallbackResolved = await context.resolveFrom(fallbackFrom);
+          if (typeof fallbackResolved === "string") {
+            fromValue = fallbackFrom;
+            resolved = fallbackResolved;
+          }
         }
       }
     }

@@ -29,8 +29,10 @@ import {
   keywordReceiverCrossesDynamicBoundary,
   isUnprovenHeritageExpression,
   keywordReceiverMemberScope,
+  kotlinExtensionReceiverTypeNode,
   nodeInStaticMemberContext,
   receiverConstructorExpression,
+  TRANSPARENT_MEMBER_CONTAINER_TYPES,
   unwrapNamedType,
   type ReceiverMemberScope,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
@@ -1373,6 +1375,18 @@ async function findReceiverMemberDefinition(
   if (targetContext.sup.id === "go") {
     return findGoReceiverMember(locals, member, receiverDef.localName, targetContext, normalizeIdentifier);
   }
+  if (targetContext.sup.id === "kotlin") {
+    const extensionMatches = kotlinExtensionFunctionsNamedOnType(
+      locals,
+      member,
+      receiverDef.localName,
+      targetContext,
+      normalizeIdentifier,
+    );
+    if (extensionMatches.length) {
+      return await selectReceiverMemberCandidates(index, extensionMatches, knownArgumentCount);
+    }
+  }
   return undefined;
 }
 
@@ -1577,9 +1591,17 @@ function findDirectLocalsWithinNode(
     while (current && current !== container) {
       const isDirectBody =
         (current.type === "statement_block" || current.type === "block") && current.parent === container;
+      // A transparent container (Kotlin's `companion object`) donates its body's members to its
+      // own enclosing class; the grammar never lets one nest under any other declaration, so its
+      // body never counts as evidence of a foreign nested class here.
+      const isTransparentBody =
+        current.type === "class_body" &&
+        !!current.parent &&
+        TRANSPARENT_MEMBER_CONTAINER_TYPES[current.parent.type] === true;
       if (
         !isDeclarationParent &&
         !isDirectBody &&
+        !isTransparentBody &&
         ((current.type === "class_body" && current.parent !== container) ||
           NESTED_MEMBER_LOCAL_CONTAINERS.has(current.type))
       ) {
@@ -1749,6 +1771,36 @@ function goMethodsNamedOnType(
     if (node.type === "method_declaration") {
       const receiverType = goMethodReceiverTypeName(node, targetContext.source, targetContext.sup);
       if (receiverType && normalizeIdentifier(receiverType) === normalizeIdentifier(typeName)) {
+        const local = findLocalWithinNode(locals, member, node, normalizeIdentifier);
+        if (local && !matches.includes(local)) matches.push(local);
+      }
+      return;
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(targetContext.tree.rootNode);
+  return matches;
+}
+
+/**
+ * Kotlin extension functions declared `fun Type.member()` for a receiver type, searched across
+ * the receiver type's own declaring file the same way `goMethodsNamedOnType` searches Go's file
+ * for a receiver method. An ordinary class member never carries a receiver-type prefix, so this
+ * never matches a real member and cannot shadow one.
+ */
+function kotlinExtensionFunctionsNamedOnType(
+  locals: readonly SymbolDef[],
+  member: string,
+  typeName: string,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
+): SymbolDef[] {
+  const matches: SymbolDef[] = [];
+  const normalizedType = normalizeIdentifier(typeName);
+  const visit = (node: SyntaxNodeLike): void => {
+    if (node.type === "function_declaration") {
+      const receiverType = kotlinExtensionReceiverTypeNode(node, targetContext.sup);
+      if (receiverType && normalizeIdentifier(sliceText(receiverType, targetContext.source)) === normalizedType) {
         const local = findLocalWithinNode(locals, member, node, normalizeIdentifier);
         if (local && !matches.includes(local)) matches.push(local);
       }
