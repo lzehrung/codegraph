@@ -42,6 +42,7 @@ import {
   CALL_ARGUMENT_NODE_TYPES,
   classifyReceiver,
   constructionTypeName,
+  declarationIsStaticEquivalent,
   declarationNodeIsStatic,
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberDeclarationNode,
@@ -491,27 +492,14 @@ function memberScopeForDefinition(
     return declarationNodeIsStatic(outOfLineDeclaration.node, outOfLineDeclaration.source) ? "static" : "instance";
   }
   if (cppOutOfLine) return "any";
-  // Kotlin has no `static` keyword; a `companion object { ... }` member is the language's
-  // static-equivalent mechanism (reachable as `Outer.member()`), so it must register "static"
-  // itself rather than fall through to the keyword-based check below, which never fires for
-  // Kotlin and would otherwise leave every Kotlin member "instance" indistinguishably.
-  if (context.sup.id === "kotlin" && isKotlinCompanionObjectMember(fn.node)) return "static";
+  // Kotlin has no `static` keyword; a member of a `companion object` or a named `object`
+  // declaration is the language's static-equivalent mechanism (reachable as `Outer.member()`).
+  if (declarationIsStaticEquivalent(context.sup.id, fn.node)) return "static";
   const declarationNode =
     fn.node.parent?.type === "public_field_definition" || fn.node.parent?.type === "field_definition"
       ? fn.node.parent
       : fn.node;
   return declarationNodeIsStatic(declarationNode, context.source) ? "static" : "instance";
-}
-
-/** Whether `node` is lexically declared inside its own nearest enclosing `companion object`. */
-function isKotlinCompanionObjectMember(node: SyntaxNodeLike): boolean {
-  let current: SyntaxNodeLike | null = node.parent;
-  while (current) {
-    if (current.type === "companion_object") return true;
-    if (current.type === "class_declaration") return false;
-    current = current.parent;
-  }
-  return false;
 }
 
 type MemberOwner = { def: SymbolDef; container: SyntaxNodeLike | null; cppOutOfLine: boolean };

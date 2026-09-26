@@ -25,6 +25,7 @@ import {
   classifyReceiver,
   cppOutOfLineOwnerPath,
   cppQualifiedNameSegments,
+  declarationIsStaticEquivalent,
   declarationNodeIsStatic,
   declaresMembers,
   hasStaticMemberDistinction,
@@ -37,6 +38,7 @@ import {
   nodeInStaticMemberContext,
   receiverConstructorExpression,
   rustImplSelfTypeNode,
+  supportsStaticMemberScope,
   TRANSPARENT_MEMBER_CONTAINER_TYPES,
   unwrapNamedType,
   type PhpObjectCreationKeyword,
@@ -1691,7 +1693,7 @@ async function resolveReceiverDefinition(
     if (isJsTsLanguage(sup.id) && directContainer.kind === SymbolKind.TypeAlias) {
       return { def: directContainer, memberScope: "any", runtimeTypeOnly: true };
     }
-    const memberScope = hasStaticMemberDistinction(sup.id) ? "static" : "any";
+    const memberScope = supportsStaticMemberScope(sup.id) ? "static" : "any";
     return { def: directContainer, memberScope };
   }
   if (isJsTsLanguage(sup.id) && isReceiverNameNode(sup, obj.type)) {
@@ -1970,6 +1972,7 @@ function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, c
     column: local.range.start.column - 1,
   };
   let current: SyntaxNodeLike | null = targetContext.tree.rootNode.descendantForPosition(position, position);
+  if (declarationIsStaticEquivalent(targetContext.sup.id, current)) return true;
   while (current && current !== container) {
     if (targetContext.sup.id === "php" && (current.type === "const_declaration" || current.type === "enum_case"))
       return true;
