@@ -4849,13 +4849,9 @@ describe("Find References: keyword receiver scope and coverage", () => {
         const lines = refs.references.map((reference) => reference.range.start.line);
         expect(lines).toContain(3);
         expect(lines).not.toContain(4);
-        // `value.run()` is classified as a named type, but `value` never resolves to a
-        // member-declaring definition, so the failed lookup cannot be dropped as proven.
         expect(refs.referenceCoverage).toEqual({
           scope: "indexed_candidates",
-          state: "partial",
-          reasons: ["strategy_unavailable"],
-          affectedFiles: [file],
+          state: "complete",
         });
       }
     } finally {

@@ -286,4 +286,37 @@ describe("Audit F3: no complete coverage while a same-name use resolves to nothi
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps partial coverage when a Kotlin extension is called on an unresolvable receiver", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-kotlin-extension-"));
+    try {
+      const file = path.join(root, "widget.kt").replace(/\\/g, "/");
+      await fsp.writeFile(
+        file,
+        [
+          "package demo",
+          "fun Widget.describe(): Int = 1",
+          "class Widget",
+          "fun show(x: Any): Int = x.describe()",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [file]);
+      const def = definitionFor(index, file, "describe");
+
+      const result = await indexer.findReferences(index, { def });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.references.some((reference) => reference.range.start.line === 4)).toBe(false);
+      expect(result.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["strategy_unavailable"],
+        affectedFiles: [file],
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
