@@ -16,7 +16,14 @@
  * field, which is absent in those rows. Zig's `memberContainerTypes` is deliberately wider than the
  * intersection: Zig has no implicit member scope, so a container's member functions must not land
  * in the file scope.
+ *
+ * `wholeScopeKinds` and `wholeScopeDeclarationTypes` say when a binding covers uses that
+ * appear before it. The walker resolves occurrences once the enclosing scope is complete; the
+ * row decides whether a later declaration in that scope names those earlier uses.
  */
+
+import type { Range } from "../types.js";
+import type { Scope } from "./scope-types.js";
 
 export type ScopeNodeRow = {
   /** Ancestor node types that mark an identifier as a parameter rather than a declaration. */
@@ -103,7 +110,60 @@ export type ScopeNodeRow = {
     enumDeclarationTypes: ReadonlySet<string>;
     scopedKeywordPattern: RegExp;
   };
+  /**
+   * Scope kinds whose bindings cover the whole scope, including uses that textually precede
+   * the declaration. JS `let`/`const` still name the inner binding from the start of the block
+   * (temporal dead zone). Absent kinds expose a binding only at and after its declaration, so a
+   * later declaration does not capture an earlier use in that scope (C and C++ blocks, Rust
+   * `let`, Go locals).
+   */
+  wholeScopeKinds?: ReadonlySet<Scope["kind"]>;
+  /**
+   * Declaration node types that cover their whole scope even when the scope kind is absent from
+   * `wholeScopeKinds`. Matched against the name's parent, or that parent's parent when the name
+   * sits under a `variable_declarator`. Rust items inside a function are visible before their
+   * text; a `let` in the same block is not.
+   */
+  wholeScopeDeclarationTypes?: ReadonlySet<string>;
+  /**
+   * Put a variable declaration in the nearest scope of one of these kinds. Python: an assignment
+   * anywhere in a function makes that name local to the whole function, not to the block that
+   * holds the statement.
+   */
+  variableTargetScopeKinds?: ReadonlySet<Scope["kind"]>;
+  /**
+   * A scope whose node or parent has one of these types stops `variableTargetScopeKinds` from
+   * lifting past it. Python class bodies are `block` nodes, but an assignment there is a class
+   * attribute, not a function local.
+   */
+  variableScopeBoundaryTypes?: ReadonlySet<string>;
+  /**
+   * Member-access node types whose property name is not a lexical use.
+   * Python `self.run` must not attach to a same-named function; the property is a member.
+   */
+  nonLexicalMemberPropertyTypes?: ReadonlySet<string>;
 };
+
+const WHOLE_FILE_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["module"]);
+const WHOLE_LEXICAL_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["module", "function", "block", "type"]);
+
+/**
+ * Whether `binding` in a scope of `scopeKind` names a use at `useStartIndex`.
+ * Whole-scope bindings name every use in the scope. Every other binding names only uses at
+ * or after its declaration. Declaration-type coverage is recorded on the binding when it is
+ * registered, so this compares indexes instead of walking the declaration's ancestors.
+ */
+export function bindingCoversUse(
+  row: ScopeNodeRow,
+  scopeKind: Scope["kind"],
+  binding: { def?: Range; coversEnclosingScope?: boolean },
+  useStartIndex: number,
+): boolean {
+  if (binding.coversEnclosingScope || row.wholeScopeKinds?.has(scopeKind)) return true;
+  const defIndex = binding.def?.start.index;
+  if (defIndex === undefined) return true;
+  return defIndex <= useStartIndex;
+}
 
 const ECMASCRIPT_SCOPE_NODES: ScopeNodeRow = {
   functionNameTypes: new Set(["function_declaration", "generator_function_declaration", "method_definition"]),
@@ -119,6 +179,7 @@ const ECMASCRIPT_SCOPE_NODES: ScopeNodeRow = {
   moduleRootTypes: new Set(["program"]),
   hoistedFunctionTypes: new Set(["function_declaration", "generator_function_declaration"]),
   hoistedVariableDeclarationTypes: new Set(["variable_declaration"]),
+  wholeScopeKinds: WHOLE_LEXICAL_SCOPE,
   requireCall: {
     callTypes: new Set(["call_expression"]),
     calleeNames: new Set(["require"]),
@@ -148,6 +209,8 @@ const C_SCOPE_NODES: ScopeNodeRow = {
   variableDeclarationTypes: new Set(["field_declaration"]),
   destructuringTypeFieldTypes: new Set(["parameter_declaration"]),
   childSkipNameTypes: new Set(["identifier", "type_identifier"]),
+  wholeScopeKinds: WHOLE_FILE_SCOPE,
+  wholeScopeDeclarationTypes: new Set(["function_declarator"]),
 };
 
 const DOCUMENT_SCOPE_NODES: ScopeNodeRow = {};
@@ -170,6 +233,11 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberContainerTypes: new Set(["class_definition"]),
     childSkipNameTypes: new Set(["identifier", "parameters"]),
     moduleRootTypes: new Set(["module"]),
+    wholeScopeKinds: new Set(["module", "function"]),
+    wholeScopeDeclarationTypes: new Set(["function_definition", "class_definition"]),
+    variableTargetScopeKinds: new Set(["function"]),
+    variableScopeBoundaryTypes: new Set(["class_definition"]),
+    nonLexicalMemberPropertyTypes: new Set(["attribute"]),
   },
   php: {
     functionNameTypes: new Set(["function_definition", "method_declaration"]),
@@ -180,6 +248,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberFunctionTypes: new Set(["method_declaration"]),
     memberContainerTypes: new Set(["class_declaration"]),
     moduleRootTypes: new Set(["program"]),
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
   },
   go: {
     parameterParents: new Set(["parameter_declaration"]),
@@ -198,6 +267,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     destructuringTypeFieldTypes: new Set(["parameter_declaration", "variadic_parameter_declaration"]),
     memberFunctionTypes: new Set(["method_declaration"]),
     childSkipNameTypes: new Set(["identifier", "type_identifier"]),
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
   },
   java: {
     functionNameTypes: new Set(["method_declaration"]),
@@ -213,6 +283,13 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberContainerTypes: new Set(["class_body", "class_declaration"]),
     childSkipNameTypes: new Set(["identifier", "type_identifier"]),
     moduleRootTypes: new Set(["program"]),
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
+    wholeScopeDeclarationTypes: new Set([
+      "method_declaration",
+      "constructor_declaration",
+      "class_declaration",
+      "field_declaration",
+    ]),
   },
   csharp: {
     parameterParents: new Set(["parameter"]),
@@ -228,6 +305,13 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberFunctionTypes: new Set(["method_declaration"]),
     memberContainerTypes: new Set(["class_declaration"]),
     childSkipNameTypes: new Set(["identifier"]),
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
+    wholeScopeDeclarationTypes: new Set([
+      "method_declaration",
+      "local_function_statement",
+      "constructor_declaration",
+      "class_declaration",
+    ]),
   },
   rust: {
     parameterParents: new Set(["parameter"]),
@@ -245,6 +329,19 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     // real declaration and makes goto/references resolve the use to itself.
     destructuringTypeFieldTypes: new Set(["parameter"]),
     childSkipNameTypes: new Set(["identifier", "type_identifier", "parameters"]),
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
+    wholeScopeDeclarationTypes: new Set([
+      "function_item",
+      "struct_item",
+      "enum_item",
+      "trait_item",
+      "const_item",
+      "static_item",
+      "mod_item",
+      "union_item",
+      "type_item",
+      "macro_definition",
+    ]),
   },
   c: C_SCOPE_NODES,
   cpp: {
@@ -267,6 +364,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     assignmentIdentifierTypes: new Set(["identifier"]),
     memberContainerTypes: new Set(["class_body", "class_declaration"]),
     childSkipNameTypes: new Set(["identifier"]),
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
+    wholeScopeDeclarationTypes: new Set(["function_declaration", "class_declaration"]),
   },
   swift: {
     parameterParents: new Set(["parameter"]),
@@ -279,6 +378,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     assignmentIdentifierTypes: new Set(["identifier"]),
     memberContainerTypes: new Set(["class_body", "class_declaration"]),
     childSkipNameTypes: new Set(["identifier", "type_identifier"]),
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
+    wholeScopeDeclarationTypes: new Set(["function_declaration", "class_declaration"]),
   },
   ruby: {
     parameterParents: new Set(["lambda_parameters"]),
@@ -291,6 +392,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberContainerTypes: new Set(["class"]),
     childSkipNameTypes: new Set(["identifier"]),
     moduleRootTypes: new Set(["program", "module"]),
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
   },
   zig: {
     parameterParents: new Set(["parameter"]),
@@ -307,6 +409,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberContainerTypes: new Set(["struct_declaration", "enum_declaration", "union_declaration"]),
 
     childSkipNameTypes: new Set(["identifier", "parameters"]),
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
   },
   sql: {
     parameterParents: new Set(["parameter"]),
@@ -316,6 +419,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     assignmentIdentifierTypes: new Set(["identifier"]),
     childSkipNameTypes: new Set(["identifier"]),
     moduleRootTypes: new Set(["program"]),
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
   },
   scss: {
     parameterParents: new Set(["parameter"]),

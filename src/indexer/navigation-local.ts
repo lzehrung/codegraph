@@ -5,6 +5,7 @@ import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
+import { bindingCoversUse, scopeNodesFor } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
 import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
 import {
@@ -159,8 +160,12 @@ export function findClosestScopeBinding(
     currentScope = best;
   }
 
+  const row = scopeNodesFor(support.id);
   while (currentScope) {
-    const binding = currentScope.map.get(normalizedName);
+    let binding: Binding | undefined = currentScope.map.get(normalizedName);
+    while (binding && !bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex)) {
+      binding = binding.earlierSameScope;
+    }
     if (binding) return binding;
     currentScope = currentScope.parent;
   }
