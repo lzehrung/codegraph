@@ -145,6 +145,7 @@ export function resolveCppExportedCallables(
   node: SyntaxNodeLike,
   source: string,
   loadParsedFile: (file: string) => CppParsedFile | null,
+  canonicalNameForDef?: (def: SymbolDef) => string | undefined,
 ): SymbolDef | null {
   const ownedBindings: Array<{ file: FileId; binding: Binding }> = [];
   const handled = new Set<Binding>();
@@ -170,11 +171,14 @@ export function resolveCppExportedCallables(
           candidate.def?.end.index === def.range.end.index,
       );
       if (!binding) return null;
-      let canonicalName = binding.canonicalName;
-      for (const [qualifiedName, bindings] of scopeIndex.cppQualifiedFunctionBindings) {
-        if (!bindings.includes(binding)) continue;
-        canonicalName = qualifiedName;
-        break;
+      const explicitName = canonicalNameForDef?.(def);
+      let canonicalName = explicitName ?? binding.canonicalName;
+      if (!explicitName) {
+        for (const [qualifiedName, bindings] of scopeIndex.cppQualifiedFunctionBindings) {
+          if (!bindings.includes(binding)) continue;
+          canonicalName = qualifiedName;
+          break;
+        }
       }
       for (const equivalent of cppEquivalentCallableBindings(binding)) {
         if (handled.has(equivalent)) continue;
@@ -240,6 +244,257 @@ export async function resolveVisibleCppCallableNameAsync(
   return resolveCppExportedCallables(
     index,
     defs,
+    node,
+    source,
+    (file) => parsedByFile.get(fileIdentityKey(file)) ?? null,
+  );
+}
+
+const CPP_USING_DIRECTIVE_NAME_TYPES: Record<string, true> = {
+  identifier: true,
+  namespace_identifier: true,
+  type_identifier: true,
+  qualified_identifier: true,
+  nested_namespace_specifier: true,
+};
+
+const CPP_USING_DIRECTIVE_REJECT_SCOPES: Record<string, true> = {
+  function_definition: true,
+  lambda_expression: true,
+  class_specifier: true,
+  struct_specifier: true,
+  union_specifier: true,
+};
+
+type CppUsingDirective = {
+  fileKey: string;
+  startIndex: number;
+  namespacePath: string[];
+  enclosing: string[];
+};
+
+function cppStarImportClosure(index: ProjectIndex, sourceModule: ModuleIndex): ModuleIndex[] {
+  const modules: ModuleIndex[] = [];
+  const pending: ModuleIndex[] = [sourceModule];
+  const seen = new Set<string>();
+  while (pending.length) {
+    const current = pending.pop()!;
+    const key = fileIdentityKey(current.file);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    modules.push(current);
+    for (const imp of current.imports) {
+      if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
+      const target = index.byFile.get(fileIdentityKey(imp.resolved));
+      if (target) pending.push(target);
+    }
+  }
+  return modules;
+}
+
+function cppUsingDirectiveIsFileOrNamespaceScope(node: SyntaxNodeLike): boolean {
+  let current: SyntaxNodeLike | null = node.parent;
+  while (current) {
+    if (CPP_USING_DIRECTIVE_REJECT_SCOPES[current.type]) return false;
+    current = current.parent;
+  }
+  return true;
+}
+
+function cppEnclosingNamespace(node: SyntaxNodeLike, source: string, fileKey: string): string[] {
+  const nested: string[][] = [];
+  let current: SyntaxNodeLike | null = node.parent;
+  while (current) {
+    if (current.type === "namespace_definition") {
+      const name = current.childForFieldName("name");
+      if (name) {
+        const segments = cppQualifiedNameSegments(name, source);
+        if (segments.length) nested.push(segments);
+      } else {
+        nested.push([`\0anon:${fileKey}:${current.startIndex}`]);
+      }
+    }
+    current = current.parent;
+  }
+  const path: string[] = [];
+  for (let index = nested.length - 1; index >= 0; index -= 1) path.push(...nested[index]!);
+  return path;
+}
+
+function cppNamespaceIsPrefix(prefix: readonly string[], path: readonly string[]): boolean {
+  if (prefix.length > path.length) return false;
+  for (let index = 0; index < prefix.length; index += 1) {
+    if (prefix[index] !== path[index]) return false;
+  }
+  return true;
+}
+
+function cppUsingDirectiveFromNode(node: SyntaxNodeLike, source: string, fileKey: string): CppUsingDirective | null {
+  if (node.type !== "using_declaration") return null;
+  let hasNamespaceKeyword = false;
+  let target: SyntaxNodeLike | null = null;
+  for (let index = 0; ; index += 1) {
+    const child = node.child(index);
+    if (!child) break;
+    if (child.type === "namespace") hasNamespaceKeyword = true;
+    else if (CPP_USING_DIRECTIVE_NAME_TYPES[child.type]) {
+      if (!target || child.type === "qualified_identifier" || child.type === "nested_namespace_specifier") {
+        target = child;
+      }
+    }
+  }
+  if (!hasNamespaceKeyword || !target || !cppUsingDirectiveIsFileOrNamespaceScope(node)) return null;
+  const namespacePath =
+    target.type === "identifier" || target.type === "namespace_identifier" || target.type === "type_identifier"
+      ? [target.text.trim()]
+      : cppQualifiedNameSegments(target, source);
+  if (!namespacePath.length || namespacePath.some((segment) => segment.length === 0)) return null;
+  return {
+    fileKey,
+    startIndex: node.startIndex,
+    namespacePath,
+    enclosing: cppEnclosingNamespace(node, source, fileKey),
+  };
+}
+
+function collectCppUsingDirectives(
+  root: SyntaxNodeLike,
+  source: string,
+  fileKey: string,
+  out: CppUsingDirective[],
+): void {
+  const visit = (node: SyntaxNodeLike): void => {
+    if (node.type === "using_declaration") {
+      const directive = cppUsingDirectiveFromNode(node, source, fileKey);
+      if (directive) out.push(directive);
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(root);
+}
+
+function addCppNamedExportTargets(
+  index: ProjectIndex,
+  moduleEntry: ModuleIndex,
+  name: string,
+  defs: SymbolDef[],
+  seen: Set<string>,
+): void {
+  const moduleKey = `${fileIdentityKey(moduleEntry.file)}\0${name}`;
+  if (seen.has(moduleKey)) return;
+  seen.add(moduleKey);
+  for (const entry of moduleEntry.exports) {
+    if (entry.type === "exportStar" || entry.exportedAs !== name) continue;
+    if (entry.type === "local") {
+      const key = definitionIdentityKey(entry.target);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      defs.push(entry.target);
+    } else if (entry.type === "reexport") {
+      const target = index.byFile.get(fileIdentityKey(entry.fromModule));
+      if (target) addCppNamedExportTargets(index, target, entry.sourceSpecifier, defs, seen);
+    }
+  }
+  for (const imp of moduleEntry.imports) {
+    if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
+    const target = index.byFile.get(fileIdentityKey(imp.resolved));
+    if (target) addCppNamedExportTargets(index, target, name, defs, seen);
+  }
+}
+
+function collectVisibleCppExportTargets(index: ProjectIndex, sourceModule: ModuleIndex, name: string): SymbolDef[] {
+  const defs: SymbolDef[] = [];
+  const seen = new Set<string>();
+  addCppNamedExportTargets(index, sourceModule, name, defs, seen);
+  for (const imp of sourceModule.imports) {
+    if (imp.kind !== "named" || typeof imp.resolved !== "string") continue;
+    if (imp.local !== name && imp.imported !== name) continue;
+    const targetModule = index.byFile.get(fileIdentityKey(imp.resolved));
+    if (targetModule) addCppNamedExportTargets(index, targetModule, imp.imported, defs, seen);
+  }
+  return defs;
+}
+
+/**
+ * Bare lookup through `using namespace`. Undefined means no directive nominates
+ * this name. Null means more than one viable candidate, or the candidate could
+ * not be proved unique. Block-scope directives are ignored.
+ */
+export function resolveCppUsingDirectiveName(
+  index: ProjectIndex,
+  sourceModule: ModuleIndex,
+  name: string,
+  node: SyntaxNodeLike,
+  source: string,
+  loadParsedFile: (file: string) => CppParsedFile | null,
+): SymbolDef | null | undefined {
+  if (!name || name.includes("::")) return undefined;
+  const useFileKey = fileIdentityKey(sourceModule.file);
+  const useNamespace = cppEnclosingNamespace(node, source, useFileKey);
+  const directives: CppUsingDirective[] = [];
+  for (const moduleEntry of cppStarImportClosure(index, sourceModule)) {
+    const parsed = loadParsedFile(moduleEntry.file);
+    if (!parsed?.tree) continue;
+    collectCppUsingDirectives(parsed.tree.rootNode, parsed.source, fileIdentityKey(moduleEntry.file), directives);
+  }
+  const applicable = directives.filter(
+    (directive) =>
+      cppNamespaceIsPrefix(directive.enclosing, useNamespace) &&
+      (directive.fileKey !== useFileKey || directive.startIndex < node.startIndex),
+  );
+  if (!applicable.length) return undefined;
+
+  const functionDefs: SymbolDef[] = [];
+  const otherDefs: SymbolDef[] = [];
+  const seen = new Set<string>();
+  const qualifiedByDef = new Map<string, string>();
+  for (const directive of applicable) {
+    const qualified = `${directive.namespacePath.join("::")}::${name}`;
+    for (const def of collectVisibleCppExportTargets(index, sourceModule, qualified)) {
+      const key = definitionIdentityKey(def);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      qualifiedByDef.set(key, qualified);
+      if (def.kind === SymbolKind.Function) functionDefs.push(def);
+      else otherDefs.push(def);
+    }
+  }
+  if (!functionDefs.length && !otherDefs.length) return undefined;
+  if (functionDefs.length) {
+    return resolveCppExportedCallables(index, functionDefs, node, source, loadParsedFile, (def) =>
+      qualifiedByDef.get(definitionIdentityKey(def)),
+    );
+  }
+  if (otherDefs.length === 1) return otherDefs[0]!;
+  return null;
+}
+
+export async function resolveCppUsingDirectiveNameAsync(
+  index: ProjectIndex,
+  sourceModule: ModuleIndex,
+  name: string,
+  node: SyntaxNodeLike,
+  source: string,
+  currentFile?: { file: FileId; parsed: CppParsedFile },
+): Promise<SymbolDef | null | undefined> {
+  const parsedByFile = new Map<string, CppParsedFile>();
+  if (currentFile) parsedByFile.set(fileIdentityKey(currentFile.file), currentFile.parsed);
+  for (const moduleEntry of cppStarImportClosure(index, sourceModule)) {
+    const key = fileIdentityKey(moduleEntry.file);
+    if (parsedByFile.has(key)) continue;
+    try {
+      parsedByFile.set(
+        key,
+        await ensureParsedContext(moduleEntry.file, index.parsed?.get(key), index.languageExtensions),
+      );
+    } catch {
+      /* reduced mode: skip files that cannot be parsed */
+    }
+  }
+  return resolveCppUsingDirectiveName(
+    index,
+    sourceModule,
+    name,
     node,
     source,
     (file) => parsedByFile.get(fileIdentityKey(file)) ?? null,

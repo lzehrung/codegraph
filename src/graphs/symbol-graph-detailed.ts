@@ -18,6 +18,7 @@ import {
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppExportedCallables,
+  resolveCppUsingDirectiveName,
   resolveVisibleCppCallableName,
 } from "../indexer/navigation-cpp.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
@@ -433,6 +434,8 @@ export async function buildSymbolGraphDetailed(
         if (sup.id === "cpp") {
           const visible = resolveVisibleCppCallableName(index, moduleEntry, name, node, src, loadCppParsedFile);
           if (visible !== undefined) return visible;
+          const directed = resolveCppUsingDirectiveName(index, moduleEntry, name, node, src, loadCppParsedFile);
+          if (directed !== undefined) return directed;
         }
         if (binding) return resolveCppAliasTarget(aliasToTargetDef.get(binding.name), node);
 

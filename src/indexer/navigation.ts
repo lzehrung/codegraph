@@ -76,6 +76,7 @@ import {
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppQualifiedMemberContainer,
+  resolveCppUsingDirectiveNameAsync,
   resolveVisibleCppCallableNameAsync,
 } from "./navigation-cpp.js";
 import {
@@ -409,6 +410,14 @@ export async function goToDefinition(
           confidence: "high",
         });
       }
+      const directed = await resolveCppUsingDirectiveNameAsync(index, mod, name, node, source, {
+        file,
+        parsed: { source, tree, sup },
+      });
+      if (directed !== undefined) {
+        if (!directed) return { status: "not_found", reason: "No unique C++ using-directive target" };
+        return okGoToResult(index, directed, { resolution: "import", confidence: "high" });
+      }
     }
 
     if (sup.supportsCrossModuleSymbols) {
@@ -540,7 +549,8 @@ export async function findRenameReferences(
  * file's module.locals holds an exact identity match (same file, kind, localName, and full range
  * span), restoring metadata such as `isMember` — followed by every equivalent
  * declaration/definition that reference collection itself proves: same-scope prototype/definition
- * pairs (C and C++), namespace-qualified equivalents, the in-class declaration for out-of-line
+ * pairs (C and C++), C prototypes linked to definitions through an include, namespace-qualified
+ * equivalents, the in-class declaration for out-of-line
  * member definitions, and out-of-line definitions for in-class member declarations linked through
  * the export index. Matching stays conservative: candidates must already exist in the definition
  * file's scope bindings or the export index with a proven signature; no name-only or arity-only
@@ -1272,6 +1282,98 @@ type CppEquivalentCallableFamily = {
  * the receiver owner, the normalized reference name, the definition-site scope binding, and the
  * proven equivalent definition family for one callable definition site.
  */
+function cIncludeLinkedFileKeys(index: ProjectIndex, startFile: string): Set<string> {
+  const startKey = fileIdentityKey(startFile);
+  const includedBy = new Map<string, string[]>();
+  for (const moduleEntry of index.byFile.values()) {
+    const includerKey = fileIdentityKey(moduleEntry.file);
+    for (const imp of moduleEntry.imports) {
+      if (typeof imp.resolved !== "string") continue;
+      const includedKey = fileIdentityKey(imp.resolved);
+      const includers = includedBy.get(includedKey);
+      if (includers) includers.push(includerKey);
+      else includedBy.set(includedKey, [includerKey]);
+    }
+  }
+  const linked = new Set<string>();
+  const walk = (origin: string, neighbors: (key: string) => readonly string[]) => {
+    const pending = [origin];
+    const seen = new Set<string>([origin]);
+    while (pending.length) {
+      const current = pending.pop()!;
+      for (const neighbor of neighbors(current)) {
+        if (seen.has(neighbor)) continue;
+        seen.add(neighbor);
+        linked.add(neighbor);
+        pending.push(neighbor);
+      }
+    }
+  };
+  walk(startKey, (key) => {
+    const moduleEntry = index.byFile.get(key);
+    if (!moduleEntry) return [];
+    const included: string[] = [];
+    for (const imp of moduleEntry.imports) {
+      if (typeof imp.resolved === "string") included.push(fileIdentityKey(imp.resolved));
+    }
+    return included;
+  });
+  walk(startKey, (key) => includedBy.get(key) ?? []);
+  linked.delete(startKey);
+  return linked;
+}
+
+/**
+ * C prototype and definition of one signature, joined only when one file includes
+ * the other. Two translation units that merely share an unrelated header stay apart,
+ * and `static` functions are not exports so they never join the family.
+ */
+async function cIncludeLinkedCallableEquivalents(
+  index: ProjectIndex,
+  def: SymbolDef,
+  definitionNameNode: SyntaxNodeLike,
+): Promise<SymbolDef[]> {
+  if (def.kind !== SymbolKind.Function || def.cTag) return [];
+  const expected = cppCallableShapeForNode(definitionNameNode);
+  if (!expected) return [];
+  const origin = index.byFile.get(fileIdentityKey(def.file));
+  const exported = origin?.exports.some(
+    (entry) => entry.type === "local" && sameDef(entry.target, def, index.languageExtensions),
+  );
+  if (!exported) return [];
+  const equivalents = new Map<string, SymbolDef>();
+  for (const fileKey of cIncludeLinkedFileKeys(index, def.file)) {
+    const moduleEntry = index.byFile.get(fileKey);
+    if (!moduleEntry) continue;
+    const candidates: SymbolDef[] = [];
+    for (const entry of moduleEntry.exports) {
+      if (entry.type !== "local") continue;
+      if (entry.exportedAs !== def.localName || entry.target.localName !== def.localName) continue;
+      if (entry.target.kind !== SymbolKind.Function || entry.target.cTag) continue;
+      candidates.push(entry.target);
+    }
+    if (!candidates.length) continue;
+    let candidateParsed: ParsedFileContext;
+    try {
+      candidateParsed = await ensureParsedContext(
+        moduleEntry.file,
+        index.parsed?.get(fileKey),
+        index.languageExtensions,
+      );
+    } catch {
+      continue;
+    }
+    if (candidateParsed.sup.id !== "c") continue;
+    for (const candidate of candidates) {
+      if (sameDef(candidate, def, index.languageExtensions)) continue;
+      const candidateNode = syntaxNodeForDefinition(candidateParsed, candidate);
+      if (cppCallableShapeForNode(candidateNode)?.signature !== expected.signature) continue;
+      equivalents.set(referenceSiteKey(candidate.file, candidate.range), candidate);
+    }
+  }
+  return [...equivalents.values()];
+}
+
 async function cppEquivalentCallableFamily(
   index: ProjectIndex,
   def: SymbolDef,
@@ -1334,6 +1436,13 @@ async function cppEquivalentCallableFamily(
     equivalents = [
       ...sameFileFunctionEquivalentDefinitions,
       ...(await cppNamespaceFunctionEquivalentDefinitions(index, definition, context, definitionNameNode)),
+    ];
+  } else if (context.sup.id === "c" && definition.kind === SymbolKind.Function && !definition.cTag) {
+    const linked = await cIncludeLinkedCallableEquivalents(index, definition, definitionNameNode);
+    const seen = new Set(sameFileFunctionEquivalentDefinitions.map((item) => referenceSiteKey(item.file, item.range)));
+    equivalents = [
+      ...sameFileFunctionEquivalentDefinitions,
+      ...linked.filter((item) => !seen.has(referenceSiteKey(item.file, item.range))),
     ];
   } else {
     equivalents = sameFileFunctionEquivalentDefinitions;
