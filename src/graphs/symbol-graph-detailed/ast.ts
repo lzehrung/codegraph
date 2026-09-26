@@ -71,6 +71,7 @@ export function collectDetailedDeclarations(
     "method_definition",
     "method_signature",
     "abstract_method_signature",
+    "function_signature",
     "constructor_declaration",
     "function_item",
     "function_signature_item",

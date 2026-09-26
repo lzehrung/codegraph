@@ -41,6 +41,8 @@ regression test.
 | [ ]  | W16 | Zig               | `self.area()` inside the struct                                                                                                  | `goToDefinition` ok; references only the declaration, `complete`                                                                                                                                                                                 |
 | [ ]  | W17 | Star-import langs | Two files export the same name through star imports (Ruby `require_relative`, Python `import *`, Rust `use x::*`, JVM wildcards) | `goToDefinition` falls back to the first match in file order with medium confidence (`src/indexer/navigation-local.ts` `resolveNamedDefinition`); after G4 the Ruby graph shares this resolver, so the fix also removes the wrong `extends` edge |
 | [ ]  | W18 | Ruby              | `module Outer; class Base; end; end` exports a bare top-level `Base` (`src/languages/definitions/ruby.ts` exports query)         | `class Worker < Base` resolves to `Outer::Base` instead of the real top-level `Base`; the graph `extends` edge follows it                                                                                                                        |
+| [ ]  | W19 | All languages     | A same-file use of a name declared later in the file (forward reference)                                                         | references omit the use and still report `complete` (single-pass scope-occurrence walk in `src/indexer/scope.ts`)                                                                                                                              |
+| [ ]  | W20 | Kotlin            | `Box.instanceHelper()` calls an instance method through the type name (invalid Kotlin)                                          | `goToDefinition` resolves it; the detailed graph already refuses the edge                                                                                                                                                                        |
 
 ## Graph, cache, and API gaps
 
@@ -52,6 +54,7 @@ regression test.
 | [ ]  | G4  | Ruby graph        | Cross-file `class A < B`, `include`, `extend` give no edge; `goToDefinition` resolves `B`              |
 | [ ]  | G5  | TS graph          | `Box.create()` static call has a `uses` edge but no `calls` edge                                       |
 | [~]  | G6  | Agent API         | `freshness: { policy: "manual" }` makes `checkFreshness()` report `fresh` without a check (since #353) |
+| [ ]  | G7  | Rust graph        | `impl` block methods get no `member_of` edge, so Rust method calls (`c.area()`) get no `calls` edge     |
 
 ## Honest misses on common code
 
@@ -70,6 +73,8 @@ regression test.
 | [ ]  | H11 | Python               | Source-side name in `from a import helper as h`                                                         |
 | [ ]  | H12 | Python/Ruby          | `super().m()` and Ruby `super` with a proven base class                                                 |
 | [ ]  | H13 | Rust/Zig             | Rust `use x::*`, struct-literal receivers, a `bin` importing its own lib; Zig qualified struct literals |
+| [ ]  | H14 | Kotlin               | A class whose method body reads a constructor property (`class G(val name: String) { fun d() = name }`): `g.d()` from another function is `not_found` |
+| [ ]  | H15 | Rust                 | Workspace-inherited dependency (`crate_a = { workspace = true }`) does not resolve                      |
 
 ## Integration
 

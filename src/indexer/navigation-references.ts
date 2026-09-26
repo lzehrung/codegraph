@@ -1126,7 +1126,7 @@ export function importBindingReferenceSites(
     if (localRange && !rangesEqual(localRange, importedRange)) {
       sites.push({ range: localRange, importBinding: "local" });
     }
-  } else if (imp.kind === "default") {
+  } else if (imp.kind === "default" || imp.kind === "namespace") {
     const { localRange } = bindingTokenRanges(imp);
     if (localRange) {
       sites.push({ range: localRange, importBinding: "local" });

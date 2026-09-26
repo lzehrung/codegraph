@@ -134,6 +134,8 @@ const TYPESCRIPT_SCOPE_NODES: ScopeNodeRow = {
   enumBodyMemberTypes: new Set(["property_identifier"]),
   enumBodyParentTypes: new Set(["enum_body"]),
   childSkipNameTypes: new Set(["identifier", "type_identifier"]),
+  // `x: T` keeps its type annotation in the `type` field; skip it for bindings (H1).
+  destructuringTypeFieldTypes: new Set(["required_parameter", "optional_parameter"]),
   moduleRootTypes: new Set(["program", "module"]),
 };
 

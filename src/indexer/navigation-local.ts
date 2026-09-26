@@ -6,7 +6,7 @@ import { okGoToResult } from "./navigation-provenance.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
-import { resolveExport, resolveImported } from "./navigation-resolve.js";
+import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
 import {
   SymbolKind,
   type GoToResult,
@@ -306,6 +306,19 @@ export function resolveNamedDefinition(
       }
     } else if (imp.kind === "namespace" && support.normalizeIdentifier(imp.localNS) === normalizedName) {
       const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
+      if (imp.mechanism === "cjs" && targetFile) {
+        const classValue = cjsRequireValueBinding(index, targetFile);
+        if (classValue) {
+          return okGoToResult(index, classValue, {
+            via: {
+              ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+              exportedName: classValue.localName,
+            },
+            resolution: "import",
+            confidence: "high",
+          });
+        }
+      }
       const targetMod = targetFile ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
       const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
       if (firstExport) {

@@ -977,7 +977,8 @@ async function findReferencesInternal(
       }
       for (const exportedName of exportedNames) {
         if (hasReachedCollectionLimit()) break;
-        if (imp.kind === "namespace") {
+        const cjsModuleValue = imp.kind === "namespace" && imp.mechanism === "cjs" && exportedName === "default";
+        if (imp.kind === "namespace" && !cjsModuleValue) {
           if (
             !isGoExportedMemberName(
               supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.id,
@@ -1054,9 +1055,10 @@ async function findReferencesInternal(
           }
         } else {
           let exported = exportedName;
+          const importedLocalName = imp.kind === "namespace" ? imp.localNS : imp.local;
           if (imp.kind === "named") {
             exported = imp.imported;
-          } else if (imp.kind === "default") {
+          } else if (imp.kind === "default" || cjsModuleValue) {
             exported = "default";
           }
           const hit = resolveExport(index, targetFile, exported, exportOptions);
@@ -1161,7 +1163,7 @@ async function findReferencesInternal(
             const ranges = await collectVerifiedNamedNodeReferences(
               index,
               fileId,
-              scansQualifiedCppImport ? (imp.local.split("::").pop() ?? imp.local) : imp.local,
+              scansQualifiedCppImport ? (importedLocalName.split("::").pop() ?? importedLocalName) : importedLocalName,
               definition,
               (params, parsed) => goToDefinition(index, params, parsed),
               remainingReferences,
@@ -1182,7 +1184,7 @@ async function findReferencesInternal(
           }
           const parsed = await ensureCandidateParsed();
           const resolvedScope = await ensureScope();
-          const localName = parsed.sup.normalizeIdentifier(imp.local);
+          const localName = parsed.sup.normalizeIdentifier(importedLocalName);
           const declarationKeys = importBindingDeclarationRangeKeys(module);
           const bindings = resolvedScope.bindings.get(localName) ?? [];
           for (const binding of bindings) {

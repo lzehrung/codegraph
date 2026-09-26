@@ -611,9 +611,10 @@ describe("Go to Definition", () => {
 
         const result = await goToDefinition(index, { file: consumerFile, line: 4, column: 11 });
 
+        expect(result.status).toBe("ok");
         if (result.status === "ok") {
-          expect(result.definition.file).not.toBe(serviceFile);
-          expect(result.definition.range.start.line).not.toBe(2);
+          expect(result.definition.file).toBe(serviceFile);
+          expect(result.definition.range.start.line).toBe(5);
         }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
