@@ -190,6 +190,7 @@ async function pushStandardBindings(
       from,
       resolved,
       typeOnly,
+      ...(includeForm ? { includeForm } : {}),
       stmtText,
       ...(statementStartIndex !== undefined ? { stmtStartIndex: statementStartIndex, source: context.source } : {}),
       ...(alias ? { alias } : {}),

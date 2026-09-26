@@ -101,8 +101,15 @@ export function declaredPackagesForContext(importerFile: string, projectRoot: st
   const importerDirectory = path.resolve(importerDirectoryForFile(importerFile));
   const ancestorSearchStart = path.resolve(projectRoot ?? importerDirectory);
   const vcsBoundary = nearestVcsAncestor(ancestorSearchStart);
-  const boundary =
-    nearestManifestAncestor(ancestorSearchStart, vcsBoundary) ?? path.resolve(projectRoot ?? importerDirectory);
+  // Config lookup is confined to the analyzed root (AGENTS.md path safety): without an
+  // enclosing Git repository there is no principled anchor above `projectRoot`, so the
+  // manifest search must stop there instead of wandering into unrelated ancestor
+  // directories. A Git repository is "repository metadata" and may still anchor the
+  // search above `projectRoot` (e.g. a scanned monorepo sub-package), matching existing
+  // cross-project-boundary support.
+  const rootBoundary = projectRoot ? path.resolve(projectRoot) : null;
+  const manifestSearchStop = vcsBoundary ?? rootBoundary;
+  const boundary = nearestManifestAncestor(ancestorSearchStart, manifestSearchStop) ?? rootBoundary ?? ancestorSearchStart;
   if (!isSameOrInside(importerDirectory, boundary)) {
     return dependencyManifestForDirectory(boundary).declaredPackages;
   }

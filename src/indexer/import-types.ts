@@ -1,4 +1,5 @@
 import type { FileId, Range } from "../types.js";
+import type { CFamilyIncludeForm } from "../util/specifiers.js";
 
 export type ImportBinding =
   | {
@@ -70,6 +71,8 @@ export type ImportBinding =
       moduleLevel?: boolean;
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
+      /** Present for a C/C++ include. Older cached bindings omit it. */
+      includeForm?: CFamilyIncludeForm;
     };
 
 /**

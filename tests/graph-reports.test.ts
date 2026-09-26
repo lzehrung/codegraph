@@ -135,10 +135,14 @@ describe("graph reports", () => {
     expect(unresolved.map((entry) => entry.name)).toEqual(["missing-package"]);
   });
 
-  it("uses package metadata above a scoped project root", () => {
+  it("uses package metadata above a scoped project root inside a Git repository", () => {
     const repoRoot = makeTempRoot("cg-unresolved-scoped-root-");
     const projectRoot = path.join(repoRoot, "src");
     fs.mkdirSync(projectRoot);
+    // Manifest discovery may only cross above `projectRoot` when a Git repository anchors
+    // the walk (repository metadata); without this marker the fix for G2 confines the
+    // search to `projectRoot` and this manifest would be ignored.
+    fs.writeFileSync(path.join(repoRoot, ".git"), "gitdir: .git\n", "utf8");
     fs.writeFileSync(
       path.join(repoRoot, "package.json"),
       JSON.stringify({

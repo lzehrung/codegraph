@@ -38,5 +38,6 @@ export function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
     to,
     raw: edge.raw,
     ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
+    ...(edge.includeForm ? { includeForm: edge.includeForm } : {}),
   };
 }

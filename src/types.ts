@@ -11,6 +11,8 @@ export type Edge = {
   typeOnly?: boolean;
   resolved?: "heuristic" | "precise";
   confidence?: number;
+  /** C/C++ include form. Absent on older edges and on specifiers that are not includes. */
+  includeForm?: "literal" | "angle" | "macro";
 };
 
 export type ProgressUpdate = {

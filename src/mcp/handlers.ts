@@ -453,16 +453,19 @@ function createCodegraphMcpHandlersForSession(
   };
   const formatSqliteFreshnessError = (freshness: AgentFreshnessResult): string => {
     if (freshness.state === "fresh") return "SQLite artifact freshness check unexpectedly failed.";
+    let action = "run artifact_build";
+    if (readOnly) {
+      action = "rebuild the artifact with write access enabled";
+    }
+    if (freshness.state === "unchecked") {
+      return `SQLite artifact may be stale; run refresh_index, then ${action} before query_sqlite. Session freshness could not be checked: ${freshness.reason}.`;
+    }
     const reason = freshness.state === "stale" ? freshness.reason : "workspace changed after artifact build";
     const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
     const omitted =
       freshness.state === "stale" && freshness.omittedChangedFileCount
         ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
         : "";
-    let action = "run artifact_build";
-    if (readOnly) {
-      action = "rebuild the artifact with write access enabled";
-    }
     if (freshness.state === "stale") {
       action = `run refresh_index, then ${action}`;
     }
@@ -498,12 +501,12 @@ function createCodegraphMcpHandlersForSession(
     refreshOptions?: { allowStaleRebuild?: boolean },
   ): Promise<AgentFreshnessResult> => {
     if (freshness.state === "fresh") return freshness;
-    if (freshness.state === "stale" && !refreshOptions?.allowStaleRebuild) {
+    if ((freshness.state === "stale" || freshness.state === "unchecked") && !refreshOptions?.allowStaleRebuild) {
       throw new Error(formatSqliteFreshnessError(freshness));
     }
     if (!canRefreshSqliteArtifact()) throw new Error(formatSqliteFreshnessError(freshness));
     await rebuildSqliteArtifactForQuery();
-    return { state: "refreshed", changedFiles: freshness.changedFiles };
+    return { state: "refreshed", changedFiles: freshness.state === "unchecked" ? [] : freshness.changedFiles };
   };
   const readSqliteArtifactSignatures = async (
     realSqlitePath: string,

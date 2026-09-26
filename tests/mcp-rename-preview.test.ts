@@ -75,7 +75,10 @@ describe("rename preview MCP tool", () => {
   it("stays available in read-only mode, reuses one session, preserves booleans, and never writes", async () => {
     const beforeSource = await fs.readFile(sourceFile, "utf8");
     const beforeConsumer = await fs.readFile(consumerFile, "utf8");
-    const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "manual" } });
+    // G6: "safe: true" requires provable freshness, so this session uses "check" (a real,
+    // honest check with nothing changed) rather than "manual" (which cannot prove freshness
+    // and therefore can no longer be reported "safe" after the fix).
+    const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "check" } });
     const counted = countingSession(session);
     const handlers = createCodegraphMcpHandlers({ root, session: counted.session, readOnly: true });
 

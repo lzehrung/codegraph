@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import fsp from "node:fs/promises";
 import {
   diffBuildOptions,
@@ -112,6 +113,101 @@ export function collectDeletedTrackedFileDependents(
     }
   }
   return dependents;
+}
+
+const RESOLUTION_ENTRY_STEMS = new Set(["index", "__init__", "mod", "package"]);
+
+/** Stems an added file can satisfy: its own name, plus the directory for an entry file. */
+export function addedResolutionStems(addedFiles: readonly string[]): Set<string> {
+  const stems = new Set<string>();
+  for (const file of addedFiles) {
+    const base = path.basename(file);
+    const extension = path.extname(base);
+    const stem = extension ? base.slice(0, -extension.length) : base;
+    if (stem) stems.add(stem);
+    if (!RESOLUTION_ENTRY_STEMS.has(stem)) continue;
+    const directory = path.basename(path.dirname(file));
+    if (directory && directory !== "." && directory !== stem) stems.add(directory);
+  }
+  return stems;
+}
+
+function lastSpecifierSegment(value: string): string {
+  const parts = value.split(/[/\\]/).filter((part) => part.length > 0 && part !== "." && part !== "..");
+  return parts.at(-1) ?? value;
+}
+
+function stripSpecifierExtension(segment: string): string {
+  const extension = path.posix.extname(segment);
+  return extension ? segment.slice(0, -extension.length) : segment;
+}
+
+/** Last specifier segment, extension removed. Python dotted names become slashes first. */
+export function externalSpecifierStem(specifier: string, languageId: string): string {
+  const normalized = languageId === "python" ? specifier.replace(/\./g, "/") : specifier;
+  return stripSpecifierExtension(lastSpecifierSegment(normalized));
+}
+
+/**
+ * tsconfig `paths` substitution for a specifier, ignoring whether the target exists.
+ * The longest matching prefix wins, matching tsconfig-paths.
+ */
+export function tsconfigAliasMappedTail(
+  specifier: string,
+  paths: Readonly<Record<string, readonly string[]>>,
+): string | null {
+  let best: { rank: number; tail: string } | null = null;
+  for (const [pattern, targets] of Object.entries(paths)) {
+    const star = pattern.indexOf("*");
+    let captured = "";
+    let rank = 0;
+    if (star === -1) {
+      if (specifier !== pattern) continue;
+      rank = pattern.length + 1000;
+    } else {
+      const prefix = pattern.slice(0, star);
+      const suffix = pattern.slice(star + 1);
+      if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix)) continue;
+      if (specifier.length < prefix.length + suffix.length) continue;
+      captured = specifier.slice(prefix.length, specifier.length - suffix.length);
+      rank = prefix.length;
+    }
+    const target = targets[0];
+    if (!target) continue;
+    const tail = target.includes("*") ? target.replace("*", captured) : target;
+    if (!best || rank > best.rank) best = { rank, tail };
+  }
+  return best?.tail ?? null;
+}
+
+export function externalSpecifierMatchesAddedStem(
+  specifier: string,
+  languageId: string,
+  addedStems: ReadonlySet<string>,
+  mappedTail?: string | null,
+): boolean {
+  if (!specifier || addedStems.size === 0) return false;
+  if (addedStems.has(externalSpecifierStem(specifier, languageId))) return true;
+  if (!mappedTail) return false;
+  return addedStems.has(externalSpecifierStem(mappedTail, languageId));
+}
+
+/**
+ * Tracked files that still have an external edge. Used only when the tracked set gained a
+ * file; the caller then keeps specifiers whose stem matches an added file. A deletion does
+ * not call this: collectDeletedTrackedFileDependents already rebuilds importers of the
+ * deleted file, and a lost file cannot make an unresolved specifier start resolving.
+ */
+export function collectExternalEdgeCandidates(
+  trackedEntries: Record<string, ManifestFileEntry>,
+  trackedFileSetChanged: boolean,
+): Set<string> {
+  const candidates = new Set<string>();
+  if (!trackedFileSetChanged) return candidates;
+  for (const [file, entry] of Object.entries(trackedEntries)) {
+    if (entry.edges.some((edge) => edge.to.type === "external")) candidates.add(file);
+  }
+  return candidates;
 }
 
 export function buildTrackedFileReverseDependencies(

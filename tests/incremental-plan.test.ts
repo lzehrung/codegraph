@@ -3,8 +3,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canUseIncrementalDiscoveryFastPath,
+  addedResolutionStems,
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
+  externalSpecifierMatchesAddedStem,
+  tsconfigAliasMappedTail,
   listUntrackedProjectFiles,
   resolveIncrementalFileList,
 } from "../src/indexer/incremental-plan.js";
@@ -317,5 +320,33 @@ describe("resolveIncrementalFileList", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("added-file specifier stems", () => {
+  it("matches a python module, a C include, an alias tail, and an entry-file directory", () => {
+    const stems = addedResolutionStems([
+      "/proj/app/util.py",
+      "/proj/lib.h",
+      "/proj/lib/target.ts",
+      "/proj/pkg/__init__.py",
+      "/proj/widget/index.ts",
+    ]);
+    expect(stems.has("util")).toBe(true);
+    expect(stems.has("lib")).toBe(true);
+    expect(stems.has("target")).toBe(true);
+    expect(stems.has("pkg")).toBe(true);
+    expect(stems.has("__init__")).toBe(true);
+    expect(stems.has("index")).toBe(true);
+    expect(stems.has("widget")).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("app.util", "python", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("lib.h", "c", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("@alias/target", "ts", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("pkg", "python", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("./widget", "ts", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("./other", "ts", stems)).toBe(false);
+    const mapped = tsconfigAliasMappedTail("@exact", { "@exact": ["./lib/target.ts"] });
+    expect(mapped).toBe("./lib/target.ts");
+    expect(externalSpecifierMatchesAddedStem("@exact", "ts", stems, mapped)).toBe(true);
   });
 });

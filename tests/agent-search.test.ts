@@ -815,7 +815,11 @@ describe("agent search", () => {
 
     const cached = await searchCodegraphWithSession(session, request);
 
-    expect(initial.freshness).toEqual({ state: "fresh" });
+    // G6: manual never claims "fresh" without evidence.
+    expect(initial.freshness).toEqual({
+      state: "unchecked",
+      reason: "freshness policy is manual; call invalidate() explicitly after edits",
+    });
     expect(cached.freshness).toEqual(freshness);
   });
 
