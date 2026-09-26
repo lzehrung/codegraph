@@ -1769,6 +1769,34 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves each C++ overload declaration name to its own callable", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-overload-decl-goto-"));
+      try {
+        const file = path.join(root, "tools.hpp").replace(/\\/g, "/");
+        const lines = [
+          "namespace tools {",
+          "  int add(int left, int right) { return left + right; }",
+          "  int add(const char* text) { return 1; }",
+          "}",
+          "int f(int a, int b = 0);",
+          "int f(int a);",
+          "int f(int a) { return a; }",
+          "",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        // Each name sits on its own declaration, so no call arity is needed. A prototype
+        // lands on the definition of the same signature, never on the other overload.
+        await testGoToDefinition(index, file, 2, lines[1]!.indexOf("add") + 1, file, 2);
+        await testGoToDefinition(index, file, 3, lines[2]!.indexOf("add") + 1, file, 3);
+        await testGoToDefinition(index, file, 5, lines[4]!.indexOf("f") + 1, file, 5);
+        await testGoToDefinition(index, file, 6, lines[5]!.indexOf("f") + 1, file, 7);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("groups C++ redeclarations and accepts default and variadic arguments", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-callable-shape-goto-"));
       try {

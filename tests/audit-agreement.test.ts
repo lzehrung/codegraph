@@ -318,6 +318,18 @@ const h3 = {
   ]),
 };
 
+const f2KotlinExplicitImport = {
+  "app/Foo.kt": src(["package app", "class Foo"]),
+  "other/Foo.kt": src(["package other", "class Foo"]),
+  "app/Use.kt": src(["package app", "import other.Foo", "fun use() = Foo()"]),
+};
+
+/** Valid C++ picks `f(int)` for `f(1)` by parameter type; codegraph does not rank overloads. */
+const f3CppAmbiguousOverload = {
+  "api.hpp": src(["int f(int a);", "int f(double a);"]),
+  "use.cpp": src(['#include "api.hpp"', "int g() { return f(1); }", "int h() { return f(1.5); }"]),
+};
+
 const h14 = {
   "G.kt": src([
     "class Gadget(val name: String) {",
@@ -885,6 +897,25 @@ const rows: AgreementRow[] = [
     "g is a Gadget, not Other",
     calls("G.kt", "use"),
   ),
+  useRow(
+    "F2",
+    "Kotlin",
+    f2KotlinExplicitImport,
+    { file: "app/Use.kt", line: 3, token: "Foo" },
+    { file: "other/Foo.kt", line: 2 },
+    calls("app/Use.kt", "use"),
+  ),
+  decoyRow(
+    "F2",
+    "Kotlin",
+    f2KotlinExplicitImport,
+    { file: "app/Use.kt", line: 3, token: "Foo" },
+    { file: "app/Foo.kt", line: 2, token: "Foo" },
+    "an explicit import beats a same-package class",
+  ),
+  useRow("F3", "C++", f3CppAmbiguousOverload, { file: "use.cpp", line: 2, token: "f" }, "not_found", undefined, {
+    declaration: { file: "api.hpp", line: 1, token: "f" },
+  }),
 
   useRow(
     "W12",

@@ -48,9 +48,6 @@ export function starImportPrecedence(languageId: string): StarImportPrecedence {
   return STAR_IMPORT_PRECEDENCE[languageId] ?? "ambiguous";
 }
 
-/** Returned when star imports name more than one distinct definition. */
-export const AMBIGUOUS_STAR_IMPORT_REASON = "Ambiguous star import";
-
 export type StarImportCandidate = {
   imp: Extract<ImportBinding, { kind: "star" }>;
   def: SymbolDef;

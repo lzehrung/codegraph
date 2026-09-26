@@ -8,8 +8,8 @@ import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import { bindingCoversUse, scopeNodesFor } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
 import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
+import { AMBIGUOUS_STAR_IMPORT_REASON } from "./ambiguous-resolution.js";
 import {
-  AMBIGUOUS_STAR_IMPORT_REASON,
   decideStarImportCandidates,
   isExpandedStarBinding,
   resolveStarImportedDefinition,
@@ -274,14 +274,16 @@ export function resolveNamedDefinition(
       : undefined;
   const suppressCppUnqualifiedLocalExport = support.id === "cpp" && !name.includes("::");
   let hit: ResolvedExport | null = null;
-  // Java: single-type import, then a same-package class, then an on-demand wildcard.
-  // resolveExport's compilation-unit hit is the same-package class, so it must wait
-  // until explicit imports have had a chance to win and must still beat star imports.
-  const deferJavaSamePackage = support.id === "java";
+  const precedence = starImportPrecedence(support.id);
+  // Explicit-beats-star languages: an explicit import, then the compilation unit (Java and
+  // Kotlin same-package peers), then a wildcard. resolveExport's compilation-unit hit must wait
+  // until explicit imports have had a chance to win and must still beat star imports. In Rust a
+  // `use` and a same-named local item are a compile error, so the order changes nothing there.
+  const deferCompilationUnitPeers = precedence === "explicit-beats-star";
   if (!suppressCppUnqualifiedLocalExport) {
     if (directExport && directExport.type === "local") {
       hit = { kind: "resolved", def: directExport.target };
-    } else if (!deferJavaSamePackage) {
+    } else if (!deferCompilationUnitPeers) {
       hit = resolveExport(index, file, name, {
         allowLocalFallback: support.membersAreImplicitlyInScope,
         ...(cNamespace ? { cNamespace } : {}),
@@ -310,7 +312,6 @@ export function resolveNamedDefinition(
     }
   }
 
-  const precedence = starImportPrecedence(support.id);
   const starCandidates: StarImportCandidate[] = [];
   let lastWinsResult: GoToResult | null = null;
   const acceptBinding = (result: GoToResult, imp: ImportBinding): GoToResult | null => {
@@ -438,7 +439,7 @@ export function resolveNamedDefinition(
   if (precedence === "last-wins") {
     if (lastWinsResult) return lastWinsResult;
   } else {
-    if (deferJavaSamePackage) {
+    if (deferCompilationUnitPeers) {
       const unitHit = resolveExport(index, file, name, {
         allowLocalFallback: support.membersAreImplicitlyInScope,
       });

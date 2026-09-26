@@ -427,13 +427,16 @@ function syntaxRoot(node: SyntaxNodeLike): SyntaxNodeLike {
   return current;
 }
 
+/**
+ * Callers pass bindings from the scope index of the query node's own file. That index may
+ * come from an earlier parse of the same source, so tree identity cannot decide the match;
+ * the same span, the same name, and the same source length do.
+ */
 function isCppDeclarationSite(binding: Binding, node: SyntaxNodeLike): boolean {
   const candidate = binding.node;
   if (!candidate) return false;
   if (candidate.startIndex !== node.startIndex || candidate.endIndex !== node.endIndex) return false;
-  const root = syntaxRoot(candidate);
-  // Offset coincidence across files is not a declaration site.
-  return root === syntaxRoot(node);
+  return candidate.text === node.text && syntaxRoot(candidate).endIndex === syntaxRoot(node).endIndex;
 }
 
 function cppCallArgumentCount(node: SyntaxNodeLike, source: string): number | null {

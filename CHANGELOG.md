@@ -17,7 +17,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Member calls through `this`, `self`, and similar receivers now navigate in C++, C#, Java, Kotlin, Ruby, and Swift. Calls through `super`, `base`, and `parent` go to the base class instead of an override in the current class.
 - TypeScript and JavaScript: find references on an enum includes uses in other files. Imports of dotted file names without an extension, such as `./orders.model`, now resolve. Call hierarchy works on functions assigned to variables, such as `const helper = () => 1`.
 - C and C++: `#include "x.h"` resolves relative to the including file, and `#include <x.h>` checks the configured include directories, so dependencies, go-to-definition, and references work for ordinary project layouts. Find references now reports call sites, and `struct` and `enum` tags stay separate from typedefs with the same name.
-- C++: a function's header declaration and its definition are one symbol, overloads resolve by argument count, and namespaces and `using` declarations resolve correctly. Impact reports calls whose argument count no longer matches a changed C++ signature.
+- C++: a function's header declaration and its definition are one symbol, overloads resolve by argument count, go-to-definition on an overload's own declaration opens that overload, and namespaces and `using` declarations resolve correctly. Impact reports calls whose argument count no longer matches a changed C++ signature.
 - C#: navigation respects namespace boundaries and resolves `using` aliases (including `Alias::Type`), `global::`, qualified generic types, and extension methods called through their static class. C# 11 `file` types stay inside their own file.
 - PHP: class, function, and method names match without regard to letter case, as PHP does, so references include differently cased uses and code in the global namespace. Class, function, and constant imports with the same name stay separate.
 - Swift: members of a constrained extension, such as `extension Box where T == Int`, are no longer offered on every `Box`.
@@ -27,13 +27,13 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Python: `import pkg.mod` then `pkg.mod.foo()` resolves, a class named like its own file is found through a package re-export, and `super().method()` reaches a known base class.
 - Ruby and PHP: `Widget.new` on a class from another file, cross-file inheritance and mixins, `new self()`, PHP 8 promoted constructor properties, and same-namespace PHP classes without a `use` line now resolve. A class nested in a Ruby module is no longer mistaken for a top-level class of the same name.
 - Rust, Go, and C: `super::Type`, workspace and path dependencies (including `workspace = true`), glob imports, and `impl` methods resolve and appear in call graphs. Go no longer resolves unexported names from another package. A C function's header declaration and its definition share one reference list.
-- When two wildcard imports provide the same name, codegraph follows each language's rule (Python: the last import wins; Java, Kotlin, and Rust: an explicit import wins) and otherwise reports the name as ambiguous instead of picking one.
+- When two wildcard imports provide the same name, codegraph follows each language's rule (Python: the last import wins; Java, Kotlin, and Rust: an explicit import wins) and otherwise reports the name as ambiguous instead of picking one. In Java and Kotlin, an explicit import also wins over a class of the same name in the file's own package.
 - Go-to-definition, find references, and call graphs now give the same answer for the same use.
 - A warm disk-cache build picks up a newly added file that an existing import can now resolve to, including Python absolute imports, quoted C and C++ includes, and tsconfig path aliases.
 
 ### Changed
 
-- `referenceCoverage` reports `partial` instead of `complete` when codegraph could not check every possible use, with the new reasons `strategy_unavailable` and `name_equivalence_unavailable`. Rename previews and impact treat these results as incomplete.
+- `referenceCoverage` reports `partial` instead of `complete` when codegraph could not check every possible use, with the new reasons `strategy_unavailable` and `name_equivalence_unavailable`. A use that could name more than one definition, such as a C++ call that fits two overloads, counts as unchecked. Rename previews and impact treat these results as incomplete.
 - Agent sessions with `freshness: { policy: "manual" }` report `{ state: "unchecked" }` from `checkFreshness()` instead of claiming `fresh` without checking. Code that handles every freshness state must handle `unchecked`.
 - Existing caches are rebuilt on the first run after upgrading, so that run takes longer than usual.
 

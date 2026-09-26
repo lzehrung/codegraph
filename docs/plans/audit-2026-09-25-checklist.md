@@ -79,5 +79,5 @@ regression test.
 ## Integration
 
 - [x] Bump cache epochs and snapshot versions once for the combined behavior change.
-- [ ] Update `docs/language-parity.md`, `CHANGELOG.md` (`[Unreleased]`), and fixture reports.
+- [x] Update `docs/language-parity.md`, `CHANGELOG.md` (`[Unreleased]`), and fixture reports.
 - [ ] `npm run check`, fresh independent review, PR, Copilot review.

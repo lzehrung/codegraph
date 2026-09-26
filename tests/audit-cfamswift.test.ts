@@ -326,13 +326,13 @@ describe("C++ using-directives", () => {
     );
   });
 
-  it("leaves two same-arity used namespaces unresolved and still separates different arities", async () => {
+  it("leaves two same-arity used namespaces unresolved, reports partial coverage, and still separates different arities", async () => {
     const ambigH = [
       "namespace tools {",
       "  int add(int left, int right) { return left + right; }",
       "}",
       "namespace other {",
-      "  int add(int left, int right) { return 9; }",
+      "  int add(double left, double right) { return 9; }",
       "}",
       "",
     ].join("\n");
@@ -345,19 +345,21 @@ describe("C++ using-directives", () => {
       "}",
       "",
     ].join("\n");
+    // Separate namespace names: `tools::add(int, int)` in both headers would be one C++ entity,
+    // so the unchecked call in ambiguous.cpp would correctly make this list partial too.
     const splitH = [
-      "namespace tools {",
+      "namespace pair {",
       "  int add(int left, int right) { return left + right; }",
       "}",
-      "namespace other {",
+      "namespace single {",
       "  int add(int only) { return only; }",
       "}",
       "",
     ].join("\n");
     const splitCpp = [
       '#include "split.hpp"',
-      "using namespace tools;",
-      "using namespace other;",
+      "using namespace pair;",
+      "using namespace single;",
       "int two() { return add(1, 2); }",
       "int one() { return add(1); }",
       "",
@@ -380,10 +382,24 @@ describe("C++ using-directives", () => {
           column: call.column,
         });
         expect(ambiguousTarget.status).toBe("not_found");
-        const toolsSites = await referenceSites(index, header, toolsAdd.line, toolsAdd.column);
-        const otherSites = await referenceSites(index, header, otherSame.line, otherSame.column);
-        expect(toolsSites).not.toContain(site(ambiguous, call.line, call.column));
-        expect(otherSites).not.toContain(site(ambiguous, call.line, call.column));
+        // Valid C++ picks tools::add by parameter type. Codegraph does not rank overloads, so
+        // the call joins neither list, and both lists admit an unchecked use in that file.
+        for (const declaration of [toolsAdd, otherSame]) {
+          const refs = await findReferences(index, { file: header, ...declaration });
+          expect(refs.status).toBe("ok");
+          if (refs.status !== "ok") throw new Error(refs.reason ?? "references not found");
+          expect(
+            refs.references.map((reference) =>
+              site(reference.file, reference.range.start.line, reference.range.start.column),
+            ),
+          ).not.toContain(site(ambiguous, call.line, call.column));
+          expect(refs.referenceCoverage).toEqual({
+            scope: "indexed_candidates",
+            state: "partial",
+            reasons: ["strategy_unavailable"],
+            affectedFiles: [ambiguous],
+          });
+        }
         const detailed = await buildSymbolGraphDetailed(index);
         expect(detailed.edges.some((edge) => edge.label === "calls" && edge.site?.file.endsWith("ambiguous.cpp"))).toBe(
           false,

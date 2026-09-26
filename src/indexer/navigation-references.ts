@@ -29,7 +29,7 @@ import { findClosestScopeBinding } from "./navigation-local.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
-import { AMBIGUOUS_STAR_IMPORT_REASON } from "./star-import-precedence.js";
+import { isAmbiguousResolutionReason } from "./ambiguous-resolution.js";
 import { ensurePhpNamespaceSymbolIndex, phpNamespaceSymbolIndexFor } from "./php-namespace-symbols.js";
 import {
   SymbolKind,
@@ -53,6 +53,35 @@ const NAMESPACE_EXPORT_PATTERN = new RegExp(
 const EXPORT_FROM_SPECIFIER_PATTERN = new RegExp(String.raw`^(${ECMASCRIPT_IDENTIFIER_SOURCE})`, "u");
 
 type ReexportEntry = Extract<ExportEntry, { type: "reexport" }>;
+
+const importClosureCache = new WeakMap<ProjectIndex, Map<string, ReadonlySet<string>>>();
+
+/** File keys reachable from `file` through resolved imports and includes, including `file`. */
+function importClosure(index: ProjectIndex, file: FileId): ReadonlySet<string> {
+  let byFile = importClosureCache.get(index);
+  if (!byFile) {
+    byFile = new Map();
+    importClosureCache.set(index, byFile);
+  }
+  const startKey = fileIdentityKey(file);
+  const cached = byFile.get(startKey);
+  if (cached) return cached;
+  const reached = new Set<string>([startKey]);
+  const startModule = index.byFile.get(startKey);
+  const pending: ModuleIndex[] = startModule ? [startModule] : [];
+  while (pending.length) {
+    for (const imp of pending.pop()!.imports) {
+      if (typeof imp.resolved !== "string") continue;
+      const key = fileIdentityKey(imp.resolved);
+      if (reached.has(key)) continue;
+      reached.add(key);
+      const moduleEntry = index.byFile.get(key);
+      if (moduleEntry) pending.push(moduleEntry);
+    }
+  }
+  byFile.set(startKey, reached);
+  return reached;
+}
 
 type ExportFromIdentifier = {
   isExportFrom: boolean;
@@ -452,11 +481,6 @@ type ReferenceDefinitionResolver = (
   parsed: ParsedFileContext,
 ) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance; reason?: string }>;
 
-/**
- * A member call on a local, parameter, field, or `this`/`self` cannot name a free function
- * in a language whose member syntax never calls one. A missing receiver, or a module or
- * namespace binding (`util.helper()`, `mod.thing()`), stays unproven.
- */
 /** True when `range` is the property of a member-access expression, not a bare call. */
 export function isMemberAccessPropertyRange(parsed: ParsedFileContext, range: Range): boolean {
   const startIndex = range.start.index;
@@ -473,6 +497,11 @@ export function isMemberAccessPropertyRange(parsed: ParsedFileContext, range: Ra
   return !!property && node.startIndex >= property.startIndex && node.endIndex <= property.endIndex;
 }
 
+/**
+ * A member call on a local, parameter, field, or `this`/`self` cannot name a free function
+ * in a language whose member syntax never calls one. A missing receiver, or a module or
+ * namespace binding (`util.helper()`, `mod.thing()`), stays unproven.
+ */
 function freeFunctionMemberSiteIsProvenNonReference(
   index: ProjectIndex,
   fileId: FileId,
@@ -595,6 +624,16 @@ export async function collectVerifiedNamedNodeReferences(
   const pushVerified = (reference: VerifiedNamedNodeReference): void => {
     if (!includeReference || includeReference(reference)) verified.push(reference);
   };
+  let definitionVisible: boolean | undefined;
+  const definitionVisibleHere = (): boolean => {
+    if (definitionVisible === undefined) {
+      const closure = importClosure(index, fileId);
+      definitionVisible = [expectedDef, ...equivalentDefinitions].some((definition) =>
+        closure.has(fileIdentityKey(definition.file)),
+      );
+    }
+    return definitionVisible;
+  };
   for (const { range, node } of matched) {
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
       break;
@@ -678,12 +717,13 @@ export async function collectVerifiedNamedNodeReferences(
     }
     // A same-name node that direct resolution and every language-specific fallback both failed
     // to place is not provably unrelated: report the file so coverage cannot silently claim
-    // `complete` while this occurrence's status stays unknown. An ambiguous star import is
-    // the same kind of gap: the use was seen and cannot be attributed to one definition.
+    // `complete` while this occurrence's status stays unknown. An ambiguous result (star
+    // imports, C++ overloads, or using targets) is the same kind of gap when this definition
+    // (or an equivalent declaration) is visible from this file: one of the candidates may be
+    // it. A name with no binding at all is proven unrelated by scope and stays out.
     if (!recoveredByLanguageFallback && onReceiverProofUnavailable) {
-      const ambiguousStarImport = resolved.reason === AMBIGUOUS_STAR_IMPORT_REASON;
       if (
-        ambiguousStarImport ||
+        (isAmbiguousResolutionReason(resolved.reason) && definitionVisibleHere()) ||
         (await receiverProofUnavailable(index, fileId, parsed, range, resolveDefinition, expectedDef))
       ) {
         onReceiverProofUnavailable(fileId);

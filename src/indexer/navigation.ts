@@ -28,7 +28,12 @@ import {
   toModuleRef,
 } from "./navigation-local.js";
 import {
+  AMBIGUOUS_CPP_OVERLOAD_REASON,
+  AMBIGUOUS_CPP_USING_DECLARATION_REASON,
+  AMBIGUOUS_CPP_USING_DIRECTIVE_REASON,
   AMBIGUOUS_STAR_IMPORT_REASON,
+} from "./ambiguous-resolution.js";
+import {
   findRubyReopenedConstantParts,
   isExpandedStarBinding,
   resolveStarImportedDefinition,
@@ -316,7 +321,7 @@ export async function goToDefinition(
       const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(qualifiedName);
       if (qualifiedBindings) {
         const target = resolveCppCallableBindings(file, qualifiedBindings, node, source);
-        if (!target) return { status: "not_found", reason: "Ambiguous C++ overload" };
+        if (!target) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
         return okGoToResult(index, target, {
           resolution: "exact",
           confidence: "high",
@@ -327,7 +332,7 @@ export async function goToDefinition(
         parsed: { source, tree, sup },
       });
       if (visibleQualified !== undefined) {
-        if (!visibleQualified) return { status: "not_found", reason: "Ambiguous C++ overload" };
+        if (!visibleQualified) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
         return okGoToResult(index, visibleQualified, {
           resolution: "exact",
           confidence: "high",
@@ -398,12 +403,12 @@ export async function goToDefinition(
         const target = resolveNamedDefinition(index, mod, file, sup, usingTarget);
         if (target) return target;
       }
-      return { status: "not_found", reason: "No unique C++ using-declaration target" };
+      return { status: "not_found", reason: AMBIGUOUS_CPP_USING_DECLARATION_REASON };
     }
     const cppCollision =
       sup.id === "cpp" && closestBinding ? resolveCppCollidingBinding(file, closestBinding, node, source) : undefined;
     if (cppCollision !== undefined) {
-      if (!cppCollision) return { status: "not_found", reason: "Ambiguous C++ overload" };
+      if (!cppCollision) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
       return okGoToResult(index, cppCollision, {
         resolution: "exact",
         confidence: "high",
@@ -427,7 +432,7 @@ export async function goToDefinition(
       });
     }
     if (sup.id === "cpp" && closestBinding?.kind === "function" && cppBindingCallableShape(closestBinding)) {
-      return { status: "not_found", reason: "Ambiguous C++ overload" };
+      return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
     }
 
     if (sup.id === "cpp") {
@@ -436,7 +441,7 @@ export async function goToDefinition(
         parsed: { source, tree, sup },
       });
       if (visible !== undefined) {
-        if (!visible) return { status: "not_found", reason: "Ambiguous C++ overload" };
+        if (!visible) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
         return okGoToResult(index, visible, {
           resolution: "exact",
           confidence: "high",
@@ -447,7 +452,7 @@ export async function goToDefinition(
         parsed: { source, tree, sup },
       });
       if (directed !== undefined) {
-        if (!directed) return { status: "not_found", reason: "No unique C++ using-directive target" };
+        if (!directed) return { status: "not_found", reason: AMBIGUOUS_CPP_USING_DIRECTIVE_REASON };
         return okGoToResult(index, directed, { resolution: "import", confidence: "high" });
       }
     }
@@ -685,7 +690,7 @@ async function recoverIncludedCallableStar(
       );
     } catch {
       return languageId === "cpp"
-        ? { status: "not_found", reason: "Ambiguous C++ overload" }
+        ? { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON }
         : { status: "not_found", reason: "No matching local or imported definition" };
     }
   }
@@ -700,7 +705,7 @@ async function recoverIncludedCallableStar(
     return okGoToResult(index, selected, { resolution: "exact", confidence: "high" });
   }
   return languageId === "cpp"
-    ? { status: "not_found", reason: "Ambiguous C++ overload" }
+    ? { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON }
     : { status: "not_found", reason: "No matching local or imported definition" };
 }
 
