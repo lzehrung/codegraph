@@ -273,7 +273,27 @@ type CppUsingDirective = {
   enclosing: string[];
 };
 
-function cppStarImportClosure(index: ProjectIndex, sourceModule: ModuleIndex): ModuleIndex[] {
+type CachedCppUsingDirectives = { fileKey: string; directives: readonly CppUsingDirective[] };
+
+/**
+ * Directives belong to the parsed tree. The star-import closure belongs to the
+ * index and module. Bare-name lookup filters those lists per use. Both maps
+ * disappear with their key, the same way the per-index WeakMaps in
+ * navigation-references.ts do.
+ */
+const cppUsingDirectivesByTree = new WeakMap<SyntaxTreeLike, CachedCppUsingDirectives>();
+
+const cppStarImportClosureCache = new WeakMap<ProjectIndex, Map<string, readonly ModuleIndex[]>>();
+
+function cppStarImportClosure(index: ProjectIndex, sourceModule: ModuleIndex): readonly ModuleIndex[] {
+  let byModule = cppStarImportClosureCache.get(index);
+  if (!byModule) {
+    byModule = new Map();
+    cppStarImportClosureCache.set(index, byModule);
+  }
+  const moduleKey = fileIdentityKey(sourceModule.file);
+  const cached = byModule.get(moduleKey);
+  if (cached) return cached;
   const modules: ModuleIndex[] = [];
   const pending: ModuleIndex[] = [sourceModule];
   const seen = new Set<string>();
@@ -289,6 +309,7 @@ function cppStarImportClosure(index: ProjectIndex, sourceModule: ModuleIndex): M
       if (target) pending.push(target);
     }
   }
+  byModule.set(moduleKey, modules);
   return modules;
 }
 
@@ -373,6 +394,19 @@ function collectCppUsingDirectives(
   visit(root);
 }
 
+function cppUsingDirectivesForFile(
+  tree: SyntaxTreeLike,
+  source: string,
+  fileKey: string,
+): readonly CppUsingDirective[] {
+  const cached = cppUsingDirectivesByTree.get(tree);
+  if (cached?.fileKey === fileKey) return cached.directives;
+  const directives: CppUsingDirective[] = [];
+  collectCppUsingDirectives(tree.rootNode, source, fileKey, directives);
+  cppUsingDirectivesByTree.set(tree, { fileKey, directives });
+  return directives;
+}
+
 function addCppNamedExportTargets(
   index: ProjectIndex,
   moduleEntry: ModuleIndex,
@@ -435,7 +469,7 @@ export function resolveCppUsingDirectiveName(
   for (const moduleEntry of cppStarImportClosure(index, sourceModule)) {
     const parsed = loadParsedFile(moduleEntry.file);
     if (!parsed?.tree) continue;
-    collectCppUsingDirectives(parsed.tree.rootNode, parsed.source, fileIdentityKey(moduleEntry.file), directives);
+    directives.push(...cppUsingDirectivesForFile(parsed.tree, parsed.source, fileIdentityKey(moduleEntry.file)));
   }
   const applicable = directives.filter(
     (directive) =>

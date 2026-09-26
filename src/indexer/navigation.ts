@@ -1278,12 +1278,14 @@ type CppEquivalentCallableFamily = {
 };
 
 /**
- * Single calculation behind reference collection and getCppEquivalentCallableDefinitions: resolves
- * the receiver owner, the normalized reference name, the definition-site scope binding, and the
- * proven equivalent definition family for one callable definition site.
+ * Reverse include edges for one index. Rebuilt only when the index object is
+ * new, matching the WeakMap caches in navigation-references.ts.
  */
-function cIncludeLinkedFileKeys(index: ProjectIndex, startFile: string): Set<string> {
-  const startKey = fileIdentityKey(startFile);
+const cIncludedByCache = new WeakMap<ProjectIndex, Map<string, readonly string[]>>();
+
+function cIncludedBy(index: ProjectIndex): Map<string, readonly string[]> {
+  const cached = cIncludedByCache.get(index);
+  if (cached) return cached;
   const includedBy = new Map<string, string[]>();
   for (const moduleEntry of index.byFile.values()) {
     const includerKey = fileIdentityKey(moduleEntry.file);
@@ -1295,6 +1297,20 @@ function cIncludeLinkedFileKeys(index: ProjectIndex, startFile: string): Set<str
       else includedBy.set(includedKey, [includerKey]);
     }
   }
+  const stored = new Map<string, readonly string[]>();
+  for (const [key, includers] of includedBy) stored.set(key, includers);
+  cIncludedByCache.set(index, stored);
+  return stored;
+}
+
+/**
+ * Single calculation behind reference collection and getCppEquivalentCallableDefinitions: resolves
+ * the receiver owner, the normalized reference name, the definition-site scope binding, and the
+ * proven equivalent definition family for one callable definition site.
+ */
+function cIncludeLinkedFileKeys(index: ProjectIndex, startFile: string): Set<string> {
+  const startKey = fileIdentityKey(startFile);
+  const includedBy = cIncludedBy(index);
   const linked = new Set<string>();
   const walk = (origin: string, neighbors: (key: string) => readonly string[]) => {
     const pending = [origin];
