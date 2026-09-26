@@ -493,6 +493,37 @@ describe("C++ using-directives", () => {
       },
     );
   });
+
+  it("applies a header's directive only to uses after the #include that brings it in", async () => {
+    const toolsHpp = ["namespace tools {", "  int add(int left, int right) { return left + right; }", "}", ""].join(
+      "\n",
+    );
+    const usingHpp = ['#include "tools.hpp"', "using namespace tools;", ""].join("\n");
+    const mainCpp = [
+      '#include "tools.hpp"',
+      "int early() { return add(1, 2); }",
+      '#include "using.hpp"',
+      "int late() { return add(1, 2); }",
+      "",
+    ].join("\n");
+    await withProject(
+      "cg-cfam-cpp-include-order-",
+      { "tools.hpp": toolsHpp, "using.hpp": usingHpp, "main.cpp": mainCpp },
+      async ({ index, paths }) => {
+        const main = paths["main.cpp"]!;
+        // Before `using.hpp`, the translation unit has no directive: `add` names nothing.
+        const early = await goToDefinition(index, { file: main, line: 2, column: columnOf(mainCpp, 2, "add") });
+        expect(early.status).toBe("not_found");
+        const late = await goToDefinition(index, { file: main, line: 4, column: columnOf(mainCpp, 4, "add") });
+        expect(late.status).toBe("ok");
+        if (late.status !== "ok") throw new Error(late.reason ?? "late add did not resolve");
+        expect(path.basename(late.definition.file)).toBe("tools.hpp");
+        const sites = await referenceSites(index, paths["tools.hpp"]!, 2, columnOf(toolsHpp, 2, "add"));
+        expect(sites).toContain(site(main, 4, columnOf(mainCpp, 4, "add")));
+        expect(sites).not.toContain(site(main, 2, columnOf(mainCpp, 2, "add")));
+      },
+    );
+  });
 });
 
 describe("Swift self member through a shadowing name", () => {

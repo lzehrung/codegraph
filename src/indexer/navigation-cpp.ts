@@ -446,6 +446,50 @@ function collectVisibleCppExportTargets(index: ProjectIndex, sourceModule: Modul
   return defs;
 }
 
+function cppIncludeSpec(pathNode: SyntaxNodeLike): { text: string; form: "literal" | "angle" } | undefined {
+  const raw = pathNode.text.trim();
+  if (pathNode.type === "string_literal" && raw.length >= 2) return { text: raw.slice(1, -1), form: "literal" };
+  if (pathNode.type === "system_lib_string" && raw.length >= 2) return { text: raw.slice(1, -1), form: "angle" };
+  return undefined;
+}
+
+/**
+ * The earliest offset in the use file at which each file enters the translation unit through
+ * an `#include`, directly or transitively. A file reached only through an include whose target
+ * cannot be read from the source (a macro include) is absent.
+ */
+function cppIncludeEntryOffsets(
+  index: ProjectIndex,
+  sourceModule: ModuleIndex,
+  node: SyntaxNodeLike,
+): ReadonlyMap<string, number> {
+  let root = node;
+  while (root.parent) root = root.parent;
+  const offsets = new Map<string, number>();
+  const visit = (current: SyntaxNodeLike): void => {
+    if (current.type === "preproc_include") {
+      const pathNode = current.childForFieldName("path");
+      const spec = pathNode ? cppIncludeSpec(pathNode) : undefined;
+      if (!spec) return;
+      for (const imp of sourceModule.imports) {
+        if (imp.kind !== "star" || imp.from !== spec.text || typeof imp.resolved !== "string") continue;
+        if (imp.includeForm && imp.includeForm !== spec.form) continue;
+        const target = index.byFile.get(fileIdentityKey(imp.resolved));
+        if (!target) continue;
+        // Document order: the first include to reach a file is its earliest entry.
+        for (const reached of cppStarImportClosure(index, target)) {
+          const key = fileIdentityKey(reached.file);
+          if (!offsets.has(key)) offsets.set(key, current.startIndex);
+        }
+      }
+      return;
+    }
+    for (const child of current.namedChildren) visit(child);
+  };
+  visit(root);
+  return offsets;
+}
+
 /**
  * Bare lookup through `using namespace`. Undefined means no directive nominates
  * this name. Null means more than one viable candidate, or the candidate could
@@ -468,11 +512,27 @@ export function resolveCppUsingDirectiveName(
     if (!parsed?.tree) continue;
     directives.push(...cppUsingDirectivesForFile(parsed.tree, parsed.source, fileIdentityKey(moduleEntry.file)));
   }
-  const applicable = directives.filter(
+  let entryOffsets: ReadonlyMap<string, number> | undefined;
+  const unordered: CppUsingDirective[] = [];
+  const applicable = directives.filter((directive) => {
+    if (!cppNamespaceIsPrefix(directive.enclosing, useNamespace)) return false;
+    if (directive.fileKey === useFileKey) return directive.startIndex < node.startIndex;
+    // A header's directive is in scope only after the `#include` that brings it in.
+    entryOffsets ??= cppIncludeEntryOffsets(index, sourceModule, node);
+    const entry = entryOffsets.get(directive.fileKey);
+    if (entry === undefined) {
+      unordered.push(directive);
+      return false;
+    }
+    return entry < node.startIndex;
+  });
+  // A directive whose include position cannot be read (a macro include) may or may not be
+  // in scope. When it would nominate this name, the use stays unresolved.
+  const unorderedNominates = unordered.some(
     (directive) =>
-      cppNamespaceIsPrefix(directive.enclosing, useNamespace) &&
-      (directive.fileKey !== useFileKey || directive.startIndex < node.startIndex),
+      collectVisibleCppExportTargets(index, sourceModule, `${directive.namespacePath.join("::")}::${name}`).length,
   );
+  if (unorderedNominates) return null;
   if (!applicable.length) return undefined;
 
   const functionDefs: SymbolDef[] = [];
