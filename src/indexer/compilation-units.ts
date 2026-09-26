@@ -36,8 +36,11 @@ import type { ProjectIndex } from "./types.js";
  *   same-identity files exist outside the unit directory.
  * - Go is directory-exact by language definition, so `complete` depends only on reading the
  *   package clause; the same package spelling in another directory is a different package.
- * - Java/Kotlin files without a `package` clause (the unnamed package) have no provable unit
- *   beyond their own file, so they return only themselves with `complete: false`.
+ * - Java/Kotlin files without a `package` clause (the unnamed package) have no identity that
+ *   groups files, so they return only themselves. `complete` is false when another indexed file
+ *   has no package clause or an unreadable package, because that file might belong to the same
+ *   unnamed package. When the index has no such file, this file is the whole unit and
+ *   `complete` is true.
  * - Kotlin `internal` and C# `internal` declarations are hidden from module exports, so this
  *   lookup cannot see them across files; such references stay unresolved rather than being
  *   matched speculatively. Java package-private and Swift `internal` declarations are export
@@ -715,6 +718,20 @@ export function getCompilationUnitPeers(
   return result;
 }
 
+/** Another indexed JVM file with no package clause might share the unnamed package. */
+function jvmGroupHasOtherUnnamedFile(grouped: UnitFactIndex, own: UnitFact): boolean {
+  const dirs = grouped.byGroupDir.get(own.group);
+  if (!dirs) return false;
+  const ownKey = fileIdentityKey(own.file);
+  for (const facts of dirs.values()) {
+    for (const fact of facts) {
+      if (fileIdentityKey(fact.file) === ownKey) continue;
+      if (fact.identity.kind === "package" && fact.identity.name === null) return true;
+    }
+  }
+  return false;
+}
+
 function computeUnitPeers(
   index: ProjectIndex,
   grouped: UnitFactIndex,
@@ -734,12 +751,14 @@ function computeUnitPeers(
   if (own.identity.kind === "package") {
     if (own.identity.name === null) {
       // A missing or unreadable `package` clause has no proven identity. Go keeps its
-      // historical whole-directory lookup in that case; the JVM unnamed package has no
-      // provable membership beyond the file itself.
+      // historical whole-directory lookup in that case. The JVM unnamed package cannot group
+      // files, so peers stay this file; the unit is complete only when no other indexed file
+      // could still belong to that unnamed package.
       if (own.group === "go") {
         for (const fact of dirFacts) files.add(fact.file);
+        return { files, complete: false };
       }
-      return { files, complete: false };
+      return { files, complete: !hasUnreadablePeer && !jvmGroupHasOtherUnnamedFile(grouped, own) };
     }
     const packageFacts = grouped.byGroupDirPackage.get(own.group)?.get(own.dirKey)?.get(own.identity.name) ?? [];
     for (const fact of packageFacts) files.add(fact.file);
