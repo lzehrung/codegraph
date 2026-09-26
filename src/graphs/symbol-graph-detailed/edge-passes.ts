@@ -2,6 +2,7 @@ import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.j
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
 import {
   isExportedDeclaration,
+  isGoExportedMemberName,
   isSwiftCrossFileHiddenSharedOwnerMember,
   isSwiftFileHiddenSharedOwnerMember,
 } from "../../indexer/declaration-visibility.js";
@@ -758,7 +759,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           }
           if (exportedName) {
             target = context.resolveExportFrom(modFile, exportedName);
-            if (!target) {
+            if (!target && (context.sup.id !== "go" || isGoExportedMemberName(context.sup.id, exportedName))) {
               const targetModule = context.index.byFile.get(fileIdentityKey(modFile));
               target = (targetModule?.locals ?? []).find((local) => local.localName === exportedName) ?? null;
             }

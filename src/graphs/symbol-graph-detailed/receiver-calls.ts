@@ -303,7 +303,7 @@ const LANGUAGE_CONSTRUCTION_FORMS: Record<
   php: { newExpression: true },
   python: { capitalizedCall: true },
   ruby: { rubyNew: true },
-  rust: { capitalizedCall: true, rustUnitStruct: true },
+  rust: { capitalizedCall: true, rustUnitStruct: true, compositeLiteral: true },
   swift: { capitalizedCall: true },
   ts: { newExpression: true },
   tsx: { newExpression: true },
@@ -576,11 +576,21 @@ function compositeLiteralTypeName(expr: SyntaxNodeLike, source: string, sup: Lan
     if (!isAddr) return null;
     current = operand;
   }
-  if (current.type !== "composite_literal" && current.type !== "struct_initializer") return null;
+  // tree-sitter-go composite_literal, tree-sitter-zig struct_initializer, tree-sitter-rust
+  // struct_expression: `Type { field: value }` / `Type{ .field = value }`.
+  if (current.type !== "composite_literal" && current.type !== "struct_initializer" && current.type !== "struct_expression") {
+    return null;
+  }
   const typeNode =
     current.childForFieldName("type") ??
-    current.namedChildren.find((child) => child.type === "type_identifier" || child.type === "identifier") ??
+    current.namedChildren.find(
+      (child) =>
+        child.type === "type_identifier" || child.type === "identifier" || child.type === sup.nodeTypes.memberExpression,
+    ) ??
     null;
+  // A qualified literal type (Zig `ns.Struct{...}`) has no dedicated `type` field and is not a
+  // simple named type either; `unwrapNamedType` rejects it, so the member-access node itself is
+  // kept so the caller can resolve it the same way as any other qualified expression.
   return typeNode ? (unwrapNamedType(typeNode, sup) ?? typeNode) : null;
 }
 

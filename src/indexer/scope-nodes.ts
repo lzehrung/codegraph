@@ -236,6 +236,12 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     variableDeclarationTypes: new Set(["field_declaration", "let_declaration", "const_item", "static_item"]),
     patternBindingTypes: new Set(["let_declaration", "const_item", "static_item"]),
     memberContainerTypes: new Set(["impl_item"]),
+    // A parameter's `type` field is a sibling of its `pattern`, not a nested pattern: without
+    // this, the generic recursive walk in `addPatternDecls` (scope.js) descends into the type
+    // position and registers the referenced type name (bare or `super::`/`crate::`-qualified)
+    // as a same-scope "param" binding at the reference site itself, which then shadows the
+    // real declaration and makes goto/references resolve the use to itself.
+    destructuringTypeFieldTypes: new Set(["parameter"]),
     childSkipNameTypes: new Set(["identifier", "type_identifier", "parameters"]),
   },
   c: C_SCOPE_NODES,

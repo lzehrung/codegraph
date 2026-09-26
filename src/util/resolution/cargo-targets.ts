@@ -212,3 +212,64 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
 
   return { roots: [...roots], probed: [...probed] };
 }
+
+/**
+ * The crate's own package name declared in its Cargo.toml `[package]` table, as the Rust
+ * identifier spells it (hyphens folded to underscores, since Cargo derives a crate's own
+ * identifier from its package name that way), or undefined when the manifest is missing or
+ * declares no name (a virtual workspace root). Lets a package's own `src/bin` targets
+ * resolve `use pkg_name::item;` back to the package's own library crate.
+ */
+export async function rustCargoPackageIdentifier(cargoRoot: string): Promise<string | undefined> {
+  const parsed = await parseCargoToml(cargoRoot);
+  const name = parsed ? packageName(parsed) : undefined;
+  return name ? name.replace(/-/gu, "_") : undefined;
+}
+
+/**
+ * A `path`-only Cargo dependency declared under `[dependencies]`, `[dev-dependencies]`, or
+ * `[build-dependencies]` (inline-table `name = { path = "..." }` or dotted-section
+ * `[dependencies.name]` form), matched by the Rust identifier the dependency's own manifest
+ * key spells (hyphens folded to underscores, matching Cargo's own crate-identifier rule). A
+ * version-only or registry dependency has no `path` field and is not returned;
+ * workspace-inherited (`{ workspace = true }`) dependencies are not resolved here.
+ */
+function pathDependencySpec(parsed: TomlTable, crateIdentifier: string): string | undefined {
+  for (const key of ["dependencies", "dev-dependencies", "build-dependencies"] as const) {
+    const table = isTomlTable(parsed[key]) ? parsed[key] : undefined;
+    if (!table) continue;
+    for (const [depName, entry] of Object.entries(table)) {
+      if (depName.replace(/-/gu, "_") !== crateIdentifier || !isTomlTable(entry)) continue;
+      const depPath = tomlString(entry, "path");
+      if (depPath) return depPath;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolves a `path`-only Cargo dependency declared in `cargoRoot`'s own Cargo.toml, named
+ * `crateIdentifier` (the Rust identifier form, e.g. `crate_a`), confined to `projectRoot`.
+ * Returns the dependency crate's own root directory (where its Cargo.toml lives), or null
+ * when `crateIdentifier` is not a path dependency, its path escapes the project, or the
+ * resolved directory does not exist.
+ */
+export async function rustPathDependencyCrateRoot(
+  cargoRoot: string,
+  projectRoot: string,
+  crateIdentifier: string,
+): Promise<string | null> {
+  const parsed = await parseCargoToml(cargoRoot);
+  if (!parsed) return null;
+  const depPath = pathDependencySpec(parsed, crateIdentifier);
+  if (!depPath) return null;
+  const resolved = path.resolve(cargoRoot, depPath);
+  if (!(await isPhysicalPathWithinRoot(projectRoot, resolved))) return null;
+  try {
+    const stat = await fsp.stat(resolved);
+    if (!stat.isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  return resolved;
+}

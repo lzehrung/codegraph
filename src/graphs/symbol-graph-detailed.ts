@@ -11,7 +11,7 @@ import {
 import { IMPLICIT_UNIT_LANGUAGES } from "../indexer/compilation-units.js";
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
-import { languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
+import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
 import { csharpAliasQualifiedLookupName, innermostNamespaceImport } from "../indexer/navigation-goto.js";
 import {
   cppUsingDeclarationTarget,
@@ -192,8 +192,11 @@ export async function buildSymbolGraphDetailed(
     return maybePushEdge(fromId, toId, label, site);
   };
 
-  const resolveExportNamespace = (file: string, exportedName: string): ResolvedDetailedExport | null =>
-    resolveExport(index, file, exportedName);
+  const resolveExportNamespace = (file: string, exportedName: string): ResolvedDetailedExport | null => {
+    const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
+    if (!isGoExportedMemberName(languageId, exportedName)) return null;
+    return resolveExport(index, file, exportedName);
+  };
 
   const resolveExportDef = (file: string, exportedName: string): SymbolDef | null => {
     const resolved = resolveExportNamespace(file, exportedName);
@@ -227,6 +230,7 @@ export async function buildSymbolGraphDetailed(
     const fileKey = typeof file === "string" ? fileIdentityKey(file) : null;
     const moduleEntry = fileKey ? index.byFile.get(fileKey) : undefined;
     const lastName = names[0];
+    if (languageId === "go" && (!lastName || !isGoExportedMemberName(languageId, lastName))) return null;
     return moduleEntry?.locals.find((entry) => entry.localName === lastName) ?? null;
   };
 

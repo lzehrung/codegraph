@@ -269,14 +269,17 @@ export function buildScopeIndexFromSource(
       addBindingToScope(pattern, kind);
       return;
     }
-    // Parameter nodes put names and types as siblings. Walking the whole subtree
-    // would register type-position identifiers (`int`, `T`, package qualifiers).
+    // Parameter nodes put names and types as siblings. Walking the whole subtree for bindings
+    // would register type-position identifiers (`int`, `T`, package qualifiers) as new locals;
+    // `walk` still visits the type field so a proven declaration (e.g. a struct name used as a
+    // parameter type) records this position as one of its occurrences.
     if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
       const typeNode = pattern.childForFieldName("type");
       for (const child of pattern.namedChildren) {
         if (typeNode && child.id === typeNode.id) continue;
         addPatternDecls(child, kind, addBindingToScope);
       }
+      if (typeNode) walk(typeNode);
       return;
     }
     if (row.destructuringPairPatternTypes?.has(pattern.type)) {
