@@ -386,12 +386,13 @@ export type ReceiverProof = {
 type BindingProof = { status: "none" } | { status: "unproven" } | { status: "type"; node: SyntaxNodeLike };
 
 /**
- * Identifier a binding node declares: a `name` field, a nested C/C++ declarator,
- * an assignment left-hand side, or the last identifier child (C++ parameters hide
- * the name after the type).
+ * Identifier a binding node declares: a `name` or `pattern` field, a nested C/C++
+ * declarator, an assignment left-hand side, or the last identifier child (C++
+ * parameters hide the name after the type). Rust spells parameter and `let` names in
+ * the `pattern` field, where the last-identifier fallback would pick the declared type.
  */
 function bindingIdentifier(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
-  const named = node.childForFieldName("name");
+  const named = node.childForFieldName("name") ?? node.childForFieldName("pattern");
   if (named && (isReceiverNameNode(sup, named.type) || named.type === "field_identifier")) {
     return named;
   }
@@ -612,6 +613,20 @@ export function kotlinExtensionReceiverTypeNode(node: SyntaxNodeLike, sup: Langu
     (child) => child.startIndex < nameNode.startIndex && (child.type === "user_type" || child.type === "nullable_type"),
   );
   return receiverType ? unwrapNamedType(receiverType, sup) : null;
+}
+
+/**
+ * Self-type name node of a Rust `impl` block: `Circle` in `impl Circle`, `impl Shape for
+ * Circle`, `impl<T> Box<T>`, or `impl Shape for &Circle`. The `type` field always names the
+ * self type (the `trait` field names the implemented trait), and `unwrapNamedType` strips
+ * generic and reference wrappers down to the base type identifier. Shared by member
+ * ownership in the detailed graph and receiver-member navigation so both attribute an
+ * impl method to the same owner.
+ */
+export function rustImplSelfTypeNode(implItem: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  if (implItem.type !== "impl_item") return null;
+  const typeNode = implItem.childForFieldName("type");
+  return typeNode ? unwrapNamedType(typeNode, sup) : null;
 }
 
 function capitalizedCallTypeName(expr: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
@@ -914,6 +929,9 @@ function findVisiblePriorConstructor(
  * Resolves the node naming the type a receiver expression was constructed from, or
  * null when no constructor is proven for it. Shared with detailed symbol-graph call
  * extraction so `goto` and resolved `calls` edges accept the same receiver forms.
+ * A bare name is unit-struct construction only while no local binding of the same
+ * name shadows it; a shadowing binding is a value whose type must come from the
+ * binding, never from the type the name also spells.
  */
 export function receiverConstructorExpression(
   obj: SyntaxNodeLike,
@@ -921,9 +939,9 @@ export function receiverConstructorExpression(
   sup: LanguageSupport,
 ): SyntaxNodeLike | null {
   const direct = constructionTypeName(obj, source, sup);
-  if (direct) return direct;
-  if (!isReceiverNameNode(sup, obj.type)) return null;
+  if (!isReceiverNameNode(sup, obj.type)) return direct;
   const receiverName = sliceText(obj, source);
+  if (direct && !bindsLocalValue(obj, receiverName, source, sup)) return direct;
   return findVisiblePriorConstructor(obj, receiverName, source, sup);
 }
 

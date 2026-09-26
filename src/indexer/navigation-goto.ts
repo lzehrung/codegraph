@@ -35,6 +35,7 @@ import {
   kotlinExtensionReceiverTypeNode,
   nodeInStaticMemberContext,
   receiverConstructorExpression,
+  rustImplSelfTypeNode,
   TRANSPARENT_MEMBER_CONTAINER_TYPES,
   unwrapNamedType,
   type PhpObjectCreationKeyword,
@@ -1614,8 +1615,16 @@ async function findReceiverMemberDefinition(
     return await selectReceiverMemberCandidates(index, allReceiverMatches, knownArgumentCount);
   }
   if (targetContext.sup.id === "rust") {
-    const implNode = findRustImplForType(targetContext.tree.rootNode, receiverDef.localName, targetContext.source);
-    return implNode ? findLocalWithinNode(locals, member, implNode, normalizeIdentifier) : undefined;
+    const matches: SymbolDef[] = [];
+    for (const implNode of findRustImplsForType(
+      targetContext.tree.rootNode,
+      receiverDef.localName,
+      targetContext.source,
+      targetContext.sup,
+    )) {
+      appendDirectKeywordMembers(locals, member, implNode, targetContext, normalizeIdentifier, undefined, matches);
+    }
+    return await selectReceiverMemberCandidates(index, matches, knownArgumentCount);
   }
   if (targetContext.sup.id === "go") {
     return findGoReceiverMember(locals, member, receiverDef.localName, targetContext, normalizeIdentifier);
@@ -2004,20 +2013,25 @@ export function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike
   return current === container;
 }
 
-function findRustImplForType(root: SyntaxNodeLike, typeName: string, source: string): SyntaxNodeLike | null {
-  let found: SyntaxNodeLike | null = null;
-  const visit = (node: SyntaxNodeLike): boolean => {
+/**
+ * Every Rust `impl` block whose self type is `typeName`, across inherent (`impl Circle`),
+ * trait (`impl Shape for Circle`), and generic (`impl<T> Box<T>`) forms. The shared
+ * self-type extraction keeps navigation and detailed-graph member ownership in agreement.
+ */
+function findRustImplsForType(
+  root: SyntaxNodeLike,
+  typeName: string,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike[] {
+  const normalized = sup.normalizeIdentifier(typeName);
+  const found: SyntaxNodeLike[] = [];
+  const visit = (node: SyntaxNodeLike): void => {
     if (node.type === "impl_item") {
-      const text = sliceText(node, source);
-      if (new RegExp(`^\\s*impl\\s+${escapeRegExp(typeName)}\\b`).test(text)) {
-        found = node;
-        return false;
-      }
+      const selfType = rustImplSelfTypeNode(node, sup);
+      if (selfType && sup.normalizeIdentifier(sliceText(selfType, source)) === normalized) found.push(node);
     }
-    for (const child of node.namedChildren) {
-      if (!visit(child)) return false;
-    }
-    return true;
+    for (const child of node.namedChildren) visit(child);
   };
   visit(root);
   return found;
@@ -2420,6 +2434,3 @@ async function lookupPythonClassMember(
   return undefined;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
