@@ -16,7 +16,7 @@ regression test.
       fixture below through all three consumers.
 - [ ] **F2 Same-package and same-namespace peers.** Java, Kotlin, Swift, and PHP resolve a peer
       declaration without an import, the way C# already does (W5, W12).
-- [ ] **F3 No `complete` with an unresolved use.** A same-name use in a scanned candidate file that
+- [~] **F3 No `complete` with an unresolved use.** A same-name use in a scanned candidate file that
       resolves to nothing makes coverage `partial`; it is not dropped silently.
 
 ## Wrong answers (break the accuracy bar)
