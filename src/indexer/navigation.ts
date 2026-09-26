@@ -3,6 +3,7 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type Lang
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
+import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
 import {
   csharpAliasQualifiedLookupName,
   findCsharpPartialTypeEquivalents,
@@ -720,6 +721,7 @@ async function findReferencesInternal(
       !receiverMemberDefinition) ||
     scansNamespaceReferences;
   let sameFileVerifiedScanExecuted = false;
+  const receiverProofUnavailableFiles = new Map<string, FileId>();
   if (localBinding && localBinding.occurrencesComplete !== false && !scansReceiverReferences) {
     for (const occurrence of localBinding.occurrences) {
       if (hasReachedCollectionLimit()) break;
@@ -735,7 +737,7 @@ async function findReferencesInternal(
       (params, parsed) => goToDefinition(index, params, parsed),
       remainingCollectionSlots(),
       verifiedReferenceFilter(definitionFile),
-      undefined,
+      (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
       equivalentDefinitions,
     );
     sameFileVerifiedScanExecuted = true;
@@ -810,6 +812,31 @@ async function findReferencesInternal(
     });
   }
 
+  // A file reached only through a dynamic import, or another construct that never creates a
+  // modeled ImportBinding, still leaves a real file-dependency edge behind. Without this, such
+  // a file is never a scan candidate at all, so a genuine same-name use inside it is silently
+  // invisible instead of making coverage `partial` — exactly the gap F3 forbids. Member
+  // definitions already get every file scanned below, so this only adds files for the narrower,
+  // import-graph-driven search.
+  if (!definition.isMember && !scansReceiverReferences) {
+    const candidateFileKeys = new Set(candidateFiles.map((file) => fileIdentityKey(file)));
+    const adjacency = index.graphAdjacency ?? graphAdjacencyFor(index.graph);
+    const graphLinkedOrphans = new Map<string, FileId>();
+    for (const candidate of [definition, ...equivalentDefinitions]) {
+      for (const importer of getReverseNeighbors(adjacency, candidate.file)) {
+        const key = fileIdentityKey(importer);
+        if (key === fileIdentityKey(definitionFile) || candidateFileKeys.has(key)) continue;
+        graphLinkedOrphans.set(key, importer);
+      }
+    }
+    for (const [key, file] of graphLinkedOrphans) {
+      candidateFiles.push(file);
+      candidateFileKeys.add(key);
+      unitPeerKeys.add(key);
+    }
+    if (graphLinkedOrphans.size) candidateFiles.sort((left, right) => left.localeCompare(right));
+  }
+
   for (const fileId of candidateFiles) {
     if (hasReachedCollectionLimit()) break;
     const module = index.byFile.get(fileIdentityKey(fileId));
@@ -848,6 +875,7 @@ async function findReferencesInternal(
           (params, parsed) => goToDefinition(index, params, parsed),
           remainingReferences,
           verifiedReferenceFilter(fileId),
+          (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
         );
         for (const { range, provenance, via } of ranges) {
           if (hasReachedCollectionLimit()) break;
@@ -908,6 +936,7 @@ async function findReferencesInternal(
             (params, parsed) => goToDefinition(index, params, parsed),
             remainingCollectionSlots(),
             verifiedReferenceFilter(fileId),
+            (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
           );
           for (const { range, provenance, via } of ranges) {
             if (hasReachedCollectionLimit()) break;
@@ -971,7 +1000,7 @@ async function findReferencesInternal(
             (params, parsed) => goToDefinition(index, params, parsed),
             remainingReferences,
             verifiedReferenceFilter(fileId),
-            undefined,
+            (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
             equivalentDefinitions,
           );
           for (const { range, provenance, via } of ranges) {
@@ -1005,7 +1034,43 @@ async function findReferencesInternal(
             // Structural visibility alone cannot attribute the import token.
             matchesDef = true;
           }
-          if (!matchesDef) continue;
+          if (!matchesDef) {
+            // The requested export slot itself does not exist at all (as opposed to existing
+            // and structurally naming a different, already-proven definition): the binding may
+            // still be a whole-module handle onto this exact file under a shape resolution does
+            // not model (a misclassified default import, for example). Verify every same-name
+            // occurrence directly instead of silently treating the file as clean.
+            if (
+              !hasReachedCollectionLimit() &&
+              hit?.kind !== "resolved" &&
+              [definition, ...equivalentDefinitions].some(
+                (candidate) => fileIdentityKey(targetFile) === fileIdentityKey(candidate.file),
+              )
+            ) {
+              const remainingReferences = remainingCollectionSlots();
+              const ranges = await collectVerifiedNamedNodeReferences(
+                index,
+                fileId,
+                exportedName,
+                definition,
+                (params, parsed) => goToDefinition(index, params, parsed),
+                remainingReferences,
+                verifiedReferenceFilter(fileId),
+                (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
+                equivalentDefinitions,
+              );
+              for (const { range, provenance, via } of ranges) {
+                if (hasReachedCollectionLimit()) break;
+                pushRef({
+                  file: fileId,
+                  range,
+                  via: { import: imp, ...(via ?? {}) },
+                  ...(provenance ? { provenance } : {}),
+                });
+              }
+            }
+            continue;
+          }
           if (attributedByProof) {
             for (const site of bindingSites) {
               pushRef({
@@ -1027,7 +1092,7 @@ async function findReferencesInternal(
               (params, parsed) => goToDefinition(index, params, parsed),
               remainingReferences,
               verifiedReferenceFilter(fileId),
-              undefined,
+              (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
               equivalentDefinitions,
             );
             for (const { range, provenance, via } of ranges) {
@@ -1076,7 +1141,7 @@ async function findReferencesInternal(
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingCollectionSlots(),
         verifiedReferenceFilter(fileId),
-        undefined,
+        (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
         equivalentDefinitions,
       );
       for (const { range, provenance, via } of ranges) {
@@ -1095,6 +1160,7 @@ async function findReferencesInternal(
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
         verifiedReferenceFilter(fileId),
+        (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
       );
       for (const { range, provenance, via } of ranges) {
         if (hasReachedCollectionLimit()) break;
@@ -1103,7 +1169,6 @@ async function findReferencesInternal(
     }
   }
 
-  const receiverProofUnavailableFiles = new Map<string, FileId>();
   const receiverScannedFiles: FileId[] = [];
   if (scansReceiverReferences) {
     for (const fileId of Array.from(index.byFile.values(), (module) => module.file).sort((left, right) =>

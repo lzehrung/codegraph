@@ -586,22 +586,19 @@ export async function collectVerifiedNamedNodeReferences(
       }
       continue;
     }
-    if (onReceiverProofUnavailable && (await receiverProofUnavailable(fileId, parsed, range, resolveDefinition))) {
-      onReceiverProofUnavailable(fileId);
-    }
+    let recoveredByLanguageFallback = false;
     if (parsed.sup.id === "php" && expectedDef.isMember) {
       const memberMatch = await phpCaseInsensitiveReceiverMemberMatch(index, fileId, node, parsed, expectedDef);
       if (memberMatch === "matched") {
         pushVerified({ range, ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}) });
+        recoveredByLanguageFallback = true;
       } else if (memberMatch === "unverified") {
         markPhpNameEquivalenceGap(index, expectedDef);
       }
-      continue;
-    }
-    // PHP names are case-insensitive, but a namespace spelling alone cannot prove a member or
-    // distinguish a class reference from a function call. Restrict the fallback to syntax whose
-    // role matches the namespace-level definition.
-    if (phpCanonicalNames && matchesPhpFallbackDefinition(node, parsed, expectedDef)) {
+    } else if (phpCanonicalNames && matchesPhpFallbackDefinition(node, parsed, expectedDef)) {
+      // PHP names are case-insensitive, but a namespace spelling alone cannot prove a member or
+      // distinguish a class reference from a function call. Restrict the fallback to syntax whose
+      // role matches the namespace-level definition.
       const rawText = getPhpQualifiedReference(node, parsed.source) ?? sliceText(node, parsed.source);
       const imports = index.byFile.get(fileIdentityKey(fileId))?.imports;
       const role = inferPhpQualifiedReferenceImportType(node);
@@ -631,7 +628,18 @@ export async function collectVerifiedNamedNodeReferences(
           }
         }
         pushVerified({ range, ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}) });
+        recoveredByLanguageFallback = true;
       }
+    }
+    // A same-name node that direct resolution and every language-specific fallback both failed
+    // to place is not provably unrelated: report the file so coverage cannot silently claim
+    // `complete` while this occurrence's status stays unknown.
+    if (
+      !recoveredByLanguageFallback &&
+      onReceiverProofUnavailable &&
+      (await receiverProofUnavailable(fileId, parsed, range, resolveDefinition))
+    ) {
+      onReceiverProofUnavailable(fileId);
     }
   }
   return verified;
