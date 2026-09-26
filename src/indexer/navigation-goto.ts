@@ -1734,7 +1734,49 @@ function appendDirectKeywordMembers(
   }
 }
 
+const SWIFT_PARAMETER_OWNER_TYPES: Record<string, true> = {
+  init_declaration: true,
+  function_declaration: true,
+  deinit_declaration: true,
+  subscript_declaration: true,
+  lambda_literal: true,
+  protocol_function_declaration: true,
+};
+
+/**
+ * Swift parameters and function-body locals share the type's byte span, but
+ * `self.name` names the member. A parameter or local that shadows the bare name
+ * is not a member candidate. Only `simple_identifier` names are Swift.
+ */
+function isSwiftShadowingNonMember(declarationNode: SyntaxNodeLike): boolean {
+  if (declarationNode.type !== "simple_identifier") return false;
+  let current: SyntaxNodeLike | null = declarationNode.parent;
+  while (current) {
+    if (current.type === "parameter" && current.parent && SWIFT_PARAMETER_OWNER_TYPES[current.parent.type]) {
+      return true;
+    }
+    if (
+      current.type === "function_body" ||
+      current.type === "lambda_literal" ||
+      current.type === "computed_property" ||
+      current.type === "willset_didset_block"
+    ) {
+      return true;
+    }
+    if (
+      current.type === "class_declaration" ||
+      current.type === "protocol_declaration" ||
+      current.type === "enum_class_body"
+    ) {
+      return false;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
 export function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike, container: SyntaxNodeLike): boolean {
+  if (isSwiftShadowingNonMember(declarationNode)) return false;
   if (nearestMemberContainer(declarationNode) !== container) return false;
   let functionDepth = 0;
   let current: SyntaxNodeLike | null = declarationNode;
