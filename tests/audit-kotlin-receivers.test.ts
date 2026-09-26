@@ -95,11 +95,10 @@ describe("audit: Kotlin receiver scope and constructor-property members (W20, H1
         for (const ref of refs.references) {
           expect(ref.range.start.line).not.toBe(locate(text, "instanceHelper", 1).line);
         }
-        // The dropped same-name occurrence is an unverified candidate use: coverage must not
-        // claim `complete` while it sits outside the reference list (the F3 rule).
-        expect(refs.referenceCoverage.state).toBe("partial");
-        expect(refs.referenceCoverage.reasons).toContain("strategy_unavailable");
-        expect(refs.referenceCoverage.affectedFiles).toContain(p.f("Box.kt"));
+        // `Box` resolves to a class whose static (companion) scope has no `instanceHelper`, and it
+        // has no unresolved supertype, so the invalid call is a proven non-reference, not an
+        // unverified candidate: coverage stays complete (the F3 classified-receiver rule).
+        expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
       }
     });
 
@@ -231,12 +230,9 @@ describe("audit: Kotlin receiver scope and constructor-property members (W20, H1
     });
 
     it("default-package cross-file (documented unnamed-package limit): not_found and partial coverage, never a wrong target", async () => {
-      const declText = [
-        "class Gadget(val name: String) {",
-        '  fun describe(): String = "x:" + name',
-        "}",
-        "",
-      ].join("\n");
+      const declText = ["class Gadget(val name: String) {", '  fun describe(): String = "x:" + name', "}", ""].join(
+        "\n",
+      );
       const useText = ["fun use() {", '  val g = Gadget("y")', "  g.describe()", "}", ""].join("\n");
       const p = await fixture("cg-h14-unnamed-", { "Gadget.kt": declText, "use.kt": useText });
 
