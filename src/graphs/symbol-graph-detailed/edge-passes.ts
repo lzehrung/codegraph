@@ -1,12 +1,16 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
 import {
+  isExportedDeclaration,
+  isGoExportedMemberName,
   isSwiftCrossFileHiddenSharedOwnerMember,
   isSwiftFileHiddenSharedOwnerMember,
 } from "../../indexer/declaration-visibility.js";
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import {
   isDirectKeywordMemberDeclaration,
+  resolvePhpObjectCreationTarget,
+  resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
@@ -37,14 +41,18 @@ import { collectNodesByType, declarationMemberArity, findFirstNodeByType, isIden
 import {
   CALL_ARGUMENT_NODE_TYPES,
   classifyReceiver,
+  constructionTypeName,
   declarationNodeIsStatic,
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberDeclarationNode,
   cppQualifiedNameSegments,
   declaresMembers,
   isUnprovenHeritageExpression,
+  kotlinExtensionReceiverTypeNode,
+  memberContainerDef,
   nearestMemberContainer,
   nodeInStaticMemberContext,
+  phpObjectCreationKeyword,
   receiverCallAccess,
   supportsImplicitSelfMemberCalls,
   supportsReceiverMemberOverloads,
@@ -89,6 +97,11 @@ type EdgePassContext = {
   sharedOwnerAnchors: Map<string, string>;
   /** Visible members a constrained Swift owner can use without donating them to its nominal type. */
   sharedOwnerAccessibleMembers: Map<string, Set<string>>;
+  /**
+   * Members hidden from other files: Java `private`, Kotlin `private`/`internal`, and Swift
+   * `private`/`fileprivate` (including a private extension). Same-file calls stay.
+   */
+  fileHiddenMemberIds: Set<string>;
   /** Definition-node ids that collapse into their declaration-node id. */
   nodeAliases: Map<string, string>;
   /** Registers a name the detailed pass proved callable (function-valued bindings). */
@@ -245,13 +258,19 @@ function getCallTarget(node: SyntaxNodeLike): SyntaxNodeLike | null {
 }
 
 function getNewTarget(node: SyntaxNodeLike): SyntaxNodeLike | null {
-  return (
-    node.childForFieldName("constructor") ??
-    node.childForFieldName("type") ??
-    node.childForFieldName("name") ??
-    node.namedChildren.find((child) => child.type === "type_identifier") ??
-    node.child(0)
+  const field =
+    node.childForFieldName("constructor") ?? node.childForFieldName("type") ?? node.childForFieldName("name");
+  if (field) return field;
+  // PHP `new Base()` has no type field; the type is a `name` / `qualified_name` child and
+  // `child(0)` is the `new` keyword, which is not a type.
+  const namedType = node.namedChildren.find(
+    (child) =>
+      child.type === "type_identifier" ||
+      child.type === "name" ||
+      child.type === "qualified_name" ||
+      child.type === "relative_name",
   );
+  return namedType ?? node.child(0);
 }
 
 export function emitPythonDecoratorEdges(context: EdgePassContext, rootNode: SyntaxNodeLike): void {
@@ -340,6 +359,17 @@ export async function emitMemberOwnershipEdges(
     }
     const memberId = ensureNode(context, memberDef);
     if (definitionId !== memberId) context.nodeAliases.set(definitionId, memberId);
+    if (context.sup.id === "java" || context.sup.id === "kotlin" || context.sup.id === "swift") {
+      const declarationNode = outOfLineDeclaration?.node ?? fn.node;
+      const hidden =
+        context.sup.id === "swift"
+          ? isSwiftFileHiddenSharedOwnerMember(context.sup.id, declarationNode)
+          : !isExportedDeclaration(context.sup.id, declarationNode);
+      if (hidden) {
+        context.fileHiddenMemberIds.add(memberId);
+        if (definitionId !== memberId) context.fileHiddenMemberIds.add(definitionId);
+      }
+    }
     markImplementationTarget(
       context,
       memberId,
@@ -460,11 +490,27 @@ function memberScopeForDefinition(
     return declarationNodeIsStatic(outOfLineDeclaration.node, outOfLineDeclaration.source) ? "static" : "instance";
   }
   if (cppOutOfLine) return "any";
+  // Kotlin has no `static` keyword; a `companion object { ... }` member is the language's
+  // static-equivalent mechanism (reachable as `Outer.member()`), so it must register "static"
+  // itself rather than fall through to the keyword-based check below, which never fires for
+  // Kotlin and would otherwise leave every Kotlin member "instance" indistinguishably.
+  if (context.sup.id === "kotlin" && isKotlinCompanionObjectMember(fn.node)) return "static";
   const declarationNode =
     fn.node.parent?.type === "public_field_definition" || fn.node.parent?.type === "field_definition"
       ? fn.node.parent
       : fn.node;
   return declarationNodeIsStatic(declarationNode, context.source) ? "static" : "instance";
+}
+
+/** Whether `node` is lexically declared inside its own nearest enclosing `companion object`. */
+function isKotlinCompanionObjectMember(node: SyntaxNodeLike): boolean {
+  let current: SyntaxNodeLike | null = node.parent;
+  while (current) {
+    if (current.type === "companion_object") return true;
+    if (current.type === "class_declaration") return false;
+    current = current.parent;
+  }
+  return false;
 }
 
 type MemberOwner = { def: SymbolDef; container: SyntaxNodeLike | null; cppOutOfLine: boolean };
@@ -498,6 +544,14 @@ async function memberOwner(
       ? await resolveCppQualifiedMemberContainer(context.index, context.moduleEntry, ownerPath, context.loadParsedFile)
       : null;
     return def ? { def, container: null, cppOutOfLine: true } : null;
+  }
+  if (context.sup.id === "kotlin") {
+    // `fun Widget.describe()` is a top-level declaration outside Widget's own body, so it is
+    // never one of `owners` above; its receiver-type prefix is the only proof of ownership.
+    const receiverTypeNode = kotlinExtensionReceiverTypeNode(fn.node, context.sup);
+    if (!receiverTypeNode) return null;
+    const def = resolveNamedType(context, sliceText(receiverTypeNode, context.source), receiverTypeNode);
+    return def ? { def, container: null, cppOutOfLine: false } : null;
   }
   if (context.sup.id !== "zig") return null;
   const container = nearestMemberContainer(fn.node);
@@ -559,7 +613,12 @@ function unwrapGoNamedType(node: SyntaxNodeLike): SyntaxNodeLike | null {
 }
 
 /** Type-like defs only, so a PHP `use function` alias cannot steal `Example::m()`. */
-function resolveNamedType(context: EdgePassContext, name: string, node: SyntaxNodeLike): SymbolDef | null {
+function resolveNamedType(
+  context: EdgePassContext,
+  name: string,
+  node: SyntaxNodeLike,
+  rubyConstructed = false,
+): SymbolDef | null {
   const target = context.resolveIdentifier(name, node);
   if (target && declaresMembers(target)) return target;
   // A parameter/annotation type name is a closer scope binding than the class it names.
@@ -569,7 +628,12 @@ function resolveNamedType(context: EdgePassContext, name: string, node: SyntaxNo
   );
   if (typed.length === 1) return typed[0]!;
   const imported = context.aliasToTargetDef.get(name);
-  return imported && declaresMembers(imported) ? imported : null;
+  if (imported && declaresMembers(imported)) return imported;
+  // Only a constructed `Klass.new` type uses Ruby's bare-constant visibility, and
+  // only when this file does not already have several classes of that name.
+  // Inheritance names stay on resolveIdentifier so an unproven superclass is not invented.
+  if (!rubyConstructed || typed.length > 1) return null;
+  return resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
 }
 
 /**
@@ -695,7 +759,13 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       if (seenAliases.has(name)) return;
       let target: SymbolDef | null = context.aliasToTargetDef.get(name) ?? null;
       if (!target) {
-        const modFile = context.aliasToTargetModule.get(name);
+        // A local variable can shadow a Go package alias (`u := LocalU{}` alongside
+        // `import u "pkg"`); aliasToTargetModule is a blind per-file text map, so refuse it
+        // here too whenever a closer, non-namespace scope binding owns the name.
+        const modFile =
+          context.sup.id === "go" && context.hasNonModuleBinding(name, node)
+            ? undefined
+            : context.aliasToTargetModule.get(name);
         if (modFile) {
           let exportedName: string | null = null;
           const parent = node.parent;
@@ -710,7 +780,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           }
           if (exportedName) {
             target = context.resolveExportFrom(modFile, exportedName);
-            if (!target) {
+            if (!target && (context.sup.id !== "go" || isGoExportedMemberName(context.sup.id, exportedName))) {
               const targetModule = context.index.byFile.get(fileIdentityKey(modFile));
               target = (targetModule?.locals ?? []).find((local) => local.localName === exportedName) ?? null;
             }
@@ -755,7 +825,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         ? getCallArgumentCount({ languageId: context.sup.id, source: context.source, call: node })
         : null;
       if (binding.kind === "named-type") {
-        const typeDef = resolveNamedType(context, binding.typeName, access.receiver);
+        const typeDef = resolveNamedType(context, binding.typeName, access.receiver, binding.constructed);
         if (!typeDef) return;
         context.receiverCalls.push({
           callerId: fromId,
@@ -901,7 +971,27 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       if (!tryResolveNode(context, callee, fromId, "calls")) recordImplicitSelfMemberCall(node, callee);
     };
 
+    const recordRubySuper = (superNode: SyntaxNodeLike): void => {
+      const container = nearestMemberContainer(fn.node);
+      if (!container || container.type !== "class") return;
+      const owner = memberContainerDef(context.moduleEntry, container);
+      if (!owner) return;
+      context.receiverCalls.push({
+        callerId: fromId,
+        ownerId: ensureNode(context, owner),
+        viaSupertypes: true,
+        memberName: fn.def.localName,
+        argumentCount: null,
+        site: { file: context.moduleEntry.file, range: toRange(superNode) },
+        memberScope: "any",
+      });
+    };
+
     const recordCallOrInstantiation = (node: SyntaxNodeLike): boolean => {
+      if (context.sup.id === "ruby" && node.type === "super") {
+        recordRubySuper(node);
+        return true;
+      }
       if (callNodeTypes.has(node.type)) {
         if (context.sup.id === "go") {
           const callTarget = getCallTarget(node);
@@ -921,19 +1011,45 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           const receiverNode = node.childForFieldName("receiver");
           const methodName = methodNode ? sliceText(methodNode, context.source) : null;
           if (methodName === "new" && receiverNode) {
-            tryResolveNode(context, receiverNode, fromId, "instantiates");
+            const recorded = tryResolveNode(context, receiverNode, fromId, "instantiates");
+            if (!recorded) {
+              const rubyType = resolveRubyVisibleConstant(
+                context.index,
+                context.moduleEntry,
+                context.sup,
+                sliceText(receiverNode, context.source),
+              );
+              if (rubyType) recordDefEdge(context, fromId, rubyType, "instantiates", receiverNode);
+            }
             return false;
           }
+          if (methodNode?.type === "super") return true;
           if (methodNode) {
             resolveCallTarget(node, methodNode);
             return false;
           }
+          const callee = getCallTarget(node);
+          if (callee?.type === "super") return true;
+          resolveCallTarget(node, callee);
+          return false;
         }
         resolveCallTarget(node, getCallTarget(node));
       }
       if (newNodeTypes.has(node.type)) {
-        const target = getNewTarget(node);
-        if (target) tryResolveNode(context, target, fromId, "instantiates");
+        const keyword = phpObjectCreationKeyword(node, context.source, context.sup);
+        if (keyword) {
+          const created = resolvePhpObjectCreationTarget(
+            context.index,
+            context.moduleEntry,
+            keyword,
+            context.source,
+            context.sup,
+          );
+          if (created) recordDefEdge(context, fromId, created, "instantiates", keyword.nameNode);
+        } else {
+          const target = constructionTypeName(node, context.source, context.sup) ?? getNewTarget(node);
+          if (target) tryResolveNode(context, target, fromId, "instantiates");
+        }
       }
       return true;
     };
@@ -1082,7 +1198,13 @@ async function recordIdentifierRelations(
         target = context.resolveIdentifier(qualifiedPath.join("::"), identifier);
       }
     } else {
-      target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
+      const name = sliceText(identifier, context.source);
+      target = context.resolveIdentifier(name, identifier);
+      // Ruby `require` publishes a top-level constant, not a nested one. Reuse the
+      // same visibility as goto so `class Worker < Base` follows the required class.
+      if (!target && context.sup.id === "ruby") {
+        target = resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
+      }
     }
     if (!target) continue;
     const targetId = defNodeId(target);

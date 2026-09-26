@@ -10,17 +10,26 @@ import {
 } from "../native/tree-sitter-native.js";
 import { IMPLICIT_UNIT_LANGUAGES } from "../indexer/compilation-units.js";
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
-import { resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
-import { languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
+import { cjsRequireValueBinding, resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
+import {
+  earliestSymbolDef,
+  typescriptCallableContainerKey,
+  typescriptCallableRoleAt,
+} from "../indexer/ts-callables.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
+import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
 import { csharpAliasQualifiedLookupName, innermostNamespaceImport } from "../indexer/navigation-goto.js";
 import {
   cppUsingDeclarationTarget,
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppExportedCallables,
+  resolveCppUsingDirectiveName,
   resolveVisibleCppCallableName,
 } from "../indexer/navigation-cpp.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
+import { ensurePhpNamespaceSymbolIndex } from "../indexer/navigation-references.js";
+import { resolveIndexedPhpClassReference } from "../indexer/php-namespace-symbols.js";
 import {
   csharpLookupName,
   findClosestScopeBinding,
@@ -130,11 +139,50 @@ function recordCallableDeclarationAliases(
   }
 }
 
+function recordTypeScriptCallableAliases(
+  moduleEntry: ModuleIndex,
+  languageId: string,
+  tree: SyntaxTreeLike,
+  nodeAliases: Map<string, string>,
+): void {
+  if (languageId !== "ts" && languageId !== "tsx") return;
+  const groups = new Map<string, SymbolDef[]>();
+  for (const local of moduleEntry.locals) {
+    if (local.kind !== SymbolKind.Function) continue;
+    const start = local.range.start.index ?? 0;
+    const end = local.range.end.index ?? start;
+    const role = typescriptCallableRoleAt(tree, start, end);
+    if (role === "other") continue;
+    const key = `${typescriptCallableContainerKey(tree, start, end)}\0${local.localName}`;
+    const group = groups.get(key) ?? [];
+    group.push(local);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const implementations = group.filter((local) => {
+      const start = local.range.start.index ?? 0;
+      const end = local.range.end.index ?? start;
+      return typescriptCallableRoleAt(tree, start, end) === "implementation";
+    });
+    let canonical: SymbolDef | undefined;
+    if (implementations.length === 1) canonical = implementations[0];
+    else if (implementations.length === 0) canonical = earliestSymbolDef(group);
+    if (!canonical) continue;
+    const canonicalId = defNodeId(canonical);
+    for (const local of group) {
+      const id = defNodeId(local);
+      if (id !== canonicalId) nodeAliases.set(id, canonicalId);
+    }
+  }
+}
+
 export async function buildSymbolGraphDetailed(
   index: ProjectIndex,
   opts?: BuildDetailedSymbolGraphOptions,
 ): Promise<DetailedSymbolGraph> {
   assertNativeRequiredAvailable(index.nativeMode);
+  await ensurePhpNamespaceSymbolIndex(index);
   const base = await buildSymbolGraph(index, opts?.files ? { files: opts.files } : undefined);
   const configuredMaxEdges =
     typeof opts?.maxEdges === "number" && opts.maxEdges > 0 ? Math.floor(opts.maxEdges) : undefined;
@@ -189,8 +237,11 @@ export async function buildSymbolGraphDetailed(
     return maybePushEdge(fromId, toId, label, site);
   };
 
-  const resolveExportNamespace = (file: string, exportedName: string): ResolvedDetailedExport | null =>
-    resolveExport(index, file, exportedName);
+  const resolveExportNamespace = (file: string, exportedName: string): ResolvedDetailedExport | null => {
+    const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
+    if (!isGoExportedMemberName(languageId, exportedName)) return null;
+    return resolveExport(index, file, exportedName);
+  };
 
   const resolveExportDef = (file: string, exportedName: string): SymbolDef | null => {
     const resolved = resolveExportNamespace(file, exportedName);
@@ -224,6 +275,7 @@ export async function buildSymbolGraphDetailed(
     const fileKey = typeof file === "string" ? fileIdentityKey(file) : null;
     const moduleEntry = fileKey ? index.byFile.get(fileKey) : undefined;
     const lastName = names[0];
+    if (languageId === "go" && (!lastName || !isGoExportedMemberName(languageId, lastName))) return null;
     return moduleEntry?.locals.find((entry) => entry.localName === lastName) ?? null;
   };
 
@@ -231,6 +283,7 @@ export async function buildSymbolGraphDetailed(
     resolveExportDef(file, exportedName);
 
   const receiverCalls: ReceiverCallCandidate[] = [];
+  const fileHiddenMemberIds = new Set<string>();
   const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
   const receiverMemberArities = new Map<string, MemberArityRange>();
   const sharedOwnerPeers = new Map<string, Promise<SharedOwnerPeer[]>>();
@@ -345,7 +398,7 @@ export async function buildSymbolGraphDetailed(
         constStringOf,
         aliasToTargetModule,
         resolveMemberPathFromModule,
-        ...(sup.id === "zig" || sup.id === "csharp"
+        ...(sup.id === "zig" || sup.id === "csharp" || isJsTsLanguage(sup.id)
           ? {
               resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
                 if (sup.id === "zig") {
@@ -353,7 +406,32 @@ export async function buildSymbolGraphDetailed(
                   if (binding && binding.kind !== "namespace") return undefined;
                 }
                 const imported = innermostNamespaceImport(moduleEntry.imports, alias, useNode, sup.normalizeIdentifier);
-                return typeof imported?.resolved === "string" ? imported.resolved : undefined;
+                if (
+                  isJsTsLanguage(sup.id) &&
+                  imported?.mechanism === "cjs" &&
+                  typeof imported.resolved === "string" &&
+                  cjsRequireValueBinding(index, imported.resolved)
+                ) {
+                  return undefined;
+                }
+                if (typeof imported?.resolved === "string") return imported.resolved;
+                if (isJsTsLanguage(sup.id)) return aliasToTargetModule.get(alias);
+                return undefined;
+              },
+            }
+          : {}),
+        // Go has no `resolveNamespaceAlias` override otherwise, so a local variable that
+        // shadows a package alias (`u := LocalU{}; u.Square()` alongside `import u "pkg"`)
+        // would still resolve `u.Square` through the blind `aliasToTargetModule` text map.
+        // Refuse the package alias whenever a closer, non-namespace scope binding owns the
+        // name at this exact use site, matching how the receiver-proof path already treats
+        // the local as the real receiver instead.
+        ...(sup.id === "go"
+          ? {
+              resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
+                const binding = findClosestScopeBinding(scopeIndex, alias, useNode, sup);
+                if (binding && binding.kind !== "namespace") return undefined;
+                return aliasToTargetModule.get(alias);
               },
             }
           : {}),
@@ -363,6 +441,7 @@ export async function buildSymbolGraphDetailed(
 
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
       recordCallableDeclarationAliases(moduleEntry, sup.id, scopeIndex.all, nodeAliases);
+      recordTypeScriptCallableAliases(moduleEntry, sup.id, tree, nodeAliases);
       const cppParsedByFile = sup.id === "cpp" ? new Map<string, ParsedFileContext>() : null;
       if (cppParsedByFile) {
         cppParsedByFile.set(fileIdentityKey(file), { source: src, tree, sup });
@@ -433,6 +512,8 @@ export async function buildSymbolGraphDetailed(
         if (sup.id === "cpp") {
           const visible = resolveVisibleCppCallableName(index, moduleEntry, name, node, src, loadCppParsedFile);
           if (visible !== undefined) return visible;
+          const directed = resolveCppUsingDirectiveName(index, moduleEntry, name, node, src, loadCppParsedFile);
+          if (directed !== undefined) return directed;
         }
         if (binding) return resolveCppAliasTarget(aliasToTargetDef.get(binding.name), node);
 
@@ -464,6 +545,10 @@ export async function buildSymbolGraphDetailed(
           });
           if (resolved?.kind === "resolved") return resolved.def;
         }
+        if (localCandidates.length === 0 && sup.id === "php") {
+          const phpClass = resolveIndexedPhpClassReference(index, src, tree, node, lookupName, moduleEntry.imports);
+          if (phpClass) return phpClass;
+        }
         return null;
       };
 
@@ -493,6 +578,7 @@ export async function buildSymbolGraphDetailed(
         sharedOwnerPeers,
         sharedOwnerAnchors,
         sharedOwnerAccessibleMembers,
+        fileHiddenMemberIds,
         nodeAliases,
         noteCallableName,
         loadParsedFile,
@@ -526,6 +612,7 @@ export async function buildSymbolGraphDetailed(
     receiverMemberArities,
     sharedOwnerAnchors,
     sharedOwnerAccessibleMembers,
+    fileHiddenMemberIds,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

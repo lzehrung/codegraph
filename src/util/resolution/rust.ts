@@ -14,7 +14,7 @@ import { XID_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { lruMapGet, lruMapSet } from "../lru-map.js";
 import { fileIdentityKey, isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
-import { rustCrateRootFiles } from "./cargo-targets.js";
+import { rustCargoPackageIdentifier, rustCrateRootFiles, rustPathDependencyCrateRoot } from "./cargo-targets.js";
 
 function isWithinOrEqual(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
@@ -829,6 +829,14 @@ async function resolveAttributedRustModulePath(
   const head = parts[0];
   if (!head) return undefined;
 
+  // `crate`/`self`/`super` start from a proven file (the crate root, the current file, or the
+  // resolved parent module); any file the walk below reaches from one of them is a real
+  // answer even when no segment carries a `#[path]` attribute. Every other head starts from
+  // an unproven guess (see `declaringFileForSpecifierHead`'s default branch), so only a real
+  // `#[path]` attribute earns a defined result there; otherwise the caller's own conventional
+  // fallback (sibling/source-root/own-package/path-dependency resolution) decides instead.
+  const provenStart = head === "crate" || head === "self" || head === "super";
+
   let startFile: string | null;
   let startModuleDir: string | undefined;
   if (head === "super") {
@@ -859,7 +867,7 @@ async function resolveAttributedRustModulePath(
 
   for (const child of childParts) {
     if (!child || child === "*") {
-      if (usedAttribute) return currentFile;
+      if (provenStart || usedAttribute) return currentFile;
       return undefined;
     }
     const pathValue = currentScope.pathAttributes.get(child);
@@ -893,7 +901,7 @@ async function resolveAttributedRustModulePath(
     attributeDirectory = path.dirname(currentFile);
   }
 
-  if (usedAttribute) return currentFile;
+  if (provenStart || usedAttribute) return currentFile;
   return undefined;
 }
 
@@ -961,5 +969,24 @@ export async function resolveRustImportPath(
   if (siblingModule) {
     return siblingModule;
   }
-  return resolveRustModuleParts(sourceRoot, parts);
+  const sourceRootModule = await resolveRustModuleParts(sourceRoot, parts);
+  if (sourceRootModule) {
+    return sourceRootModule;
+  }
+
+  if (cargoRoot && head) {
+    // A package's own binary target (`src/bin/*.rs`, `src/main.rs` alongside `src/lib.rs`)
+    // names its own library crate by the package's own name, exactly like an external crate.
+    const ownPackageIdentifier = await rustCargoPackageIdentifier(cargoRoot);
+    if (ownPackageIdentifier && ownPackageIdentifier === head) {
+      return resolveRustModuleParts(sourceRoot, tail);
+    }
+    // A workspace path dependency (`[dependencies] head = { path = "../head" }`) names its
+    // own crate root, not a submodule of the current crate.
+    const dependencyRoot = await rustPathDependencyCrateRoot(cargoRoot, projectRoot, head);
+    if (dependencyRoot) {
+      return resolveRustModuleParts(crateSourceRoot(dependencyRoot, projectRoot), tail);
+    }
+  }
+  return null;
 }

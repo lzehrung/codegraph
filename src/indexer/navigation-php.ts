@@ -5,6 +5,48 @@ import { sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import { SymbolKind } from "./types.js";
 
+/** Promotion parameter that contains `node`, or null once a method or class boundary is crossed. */
+export function phpPropertyPromotionParameter(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (current.type === "property_promotion_parameter") return current;
+    if (
+      current.type === "method_declaration" ||
+      current.type === "function_definition" ||
+      current.type === "class_declaration"
+    ) {
+      return null;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+/**
+ * Variable declared by a visibility-modified `__construct` parameter.
+ * The same syntax on any other method is a parameter, not a class property.
+ */
+export function phpConstructorPromotedVariable(node: SyntaxNodeLike, source?: string): SyntaxNodeLike | null {
+  const parameter = node.type === "property_promotion_parameter" ? node : phpPropertyPromotionParameter(node);
+  if (!parameter) return null;
+  const variable = parameter.childForFieldName("name");
+  if (!variable || variable.type !== "variable_name") return null;
+  const namesTheVariable =
+    node === parameter || (node.startIndex >= variable.startIndex && node.endIndex <= variable.endIndex);
+  if (!namesTheVariable) return null;
+  let method: SyntaxNodeLike | null = parameter.parent;
+  while (method && method.type !== "method_declaration") {
+    if (method.type === "class_declaration" || method.type === "function_definition") return null;
+    method = method.parent;
+  }
+  if (!method) return null;
+  const methodName = method.childForFieldName("name");
+  if (!methodName) return null;
+  const text = source ? sliceText(methodName, source) : methodName.text;
+  if (text !== "__construct") return null;
+  return variable;
+}
+
 function readPhpNamespaceName(namespaceNode: SyntaxNodeLike, source: string): string | null {
   const namespaceName =
     namespaceNode.childForFieldName?.("name") ??

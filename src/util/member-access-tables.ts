@@ -88,6 +88,12 @@ export type MemberAccessRow = {
   navigationFallbackLastChild?: true;
   /** Identifiers that name the type declaring the calling member. */
   receiverKeywords?: ReceiverKeywords;
+  /**
+   * A receiver keyword may also be spelled as a zero-argument call to that keyword identifier
+   * (Python's `super()`, which has no bare-name form unlike `self`/`cls`). Absent for every
+   * language whose receiver keywords are always bare names.
+   */
+  receiverKeywordCallShape?: true;
   /** Why the language declares no receiver keywords. */
   receiverKeywordsOmittedReason?: string;
   /** Language syntax that declares ancestors visible to own-type and supertype receivers. */
@@ -241,7 +247,8 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     memberAccessShapes: [
       { object: { field: "object", fallbackIndex: 0 }, property: { field: "attribute", fallbackIndex: 2 } },
     ],
-    receiverKeywords: { own: ["self", "cls"], instanceOwn: ["self"], supertype: [] },
+    receiverKeywords: { own: ["self", "cls"], instanceOwn: ["self"], supertype: ["super"] },
+    receiverKeywordCallShape: true,
     receiverAncestry: { clauses: [{ nodeType: "argument_list", relation: "extends" }] },
   },
   rst: { omittedReason: "reStructuredText document format; embedded code blocks parse as their own language." },
@@ -258,7 +265,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     ],
     receiverKeywords: { own: ["self"], instanceOwn: ["self"], supertype: [] },
     receiverAncestry: {
-      clauses: [{ nodeType: "superclass", relation: "extends" }],
+      clauses: [{ nodeType: "superclass", relation: "extends", supertype: "all" }],
       mixinCalls: ["include", "extend", "prepend"],
     },
   },

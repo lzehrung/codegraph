@@ -88,6 +88,11 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
         left: (member_expression object: (identifier) @exp property: (property_identifier) @cjs_export_name)
         right: (identifier) @cjs_local))
         (#eq? @exp "exports"))
+      ;; CJS whole-module value: module.exports = Widget
+      ((expression_statement (assignment_expression
+        left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
+        right: (identifier) @cjs_module_value))
+        (#eq? @mod "module") (#eq? @prop "exports"))
       ;; CJS function/arrow direct exports
       ((expression_statement (assignment_expression
         left: (member_expression object: (member_expression object: (identifier) @mod property: (property_identifier) @prop) property: (property_identifier) @cjs_export_name)
@@ -135,8 +140,12 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias))) (string) @from) @stmt
       (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname !alias))) (string) @from) @stmt
       (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from) @stmt
-      ((lexical_declaration (variable_declarator name:(identifier) @def value: (call_expression (identifier) @req arguments: (arguments (string) @from))))
+      ((lexical_declaration (variable_declarator name:(identifier) @ns value: (call_expression (identifier) @req arguments: (arguments (string) @from)))) @stmt
         (#eq? @req "require"))
+      ((variable_declaration (variable_declarator name:(identifier) @ns value: (call_expression (identifier) @req arguments: (arguments (string) @from)))) @stmt
+        (#eq? @req "require"))
+      ((lexical_declaration (variable_declarator name: (identifier) @ns value: (await_expression (call_expression function: (import) arguments: (arguments (string) @from))))) @stmt)
+      ((variable_declaration (variable_declarator name: (identifier) @ns value: (await_expression (call_expression function: (import) arguments: (arguments (string) @from))))) @stmt)
       ((lexical_declaration (variable_declarator (object_pattern) @pattern value: (call_expression (identifier) @req arguments: (arguments (string) @from))))
         (#eq? @req "require"))
     `,

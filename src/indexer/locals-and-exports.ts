@@ -19,6 +19,7 @@ import { buildScopeIndexFromSource } from "./scope.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
 import { isPythonInstanceAttributeDeclaration } from "../languages/definitions/python.js";
+import { phpConstructorPromotedVariable, phpPropertyPromotionParameter } from "./navigation-php.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { importCapture } from "../languages/graph-captures.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
@@ -28,6 +29,7 @@ import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/ide
 import { isExportedDeclaration } from "./declaration-visibility.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { cppCallableIsDefinition, cppCallableShapeForNode } from "./cpp-callables.js";
+import { earliestSymbolDef, typescriptCallableContainerKey, typescriptCallableRoleAt } from "./ts-callables.js";
 
 /**
  * Matches one `exportScopeBlockers` entry against an ancestor node. A plain entry compares the
@@ -118,6 +120,12 @@ const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
   trait_item: true,
   enum_declaration: true,
   enum_item: true,
+  // Zig has no implicit member scope of its own; a function nested in one of these container
+  // forms is a method, matching the receiver-call detection in receiver-calls.ts's
+  // MEMBER_CONTAINER_TYPES, which already lists all three.
+  struct_declaration: true,
+  union_declaration: true,
+  opaque_declaration: true,
 };
 
 const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
@@ -133,6 +141,7 @@ const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
 
 function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
   if (isPythonInstanceAttributeDeclaration(node)) return true;
+  if (phpConstructorPromotedVariable(node)) return true;
   let current = node.parent?.parent ?? null;
   while (current) {
     if (MEMBER_CONTAINER_NODE_TYPES[current.type]) return true;
@@ -177,6 +186,33 @@ function cppQualifiedExportName(
     current = current.parent;
   }
   return [...namespaceSegments.flat(), ...(qualifiedSegments ?? [name])].join("::");
+}
+
+/**
+ * Nested Ruby constants are not top-level names. `module Outer; class Base`
+ * exports as `Outer::Base`, so a `require` cannot bind bare `Base`. A
+ * `scope_resolution` name (`class Path::Tool`) already is its public path.
+ */
+function rubyQualifiedExportName(nameNode: SyntaxNodeLike, source: string, name: string): string {
+  if (nameNode.type !== "constant") return name;
+  const segments: string[] = [];
+  let current = nameNode.parent;
+  while (current) {
+    if (current.type === "class" || current.type === "module") {
+      const containerName = current.childForFieldName("name");
+      const ownsExport =
+        containerName !== null &&
+        containerName.startIndex <= nameNode.startIndex &&
+        containerName.endIndex >= nameNode.endIndex;
+      if (containerName && !ownsExport) {
+        const text = sliceText(containerName, source);
+        if (text) segments.unshift(text);
+      }
+    }
+    current = current.parent;
+  }
+  if (!segments.length) return name;
+  return `${segments.join("::")}::${name}`;
 }
 
 const C_DECLARATOR_IDENTIFIER_PATTERN = new RegExp(`^${XID_IDENTIFIER_SOURCE}`, "u");
@@ -229,6 +265,46 @@ function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>, la
     }
   }
   return `${entry.exportedAs}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
+}
+
+function collapseTypeScriptCallableExports(
+  exports: ExportEntry[],
+  tree: SyntaxTreeLike | null,
+  languageId: string,
+): ExportEntry[] {
+  if ((languageId !== "ts" && languageId !== "tsx") || !tree) return exports;
+  const groups = new Map<string, Extract<ExportEntry, { type: "local" }>[]>();
+  for (const entry of exports) {
+    if (entry.type !== "local" || entry.target.kind !== SymbolKind.Function) continue;
+    const start = entry.target.range.start.index ?? 0;
+    const end = entry.target.range.end.index ?? start;
+    const role = typescriptCallableRoleAt(tree, start, end);
+    if (role === "other") continue;
+    const key = `${typescriptCallableContainerKey(tree, start, end)}\0${entry.exportedAs}`;
+    const group = groups.get(key) ?? [];
+    group.push(entry);
+    groups.set(key, group);
+  }
+  const drop = new Set<ExportEntry>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const implementations = group.filter((entry) => {
+      const start = entry.target.range.start.index ?? 0;
+      const end = entry.target.range.end.index ?? start;
+      return typescriptCallableRoleAt(tree, start, end) === "implementation";
+    });
+    let keep: Extract<ExportEntry, { type: "local" }>[] = implementations;
+    if (implementations.length === 0) {
+      const earliest = earliestSymbolDef(group.map((entry) => entry.target));
+      const signature = group.find((entry) => entry.target === earliest);
+      keep = signature ? [signature] : [];
+    }
+    for (const entry of group) {
+      if (!keep.includes(entry)) drop.add(entry);
+    }
+  }
+  if (drop.size === 0) return exports;
+  return exports.filter((entry) => !drop.has(entry));
 }
 
 function dedupeExportEntries(entries: ExportEntry[], languageId: string): ExportEntry[] {
@@ -659,6 +735,12 @@ export function collectLocalsAndExportsFromSource(
                 );
               }
             }
+          } else if (node && phpPropertyPromotionParameter(node)) {
+            const promoted = phpConstructorPromotedVariable(node, source);
+            if (promoted) {
+              pushLocal(sliceText(promoted, source), SymbolKind.Variable, toRange(promoted), promoted);
+              capturedLocals = true;
+            }
           } else {
             pushLocal(capture.text, classifyLocalCapture(node), nativeRange, node);
           }
@@ -953,6 +1035,18 @@ export function collectLocalsAndExportsFromSource(
         });
         continue;
       }
+      if (map["cjs_module_value"]) {
+        const localName = map["cjs_module_value"].text;
+        const local = locals.find((def) => def.localName === localName);
+        if (local && !exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
+          exports.push({
+            type: "local",
+            exportedAs: "default",
+            target: { ...local, kind: SymbolKind.Default },
+          });
+        }
+        continue;
+      }
       if (map["cjs_shorthand"]) {
         const nameText = map["cjs_shorthand"].text;
         const local = locals.find((def) => def.localName === nameText);
@@ -975,13 +1069,13 @@ export function collectLocalsAndExportsFromSource(
       if (map["cjs_export_name"] && map["cjs_fn"]) {
         const exportedAs = map["cjs_export_name"].text;
         const fnNode = nodeForCapture(map["cjs_fn"]);
-        const sym = buildSymbolDef(
-          exportedAs,
-          SymbolKind.Function,
-          rangeFromNativeCapture(map["cjs_fn"], ensureByteIndexMap()),
-          fnNode,
+        const nameNode = fnNode?.childForFieldName("name");
+        const range = nameNode ? toRange(nameNode) : rangeFromNativeCapture(map["cjs_fn"], ensureByteIndexMap());
+        const existing = locals.find(
+          (def) => def.localName === exportedAs && def.range.start.index === range.start.index,
         );
-        locals.push(sym);
+        const sym = existing ?? buildSymbolDef(exportedAs, SymbolKind.Function, range, nameNode ?? fnNode);
+        if (!existing) locals.push(sym);
         exports.push({ type: "local", exportedAs, target: sym });
         continue;
       }
@@ -1076,7 +1170,9 @@ export function collectLocalsAndExportsFromSource(
           const exportedName =
             support.id === "cpp" && visibilityNameNode
               ? cppQualifiedExportName(visibilityNameNode, source, nameText)
-              : nameText;
+              : support.id === "ruby" && visibilityNameNode
+                ? rubyQualifiedExportName(visibilityNameNode, source, nameText)
+                : nameText;
           if (!isDefaultExport) {
             exports.push({
               type: "local",
@@ -1327,5 +1423,10 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  return { file, exports: dedupeExportEntries(exports, support.id), imports, locals };
+  return {
+    file,
+    exports: dedupeExportEntries(collapseTypeScriptCallableExports(exports, ensureTree(), support.id), support.id),
+    imports,
+    locals,
+  };
 }

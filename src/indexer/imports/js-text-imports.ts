@@ -314,8 +314,8 @@ async function collectCommonJsRequireDeclarations(
     const localRange = tokenRange(source, lineStarts, localStart, local);
     const resolved = await context.resolveFrom(moduleSpecifier);
     context.pushBinding({
-      kind: "default",
-      local,
+      kind: "namespace",
+      localNS: local,
       from: moduleSpecifier,
       ...(localRange ? { localRange } : {}),
       resolved,
@@ -380,8 +380,8 @@ async function collectCommonJsImportEquals(
     const localRange = tokenRange(source, lineStarts, localStart, local);
     const resolved = await context.resolveFrom(moduleSpecifier);
     context.pushBinding({
-      kind: "default",
-      local,
+      kind: "namespace",
+      localNS: local,
       from: moduleSpecifier,
       ...(localRange ? { localRange } : {}),
       resolved,

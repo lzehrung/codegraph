@@ -134,6 +134,8 @@ const TYPESCRIPT_SCOPE_NODES: ScopeNodeRow = {
   enumBodyMemberTypes: new Set(["property_identifier"]),
   enumBodyParentTypes: new Set(["enum_body"]),
   childSkipNameTypes: new Set(["identifier", "type_identifier"]),
+  // `x: T` keeps its type annotation in the `type` field; skip it for bindings (H1).
+  destructuringTypeFieldTypes: new Set(["required_parameter", "optional_parameter"]),
   moduleRootTypes: new Set(["program", "module"]),
 };
 
@@ -205,6 +207,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     enumMemberTypes: new Set(["enum_constant"]),
     enumBodyParentTypes: new Set(["enum_body"]),
     variableDeclarationTypes: new Set(["field_declaration", "local_variable_declaration"]),
+    destructuringTypeFieldTypes: new Set(["formal_parameter"]),
     variableDeclaratorTypes: new Set(["variable_declarator"]),
     memberFunctionTypes: new Set(["method_declaration"]),
     memberContainerTypes: new Set(["class_body", "class_declaration"]),
@@ -220,6 +223,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     enumMemberTypes: new Set(["enum_member_declaration"]),
     declarationPatternTypes: new Set(["declaration_pattern"]),
     variableDeclarationTypes: new Set(["variable_declaration", "field_declaration"]),
+    destructuringTypeFieldTypes: new Set(["parameter"]),
     variableDeclaratorTypes: new Set(["variable_declarator"]),
     memberFunctionTypes: new Set(["method_declaration"]),
     memberContainerTypes: new Set(["class_declaration"]),
@@ -234,6 +238,12 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     variableDeclarationTypes: new Set(["field_declaration", "let_declaration", "const_item", "static_item"]),
     patternBindingTypes: new Set(["let_declaration", "const_item", "static_item"]),
     memberContainerTypes: new Set(["impl_item"]),
+    // A parameter's `type` field is a sibling of its `pattern`, not a nested pattern: without
+    // this, the generic recursive walk in `addPatternDecls` (scope.js) descends into the type
+    // position and registers the referenced type name (bare or `super::`/`crate::`-qualified)
+    // as a same-scope "param" binding at the reference site itself, which then shadows the
+    // real declaration and makes goto/references resolve the use to itself.
+    destructuringTypeFieldTypes: new Set(["parameter"]),
     childSkipNameTypes: new Set(["identifier", "type_identifier", "parameters"]),
   },
   c: C_SCOPE_NODES,

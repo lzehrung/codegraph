@@ -6,7 +6,7 @@ import { okGoToResult } from "./navigation-provenance.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
-import { resolveExport, resolveImported } from "./navigation-resolve.js";
+import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
 import {
   SymbolKind,
   type GoToResult,
@@ -293,7 +293,12 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "star") {
-      const result = resolveImported(index, imp, name, cNamespace ? { cNamespace } : undefined);
+      // Ruby star expansion already publishes exported constants. Local fallback would
+      // resurrect a nested class as a bare name the exports query omitted.
+      const result = resolveImported(index, imp, name, {
+        ...(cNamespace ? { cNamespace } : {}),
+        ...(support.id === "ruby" ? { allowLocalFallback: false } : {}),
+      });
       if (result && !("namespace" in result)) {
         return okGoToResult(index, result, {
           via: {
@@ -306,6 +311,19 @@ export function resolveNamedDefinition(
       }
     } else if (imp.kind === "namespace" && support.normalizeIdentifier(imp.localNS) === normalizedName) {
       const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
+      if (imp.mechanism === "cjs" && targetFile) {
+        const classValue = cjsRequireValueBinding(index, targetFile);
+        if (classValue) {
+          return okGoToResult(index, classValue, {
+            via: {
+              ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+              exportedName: classValue.localName,
+            },
+            resolution: "import",
+            confidence: "high",
+          });
+        }
+      }
       const targetMod = targetFile ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
       const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
       if (firstExport) {
@@ -316,6 +334,39 @@ export function resolveNamedDefinition(
           },
           resolution: "namespace",
           confidence: "medium",
+        });
+      }
+    }
+  }
+
+  // A local binding name always wins above so a grouped import's own aliases never collide with
+  // each other. An aliased import's source spelling is not itself a bound name anywhere in the
+  // file (Python: `from a import helper as h` binds only `h`; a bare `helper()` elsewhere is
+  // unbound and must stay not_found), so only resolve it when the click falls inside that exact
+  // import statement's own source-name token, never by re-matching the spelling anywhere else.
+  if (referenceIndex !== undefined) {
+    for (const imp of mod.imports) {
+      if (
+        imp.kind !== "named" ||
+        imp.local === imp.imported ||
+        support.normalizeIdentifier(imp.imported) !== normalizedName ||
+        !imp.importedRange ||
+        imp.importedRange.start.index === undefined ||
+        imp.importedRange.end.index === undefined ||
+        referenceIndex < imp.importedRange.start.index ||
+        referenceIndex >= imp.importedRange.end.index
+      ) {
+        continue;
+      }
+      const result = resolveImported(index, imp, imp.imported, cNamespace ? { cNamespace } : undefined);
+      if (result && !("namespace" in result)) {
+        return okGoToResult(index, result, {
+          via: {
+            ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+            exportedName: imp.imported,
+          },
+          resolution: "import",
+          confidence: "high",
         });
       }
     }

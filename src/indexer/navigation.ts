@@ -4,11 +4,15 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
+import { isGoExportedMemberName } from "./declaration-visibility.js";
+import { phpObjectCreationKeyword } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   csharpAliasQualifiedLookupName,
   findCsharpPartialTypeEquivalents,
   innermostNamespaceImport,
   resolveMemberAccessDefinition,
+  resolvePhpObjectCreationTarget,
+  resolveRubySuperDefinition,
   sharedOwnerMemberUnitComplete,
   resolveImplicitSelfMember,
   supportsReceiverMemberNavigation,
@@ -30,11 +34,13 @@ import {
   normalizePhpQualifiedReference,
   phpLastIdentifierSegment,
 } from "./navigation-php.js";
+import { resolveIndexedPhpClassReference } from "./php-namespace-symbols.js";
 import {
   buildIndexedCandidateCoverage,
   buildPhpQualifiedNames,
   cppCanonicalStructuralExport,
   describeReferenceStrategies,
+  ensurePhpNamespaceSymbolIndex,
   collectVerifiedNamedNodeReferences,
   type VerifiedNamedNodeReference,
   getCachedScope,
@@ -77,6 +83,7 @@ import {
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppQualifiedMemberContainer,
+  resolveCppUsingDirectiveNameAsync,
   resolveVisibleCppCallableNameAsync,
 } from "./navigation-cpp.js";
 import {
@@ -160,6 +167,7 @@ export async function goToDefinition(
   const sup = context.sup;
   const source = context.source;
   const tree = context.tree;
+  if (sup.id === "php") await ensurePhpNamespaceSymbolIndex(index);
 
   const pos = {
     row: Math.max(0, line - 1),
@@ -181,6 +189,20 @@ export async function goToDefinition(
 
   while (node && (node.type === "," || node.type === ".")) node = node.parent;
   if (!node) return { status: "not_found", reason: "No node at position" };
+
+  if (sup.id === "ruby" && node.type === "super") {
+    const target = await resolveRubySuperDefinition(index, mod, node, source, sup);
+    if (!target) return { status: "not_found", reason: "No matching Ruby superclass method" };
+    return okGoToResult(index, target, { resolution: "member-access", confidence: "medium" });
+  }
+  if (sup.id === "php") {
+    const keyword = phpObjectCreationKeyword(node, source, sup);
+    if (keyword) {
+      const created = resolvePhpObjectCreationTarget(index, mod, keyword, source, sup);
+      if (!created) return { status: "not_found", reason: "No matching PHP class" };
+      return okGoToResult(index, created, { resolution: "member-access", confidence: "medium" });
+    }
+  }
 
   const shorthandId = sup.nodeTypes.shorthandPropertyIdentifier ?? [];
   const isId = sup.nodeTypes.identifier.includes(node.type) || shorthandId.includes(node.type);
@@ -257,6 +279,7 @@ export async function goToDefinition(
       mod,
       node,
       source,
+      tree,
       sup,
       ...(scopeIndex
         ? {
@@ -410,6 +433,14 @@ export async function goToDefinition(
           confidence: "high",
         });
       }
+      const directed = await resolveCppUsingDirectiveNameAsync(index, mod, name, node, source, {
+        file,
+        parsed: { source, tree, sup },
+      });
+      if (directed !== undefined) {
+        if (!directed) return { status: "not_found", reason: "No unique C++ using-directive target" };
+        return okGoToResult(index, directed, { resolution: "import", confidence: "high" });
+      }
     }
 
     if (sup.supportsCrossModuleSymbols) {
@@ -434,6 +465,16 @@ export async function goToDefinition(
         }
       }
       if (resolvedName) return resolvedName;
+      if (sup.id === "php" && node) {
+        const phpClass = resolveIndexedPhpClassReference(index, source, tree, node, lookupName, mod.imports);
+        if (phpClass) {
+          return okGoToResult(index, phpClass, {
+            via: { exportedName: phpClass.localName },
+            resolution: "php-qualified",
+            confidence: "high",
+          });
+        }
+      }
     }
   }
 
@@ -541,7 +582,8 @@ export async function findRenameReferences(
  * file's module.locals holds an exact identity match (same file, kind, localName, and full range
  * span), restoring metadata such as `isMember` — followed by every equivalent
  * declaration/definition that reference collection itself proves: same-scope prototype/definition
- * pairs (C and C++), namespace-qualified equivalents, the in-class declaration for out-of-line
+ * pairs (C and C++), C prototypes linked to definitions through an include, namespace-qualified
+ * equivalents, the in-class declaration for out-of-line
  * member definitions, and out-of-line definitions for in-class member declarations linked through
  * the export index. Matching stays conservative: candidates must already exist in the definition
  * file's scope bindings or the export index with a proven signature; no name-only or arity-only
@@ -952,7 +994,16 @@ async function findReferencesInternal(
       }
       for (const exportedName of exportedNames) {
         if (hasReachedCollectionLimit()) break;
-        if (imp.kind === "namespace") {
+        const cjsModuleValue = imp.kind === "namespace" && imp.mechanism === "cjs" && exportedName === "default";
+        if (imp.kind === "namespace" && !cjsModuleValue) {
+          if (
+            !isGoExportedMemberName(
+              supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.id,
+              exportedName,
+            )
+          ) {
+            continue;
+          }
           const hit = resolveExport(index, targetFile, exportedName, exportOptions);
           const matchesDef =
             hit?.kind === "resolved"
@@ -963,9 +1014,16 @@ async function findReferencesInternal(
                 );
           if (!matchesDef) continue;
           const parsed = await ensureCandidateParsed();
+          // A python multi-segment dotted import (`import a.b`) binds only the first segment
+          // `a`; the source only ever repeats the whole dotted phrase to reach the resolved
+          // leaf module again (`a.b.symbol(...)`), never the bound local name alone. An aliased
+          // import (`import a.b as c`) binds that whole phrase to `c` directly instead, so `c`
+          // alone is the correct single-hop search name, same as any other namespace alias.
+          const namespaceSearchName =
+            imp.mechanism === "python" && imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS;
           const ranges = await collectNamespaceMemberRefs(
             fileId,
-            imp.localNS,
+            namespaceSearchName,
             exportedName,
             parsed,
             index.languageExtensions,
@@ -995,7 +1053,9 @@ async function findReferencesInternal(
           const ranges = await collectVerifiedNamedNodeReferences(
             index,
             fileId,
-            parsedContext.sup.id === "cpp" ? (exportedName.split("::").pop() ?? exportedName) : exportedName,
+            parsedContext.sup.id === "cpp" || parsedContext.sup.id === "ruby"
+              ? (exportedName.split("::").pop() ?? exportedName)
+              : exportedName,
             definition,
             (params, parsed) => goToDefinition(index, params, parsed),
             remainingReferences,
@@ -1014,9 +1074,10 @@ async function findReferencesInternal(
           }
         } else {
           let exported = exportedName;
+          const importedLocalName = imp.kind === "namespace" ? imp.localNS : imp.local;
           if (imp.kind === "named") {
             exported = imp.imported;
-          } else if (imp.kind === "default") {
+          } else if (imp.kind === "default" || cjsModuleValue) {
             exported = "default";
           }
           const hit = resolveExport(index, targetFile, exported, exportOptions);
@@ -1033,6 +1094,39 @@ async function findReferencesInternal(
             // Recover candidates, but prove each overload call through goToDefinition.
             // Structural visibility alone cannot attribute the import token.
             matchesDef = true;
+          }
+          // A python `from pkg import name` binds `name` from the package's own namespace.
+          // Usually that is a real re-exported symbol (handled above); when the package has no
+          // such export, Python's own import system falls back to treating `name` as an
+          // implicit submodule attribute instead. Reuse the namespace-style dotted scan the
+          // `imp.kind === "namespace"` branch above runs, rather than the bare-identifier scan
+          // this branch runs next, so a same-name use through the bound local still counts.
+          if (!matchesDef && imp.kind === "named" && imp.mechanism === "python") {
+            const importedResult = resolveImported(index, imp, exported, exportOptions);
+            const submoduleFile =
+              importedResult && "namespace" in importedResult ? importedResult.namespace : undefined;
+            if (
+              submoduleFile &&
+              [definition, ...equivalentDefinitions].some(
+                (candidate) => fileIdentityKey(submoduleFile) === fileIdentityKey(candidate.file),
+              )
+            ) {
+              const parsed = await ensureCandidateParsed();
+              const ranges = await collectNamespaceMemberRefs(
+                fileId,
+                imp.local,
+                exportedName,
+                parsed,
+                index.languageExtensions,
+                undefined,
+                module.imports,
+              );
+              for (const range of ranges) {
+                if (hasReachedCollectionLimit()) break;
+                pushRef({ file: fileId, range, via: { import: imp, namespaceMember: exportedName } });
+              }
+              continue;
+            }
           }
           if (!matchesDef) {
             // The requested export slot itself does not exist at all (as opposed to existing
@@ -1056,7 +1150,8 @@ async function findReferencesInternal(
                 (params, parsed) => goToDefinition(index, params, parsed),
                 remainingReferences,
                 verifiedReferenceFilter(fileId),
-                (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
+                (unavailableFile) =>
+                  receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
                 equivalentDefinitions,
               );
               for (const { range, provenance, via } of ranges) {
@@ -1087,7 +1182,7 @@ async function findReferencesInternal(
             const ranges = await collectVerifiedNamedNodeReferences(
               index,
               fileId,
-              scansQualifiedCppImport ? (imp.local.split("::").pop() ?? imp.local) : imp.local,
+              scansQualifiedCppImport ? (importedLocalName.split("::").pop() ?? importedLocalName) : importedLocalName,
               definition,
               (params, parsed) => goToDefinition(index, params, parsed),
               remainingReferences,
@@ -1108,7 +1203,7 @@ async function findReferencesInternal(
           }
           const parsed = await ensureCandidateParsed();
           const resolvedScope = await ensureScope();
-          const localName = parsed.sup.normalizeIdentifier(imp.local);
+          const localName = parsed.sup.normalizeIdentifier(importedLocalName);
           const declarationKeys = importBindingDeclarationRangeKeys(module);
           const bindings = resolvedScope.bindings.get(localName) ?? [];
           for (const binding of bindings) {
@@ -1333,10 +1428,118 @@ type CppEquivalentCallableFamily = {
 };
 
 /**
+ * Reverse include edges for one index. Rebuilt only when the index object is
+ * new, matching the WeakMap caches in navigation-references.ts.
+ */
+const cIncludedByCache = new WeakMap<ProjectIndex, Map<string, readonly string[]>>();
+
+function cIncludedBy(index: ProjectIndex): Map<string, readonly string[]> {
+  const cached = cIncludedByCache.get(index);
+  if (cached) return cached;
+  const includedBy = new Map<string, string[]>();
+  for (const moduleEntry of index.byFile.values()) {
+    const includerKey = fileIdentityKey(moduleEntry.file);
+    for (const imp of moduleEntry.imports) {
+      if (typeof imp.resolved !== "string") continue;
+      const includedKey = fileIdentityKey(imp.resolved);
+      const includers = includedBy.get(includedKey);
+      if (includers) includers.push(includerKey);
+      else includedBy.set(includedKey, [includerKey]);
+    }
+  }
+  const stored = new Map<string, readonly string[]>();
+  for (const [key, includers] of includedBy) stored.set(key, includers);
+  cIncludedByCache.set(index, stored);
+  return stored;
+}
+
+/**
  * Single calculation behind reference collection and getCppEquivalentCallableDefinitions: resolves
  * the receiver owner, the normalized reference name, the definition-site scope binding, and the
  * proven equivalent definition family for one callable definition site.
  */
+function cIncludeLinkedFileKeys(index: ProjectIndex, startFile: string): Set<string> {
+  const startKey = fileIdentityKey(startFile);
+  const includedBy = cIncludedBy(index);
+  const linked = new Set<string>();
+  const walk = (origin: string, neighbors: (key: string) => readonly string[]) => {
+    const pending = [origin];
+    const seen = new Set<string>([origin]);
+    while (pending.length) {
+      const current = pending.pop()!;
+      for (const neighbor of neighbors(current)) {
+        if (seen.has(neighbor)) continue;
+        seen.add(neighbor);
+        linked.add(neighbor);
+        pending.push(neighbor);
+      }
+    }
+  };
+  walk(startKey, (key) => {
+    const moduleEntry = index.byFile.get(key);
+    if (!moduleEntry) return [];
+    const included: string[] = [];
+    for (const imp of moduleEntry.imports) {
+      if (typeof imp.resolved === "string") included.push(fileIdentityKey(imp.resolved));
+    }
+    return included;
+  });
+  walk(startKey, (key) => includedBy.get(key) ?? []);
+  linked.delete(startKey);
+  return linked;
+}
+
+/**
+ * C prototype and definition of one signature, joined only when one file includes
+ * the other. Two translation units that merely share an unrelated header stay apart,
+ * and `static` functions are not exports so they never join the family.
+ */
+async function cIncludeLinkedCallableEquivalents(
+  index: ProjectIndex,
+  def: SymbolDef,
+  definitionNameNode: SyntaxNodeLike,
+): Promise<SymbolDef[]> {
+  if (def.kind !== SymbolKind.Function || def.cTag) return [];
+  const expected = cppCallableShapeForNode(definitionNameNode);
+  if (!expected) return [];
+  const origin = index.byFile.get(fileIdentityKey(def.file));
+  const exported = origin?.exports.some(
+    (entry) => entry.type === "local" && sameDef(entry.target, def, index.languageExtensions),
+  );
+  if (!exported) return [];
+  const equivalents = new Map<string, SymbolDef>();
+  for (const fileKey of cIncludeLinkedFileKeys(index, def.file)) {
+    const moduleEntry = index.byFile.get(fileKey);
+    if (!moduleEntry) continue;
+    const candidates: SymbolDef[] = [];
+    for (const entry of moduleEntry.exports) {
+      if (entry.type !== "local") continue;
+      if (entry.exportedAs !== def.localName || entry.target.localName !== def.localName) continue;
+      if (entry.target.kind !== SymbolKind.Function || entry.target.cTag) continue;
+      candidates.push(entry.target);
+    }
+    if (!candidates.length) continue;
+    let candidateParsed: ParsedFileContext;
+    try {
+      candidateParsed = await ensureParsedContext(
+        moduleEntry.file,
+        index.parsed?.get(fileKey),
+        index.languageExtensions,
+      );
+    } catch {
+      continue;
+    }
+    if (candidateParsed.sup.id !== "c") continue;
+    for (const candidate of candidates) {
+      if (sameDef(candidate, def, index.languageExtensions)) continue;
+      const candidateNode = syntaxNodeForDefinition(candidateParsed, candidate);
+      if (cppCallableShapeForNode(candidateNode)?.signature !== expected.signature) continue;
+      equivalents.set(referenceSiteKey(candidate.file, candidate.range), candidate);
+    }
+  }
+  return [...equivalents.values()];
+}
+
 async function cppEquivalentCallableFamily(
   index: ProjectIndex,
   def: SymbolDef,
@@ -1399,6 +1602,13 @@ async function cppEquivalentCallableFamily(
     equivalents = [
       ...sameFileFunctionEquivalentDefinitions,
       ...(await cppNamespaceFunctionEquivalentDefinitions(index, definition, context, definitionNameNode)),
+    ];
+  } else if (context.sup.id === "c" && definition.kind === SymbolKind.Function && !definition.cTag) {
+    const linked = await cIncludeLinkedCallableEquivalents(index, definition, definitionNameNode);
+    const seen = new Set(sameFileFunctionEquivalentDefinitions.map((item) => referenceSiteKey(item.file, item.range)));
+    equivalents = [
+      ...sameFileFunctionEquivalentDefinitions,
+      ...linked.filter((item) => !seen.has(referenceSiteKey(item.file, item.range))),
     ];
   } else {
     equivalents = sameFileFunctionEquivalentDefinitions;
@@ -1631,10 +1841,17 @@ export async function collectNamespaceMemberRefs(
   const walk = (node: SyntaxNodeLike): void => {
     if (isMemberAccessNode(sup, node)) {
       const { object: obj, property: prop } = getMemberAccessParts(sup, node);
-      if (obj && prop && isMemberObjectIdentifier(obj.type) && isMemberReferencePropertyIdentifier(sup, prop.type)) {
+      if (obj && prop && isMemberReferencePropertyIdentifier(sup, prop.type)) {
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
-        if (normalize(objectName) === normalizedNs && normalize(propertyName) === normalizedMember) {
+        // A python multi-segment dotted import (`import a.b`) binds only the first segment;
+        // the source only ever repeats the whole dotted phrase to reach the resolved leaf
+        // module again, so `ns` can be that literal phrase and `obj` a compound chain rather
+        // than the single bare identifier every other caller passes.
+        const objectMatches = normalizedNs.includes(".")
+          ? normalize(objectName) === normalizedNs
+          : isMemberObjectIdentifier(obj.type) && normalize(objectName) === normalizedNs;
+        if (objectMatches && normalize(propertyName) === normalizedMember) {
           const inAliasScope =
             sup.id !== "csharp" ||
             !namespaceImport ||
