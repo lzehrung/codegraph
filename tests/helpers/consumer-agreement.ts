@@ -27,12 +27,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
-import {
-  buildProjectIndex,
-  findReferences,
-  goToDefinition,
-  type ProjectIndex,
-} from "../../src/index.js";
+import { buildProjectIndex, findReferences, goToDefinition, type ProjectIndex } from "../../src/index.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../../src/graphs/symbol-graph-detailed.js";
 import { normalizePath } from "../../src/util/paths.js";
@@ -112,7 +107,12 @@ export function findDetailedNode(
 }
 
 /** Whether `buildSymbolGraphDetailed` has an edge with `label` from `fromId` to `toId`. */
-export function hasDetailedEdge(fixture: ConsumerAgreementFixture, fromId: string, toId: string, label: string): boolean {
+export function hasDetailedEdge(
+  fixture: ConsumerAgreementFixture,
+  fromId: string,
+  toId: string,
+  label: string,
+): boolean {
   return fixture.graph.edges.some((edge) => edge.from === fromId && edge.to === toId && edge.label === label);
 }
 
@@ -249,9 +249,7 @@ function assertEdges(
     const description =
       `detailed-graph "${edgeSpec.label}" edge ${edgeSpec.from.name} (${edgeSpec.from.file}) -> ` +
       `${toName} (${toFile}), from site ${siteLabel}; edges from ${edgeSpec.from.name}: [${fromEdges}]`;
-    expect(present, edgeSpec.absent ? `expected NO ${description}` : `expected ${description}`).toBe(
-      !edgeSpec.absent,
-    );
+    expect(present, edgeSpec.absent ? `expected NO ${description}` : `expected ${description}`).toBe(!edgeSpec.absent);
   }
 }
 
@@ -339,14 +337,7 @@ export async function assertConsumerAgreement(
     expect(goto.status, `goToDefinition(${label})`).toBe("not_found");
     if (site.sameNameDeclaration) {
       const refs = await referencesFromDeclaration(fixture, site.sameNameDeclaration);
-      expectDeclarationExcludesSite(
-        refs,
-        site.sameNameDeclaration,
-        file,
-        site.line,
-        label,
-        site.provablyNotAReference,
-      );
+      expectDeclarationExcludesSite(refs, site.sameNameDeclaration, file, site.line, label, site.provablyNotAReference);
       if (site.edges && refs.status === "ok") {
         const toNode = nodeForDefinition(fixture, refs.definition);
         assertEdges(fixture, label, site.edges, {
@@ -384,10 +375,7 @@ export async function assertConsumerAgreement(
           `findReferences(${site.expected.file}:${site.expected.line}) coverage ${JSON.stringify(refs.referenceCoverage)}`,
         ).toBe("complete");
       } else {
-        expect(
-          listed,
-          `findReferences(${site.expected.file}:${site.expected.line}) must include ${label}`,
-        ).toBe(true);
+        expect(listed, `findReferences(${site.expected.file}:${site.expected.line}) must include ${label}`).toBe(true);
       }
       if (!site.keywordReceiver && site.requireCompleteCoverage) {
         expect(

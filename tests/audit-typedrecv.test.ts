@@ -66,9 +66,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
       }
 
       const graph = await buildSymbolGraphDetailed(p.index);
-      const calls = graph.edges.filter(
-        (edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "hello",
-      );
+      const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "hello");
       expect(calls).toHaveLength(1);
     });
 
@@ -128,7 +126,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
     it("decoy: a generic type parameter T is not a proven receiver type", async () => {
       const text = [
         "public class Box<T> {",
-        "  static class Other { String hello() { return \"nope\"; } }",
+        '  static class Other { String hello() { return "nope"; } }',
         "  String use(T item) {",
         "    return item.hello();",
         "  }",
@@ -165,9 +163,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
       }
 
       const graph = await buildSymbolGraphDetailed(p.index);
-      const calls = graph.edges.filter(
-        (edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "run",
-      );
+      const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "run");
       expect(calls).toHaveLength(1);
     });
 
@@ -224,7 +220,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
   describe("H2: Kotlin companion-object factory", () => {
     it("resolves Widget.create() to the companion-object member", async () => {
       const text =
-        'class Widget(val id: Int) {\n  companion object {\n    fun create(): Widget = Widget(0)\n  }\n}\nfun use(): Widget = Widget.create()\n';
+        "class Widget(val id: Int) {\n  companion object {\n    fun create(): Widget = Widget(0)\n  }\n}\nfun use(): Widget = Widget.create()\n";
       const p = await fixture("cg-h2-companion-", { "w.kt": text });
 
       const goto = await goToDefinition(p.index, { file: p.f("w.kt"), ...locate(text, "create", 1) });
@@ -239,9 +235,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
       }
 
       const graph = await buildSymbolGraphDetailed(p.index);
-      const calls = graph.edges.filter(
-        (edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "create",
-      );
+      const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "create");
       expect(calls).toHaveLength(1);
     });
 
@@ -324,9 +318,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
       }
 
       const graph = await buildSymbolGraphDetailed(p.index);
-      const calls = graph.edges.filter(
-        (edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Value",
-      );
+      const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Value");
       expect(calls).toHaveLength(1);
     });
 

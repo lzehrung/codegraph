@@ -104,13 +104,17 @@ describe("W14: class named like its own module through a package re-export", () 
         if (result.status !== "ok") return;
         expect(result.referenceCoverage.state).toBe("complete");
 
-        const sites = result.references.map((reference) => `${fileIdentityKey(reference.file)}:${reference.range.start.line}`);
+        const sites = result.references.map(
+          (reference) => `${fileIdentityKey(reference.file)}:${reference.range.start.line}`,
+        );
         expect(sites).toContain(`${fileIdentityKey(f("pkg/__init__.py"))}:1`);
         expect(sites).toContain(`${fileIdentityKey(f("main.py"))}:1`);
         expect(sites).toContain(`${fileIdentityKey(f("main.py"))}:3`);
-        expect(result.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(f("decoy_pkg/widget.py")))).toBe(
-          false,
-        );
+        expect(
+          result.references.some(
+            (reference) => fileIdentityKey(reference.file) === fileIdentityKey(f("decoy_pkg/widget.py")),
+          ),
+        ).toBe(false);
       },
     );
   });
@@ -173,9 +177,13 @@ describe("W15: import pkg.mod then pkg.mod.foo()", () => {
         expect(result.status).toBe("ok");
         if (result.status !== "ok") return;
         expect(result.referenceCoverage.state).toBe("complete");
-        const sites = result.references.map((reference) => `${fileIdentityKey(reference.file)}:${reference.range.start.line}`);
+        const sites = result.references.map(
+          (reference) => `${fileIdentityKey(reference.file)}:${reference.range.start.line}`,
+        );
         expect(sites).toContain(`${fileIdentityKey(f("main.py"))}:3`);
-        expect(result.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(f("other.py")))).toBe(false);
+        expect(
+          result.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(f("other.py"))),
+        ).toBe(false);
       },
     );
   });
@@ -201,7 +209,9 @@ describe("W15: import pkg.mod then pkg.mod.foo()", () => {
         expect(result.status).toBe("ok");
         if (result.status !== "ok") return;
         expect(result.referenceCoverage.state).toBe("complete");
-        const sites = result.references.map((reference) => `${fileIdentityKey(reference.file)}:${reference.range.start.line}`);
+        const sites = result.references.map(
+          (reference) => `${fileIdentityKey(reference.file)}:${reference.range.start.line}`,
+        );
         expect(sites).toContain(`${fileIdentityKey(f("from_import.py"))}:3`);
         expect(sites).toContain(`${fileIdentityKey(f("aliased.py"))}:3`);
       },
@@ -250,7 +260,11 @@ describe("H11: source-side name in an aliased Python import", () => {
       { "a.py": aSource, "b.py": bSource, "decoy.py": decoySource },
       async (_root, f) => {
         const index = await buildProjectIndex(_root, { cache: "off" });
-        const result = await findReferences(index, { file: f("a.py"), line: 1, column: columnOf(aSource, 1, "helper") });
+        const result = await findReferences(index, {
+          file: f("a.py"),
+          line: 1,
+          column: columnOf(aSource, 1, "helper"),
+        });
         expect(result.status).toBe("ok");
         if (result.status !== "ok") return;
         expect(result.referenceCoverage.state).toBe("complete");
@@ -259,7 +273,9 @@ describe("H11: source-side name in an aliased Python import", () => {
           .map((reference) => reference.range.start.column);
         expect(bFileSites).toContain(columnOf(bSource, 1, "helper"));
         expect(bFileSites).toContain(columnOf(bSource, 1, "helper_alias"));
-        expect(result.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(f("decoy.py")))).toBe(false);
+        expect(
+          result.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(f("decoy.py"))),
+        ).toBe(false);
       },
     );
   });
@@ -271,19 +287,30 @@ describe("H11: source-side name in an aliased Python import", () => {
     const source = "from a import helper as h\n\nh()\nhelper()\n";
     await withFixture("cg-audit-h11-unbound-", { "a.py": aSource, "b.py": source }, async (_root, f) => {
       const index = await buildProjectIndex(_root, { cache: "off" });
-      const importToken = await goToDefinition(index, { file: f("b.py"), line: 1, column: columnOf(source, 1, "helper") });
+      const importToken = await goToDefinition(index, {
+        file: f("b.py"),
+        line: 1,
+        column: columnOf(source, 1, "helper"),
+      });
       expect(importToken.status).toBe("ok");
       const aliasUse = await goToDefinition(index, { file: f("b.py"), line: 3, column: columnOf(source, 3, "h") });
       expect(aliasUse.status).toBe("ok");
-      const unboundUse = await goToDefinition(index, { file: f("b.py"), line: 4, column: columnOf(source, 4, "helper") });
+      const unboundUse = await goToDefinition(index, {
+        file: f("b.py"),
+        line: 4,
+        column: columnOf(source, 4, "helper"),
+      });
       expect(unboundUse.status).toBe("not_found");
 
       const refs = await findReferences(index, { file: f("a.py"), line: 1, column: columnOf(aSource, 1, "helper") });
       expect(refs.status).toBe("ok");
       if (refs.status !== "ok") return;
-      expect(refs.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(f("b.py")) && reference.range.start.line === 4)).toBe(
-        false,
-      );
+      expect(
+        refs.references.some(
+          (reference) =>
+            fileIdentityKey(reference.file) === fileIdentityKey(f("b.py")) && reference.range.start.line === 4,
+        ),
+      ).toBe(false);
     });
   });
 });
@@ -344,7 +371,8 @@ describe("H12 (Python): super() through a proven base class", () => {
 
   it("resolves a cross-file super() call to an imported base member", async () => {
     const baseSource = "class Base:\n    def greet(self):\n        return 1\n";
-    const derivedSource = "from base import Base\n\nclass Derived(Base):\n    def greet(self):\n        return super().greet()\n";
+    const derivedSource =
+      "from base import Base\n\nclass Derived(Base):\n    def greet(self):\n        return super().greet()\n";
     await withFixture(
       "cg-audit-h12-crossfile-",
       { "base.py": baseSource, "derived.py": derivedSource },
@@ -370,7 +398,8 @@ describe("H12 (Python): super() through a proven base class", () => {
         expect(refs.referenceCoverage.state).toBe("complete");
         expect(
           refs.references.some(
-            (reference) => fileIdentityKey(reference.file) === fileIdentityKey(f("derived.py")) && reference.range.start.line === 5,
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(f("derived.py")) && reference.range.start.line === 5,
           ),
         ).toBe(true);
       },

@@ -109,7 +109,8 @@ export function declaredPackagesForContext(importerFile: string, projectRoot: st
   // cross-project-boundary support.
   const rootBoundary = projectRoot ? path.resolve(projectRoot) : null;
   const manifestSearchStop = vcsBoundary ?? rootBoundary;
-  const boundary = nearestManifestAncestor(ancestorSearchStart, manifestSearchStop) ?? rootBoundary ?? ancestorSearchStart;
+  const boundary =
+    nearestManifestAncestor(ancestorSearchStart, manifestSearchStop) ?? rootBoundary ?? ancestorSearchStart;
   if (!isSameOrInside(importerDirectory, boundary)) {
     return dependencyManifestForDirectory(boundary).declaredPackages;
   }

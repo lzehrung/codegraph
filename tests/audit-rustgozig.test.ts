@@ -143,7 +143,8 @@ describe("Go unexported cross-package access (W11)", () => {
   it("rejects goto/references/calls-edge for an unexported cross-package selector while same-package peer and exported access keep working", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-w11-"));
     try {
-      const util = "package util\n\nfunc Square(x float64) float64 { return x * x }\n\nfunc hidden() int { return 2 }\n";
+      const util =
+        "package util\n\nfunc Square(x float64) float64 { return x * x }\n\nfunc hidden() int { return 2 }\n";
       const util2 = "package util\n\nfunc callHiddenFromPeer() int {\n\treturn hidden()\n}\n";
       const main =
         'package main\n\nimport u "example.com/proj/util"\n\nfunc main() {\n\t_ = u.Square(3.0)\n\t_ = u.hidden()\n}\n';
@@ -256,7 +257,11 @@ describe("Zig self.method() references (W16)", () => {
         .map((reference) => `${fileIdentityKey(reference.file)}:${reference.range.start.line}`)
         .sort();
       expect(refSites).toEqual(
-        [`${fileIdentityKey(shapesFile)}:3`, `${fileIdentityKey(shapesFile)}:4`, `${fileIdentityKey(usageFile)}:4`].sort(),
+        [
+          `${fileIdentityKey(shapesFile)}:3`,
+          `${fileIdentityKey(shapesFile)}:4`,
+          `${fileIdentityKey(usageFile)}:4`,
+        ].sort(),
       );
       expect(refs.referenceCoverage?.state).toBe("complete");
 
@@ -267,9 +272,9 @@ describe("Zig self.method() references (W16)", () => {
       )?.[0];
       expect(describeId).toBeDefined();
       expect(circleAreaId).toBeDefined();
-      expect(graph.edges.some((edge) => edge.from === describeId && edge.to === circleAreaId && edge.label === "calls")).toBe(
-        true,
-      );
+      expect(
+        graph.edges.some((edge) => edge.from === describeId && edge.to === circleAreaId && edge.label === "calls"),
+      ).toBe(true);
 
       const decoyRefs = await findReferences(index, {
         file: decoyFile,
@@ -336,7 +341,11 @@ describe("Rust/Zig honest fixes (H13)", () => {
       const index = await buildProjectIndex(root, { cache: "off" });
       const libFile = path.join(root, "src/lib.rs");
 
-      const goto = await goToDefinition(index, { file: libFile, line: 5, column: columnOf(src.split("\n")[4]!, "area") });
+      const goto = await goToDefinition(index, {
+        file: libFile,
+        line: 5,
+        column: columnOf(src.split("\n")[4]!, "area"),
+      });
       expect(goto.status).toBe("ok");
       if (goto.status === "ok") {
         expect(goto.definition.range.start.line).toBe(2);
@@ -408,7 +417,11 @@ describe("Rust/Zig honest fixes (H13)", () => {
       const mainFile = path.join(root, "main.zig");
       const shapesFile = path.join(root, "shapes.zig");
 
-      const goto = await goToDefinition(index, { file: mainFile, line: 4, column: columnOf(main.split("\n")[3]!, "area") });
+      const goto = await goToDefinition(index, {
+        file: mainFile,
+        line: 4,
+        column: columnOf(main.split("\n")[3]!, "area"),
+      });
       expect(goto.status).toBe("ok");
       if (goto.status === "ok") {
         expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(shapesFile));

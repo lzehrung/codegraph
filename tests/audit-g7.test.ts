@@ -100,14 +100,10 @@ describe("Rust impl methods own member_of edges and calls edges (G7)", () => {
       expect(graph.nodes.has(circleAreaId)).toBe(true);
       expect(graph.nodes.has(squareAreaId)).toBe(true);
       expect(
-        graph.edges.some(
-          (edge) => edge.label === "member_of" && edge.from === circleAreaId && edge.to === circleId,
-        ),
+        graph.edges.some((edge) => edge.label === "member_of" && edge.from === circleAreaId && edge.to === circleId),
       ).toBe(true);
       expect(
-        graph.edges.some(
-          (edge) => edge.label === "member_of" && edge.from === squareAreaId && edge.to === squareId,
-        ),
+        graph.edges.some((edge) => edge.label === "member_of" && edge.from === squareAreaId && edge.to === squareId),
       ).toBe(true);
 
       const totalCalls = graph.edges.filter((edge) => edge.label === "calls" && edge.from === totalId);
@@ -197,9 +193,13 @@ describe("Rust impl methods own member_of edges and calls edges (G7)", () => {
       const getId = defNodeIdAt(libFile, lib, "get", 0);
       const totalId = defNodeIdAt(libFile, lib, "total", 0);
 
-      expect(graph.edges.some((edge) => edge.label === "member_of" && edge.from === describeId && edge.to === shapeId)).toBe(true);
       expect(
-        graph.edges.some((edge) => edge.label === "member_of" && edge.from === decoyDescribeId && edge.to === decoyTraitId),
+        graph.edges.some((edge) => edge.label === "member_of" && edge.from === describeId && edge.to === shapeId),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) => edge.label === "member_of" && edge.from === decoyDescribeId && edge.to === decoyTraitId,
+        ),
       ).toBe(true);
       expect(
         graph.edges.some((edge) => edge.label === "member_of" && edge.from === circleAreaId && edge.to === circleId),
@@ -207,7 +207,9 @@ describe("Rust impl methods own member_of edges and calls edges (G7)", () => {
       expect(
         graph.edges.some((edge) => edge.label === "member_of" && edge.from === squareAreaId && edge.to === squareId),
       ).toBe(true);
-      expect(graph.edges.some((edge) => edge.label === "member_of" && edge.from === getId && edge.to === wrapperId)).toBe(true);
+      expect(
+        graph.edges.some((edge) => edge.label === "member_of" && edge.from === getId && edge.to === wrapperId),
+      ).toBe(true);
 
       const totalCalls = graph.edges.filter((edge) => edge.label === "calls" && edge.from === totalId);
       expect(totalCalls.map((edge) => edge.to).sort()).toEqual([circleAreaId, describeId].sort());

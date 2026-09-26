@@ -255,7 +255,12 @@ const h6 = {
     "  public String use(Greeter g) { return g.hello(); }",
     "}",
   ]),
-  "decoy/Greeter.java": src(["package decoy;", "public class Greeter {", '  public String hello() { return "no"; }', "}"]),
+  "decoy/Greeter.java": src([
+    "package decoy;",
+    "public class Greeter {",
+    '  public String hello() { return "no"; }',
+    "}",
+  ]),
 };
 
 const w3 = {
@@ -525,7 +530,12 @@ const w2 = {
     '  render(): string { return "d"; }',
     "}",
   ]),
-  "use.ts": src(['import Widget from "./widget";', "export function run(): string {", "  return new Widget().render();", "}"]),
+  "use.ts": src([
+    'import Widget from "./widget";',
+    "export function run(): string {",
+    "  return new Widget().render();",
+    "}",
+  ]),
 };
 
 const w4 = {
@@ -632,7 +642,14 @@ const uses = (fromFile: string, fromName: string): AgreementRow["edge"] => ({
 });
 
 const rows: AgreementRow[] = [
-  useRow("W9", "C", w9, { file: "run.c", line: 3, token: "compute" }, { file: "util.h", line: 3 }, calls("run.c", "run")),
+  useRow(
+    "W9",
+    "C",
+    w9,
+    { file: "run.c", line: 3, token: "compute" },
+    { file: "util.h", line: 3 },
+    calls("run.c", "run"),
+  ),
   decoyRow(
     "W9",
     "C",
@@ -776,7 +793,14 @@ const rows: AgreementRow[] = [
     calls("b/User.java", "use"),
   ),
 
-  useRow("W3", "JavaScript", w3, { file: "use.js", line: 2, token: "helper" }, { file: "util.js", line: 1 }, calls("use.js", "run")),
+  useRow(
+    "W3",
+    "JavaScript",
+    w3,
+    { file: "use.js", line: 2, token: "helper" },
+    { file: "util.js", line: 1 },
+    calls("use.js", "run"),
+  ),
   decoyRow(
     "W3",
     "JavaScript",
@@ -810,7 +834,14 @@ const rows: AgreementRow[] = [
     "the receiver is class Box, not class Decoy",
     calls("Box.kt", "useInvalid"),
   ),
-  useRow("H2", "Kotlin", h2, { file: "w.kt", line: 9, token: "create" }, { file: "w.kt", line: 3 }, calls("w.kt", "use")),
+  useRow(
+    "H2",
+    "Kotlin",
+    h2,
+    { file: "w.kt", line: 9, token: "create" },
+    { file: "w.kt", line: 3 },
+    calls("w.kt", "use"),
+  ),
   decoyRow(
     "H2",
     "Kotlin",
@@ -837,7 +868,14 @@ const rows: AgreementRow[] = [
     "w is a Widget, so the call is the extension, not Gadget.describe",
     calls("w.kt", "use"),
   ),
-  useRow("H14", "Kotlin", h14, { file: "G.kt", line: 9, token: "describe" }, { file: "G.kt", line: 2 }, calls("G.kt", "use")),
+  useRow(
+    "H14",
+    "Kotlin",
+    h14,
+    { file: "G.kt", line: 9, token: "describe" },
+    { file: "G.kt", line: 2 },
+    calls("G.kt", "use"),
+  ),
   decoyRow(
     "H14",
     "Kotlin",

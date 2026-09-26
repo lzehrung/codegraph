@@ -691,14 +691,20 @@ function compositeLiteralTypeName(expr: SyntaxNodeLike, source: string, sup: Lan
   }
   // tree-sitter-go composite_literal, tree-sitter-zig struct_initializer, tree-sitter-rust
   // struct_expression: `Type { field: value }` / `Type{ .field = value }`.
-  if (current.type !== "composite_literal" && current.type !== "struct_initializer" && current.type !== "struct_expression") {
+  if (
+    current.type !== "composite_literal" &&
+    current.type !== "struct_initializer" &&
+    current.type !== "struct_expression"
+  ) {
     return null;
   }
   const typeNode =
     current.childForFieldName("type") ??
     current.namedChildren.find(
       (child) =>
-        child.type === "type_identifier" || child.type === "identifier" || child.type === sup.nodeTypes.memberExpression,
+        child.type === "type_identifier" ||
+        child.type === "identifier" ||
+        child.type === sup.nodeTypes.memberExpression,
     ) ??
     null;
   // A qualified literal type (Zig `ns.Struct{...}`) has no dedicated `type` field and is not a

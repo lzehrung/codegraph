@@ -194,7 +194,8 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
 
   it("Java: instance method call through a constructed local, cross-file", async () => {
     const fixture = await buildConsumerAgreementFixture("cg-audit-spread-java-", {
-      "com/example/Helper.java": "package com.example;\n\npublic class Helper {\n    public int compute() {\n        return 1;\n    }\n}\n",
+      "com/example/Helper.java":
+        "package com.example;\n\npublic class Helper {\n    public int compute() {\n        return 1;\n    }\n}\n",
       "com/example/use/Runner.java":
         "package com.example.use;\n\nimport com.example.Helper;\n\npublic class Runner {\n" +
         "    public int run() {\n        Helper h = new Helper();\n        return h.compute();\n    }\n}\n",
@@ -214,7 +215,8 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
 
   it("C#: static method call through an explicit using, cross-file", async () => {
     const fixture = await buildConsumerAgreementFixture("cg-audit-spread-cs-", {
-      "Helper.cs": "namespace Example {\n  public class Helper {\n    public static int Compute() {\n      return 1;\n    }\n  }\n}\n",
+      "Helper.cs":
+        "namespace Example {\n  public class Helper {\n    public static int Compute() {\n      return 1;\n    }\n  }\n}\n",
       "Runner.cs":
         "using Example;\n\nnamespace Consumer {\n  public class Runner {\n    public int Run() {\n      return Helper.Compute();\n    }\n  }\n}\n",
     });
@@ -292,7 +294,8 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
 
   it("PHP: static call through an explicit use import, cross-file", async () => {
     const fixture = await buildConsumerAgreementFixture("cg-audit-spread-php-", {
-      "Helper.php": "<?php\nnamespace App;\n\nclass Helper {\n  public static function compute() {\n    return 1;\n  }\n}\n",
+      "Helper.php":
+        "<?php\nnamespace App;\n\nclass Helper {\n  public static function compute() {\n    return 1;\n  }\n}\n",
       "run.php": "<?php\nnamespace Consumer;\n\nuse App\\Helper;\n\nfunction run() {\n  return Helper::compute();\n}\n",
     });
     try {
