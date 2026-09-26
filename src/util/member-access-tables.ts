@@ -265,7 +265,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     ],
     receiverKeywords: { own: ["self"], instanceOwn: ["self"], supertype: [] },
     receiverAncestry: {
-      clauses: [{ nodeType: "superclass", relation: "extends" }],
+      clauses: [{ nodeType: "superclass", relation: "extends", supertype: "all" }],
       mixinCalls: ["include", "extend", "prepend"],
     },
   },

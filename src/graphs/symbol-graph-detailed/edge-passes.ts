@@ -7,9 +7,10 @@ import {
   isSwiftFileHiddenSharedOwnerMember,
 } from "../../indexer/declaration-visibility.js";
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
-import { resolveNamedDefinition } from "../../indexer/navigation-local.js";
 import {
   isDirectKeywordMemberDeclaration,
+  resolvePhpObjectCreationTarget,
+  resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
@@ -40,6 +41,7 @@ import { collectNodesByType, declarationMemberArity, findFirstNodeByType, isIden
 import {
   CALL_ARGUMENT_NODE_TYPES,
   classifyReceiver,
+  constructionTypeName,
   declarationNodeIsStatic,
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberDeclarationNode,
@@ -47,8 +49,10 @@ import {
   declaresMembers,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
+  memberContainerDef,
   nearestMemberContainer,
   nodeInStaticMemberContext,
+  phpObjectCreationKeyword,
   receiverCallAccess,
   supportsImplicitSelfMemberCalls,
   supportsReceiverMemberOverloads,
@@ -609,7 +613,12 @@ function unwrapGoNamedType(node: SyntaxNodeLike): SyntaxNodeLike | null {
 }
 
 /** Type-like defs only, so a PHP `use function` alias cannot steal `Example::m()`. */
-function resolveNamedType(context: EdgePassContext, name: string, node: SyntaxNodeLike): SymbolDef | null {
+function resolveNamedType(
+  context: EdgePassContext,
+  name: string,
+  node: SyntaxNodeLike,
+  rubyConstructed = false,
+): SymbolDef | null {
   const target = context.resolveIdentifier(name, node);
   if (target && declaresMembers(target)) return target;
   // A parameter/annotation type name is a closer scope binding than the class it names.
@@ -619,7 +628,12 @@ function resolveNamedType(context: EdgePassContext, name: string, node: SyntaxNo
   );
   if (typed.length === 1) return typed[0]!;
   const imported = context.aliasToTargetDef.get(name);
-  return imported && declaresMembers(imported) ? imported : null;
+  if (imported && declaresMembers(imported)) return imported;
+  // Only a constructed `Klass.new` type uses Ruby's bare-constant visibility, and
+  // only when this file does not already have several classes of that name.
+  // Inheritance names stay on resolveIdentifier so an unproven superclass is not invented.
+  if (!rubyConstructed || typed.length > 1) return null;
+  return resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
 }
 
 /**
@@ -811,7 +825,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         ? getCallArgumentCount({ languageId: context.sup.id, source: context.source, call: node })
         : null;
       if (binding.kind === "named-type") {
-        const typeDef = resolveNamedType(context, binding.typeName, access.receiver);
+        const typeDef = resolveNamedType(context, binding.typeName, access.receiver, binding.constructed);
         if (!typeDef) return;
         context.receiverCalls.push({
           callerId: fromId,
@@ -957,7 +971,27 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       if (!tryResolveNode(context, callee, fromId, "calls")) recordImplicitSelfMemberCall(node, callee);
     };
 
+    const recordRubySuper = (superNode: SyntaxNodeLike): void => {
+      const container = nearestMemberContainer(fn.node);
+      if (!container || container.type !== "class") return;
+      const owner = memberContainerDef(context.moduleEntry, container);
+      if (!owner) return;
+      context.receiverCalls.push({
+        callerId: fromId,
+        ownerId: ensureNode(context, owner),
+        viaSupertypes: true,
+        memberName: fn.def.localName,
+        argumentCount: null,
+        site: { file: context.moduleEntry.file, range: toRange(superNode) },
+        memberScope: "any",
+      });
+    };
+
     const recordCallOrInstantiation = (node: SyntaxNodeLike): boolean => {
+      if (context.sup.id === "ruby" && node.type === "super") {
+        recordRubySuper(node);
+        return true;
+      }
       if (callNodeTypes.has(node.type)) {
         if (context.sup.id === "go") {
           const callTarget = getCallTarget(node);
@@ -977,19 +1011,45 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           const receiverNode = node.childForFieldName("receiver");
           const methodName = methodNode ? sliceText(methodNode, context.source) : null;
           if (methodName === "new" && receiverNode) {
-            tryResolveNode(context, receiverNode, fromId, "instantiates");
+            const recorded = tryResolveNode(context, receiverNode, fromId, "instantiates");
+            if (!recorded) {
+              const rubyType = resolveRubyVisibleConstant(
+                context.index,
+                context.moduleEntry,
+                context.sup,
+                sliceText(receiverNode, context.source),
+              );
+              if (rubyType) recordDefEdge(context, fromId, rubyType, "instantiates", receiverNode);
+            }
             return false;
           }
+          if (methodNode?.type === "super") return true;
           if (methodNode) {
             resolveCallTarget(node, methodNode);
             return false;
           }
+          const callee = getCallTarget(node);
+          if (callee?.type === "super") return true;
+          resolveCallTarget(node, callee);
+          return false;
         }
         resolveCallTarget(node, getCallTarget(node));
       }
       if (newNodeTypes.has(node.type)) {
-        const target = getNewTarget(node);
-        if (target) tryResolveNode(context, target, fromId, "instantiates");
+        const keyword = phpObjectCreationKeyword(node, context.source, context.sup);
+        if (keyword) {
+          const created = resolvePhpObjectCreationTarget(
+            context.index,
+            context.moduleEntry,
+            keyword,
+            context.source,
+            context.sup,
+          );
+          if (created) recordDefEdge(context, fromId, created, "instantiates", keyword.nameNode);
+        } else {
+          const target = constructionTypeName(node, context.source, context.sup) ?? getNewTarget(node);
+          if (target) tryResolveNode(context, target, fromId, "instantiates");
+        }
       }
       return true;
     };
@@ -1140,16 +1200,10 @@ async function recordIdentifierRelations(
     } else {
       const name = sliceText(identifier, context.source);
       target = context.resolveIdentifier(name, identifier);
-      // Ruby has no package/namespace compilation unit: `require_relative` gives a
-      // class/module whole-program visibility instead, with no aliasToTargetDef entry for
-      // the implicit same-named "namespace" binding a require creates. Fall back to the
-      // exact resolveNamedDefinition call goToDefinition's own bare-name resolution makes for
-      // every cross-module-symbol language, scoped to this one heritage lookup so a
-      // constructed-receiver name (`Klass.new`) elsewhere keeps its own require-based
-      // visibility untouched.
+      // Ruby `require` publishes a top-level constant, not a nested one. Reuse the
+      // same visibility as goto so `class Worker < Base` follows the required class.
       if (!target && context.sup.id === "ruby") {
-        const resolved = resolveNamedDefinition(context.index, context.moduleEntry, context.moduleEntry.file, context.sup, name);
-        if (resolved?.status === "ok") target = resolved.definition;
+        target = resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
       }
     }
     if (!target) continue;

@@ -6,6 +6,7 @@ import { declarationKindToBindingKind } from "./declarations.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
 import { typescriptCallableRole } from "./ts-callables.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
 import { scopeNodesFor, type ScopeNodeRow } from "./scope-nodes.js";
@@ -275,11 +276,66 @@ export function buildScopeIndexFromSource(
     return rootScope.map.get(canonicalName);
   };
 
+  const lookupOutsideFunctions = (name: string): Binding | undefined => {
+    const canonicalName = normalizeIdentifier(name);
+    for (let index = stack.length - 1; index >= 0; index--) {
+      const scope = stack[index]!;
+      if (scope.kind === "function") continue;
+      const hit = scope.map.get(canonicalName);
+      if (hit) return hit;
+    }
+    return rootScope.map.get(canonicalName);
+  };
+
+  const isPhpThisPropertyName = (nameNode: SyntaxNodeLike): boolean => {
+    const parent = nameNode.parent;
+    if (!parent || parent.type !== "member_access_expression") return false;
+    const property =
+      parent.childForFieldName("name") ?? parent.namedChildren.find((child) => child.type === "name") ?? null;
+    if (!property || property.startIndex !== nameNode.startIndex || property.endIndex !== nameNode.endIndex) {
+      return false;
+    }
+    const object = parent.childForFieldName("object") ?? parent.namedChildren[0] ?? null;
+    if (!object || object.startIndex === property.startIndex) return false;
+    return sliceText(object, source) === "$this";
+  };
+
+  const promotedVariablesInClass = (classNode: SyntaxNodeLike): SyntaxNodeLike[] => {
+    const variables: SyntaxNodeLike[] = [];
+    const visit = (current: SyntaxNodeLike): void => {
+      if (
+        current !== classNode &&
+        (current.type === "class_declaration" ||
+          current.type === "trait_declaration" ||
+          current.type === "enum_declaration" ||
+          current.type === "function_definition")
+      ) {
+        return;
+      }
+      if (current.type === "method_declaration") {
+        const name = current.childForFieldName("name");
+        if (!name || sliceText(name, source) !== "__construct") return;
+        const params = current.childForFieldName("parameters");
+        for (const child of params?.namedChildren ?? []) {
+          const variable = phpConstructorPromotedVariable(child, source);
+          if (variable) variables.push(variable);
+        }
+        return;
+      }
+      for (const child of current.namedChildren) visit(child);
+    };
+    visit(classNode);
+    return variables;
+  };
+
   const addPatternDecls = (
     pattern: SyntaxNodeLike,
     kind: BindingKind,
     addBindingToScope: (nameNode: SyntaxNodeLike, kind: BindingKind) => void = addDecl,
   ): void => {
+    if (pattern.type === "property_promotion_parameter" && phpConstructorPromotedVariable(pattern, source)) {
+      return;
+    }
     if (idSet.has(pattern.type)) {
       addBindingToScope(pattern, kind);
       return;
@@ -577,6 +633,10 @@ export function buildScopeIndexFromSource(
         allScopes.push(scope);
         pushed = true;
         pushedScopeCount = 1;
+        const blockParams = node.childForFieldName("parameters");
+        if (blockParams && (blockParams.type === "block_parameters" || blockParams.type === "lambda_parameters")) {
+          addPatternDecls(blockParams, "param");
+        }
       }
     } else if (row.typeScopeTypes?.has(node.type)) {
       // Go generic type declarations idiomatically reuse `T` as the type-parameter
@@ -645,7 +705,10 @@ export function buildScopeIndexFromSource(
         const isCppMemberProperty =
           !!memberProperty && memberProperty.startIndex <= node.startIndex && memberProperty.endIndex >= node.endIndex;
         if (!isCppMemberProperty) {
-          const binding = lookup(sliceText(node, source), node);
+          const phpThisProperty = support.id === "php" && isPhpThisPropertyName(node);
+          const binding = phpThisProperty
+            ? lookupOutsideFunctions(sliceText(node, source))
+            : lookup(sliceText(node, source), node);
           if (support.id === "cpp" && binding?.kind === "function") {
             cppFunctionOccurrences.push({ binding, node, range: toRange(node) });
           } else if (binding) {
@@ -655,15 +718,25 @@ export function buildScopeIndexFromSource(
       }
     }
 
+    if (support.id === "php" && node.type === "class_declaration") {
+      const target = stack[stack.length - 1] ?? rootScope;
+      for (const variable of promotedVariablesInClass(node)) addBinding(target, variable, "local");
+    }
+
     for (const child of node.namedChildren) {
       if (pushed) {
         const params = node.childForFieldName("parameters");
         const skipsFunctionParameters = support.createsFunctionScope(node) && params?.id === child.id;
+        const skipsBlockParameters =
+          support.createsBlockScope(node) &&
+          (child.type === "block_parameters" || child.type === "lambda_parameters") &&
+          params?.startIndex === child.startIndex &&
+          params.endIndex === child.endIndex;
         const skipsNameOrParameters =
           (row.functionNameTypes?.has(node.type) || row.classNameTypes?.has(node.type)) &&
           row.childSkipNameTypes?.has(child.type);
         const skipsCppNamespaceName = createsCppNamespaceScope && node.childForFieldName("name")?.id === child.id;
-        if (skipsFunctionParameters || skipsNameOrParameters || skipsCppNamespaceName) {
+        if (skipsFunctionParameters || skipsBlockParameters || skipsNameOrParameters || skipsCppNamespaceName) {
           continue;
         }
       }

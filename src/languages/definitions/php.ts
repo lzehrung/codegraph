@@ -101,6 +101,7 @@ export const PHP_DEF: LanguageDefinition = {
       (method_declaration name: (name) @name)
       (const_declaration (const_element . (name) @name))
       (property_element name: (variable_name) @name)
+      (property_promotion_parameter name: (variable_name) @name)
     `,
     importBindings: PHP_IMPORT_QUERY,
   },

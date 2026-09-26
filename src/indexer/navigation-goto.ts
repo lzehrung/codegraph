@@ -27,6 +27,7 @@ import {
   declarationNodeIsStatic,
   declaresMembers,
   hasStaticMemberDistinction,
+  memberContainerDef,
   nearestMemberContainer,
   keywordReceiverCrossesDynamicBoundary,
   isUnprovenHeritageExpression,
@@ -36,6 +37,7 @@ import {
   receiverConstructorExpression,
   TRANSPARENT_MEMBER_CONTAINER_TYPES,
   unwrapNamedType,
+  type PhpObjectCreationKeyword,
   type ReceiverMemberScope,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
@@ -51,7 +53,7 @@ import {
   isSwiftCrossFileHiddenSharedOwnerMember,
 } from "./declaration-visibility.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
-import { csharpLookupName, csharpQualifiedNameNode } from "./navigation-local.js";
+import { csharpLookupName, csharpQualifiedNameNode, resolveNamedDefinition } from "./navigation-local.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
@@ -411,6 +413,83 @@ export function innermostNamespaceImport(
   return undefined;
 }
 
+function rubyScopeResolutionPath(node: SyntaxNodeLike, source: string): { path: string; root: string } | null {
+  if (node.type !== "constant") return null;
+  const owner = node.parent;
+  if (owner?.type !== "scope_resolution") return null;
+  const ownerName = owner.childForFieldName("name");
+  if (!ownerName || ownerName.startIndex !== node.startIndex || ownerName.endIndex !== node.endIndex) return null;
+  // `Outer::Inner::Tool` nests scope_resolution on `scope`, so flatten from the
+  // clicked name instead of stopping at the first nested scope.
+  const segments: string[] = [];
+  let current: SyntaxNodeLike | null = owner;
+  while (current?.type === "scope_resolution") {
+    const name = current.childForFieldName("name");
+    const scope = current.childForFieldName("scope");
+    if (!name || name.type !== "constant") return null;
+    const text = sliceText(name, source);
+    if (!text) return null;
+    segments.unshift(text);
+    current = scope;
+  }
+  if (!current || current.type !== "constant" || segments.length === 0) return null;
+  const root = sliceText(current, source);
+  if (!root) return null;
+  return { path: `${root}::${segments.join("::")}`, root };
+}
+
+/**
+ * `Outer::Inner::Tool` is one constant path. Nested classes are exported under that
+ * path, not as bare `Tool`, so the chain has to ask for the qualified export.
+ */
+function resolveRubyQualifiedConstantDefinition(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  source: string,
+): GoToResult | null {
+  const qualified = rubyScopeResolutionPath(node, source);
+  if (!qualified) return null;
+  const files: string[] = [];
+  const seen = new Set<string>();
+  const add = (file: string | undefined): void => {
+    if (!file) return;
+    const key = fileIdentityKey(file);
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push(file);
+  };
+  for (const imp of mod.imports) {
+    if (imp.kind === "namespace" && imp.localNS === qualified.root && typeof imp.resolved === "string") {
+      add(imp.resolved);
+    }
+  }
+  add(mod.file);
+  const hits: SymbolDef[] = [];
+  for (const file of files) {
+    const hit = resolveExport(index, file, qualified.path, { allowLocalFallback: false });
+    if (hit?.kind !== "resolved") continue;
+    if (
+      hits.some(
+        (candidate) =>
+          fileIdentityKey(candidate.file) === fileIdentityKey(hit.def.file) &&
+          candidate.localName === hit.def.localName &&
+          candidate.range.start.line === hit.def.range.start.line &&
+          candidate.range.start.column === hit.def.range.start.column,
+      )
+    ) {
+      continue;
+    }
+    hits.push(hit.def);
+  }
+  if (hits.length !== 1) return null;
+  return okGoToResult(index, hits[0]!, {
+    via: { exportedName: qualified.path },
+    resolution: "member-access",
+    confidence: "medium",
+  });
+}
+
 export async function resolveMemberAccessDefinition(params: {
   index: ProjectIndex;
   mod: ModuleIndex;
@@ -421,6 +500,10 @@ export async function resolveMemberAccessDefinition(params: {
   resolveLexicalBinding?: (expression: SyntaxNodeLike) => SymbolDef | null;
 }): Promise<GoToResult | null> {
   const { index, mod, node, source, tree, sup, resolveLexicalBinding } = params;
+  if (sup.id === "ruby") {
+    const qualified = resolveRubyQualifiedConstantDefinition(index, mod, node, source);
+    if (qualified) return qualified;
+  }
   const parent = node.parent;
   if (!parent || !sup.supportsCrossModuleSymbols) {
     return null;
@@ -590,7 +673,7 @@ export async function resolveMemberAccessDefinition(params: {
             const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
             return memberDef ? { kind: "resolved", def: memberDef } : null;
           }
-          if (sup.id === "ruby") {
+          if (sup.id === "ruby" && declaresMembers(base.def)) {
             const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
             if (memberDef) return { kind: "resolved", def: memberDef };
             const localHit = resolveExport(index, base.def.file, memberName);
@@ -1290,6 +1373,83 @@ function memberDeclaringLocals(mod: ModuleIndex, typeName: string, normalize: (n
   return mod.locals.filter((local) => normalize(local.localName) === normalized && declaresMembers(local));
 }
 
+/**
+ * Ruby constant visible the same way go-to-definition resolves a bare `Widget`:
+ * a same-file declaration, or the class a `require` brought in. Not project-wide.
+ */
+export function resolveRubyVisibleConstant(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  sup: LanguageSupport,
+  typeName: string,
+): SymbolDef | null {
+  if (sup.id !== "ruby") return null;
+  const resolved = resolveNamedDefinition(index, mod, mod.file, sup, typeName);
+  if (resolved?.status !== "ok") return null;
+  return declaresMembers(resolved.definition) ? resolved.definition : null;
+}
+
+/** Proven PHP `extends` base, using the same simple-name lookup as `parent::`. */
+function resolvePhpProvenBaseClass(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  classNode: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+): SymbolDef | null {
+  const bases = collectDeclaredBaseTypes(classNode, source, sup, true);
+  if (bases.length !== 1) return null;
+  const base = bases[0];
+  if (!base || base.kind !== "simple") return null;
+  const normalize = (name: string): string => foldPhpIdentifierCase(sup.normalizeIdentifier(name));
+  return resolveNamedMemberContainer(index, mod, base.name, normalize) ?? null;
+}
+
+/**
+ * Class named by `new self()`, `new static()`, or `new parent()`.
+ * `self` and `static` are the enclosing class. `parent` is the proven base.
+ * Returns null when the keyword is not proven, so a class named `Parent` cannot win.
+ */
+export function resolvePhpObjectCreationTarget(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  keyword: PhpObjectCreationKeyword,
+  source: string,
+  sup: LanguageSupport,
+): SymbolDef | null {
+  if (!keyword.classNode) return null;
+  if (keyword.keyword === "self" || keyword.keyword === "static") {
+    return memberContainerDef(mod, keyword.classNode);
+  }
+  return resolvePhpProvenBaseClass(index, mod, keyword.classNode, source, sup);
+}
+
+function enclosingRubyMethod(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current = node.parent;
+  while (current) {
+    if (current.type === "method" || current.type === "singleton_method") return current;
+    current = current.parent;
+  }
+  return null;
+}
+
+/** Bare `super` / `super()` targets the same-named method on a proven superclass. */
+export async function resolveRubySuperDefinition(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+): Promise<SymbolDef | undefined> {
+  if (sup.id !== "ruby" || node.type !== "super") return undefined;
+  const method = enclosingRubyMethod(node);
+  const nameNode = method?.childForFieldName("name") ?? null;
+  if (!nameNode) return undefined;
+  const member = sliceText(nameNode, source);
+  if (!member) return undefined;
+  return resolveKeywordReceiverMember(index, mod, node, member, "any", true);
+}
+
 async function resolveReceiverDefinition(
   index: ProjectIndex,
   obj: SyntaxNodeLike,
@@ -1337,6 +1497,18 @@ async function resolveReceiverDefinition(
         def: constructed,
         memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
       };
+    }
+    // Ruby `require` exposes a class as a namespace import. A bare constant already
+    // resolves through resolveNamedDefinition; `Klass.new` must use that same path
+    // so goto, references, and call edges agree. Same-file classes returned above.
+    if (sup.id === "ruby" && typedLocals.length === 0) {
+      const rubyType = resolveRubyVisibleConstant(index, mod, sup, typeName);
+      if (rubyType) {
+        return {
+          def: rubyType,
+          memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
+        };
+      }
     }
     if (typedLocals[0]) {
       return {

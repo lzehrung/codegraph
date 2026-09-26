@@ -1133,7 +1133,7 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, greet, run, files)).toEqual(["greet"]);
   });
 
-  it("leaves Ruby super unresolved because it is a same-name keyword, not a receiver", async () => {
+  it("leaves Ruby super unresolved when the superclass is not proven", async () => {
     const files: Record<string, string> = {
       "base.rb": ["class RbBase", "  def helper", "  end", "end"].join("\n"),
       "child.rb": ["class RbChild < RbBase", "  def helper", "    super", "  end", "end"].join("\n"),
@@ -1144,6 +1144,44 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(childHelper).toHaveLength(1);
     expect(baseHelper).toHaveLength(1);
     expect(callsiteTexts(graph, baseHelper[0]!, childHelper[0]!, files)).toBeNull();
+  });
+
+  it("records a Ruby super call on the proven superclass, not a mixin of the same name", async () => {
+    const files: Record<string, string> = {
+      "same.rb": [
+        "module RbGreets",
+        "  def helper",
+        "  end",
+        "end",
+        "class RbBase",
+        "  def helper",
+        "  end",
+        "end",
+        "class RbChild < RbBase",
+        "  include RbGreets",
+        "  def helper",
+        "    super",
+        "  end",
+        "end",
+        "class RbOrphan",
+        "  def helper",
+        "    super",
+        "  end",
+        "end",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-rb-super-proven-", files);
+    const childHelper = membersOwnedBy(graph, "RbChild", "helper");
+    const baseHelper = membersOwnedBy(graph, "RbBase", "helper");
+    const mixinHelper = membersOwnedBy(graph, "RbGreets", "helper");
+    const orphanHelper = membersOwnedBy(graph, "RbOrphan", "helper");
+    expect(childHelper).toHaveLength(1);
+    expect(baseHelper).toHaveLength(1);
+    expect(mixinHelper).toHaveLength(1);
+    expect(orphanHelper).toHaveLength(1);
+    expect(callsiteTexts(graph, baseHelper[0]!, childHelper[0]!, files)).toEqual(["super"]);
+    expect(callsiteTexts(graph, mixinHelper[0]!, childHelper[0]!, files)).toBeNull();
+    expect(callsiteTexts(graph, baseHelper[0]!, orphanHelper[0]!, files)).toBeNull();
   });
 
   it("records a Kotlin super call on the class ancestor when an interface declares the same name", async () => {
