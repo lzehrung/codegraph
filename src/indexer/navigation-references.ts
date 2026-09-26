@@ -9,6 +9,7 @@ import {
   declaresMembers,
   receiverConstructorExpression,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { sameDef } from "./reference-context.js";
 import {
@@ -470,6 +471,7 @@ type ReferenceDefinitionResolver = (
 ) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>;
 
 async function receiverProofUnavailable(
+  index: ProjectIndex,
   fileId: FileId,
   parsed: ParsedFileContext,
   range: Range,
@@ -486,7 +488,19 @@ async function receiverProofUnavailable(
       const { object, property } = getMemberAccessParts(parsed.sup, current);
       if (!object || !property || property.startIndex !== range.start.index) return false;
       const receiver = classifyReceiver(parsed.sup, object, parsed.source, new Map(), current.startIndex, current);
-      if (receiver) return false;
+      // A recognized shape is not proof. Exclude it only when the type is a resolved
+      // member-declaring definition, every supertype resolves, and none declare this member.
+      if (receiver) {
+        const omits = await provenClassifiedReceiverOmitsMember(
+          index,
+          fileId,
+          parsed,
+          current,
+          object,
+          sliceText(property, parsed.source),
+        );
+        return !omits;
+      }
       const receiverRange = toRange(object);
       const resolvedReceiver = await resolveDefinition(
         {
@@ -637,7 +651,7 @@ export async function collectVerifiedNamedNodeReferences(
     if (
       !recoveredByLanguageFallback &&
       onReceiverProofUnavailable &&
-      (await receiverProofUnavailable(fileId, parsed, range, resolveDefinition))
+      (await receiverProofUnavailable(index, fileId, parsed, range, resolveDefinition))
     ) {
       onReceiverProofUnavailable(fileId);
     }

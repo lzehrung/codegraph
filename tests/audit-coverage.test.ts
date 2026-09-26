@@ -196,4 +196,94 @@ describe("Audit F3: no complete coverage while a same-name use resolves to nothi
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  it("does not report complete coverage when a default-imported constructor call fails to resolve its member", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-jsts-default-"));
+    try {
+      const widgetFile = path.join(root, "widget.ts").replace(/\\/g, "/");
+      const useFile = path.join(root, "use.ts").replace(/\\/g, "/");
+      await fsp.writeFile(
+        widgetFile,
+        [
+          "export default class Widget {",
+          "  static create() { return new Widget(); }",
+          "  render() { return 1; }",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(
+        useFile,
+        ['import Widget from "./widget";', "Widget.create();", "new Widget().render();", ""].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [widgetFile, useFile]);
+      const def = definitionFor(index, widgetFile, "render");
+
+      const result = await indexer.findReferences(index, { def });
+      expectHonestCoverageForUnverifiedUse(result, useFile, 3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps complete coverage when a constructed call resolves to another class's own render", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-other-render-"));
+    try {
+      const widgetFile = path.join(root, "widget.ts").replace(/\\/g, "/");
+      const useFile = path.join(root, "use.ts").replace(/\\/g, "/");
+      await fsp.writeFile(widgetFile, "export class Widget {\n  render() { return 1; }\n}\n", "utf8");
+      await fsp.writeFile(
+        useFile,
+        [
+          'import { Widget } from "./widget";',
+          "class Other {",
+          "  render() { return 2; }",
+          "}",
+          "new Other().render();",
+          "void Widget;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [widgetFile, useFile]);
+      const def = definitionFor(index, widgetFile, "render");
+
+      const result = await indexer.findReferences(index, { def });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.references.some((reference) => reference.file === useFile)).toBe(false);
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps complete coverage when a fully known local class has no render and no base", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-other-empty-"));
+    try {
+      const widgetFile = path.join(root, "widget.ts").replace(/\\/g, "/");
+      const useFile = path.join(root, "use.ts").replace(/\\/g, "/");
+      await fsp.writeFile(widgetFile, "export class Widget {\n  render() { return 1; }\n}\n", "utf8");
+      // Other resolves in this file, declares no render, and has no supertype, so the call is a
+      // proven non-reference rather than an unresolved member of Widget.
+      await fsp.writeFile(
+        useFile,
+        ['import { Widget } from "./widget";', "class Other {}", "new Other().render();", "void Widget;", ""].join(
+          "\n",
+        ),
+        "utf8",
+      );
+      const index = await createTestIndexFromFiles(root, [widgetFile, useFile]);
+      const def = definitionFor(index, widgetFile, "render");
+
+      const result = await indexer.findReferences(index, { def });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.references.some((reference) => reference.file === useFile)).toBe(false);
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

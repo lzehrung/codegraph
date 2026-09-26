@@ -20,6 +20,7 @@ import {
 } from "../util/member-access-tables.js";
 import { cppCallableShapeForNode } from "./cpp-callables.js";
 import {
+  classifyReceiver,
   cppOutOfLineOwnerPath,
   cppQualifiedNameSegments,
   declarationNodeIsStatic,
@@ -991,6 +992,172 @@ async function resolveQualifiedMemberContainer(
     return asMemberContainer(index, hit.def);
   }
   return undefined;
+}
+
+function nodeContainsUnprovenHeritage(node: SyntaxNodeLike): boolean {
+  if (isUnprovenHeritageExpression(node)) return true;
+  return node.namedChildren.some((child) => nodeContainsUnprovenHeritage(child));
+}
+
+/** A heritage or mixin clause whose type expression is not a resolvable name. */
+function containerHeritageIsUnproven(container: SyntaxNodeLike, source: string, sup: LanguageSupport): boolean {
+  const ancestry = MEMBER_ACCESS_ROWS[sup.id]?.receiverAncestry;
+  if (!ancestry) return false;
+  const clauseTypes = new Set(ancestry.clauses.map((rule) => rule.nodeType));
+  const nodes: SyntaxNodeLike[] = [];
+  for (const child of container.namedChildren) {
+    nodes.push(child);
+    for (const grand of child.namedChildren) nodes.push(grand);
+  }
+  if (nodes.some((node) => clauseTypes.has(node.type) && nodeContainsUnprovenHeritage(node))) return true;
+  const mixinCalls = ancestry.mixinCalls;
+  if (!mixinCalls?.length) return false;
+  return nodes.some((node) => {
+    if (node.type !== "call" || node.childForFieldName("receiver")) return false;
+    const methodNode = node.childForFieldName("method");
+    const methodName = methodNode ? sliceText(methodNode, source) : undefined;
+    if (!methodName || !mixinCalls.includes(methodName)) return false;
+    const args = node.childForFieldName("arguments");
+    return !!args && nodeContainsUnprovenHeritage(args);
+  });
+}
+
+function definitionForContainer(mod: ModuleIndex, container: SyntaxNodeLike): SymbolDef | undefined {
+  const nameNode = container.childForFieldName("name");
+  if (!nameNode) return undefined;
+  const matches = mod.locals.filter(
+    (local) => declaresMembers(local) && local.range.start.index === nameNode.startIndex,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+async function resolveReceiverTypeName(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  sup: LanguageSupport,
+  typeName: string,
+): Promise<SymbolDef | undefined> {
+  const trimmed = typeName.trim().replace(/^\\+/, "");
+  if (!trimmed) return undefined;
+  const normalize = sup.normalizeIdentifier;
+  for (const separator of ["::", "\\", "."]) {
+    if (!trimmed.includes(separator)) continue;
+    const parts = trimmed.split(separator).filter(Boolean);
+    if (parts.length < 2) return undefined;
+    return resolveQualifiedMemberContainer(index, mod, parts[0]!, parts.slice(1), normalize, sup);
+  }
+  return resolveNamedMemberContainer(index, mod, trimmed, normalize);
+}
+
+async function resolveDeclaredBase(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  sup: LanguageSupport,
+  base: DeclaredBaseType,
+): Promise<SymbolDef | undefined> {
+  const normalize = sup.normalizeIdentifier;
+  if (base.kind === "simple") return resolveNamedMemberContainer(index, mod, base.name, normalize);
+  return resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup);
+}
+
+/**
+ * True when `def` and every resolved supertype lack a direct `memberName`. An unresolved
+ * supertype, an unreadable declaration, or a declared member returns false.
+ */
+async function hierarchyOmitsMember(
+  index: ProjectIndex,
+  def: SymbolDef,
+  memberName: string,
+  memberScope: ReceiverMemberScope,
+  seen: Set<string>,
+): Promise<boolean> {
+  const containerDef = asMemberContainer(index, def);
+  if (!containerDef) return false;
+  const start = containerDef.range.start;
+  const key = `${fileIdentityKey(containerDef.file)}:${start.index ?? `${start.line}:${start.column}`}`;
+  if (seen.has(key)) return true;
+  seen.add(key);
+  const ref = await keywordClassRefFromDef(index, containerDef);
+  if (!ref) return false;
+  const normalize = ref.context.sup.normalizeIdentifier;
+  const memberPredicate =
+    memberScope === "any"
+      ? undefined
+      : (local: SymbolDef) => matchesReceiverMemberScope(local, memberScope, ref.context, ref.container);
+  if (
+    findDirectLocalsWithinNode(ref.module.locals, memberName, ref.container, ref.context, normalize, memberPredicate)
+      .length > 0
+  ) {
+    return false;
+  }
+  if (ref.context.sup.id === "csharp" || ref.context.sup.id === "swift") {
+    const shared = await findSharedOwnerMemberDefinitions({
+      index,
+      ownerFile: containerDef.file,
+      ownerContainer: ref.container,
+      ownerSource: ref.context.source,
+      languageId: ref.context.sup.id,
+      member: memberName,
+      memberScope,
+    });
+    if (shared.length > 0) return false;
+  }
+  if (containerHeritageIsUnproven(ref.container, ref.context.source, ref.context.sup)) return false;
+  const bases = collectDeclaredBaseTypes(ref.container, ref.context.source, ref.context.sup, false);
+  for (const base of bases) {
+    const baseDef = await resolveDeclaredBase(index, ref.module, ref.context.sup, base);
+    if (!baseDef) return false;
+    if (!(await hierarchyOmitsMember(index, baseDef, memberName, memberScope, seen))) return false;
+  }
+  return true;
+}
+
+/**
+ * A classified receiver (`new Widget()`, a named type, `this`, or `super`) excludes a failed
+ * member lookup only when its type resolves to a member-declaring definition, no supertype is
+ * unresolved, and that type does not declare `memberName`. Otherwise the site stays unproven.
+ */
+export async function provenClassifiedReceiverOmitsMember(
+  index: ProjectIndex,
+  fileId: string,
+  parsed: ParsedFileContext,
+  accessNode: SyntaxNodeLike,
+  objectNode: SyntaxNodeLike,
+  memberName: string,
+): Promise<boolean> {
+  const mod = index.byFile.get(fileIdentityKey(fileId));
+  if (!mod) return false;
+  const receiver = classifyReceiver(
+    parsed.sup,
+    objectNode,
+    parsed.source,
+    new Map(),
+    accessNode.startIndex,
+    accessNode,
+  );
+  if (!receiver) return false;
+  if (receiver.kind === "named-type") {
+    const def = await resolveReceiverTypeName(index, mod, parsed.sup, receiver.typeName);
+    if (!def) return false;
+    return hierarchyOmitsMember(index, def, memberName, receiver.memberScope, new Set());
+  }
+  const container = nearestMemberContainer(accessNode);
+  if (!container) return false;
+  if (receiver.kind === "supertype") {
+    if (containerHeritageIsUnproven(container, parsed.source, parsed.sup)) return false;
+    const bases = collectDeclaredBaseTypes(container, parsed.source, parsed.sup, true);
+    if (!bases.length) return false;
+    const seen = new Set<string>();
+    for (const base of bases) {
+      const baseDef = await resolveDeclaredBase(index, mod, parsed.sup, base);
+      if (!baseDef) return false;
+      if (!(await hierarchyOmitsMember(index, baseDef, memberName, receiver.memberScope, seen))) return false;
+    }
+    return true;
+  }
+  const def = definitionForContainer(mod, container);
+  if (!def) return false;
+  return hierarchyOmitsMember(index, def, memberName, receiver.memberScope, new Set());
 }
 
 async function keywordClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promise<KeywordClassRef | null> {
