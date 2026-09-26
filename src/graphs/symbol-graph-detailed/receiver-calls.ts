@@ -6,6 +6,7 @@ import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
 import { foldPhpIdentifierCase, XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { fileIdentityKey } from "../../util/paths.js";
 import { keywordReceiverKind, ownReceiverMemberScope } from "../../util/member-access-tables.js";
 import {
   getMemberAccessParts,
@@ -1460,6 +1461,7 @@ export function emitReceiverCallEdges(
   memberArities: ReadonlyMap<string, MemberArityRange> = new Map(),
   ownerAnchors: ReadonlyMap<string, string> = new Map(),
   accessibleMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  fileHiddenMemberIds: ReadonlySet<string> = new Set(),
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1530,6 +1532,8 @@ export function emitReceiverCallEdges(
         memberScopes,
         nodeAliases,
         memberArities,
+        fileHiddenMemberIds,
+        candidate.site.file,
       );
       if (lookup.status === "unique") {
         receiverDisposition = "resolved";
@@ -1623,6 +1627,8 @@ function provenMemberTarget(
   memberScopes: ReadonlyMap<string, ReceiverMemberScope>,
   nodeAliases: ReadonlyMap<string, string>,
   memberArities: ReadonlyMap<string, MemberArityRange>,
+  fileHiddenMemberIds: ReadonlySet<string>,
+  useFile: string,
 ): MemberTargetLookup {
   const matches = new Set<string>();
   for (const ownerId of owners) {
@@ -1630,6 +1636,12 @@ function provenMemberTarget(
       const canonicalId = canonicalMemberId(memberId, nodeAliases);
       const node = graph.nodes.get(memberId) ?? graph.nodes.get(canonicalId);
       if (!node || (node.kind !== "function" && !node.callable)) continue;
+      if (
+        (fileHiddenMemberIds.has(memberId) || fileHiddenMemberIds.has(canonicalId)) &&
+        fileIdentityKey(node.file) !== fileIdentityKey(useFile)
+      ) {
+        continue;
+      }
       const nameMatches = candidate.caseInsensitiveMemberName
         ? foldPhpIdentifierCase(node.name) === foldPhpIdentifierCase(candidate.memberName)
         : node.name === candidate.memberName;

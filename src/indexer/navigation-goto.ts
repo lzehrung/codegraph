@@ -1,7 +1,7 @@
 import { CSHARP_SUPPORT, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
-import type { SyntaxNodeLike } from "../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -43,12 +43,13 @@ import {
   type CallableArity,
 } from "../languages/callable-arity.js";
 import { getCompilationUnitPeers } from "./compilation-units.js";
-import { isSwiftCrossFileHiddenSharedOwnerMember } from "./declaration-visibility.js";
+import { isExportedDeclaration, isSwiftCrossFileHiddenSharedOwnerMember } from "./declaration-visibility.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { csharpLookupName, csharpQualifiedNameNode } from "./navigation-local.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
+import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./php-namespace-symbols.js";
 import { resolveExport, resolveImported, resolvePhpExportByImportType } from "./navigation-resolve.js";
 import {
   CSHARP_PARTIAL_CONTAINER_TYPES,
@@ -402,10 +403,11 @@ export async function resolveMemberAccessDefinition(params: {
   mod: ModuleIndex;
   node: SyntaxNodeLike;
   source: string;
+  tree: SyntaxTreeLike;
   sup: LanguageSupport;
   resolveLexicalBinding?: (expression: SyntaxNodeLike) => SymbolDef | null;
 }): Promise<GoToResult | null> {
-  const { index, mod, node, source, sup, resolveLexicalBinding } = params;
+  const { index, mod, node, source, tree, sup, resolveLexicalBinding } = params;
   const parent = node.parent;
   if (!parent || !sup.supportsCrossModuleSymbols) {
     return null;
@@ -495,6 +497,13 @@ export async function resolveMemberAccessDefinition(params: {
           );
         });
         if (local) return { kind: "resolved", def: local };
+        if (sup.id === "java" || sup.id === "kotlin" || sup.id === "swift") {
+          const peer = resolveExport(index, mod.file, exprName);
+          if (peer) return peer;
+        } else if (sup.id === "php") {
+          const phpClass = resolveIndexedPhpClassReference(index, source, tree, expr, exprName, mod.imports);
+          if (phpClass) return { kind: "resolved", def: phpClass };
+        }
       }
 
       for (const starImport of mod.imports.filter((candidate) => candidate.kind === "star")) {
@@ -721,7 +730,7 @@ export async function resolveMemberAccessDefinition(params: {
             );
           }
 
-          if (memberDef) {
+          if (memberDef && !crossFilePeerMemberHidden(mod.file, memberDef, targetContext)) {
             return okGoToResult(index, memberDef, {
               via: { exportedName: member },
               resolution: "member-access",
@@ -1022,6 +1031,20 @@ async function keywordClassRefFromNode(
   return { file: mod.file, container, context, module: mod };
 }
 
+function crossFilePeerMemberHidden(useFile: string, memberDef: SymbolDef, targetContext: ParsedFileContext): boolean {
+  const languageId = targetContext.sup.id;
+  if (languageId !== "java" && languageId !== "kotlin" && languageId !== "swift") return false;
+  const start = memberDef.range.start;
+  const position = { row: Math.max(0, start.line - 1), column: Math.max(0, start.column - 1) };
+  const nameNode = targetContext.tree.rootNode.descendantForPosition(position, position);
+  if (!nameNode) return false;
+  if (languageId === "swift") {
+    return isSwiftCrossFileHiddenSharedOwnerMember(languageId, useFile, memberDef.file, nameNode);
+  }
+  if (fileIdentityKey(useFile) === fileIdentityKey(memberDef.file)) return false;
+  return !isExportedDeclaration(languageId, nameNode);
+}
+
 async function baseRefsFromContainer(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -1029,6 +1052,7 @@ async function baseRefsFromContainer(
   source: string,
   sup: LanguageSupport,
   superclassOnly: boolean,
+  tree: SyntaxTreeLike,
 ): Promise<KeywordClassRef[]> {
   const bases = collectDeclaredBaseTypes(container, source, sup, superclassOnly);
   const refs: KeywordClassRef[] = [];
@@ -1038,10 +1062,13 @@ async function baseRefsFromContainer(
     return sup.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
   };
   for (const base of bases) {
-    const def =
+    let def =
       base.kind === "simple"
         ? resolveNamedMemberContainer(index, mod, base.name, normalize)
         : await resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup);
+    if (!def && sup.id === "php" && base.kind === "simple") {
+      def = resolvePhpNamespaceSymbol(index, source, tree, container, base.name, mod.imports, "class") ?? undefined;
+    }
     if (!def) continue;
     const ref = await keywordClassRefFromDef(index, def);
     if (!ref) continue;
@@ -1088,6 +1115,7 @@ async function resolveKeywordReceiverMember(
         current.context.source,
         current.context.sup,
         true,
+        current.context.tree,
       )
     : [current];
   if (level.length === 0) return undefined;
@@ -1161,6 +1189,7 @@ async function resolveKeywordReceiverMember(
         candidate.context.source,
         candidate.context.sup,
         startAtAncestor,
+        candidate.context.tree,
       )) {
         const key = keywordContainerKey(parent.file, parent.container);
         if (visited.has(key)) continue;

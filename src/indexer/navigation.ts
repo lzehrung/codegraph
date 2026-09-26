@@ -30,11 +30,13 @@ import {
   normalizePhpQualifiedReference,
   phpLastIdentifierSegment,
 } from "./navigation-php.js";
+import { resolveIndexedPhpClassReference } from "./php-namespace-symbols.js";
 import {
   buildIndexedCandidateCoverage,
   buildPhpQualifiedNames,
   cppCanonicalStructuralExport,
   describeReferenceStrategies,
+  ensurePhpNamespaceSymbolIndex,
   collectVerifiedNamedNodeReferences,
   type VerifiedNamedNodeReference,
   getCachedScope,
@@ -160,6 +162,7 @@ export async function goToDefinition(
   const sup = context.sup;
   const source = context.source;
   const tree = context.tree;
+  if (sup.id === "php") await ensurePhpNamespaceSymbolIndex(index);
 
   const pos = {
     row: Math.max(0, line - 1),
@@ -257,6 +260,7 @@ export async function goToDefinition(
       mod,
       node,
       source,
+      tree,
       sup,
       ...(scopeIndex
         ? {
@@ -434,6 +438,16 @@ export async function goToDefinition(
         }
       }
       if (resolvedName) return resolvedName;
+      if (sup.id === "php" && node) {
+        const phpClass = resolveIndexedPhpClassReference(index, source, tree, node, lookupName, mod.imports);
+        if (phpClass) {
+          return okGoToResult(index, phpClass, {
+            via: { exportedName: phpClass.localName },
+            resolution: "php-qualified",
+            confidence: "high",
+          });
+        }
+      }
     }
   }
 

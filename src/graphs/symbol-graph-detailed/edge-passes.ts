@@ -1,6 +1,7 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
 import {
+  isExportedDeclaration,
   isSwiftCrossFileHiddenSharedOwnerMember,
   isSwiftFileHiddenSharedOwnerMember,
 } from "../../indexer/declaration-visibility.js";
@@ -90,6 +91,11 @@ type EdgePassContext = {
   sharedOwnerAnchors: Map<string, string>;
   /** Visible members a constrained Swift owner can use without donating them to its nominal type. */
   sharedOwnerAccessibleMembers: Map<string, Set<string>>;
+  /**
+   * Members hidden from other files: Java `private`, Kotlin `private`/`internal`, and Swift
+   * `private`/`fileprivate` (including a private extension). Same-file calls stay.
+   */
+  fileHiddenMemberIds: Set<string>;
   /** Definition-node ids that collapse into their declaration-node id. */
   nodeAliases: Map<string, string>;
   /** Registers a name the detailed pass proved callable (function-valued bindings). */
@@ -246,13 +252,19 @@ function getCallTarget(node: SyntaxNodeLike): SyntaxNodeLike | null {
 }
 
 function getNewTarget(node: SyntaxNodeLike): SyntaxNodeLike | null {
-  return (
-    node.childForFieldName("constructor") ??
-    node.childForFieldName("type") ??
-    node.childForFieldName("name") ??
-    node.namedChildren.find((child) => child.type === "type_identifier") ??
-    node.child(0)
+  const field =
+    node.childForFieldName("constructor") ?? node.childForFieldName("type") ?? node.childForFieldName("name");
+  if (field) return field;
+  // PHP `new Base()` has no type field; the type is a `name` / `qualified_name` child and
+  // `child(0)` is the `new` keyword, which is not a type.
+  const namedType = node.namedChildren.find(
+    (child) =>
+      child.type === "type_identifier" ||
+      child.type === "name" ||
+      child.type === "qualified_name" ||
+      child.type === "relative_name",
   );
+  return namedType ?? node.child(0);
 }
 
 export function emitPythonDecoratorEdges(context: EdgePassContext, rootNode: SyntaxNodeLike): void {
@@ -341,6 +353,17 @@ export async function emitMemberOwnershipEdges(
     }
     const memberId = ensureNode(context, memberDef);
     if (definitionId !== memberId) context.nodeAliases.set(definitionId, memberId);
+    if (context.sup.id === "java" || context.sup.id === "kotlin" || context.sup.id === "swift") {
+      const declarationNode = outOfLineDeclaration?.node ?? fn.node;
+      const hidden =
+        context.sup.id === "swift"
+          ? isSwiftFileHiddenSharedOwnerMember(context.sup.id, declarationNode)
+          : !isExportedDeclaration(context.sup.id, declarationNode);
+      if (hidden) {
+        context.fileHiddenMemberIds.add(memberId);
+        if (definitionId !== memberId) context.fileHiddenMemberIds.add(definitionId);
+      }
+    }
     markImplementationTarget(
       context,
       memberId,
