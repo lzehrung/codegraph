@@ -223,6 +223,7 @@ export async function collectImportsForFile(
             specifier.includeForm ? { includeForm: specifier.includeForm } : undefined,
           ),
           typeOnly: !!specifier.typeOnly,
+          ...(specifier.includeForm ? { includeForm: specifier.includeForm } : {}),
         });
       }
     }

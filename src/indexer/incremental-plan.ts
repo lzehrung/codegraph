@@ -115,30 +115,20 @@ export function collectDeletedTrackedFileDependents(
 }
 
 /**
- * Files whose specifier looks locally resolvable (`./x`, `../x`, or an absolute path) but is
- * recorded as an `external` edge failed to resolve to a project file the last time they were
- * indexed. Adding, deleting, or renaming a file can change what such a specifier now resolves
- * to, so these importers must be reprocessed whenever the tracked file set itself changed --
- * unlike a content edit, which the manifest signature check already catches on its own. Gated
- * on `hasNewTrackedFile` so a warm rebuild with no added file (including a pure content edit or
- * a pure deletion) pays nothing extra; a deletion alone can only ever remove a resolution, which
- * `collectDeletedTrackedFileDependents` already covers.
+ * Tracked files that still have an external edge, when the tracked file set gained or lost a
+ * file. The caller re-resolves those specifiers with the cold resolver and reprocesses only the
+ * files whose target changed. A content-only edit does not pass `trackedFileSetChanged`.
  */
-export function collectUnresolvedImportDependents(
+export function collectExternalEdgeCandidates(
   trackedEntries: Record<string, ManifestFileEntry>,
-  hasNewTrackedFile: boolean,
+  trackedFileSetChanged: boolean,
 ): Set<string> {
-  const dependents = new Set<string>();
-  if (!hasNewTrackedFile) return dependents;
+  const candidates = new Set<string>();
+  if (!trackedFileSetChanged) return candidates;
   for (const [file, entry] of Object.entries(trackedEntries)) {
-    const hasLocallyResolvableUnresolvedImport = entry.edges.some((edge) => {
-      if (edge.to.type !== "external") return false;
-      const specifier = edge.raw || edge.to.name;
-      return specifier.startsWith(".") || specifier.startsWith("/");
-    });
-    if (hasLocallyResolvableUnresolvedImport) dependents.add(file);
+    if (entry.edges.some((edge) => edge.to.type === "external")) candidates.add(file);
   }
-  return dependents;
+  return candidates;
 }
 
 export function buildTrackedFileReverseDependencies(

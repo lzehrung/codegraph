@@ -21,6 +21,7 @@ type ResolvedSpecifierEdge = {
   typeOnly?: boolean;
   resolved?: ModuleSpecifier["resolved"];
   confidence?: number;
+  includeForm?: ModuleSpecifier["includeForm"];
 };
 
 export type ModuleSpecifierResolutionContext = {
@@ -49,6 +50,7 @@ function withSpecifierMetadata(entry: ModuleSpecifier, to: EdgeTo): ResolvedSpec
     ...(entry.typeOnly !== undefined ? { typeOnly: entry.typeOnly } : {}),
     ...(entry.resolved !== undefined ? { resolved: entry.resolved } : {}),
     ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
+    ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
   };
 }
 

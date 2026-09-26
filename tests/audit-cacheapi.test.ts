@@ -88,9 +88,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
       expect(refsWarm.referenceCoverage.state).toBe("complete");
 
       const detailed = await buildSymbolGraphDetailed(warm);
-      const qNode = [...detailed.nodes.values()].find(
-        (node) => node.file === normalizePath(q) && node.name === "q",
-      );
+      const qNode = [...detailed.nodes.values()].find((node) => node.file === normalizePath(q) && node.name === "q");
       const runNode = [...detailed.nodes.values()].find(
         (node) => node.file === normalizePath(p) && node.name === "run",
       );
@@ -125,9 +123,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
 
       const session = createAgentSession({ root, buildOptions: { cache: "disk" }, freshness: { policy: "auto" } });
       const before = await session.loadProject({ symbolGraph: "skip" });
-      expect(getUnresolvedImports(before.fileGraph, { projectRoot: root }).map((entry) => entry.name)).toContain(
-        "./q",
-      );
+      expect(getUnresolvedImports(before.fileGraph, { projectRoot: root }).map((entry) => entry.name)).toContain("./q");
 
       const q = path.join(root, "q.ts");
       await fsp.writeFile(q, "export function q(): number {\n  return 42;\n}\n", "utf8");
@@ -136,9 +132,9 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
       expect(freshness.state).toBe("refreshed");
 
       const after = await session.loadProject({ symbolGraph: "skip" });
-      expect(
-        getUnresolvedImports(after.fileGraph, { projectRoot: root }).map((entry) => entry.name),
-      ).not.toContain("./q");
+      expect(getUnresolvedImports(after.fileGraph, { projectRoot: root }).map((entry) => entry.name)).not.toContain(
+        "./q",
+      );
 
       const goto = await goToDefinition(after.index, { file: p, line: 3, column: columnOf(pLines, 3, "q(") });
       expect(goto.status).toBe("ok");
@@ -147,6 +143,182 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
       }
 
       session.invalidate();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a Python absolute package import once the target module is added, and unresolves it again once deleted", async () => {
+    const root = await mkTmpDir("cg-audit-g1-python-");
+    try {
+      const main = path.join(root, "main.py");
+      const util = path.join(root, "pkg", "util.py");
+      const otherUtil = path.join(root, "other", "util.py");
+      const mainLines = ["import pkg.util", "", "result = pkg.util.helper()", ""];
+      await fsp.writeFile(main, mainLines.join("\n"), "utf8");
+
+      const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+      expect(getUnresolvedImports(initial.graph, { projectRoot: root }).map((entry) => entry.name)).toContain(
+        "pkg.util",
+      );
+
+      // A same-named module in an unrelated directory arrives alongside the real one: only
+      // `pkg/util.py` may resolve `pkg.util`.
+      const utilLines = ["def helper():", "    return 42", ""];
+      await fsp.mkdir(path.dirname(util), { recursive: true });
+      await fsp.mkdir(path.dirname(otherUtil), { recursive: true });
+      await fsp.writeFile(util, utilLines.join("\n"), "utf8");
+      await fsp.writeFile(otherUtil, ["def helper():", "    return 999", ""].join("\n"), "utf8");
+
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targets = await expectWarmMatchesCold(root, main, warm);
+
+      expect(targets).toContain(`file:${normalizePath(util)}`);
+      expect(targets.some((target) => target.endsWith("/other/util.py"))).toBe(false);
+
+      const warmUnresolved = getUnresolvedImports(warm.graph, { projectRoot: root }).map((entry) => entry.name);
+      expect(warmUnresolved).not.toContain("pkg.util");
+
+      const gotoWarm = await goToDefinition(warm, { file: main, line: 1, column: columnOf(mainLines, 1, "pkg") });
+      expect(gotoWarm.status).toBe("ok");
+      if (gotoWarm.status !== "ok") throw new Error("expected goToDefinition to resolve after pkg/util.py was added");
+      expect(normalizePath(gotoWarm.definition.file)).toBe(normalizePath(util));
+
+      const refsWarm = await findReferences(warm, { file: util, line: 1, column: columnOf(utilLines, 1, "helper") });
+      expect(refsWarm.status).toBe("ok");
+      if (refsWarm.status !== "ok") throw new Error("expected findReferences to resolve after pkg/util.py was added");
+      expect(refsWarm.references.some((reference) => normalizePath(reference.file) === normalizePath(util))).toBe(true);
+
+      const noChangeReport: BuildReport = { timings: {} };
+      await buildProjectIndexIncremental(root, { ...DISK_BUILD, report: noChangeReport });
+      expectNoReprocessedFiles(noChangeReport);
+
+      await fsp.rm(util);
+      await fsp.rm(otherUtil);
+      const warmAfterDelete = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targetsAfterDelete = await expectWarmMatchesCold(root, main, warmAfterDelete);
+      expect(targetsAfterDelete).toEqual(["external:pkg.util"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a C quoted #include once the header is added, and unresolves it again once deleted", async () => {
+    const root = await mkTmpDir("cg-audit-g1-c-include-");
+    try {
+      const main = path.join(root, "main.c");
+      const lib = path.join(root, "lib.h");
+      const otherLib = path.join(root, "other", "lib.h");
+      const mainLines = ['#include "lib.h"', "int use(void) {", "  return helper();", "}", ""];
+      await fsp.writeFile(main, mainLines.join("\n"), "utf8");
+
+      const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+      expect(getUnresolvedImports(initial.graph, { projectRoot: root }).map((entry) => entry.name)).toContain("lib.h");
+
+      // A same-named header in an unrelated directory arrives alongside the real one: a
+      // quoted include must only bind to the sibling `lib.h`.
+      const libLines = ["int helper(void);", ""];
+      await fsp.mkdir(path.dirname(otherLib), { recursive: true });
+      await fsp.writeFile(lib, libLines.join("\n"), "utf8");
+      await fsp.writeFile(otherLib, ["int helper(void);", ""].join("\n"), "utf8");
+
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targets = await expectWarmMatchesCold(root, main, warm);
+
+      expect(targets).toContain(`file:${normalizePath(lib)}`);
+      expect(targets.some((target) => target.endsWith("/other/lib.h"))).toBe(false);
+      expect(targets).not.toContain("external:lib.h");
+
+      const warmUnresolved = getUnresolvedImports(warm.graph, { projectRoot: root }).map((entry) => entry.name);
+      expect(warmUnresolved).not.toContain("lib.h");
+
+      const gotoWarm = await goToDefinition(warm, { file: main, line: 3, column: columnOf(mainLines, 3, "helper(") });
+      expect(gotoWarm.status).toBe("ok");
+      if (gotoWarm.status !== "ok") throw new Error("expected goToDefinition to resolve after lib.h was added");
+      expect(normalizePath(gotoWarm.definition.file)).toBe(normalizePath(lib));
+
+      const refsWarm = await findReferences(warm, { file: lib, line: 1, column: columnOf(libLines, 1, "helper(") });
+      expect(refsWarm.status).toBe("ok");
+      if (refsWarm.status !== "ok") throw new Error("expected findReferences to resolve after lib.h was added");
+      expect(refsWarm.references.some((reference) => normalizePath(reference.file) === normalizePath(main))).toBe(true);
+
+      const noChangeReport: BuildReport = { timings: {} };
+      await buildProjectIndexIncremental(root, { ...DISK_BUILD, report: noChangeReport });
+      expectNoReprocessedFiles(noChangeReport);
+
+      await fsp.rm(lib);
+      await fsp.rm(otherLib);
+      const warmAfterDelete = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targetsAfterDelete = await expectWarmMatchesCold(root, main, warmAfterDelete);
+      expect(targetsAfterDelete).toEqual(["external:lib.h"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a tsconfig path alias once the target file is added, and unresolves it again once deleted", async () => {
+    const root = await mkTmpDir("cg-audit-g1-ts-alias-");
+    try {
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["lib/*"] } } }, null, 2),
+        "utf8",
+      );
+      const main = path.join(root, "main.ts");
+      const util = path.join(root, "lib", "util.ts");
+      const otherUtil = path.join(root, "other", "util.ts");
+      const mainLines = [
+        'import { fn } from "@lib/util";',
+        "export function run(): number {",
+        "  return fn();",
+        "}",
+        "",
+      ];
+      await fsp.writeFile(main, mainLines.join("\n"), "utf8");
+
+      const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+      expect(getUnresolvedImports(initial.graph, { projectRoot: root }).map((entry) => entry.name)).toContain(
+        "@lib/util",
+      );
+
+      // A same-named file in an unrelated directory arrives alongside the real one: the alias
+      // must only bind to the configured `lib/util.ts`.
+      const utilLines = ["export function fn(): number {", "  return 1;", "}", ""];
+      await fsp.mkdir(path.dirname(util), { recursive: true });
+      await fsp.mkdir(path.dirname(otherUtil), { recursive: true });
+      await fsp.writeFile(util, utilLines.join("\n"), "utf8");
+      await fsp.writeFile(otherUtil, ["export function fn(): number {", "  return 999;", "}", ""].join("\n"), "utf8");
+
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targets = await expectWarmMatchesCold(root, main, warm);
+
+      expect(targets).toContain(`file:${normalizePath(util)}`);
+      expect(targets.some((target) => target.endsWith("/other/util.ts"))).toBe(false);
+      expect(targets).not.toContain("external:@lib/util");
+
+      const warmUnresolved = getUnresolvedImports(warm.graph, { projectRoot: root }).map((entry) => entry.name);
+      expect(warmUnresolved).not.toContain("@lib/util");
+
+      const gotoWarm = await goToDefinition(warm, { file: main, line: 3, column: columnOf(mainLines, 3, "fn(") });
+      expect(gotoWarm.status).toBe("ok");
+      if (gotoWarm.status !== "ok") throw new Error("expected goToDefinition to resolve after lib/util.ts was added");
+      expect(normalizePath(gotoWarm.definition.file)).toBe(normalizePath(util));
+
+      const refsWarm = await findReferences(warm, { file: util, line: 1, column: columnOf(utilLines, 1, "fn(") });
+      expect(refsWarm.status).toBe("ok");
+      if (refsWarm.status !== "ok") throw new Error("expected findReferences to resolve after lib/util.ts was added");
+      expect(refsWarm.references.some((reference) => normalizePath(reference.file) === normalizePath(main))).toBe(true);
+      expect(refsWarm.referenceCoverage.state).toBe("complete");
+
+      const noChangeReport: BuildReport = { timings: {} };
+      await buildProjectIndexIncremental(root, { ...DISK_BUILD, report: noChangeReport });
+      expectNoReprocessedFiles(noChangeReport);
+
+      await fsp.rm(util);
+      await fsp.rm(otherUtil);
+      const warmAfterDelete = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targetsAfterDelete = await expectWarmMatchesCold(root, main, warmAfterDelete);
+      expect(targetsAfterDelete).toEqual(["external:@lib/util"]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -239,7 +411,9 @@ describe("G6: agent session freshness under a manual policy never claims fresh w
       // Manual truly does not auto-invalidate: loadProject keeps serving the stale snapshot.
       // That is unchanged by the fix -- only the dishonest "fresh" label is fixed.
       const manualSnapshot = await manualSession.loadProject({ symbolGraph: "skip" });
-      const manualExports = [...manualSnapshot.index.byFile.values()][0]!.exports.map((entry) => entry.exportedAs);
+      const manualExports = [...manualSnapshot.index.byFile.values()][0]!.exports.flatMap((entry) =>
+        entry.type === "local" ? [entry.exportedAs] : [],
+      );
       expect(manualExports).not.toContain("sub");
 
       manualSession.invalidate();
@@ -253,7 +427,11 @@ describe("G6: agent session freshness under a manual policy never claims fresh w
     const root = await mkTmpDir("cg-audit-g6-consumer-");
     try {
       const mathFile = path.join(root, "math.ts");
-      await fsp.writeFile(mathFile, "export function add(a: number, b: number): number {\n  return a + b;\n}\n", "utf8");
+      await fsp.writeFile(
+        mathFile,
+        "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+        "utf8",
+      );
       const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "manual" } });
 
       const before = await workspaceSymbolsWithSession(session, { root, query: "add", limit: 20 });

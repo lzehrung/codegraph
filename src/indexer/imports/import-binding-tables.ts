@@ -14,6 +14,7 @@ import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/r
 import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
 import type { Range } from "../../types.js";
+import type { CFamilyIncludeForm } from "../../util/specifiers.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
 
@@ -53,6 +54,7 @@ export type ImplicitImportBindingArgs = {
   /** UTF-16 range of the captured alias token, when the native alias capture proved it. */
   localRange?: Range;
   wildcard?: boolean;
+  includeForm?: CFamilyIncludeForm;
 };
 
 export type ApplyStatementImportOverride = (
@@ -592,9 +594,15 @@ function appendZigImplicitBinding(
 
 function appendIncludeStarImplicitBinding(
   context: LanguageSpecificImportContext,
-  { from, resolved, typeOnly }: ImplicitImportBindingArgs,
+  { from, resolved, typeOnly, includeForm }: ImplicitImportBindingArgs,
 ): void {
-  context.pushBinding({ kind: "star", from, resolved, typeOnly });
+  context.pushBinding({
+    kind: "star",
+    from,
+    resolved,
+    typeOnly,
+    ...(includeForm ? { includeForm } : {}),
+  });
 }
 
 const ECMASCRIPT_STATEMENT_OMITTED =

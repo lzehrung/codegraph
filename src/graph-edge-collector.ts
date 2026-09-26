@@ -241,7 +241,7 @@ export async function collectEdgesForFile(
   for (const resolvedEdge of await Promise.all(edgeResolutionTasks)) {
     if (!resolvedEdge) continue;
     for (const edgeEntry of resolvedEdge) {
-      const { to, spec, raw, typeOnly, resolved, confidence } = edgeEntry;
+      const { to, spec, raw, typeOnly, resolved, confidence, includeForm } = edgeEntry;
       edges.push({
         from: normalizedFile,
         to,
@@ -249,6 +249,7 @@ export async function collectEdgesForFile(
         ...(typeOnly !== undefined && { typeOnly }),
         ...(resolved !== undefined && { resolved }),
         ...(confidence !== undefined && { confidence }),
+        ...(includeForm ? { includeForm } : {}),
       });
     }
   }

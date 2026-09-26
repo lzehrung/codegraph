@@ -27,7 +27,8 @@ import {
   resolveSpecifier,
   type MatchPathFn,
 } from "../util/resolution.js";
-import { collectCppDeclaredModules } from "../util/resolution/cpp.js";
+import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
+import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
 import {
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
@@ -129,7 +130,7 @@ import {
   buildTrackedFileReverseDependencies,
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
-  collectUnresolvedImportDependents,
+  collectExternalEdgeCandidates,
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
   partitionTrackedManifestFiles,
@@ -518,6 +519,91 @@ function graphEdgeKey(edge: Edge): string {
   const from = fileIdentityKey(edge.from);
   const target = edge.to.type === "file" ? `file:${fileIdentityKey(edge.to.path)}` : `external:${edge.to.name}`;
   return `${from}::${target}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
+}
+
+function externalEdgeTargetKey(to: Edge["to"]): string {
+  return to.type === "file" ? `file:${fileIdentityKey(to.path)}` : `external:${to.name}`;
+}
+
+/**
+ * A C/C++ external edge with no include form cannot be re-resolved: `#include "lib.h"` and a
+ * macro include can both persist as the same unquoted text. Named module imports have no form
+ * and stay on the resolver. Header-shaped entries from an older cache are reparsed instead of
+ * guessed as quoted.
+ */
+function cFamilyExternalEdgeNeedsReparse(edges: readonly Edge[]): boolean {
+  return edges.some(
+    (edge) => edge.to.type === "external" && edge.includeForm === undefined && !isCppNamedModuleSpecifier(edge.raw),
+  );
+}
+
+const PRECISE_EXTERNAL_RESOLUTION_LANGUAGES: Record<string, true> = {
+  c: true,
+  cpp: true,
+  js: true,
+  jsx: true,
+  python: true,
+  ts: true,
+  tsx: true,
+};
+
+async function externalSpecifierResolutionChanged(
+  file: string,
+  entry: ManifestFileEntry,
+  projectRoot: string,
+  workspaceConfig: WorkspaceConfig | undefined,
+  graphOptions: GraphBuildOptions,
+  languageExtensions: BuildOptions["languageExtensions"],
+  loadMatchPath: (file: string) => Promise<MatchPathFn | undefined>,
+): Promise<boolean> {
+  const support = supportForFileWithoutHeaderSample(file, languageExtensions);
+  if (!support) return true;
+  const externalEdges = entry.edges.filter((edge) => edge.to.type === "external");
+  if (!externalEdges.length) return false;
+  // Languages whose resolver needs an unstored per-occurrence input (SCSS resolution
+  // kind, PHP import role, Rust path attribute) keep the previous relative-specifier
+  // reparse. Re-resolving them from the edge alone changes the answer.
+  if (!PRECISE_EXTERNAL_RESOLUTION_LANGUAGES[support.id]) {
+    return externalEdges.some((edge) => {
+      const specifier = edge.to.type === "external" ? edge.raw || edge.to.name : edge.raw;
+      return specifier.startsWith(".") || specifier.startsWith("/");
+    });
+  }
+  if ((support.id === "c" || support.id === "cpp") && cFamilyExternalEdgeNeedsReparse(externalEdges)) return true;
+  const matchPath = support.id === "ts" || support.id === "tsx" ? await loadMatchPath(file) : undefined;
+  const groups = new Map<string, Edge[]>();
+  for (const edge of externalEdges) {
+    const key = `${edge.raw}\0${edge.includeForm ?? ""}\0${edge.typeOnly ? 1 : 0}`;
+    const group = groups.get(key);
+    if (group) group.push(edge);
+    else groups.set(key, [edge]);
+  }
+  for (const group of groups.values()) {
+    const sample = group[0]!;
+    const resolved = await resolveModuleSpecifierEdges(
+      {
+        spec: sample.raw,
+        ...(sample.typeOnly ? { typeOnly: true } : {}),
+        ...(sample.includeForm ? { includeForm: sample.includeForm } : {}),
+      },
+      {
+        support,
+        file,
+        projectRoot,
+        workspaceConfig,
+        matchPath,
+        resolveNodeModules: !!graphOptions.resolveNodeModules,
+        ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+      },
+    );
+    const resolvedKeys = (resolved ?? []).map((item) => externalEdgeTargetKey(item.to)).sort();
+    const cachedKeys = group.map((edge) => externalEdgeTargetKey(edge.to)).sort();
+    if (resolvedKeys.length !== cachedKeys.length) return true;
+    for (let index = 0; index < resolvedKeys.length; index += 1) {
+      if (resolvedKeys[index] !== cachedKeys[index]) return true;
+    }
+  }
+  return false;
 }
 
 async function moduleCacheSignatureForFile(
@@ -2134,13 +2220,9 @@ export async function buildProjectIndexIncremental(
         }
       }
       const reverseDeps = buildTrackedFileReverseDependencies(trackedEntries);
-      // A file just added (or renamed to a new path) can change what a sibling's previously
-      // unresolved relative import now resolves to, even though that sibling's own content --
-      // and therefore its signature -- never changed. See collectUnresolvedImportDependents.
-      const unresolvedImportDependents = collectUnresolvedImportDependents(trackedEntries, hasNewTrackedFile);
       const invalidateCachedDependents = () => {
         const dependentFilesOfChanged = collectTrackedFileDependents(trackedEntries, changedFiles, reverseDeps);
-        for (const file of new Set([...dependentFilesOfChanged, ...unresolvedImportDependents])) {
+        for (const file of dependentFilesOfChanged) {
           const key = fileIdentityKey(file);
           if (modules.has(key)) {
             modules.delete(key);
@@ -2198,6 +2280,40 @@ export async function buildProjectIndexIncremental(
         }
       }
       invalidateCachedDependents();
+      // A gained or lost tracked file can change what an external specifier resolves to.
+      // Re-run the cold resolver (no parse) and rebuild only files whose target changed.
+      // A C/C++ edge that never recorded includeForm is reparsed instead of guessed.
+      const trackedFileSetChanged = hasNewTrackedFile || deletedTrackedFiles.size > 0;
+      const externalEdgeCandidates = collectExternalEdgeCandidates(trackedEntries, trackedFileSetChanged);
+      if (externalEdgeCandidates.size) {
+        const candidateFiles = Array.from(externalEdgeCandidates);
+        const staleResolutions = await mapLimit(candidateFiles, conc, async (candidate) => {
+          if (!allFiles.has(candidate) || changedFiles.has(candidate)) return false;
+          const entry = trackedEntries[candidate];
+          if (!entry) return false;
+          return externalSpecifierResolutionChanged(
+            candidate,
+            entry,
+            projectRoot,
+            workspaceConfig,
+            graphOptions,
+            opts?.languageExtensions,
+            loadMatchPathForFile,
+          );
+        });
+        for (let index = 0; index < candidateFiles.length; index += 1) {
+          if (!staleResolutions[index]) continue;
+          const candidate = candidateFiles[index]!;
+          const key = fileIdentityKey(candidate);
+          if (modules.has(key)) {
+            modules.delete(key);
+            if (fileReport) {
+              fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
+            }
+          }
+          markAsChanged(candidate);
+        }
+      }
       const changedList = Array.from(changedFiles);
       // Sized by the work that remains rather than the size of the project: an incremental build
       // touching a handful of files gets a handful of threads, or none.
