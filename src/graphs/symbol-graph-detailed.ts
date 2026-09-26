@@ -357,6 +357,21 @@ export async function buildSymbolGraphDetailed(
               },
             }
           : {}),
+        // Go has no `resolveNamespaceAlias` override otherwise, so a local variable that
+        // shadows a package alias (`u := LocalU{}; u.Square()` alongside `import u "pkg"`)
+        // would still resolve `u.Square` through the blind `aliasToTargetModule` text map.
+        // Refuse the package alias whenever a closer, non-namespace scope binding owns the
+        // name at this exact use site, matching how the receiver-proof path already treats
+        // the local as the real receiver instead.
+        ...(sup.id === "go"
+          ? {
+              resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
+                const binding = findClosestScopeBinding(scopeIndex, alias, useNode, sup);
+                if (binding && binding.kind !== "namespace") return undefined;
+                return aliasToTargetModule.get(alias);
+              },
+            }
+          : {}),
       });
       const { memberExpressionType, optionalMemberTypes, propertyIdentifierTypes, resolveMemberChainTarget } =
         memberResolver;

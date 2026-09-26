@@ -327,7 +327,7 @@ nativeDescribe("receiver method call edges", () => {
     expect(callsiteTexts(graph, libTarget, run, files)).toBeNull();
   });
 
-  it("leaves a TypeScript dotted static call unresolved because a dotted identifier is not type proof", async () => {
+  it("records a TypeScript dotted static call through a capitalized type-name receiver", async () => {
     const files: Record<string, string> = {
       "cfg.ts": "export class Cfg { static load(): number { return 1; } }\n",
       "boot.ts": ['import { Cfg } from "./cfg";', "export function boot(): number { return Cfg.load(); }"].join("\n"),
@@ -335,7 +335,7 @@ nativeDescribe("receiver method call edges", () => {
     const graph = await buildFixture("cg-receiver-ts-static-", files);
     const load = nodeIn(graph, "cfg.ts", "load");
     const boot = nodeIn(graph, "boot.ts", "boot");
-    expect(callsiteTexts(graph, load, boot, files)).toBeNull();
+    expect(callsiteTexts(graph, load, boot, files)).toEqual(["load"]);
   });
 
   it("records type-scoped static calls that use :: syntax", async () => {
