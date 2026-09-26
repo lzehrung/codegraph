@@ -86,7 +86,9 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v23: C# `file partial` owners in different files no longer share member and call edges.
 // v24: C# top-level types beside block namespaces become global-namespace peers with new edges.
 // v25: identical C# aliases in separate namespace blocks each resolve their own scoped uses.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 25;
+// v26: accuracy-audit fixes add Go cross-package, Ruby ancestry, TS static, Rust impl, PHP
+// namespace, and same-unit peer edges, and drop invalid cross-file, unexported, and ambiguous ones.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 26;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";

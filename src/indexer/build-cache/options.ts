@@ -116,8 +116,13 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * uses qualified peers for C# shared-owner member coverage.
  * Epoch 65 keeps one C# using-directive binding per statement offset, so identical aliases in
  * separate namespace blocks each keep their own scope.
+ * Epoch 66 applies the accuracy-audit fixes: same-unit peers for Java, Kotlin, Swift, and PHP;
+ * declared-type receivers; TypeScript overloads, default exports, `require`, and `import()`
+ * bindings; Python, Ruby, Rust, Go, Zig, C, and C++ resolution corrections; star-import
+ * precedence; same-file forward references; honest reference coverage for unverified uses;
+ * and cached `includeForm` so warm builds re-resolve specifiers a new file can satisfy.
  */
-export const CORE_ALGORITHM_EPOCH = 65;
+export const CORE_ALGORITHM_EPOCH = 66;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -136,8 +141,11 @@ export const CORE_ALGORITHM_EPOCH = 65;
  * blocks for receiver-aware member resolution, and records Python and Ruby keyword receiver
  * members in the owning class scope.
  * Epoch 10 classifies C++ class, struct, and union declarations as receiver members.
+ * Epoch 11 exports nested Ruby constants by qualified path, captures PHP promoted constructor
+ * properties, scopes Ruby block parameters, reads Go selector `field_identifier` names, and skips
+ * TypeScript parameter type annotations when binding names.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 10;
+export const LANGUAGE_BEHAVIOR_EPOCH = 11;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

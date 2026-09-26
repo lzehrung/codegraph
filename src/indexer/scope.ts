@@ -9,7 +9,7 @@ import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiv
 import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
-import { scopeNodesFor, type ScopeNodeRow } from "./scope-nodes.js";
+import { bindingCoversUse, scopeNodesFor, type ScopeNodeRow } from "./scope-nodes.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./types.js";
@@ -102,10 +102,13 @@ export function buildScopeIndexFromSource(
   const cppFunctionCollisionGroups = new Set<Binding[]>();
   const cppFunctionOccurrences: Array<{ binding: Binding; node: SyntaxNodeLike; range: Range }> = [];
   const extraBindingSpans = new Set<string>();
-  const preserveExtraBinding = (binding: Binding): void => {
+  const bindingSpanKey = (binding: Binding): string => {
     const start = binding.def?.start.index;
     const end = binding.def?.end.index;
-    const key = `${binding.canonicalName}:${start ?? ""}:${end ?? ""}`;
+    return `${binding.canonicalName}:${start ?? ""}:${end ?? ""}`;
+  };
+  const preserveExtraBinding = (binding: Binding): void => {
+    const key = bindingSpanKey(binding);
     if (extraBindingSpans.has(key)) return;
     extraBindingSpans.add(key);
     extraBindings.push(binding);
@@ -158,6 +161,24 @@ export function buildScopeIndexFromSource(
   }
 
   const row = scopeNodesFor(support.id);
+  /** Covering-declaration names collected before a scope's body is walked, keyed by syntax node id. */
+  const pendingNamesByNodeId = new Map<number, Set<string>>();
+  /**
+   * JS and TS record let/const/class/type names during the existing hoist walk. A use defers only
+   * when one of those names is still ahead, so the queue stays the forward references.
+   */
+  const tracksLexicalNames = !!(row.hoistedFunctionTypes || row.hoistedVariableDeclarationTypes);
+  const canDeferForward =
+    !tracksLexicalNames &&
+    (!!row.wholeScopeKinds?.size || !!row.wholeScopeDeclarationTypes?.size || !!row.variableTargetScopeKinds?.size);
+  const nodeById = (id: number): SyntaxNodeLike | undefined =>
+    tree instanceof ProjectedSyntaxTree ? tree.nodeById(id) : undefined;
+  const attachPendingNames = (scope: Scope): void => {
+    const nodeId = scope.node.id;
+    if (nodeId === undefined) return;
+    const names = pendingNamesByNodeId.get(nodeId);
+    if (names && names.size > 0) scope.pendingCoveringNames = names;
+  };
   const idSet = new Set([...support.nodeTypes.identifier, ...(support.nodeTypes.shorthandPropertyIdentifier ?? [])]);
   const scopeDeclarationNames = support.scopeDeclarationNames;
 
@@ -170,8 +191,75 @@ export function buildScopeIndexFromSource(
     return false;
   };
 
+  const declarationCoversScope = (nameNode: SyntaxNodeLike): boolean => {
+    const types = row.wholeScopeDeclarationTypes;
+    if (!types) return false;
+    let current: SyntaxNodeLike | null = nameNode.parent;
+    for (let depth = 0; current && depth < 8; depth += 1) {
+      if (types.has(current.type)) return true;
+      if (current.type === "variable_declarator" && current.parent && types.has(current.parent.type)) return true;
+      // A local under a function body is not that function's declarator. Stop at the
+      // body so only the declarator wrapped around this name (qualified or not) matches.
+      if (support.createsFunctionScope(current) || support.createsBlockScope(current)) break;
+      current = current.parent;
+    }
+    return false;
+  };
+
+  const stealCoveredOccurrences = (target: Scope, binding: Binding, key: string): void => {
+    if (!binding.coversEnclosingScope) return;
+    const sources: Binding[] = [];
+    const pushChain = (found: Binding | undefined): void => {
+      let current = found;
+      while (current && current !== binding) {
+        sources.push(current);
+        current = current.earlierSameScope;
+      }
+    };
+    // A same-scope redeclaration keeps its own uses. Only an outer binding can be shadowed.
+    let parent = target.parent;
+    while (parent) {
+      const found = parent.map.get(key);
+      if (found) {
+        pushChain(found);
+        break;
+      }
+      parent = parent.parent;
+    }
+    const start = target.node.startIndex;
+    const end = target.node.endIndex;
+    const seen = new Set<Range[]>();
+    for (const source of sources) {
+      if (seen.has(source.occurrences)) continue;
+      seen.add(source.occurrences);
+      const occurrences = source.occurrences;
+      let write = 0;
+      let moved = 0;
+      for (let index = 0; index < occurrences.length; index += 1) {
+        const occurrence = occurrences[index]!;
+        const occurrenceStart = occurrence.start.index;
+        const occurrenceEnd = occurrence.end.index;
+        if (
+          occurrenceStart !== undefined &&
+          occurrenceEnd !== undefined &&
+          occurrenceStart >= start &&
+          occurrenceEnd <= end
+        ) {
+          binding.occurrences.push(occurrence);
+          moved += 1;
+        } else {
+          occurrences[write++] = occurrence;
+        }
+      }
+      if (moved > 0) occurrences.length = write;
+    }
+  };
+
   const addBinding = (target: Scope, nameNode: SyntaxNodeLike, kind: BindingKind): void => {
     const binding = buildBinding(nameNode, kind);
+    if (row.wholeScopeKinds?.has(target.kind) || declarationCoversScope(nameNode)) {
+      binding.coversEnclosingScope = true;
+    }
     const tagRole = support.id === "c" ? cTagRole(nameNode) : undefined;
     const key = tagRole ? cScopeName(binding.canonicalName, "tag") : binding.canonicalName;
     if (tagRole === "reference") {
@@ -233,7 +321,35 @@ export function buildScopeIndexFromSource(
         }
       }
     }
+    const sameSpan =
+      !!existing?.def &&
+      !!binding.def &&
+      existing.def.start.index === binding.def.start.index &&
+      existing.def.end.index === binding.def.end.index;
+    // Pattern walks can register one name node twice. A second pass with a different kind is the
+    // real classification (`module` is pre-registered as a class, then as a type) and replaces it.
+    if (sameSpan && existing?.kind === kind) return;
+    // A second local in a whole-scope scope is the same binding (Python assignments). Keep the
+    // first declaration and record the later one as an occurrence so an earlier use does not get
+    // attached only to the textually last declaration.
+    if (
+      !sameSpan &&
+      existing &&
+      kind === "local" &&
+      existing.kind === "local" &&
+      !tagRole &&
+      !!row.variableTargetScopeKinds &&
+      row.wholeScopeKinds?.has(target.kind)
+    ) {
+      if (binding.def) existing.occurrences.push(binding.def);
+      return;
+    }
+    if (!sameSpan && existing && !extraBindingSpans.has(bindingSpanKey(existing))) {
+      binding.earlierSameScope = existing;
+    }
     target.map.set(key, binding);
+    if (binding.coversEnclosingScope) target.pendingCoveringNames?.delete(binding.canonicalName);
+    if (!tracksLexicalNames) stealCoveredOccurrences(target, binding, key);
     const cppNamespace = cppNamespacePathByMap.get(target.map);
     if (support.id === "cpp" && kind === "function" && cppNamespace) {
       const qualifiedKey = `${cppNamespace}::${binding.name}`;
@@ -260,7 +376,31 @@ export function buildScopeIndexFromSource(
   // type parameter: Go struct fields are accessed through a receiver from
   // anywhere in the file, unlike a type parameter, which is scoped to its own
   // declaration.
+  const variableDeclarationScope = (): Scope => {
+    const current = stack[stack.length - 1] ?? rootScope;
+    const targetKinds = row.variableTargetScopeKinds;
+    if (!targetKinds) return current;
+    const boundary = row.variableScopeBoundaryTypes;
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      const scope = stack[index]!;
+      if (boundary) {
+        const parentType = scope.node.parent?.type;
+        if (boundary.has(scope.node.type) || (parentType !== undefined && boundary.has(parentType))) return scope;
+      }
+      if (targetKinds.has(scope.kind)) return scope;
+    }
+    return current;
+  };
+
+  const addVariableDecl = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
+    addBinding(variableDeclarationScope(), nameNode, kind);
+  };
+
   const addDeclSkippingTypeScope = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
+    if (kind === "local" && row.variableTargetScopeKinds) {
+      addVariableDecl(nameNode, kind);
+      return;
+    }
     const target = [...stack].reverse().find((scope) => scope.kind !== "type") ?? rootScope;
     addBinding(target, nameNode, kind);
   };
@@ -278,7 +418,7 @@ export function buildScopeIndexFromSource(
 
   const lookupOutsideFunctions = (name: string): Binding | undefined => {
     const canonicalName = normalizeIdentifier(name);
-    for (let index = stack.length - 1; index >= 0; index--) {
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
       const scope = stack[index]!;
       if (scope.kind === "function") continue;
       const hit = scope.map.get(canonicalName);
@@ -464,6 +604,10 @@ export function buildScopeIndexFromSource(
           } else addPatternDecls(name, "local", addBindingToScope);
         }
       } else if (row.assignmentIdentifierTypes?.has(child.type) && row.assignmentDeclarationTypes?.has(node.type)) {
+        const left = node.childForFieldName("left");
+        // `y = x` names both identifiers. Only the left-hand side declares; the right-hand side
+        // is a use and must not become a same-scope binding that hides the real declaration.
+        if (left && (left.startIndex !== child.startIndex || left.endIndex !== child.endIndex)) continue;
         addBindingToScope(child, "local");
       } else if (row.patternBindingTypes?.has(node.type)) {
         const pattern = node.childForFieldName("pattern") || node.childForFieldName("name");
@@ -472,28 +616,90 @@ export function buildScopeIndexFromSource(
     }
   };
 
+  const rememberPatternNames = (pattern: SyntaxNodeLike, names: Set<string>): void => {
+    if (idSet.has(pattern.type)) {
+      names.add(normalizeIdentifier(sliceText(pattern, source)));
+      return;
+    }
+    if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
+      const typeNode = pattern.childForFieldName("type");
+      for (const child of pattern.namedChildren) {
+        if (typeNode && child.startIndex === typeNode.startIndex && child.endIndex === typeNode.endIndex) continue;
+        rememberPatternNames(child, names);
+      }
+      return;
+    }
+    if (row.destructuringPairPatternTypes?.has(pattern.type)) {
+      const value = pattern.childForFieldName("value");
+      if (value) rememberPatternNames(value, names);
+      return;
+    }
+    for (const child of pattern.namedChildren) rememberPatternNames(child, names);
+  };
+
+  const rememberLexicalNames = (declaration: SyntaxNodeLike, names: Set<string>): void => {
+    for (const child of declaration.namedChildren) {
+      if (!row.variableDeclaratorTypes?.has(child.type)) continue;
+      const name = child.childForFieldName("name");
+      if (name) rememberPatternNames(name, names);
+    }
+  };
+
   const collectHoistedDeclarations = (scopeNode: SyntaxNodeLike): void => {
     if (!row.hoistedFunctionTypes && !row.hoistedVariableDeclarationTypes) return;
 
+    let pending: Set<string> | undefined;
+    const ensurePending = (): Set<string> => {
+      if (!pending) {
+        pending = new Set();
+        if (scopeNode.id !== undefined) pendingNamesByNodeId.set(scopeNode.id, pending);
+      }
+      return pending;
+    };
+    const addPending = (nameNode: SyntaxNodeLike): void => {
+      ensurePending().add(normalizeIdentifier(sliceText(nameNode, source)));
+    };
+
     const visit = (node: SyntaxNodeLike): void => {
-      if (support.createsFunctionScope(node)) {
+      if (node !== scopeNode && support.createsFunctionScope(node)) {
         if (row.hoistedFunctionTypes?.has(node.type)) {
           const name = node.childForFieldName("name");
           if (name) addHoistedDecl(name, "function");
         }
         return;
       }
+      if (
+        node !== scopeNode &&
+        !row.moduleRootTypes?.has(node.type) &&
+        (support.createsBlockScope(node) || !!row.typeScopeTypes?.has(node.type))
+      ) {
+        collectHoistedDeclarations(node);
+        return;
+      }
       if (row.hoistedVariableDeclarationTypes?.has(node.type)) {
         addVariableDeclarations(node, addHoistedDecl);
+      } else if (row.variableDeclarationTypes?.has(node.type)) {
+        rememberLexicalNames(node, ensurePending());
       }
-      for (const child of node.namedChildren) {
-        visit(child);
+      if (row.classNameTypes?.has(node.type) || row.typeNameTypes?.has(node.type)) {
+        const name = node.childForFieldName("name");
+        if (name) addPending(name);
       }
+      if (row.enumAssignmentTypes?.has(node.type)) {
+        const name = node.childForFieldName("name");
+        if (name) addPending(name);
+      } else if (
+        row.enumBodyMemberTypes?.has(node.type) &&
+        node.parent &&
+        row.enumBodyParentTypes?.has(node.parent.type)
+      ) {
+        addPending(node);
+      }
+      if (idSet.has(node.type) && scopeDeclarationNames(node)) addPending(node);
+      for (const child of node.namedChildren) visit(child);
     };
 
-    for (const child of scopeNode.namedChildren) {
-      visit(child);
-    }
+    for (const child of scopeNode.namedChildren) visit(child);
   };
 
   const isMemberFunction = (node: SyntaxNodeLike): boolean => {
@@ -508,6 +714,116 @@ export function buildScopeIndexFromSource(
       current = current.parent;
     }
     return false;
+  };
+
+  const canonicalUseName = (name: string, node: SyntaxNodeLike): string => {
+    const normalized = normalizeIdentifier(name);
+    return support.id === "c" && cTagRole(node) ? cScopeName(normalized, "tag") : normalized;
+  };
+
+  const scopeOwnsBinding = (scope: Scope, canonical: string, binding: Binding): boolean => {
+    let current = scope.map.get(canonical);
+    while (current) {
+      if (current === binding) return true;
+      current = current.earlierSameScope;
+    }
+    return false;
+  };
+
+  const deferToScope = (canonical: string, binding: Binding | undefined): Scope | undefined => {
+    if (row.variableTargetScopeKinds) {
+      for (let index = stack.length - 1; index >= 0; index -= 1) {
+        const scope = stack[index]!;
+        if (binding && scopeOwnsBinding(scope, canonical, binding)) return undefined;
+        if (row.variableTargetScopeKinds.has(scope.kind)) return scope;
+      }
+    }
+    if (tracksLexicalNames) {
+      const current = stack[stack.length - 1] ?? rootScope;
+      // A covering declaration still ahead in this scope shadows an outer binding (TDZ, hoisting).
+      if (current.pendingCoveringNames?.has(canonical)) return current;
+      if (binding && current.map.get(canonical) === binding) return undefined;
+      for (let index = stack.length - 1; index >= 0; index -= 1) {
+        const scope = stack[index]!;
+        if (binding && scopeOwnsBinding(scope, canonical, binding)) return undefined;
+        if (scope.pendingCoveringNames?.has(canonical)) return scope;
+      }
+      return undefined;
+    }
+    if (!binding && canDeferForward) {
+      for (let index = stack.length - 1; index >= 0; index -= 1) {
+        const scope = stack[index]!;
+        if (scopeCanGainCoveringBinding(scope)) return scope;
+      }
+    }
+    return undefined;
+  };
+
+  const scopeCanGainCoveringBinding = (scope: Scope): boolean =>
+    !!row.wholeScopeKinds?.has(scope.kind) ||
+    !!row.variableTargetScopeKinds?.has(scope.kind) ||
+    (!!row.wholeScopeDeclarationTypes?.size && scope.kind !== "module");
+
+  const lookupCovering = (
+    start: Scope | undefined,
+    useNode: SyntaxNodeLike,
+    canonical: string,
+    phpThis: boolean,
+  ): Binding | undefined => {
+    const useStart = useNode.startIndex;
+    let scope = start;
+    while (scope) {
+      if (!(phpThis && scope.kind === "function")) {
+        let binding = scope.map.get(canonical);
+        while (binding && !bindingCoversUse(row, scope.kind, binding, useStart)) binding = binding.earlierSameScope;
+        if (binding) return binding;
+      }
+      scope = scope.parent;
+    }
+    return undefined;
+  };
+
+  const attachOccurrence = (binding: Binding, useNode: SyntaxNodeLike): void => {
+    const range = toRange(useNode);
+    if (support.id === "cpp" && binding.kind === "function") {
+      cppFunctionOccurrences.push({ binding, node: useNode, range });
+    } else {
+      binding.occurrences.push(range);
+    }
+  };
+
+  const queueUse = (scope: Scope, id: number): void => {
+    let queued = scope.queuedUseIds;
+    if (!queued) scope.queuedUseIds = queued = [];
+    queued.push(id);
+  };
+
+  const closeScope = (scope: Scope): void => {
+    const queued = scope.queuedUseIds;
+    if (!queued) return;
+    delete scope.queuedUseIds;
+    let receiver: Scope | undefined;
+    if (!tracksLexicalNames) {
+      receiver = scope.parent;
+      while (receiver && !scopeCanGainCoveringBinding(receiver)) receiver = receiver.parent;
+    }
+    for (let index = 0; index < queued.length; index += 1) {
+      const id = queued[index]!;
+      const useNode = nodeById(id);
+      if (!useNode) continue;
+      const phpThis = support.id === "php" && isPhpThisPropertyName(useNode);
+      const canonical = canonicalUseName(sliceText(useNode, source), useNode);
+      const binding = lookupCovering(scope, useNode, canonical, phpThis);
+      if (!binding) {
+        if (receiver) queueUse(receiver, id);
+        continue;
+      }
+      if (receiver && !scopeOwnsBinding(scope, canonical, binding)) {
+        queueUse(receiver, id);
+        continue;
+      }
+      attachOccurrence(binding, useNode);
+    }
   };
 
   const walk = (node: SyntaxNodeLike) => {
@@ -621,6 +937,7 @@ export function buildScopeIndexFromSource(
       const params = node.childForFieldName("parameters");
       if (params) addPatternDecls(params, "param");
       collectHoistedDeclarations(node);
+      attachPendingNames(scope);
     } else if (support.createsBlockScope(node) || createsCppMemberScope) {
       if (!row.moduleRootTypes?.has(node.type)) {
         const scope: Scope = {
@@ -629,6 +946,7 @@ export function buildScopeIndexFromSource(
           node,
           parent: stack[stack.length - 1],
         };
+        attachPendingNames(scope);
         stack.push(scope);
         allScopes.push(scope);
         pushed = true;
@@ -650,6 +968,7 @@ export function buildScopeIndexFromSource(
         node,
         parent: stack[stack.length - 1],
       };
+      attachPendingNames(scope);
       stack.push(scope);
       allScopes.push(scope);
       pushed = true;
@@ -657,7 +976,10 @@ export function buildScopeIndexFromSource(
     }
 
     if (row.variableDeclarationTypes?.has(node.type)) {
-      addVariableDeclarations(node, row.hoistedVariableDeclarationTypes?.has(node.type) ? addHoistedDecl : addDecl);
+      addVariableDeclarations(
+        node,
+        row.hoistedVariableDeclarationTypes?.has(node.type) ? addHoistedDecl : addVariableDecl,
+      );
     }
 
     if (row.declarationPatternTypes?.has(node.type)) {
@@ -699,21 +1021,22 @@ export function buildScopeIndexFromSource(
       } else {
         const parent = node.parent;
         const memberProperty =
-          support.id === "cpp" && parent && isMemberAccessNode(support, parent)
+          parent &&
+          (row.nonLexicalMemberPropertyTypes?.has(parent.type) ||
+            (support.id === "cpp" && isMemberAccessNode(support, parent)))
             ? getMemberAccessParts(support, parent).property
             : null;
-        const isCppMemberProperty =
+        const isMemberProperty =
           !!memberProperty && memberProperty.startIndex <= node.startIndex && memberProperty.endIndex >= node.endIndex;
-        if (!isCppMemberProperty) {
-          const phpThisProperty = support.id === "php" && isPhpThisPropertyName(node);
-          const binding = phpThisProperty
-            ? lookupOutsideFunctions(sliceText(node, source))
-            : lookup(sliceText(node, source), node);
-          if (support.id === "cpp" && binding?.kind === "function") {
-            cppFunctionOccurrences.push({ binding, node, range: toRange(node) });
-          } else if (binding) {
-            binding.occurrences.push(toRange(node));
-          }
+        if (!isMemberProperty) {
+          const phpThis = support.id === "php" && isPhpThisPropertyName(node);
+          const name = sliceText(node, source);
+          const binding = phpThis ? lookupOutsideFunctions(name) : lookup(name, node);
+          const canonical = canonicalUseName(name, node);
+          const deferred = deferToScope(canonical, binding);
+          const useId = node.id;
+          if (deferred && useId !== undefined) queueUse(deferred, useId);
+          else if (binding) attachOccurrence(binding, node);
         }
       }
     }
@@ -742,7 +1065,11 @@ export function buildScopeIndexFromSource(
       }
       walk(child);
     }
-    for (let index = 0; index < pushedScopeCount; index += 1) stack.pop();
+    for (let index = 0; index < pushedScopeCount; index += 1) {
+      const closed = stack[stack.length - 1];
+      if (closed) closeScope(closed);
+      stack.pop();
+    }
     cppNamespacePath.length = namespacePathStart;
   };
 
@@ -782,7 +1109,9 @@ export function buildScopeIndexFromSource(
   };
 
   collectHoistedDeclarations(tree.rootNode);
+  attachPendingNames(rootScope);
   walk(tree.rootNode);
+  closeScope(rootScope);
   for (const collisions of cppFunctionCollisionGroups) prepareCppCallableBindings(collisions);
   const cppQualifiedCallableBindings = new Map<string, Binding[]>();
   for (const [key, memberBindings] of cppQualifiedMemberBindings) {
@@ -821,20 +1150,21 @@ export function buildScopeIndexFromSource(
   const bindings = new Map<string, Binding[]>();
   const all: Binding[] = [];
   const flushedMaps = new Set<Map<string, Binding>>();
-  const flush = (scope: Scope) => {
-    if (flushedMaps.has(scope.map)) return;
-    flushedMaps.add(scope.map);
-    for (const binding of scope.map.values()) {
-      if (!bindings.has(binding.canonicalName)) bindings.set(binding.canonicalName, []);
-      bindings.get(binding.canonicalName)!.push(binding);
-      all.push(binding);
-    }
-  };
-  for (const scope of allScopes) flush(scope);
-  for (const binding of extraBindings) {
+  const seenBindings = new Set<Binding>();
+  const pushBinding = (binding: Binding): void => {
+    if (seenBindings.has(binding)) return;
+    seenBindings.add(binding);
     if (!bindings.has(binding.canonicalName)) bindings.set(binding.canonicalName, []);
     bindings.get(binding.canonicalName)!.push(binding);
     all.push(binding);
-  }
+    if (binding.earlierSameScope) pushBinding(binding.earlierSameScope);
+  };
+  const flush = (scope: Scope) => {
+    if (flushedMaps.has(scope.map)) return;
+    flushedMaps.add(scope.map);
+    for (const binding of scope.map.values()) pushBinding(binding);
+  };
+  for (const scope of allScopes) flush(scope);
+  for (const binding of extraBindings) pushBinding(binding);
   return { bindings, all, allScopes, cppQualifiedFunctionBindings: cppQualifiedCallableBindings };
 }
