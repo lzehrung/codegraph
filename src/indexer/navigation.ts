@@ -25,7 +25,14 @@ import {
   findDeclarationNameNode,
   getOrBuildScopeIndex,
   resolveNamedDefinition,
+  toModuleRef,
 } from "./navigation-local.js";
+import {
+  AMBIGUOUS_STAR_IMPORT_REASON,
+  findRubyReopenedConstantParts,
+  isExpandedStarBinding,
+  resolveStarImportedDefinition,
+} from "./star-import-precedence.js";
 import { createNavigationProvenance, okGoToResult } from "./navigation-provenance.js";
 import {
   findPhpImportAlias,
@@ -84,6 +91,7 @@ import {
   cppUsingDeclarationTarget,
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
+  resolveCppExportedCallables,
   resolveCppQualifiedMemberContainer,
   resolveCppUsingDirectiveNameAsync,
   resolveVisibleCppCallableNameAsync,
@@ -457,6 +465,14 @@ export async function goToDefinition(
         cNamespace,
         node.startIndex,
       );
+      if (
+        (sup.id === "c" || sup.id === "cpp") &&
+        resolvedName?.status === "not_found" &&
+        resolvedName.reason === AMBIGUOUS_STAR_IMPORT_REASON
+      ) {
+        const recovered = await recoverIncludedCallableStar(index, mod, sup.id, lookupName, cNamespace, node, source);
+        if (recovered) return recovered;
+      }
       if (sup.id === "swift" || sup.id === "csharp") {
         // Inside a type, a proven member takes precedence over a same-named module name. C#
         // partial members declared in another file reach this path only as invocation callees.
@@ -594,6 +610,101 @@ export async function findRenameReferences(
  * `parsedContext` is optional; when omitted the definition file is parsed on demand. Definitions
  * outside C/C++ return just the enriched definition.
  */
+/**
+ * Two included declarations of one C/C++ function are one callable, using
+ * {@link getCppEquivalentCallableDefinitions}. Different signatures stay an
+ * overload set and are chosen by call arity. Non-callables (typedefs, structs)
+ * are left to the star-import ambiguity result.
+ */
+async function recoverIncludedCallableStar(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  languageId: string,
+  name: string,
+  cNamespace: "tag" | "ordinary" | undefined,
+  node: SyntaxNodeLike,
+  source: string,
+): Promise<GoToResult | null> {
+  const candidates: Array<{ imp: Extract<ImportBinding, { kind: "star" }>; def: SymbolDef }> = [];
+  for (const imp of mod.imports) {
+    if (isExpandedStarBinding(imp, mod.imports) || imp.kind !== "star") continue;
+    const def = resolveStarImportedDefinition(index, imp, name, languageId, cNamespace);
+    if (def) candidates.push({ imp, def });
+  }
+  const functions = candidates.filter((candidate) => candidate.def.kind === SymbolKind.Function && !candidate.def.cTag);
+  if (functions.length < 2) return null;
+
+  const familyOf = new Map<string, SymbolDef[]>();
+  const family = async (def: SymbolDef): Promise<SymbolDef[]> => {
+    const key = referenceSiteKey(def.file, def.range);
+    const cached = familyOf.get(key);
+    if (cached) return cached;
+    const defs = await getCppEquivalentCallableDefinitions(index, def);
+    familyOf.set(key, defs);
+    return defs;
+  };
+  const parent = functions.map((_, candidateIndex) => candidateIndex);
+  const find = (start: number): number => {
+    let current = start;
+    while (parent[current] !== current) {
+      const next = parent[current]!;
+      parent[current] = parent[next] ?? next;
+      current = next;
+    }
+    return current;
+  };
+  const unite = (left: number, right: number): void => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parent[rightRoot] = leftRoot;
+  };
+  for (let left = 0; left < functions.length; left += 1) {
+    const defs = await family(functions[left]!.def);
+    for (let right = left + 1; right < functions.length; right += 1) {
+      if (defs.some((item) => sameDef(item, functions[right]!.def, index.languageExtensions))) unite(left, right);
+    }
+  }
+  const roots = new Set(functions.map((_, candidateIndex) => find(candidateIndex)));
+  if (roots.size === 1) {
+    const chosen = functions[0]!;
+    const importedFrom = toModuleRef(chosen.imp.resolved);
+    return okGoToResult(index, chosen.def, {
+      via: { ...(importedFrom ? { importedFrom } : {}), exportedName: name },
+      resolution: "import-star",
+      confidence: "medium",
+    });
+  }
+
+  const parsedByFile = new Map<string, ParsedFileContext>();
+  for (const candidate of functions) {
+    const key = fileIdentityKey(candidate.def.file);
+    if (parsedByFile.has(key)) continue;
+    try {
+      parsedByFile.set(
+        key,
+        await ensureParsedContext(candidate.def.file, index.parsed?.get(key), index.languageExtensions),
+      );
+    } catch {
+      return languageId === "cpp"
+        ? { status: "not_found", reason: "Ambiguous C++ overload" }
+        : { status: "not_found", reason: "No matching local or imported definition" };
+    }
+  }
+  const selected = resolveCppExportedCallables(
+    index,
+    functions.map((candidate) => candidate.def),
+    node,
+    source,
+    (targetFile) => parsedByFile.get(fileIdentityKey(targetFile)) ?? null,
+  );
+  if (selected) {
+    return okGoToResult(index, selected, { resolution: "exact", confidence: "high" });
+  }
+  return languageId === "cpp"
+    ? { status: "not_found", reason: "Ambiguous C++ overload" }
+    : { status: "not_found", reason: "No matching local or imported definition" };
+}
+
 export async function getCppEquivalentCallableDefinitions(
   index: ProjectIndex,
   def: SymbolDef,
@@ -725,7 +836,8 @@ async function findReferencesInternal(
       definition.kind === SymbolKind.TypeAlias)
       ? await findCsharpPartialTypeEquivalents(index, definition)
       : [];
-  const equivalentDefinitions = [...family.equivalents, ...csharpPartialEquivalents];
+  const rubyReopen = parsedContext.sup.id === "ruby" ? findRubyReopenedConstantParts(index, definition) : undefined;
+  const equivalentDefinitions = [...family.equivalents, ...csharpPartialEquivalents, ...(rubyReopen?.parts ?? [])];
   for (const equivalent of equivalentDefinitions) {
     pushRef({ file: equivalent.file, range: equivalent.range });
   }
@@ -1397,7 +1509,10 @@ async function findReferencesInternal(
         ? { implicitUnitPeers: { applicable: true, executed: implicitUnitComplete } }
         : {}),
     }),
-    strategyUnavailableFiles: [...receiverProofUnavailableFiles.values()],
+    strategyUnavailableFiles: [
+      ...receiverProofUnavailableFiles.values(),
+      ...(rubyReopen?.incomplete ? [definition.file] : []),
+    ],
   });
 
   return {

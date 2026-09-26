@@ -1,11 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
 import { resolvePythonModule } from "../../util/resolution.js";
 import { maskPythonCommentsAndStrings, stripPythonCommentsAndStrings } from "../../util/comments.js";
 import { PYTHON_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import type { NativeMatch } from "../../native/tree-sitter-native.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
-import type { ImportBindingSink, ResolvedImportTarget } from "./context.js";
+import type { ImportBindingSink } from "./context.js";
 import { attributeNamedBindingRanges } from "./binding-ranges.js";
 import type { ImportBinding } from "../types.js";
 
@@ -23,40 +21,6 @@ function splitRelativeModuleSpec(moduleSpec: string): { relDots: number; mod: st
     relDots: match[1]!.length,
     mod: match[2] || null,
   };
-}
-
-function resolvePythonNamespaceMember(resolved: ResolvedImportTarget, imported: string): string | undefined {
-  if (typeof resolved !== "string") return undefined;
-  let baseDir = resolved;
-  try {
-    const stat = fs.statSync(baseDir);
-    if (
-      !stat.isDirectory() &&
-      (baseDir.toLowerCase().endsWith("__init__.py") || baseDir.toLowerCase().endsWith("__init__.pyi"))
-    ) {
-      baseDir = path.dirname(baseDir);
-    }
-  } catch {
-    return undefined;
-  }
-
-  const candidates = [
-    path.join(baseDir, `${imported}.py`),
-    path.join(baseDir, `${imported}.pyi`),
-    path.join(baseDir, imported, "__init__.py"),
-    path.join(baseDir, imported, "__init__.pyi"),
-    path.join(baseDir, imported),
-  ];
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate.replace(/\\/g, "/");
-      }
-    } catch {
-      // Ignore filesystem races and continue trying remaining namespace candidates.
-    }
-  }
-  return undefined;
 }
 
 async function pushStarImport(
@@ -231,7 +195,13 @@ async function collectPythonImportStatement(
     const aliasMatch = item.match(PYTHON_MODULE_LIST_ITEM_PATTERN);
     if (!aliasMatch) continue;
     const dotted = aliasMatch[1]!;
-    await pushDefaultImport(context, dotted, aliasMatch[2] ?? dotted.split(".")[0]!, moduleLevel, aliasMatch[2] !== undefined);
+    await pushDefaultImport(
+      context,
+      dotted,
+      aliasMatch[2] ?? dotted.split(".")[0]!,
+      moduleLevel,
+      aliasMatch[2] !== undefined,
+    );
   }
   return true;
 }

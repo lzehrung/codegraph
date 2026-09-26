@@ -1167,12 +1167,13 @@ export function collectLocalsAndExportsFromSource(
           ) ?? locals.find((def) => def.localName === nameText);
         if (local) {
           const isDefaultExport = /^\s*export\s+default\b/.test(stmtText);
-          const exportedName =
-            support.id === "cpp" && visibilityNameNode
-              ? cppQualifiedExportName(visibilityNameNode, source, nameText)
-              : support.id === "ruby" && visibilityNameNode
-                ? rubyQualifiedExportName(visibilityNameNode, source, nameText)
-                : nameText;
+          const qualifiedExportName = (): string => {
+            if (!visibilityNameNode) return nameText;
+            if (support.id === "cpp") return cppQualifiedExportName(visibilityNameNode, source, nameText);
+            if (support.id === "ruby") return rubyQualifiedExportName(visibilityNameNode, source, nameText);
+            return nameText;
+          };
+          const exportedName = qualifiedExportName();
           if (!isDefaultExport) {
             exports.push({
               type: "local",
