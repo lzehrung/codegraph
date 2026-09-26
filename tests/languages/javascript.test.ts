@@ -7,6 +7,7 @@ import type { LanguageTestDefinition } from "./types.js";
 import { createTestIndexFromFiles, findSymbolsByName } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { buildProjectIndexFromFiles, findReferences, goToDefinition } from "../../src/index.js";
+import { findRenameReferences, findUsageReferences } from "../../src/indexer/navigation.js";
 
 const definition: LanguageTestDefinition = {
   id: "javascript",
@@ -54,11 +55,17 @@ const definition: LanguageTestDefinition = {
           file: "helpers.js",
           line: 1,
           column: 17,
+          // utils.js re-exports helpers.js's helperFunction under an alias
+          // (`export { helperFunction as reExportedHelper } from "./helpers.js"`), and the
+          // `utils.js -> helpers.js` dependency edge above proves the cross-file link, so the
+          // source-specifier token at utils.js:22 is a genuine reference distinct from utils.js's
+          // own same-named local declaration at utils.js:1.
           references: [
             { file: "helpers.js", line: 1 },
             { file: "helpers.js", line: 18 },
             { file: "main.js", line: 25 },
             { file: "main.js", line: 33 },
+            { file: "utils.js", line: 22 },
           ],
         },
         {
@@ -77,6 +84,43 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("F3 graph-linked candidate discovery for a re-export chain", () => {
+  it("finds the re-export specifier as an `all`-mode reference but excludes it from usages and rename", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "javascript");
+    const helpersFile = path.join(root, "helpers.js").replace(/\\/g, "/");
+    const utilsFile = path.join(root, "utils.js").replace(/\\/g, "/");
+    const mainFile = path.join(root, "main.js").replace(/\\/g, "/");
+    const index = await createTestIndexFromFiles(root, [helpersFile, utilsFile, mainFile]);
+    const def = index.byFile
+      .get(fileIdentityKey(helpersFile))
+      ?.locals.find((local) => local.localName === "helperFunction");
+    if (!def) throw new Error("Expected a definition for helperFunction");
+
+    // utils.js:22 is `export { helperFunction as reExportedHelper } from "./helpers.js";` - the
+    // source-specifier token names helpers.js's helperFunction directly, so it is a genuine
+    // reference site, but it is a re-export alias, not a usage: rename must not touch it and
+    // "usages" (which drives call-site style consumers) must not report it either.
+    const all = await findReferences(index, { def });
+    expect(all.status).toBe("ok");
+    if (all.status !== "ok") return;
+    const reexportSite = all.references.find(
+      (reference) => reference.file === utilsFile && reference.range.start.line === 22,
+    );
+    expect(reexportSite).toBeDefined();
+    expect(reexportSite?.via).toEqual({ reexport: true });
+
+    const usages = await findUsageReferences(index, { def });
+    expect(usages.status).toBe("ok");
+    if (usages.status !== "ok") return;
+    expect(usages.references.some((reference) => reference.file === utilsFile)).toBe(false);
+
+    const rename = await findRenameReferences(index, def);
+    expect(rename.status).toBe("ok");
+    if (rename.status !== "ok") return;
+    expect(rename.references.some((reference) => reference.file === utilsFile)).toBe(false);
+  });
+});
 
 describe("CommonJS spread exports", () => {
   it("resolves static sources and reports unresolved spread sources", async () => {
