@@ -11,9 +11,9 @@ regression test.
 
 ## Cross-cutting fixes (do first)
 
-- [~] **F1 Consumers agree.** `goToDefinition`, `findReferences`, and `buildSymbolGraphDetailed` give
-  the same answer for the same use site. Add a cross-consumer agreement test that runs every
-  fixture below through all three consumers.
+- [x] **F1 Consumers agree.** `goToDefinition`, `findReferences`, and `buildSymbolGraphDetailed` give
+      the same answer for the same use site. Add a cross-consumer agreement test that runs every
+      fixture below through all three consumers.
 - [x] **F2 Same-package and same-namespace peers.** Java, Kotlin, Swift, and PHP resolve a peer
       declaration without an import, the way C# already does (W5, W12).
 - [x] **F3 No `complete` with an unresolved use.** A same-name use in a scanned candidate file that
@@ -78,6 +78,6 @@ regression test.
 
 ## Integration
 
-- [ ] Bump cache epochs and snapshot versions once for the combined behavior change.
+- [x] Bump cache epochs and snapshot versions once for the combined behavior change.
 - [ ] Update `docs/language-parity.md`, `CHANGELOG.md` (`[Unreleased]`), and fixture reports.
 - [ ] `npm run check`, fresh independent review, PR, Copilot review.
