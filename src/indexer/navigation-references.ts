@@ -3,12 +3,13 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
-import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
+import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
 import {
   classifyReceiver,
   declaresMembers,
   receiverConstructorExpression,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { sameDef } from "./reference-context.js";
 import {
@@ -22,8 +23,9 @@ import {
   readPhpNamespaceFromRange,
   selectFirstExistingPhpCanonicalName,
 } from "./navigation-php.js";
-import { isKeywordReceiver } from "../util/member-access-tables.js";
+import { isKeywordReceiver, memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
 import { getCompilationUnitPeers } from "./compilation-units.js";
+import { findClosestScopeBinding } from "./navigation-local.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -576,11 +578,57 @@ type ReferenceDefinitionResolver = (
   parsed: ParsedFileContext,
 ) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>;
 
+/**
+ * A member call on a local, parameter, field, or `this`/`self` cannot name a free function
+ * in a language whose member syntax never calls one. A missing receiver, or a module or
+ * namespace binding (`util.helper()`, `mod.thing()`), stays unproven.
+ */
+/** True when `range` is the property of a member-access expression, not a bare call. */
+export function isMemberAccessPropertyRange(parsed: ParsedFileContext, range: Range): boolean {
+  const startIndex = range.start.index;
+  const node =
+    startIndex !== undefined
+      ? parsed.tree.rootNode.descendantForIndex(startIndex, range.end.index ?? startIndex)
+      : parsed.tree.rootNode.descendantForPosition(
+          { row: range.start.line - 1, column: range.start.column - 1 },
+          { row: range.start.line - 1, column: range.start.column - 1 },
+        );
+  const parent = node.parent;
+  if (!parent || !isMemberAccessNode(parsed.sup, parent)) return false;
+  const property = getMemberAccessParts(parsed.sup, parent).property;
+  return !!property && node.startIndex >= property.startIndex && node.endIndex <= property.endIndex;
+}
+
+function freeFunctionMemberSiteIsProvenNonReference(
+  index: ProjectIndex,
+  fileId: FileId,
+  parsed: ParsedFileContext,
+  objectNode: SyntaxNodeLike,
+  expectedDef: SymbolDef,
+): boolean {
+  if (expectedDef.isMember || expectedDef.kind !== SymbolKind.Function) return false;
+  if (memberSyntaxNamesFreeFunction(parsed.sup.id)) return false;
+  const receiverText = sliceText(objectNode, parsed.source).trim();
+  if (isKeywordReceiver(parsed.sup.id, receiverText)) return true;
+  if (!isReceiverNameNode(parsed.sup, objectNode.type)) return false;
+  const mod = index.byFile.get(fileIdentityKey(fileId));
+  if (!mod) return false;
+  const binding = findClosestScopeBinding(
+    getCachedScope(index, fileId, mod, parsed),
+    receiverText,
+    objectNode,
+    parsed.sup,
+  );
+  return binding?.kind === "local" || binding?.kind === "param";
+}
+
 async function receiverProofUnavailable(
+  index: ProjectIndex,
   fileId: FileId,
   parsed: ParsedFileContext,
   range: Range,
   resolveDefinition: ReferenceDefinitionResolver,
+  expectedDef: SymbolDef,
 ): Promise<boolean> {
   const position = {
     row: range.start.line - 1,
@@ -593,21 +641,37 @@ async function receiverProofUnavailable(
       const { object, property } = getMemberAccessParts(parsed.sup, current);
       if (!object || !property || property.startIndex !== range.start.index) return false;
       const receiver = classifyReceiver(parsed.sup, object, parsed.source, new Map(), current.startIndex, current);
-      if (receiver) return false;
-      const receiverRange = toRange(object);
-      const resolvedReceiver = await resolveDefinition(
-        {
-          file: fileId,
-          line: receiverRange.start.line,
-          column: receiverRange.start.column,
-        },
-        parsed,
-      );
-      return !(
-        resolvedReceiver.status === "ok" &&
-        resolvedReceiver.definition &&
-        declaresMembers(resolvedReceiver.definition)
-      );
+      // A recognized shape is not proof. Exclude it only when the type is a resolved
+      // member-declaring definition, every supertype resolves, and none declare this member.
+      let unavailable: boolean;
+      if (receiver) {
+        const omits = await provenClassifiedReceiverOmitsMember(
+          index,
+          fileId,
+          parsed,
+          current,
+          object,
+          sliceText(property, parsed.source),
+        );
+        unavailable = !omits;
+      } else {
+        const receiverRange = toRange(object);
+        const resolvedReceiver = await resolveDefinition(
+          {
+            file: fileId,
+            line: receiverRange.start.line,
+            column: receiverRange.start.column,
+          },
+          parsed,
+        );
+        unavailable = !(
+          resolvedReceiver.status === "ok" &&
+          resolvedReceiver.definition &&
+          declaresMembers(resolvedReceiver.definition)
+        );
+      }
+      if (!unavailable) return false;
+      return !freeFunctionMemberSiteIsProvenNonReference(index, fileId, parsed, object, expectedDef);
     }
     current = current.parent;
   }
@@ -744,7 +808,7 @@ export async function collectVerifiedNamedNodeReferences(
     if (
       !recoveredByLanguageFallback &&
       onReceiverProofUnavailable &&
-      (await receiverProofUnavailable(fileId, parsed, range, resolveDefinition))
+      (await receiverProofUnavailable(index, fileId, parsed, range, resolveDefinition, expectedDef))
     ) {
       onReceiverProofUnavailable(fileId);
     }
@@ -927,9 +991,7 @@ function getIndexedReferenceCandidateFiles(
     if (
       moduleIndex.imports.some(
         (imp) =>
-          (imp.kind === "star" ||
-            imp.kind === "namespace" ||
-            (imp.kind === "named" && imp.mechanism === "python")) &&
+          (imp.kind === "star" || imp.kind === "namespace" || (imp.kind === "named" && imp.mechanism === "python")) &&
           importCanReferenceDefinition(index, imp, def, exportedNames, languageId),
       )
     ) {

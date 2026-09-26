@@ -98,6 +98,15 @@ export type MemberAccessRow = {
   receiverKeywordsOmittedReason?: string;
   /** Language syntax that declares ancestors visible to own-type and supertype receivers. */
   receiverAncestry?: ReceiverAncestry;
+  /**
+   * Member syntax can name a free function (`!isMember`): Kotlin extensions
+   * (`fun Widget.describe()`) and Go methods, which are indexed as free functions.
+   * Swift extensions, Rust methods, and C# extension methods are `isMember`, so they
+   * stay on the member path and do not set this flag.
+   */
+  memberCallNamesFreeFunction?: true;
+  /** Why a member call cannot name a free function in this language. */
+  memberCallNamesFreeFunctionOmittedReason?: string;
 };
 
 /** C models dotted access as `field_expression`; C++ also exposes scoped `qualified_identifier`. */
@@ -123,11 +132,14 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     memberAccessShapes: [C_FIELD_ACCESS_SHAPE],
     receiverKeywordsOmittedReason:
       "C has no receiver keyword; member access always names an explicit object or pointer.",
+    memberCallNamesFreeFunctionOmittedReason: "A member expression names a field of an object, not a free function.",
   },
   cpp: {
     memberAccessShapes: [C_FIELD_ACCESS_SHAPE, CPP_QUALIFIED_ACCESS_SHAPE],
     receiverKeywords: { own: ["this"], instanceOwn: ["this"], supertype: [] },
     receiverAncestry: { clauses: [{ nodeType: "base_class_clause", relation: "extends" }] },
+    memberCallNamesFreeFunctionOmittedReason:
+      "A member call on an object or parameter cannot name a namespace free function.",
   },
   css: { omittedReason: "Style language; no member-access concept." },
   csharp: {
@@ -145,6 +157,8 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     receiverAncestry: {
       clauses: [{ nodeType: "base_list", relation: "superclass-first", supertype: "first-child" }],
     },
+    memberCallNamesFreeFunctionOmittedReason:
+      "Extension methods are members; a free function is not called with member syntax.",
   },
   go: {
     extraTraversalTypes: ["qualified_type"],
@@ -166,6 +180,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         },
       ],
     },
+    memberCallNamesFreeFunction: true,
   },
   hbs: { omittedReason: "Handlebars document format; embedded scripts parse as their own language." },
   html: { omittedReason: "Document format; embedded scripts parse as their own language." },
@@ -189,12 +204,15 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         { nodeType: "super_interfaces", relation: "implements" },
       ],
     },
+    memberCallNamesFreeFunctionOmittedReason: "A method call names a member of the receiver type, not a free function.",
   },
   js: {
     memberAccessOmittedReason:
       "The shared generic default already reads member_expression's object and property fields.",
     receiverKeywords: THIS_SUPER_RECEIVERS,
     receiverAncestry: { clauses: [{ nodeType: "class_heritage", relation: "extends", supertype: "all" }] },
+    memberCallNamesFreeFunctionOmittedReason:
+      "Member syntax names an object property; a free function is not called that way.",
   },
   kotlin: {
     memberAccessShapes: [
@@ -205,6 +223,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     receiverAncestry: {
       clauses: [{ nodeType: "delegation_specifiers", relation: "superclass-first", supertype: "first-child" }],
     },
+    memberCallNamesFreeFunction: true,
   },
   less: { omittedReason: "Style language; no member-access concept." },
   markdown: { omittedReason: "Document format; fenced code blocks parse as their own language." },
@@ -241,6 +260,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         { nodeType: "use_declaration", relation: "trait", each: true },
       ],
     },
+    memberCallNamesFreeFunctionOmittedReason: "A member or scoped call names a class member, not a free function.",
   },
   python: {
     memberExpressionType: "attribute",
@@ -250,6 +270,8 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     receiverKeywords: { own: ["self", "cls"], instanceOwn: ["self"], supertype: ["super"] },
     receiverKeywordCallShape: true,
     receiverAncestry: { clauses: [{ nodeType: "argument_list", relation: "extends" }] },
+    memberCallNamesFreeFunctionOmittedReason:
+      "Attribute access names a member; a free function is not called that way.",
   },
   rst: { omittedReason: "reStructuredText document format; embedded code blocks parse as their own language." },
   ruby: {
@@ -268,6 +290,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       clauses: [{ nodeType: "superclass", relation: "extends", supertype: "all" }],
       mixinCalls: ["include", "extend", "prepend"],
     },
+    memberCallNamesFreeFunctionOmittedReason: "A call with a receiver names a method, not a free function.",
   },
   rust: {
     memberAccessShapes: [
@@ -278,6 +301,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       },
     ],
     receiverKeywords: { own: ["self", "Self"], instanceOwn: ["self"], supertype: [] },
+    memberCallNamesFreeFunctionOmittedReason: "Methods are members; a free function is not invoked with member syntax.",
   },
   scss: { omittedReason: "Style language; no member-access concept." },
   svelte: { omittedReason: "Svelte component format; script blocks parse as js/ts and templates as html." },
@@ -297,6 +321,8 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         },
       ],
     },
+    memberCallNamesFreeFunctionOmittedReason:
+      "Extension methods are members; a free function is not called with member syntax.",
   },
   ts: {
     memberAccessOmittedReason:
@@ -308,6 +334,8 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         { nodeType: "implements_clause", relation: "implements" },
       ],
     },
+    memberCallNamesFreeFunctionOmittedReason:
+      "Member syntax names an object property; a free function is not called that way.",
   },
   tsx: {
     memberAccessOmittedReason:
@@ -319,11 +347,14 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         { nodeType: "implements_clause", relation: "implements" },
       ],
     },
+    memberCallNamesFreeFunctionOmittedReason:
+      "Member syntax names an object property; a free function is not called that way.",
   },
   vue: { omittedReason: "Vue component format; script blocks parse as js/ts and templates as html." },
   zig: {
     memberAccessOmittedReason: "No per-language extraction today; the shared generic default is zig's behavior.",
     receiverKeywords: { own: ["self"], instanceOwn: ["self"], supertype: [] },
+    memberCallNamesFreeFunctionOmittedReason: "A member call names a container member, not a free function.",
   },
 };
 
@@ -363,4 +394,9 @@ export function ownReceiverMemberScope(languageId: string, receiverName: string)
 
 export function isKeywordReceiver(languageId: string, receiverName: string): boolean {
   return keywordReceiverKind(languageId, receiverName) !== null;
+}
+
+/** Whether `receiver.name()` can refer to a free function rather than only a member. */
+export function memberSyntaxNamesFreeFunction(languageId: string): boolean {
+  return MEMBER_ACCESS_ROWS[languageId]?.memberCallNamesFreeFunction === true;
 }

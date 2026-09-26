@@ -81,6 +81,8 @@ function declaredCapabilityFields(row: MemberAccessRow): string[] {
   if (row.receiverAncestry) fields.push("receiverAncestry");
   if (row.memberAccessOmittedReason) fields.push("memberAccessOmittedReason");
   if (row.receiverKeywordsOmittedReason) fields.push("receiverKeywordsOmittedReason");
+  if (row.memberCallNamesFreeFunction) fields.push("memberCallNamesFreeFunction");
+  if (row.memberCallNamesFreeFunctionOmittedReason) fields.push("memberCallNamesFreeFunctionOmittedReason");
   return fields;
 }
 
@@ -125,6 +127,17 @@ describe("member access tables", () => {
         expect(
           row.receiverKeywordsOmittedReason,
           `${languageId} declares receiver keywords and also an omission reason`,
+        ).toBeUndefined();
+      }
+      if (row.memberCallNamesFreeFunction === undefined) {
+        expect(
+          row.memberCallNamesFreeFunctionOmittedReason,
+          `${languageId} declares no free-function member call and no reason`,
+        ).toBeTruthy();
+      } else {
+        expect(
+          row.memberCallNamesFreeFunctionOmittedReason,
+          `${languageId} allows a free-function member call and also an omission reason`,
         ).toBeUndefined();
       }
     }

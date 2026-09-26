@@ -5,6 +5,7 @@ import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js"
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
 import { isGoExportedMemberName } from "./declaration-visibility.js";
+import { memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
 import { phpObjectCreationKeyword } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   csharpAliasQualifiedLookupName,
@@ -42,6 +43,7 @@ import {
   describeReferenceStrategies,
   ensurePhpNamespaceSymbolIndex,
   collectVerifiedNamedNodeReferences,
+  isMemberAccessPropertyRange,
   type VerifiedNamedNodeReference,
   getCachedScope,
   exportFromIdentifier,
@@ -764,10 +766,35 @@ async function findReferencesInternal(
     scansNamespaceReferences;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
+  let memberCallOccurrencesNeedVerification = false;
   if (localBinding && localBinding.occurrencesComplete !== false && !scansReceiverReferences) {
+    const verifyMemberCalls = memberSyntaxNamesFreeFunction(parsedContext.sup.id);
     for (const occurrence of localBinding.occurrences) {
       if (hasReachedCollectionLimit()) break;
+      // A scope occurrence is not proof of a member call. Languages that invoke a free
+      // function that way verify the site; an unresolvable receiver stays unavailable.
+      if (verifyMemberCalls && isMemberAccessPropertyRange(parsedContext, occurrence)) {
+        memberCallOccurrencesNeedVerification = true;
+        continue;
+      }
       pushRef({ file: definitionFile, range: occurrence });
+    }
+  }
+  if (memberCallOccurrencesNeedVerification && !hasReachedCollectionLimit()) {
+    const ranges = await collectVerifiedNamedNodeReferences(
+      index,
+      definitionFile,
+      referenceDef.localName,
+      referenceDef,
+      (params, parsed) => goToDefinition(index, params, parsed),
+      remainingCollectionSlots(),
+      verifiedReferenceFilter(definitionFile),
+      (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
+      equivalentDefinitions,
+    );
+    for (const { range, provenance, via } of ranges) {
+      if (hasReachedCollectionLimit()) break;
+      pushRef({ file: definitionFile, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
     }
   }
   if (requiresSameFileVerifiedScan && !hasReachedCollectionLimit()) {
