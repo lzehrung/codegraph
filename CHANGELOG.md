@@ -30,7 +30,6 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - When two wildcard imports provide the same name, codegraph follows each language's rule (Python: the last import wins; Java, Kotlin, and Rust: an explicit import wins) and otherwise reports the name as ambiguous instead of picking one.
 - Go-to-definition, find references, and call graphs now give the same answer for the same use.
 - A warm disk-cache build picks up a newly added file that an existing import can now resolve to, including Python absolute imports, quoted C and C++ includes, and tsconfig path aliases.
-- Package-manifest lookups for unresolved imports no longer read outside `--root` when the project has no Git repository.
 
 ### Changed
 

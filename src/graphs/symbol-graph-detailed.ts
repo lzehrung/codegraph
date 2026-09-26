@@ -11,11 +11,7 @@ import {
 import { IMPLICIT_UNIT_LANGUAGES } from "../indexer/compilation-units.js";
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { cjsRequireValueBinding, resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
-import {
-  earliestSymbolDef,
-  typescriptCallableContainerKey,
-  typescriptCallableRoleAt,
-} from "../indexer/ts-callables.js";
+import { typescriptCallableContainerKey, typescriptCallableRoleAt } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
 import { csharpAliasQualifiedLookupName, innermostNamespaceImport } from "../indexer/navigation-goto.js";
@@ -28,8 +24,7 @@ import {
   resolveVisibleCppCallableName,
 } from "../indexer/navigation-cpp.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
-import { ensurePhpNamespaceSymbolIndex } from "../indexer/navigation-references.js";
-import { resolveIndexedPhpClassReference } from "../indexer/php-namespace-symbols.js";
+import { ensurePhpNamespaceSymbolIndex, resolveIndexedPhpClassReference } from "../indexer/php-namespace-symbols.js";
 import {
   csharpLookupName,
   findClosestScopeBinding,
@@ -165,10 +160,11 @@ function recordTypeScriptCallableAliases(
       const end = local.range.end.index ?? start;
       return typescriptCallableRoleAt(tree, start, end) === "implementation";
     });
-    let canonical: SymbolDef | undefined;
-    if (implementations.length === 1) canonical = implementations[0];
-    else if (implementations.length === 0) canonical = earliestSymbolDef(group);
-    if (!canonical) continue;
+    // One implementation body makes the signatures one callable. A signature-only set (an
+    // interface, `declare`, or abstract overloads) keeps one node per signature, so type
+    // hierarchy sees each arity and rejects the ambiguous member instead of guessing.
+    if (implementations.length !== 1) continue;
+    const canonical = implementations[0]!;
     const canonicalId = defNodeId(canonical);
     for (const local of group) {
       const id = defNodeId(local);

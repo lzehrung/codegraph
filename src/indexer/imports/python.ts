@@ -1,9 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import { resolvePythonModule } from "../../util/resolution.js";
 import { maskPythonCommentsAndStrings, stripPythonCommentsAndStrings } from "../../util/comments.js";
 import { PYTHON_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import type { NativeMatch } from "../../native/tree-sitter-native.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
-import type { ImportBindingSink } from "./context.js";
+import type { ImportBindingSink, ResolvedImportTarget } from "./context.js";
 import { attributeNamedBindingRanges } from "./binding-ranges.js";
 import type { ImportBinding } from "../types.js";
 
@@ -39,6 +41,37 @@ async function pushStarImport(
   });
 }
 
+/**
+ * The submodule `from pkg import name` binds when `pkg` has no attribute `name`: `name.py`,
+ * `name.pyi`, `name/__init__.py`, or a PEP 420 directory `name/`. Python's importer compares
+ * directory entries case-sensitively even on case-insensitive filesystems, so `Widget` never
+ * names `widget.py`; that import stays a named binding of the package's `Widget` attribute.
+ */
+function resolvePythonSubmoduleExact(resolved: ResolvedImportTarget, imported: string): string | undefined {
+  if (typeof resolved !== "string") return undefined;
+  let baseDir = resolved;
+  let entries: fs.Dirent[];
+  try {
+    if (!fs.statSync(baseDir).isDirectory()) {
+      const base = path.basename(baseDir).toLowerCase();
+      if (base !== "__init__.py" && base !== "__init__.pyi") return undefined;
+      baseDir = path.dirname(baseDir);
+    }
+    entries = fs.readdirSync(baseDir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  for (const fileName of [`${imported}.py`, `${imported}.pyi`]) {
+    if (entries.some((entry) => entry.isFile() && entry.name === fileName)) {
+      return path.join(baseDir, fileName).replace(/\\/g, "/");
+    }
+  }
+  if (entries.some((entry) => entry.isDirectory() && entry.name === imported)) {
+    return path.join(baseDir, imported).replace(/\\/g, "/");
+  }
+  return undefined;
+}
+
 async function pushNamedImport(
   context: PythonImportExtractionContext,
   moduleSpec: string,
@@ -49,6 +82,19 @@ async function pushNamedImport(
 ): Promise<void> {
   const { relDots, mod } = splitRelativeModuleSpec(moduleSpec);
   const resolved = await resolvePythonModule(context.projectRoot, context.file, mod, relDots);
+  const submodule = resolvePythonSubmoduleExact(resolved, imported);
+  if (submodule) {
+    context.pushBinding({
+      kind: "namespace",
+      localNS: local,
+      from: moduleSpec,
+      ...(explicitAlias ? { explicitAlias: true } : {}),
+      resolved: submodule,
+      mechanism: "python",
+      moduleLevel,
+    });
+    return;
+  }
 
   context.pushBinding({
     kind: "named",

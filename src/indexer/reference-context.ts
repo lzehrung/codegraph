@@ -5,6 +5,11 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { SymbolDef } from "./types.js";
 
+/** Stable identity of one declaration site: file identity plus start offset (or line and column). */
+export function definitionIdentityKey(def: SymbolDef): string {
+  return `${fileIdentityKey(def.file)}:${def.range.start.index ?? `${def.range.start.line}:${def.range.start.column}`}`;
+}
+
 export function sameDef(left: SymbolDef, right: SymbolDef, languageExtensions?: LanguageExtensionMap): boolean {
   const leftIndex = left.range.start.index ?? 0;
   const rightIndex = right.range.start.index ?? 0;

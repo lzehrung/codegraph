@@ -42,13 +42,12 @@ import {
   normalizePhpQualifiedReference,
   phpLastIdentifierSegment,
 } from "./navigation-php.js";
-import { resolveIndexedPhpClassReference } from "./php-namespace-symbols.js";
+import { ensurePhpNamespaceSymbolIndex, resolveIndexedPhpClassReference } from "./php-namespace-symbols.js";
 import {
   buildIndexedCandidateCoverage,
   buildPhpQualifiedNames,
   cppCanonicalStructuralExport,
   describeReferenceStrategies,
-  ensurePhpNamespaceSymbolIndex,
   collectVerifiedNamedNodeReferences,
   isMemberAccessPropertyRange,
   type VerifiedNamedNodeReference,
@@ -1595,12 +1594,8 @@ function cIncludedBy(index: ProjectIndex): Map<string, readonly string[]> {
   return stored;
 }
 
-/**
- * Single calculation behind reference collection and getCppEquivalentCallableDefinitions: resolves
- * the receiver owner, the normalized reference name, the definition-site scope binding, and the
- * proven equivalent definition family for one callable definition site.
- */
-function cIncludeLinkedFileKeys(index: ProjectIndex, startFile: string): Set<string> {
+/** Indexed files linked to `startFile` by `#include` in either direction, excluding the file itself. */
+function cIncludeLinkedModules(index: ProjectIndex, startFile: string): ModuleIndex[] {
   const startKey = fileIdentityKey(startFile);
   const includedBy = cIncludedBy(index);
   const linked = new Set<string>();
@@ -1628,7 +1623,12 @@ function cIncludeLinkedFileKeys(index: ProjectIndex, startFile: string): Set<str
   });
   walk(startKey, (key) => includedBy.get(key) ?? []);
   linked.delete(startKey);
-  return linked;
+  const modules: ModuleIndex[] = [];
+  for (const key of linked) {
+    const moduleEntry = index.byFile.get(key);
+    if (moduleEntry) modules.push(moduleEntry);
+  }
+  return modules;
 }
 
 /**
@@ -1650,9 +1650,7 @@ async function cIncludeLinkedCallableEquivalents(
   );
   if (!exported) return [];
   const equivalents = new Map<string, SymbolDef>();
-  for (const fileKey of cIncludeLinkedFileKeys(index, def.file)) {
-    const moduleEntry = index.byFile.get(fileKey);
-    if (!moduleEntry) continue;
+  for (const moduleEntry of cIncludeLinkedModules(index, def.file)) {
     const candidates: SymbolDef[] = [];
     for (const entry of moduleEntry.exports) {
       if (entry.type !== "local") continue;
@@ -1665,7 +1663,7 @@ async function cIncludeLinkedCallableEquivalents(
     try {
       candidateParsed = await ensureParsedContext(
         moduleEntry.file,
-        index.parsed?.get(fileKey),
+        index.parsed?.get(fileIdentityKey(moduleEntry.file)),
         index.languageExtensions,
       );
     } catch {
@@ -1682,6 +1680,11 @@ async function cIncludeLinkedCallableEquivalents(
   return [...equivalents.values()];
 }
 
+/**
+ * Single calculation behind reference collection and getCppEquivalentCallableDefinitions: resolves
+ * the receiver owner, the normalized reference name, the definition-site scope binding, and the
+ * proven equivalent definition family for one callable definition site.
+ */
 async function cppEquivalentCallableFamily(
   index: ProjectIndex,
   def: SymbolDef,

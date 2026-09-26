@@ -12,6 +12,7 @@ import {
 } from "./cpp-callables.js";
 import { getOrBuildScopeIndex } from "./navigation-local.js";
 import type { Binding } from "./scope-types.js";
+import { definitionIdentityKey } from "./reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 
 const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
@@ -54,10 +55,6 @@ export function resolveCppCollidingBinding(
   const collisions = binding.sameScopeFunctionBindings ?? [binding];
   if (collisions.length < 2 && !cppBindingCallableShape(binding)) return undefined;
   return resolveCppCallableBindings(file, collisions, node, source);
-}
-
-function definitionIdentityKey(def: SymbolDef): string {
-  return `${fileIdentityKey(def.file)}:${def.range.start.index ?? `${def.range.start.line}:${def.range.start.column}`}`;
 }
 
 /** A using-declaration introduces its target, not a new local definition. */

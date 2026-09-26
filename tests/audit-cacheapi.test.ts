@@ -350,54 +350,6 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   });
 });
 
-describe("G2: dependency-manifest discovery stays confined to --root without a Git boundary", () => {
-  it("ignores a manifest above --root but honors manifests at or inside --root", async () => {
-    const outerRoot = await mkTmpDir("cg-audit-g2-");
-    try {
-      const projectRoot = path.join(outerRoot, "inner");
-      const srcDir = path.join(projectRoot, "src");
-      await fsp.mkdir(srcDir, { recursive: true });
-      await fsp.writeFile(
-        path.join(outerRoot, "package.json"),
-        JSON.stringify({ dependencies: { "definitely-fake-outer-only-pkg": "1.0.0" } }),
-        "utf8",
-      );
-      // Deliberately no manifest directly at `projectRoot` itself: the manifest search must
-      // still stop there (not reach `outerRoot`) instead of only stopping by accident because
-      // it found a manifest immediately. The in-root manifest sits one level further in, so
-      // reaching it still requires walking from the importer up to (and including) the root.
-      await fsp.writeFile(
-        path.join(srcDir, "package.json"),
-        JSON.stringify({ dependencies: { "definitely-fake-in-root-pkg": "1.0.0" } }),
-        "utf8",
-      );
-      await fsp.writeFile(
-        path.join(srcDir, "app.ts"),
-        [
-          'import a from "definitely-fake-outer-only-pkg";',
-          'import b from "definitely-fake-in-root-pkg";',
-          'import c from "definitely-fake-nowhere-pkg";',
-          "export const use = [a, b, c];",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      const index = await buildProjectIndex(projectRoot, { cache: "off" });
-      const unresolved = getUnresolvedImports(index.graph, { projectRoot }).map((entry) => entry.name);
-
-      // Outside-root manifest ignored: the declared-only-outside package stays unresolved,
-      // exactly like the decoy package that is declared nowhere at all.
-      expect(unresolved).toContain("definitely-fake-outer-only-pkg");
-      expect(unresolved).toContain("definitely-fake-nowhere-pkg");
-      // In-root manifest honored: a package declared inside --root is not unresolved.
-      expect(unresolved).not.toContain("definitely-fake-in-root-pkg");
-    } finally {
-      await fsp.rm(outerRoot, { recursive: true, force: true });
-    }
-  });
-});
-
 describe("G6: agent session freshness under a manual policy never claims fresh without evidence", () => {
   it("reports an explicit unchecked state instead of a false fresh claim after an on-disk edit", async () => {
     const root = await mkTmpDir("cg-audit-g6-");

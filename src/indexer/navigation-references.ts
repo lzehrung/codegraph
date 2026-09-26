@@ -11,7 +11,7 @@ import {
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
-import { sameDef } from "./reference-context.js";
+import { definitionIdentityKey, sameDef } from "./reference-context.js";
 import {
   canonicalPhpReferenceNames,
   comparePhpReferenceNames,
@@ -30,6 +30,7 @@ import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import { AMBIGUOUS_STAR_IMPORT_REASON } from "./star-import-precedence.js";
+import { ensurePhpNamespaceSymbolIndex, phpNamespaceSymbolIndexFor } from "./php-namespace-symbols.js";
 import {
   SymbolKind,
   type ExportEntry,
@@ -188,142 +189,9 @@ export async function buildPhpQualifiedNames(
   return readPhpDefinitionNames(index, definitionFile, def);
 }
 
-function definitionIdentityKey(def: SymbolDef): string {
-  return `${fileIdentityKey(def.file)}:${def.range.start.index ?? `${def.range.start.line}:${def.range.start.column}`}`;
-}
-
 const phpCanonicalNamesCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
 const phpNameEquivalenceGaps = new WeakMap<ProjectIndex, Set<string>>();
 
-const PHP_CLASS_LIKE_KINDS: ReadonlySet<string> = new Set([
-  SymbolKind.Class,
-  SymbolKind.Interface,
-  SymbolKind.TypeAlias,
-]);
-
-export type PhpNamespaceSymbolIndex = {
-  classes: Map<string, SymbolDef[]>;
-  functions: Map<string, SymbolDef[]>;
-  namesByKind: Map<string, string[]>;
-  source: ProjectIndex["byFile"];
-  size: number;
-};
-
-const phpNamespaceSymbolIndexes = new WeakMap<ProjectIndex, PhpNamespaceSymbolIndex>();
-const phpNamespaceSymbolIndexBuilds = new WeakMap<ProjectIndex, Promise<PhpNamespaceSymbolIndex>>();
-
-function pushPhpNamespaceSymbol(map: Map<string, SymbolDef[]>, key: string, def: SymbolDef): void {
-  const existing = map.get(key);
-  if (!existing) {
-    map.set(key, [def]);
-    return;
-  }
-  const start = def.range.start.index;
-  if (
-    existing.some((candidate) => {
-      const candidateStart = candidate.range.start.index;
-      return (
-        fileIdentityKey(candidate.file) === fileIdentityKey(def.file) &&
-        candidate.localName === def.localName &&
-        candidateStart === start
-      );
-    })
-  ) {
-    return;
-  }
-  existing.push(def);
-}
-
-/**
- * Qualified PHP names for one index, read once from each declaration's parsed tree.
- * `phpIndexedCanonicalNames` and same-namespace lookup share this table. A replaced
- * `byFile` map rebuilds it. Ambiguous spellings stay as multiple defs.
- */
-export function ensurePhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNamespaceSymbolIndex> {
-  const cached = phpNamespaceSymbolIndexes.get(index);
-  if (cached && cached.source === index.byFile && cached.size === index.byFile.size) return Promise.resolve(cached);
-  const pending = phpNamespaceSymbolIndexBuilds.get(index);
-  if (pending) return pending;
-  const build = buildPhpNamespaceSymbolIndex(index)
-    .then((built) => {
-      phpNamespaceSymbolIndexes.set(index, built);
-      return built;
-    })
-    .finally(() => {
-      if (phpNamespaceSymbolIndexBuilds.get(index) === build) phpNamespaceSymbolIndexBuilds.delete(index);
-    });
-  phpNamespaceSymbolIndexBuilds.set(index, build);
-  return build;
-}
-
-/** Synchronous view of `ensurePhpNamespaceSymbolIndex`. Null until that builder has finished. */
-export function phpNamespaceSymbolIndexFor(index: ProjectIndex): PhpNamespaceSymbolIndex | null {
-  const cached = phpNamespaceSymbolIndexes.get(index);
-  if (!cached || cached.source !== index.byFile || cached.size !== index.byFile.size) return null;
-  return cached;
-}
-
-async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNamespaceSymbolIndex> {
-  const classes = new Map<string, SymbolDef[]>();
-  const functions = new Map<string, SymbolDef[]>();
-  const namesByKind = new Map<string, string[]>();
-  const seenByKind = new Map<string, Set<string>>();
-  let canonicalCache = phpCanonicalNamesCache.get(index);
-  if (!canonicalCache) {
-    canonicalCache = new Map();
-    phpCanonicalNamesCache.set(index, canonicalCache);
-  }
-
-  const phpModules: ModuleIndex[] = [];
-  for (const moduleEntry of index.byFile.values()) {
-    if (supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id === "php") {
-      phpModules.push(moduleEntry);
-    }
-  }
-
-  const parsedByFile = new Map<string, ParsedFileContext | null>();
-  await Promise.all(
-    phpModules.map(async (moduleEntry) => {
-      const key = fileIdentityKey(moduleEntry.file);
-      try {
-        const parsed = await ensureParsedContext(moduleEntry.file, index.parsed?.get(key), index.languageExtensions);
-        parsedByFile.set(key, parsed.sup.id === "php" ? parsed : null);
-      } catch {
-        parsedByFile.set(key, null);
-      }
-    }),
-  );
-
-  for (const moduleEntry of phpModules) {
-    const parsed = parsedByFile.get(fileIdentityKey(moduleEntry.file)) ?? null;
-    for (const local of moduleEntry.locals) {
-      if (local.isMember) continue;
-      if (!parsed) continue;
-      const phpNamespace = readPhpNamespaceFromRange(parsed.tree, parsed.source, local.range);
-      const canonical = (phpNamespace ? `${phpNamespace}\\${local.localName}` : local.localName).replace(/^\\+/, "");
-      const cacheKey = definitionIdentityKey(local);
-      if (!canonicalCache.has(cacheKey)) canonicalCache.set(cacheKey, canonical ? [canonical] : []);
-      if (!canonical) continue;
-      const folded = foldPhpIdentifierCase(canonical);
-      if (PHP_CLASS_LIKE_KINDS.has(local.kind)) pushPhpNamespaceSymbol(classes, folded, local);
-      else if (local.kind === SymbolKind.Function) pushPhpNamespaceSymbol(functions, folded, local);
-      let names = namesByKind.get(local.kind);
-      let seen = seenByKind.get(local.kind);
-      if (!names || !seen) {
-        names = [];
-        seen = new Set();
-        namesByKind.set(local.kind, names);
-        seenByKind.set(local.kind, seen);
-      }
-      if (!seen.has(folded)) {
-        seen.add(folded);
-        names.push(canonical);
-      }
-    }
-  }
-
-  return { classes, functions, namesByKind, source: index.byFile, size: index.byFile.size };
-}
 async function phpCanonicalDefinitionNames(index: ProjectIndex, def: SymbolDef): Promise<string[]> {
   let perIndex = phpCanonicalNamesCache.get(index);
   if (!perIndex) {
@@ -333,6 +201,11 @@ async function phpCanonicalDefinitionNames(index: ProjectIndex, def: SymbolDef):
   const key = definitionIdentityKey(def);
   const cached = perIndex.get(key);
   if (cached) return cached;
+  const indexed = phpNamespaceSymbolIndexFor(index)?.canonicalByDefinition.get(key);
+  if (indexed) {
+    perIndex.set(key, [indexed]);
+    return [indexed];
+  }
   const canonicalNames = (await readPhpDefinitionNames(index, def.file, def)).map((name) => name.replace(/^\\+/, ""));
   perIndex.set(key, canonicalNames);
   return canonicalNames;
