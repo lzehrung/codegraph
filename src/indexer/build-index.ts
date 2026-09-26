@@ -129,6 +129,7 @@ import {
   buildTrackedFileReverseDependencies,
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
+  collectUnresolvedImportDependents,
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
   partitionTrackedManifestFiles,
@@ -2120,20 +2121,26 @@ export async function buildProjectIndexIncremental(
       const bloomFilterCache = useBloomFilters
         ? new (await import("../util/bloom-filter.js")).BloomFilterCache()
         : undefined;
+      let hasNewTrackedFile = false;
       for (const file of allFiles) {
         const sigInfo = fileSignatures.get(file);
         if (!sigInfo) continue;
         const entry = trackedEntries[file];
         const hasMatchingGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
         const hasMatchingSig = entry?.sig === sigInfo.sig;
+        if (!entry) hasNewTrackedFile = true;
         if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
           changedFiles.add(file);
         }
       }
       const reverseDeps = buildTrackedFileReverseDependencies(trackedEntries);
+      // A file just added (or renamed to a new path) can change what a sibling's previously
+      // unresolved relative import now resolves to, even though that sibling's own content --
+      // and therefore its signature -- never changed. See collectUnresolvedImportDependents.
+      const unresolvedImportDependents = collectUnresolvedImportDependents(trackedEntries, hasNewTrackedFile);
       const invalidateCachedDependents = () => {
         const dependentFilesOfChanged = collectTrackedFileDependents(trackedEntries, changedFiles, reverseDeps);
-        for (const file of dependentFilesOfChanged) {
+        for (const file of new Set([...dependentFilesOfChanged, ...unresolvedImportDependents])) {
           const key = fileIdentityKey(file);
           if (modules.has(key)) {
             modules.delete(key);

@@ -114,6 +114,33 @@ export function collectDeletedTrackedFileDependents(
   return dependents;
 }
 
+/**
+ * Files whose specifier looks locally resolvable (`./x`, `../x`, or an absolute path) but is
+ * recorded as an `external` edge failed to resolve to a project file the last time they were
+ * indexed. Adding, deleting, or renaming a file can change what such a specifier now resolves
+ * to, so these importers must be reprocessed whenever the tracked file set itself changed --
+ * unlike a content edit, which the manifest signature check already catches on its own. Gated
+ * on `hasNewTrackedFile` so a warm rebuild with no added file (including a pure content edit or
+ * a pure deletion) pays nothing extra; a deletion alone can only ever remove a resolution, which
+ * `collectDeletedTrackedFileDependents` already covers.
+ */
+export function collectUnresolvedImportDependents(
+  trackedEntries: Record<string, ManifestFileEntry>,
+  hasNewTrackedFile: boolean,
+): Set<string> {
+  const dependents = new Set<string>();
+  if (!hasNewTrackedFile) return dependents;
+  for (const [file, entry] of Object.entries(trackedEntries)) {
+    const hasLocallyResolvableUnresolvedImport = entry.edges.some((edge) => {
+      if (edge.to.type !== "external") return false;
+      const specifier = edge.raw || edge.to.name;
+      return specifier.startsWith(".") || specifier.startsWith("/");
+    });
+    if (hasLocallyResolvableUnresolvedImport) dependents.add(file);
+  }
+  return dependents;
+}
+
 export function buildTrackedFileReverseDependencies(
   trackedEntries: Record<string, ManifestFileEntry>,
 ): Map<string, Set<string>> {

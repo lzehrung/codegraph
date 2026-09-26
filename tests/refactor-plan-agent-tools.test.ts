@@ -35,7 +35,10 @@ afterAll(async () => {
 describe("refactor plan agent tool", () => {
   it("reuses the supplied caller session and returns authoritative read-only rename evidence", async () => {
     const before = await fs.readFile(sourceFile, "utf8");
-    const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "manual" } });
+    // G6: "safe: true" requires provable freshness, so this session uses "check" (a real,
+    // honest check with nothing changed) rather than "manual" (which cannot prove freshness
+    // and therefore can no longer be reported "safe" after the fix).
+    const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "check" } });
     const counted = countingSession(session);
 
     const response = await tool_buildRefactorPlan(
