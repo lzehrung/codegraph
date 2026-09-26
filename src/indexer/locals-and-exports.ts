@@ -118,6 +118,12 @@ const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
   trait_item: true,
   enum_declaration: true,
   enum_item: true,
+  // Zig has no implicit member scope of its own; a function nested in one of these container
+  // forms is a method, matching the receiver-call detection in receiver-calls.ts's
+  // MEMBER_CONTAINER_TYPES, which already lists all three.
+  struct_declaration: true,
+  union_declaration: true,
+  opaque_declaration: true,
 };
 
 const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {

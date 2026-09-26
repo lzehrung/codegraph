@@ -41,7 +41,7 @@ import {
   type CallableArity,
 } from "../languages/callable-arity.js";
 import { getCompilationUnitPeers } from "./compilation-units.js";
-import { isSwiftCrossFileHiddenSharedOwnerMember } from "./declaration-visibility.js";
+import { isGoExportedMemberName, isSwiftCrossFileHiddenSharedOwnerMember } from "./declaration-visibility.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { csharpLookupName, csharpQualifiedNameNode } from "./navigation-local.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
@@ -518,6 +518,7 @@ export async function resolveMemberAccessDefinition(params: {
         const base = await resolveExpression(subObj);
         const memberName = sliceText(subProp, source);
         if (base?.kind === "namespace") {
+          if (!isGoExportedMemberName(sup.id, memberName)) return null;
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {

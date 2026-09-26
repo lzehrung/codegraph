@@ -3,6 +3,7 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type Lang
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
+import { isGoExportedMemberName } from "./declaration-visibility.js";
 import {
   csharpAliasQualifiedLookupName,
   findCsharpPartialTypeEquivalents,
@@ -924,6 +925,9 @@ async function findReferencesInternal(
       for (const exportedName of exportedNames) {
         if (hasReachedCollectionLimit()) break;
         if (imp.kind === "namespace") {
+          if (!isGoExportedMemberName(supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.id, exportedName)) {
+            continue;
+          }
           const hit = resolveExport(index, targetFile, exportedName, exportOptions);
           const matchesDef =
             hit?.kind === "resolved"

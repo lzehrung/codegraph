@@ -270,6 +270,21 @@ export function isExportedDeclaration(languageId: string, node: SyntaxNodeLike):
   return isExportedByRow(declaration, row);
 }
 
+/**
+ * Go export visibility is spelled in the identifier itself (Go spec, "Exported identifiers"):
+ * a name is visible outside its declaring package only when its first Unicode letter is
+ * upper case. Unlike every `DeclarationVisibilityRow` above, this must never filter a Go
+ * file's module exports: Go's own compilation-unit peers (any file in the same package)
+ * legitimately see an unexported name, and that same-package lookup reads the same export
+ * list. Only a reference that explicitly crosses a namespace-import boundary into a
+ * *different* package may not see an unexported name; callers that resolve a member reached
+ * through such an import call this directly instead of adding a `GO_ROW` here.
+ */
+export function isGoExportedMemberName(languageId: string | undefined, name: string): boolean {
+  if (languageId !== "go") return true;
+  return /^\p{Lu}/u.test(name);
+}
+
 function swiftDeclarationKind(container: SyntaxNodeLike): string {
   const kind = container.childForFieldName("declaration_kind");
   if (kind) {
