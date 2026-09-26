@@ -92,6 +92,44 @@ export function hasStaticMemberDistinction(languageId: string): boolean {
 }
 
 /**
+ * Languages whose grammar gives members a static-equivalent scope without a `static` keyword:
+ * a Kotlin member of a `companion object` or a named `object` declaration is reachable as
+ * `Outer.member()`. Member lookup classifies those members "static" and every other member
+ * "instance", matching the keyword-`static` languages.
+ */
+const STATIC_EQUIVALENT_MEMBER_CONTAINERS: Record<string, Readonly<Record<string, true>>> = {
+  kotlin: { companion_object: true, object_declaration: true },
+};
+
+/**
+ * Whether `node` is lexically declared inside its language's static-equivalent member
+ * container. The nearest enclosing member container decides: a nested type's members belong
+ * to that type, not to an outer `object`.
+ */
+export function declarationIsStaticEquivalent(languageId: string, node: SyntaxNodeLike): boolean {
+  const containers = STATIC_EQUIVALENT_MEMBER_CONTAINERS[languageId];
+  if (!containers) return false;
+  let current: SyntaxNodeLike | null = node.parent;
+  while (current) {
+    if (containers[current.type] === true) return true;
+    if (MEMBER_CONTAINER_TYPES[current.type] === true) return false;
+    current = current.parent;
+  }
+  return false;
+}
+
+/**
+ * Whether member lookup for `languageId` distinguishes static-equivalent members from
+ * instance members. A bare type-name receiver restricts lookup to the static-equivalent
+ * scope exactly when this holds; otherwise every member must stay reachable.
+ */
+export function supportsStaticMemberScope(languageId: string): boolean {
+  return (
+    STATIC_MEMBER_LANGUAGES[languageId] !== undefined || STATIC_EQUIVALENT_MEMBER_CONTAINERS[languageId] !== undefined
+  );
+}
+
+/**
  * Call nodes that carry the receiver and the member name on the call node itself
  * instead of exposing a member-access callee.
  */
