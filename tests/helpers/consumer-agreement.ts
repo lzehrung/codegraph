@@ -8,6 +8,9 @@
  *    stay unresolved, returns `not_found`).
  *  - When resolved, `findReferences` from that declaration includes the site. Callers that set
  *    `requireCompleteCoverage` also require `referenceCoverage.state: "complete"`.
+ *    `keywordReceiver` is the exception: `self`, `static`, `this`, and `$this` are not name
+ *    references to the class. Goto and edges stay, the class's references omit the keyword,
+ *    and coverage is `complete`.
  *  - When the site is itself a call, `extends`, mixin (`include`/`extend`), or construction, the
  *    matching `buildSymbolGraphDetailed` edge exists from the named enclosing declaration to the
  *    resolved declaration's node (or is proven absent, for a same-named decoy).
@@ -144,6 +147,12 @@ export type ConsumerAgreementSite = {
       expected: { file: string; line: number };
       /** Asserts `findReferences` from the resolved declaration includes this site. Default true. */
       checkReferences?: boolean;
+      /**
+       * The site is a keyword receiver (`self`, `static`, `this`, `$this`), not a name
+       * reference to the class. Goto and edges are unchanged. The class's references must
+       * omit this site, and coverage must be `complete`.
+       */
+      keywordReceiver?: boolean;
       /**
        * Also require `referenceCoverage.state: "complete"`. Off by default so existing callers
        * keep the reference-list check without a new coverage assertion.
@@ -364,11 +373,23 @@ export async function assertConsumerAgreement(
     });
     expect(refs.status, `findReferences(${site.expected.file}:${site.expected.line})`).toBe("ok");
     if (refs.status === "ok") {
-      expect(
-        referenceListsSite(refs.references, file, site.line),
-        `findReferences(${site.expected.file}:${site.expected.line}) must include ${label}`,
-      ).toBe(true);
-      if (site.requireCompleteCoverage) {
+      const listed = referenceListsSite(refs.references, file, site.line);
+      if (site.keywordReceiver) {
+        expect(
+          listed,
+          `findReferences(${site.expected.file}:${site.expected.line}) must not include keyword receiver ${label}`,
+        ).toBe(false);
+        expect(
+          refs.referenceCoverage.state,
+          `findReferences(${site.expected.file}:${site.expected.line}) coverage ${JSON.stringify(refs.referenceCoverage)}`,
+        ).toBe("complete");
+      } else {
+        expect(
+          listed,
+          `findReferences(${site.expected.file}:${site.expected.line}) must include ${label}`,
+        ).toBe(true);
+      }
+      if (!site.keywordReceiver && site.requireCompleteCoverage) {
         expect(
           refs.referenceCoverage.state,
           `findReferences(${site.expected.file}:${site.expected.line}) coverage ${JSON.stringify(refs.referenceCoverage)}`,

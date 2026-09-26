@@ -50,6 +50,11 @@ type AgreementRow = {
   provenNonReference?: string;
   /** Real cross-consumer disagreement. The row is registered with `it.fails`. */
   fails?: string;
+  /**
+   * Keyword receiver (`self`, `static`, `this`, `$this`). Goto and edges stay; the class's
+   * references omit the keyword and coverage is complete.
+   */
+  keywordReceiver?: boolean;
 };
 
 function address(token: TokenAt): TokenAt {
@@ -123,6 +128,7 @@ async function runAgreementRow(row: AgreementRow): Promise<void> {
     ...site,
     expected: row.expected,
     requireCompleteCoverage: true,
+    ...(row.keywordReceiver ? { keywordReceiver: true } : {}),
     ...(row.edge
       ? { edges: [{ label: row.edge.label, from: { file: row.edge.fromFile, name: row.edge.fromName } }] }
       : {}),
@@ -510,6 +516,7 @@ const w2 = {
     "export default class Widget {",
     "  static create(): Widget { return new Widget(); }",
     '  render(): string { return "w"; }',
+    "  m(): number { return this.m(); }",
     "}",
   ]),
   "decoy.ts": src([
@@ -572,7 +579,7 @@ function useRow(
   site: TokenAt,
   expected: AgreementRow["expected"],
   edge?: AgreementRow["edge"],
-  extra?: Pick<AgreementRow, "declaration" | "provenNonReference" | "fails">,
+  extra?: Pick<AgreementRow, "declaration" | "provenNonReference" | "fails" | "keywordReceiver">,
 ): AgreementRow {
   return {
     id,
@@ -585,6 +592,7 @@ function useRow(
     ...(extra?.declaration ? { declaration: extra.declaration } : {}),
     ...(extra?.provenNonReference ? { provenNonReference: extra.provenNonReference } : {}),
     ...(extra?.fails ? { fails: extra.fails } : {}),
+    ...(extra?.keywordReceiver ? { keywordReceiver: true } : {}),
   };
 }
 
@@ -812,8 +820,6 @@ const rows: AgreementRow[] = [
     "Widget.create() is the companion factory, not Gadget's instance method",
     calls("w.kt", "use"),
   ),
-  // The call is in the reference list, but coverage stays partial: an applicable reference
-  // strategy never runs (strategy_unavailable). Goto still resolves the extension.
   useRow(
     "H3",
     "Kotlin",
@@ -821,10 +827,6 @@ const rows: AgreementRow[] = [
     { file: "w.kt", line: 8, token: "describe" },
     { file: "w.kt", line: 5 },
     calls("w.kt", "use"),
-    {
-      fails:
-        "extension call is listed by findReferences, but coverage stays partial (strategy_unavailable) instead of complete",
-    },
   ),
   decoyRow(
     "H3",
@@ -863,8 +865,8 @@ const rows: AgreementRow[] = [
     "Worker is in Acme\\App; Other\\Ns\\Base is a different namespace",
     { label: "extends", fromFile: "Worker.php", fromName: "Worker" },
   ),
-  // new self() resolves to Child and the instantiates edge is recorded, but the class's
-  // reference list does not contain the self keyword.
+  // `self` is a keyword receiver: goto resolves new self() to Child and the instantiates
+  // edge is recorded, but the keyword is not a name reference of the class.
   useRow(
     "H8",
     "PHP",
@@ -872,9 +874,7 @@ const rows: AgreementRow[] = [
     { file: "box.php", line: 7, token: "self" },
     { file: "box.php", line: 6 },
     { label: "instantiates", fromFile: "box.php", fromName: "makeSelf" },
-    {
-      fails: "goToDefinition resolves new self() to Child, but findReferences(Child) omits the self keyword",
-    },
+    { keywordReceiver: true },
   ),
   decoyRow(
     "H8",
@@ -1144,6 +1144,16 @@ const rows: AgreementRow[] = [
     { file: "use.ts", line: 3, token: "render" },
     { file: "widget.ts", line: 3 },
     calls("use.ts", "run"),
+  ),
+  // `this` in this.m() resolves to Widget, and it is not a name reference of the class.
+  useRow(
+    "this-m",
+    "TypeScript",
+    w2,
+    { file: "widget.ts", line: 4, token: "this" },
+    { file: "widget.ts", line: 1 },
+    undefined,
+    { keywordReceiver: true },
   ),
   decoyRow(
     "W2",
