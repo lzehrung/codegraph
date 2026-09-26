@@ -29,7 +29,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Rust, Go, and C: `super::Type`, workspace and path dependencies (including `workspace = true`), glob imports, and `impl` methods resolve and appear in call graphs. Go no longer resolves unexported names from another package. A C function's header declaration and its definition share one reference list.
 - When two wildcard imports provide the same name, codegraph follows each language's rule (Python: the last import wins; Java, Kotlin, and Rust: an explicit import wins) and otherwise reports the name as ambiguous instead of picking one. In Java and Kotlin, an explicit import also wins over a class of the same name in the file's own package.
 - Go-to-definition, find references, and call graphs now give the same answer for the same use.
-- A warm disk-cache build picks up a newly added file that an existing import can now resolve to, including Python absolute imports, quoted C and C++ includes, and tsconfig path aliases.
+- A warm disk-cache build picks up a newly added file that an existing import can now resolve to, including `.d.ts` declaration files, Python absolute imports, quoted C and C++ includes, and every tsconfig path alias target.
 
 ### Changed
 

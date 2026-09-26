@@ -12,6 +12,7 @@ import { listChangedFiles, listUntrackedFiles, type GitDiscoveryCache } from "..
 import { errorMessage } from "../util/errors.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
+import { DEFAULT_RESOLUTION_EXTENSIONS } from "../util/resolution-candidates.js";
 import {
   createDiscoveredFileMatcher,
   DEFAULT_PROJECT_PATTERNS,
@@ -116,6 +117,10 @@ export function collectDeletedTrackedFileDependents(
 }
 
 const RESOLUTION_ENTRY_STEMS = new Set(["index", "__init__", "mod", "package"]);
+/** `.d.ts` and similar: a resolver probes `foo` + `.d.ts`, so `foo.d.ts` satisfies stem `foo`. */
+const MULTI_PART_RESOLUTION_EXTENSIONS = DEFAULT_RESOLUTION_EXTENSIONS.filter(
+  (extension) => extension.lastIndexOf(".") > 0,
+);
 
 /** Stems an added file can satisfy: its own name, plus the directory for an entry file. */
 export function addedResolutionStems(addedFiles: readonly string[]): Set<string> {
@@ -123,11 +128,18 @@ export function addedResolutionStems(addedFiles: readonly string[]): Set<string>
   for (const file of addedFiles) {
     const base = path.basename(file);
     const extension = path.extname(base);
-    const stem = extension ? base.slice(0, -extension.length) : base;
-    if (stem) stems.add(stem);
-    if (!RESOLUTION_ENTRY_STEMS.has(stem)) continue;
-    const directory = path.basename(path.dirname(file));
-    if (directory && directory !== "." && directory !== stem) stems.add(directory);
+    const fileStems = [extension ? base.slice(0, -extension.length) : base];
+    const lowerBase = base.toLowerCase();
+    for (const multiPart of MULTI_PART_RESOLUTION_EXTENSIONS) {
+      if (lowerBase.endsWith(multiPart)) fileStems.push(base.slice(0, -multiPart.length));
+    }
+    for (const stem of fileStems) {
+      if (!stem) continue;
+      stems.add(stem);
+      if (!RESOLUTION_ENTRY_STEMS.has(stem)) continue;
+      const directory = path.basename(path.dirname(file));
+      if (directory && directory !== "." && directory !== stem) stems.add(directory);
+    }
   }
   return stems;
 }

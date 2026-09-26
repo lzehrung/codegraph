@@ -381,6 +381,37 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves an extensionless import once its .d.ts declaration file is added", async () => {
+    const root = await mkTmpDir("cg-audit-g1-dts-");
+    try {
+      const main = path.join(root, "main.ts");
+      const target = path.join(root, "types", "shape.d.ts");
+      await fsp.writeFile(
+        main,
+        [
+          'import type { Shape } from "./types/shape";',
+          "export const area = (shape: Shape): number => shape.w;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+      expect(getUnresolvedImports(initial.graph, { projectRoot: root }).map((entry) => entry.name)).toContain(
+        "./types/shape",
+      );
+
+      await fsp.mkdir(path.dirname(target), { recursive: true });
+      await fsp.writeFile(target, "export interface Shape {\n  w: number;\n}\n", "utf8");
+
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targets = await expectWarmMatchesCold(root, main, warm);
+      expect(targets).toContain(`file:${normalizePath(target)}`);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("G6: agent session freshness under a manual policy never claims fresh without evidence", () => {

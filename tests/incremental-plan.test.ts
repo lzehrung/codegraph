@@ -361,4 +361,11 @@ describe("added-file specifier stems", () => {
       ),
     ).toBe(false);
   });
+
+  it("matches a declaration file by its source stem and an index declaration by its directory", () => {
+    const stems = addedResolutionStems(["/proj/types/foo.d.ts", "/proj/api/index.d.mts"]);
+    expect(externalSpecifierMatchesAddedStem("./types/foo", "ts", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("./api", "ts", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("./types/bar", "ts", stems)).toBe(false);
+  });
 });
