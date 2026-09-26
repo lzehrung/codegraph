@@ -66,13 +66,14 @@ function address(token: TokenAt): TokenAt {
   };
 }
 
-const built = new Map<string, Promise<ConsumerAgreementFixture>>();
+// One build per fixture object: several rows (use and decoy, or two cases with one id) share it.
+const built = new Map<Readonly<Record<string, string>>, Promise<ConsumerAgreementFixture>>();
 
 function loadFixture(row: AgreementRow): Promise<ConsumerAgreementFixture> {
-  const existing = built.get(row.id);
+  const existing = built.get(row.files);
   if (existing) return existing;
   const pending = buildConsumerAgreementFixture(`cg-agree-${row.id}-`, row.files);
-  built.set(row.id, pending);
+  built.set(row.files, pending);
   return pending;
 }
 
@@ -391,6 +392,13 @@ const w15 = {
   "pkg/mod.py": src(["def foo():", "    return 42"]),
   "other.py": src(["def foo():", "    return -1"]),
   "main.py": src(["import pkg.mod", "", "def run():", "    return pkg.mod.foo()"]),
+};
+
+/** The receiver `X` follows the same last-star rule as a bare name. */
+const w17Receiver = {
+  "a.py": src(["class X:", "    @staticmethod", "    def m():", "        return 1"]),
+  "b.py": src(["class X:", "    @staticmethod", "    def m():", "        return 2"]),
+  "main.py": src(["from a import *", "from b import *", "", "def run():", "    return X.m()"]),
 };
 
 const w17 = {
@@ -1005,6 +1013,23 @@ const rows: AgreementRow[] = [
     { file: "main.py", line: 5, token: "helper" },
     { file: "decoy.py", line: 1, token: "helper" },
     "decoy.py is never star-imported; the later import rebinds helper to aaa",
+    calls("main.py", "run"),
+  ),
+  useRow(
+    "W17",
+    "Python",
+    w17Receiver,
+    { file: "main.py", line: 5, token: "m" },
+    { file: "b.py", line: 3 },
+    calls("main.py", "run"),
+  ),
+  decoyRow(
+    "W17",
+    "Python",
+    w17Receiver,
+    { file: "main.py", line: 5, token: "m" },
+    { file: "a.py", line: 3, token: "m" },
+    "the later star import rebinds X to b.X, so the receiver is b's class",
     calls("main.py", "run"),
   ),
   useRow("H11", "Python", h11, { file: "b.py", line: 1, token: "helper" }, { file: "a.py", line: 1 }),

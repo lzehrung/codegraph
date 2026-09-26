@@ -27,8 +27,13 @@ function edgeTargets(index: ProjectIndex, file: string): string[] {
     .sort();
 }
 
-async function expectWarmMatchesCold(root: string, consumer: string, warm: ProjectIndex): Promise<string[]> {
-  const cold = await buildProjectIndex(root, { cache: "off" });
+async function expectWarmMatchesCold(
+  root: string,
+  consumer: string,
+  warm: ProjectIndex,
+  options: Parameters<typeof buildProjectIndex>[1] = {},
+): Promise<string[]> {
+  const cold = await buildProjectIndex(root, { ...options, cache: "off" });
   const warmTargets = edgeTargets(warm, consumer);
   expect(warmTargets).toEqual(edgeTargets(cold, consumer));
   return warmTargets;
@@ -223,6 +228,76 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
       const warmAfterDelete = await buildProjectIndexIncremental(root, DISK_BUILD);
       const targetsAfterDelete = await expectWarmMatchesCold(root, main, warmAfterDelete);
       expect(targetsAfterDelete).toEqual(["external:pkg.util"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-resolves `from pkg import mod` once the submodule file is added beside an existing package", async () => {
+    const root = await mkTmpDir("cg-audit-g1-py-submodule-");
+    try {
+      const main = path.join(root, "main.py");
+      const init = path.join(root, "pkg", "__init__.py");
+      const relativeUser = path.join(root, "pkg", "user.py");
+      const submodule = path.join(root, "pkg", "mod.py");
+      await fsp.mkdir(path.dirname(init), { recursive: true });
+      await fsp.writeFile(init, "", "utf8");
+      await fsp.writeFile(
+        main,
+        ["from pkg import mod", "", "def run():", "    return mod.value()", ""].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(
+        relativeUser,
+        ["from . import mod", "", "def use():", "    return mod.value()", ""].join("\n"),
+        "utf8",
+      );
+
+      await buildProjectIndexIncremental(root, DISK_BUILD);
+      await fsp.writeFile(submodule, "def value():\n    return 1\n", "utf8");
+
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      for (const [file, line] of [
+        [main, 4],
+        [relativeUser, 4],
+      ] as const) {
+        const bindings = (index: ProjectIndex) =>
+          (index.byFile.get(fileIdentityKey(file))?.imports ?? []).map((imp) => ({
+            kind: imp.kind,
+            resolved: typeof imp.resolved === "string" ? normalizePath(imp.resolved) : imp.resolved,
+          }));
+        expect(bindings(warm)).toEqual(bindings(cold));
+        const column = "    return mod.value()".indexOf("value") + 1;
+        const target = await goToDefinition(warm, { file, line, column });
+        expect(target.status).toBe("ok");
+        if (target.status === "ok") expect(fileIdentityKey(target.definition.file)).toBe(fileIdentityKey(submodule));
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps both unresolved include forms so a header added beside the includer resolves the quoted form", async () => {
+    const root = await mkTmpDir("cg-audit-g1-c-include-forms-");
+    try {
+      const main = path.join(root, "src", "main.c");
+      const header = path.join(root, "src", "x.h");
+      // The angle form comes first, so a form-blind dedup would keep only it, and an angle
+      // include never searches the includer's directory.
+      await fsp.mkdir(path.dirname(main), { recursive: true });
+      await fsp.writeFile(
+        main,
+        ["#include <x.h>", '#include "x.h"', "int main(void) { return 0; }", ""].join("\n"),
+        "utf8",
+      );
+
+      await buildProjectIndexIncremental(root, DISK_BUILD);
+      await fsp.writeFile(header, "int x(void);\n", "utf8");
+
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targets = await expectWarmMatchesCold(root, main, warm);
+      expect(targets).toContain(`file:${normalizePath(header)}`);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

@@ -3,7 +3,7 @@ import { fileIdentityKey } from "../util/paths.js";
 import type { ImportBinding } from "./import-types.js";
 import { resolveImported } from "./navigation-resolve.js";
 import { sameDef } from "./reference-context.js";
-import type { ProjectIndex, SymbolDef } from "./types.js";
+import type { ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
 
 /**
  * What a language does when more than one star import can see the same simple name.
@@ -321,6 +321,30 @@ export function decideStarImportCandidates(
   const match = candidates.find((candidate) => sameDef(candidate.def, definition, index.languageExtensions));
   if (!match) return { status: "ambiguous" };
   return { status: "resolved", imp: match.imp, definition };
+}
+
+/**
+ * One simple name through every star import of `mod`, under the language's precedence.
+ * Bare names, member receivers, and base-class lookups all reach star imports through this,
+ * so one rule decides for every consumer. Explicit imports are the caller's concern.
+ */
+export function resolveStarImportedName(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  languageId: string,
+  name: string,
+): StarImportDecision {
+  const candidates: StarImportCandidate[] = [];
+  for (const imp of mod.imports) {
+    if (imp.kind !== "star") continue;
+    const def = resolveStarImportedDefinition(index, imp, name, languageId);
+    if (def) candidates.push({ imp, def });
+  }
+  if (starImportPrecedence(languageId) === "last-wins") {
+    const last = candidates.at(-1);
+    return last ? { status: "resolved", imp: last.imp, definition: last.def } : { status: "none" };
+  }
+  return decideStarImportCandidates(index, languageId, candidates, mod.file);
 }
 
 export type RubyReopenedConstant = {

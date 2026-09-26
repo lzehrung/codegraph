@@ -240,6 +240,12 @@ function dependencyEntries(parsed: TomlTable, crateIdentifier: string): TomlTabl
   return matches;
 }
 
+type PathDependency = {
+  depPath: string;
+  /** `package = "..."` rename: the dependency's real package name, when it differs from the key. */
+  packageName?: string;
+};
+
 /**
  * A `path`-only Cargo dependency declared under `[dependencies]`, `[dev-dependencies]`, or
  * `[build-dependencies]` (inline-table `name = { path = "..." }` or dotted-section
@@ -249,10 +255,12 @@ function dependencyEntries(parsed: TomlTable, crateIdentifier: string): TomlTabl
  * workspace-inherited (`{ workspace = true }`) dependencies carry no `path` here and are
  * resolved through the workspace manifest instead.
  */
-function pathDependencySpec(parsed: TomlTable, crateIdentifier: string): string | undefined {
+function pathDependencySpec(parsed: TomlTable, crateIdentifier: string): PathDependency | undefined {
   for (const entry of dependencyEntries(parsed, crateIdentifier)) {
     const depPath = tomlString(entry, "path");
-    if (depPath) return depPath;
+    if (!depPath) continue;
+    const renamed = tomlString(entry, "package");
+    return renamed ? { depPath, packageName: renamed } : { depPath };
   }
   return undefined;
 }
@@ -277,7 +285,7 @@ async function workspaceInheritedDependencyPath(
   cargoRoot: string,
   projectRoot: string,
   crateIdentifier: string,
-): Promise<{ manifestDir: string; depPath: string } | null> {
+): Promise<({ manifestDir: string } & PathDependency) | null> {
   const root = path.resolve(projectRoot);
   let current = path.resolve(cargoRoot);
   while (await isPhysicalPathWithinRoot(root, current)) {
@@ -288,7 +296,9 @@ async function workspaceInheritedDependencyPath(
       for (const [depName, entry] of Object.entries(table ?? {})) {
         if (depName.replace(/-/gu, "_") !== crateIdentifier || !isTomlTable(entry)) continue;
         const depPath = tomlString(entry, "path");
-        return depPath ? { manifestDir: current, depPath } : null;
+        if (!depPath) return null;
+        const renamed = tomlString(entry, "package");
+        return renamed ? { manifestDir: current, depPath, packageName: renamed } : { manifestDir: current, depPath };
       }
       return null;
     }
@@ -304,9 +314,9 @@ async function workspaceInheritedDependencyPath(
  * `crateIdentifier` (the Rust identifier form, e.g. `crate_a`), confined to `projectRoot`.
  * A workspace-inherited entry (`{ workspace = true }`) follows the nearest ancestor
  * workspace manifest's `[workspace.dependencies]` `path`, also confined to `projectRoot`.
- * Returns the dependency crate's own root directory (where its Cargo.toml lives), or null
- * when `crateIdentifier` is not a resolvable path dependency, its path escapes the project,
- * or the resolved directory does not exist.
+ * Returns the dependency crate's own root directory, or null when `crateIdentifier` is not a
+ * resolvable path dependency, its path escapes the project, or the directory has no Cargo.toml
+ * whose `[package]` name is the dependency (Cargo rejects such a dependency).
  */
 export async function rustPathDependencyCrateRoot(
   cargoRoot: string,
@@ -316,21 +326,19 @@ export async function rustPathDependencyCrateRoot(
   const parsed = await parseCargoToml(cargoRoot);
   if (!parsed) return null;
   let manifestDir = cargoRoot;
-  let depPath = pathDependencySpec(parsed, crateIdentifier);
-  if (!depPath && workspaceInheritanceRequested(parsed, crateIdentifier)) {
+  let dependency = pathDependencySpec(parsed, crateIdentifier);
+  if (!dependency && workspaceInheritanceRequested(parsed, crateIdentifier)) {
     const inherited = await workspaceInheritedDependencyPath(cargoRoot, projectRoot, crateIdentifier);
     if (!inherited) return null;
     manifestDir = inherited.manifestDir;
-    depPath = inherited.depPath;
+    dependency = inherited;
   }
-  if (!depPath) return null;
-  const resolved = path.resolve(manifestDir, depPath);
+  if (!dependency) return null;
+  const resolved = path.resolve(manifestDir, dependency.depPath);
   if (!(await isPhysicalPathWithinRoot(projectRoot, resolved))) return null;
-  try {
-    const stat = await fsp.stat(resolved);
-    if (!stat.isDirectory()) return null;
-  } catch {
-    return null;
-  }
+  const dependencyManifest = await parseCargoToml(resolved);
+  const actualName = dependencyManifest ? packageName(dependencyManifest) : undefined;
+  const expectedName = dependency.packageName ?? crateIdentifier;
+  if (!actualName || actualName.replace(/-/gu, "_") !== expectedName.replace(/-/gu, "_")) return null;
   return resolved;
 }

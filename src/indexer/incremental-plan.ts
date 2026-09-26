@@ -10,7 +10,7 @@ import {
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
 import { listChangedFiles, listUntrackedFiles, type GitDiscoveryCache } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
-import { fileIdentityKey } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS } from "../util/resolution-candidates.js";
 import {
@@ -114,6 +114,40 @@ export function collectDeletedTrackedFileDependents(
     }
   }
   return dependents;
+}
+
+const PYTHON_SOURCE_PATTERN = /\.pyi?$/iu;
+
+/**
+ * `from pkg import name` resolves to `pkg/__init__.py` until `pkg/name.py` exists; then the
+ * binding is the submodule. That edge is already resolved, so no external edge names the
+ * added module. Returns cached Python importers of each package an added module (or a new
+ * subpackage `__init__`) extends; they are reparsed instead of reused.
+ */
+export function collectPythonPackageImporters(
+  trackedEntries: Record<string, ManifestFileEntry>,
+  addedFiles: readonly string[],
+): Set<string> {
+  const packageInits = new Set<string>();
+  for (const file of addedFiles) {
+    if (!PYTHON_SOURCE_PATTERN.test(file)) continue;
+    const normalized = normalizePath(file);
+    const moduleDir = path.posix.dirname(normalized);
+    const packageDir = path.posix.basename(normalized).startsWith("__init__.")
+      ? path.posix.dirname(moduleDir)
+      : moduleDir;
+    for (const init of ["__init__.py", "__init__.pyi"])
+      packageInits.add(fileIdentityKey(path.posix.join(packageDir, init)));
+  }
+  const importers = new Set<string>();
+  if (!packageInits.size) return importers;
+  for (const [file, entry] of Object.entries(trackedEntries)) {
+    if (!PYTHON_SOURCE_PATTERN.test(file)) continue;
+    if (entry.edges.some((edge) => edge.to.type === "file" && packageInits.has(fileIdentityKey(edge.to.path)))) {
+      importers.add(file);
+    }
+  }
+  return importers;
 }
 
 const RESOLUTION_ENTRY_STEMS = new Set(["index", "__init__", "mod", "package"]);

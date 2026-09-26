@@ -133,6 +133,7 @@ import {
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
   collectExternalEdgeCandidates,
+  collectPythonPackageImporters,
   externalSpecifierMatchesAddedStem,
   tsconfigAliasMappedTails,
   isMissingGitRevisionError,
@@ -2306,6 +2307,16 @@ export async function buildProjectIndexIncremental(
       // cannot round-trip (unstored resolution kind, or a C/C++ include with no form) are
       // reparsed instead of guessed.
       if (addedFiles.length) {
+        const reparseCachedFile = (candidate: string): void => {
+          const key = fileIdentityKey(candidate);
+          if (modules.has(key)) {
+            modules.delete(key);
+            if (fileReport) {
+              fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
+            }
+          }
+          markAsChanged(candidate);
+        };
         const addedStems = addedResolutionStems(addedFiles);
         const externalEdgeCandidates = collectExternalEdgeCandidates(trackedEntries, true);
         if (externalEdgeCandidates.size) {
@@ -2328,17 +2339,11 @@ export async function buildProjectIndexIncremental(
             );
           });
           for (let index = 0; index < candidateFiles.length; index += 1) {
-            if (!staleResolutions[index]) continue;
-            const candidate = candidateFiles[index]!;
-            const key = fileIdentityKey(candidate);
-            if (modules.has(key)) {
-              modules.delete(key);
-              if (fileReport) {
-                fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
-              }
-            }
-            markAsChanged(candidate);
+            if (staleResolutions[index]) reparseCachedFile(candidateFiles[index]!);
           }
+        }
+        for (const importer of collectPythonPackageImporters(trackedEntries, addedFiles)) {
+          if (allFiles.has(importer) && !changedFiles.has(importer)) reparseCachedFile(importer);
         }
       }
       const changedList = Array.from(changedFiles);

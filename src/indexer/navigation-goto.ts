@@ -1,4 +1,4 @@
-import { CSHARP_SUPPORT, type LanguageSupport } from "../languages.js";
+import { CSHARP_SUPPORT, supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -21,6 +21,7 @@ import {
 } from "../util/member-access-tables.js";
 import { cppCallableShapeForNode } from "./cpp-callables.js";
 import { earliestSymbolDef, typescriptCallableRoleAt } from "./ts-callables.js";
+import { isExpandedStarBinding, resolveStarImportedName } from "./star-import-precedence.js";
 import {
   classifyReceiver,
   cppOutOfLineOwnerPath,
@@ -554,19 +555,29 @@ export async function resolveMemberAccessDefinition(params: {
           if (!imp) {
             imp = mod.imports.find(
               (candidate) =>
-                (candidate.kind === "named" || candidate.kind === "default") && candidate.local === exprName,
+                (candidate.kind === "named" || candidate.kind === "default") &&
+                candidate.local === exprName &&
+                !isExpandedStarBinding(candidate, mod.imports),
             );
           }
         }
       } else {
         imp = mod.imports.find(
-          (candidate) => (candidate.kind === "named" || candidate.kind === "default") && candidate.local === exprName,
+          (candidate) =>
+            (candidate.kind === "named" || candidate.kind === "default") &&
+            candidate.local === exprName &&
+            !isExpandedStarBinding(candidate, mod.imports),
         );
         if (!imp && isJsTsLanguage(sup.id)) {
           imp = innermostNamespaceImport(mod.imports, exprName, expr);
         }
         if (!imp) {
-          imp = mod.imports.find((candidate) => candidate.kind === "namespace" && candidate.localNS === exprName);
+          imp = mod.imports.find(
+            (candidate) =>
+              candidate.kind === "namespace" &&
+              candidate.localNS === exprName &&
+              !isExpandedStarBinding(candidate, mod.imports),
+          );
         }
       }
       if (imp) {
@@ -616,14 +627,13 @@ export async function resolveMemberAccessDefinition(params: {
         }
       }
 
+      const starDecision = resolveStarImportedName(index, mod, sup.id, exprName);
+      if (starDecision.status === "resolved") return { kind: "resolved", def: starDecision.definition };
+      if (starDecision.status === "ambiguous") return null;
+      // A star import can also bind a submodule (`from pkg import *` exposing `pkg.mod`).
       for (const starImport of mod.imports.filter((candidate) => candidate.kind === "star")) {
         const result = resolveImported(index, starImport, exprName);
-        if (result) {
-          if ("namespace" in result) {
-            return { kind: "namespace", file: result.namespace };
-          }
-          return { kind: "resolved", def: result };
-        }
+        if (result && "namespace" in result) return { kind: "namespace", file: result.namespace };
       }
       return null;
     }
@@ -1080,6 +1090,7 @@ function resolveNamedMemberContainer(
   const normalizedName = normalize(name);
 
   for (const imp of mod.imports) {
+    if (isExpandedStarBinding(imp, mod.imports)) continue;
     if (imp.kind === "named" && normalize(imp.local) === normalizedName) {
       const container = importedMemberContainer(index, resolveImported(index, imp, imp.imported));
       if (container) return container;
@@ -1088,8 +1099,13 @@ function resolveNamedMemberContainer(
       const container = importedMemberContainer(index, resolveImported(index, imp, "default"));
       if (container) return container;
     }
-    if (imp.kind === "star") {
-      const container = importedMemberContainer(index, resolveImported(index, imp, name));
+  }
+  const languageId = supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id;
+  if (languageId) {
+    const starDecision = resolveStarImportedName(index, mod, languageId, name);
+    if (starDecision.status === "ambiguous") return undefined;
+    if (starDecision.status === "resolved") {
+      const container = asMemberContainer(index, starDecision.definition);
       if (container) return container;
     }
   }
@@ -2534,14 +2550,15 @@ function resolvePythonNamedClass(index: ProjectIndex, mod: ModuleIndex, name: st
   if (candidates.length > 1) return undefined;
 
   for (const imp of mod.imports) {
+    if (isExpandedStarBinding(imp, mod.imports)) continue;
     if (imp.kind === "named" && imp.local === name) {
       const result = resolveImported(index, imp, imp.imported);
       if (result && !("namespace" in result) && result.kind === SymbolKind.Class) return result;
     }
-    if (imp.kind === "star") {
-      const result = resolveImported(index, imp, name);
-      if (result && !("namespace" in result) && result.kind === SymbolKind.Class) return result;
-    }
+  }
+  const starDecision = resolveStarImportedName(index, mod, "python", name);
+  if (starDecision.status === "resolved") {
+    return starDecision.definition.kind === SymbolKind.Class ? starDecision.definition : undefined;
   }
   const exported = resolveExport(index, mod.file, name, { preferredKind: SymbolKind.Class, allowLocalFallback: false });
   if (exported?.kind === "resolved" && exported.def.kind === SymbolKind.Class) return exported.def;

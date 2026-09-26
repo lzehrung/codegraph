@@ -306,4 +306,46 @@ describe("Rust workspace-inherited dependency (H15)", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves a path dependency only into a directory whose Cargo.toml names that package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-h15-manifest-"));
+    try {
+      const greet = 'pub fn greet() -> &\'static str { "hi" }\n';
+      const use = (crate: string): string => `use ${crate}::greet;\nfn main() { println!("{}", greet()); }\n`;
+      await writeFixture(root, {
+        // No Cargo.toml: Cargo rejects this dependency, so it must stay unresolved.
+        "loose/src/lib.rs": greet,
+        "no_manifest/Cargo.toml":
+          '[package]\nname = "no_manifest"\nversion = "0.1.0"\n[dependencies]\nloose = { path = "../loose" }\n',
+        "no_manifest/src/main.rs": use("loose"),
+        // A manifest for a different package: also rejected by Cargo.
+        "other_pkg/Cargo.toml": '[package]\nname = "something_else"\nversion = "0.1.0"\n',
+        "other_pkg/src/lib.rs": greet,
+        "wrong_name/Cargo.toml":
+          '[package]\nname = "wrong_name"\nversion = "0.1.0"\n[dependencies]\nother_pkg = { path = "../other_pkg" }\n',
+        "wrong_name/src/main.rs": use("other_pkg"),
+        // A `package = "..."` rename binds the local key to the real package name.
+        "renamed/Cargo.toml":
+          '[package]\nname = "renamed"\nversion = "0.1.0"\n[dependencies]\nalias = { path = "../other_pkg", package = "something_else" }\n',
+        "renamed/src/main.rs": use("alias"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const gotoIn = async (crate: string, dir: string) =>
+        await goToDefinition(index, {
+          file: path.join(root, dir, "src/main.rs"),
+          line: 2,
+          column: columnOf(use(crate).split("\n")[1]!, "greet"),
+        });
+
+      expect((await gotoIn("loose", "no_manifest")).status).toBe("not_found");
+      expect((await gotoIn("other_pkg", "wrong_name")).status).toBe("not_found");
+      const renamed = await gotoIn("alias", "renamed");
+      expect(renamed.status).toBe("ok");
+      if (renamed.status === "ok") {
+        expect(fileIdentityKey(renamed.definition.file)).toBe(fileIdentityKey(path.join(root, "other_pkg/src/lib.rs")));
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
