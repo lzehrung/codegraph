@@ -40,6 +40,31 @@ function expectNoReprocessedFiles(report: BuildReport): void {
 }
 
 describe("G1: warm disk-cache build reacts when a file starts or stops resolving an import", () => {
+  it("reparses nothing when an unrelated file is deleted", async () => {
+    const root = await mkTmpDir("cg-audit-g1-unrelated-delete-");
+    try {
+      const tsFile = path.join(root, "main.ts");
+      const scssFile = path.join(root, "main.scss");
+      const unrelated = path.join(root, "note.ts");
+      await fsp.writeFile(tsFile, 'import "./missing";\nexport const value = 1;\n', "utf8");
+      await fsp.writeFile(scssFile, '@import "./missing";\n', "utf8");
+      await fsp.writeFile(unrelated, "export const note = 1;\n", "utf8");
+
+      const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+      expect(edgeTargets(initial, tsFile)).toContain("external:./missing");
+      expect(edgeTargets(initial, scssFile)).toContain("external:./missing");
+
+      await fsp.unlink(unrelated);
+      const report: BuildReport = { timings: {} };
+      const warm = await buildProjectIndexIncremental(root, { ...DISK_BUILD, report });
+      expectNoReprocessedFiles(report);
+      expect(edgeTargets(warm, tsFile)).toEqual(edgeTargets(initial, tsFile));
+      expect(edgeTargets(warm, scssFile)).toEqual(edgeTargets(initial, scssFile));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves a previously unresolved relative import once the target file is added, and unresolves it again once deleted", async () => {
     const root = await mkTmpDir("cg-audit-g1-add-delete-");
     try {
