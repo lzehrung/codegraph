@@ -54,7 +54,7 @@ regression test.
 | [x]  | G4  | Ruby graph        | Cross-file `class A < B`, `include`, `extend` give no edge; `goToDefinition` resolves `B`              |
 | [x]  | G5  | TS graph          | `Box.create()` static call has a `uses` edge but no `calls` edge                                       |
 | [x]  | G6  | Agent API         | `freshness: { policy: "manual" }` makes `checkFreshness()` report `fresh` without a check (since #353) |
-| [ ]  | G7  | Rust graph        | `impl` block methods get no `member_of` edge, so Rust method calls (`c.area()`) get no `calls` edge    |
+| [x]  | G7  | Rust graph        | `impl` block methods get no `member_of` edge, so Rust method calls (`c.area()`) get no `calls` edge    |
 
 ## Honest misses on common code
 
@@ -74,7 +74,7 @@ regression test.
 | [x]  | H12 | Python/Ruby          | `super().m()` and Ruby `super` with a proven base class                                                                                               |
 | [x]  | H13 | Rust/Zig             | Rust `use x::*`, struct-literal receivers, a `bin` importing its own lib; Zig qualified struct literals                                               |
 | [ ]  | H14 | Kotlin               | A class whose method body reads a constructor property (`class G(val name: String) { fun d() = name }`): `g.d()` from another function is `not_found` |
-| [ ]  | H15 | Rust                 | Workspace-inherited dependency (`crate_a = { workspace = true }`) does not resolve                                                                    |
+| [x]  | H15 | Rust                 | Workspace-inherited dependency (`crate_a = { workspace = true }`) does not resolve                                                                    |
 
 ## Integration
 
