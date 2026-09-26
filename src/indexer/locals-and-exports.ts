@@ -19,6 +19,7 @@ import { buildScopeIndexFromSource } from "./scope.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
 import { isPythonInstanceAttributeDeclaration } from "../languages/definitions/python.js";
+import { phpConstructorPromotedVariable, phpPropertyPromotionParameter } from "./navigation-php.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { importCapture } from "../languages/graph-captures.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
@@ -133,6 +134,7 @@ const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
 
 function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
   if (isPythonInstanceAttributeDeclaration(node)) return true;
+  if (phpConstructorPromotedVariable(node)) return true;
   let current = node.parent?.parent ?? null;
   while (current) {
     if (MEMBER_CONTAINER_NODE_TYPES[current.type]) return true;
@@ -177,6 +179,33 @@ function cppQualifiedExportName(
     current = current.parent;
   }
   return [...namespaceSegments.flat(), ...(qualifiedSegments ?? [name])].join("::");
+}
+
+/**
+ * Nested Ruby constants are not top-level names. `module Outer; class Base`
+ * exports as `Outer::Base`, so a `require` cannot bind bare `Base`. A
+ * `scope_resolution` name (`class Path::Tool`) already is its public path.
+ */
+function rubyQualifiedExportName(nameNode: SyntaxNodeLike, source: string, name: string): string {
+  if (nameNode.type !== "constant") return name;
+  const segments: string[] = [];
+  let current = nameNode.parent;
+  while (current) {
+    if (current.type === "class" || current.type === "module") {
+      const containerName = current.childForFieldName("name");
+      const ownsExport =
+        containerName !== null &&
+        containerName.startIndex <= nameNode.startIndex &&
+        containerName.endIndex >= nameNode.endIndex;
+      if (containerName && !ownsExport) {
+        const text = sliceText(containerName, source);
+        if (text) segments.unshift(text);
+      }
+    }
+    current = current.parent;
+  }
+  if (!segments.length) return name;
+  return `${segments.join("::")}::${name}`;
 }
 
 const C_DECLARATOR_IDENTIFIER_PATTERN = new RegExp(`^${XID_IDENTIFIER_SOURCE}`, "u");
@@ -659,6 +688,12 @@ export function collectLocalsAndExportsFromSource(
                 );
               }
             }
+          } else if (node && phpPropertyPromotionParameter(node)) {
+            const promoted = phpConstructorPromotedVariable(node, source);
+            if (promoted) {
+              pushLocal(sliceText(promoted, source), SymbolKind.Variable, toRange(promoted), promoted);
+              capturedLocals = true;
+            }
           } else {
             pushLocal(capture.text, classifyLocalCapture(node), nativeRange, node);
           }
@@ -1076,7 +1111,9 @@ export function collectLocalsAndExportsFromSource(
           const exportedName =
             support.id === "cpp" && visibilityNameNode
               ? cppQualifiedExportName(visibilityNameNode, source, nameText)
-              : nameText;
+              : support.id === "ruby" && visibilityNameNode
+                ? rubyQualifiedExportName(visibilityNameNode, source, nameText)
+                : nameText;
           if (!isDefaultExport) {
             exports.push({
               type: "local",

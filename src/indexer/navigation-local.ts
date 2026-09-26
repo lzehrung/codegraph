@@ -293,7 +293,12 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "star") {
-      const result = resolveImported(index, imp, name, cNamespace ? { cNamespace } : undefined);
+      // Ruby star expansion already publishes exported constants. Local fallback would
+      // resurrect a nested class as a bare name the exports query omitted.
+      const result = resolveImported(index, imp, name, {
+        ...(cNamespace ? { cNamespace } : {}),
+        ...(support.id === "ruby" ? { allowLocalFallback: false } : {}),
+      });
       if (result && !("namespace" in result)) {
         return okGoToResult(index, result, {
           via: {

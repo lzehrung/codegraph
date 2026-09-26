@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
-import { SymbolKind, type SymbolDef } from "../../indexer/types.js";
+import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
@@ -349,7 +349,13 @@ export type MemberArityRange = {
 export type ReceiverBinding =
   | { kind: "own-type"; memberScope: ReceiverMemberScope }
   | { kind: "supertype"; memberScope: ReceiverMemberScope }
-  | { kind: "named-type"; typeName: string; memberScope: ReceiverMemberScope };
+  | {
+      kind: "named-type";
+      typeName: string;
+      memberScope: ReceiverMemberScope;
+      /** Set when `typeName` names the type a constructor expression built. */
+      constructed?: true;
+    };
 
 /** What one receiver expression proves, memoized per enclosing function and text. */
 export type ReceiverProof = {
@@ -468,6 +474,59 @@ function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): Syntax
     }
   }
   return null;
+}
+
+const PHP_OBJECT_CREATION_KEYWORDS: Record<string, "self" | "static" | "parent"> = {
+  self: "self",
+  static: "static",
+  parent: "parent",
+};
+
+/** `new self()`, `new static()`, or `new parent()`, or null when `node` is not that keyword. */
+export type PhpObjectCreationKeyword = {
+  keyword: "self" | "static" | "parent";
+  nameNode: SyntaxNodeLike;
+  /** Enclosing class, or null when the keyword is outside a class declaration. */
+  classNode: SyntaxNodeLike | null;
+};
+
+export function phpObjectCreationKeyword(
+  node: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+): PhpObjectCreationKeyword | null {
+  if (sup.id !== "php") return null;
+  let creation: SyntaxNodeLike | null = node;
+  while (creation && creation.type !== "object_creation_expression") {
+    if (
+      creation.type === "method_declaration" ||
+      creation.type === "function_definition" ||
+      creation.type === "class_declaration"
+    ) {
+      return null;
+    }
+    creation = creation.parent;
+  }
+  if (!creation) return null;
+  const nameNode = constructorNameNode(creation, sup);
+  if (!nameNode) return null;
+  const onName = node === creation || (node.startIndex >= nameNode.startIndex && node.endIndex <= nameNode.endIndex);
+  if (!onName) return null;
+  const keyword = PHP_OBJECT_CREATION_KEYWORDS[foldPhpIdentifierCase(sliceText(nameNode, source))];
+  if (!keyword) return null;
+  const container = nearestMemberContainer(creation);
+  const classNode = container?.type === "class_declaration" ? container : null;
+  return { keyword, nameNode, classNode };
+}
+
+/** Members-declaring symbol whose name node is this container's name, when that match is unique. */
+export function memberContainerDef(mod: ModuleIndex, container: SyntaxNodeLike): SymbolDef | null {
+  const nameNode = container.childForFieldName("name");
+  if (!nameNode) return null;
+  const matches = mod.locals.filter(
+    (local) => declaresMembers(local) && local.range.start.index === nameNode.startIndex,
+  );
+  return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
 function rubyNewReceiverNameNode(node: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
@@ -1102,6 +1161,7 @@ export function classifyReceiver(
       kind: "named-type",
       typeName: sliceText(proof.constructed, source),
       memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
+      constructed: true,
     };
   }
   if (!receiverIsName) return null;

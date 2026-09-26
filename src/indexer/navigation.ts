@@ -3,11 +3,14 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type Lang
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
+import { phpObjectCreationKeyword } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   csharpAliasQualifiedLookupName,
   findCsharpPartialTypeEquivalents,
   innermostNamespaceImport,
   resolveMemberAccessDefinition,
+  resolvePhpObjectCreationTarget,
+  resolveRubySuperDefinition,
   sharedOwnerMemberUnitComplete,
   resolveImplicitSelfMember,
   supportsReceiverMemberNavigation,
@@ -180,6 +183,20 @@ export async function goToDefinition(
 
   while (node && (node.type === "," || node.type === ".")) node = node.parent;
   if (!node) return { status: "not_found", reason: "No node at position" };
+
+  if (sup.id === "ruby" && node.type === "super") {
+    const target = await resolveRubySuperDefinition(index, mod, node, source, sup);
+    if (!target) return { status: "not_found", reason: "No matching Ruby superclass method" };
+    return okGoToResult(index, target, { resolution: "member-access", confidence: "medium" });
+  }
+  if (sup.id === "php") {
+    const keyword = phpObjectCreationKeyword(node, source, sup);
+    if (keyword) {
+      const created = resolvePhpObjectCreationTarget(index, mod, keyword, source, sup);
+      if (!created) return { status: "not_found", reason: "No matching PHP class" };
+      return okGoToResult(index, created, { resolution: "member-access", confidence: "medium" });
+    }
+  }
 
   const shorthandId = sup.nodeTypes.shorthandPropertyIdentifier ?? [];
   const isId = sup.nodeTypes.identifier.includes(node.type) || shorthandId.includes(node.type);
@@ -966,7 +983,9 @@ async function findReferencesInternal(
           const ranges = await collectVerifiedNamedNodeReferences(
             index,
             fileId,
-            parsedContext.sup.id === "cpp" ? (exportedName.split("::").pop() ?? exportedName) : exportedName,
+            parsedContext.sup.id === "cpp" || parsedContext.sup.id === "ruby"
+              ? (exportedName.split("::").pop() ?? exportedName)
+              : exportedName,
             definition,
             (params, parsed) => goToDefinition(index, params, parsed),
             remainingReferences,
