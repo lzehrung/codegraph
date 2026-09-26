@@ -54,6 +54,7 @@ import {
   nodeInStaticMemberContext,
   phpObjectCreationKeyword,
   receiverCallAccess,
+  rustImplSelfTypeNode,
   supportsImplicitSelfMemberCalls,
   supportsReceiverMemberOverloads,
   type ReceiverCallAccess,
@@ -552,6 +553,17 @@ async function memberOwner(
     if (!receiverTypeNode) return null;
     const def = resolveNamedType(context, sliceText(receiverTypeNode, context.source), receiverTypeNode);
     return def ? { def, container: null, cppOutOfLine: false } : null;
+  }
+  if (context.sup.id === "rust") {
+    // A Rust impl method sits beside its self type, not inside it (like Go's receiver type);
+    // the `impl` block's self type is the owner, and only direct impl members count.
+    const container = nearestMemberContainer(fn.node);
+    if (!container || container.type !== "impl_item" || !isDirectKeywordMemberDeclaration(fn.node, container)) {
+      return null;
+    }
+    const nameNode = rustImplSelfTypeNode(container, context.sup);
+    const def = nameNode ? resolveNamedType(context, sliceText(nameNode, context.source), nameNode) : null;
+    return def ? { def, container, cppOutOfLine: false } : null;
   }
   if (context.sup.id !== "zig") return null;
   const container = nearestMemberContainer(fn.node);
