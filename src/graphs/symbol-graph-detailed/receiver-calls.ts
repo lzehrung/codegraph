@@ -1210,6 +1210,9 @@ const UNBOUND_INSTANCE_CALL_LANGUAGE_IDS: Record<string, true> = {
  */
 const STATIC_TYPE_NAME_RECEIVER_LANGUAGE_IDS: Record<string, true> = {
   csharp: true,
+  js: true,
+  ts: true,
+  tsx: true,
 };
 
 /** Whether a receiver name is capitalized like a type in a capitalized-name language. */

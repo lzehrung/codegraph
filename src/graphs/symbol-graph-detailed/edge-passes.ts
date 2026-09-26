@@ -7,6 +7,7 @@ import {
   isSwiftFileHiddenSharedOwnerMember,
 } from "../../indexer/declaration-visibility.js";
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
+import { resolveNamedDefinition } from "../../indexer/navigation-local.js";
 import {
   isDirectKeywordMemberDeclaration,
   resolveSharedOwnerContainers,
@@ -744,7 +745,13 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       if (seenAliases.has(name)) return;
       let target: SymbolDef | null = context.aliasToTargetDef.get(name) ?? null;
       if (!target) {
-        const modFile = context.aliasToTargetModule.get(name);
+        // A local variable can shadow a Go package alias (`u := LocalU{}` alongside
+        // `import u "pkg"`); aliasToTargetModule is a blind per-file text map, so refuse it
+        // here too whenever a closer, non-namespace scope binding owns the name.
+        const modFile =
+          context.sup.id === "go" && context.hasNonModuleBinding(name, node)
+            ? undefined
+            : context.aliasToTargetModule.get(name);
         if (modFile) {
           let exportedName: string | null = null;
           const parent = node.parent;
@@ -1131,7 +1138,19 @@ async function recordIdentifierRelations(
         target = context.resolveIdentifier(qualifiedPath.join("::"), identifier);
       }
     } else {
-      target = context.resolveIdentifier(sliceText(identifier, context.source), identifier);
+      const name = sliceText(identifier, context.source);
+      target = context.resolveIdentifier(name, identifier);
+      // Ruby has no package/namespace compilation unit: `require_relative` gives a
+      // class/module whole-program visibility instead, with no aliasToTargetDef entry for
+      // the implicit same-named "namespace" binding a require creates. Fall back to the
+      // exact resolveNamedDefinition call goToDefinition's own bare-name resolution makes for
+      // every cross-module-symbol language, scoped to this one heritage lookup so a
+      // constructed-receiver name (`Klass.new`) elsewhere keeps its own require-based
+      // visibility untouched.
+      if (!target && context.sup.id === "ruby") {
+        const resolved = resolveNamedDefinition(context.index, context.moduleEntry, context.moduleEntry.file, context.sup, name);
+        if (resolved?.status === "ok") target = resolved.definition;
+      }
     }
     if (!target) continue;
     const targetId = defNodeId(target);
