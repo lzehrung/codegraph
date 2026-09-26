@@ -458,7 +458,9 @@ function createCodegraphMcpHandlersForSession(
       action = "rebuild the artifact with write access enabled";
     }
     if (freshness.state === "unchecked") {
-      return `SQLite artifact may be stale; run refresh_index, then ${action} before query_sqlite. Session freshness could not be checked: ${freshness.reason}.`;
+      // A manual session records no file signatures, so it can neither prove the artifact is
+      // current nor build a SQLite artifact that carries freshness metadata.
+      return `SQLite artifact may be stale, and this session cannot check or rebuild it: ${freshness.reason}. Rebuild the artifact from a session whose freshness policy is "check" or "auto" (for example \`codegraph artifact --sqlite\`), then query again.`;
     }
     const reason = freshness.state === "stale" ? freshness.reason : "workspace changed after artifact build";
     const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
