@@ -21,6 +21,8 @@ import {
   resolveVisibleCppCallableName,
 } from "../indexer/navigation-cpp.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
+import { ensurePhpNamespaceSymbolIndex } from "../indexer/navigation-references.js";
+import { resolveIndexedPhpClassReference } from "../indexer/php-namespace-symbols.js";
 import {
   csharpLookupName,
   findClosestScopeBinding,
@@ -135,6 +137,7 @@ export async function buildSymbolGraphDetailed(
   opts?: BuildDetailedSymbolGraphOptions,
 ): Promise<DetailedSymbolGraph> {
   assertNativeRequiredAvailable(index.nativeMode);
+  await ensurePhpNamespaceSymbolIndex(index);
   const base = await buildSymbolGraph(index, opts?.files ? { files: opts.files } : undefined);
   const configuredMaxEdges =
     typeof opts?.maxEdges === "number" && opts.maxEdges > 0 ? Math.floor(opts.maxEdges) : undefined;
@@ -231,6 +234,7 @@ export async function buildSymbolGraphDetailed(
     resolveExportDef(file, exportedName);
 
   const receiverCalls: ReceiverCallCandidate[] = [];
+  const fileHiddenMemberIds = new Set<string>();
   const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
   const receiverMemberArities = new Map<string, MemberArityRange>();
   const sharedOwnerPeers = new Map<string, Promise<SharedOwnerPeer[]>>();
@@ -464,6 +468,10 @@ export async function buildSymbolGraphDetailed(
           });
           if (resolved?.kind === "resolved") return resolved.def;
         }
+        if (localCandidates.length === 0 && sup.id === "php") {
+          const phpClass = resolveIndexedPhpClassReference(index, src, tree, node, lookupName, moduleEntry.imports);
+          if (phpClass) return phpClass;
+        }
         return null;
       };
 
@@ -493,6 +501,7 @@ export async function buildSymbolGraphDetailed(
         sharedOwnerPeers,
         sharedOwnerAnchors,
         sharedOwnerAccessibleMembers,
+        fileHiddenMemberIds,
         nodeAliases,
         noteCallableName,
         loadParsedFile,
@@ -526,6 +535,7 @@ export async function buildSymbolGraphDetailed(
     receiverMemberArities,
     sharedOwnerAnchors,
     sharedOwnerAccessibleMembers,
+    fileHiddenMemberIds,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));
