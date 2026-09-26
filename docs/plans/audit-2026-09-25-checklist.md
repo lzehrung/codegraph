@@ -17,7 +17,7 @@ regression test.
 - [x] **F2 Same-package and same-namespace peers.** Java, Kotlin, Swift, and PHP resolve a peer
       declaration without an import, the way C# already does (W5, W12).
 - [x] **F3 No `complete` with an unresolved use.** A same-name use in a scanned candidate file that
-  resolves to nothing makes coverage `partial`; it is not dropped silently.
+      resolves to nothing makes coverage `partial`; it is not dropped silently.
 
 ## Wrong answers (break the accuracy bar)
 
@@ -48,12 +48,12 @@ regression test.
 
 | Done | ID  | Area              | Case                                                                                                   |
 | ---- | --- | ----------------- | ------------------------------------------------------------------------------------------------------ |
-| [ ]  | G1  | Disk cache        | A new file that makes an existing unresolved import resolvable is ignored by a warm build              |
-| [~]  | G2  | Package manifests | Nearest-manifest lookup reads above `--root` when no `.git` exists                                     |
+| [x]  | G1  | Disk cache        | A new file that makes an existing unresolved import resolvable is ignored by a warm build              |
+| [x]  | G2  | Package manifests | Nearest-manifest lookup reads above `--root` when no `.git` exists                                     |
 | [x]  | G3  | Go graph          | No `calls` edge for a cross-package call (`u.Square()`) that navigation resolves                       |
 | [x]  | G4  | Ruby graph        | Cross-file `class A < B`, `include`, `extend` give no edge; `goToDefinition` resolves `B`              |
 | [x]  | G5  | TS graph          | `Box.create()` static call has a `uses` edge but no `calls` edge                                       |
-| [~]  | G6  | Agent API         | `freshness: { policy: "manual" }` makes `checkFreshness()` report `fresh` without a check (since #353) |
+| [x]  | G6  | Agent API         | `freshness: { policy: "manual" }` makes `checkFreshness()` report `fresh` without a check (since #353) |
 | [ ]  | G7  | Rust graph        | `impl` block methods get no `member_of` edge, so Rust method calls (`c.area()`) get no `calls` edge    |
 
 ## Honest misses on common code
