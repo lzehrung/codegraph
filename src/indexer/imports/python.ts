@@ -85,18 +85,6 @@ async function pushNamedImport(
 ): Promise<void> {
   const { relDots, mod } = splitRelativeModuleSpec(moduleSpec);
   const resolved = await resolvePythonModule(context.projectRoot, context.file, mod, relDots);
-  const namespaceResolved = resolvePythonNamespaceMember(resolved, imported);
-  if (namespaceResolved) {
-    context.pushBinding({
-      kind: "namespace",
-      localNS: local,
-      from: moduleSpec,
-      resolved: namespaceResolved,
-      mechanism: "python",
-      moduleLevel,
-    });
-    return;
-  }
 
   context.pushBinding({
     kind: "named",
@@ -115,12 +103,14 @@ async function pushDefaultImport(
   dotted: string,
   local: string,
   moduleLevel: boolean,
+  explicitAlias: boolean,
 ): Promise<void> {
   const resolved = await resolvePythonModule(context.projectRoot, context.file, dotted, 0);
   context.pushBinding({
     kind: "namespace",
     localNS: local,
     from: dotted,
+    ...(explicitAlias ? { explicitAlias: true } : {}),
     resolved,
     mechanism: "python",
     moduleLevel,
@@ -241,7 +231,7 @@ async function collectPythonImportStatement(
     const aliasMatch = item.match(PYTHON_MODULE_LIST_ITEM_PATTERN);
     if (!aliasMatch) continue;
     const dotted = aliasMatch[1]!;
-    await pushDefaultImport(context, dotted, aliasMatch[2] ?? dotted.split(".")[0]!, moduleLevel);
+    await pushDefaultImport(context, dotted, aliasMatch[2] ?? dotted.split(".")[0]!, moduleLevel, aliasMatch[2] !== undefined);
   }
   return true;
 }
@@ -314,6 +304,6 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
     const dotted = match[2]!;
     const local = match[3] ?? dotted.split(".")[0]!;
     const moduleLevel = isModuleLevelKeywordInStrippedSource(pySrc, keywordStart);
-    await pushDefaultImport(context, dotted, local, moduleLevel);
+    await pushDefaultImport(context, dotted, local, moduleLevel, match[3] !== undefined);
   }
 }

@@ -760,7 +760,7 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, shared, clsRun, files)).toEqual(["py_shared"]);
   });
 
-  it("leaves Python super() receivers unresolved", async () => {
+  it("resolves Python super() through a proven base class and leaves an unproven base unresolved", async () => {
     const files: Record<string, string> = {
       "pysuper.py": [
         "class PyBase:",
@@ -769,12 +769,17 @@ nativeDescribe("receiver method call edge language parity", () => {
         "class PyChild(PyBase):",
         "    def py_run(self):",
         "        return super().py_helper()",
+        "class PyStandalone:",
+        "    def py_only(self):",
+        "        return super().py_helper()",
       ].join("\n"),
     };
     const graph = await buildFixture("cg-receiver-py-super-", files);
     const helper = nodeIn(graph, "pysuper.py", "py_helper");
     const run = nodeIn(graph, "pysuper.py", "py_run");
-    expect(callsiteTexts(graph, helper, run, files)).toBeNull();
+    const standaloneOnly = nodeIn(graph, "pysuper.py", "py_only");
+    expect(callsiteTexts(graph, helper, run, files)).toEqual(["py_helper"]);
+    expect(outgoingCallCount(graph, standaloneOnly)).toBe(0);
   });
 
   it("records calls edges for C++ this receivers, including inherited members", async () => {

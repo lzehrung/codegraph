@@ -13,6 +13,7 @@ import {
   isMemberAccessNode,
   isMemberReferencePropertyIdentifier,
   isReceiverNameNode,
+  receiverKeywordText,
 } from "../../util/member-access.js";
 import type { SymbolGraph } from "../symbol-graph.js";
 import { declarationMemberArity, findFirstNodeByType, isIdentifierType, PARAMETER_LIST_NODE_TYPES } from "./ast.js";
@@ -1076,7 +1077,7 @@ export function classifyReceiver(
   cacheScope: number,
   accessNode: SyntaxNodeLike,
 ): ReceiverBinding | null {
-  const text = sliceText(receiver, source).trim();
+  const text = receiverKeywordText(sup, receiver, source);
   if (!text) return null;
   const keywordKind = keywordReceiverKind(sup.id, text);
   if (keywordKind) {

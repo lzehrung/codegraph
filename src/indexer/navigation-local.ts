@@ -321,5 +321,30 @@ export function resolveNamedDefinition(
     }
   }
 
+  // A local binding name always wins above so a grouped import's own aliases never collide with
+  // each other; only look up an aliased import's source-side spelling once no binding's own
+  // local name matched at all, so `from a import helper as h` still lets a click on `helper`
+  // itself (real source text naming a real symbol) reach the definition.
+  for (const imp of mod.imports) {
+    if (
+      imp.kind !== "named" ||
+      imp.local === imp.imported ||
+      support.normalizeIdentifier(imp.imported) !== normalizedName
+    ) {
+      continue;
+    }
+    const result = resolveImported(index, imp, imp.imported, cNamespace ? { cNamespace } : undefined);
+    if (result && !("namespace" in result)) {
+      return okGoToResult(index, result, {
+        via: {
+          ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+          exportedName: imp.imported,
+        },
+        resolution: "import",
+        confidence: "high",
+      });
+    }
+  }
+
   return null;
 }

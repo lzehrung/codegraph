@@ -712,7 +712,15 @@ function importCanReferenceDefinition(
   };
 
   if (imp.kind === "named") {
-    return resolvesToDefinition(imp.imported);
+    if (resolvesToDefinition(imp.imported)) return true;
+    // A python `from pkg import name` binds `name` from the package's own namespace; when the
+    // package has no such export, Python's own import system falls back to treating `name` as
+    // an implicit submodule attribute instead (the same fallback `resolveImported` applies at
+    // consumption time). Reusing that fallback here keeps candidate-file discovery in agreement
+    // with the goto/reference-collection consumers that already resolve through it.
+    if (languageId !== "python") return false;
+    const result = resolveImported(index, imp, imp.imported, exportOptions);
+    return !!result && "namespace" in result && fileIdentityKey(result.namespace) === fileIdentityKey(def.file);
   }
   if (imp.kind === "default") {
     return resolvesToDefinition("default");
@@ -804,7 +812,9 @@ function getIndexedReferenceCandidateFiles(
     if (
       moduleIndex.imports.some(
         (imp) =>
-          (imp.kind === "star" || imp.kind === "namespace") &&
+          (imp.kind === "star" ||
+            imp.kind === "namespace" ||
+            (imp.kind === "named" && imp.mechanism === "python")) &&
           importCanReferenceDefinition(index, imp, def, exportedNames, languageId),
       )
     ) {
