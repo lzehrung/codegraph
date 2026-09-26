@@ -7,7 +7,7 @@ import {
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
   externalSpecifierMatchesAddedStem,
-  tsconfigAliasMappedTail,
+  tsconfigAliasMappedTails,
   listUntrackedProjectFiles,
   resolveIncrementalFileList,
 } from "../src/indexer/incremental-plan.js";
@@ -345,8 +345,20 @@ describe("added-file specifier stems", () => {
     expect(externalSpecifierMatchesAddedStem("pkg", "python", stems)).toBe(true);
     expect(externalSpecifierMatchesAddedStem("./widget", "ts", stems)).toBe(true);
     expect(externalSpecifierMatchesAddedStem("./other", "ts", stems)).toBe(false);
-    const mapped = tsconfigAliasMappedTail("@exact", { "@exact": ["./lib/target.ts"] });
-    expect(mapped).toBe("./lib/target.ts");
+    const mapped = tsconfigAliasMappedTails("@exact", { "@exact": ["./lib/target.ts"] });
+    expect(mapped).toEqual(["./lib/target.ts"]);
     expect(externalSpecifierMatchesAddedStem("@exact", "ts", stems, mapped)).toBe(true);
+    // A fallback target counts: only the second target matches the added file.
+    const fallback = tsconfigAliasMappedTails("@lib/target", { "@lib/*": ["missing/miss-*", "lib/*"] });
+    expect(fallback).toEqual(["missing/miss-target", "lib/target"]);
+    expect(externalSpecifierMatchesAddedStem("@lib/target", "ts", stems, fallback)).toBe(true);
+    expect(
+      externalSpecifierMatchesAddedStem(
+        "@lib/other",
+        "ts",
+        stems,
+        tsconfigAliasMappedTails("@lib/other", { "@lib/*": ["missing/miss-*", "lib/*"] }),
+      ),
+    ).toBe(false);
   });
 });

@@ -149,14 +149,15 @@ export function externalSpecifierStem(specifier: string, languageId: string): st
 }
 
 /**
- * tsconfig `paths` substitution for a specifier, ignoring whether the target exists.
- * The longest matching prefix wins, matching tsconfig-paths.
+ * tsconfig `paths` substitutions for a specifier, ignoring whether each target exists. The
+ * longest matching prefix selects the pattern, matching tsconfig-paths; every fallback target
+ * of that pattern is returned in order, because an added file can satisfy any of them.
  */
-export function tsconfigAliasMappedTail(
+export function tsconfigAliasMappedTails(
   specifier: string,
   paths: Readonly<Record<string, readonly string[]>>,
-): string | null {
-  let best: { rank: number; tail: string } | null = null;
+): string[] {
+  let best: { rank: number; tails: string[] } | null = null;
   for (const [pattern, targets] of Object.entries(paths)) {
     const star = pattern.indexOf("*");
     let captured = "";
@@ -172,24 +173,24 @@ export function tsconfigAliasMappedTail(
       captured = specifier.slice(prefix.length, specifier.length - suffix.length);
       rank = prefix.length;
     }
-    const target = targets[0];
-    if (!target) continue;
-    const tail = target.includes("*") ? target.replace("*", captured) : target;
-    if (!best || rank > best.rank) best = { rank, tail };
+    const tails = targets
+      .filter(Boolean)
+      .map((target) => (target.includes("*") ? target.replace("*", captured) : target));
+    if (!tails.length) continue;
+    if (!best || rank > best.rank) best = { rank, tails };
   }
-  return best?.tail ?? null;
+  return best?.tails ?? [];
 }
 
 export function externalSpecifierMatchesAddedStem(
   specifier: string,
   languageId: string,
   addedStems: ReadonlySet<string>,
-  mappedTail?: string | null,
+  mappedTails: readonly string[] = [],
 ): boolean {
   if (!specifier || addedStems.size === 0) return false;
   if (addedStems.has(externalSpecifierStem(specifier, languageId))) return true;
-  if (!mappedTail) return false;
-  return addedStems.has(externalSpecifierStem(mappedTail, languageId));
+  return mappedTails.some((tail) => addedStems.has(externalSpecifierStem(tail, languageId)));
 }
 
 /**

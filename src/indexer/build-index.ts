@@ -134,7 +134,7 @@ import {
   collectTrackedFileDependents,
   collectExternalEdgeCandidates,
   externalSpecifierMatchesAddedStem,
-  tsconfigAliasMappedTail,
+  tsconfigAliasMappedTails,
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
   partitionTrackedManifestFiles,
@@ -572,8 +572,8 @@ async function externalSpecifierResolutionChanged(
     const paths = await loadTsconfigPaths(file);
     if (paths && Object.keys(paths).length) {
       for (const edge of needsAlias) {
-        const mapped = tsconfigAliasMappedTail(specifierOf(edge), paths);
-        if (mapped && externalSpecifierMatchesAddedStem(specifierOf(edge), support.id, addedStems, mapped)) {
+        const mapped = tsconfigAliasMappedTails(specifierOf(edge), paths);
+        if (mapped.length && externalSpecifierMatchesAddedStem(specifierOf(edge), support.id, addedStems, mapped)) {
           matching.push(edge);
         }
       }

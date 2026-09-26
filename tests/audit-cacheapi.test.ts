@@ -348,6 +348,39 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves a tsconfig alias whose second fallback target is the file that was added", async () => {
+    const root = await mkTmpDir("cg-audit-g1-ts-alias-fallback-");
+    try {
+      await fsp.writeFile(
+        path.join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["missing/miss-*", "real/pre-*"] } } }),
+        "utf8",
+      );
+      const main = path.join(root, "main.ts");
+      const target = path.join(root, "real", "pre-foo.ts");
+      await fsp.writeFile(
+        main,
+        ['import { fn } from "@lib/foo";', "export const run = (): number => fn();", ""].join("\n"),
+        "utf8",
+      );
+
+      const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+      expect(getUnresolvedImports(initial.graph, { projectRoot: root }).map((entry) => entry.name)).toContain(
+        "@lib/foo",
+      );
+
+      await fsp.mkdir(path.dirname(target), { recursive: true });
+      await fsp.writeFile(target, "export function fn(): number {\n  return 1;\n}\n", "utf8");
+
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targets = await expectWarmMatchesCold(root, main, warm);
+      expect(targets).toContain(`file:${normalizePath(target)}`);
+      expect(targets).not.toContain("external:@lib/foo");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("G6: agent session freshness under a manual policy never claims fresh without evidence", () => {

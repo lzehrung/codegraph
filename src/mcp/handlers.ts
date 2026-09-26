@@ -1012,7 +1012,9 @@ function createCodegraphMcpHandlersForSession(
       let artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
       if (artifactFreshness.state !== "fresh") {
         const sessionFreshness = await checkMcpFreshness();
-        if (sessionFreshness.state === "stale") {
+        // An unchecked (manual) session cannot prove its snapshot matches disk, so rebuilding
+        // the artifact from it is as unsafe as rebuilding from a known-stale one.
+        if (sessionFreshness.state === "stale" || sessionFreshness.state === "unchecked") {
           throw new Error(formatSqliteFreshnessError(sessionFreshness));
         }
         artifactFreshness = await refreshSqliteArtifactForQuery(artifactFreshness, { allowStaleRebuild: true });

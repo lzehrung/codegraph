@@ -2557,6 +2557,25 @@ describe("codegraph MCP handlers", () => {
     expect(caught.message).not.toMatch(/artifact_build before query_sqlite/i);
   });
 
+  it("refuses to rebuild a stale SQLite artifact from an unchecked manual session", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-manual-session-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "keep.ts"), "export const keep = 1;\n");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+    buildHandlers.dispose();
+
+    const session = createAgentSession({ root, freshness: { policy: "manual" } });
+    await session.loadProject({ symbolGraph: "skip" });
+    await fs.writeFile(path.join(root, "added.ts"), "export const added = 2;\n");
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, readOnly: false, session });
+
+    await expect(readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" })).rejects.toThrow(
+      /SQLite artifact may be stale; run refresh_index/,
+    );
+    session.invalidate();
+  });
+
   it("refuses older SQLite artifacts without freshness metadata in read-only mode", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-legacy-artifact-"));
     const outDir = path.join(root, "out");
