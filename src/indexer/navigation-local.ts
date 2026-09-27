@@ -5,7 +5,15 @@ import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
-import { bindingCoversUse, fileScopeDefinitionCoversUse, scopeNodesFor } from "./scope-nodes.js";
+import {
+  bindingCoversUse,
+  fileScopeDefinitionCoversUse,
+  isExplicitMethodCall,
+  laterLocalBlocksOuterUse,
+  scopeAllowsUse,
+  scopeIdentifierKey,
+  scopeNodesFor,
+} from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
 import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
 import { phpNamedImportRole } from "./import-types.js";
@@ -179,6 +187,19 @@ function effectivePythonModuleScopeBinding(
   return null;
 }
 
+function closestContainingScope(scopeIndex: ScopeIndex, currentNode: SyntaxNodeLike): Scope | undefined {
+  let best: Scope | undefined;
+  for (const scope of scopeIndex.allScopes) {
+    if (
+      currentNode.startIndex >= scope.node.startIndex &&
+      currentNode.endIndex <= scope.node.endIndex &&
+      (!best || (scope.node.startIndex >= best.node.startIndex && scope.node.endIndex <= best.node.endIndex))
+    )
+      best = scope;
+  }
+  return best;
+}
+
 export function findClosestScopeBinding(
   scopeIndex: ScopeIndex,
   bindingName: string,
@@ -198,36 +219,27 @@ export function findClosestScopeBinding(
     }
     return owner;
   }
-  const canonicalName = support.normalizeIdentifier(bindingName);
-  const normalizedName = support.id === "c" && cTagRole(currentNode) ? cScopeName(canonicalName, "tag") : canonicalName;
-  let currentScope = scopeIndex.allScopes.find((scope) => {
-    const start = scope.node.startIndex;
-    const end = scope.node.endIndex;
-    return currentNode.startIndex >= start && currentNode.endIndex <= end;
-  });
-
-  if (currentScope) {
-    let best = currentScope;
-    for (const scope of scopeIndex.allScopes) {
-      if (
-        currentNode.startIndex >= scope.node.startIndex &&
-        currentNode.endIndex <= scope.node.endIndex &&
-        scope.node.startIndex >= best.node.startIndex &&
-        scope.node.endIndex <= best.node.endIndex
-      ) {
-        best = scope;
-      }
-    }
-    currentScope = best;
-  }
-
   const row = scopeNodesFor(support.id);
+  const canonicalName = scopeIdentifierKey(row, bindingName, currentNode, support.normalizeIdentifier);
+  const normalizedName = support.id === "c" && cTagRole(currentNode) ? cScopeName(canonicalName, "tag") : canonicalName;
+  let currentScope = closestContainingScope(scopeIndex, currentNode);
+
+  const methodCall = isExplicitMethodCall(row, currentNode);
   const pythonModuleLookupAtRuntime =
     !!row.moduleBindingsAtFunctionRuntime && pythonModuleLookupUsesRuntimeBindings(currentScope, currentNode);
   while (currentScope) {
+    if (!scopeAllowsUse(row, currentScope, currentNode)) {
+      currentScope = currentScope.parent;
+      continue;
+    }
     let binding: Binding | undefined = currentScope.map.get(normalizedName);
-    if (!pythonModuleLookupAtRuntime || currentScope.kind !== "module") {
-      while (binding && !bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex)) {
+    if (!pythonModuleLookupAtRuntime || currentScope.kind !== "module" || methodCall) {
+      while (
+        binding &&
+        ((methodCall && binding.kind === "local") ||
+          ((!pythonModuleLookupAtRuntime || currentScope.kind !== "module") &&
+            !bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex)))
+      ) {
         binding = binding.earlierSameScope;
       }
     }
@@ -242,10 +254,38 @@ export function findClosestScopeBinding(
       continue;
     }
     if (binding) return binding;
+    if (laterLocalBlocksOuterUse(row, currentScope, normalizedName, currentNode.startIndex)) return null;
     currentScope = currentScope.parent;
   }
 
   return null;
+}
+
+/** A later C# local makes an earlier use invalid rather than binding to an outer member. */
+export function laterLocalShadowsUse(
+  scopeIndex: ScopeIndex,
+  bindingName: string,
+  currentNode: SyntaxNodeLike,
+  support: LanguageSupport,
+): boolean {
+  const row = scopeNodesFor(support.id);
+  if (!row.laterLocalBlocksOuterKinds) return false;
+  const canonicalName = scopeIdentifierKey(row, bindingName, currentNode, support.normalizeIdentifier);
+  let scope = closestContainingScope(scopeIndex, currentNode);
+  while (scope) {
+    if (!scopeAllowsUse(row, scope, currentNode)) {
+      scope = scope.parent;
+      continue;
+    }
+    if (laterLocalBlocksOuterUse(row, scope, canonicalName, currentNode.startIndex)) return true;
+    let binding = scope.map.get(canonicalName);
+    while (binding && !bindingCoversUse(row, scope.kind, binding, currentNode.startIndex)) {
+      binding = binding.earlierSameScope;
+    }
+    if (binding) return false;
+    scope = scope.parent;
+  }
+  return false;
 }
 
 export function findClosestBinding(

@@ -10,6 +10,8 @@ import {
   type FindReferencesResult,
 } from "../src/index.js";
 
+import { bindingCoversUse, scopeNodesFor } from "../src/indexer/scope-nodes.js";
+
 function columnOf(source: string, line: number, token: string, occurrence = 0): number {
   const text = source.split("\n")[line - 1] ?? "";
   let from = 0;
@@ -202,6 +204,33 @@ describe("forward references (W19)", () => {
     });
   });
 
+  it("keeps a PHP variable separate from a same-named class", async () => {
+    const source = [
+      "<?php",
+      "class widget {}",
+      "echo $widget;",
+      "$widget = 1;",
+      "echo $widget;",
+      "new widget();",
+      "",
+    ].join("\n");
+    await withFile("separate-namespaces.php", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const before = await goToDefinition(index, { file, line: 3, column: columnOf(source, 3, "$widget") });
+      expect(before.status).toBe("not_found");
+      const assigned = await goToDefinition(index, { file, line: 5, column: columnOf(source, 5, "$widget") });
+      expect(assigned.status).toBe("ok");
+      if (assigned.status === "ok") expect(assigned.definition.range.start.line).toBe(4);
+      const variableRefs = await findReferences(index, { file, line: 4, column: columnOf(source, 4, "$widget") });
+      expect(referenceLines(variableRefs)).toEqual([4, 5]);
+      const classUse = await goToDefinition(index, { file, line: 6, column: columnOf(source, 6, "widget") });
+      expect(classUse.status).toBe("ok");
+      if (classUse.status === "ok") expect(classUse.definition.range.start.line).toBe(2);
+      const classRefs = await findReferences(index, { file, line: 2, column: columnOf(source, 2, "widget") });
+      expect(referenceLines(classRefs)).toEqual([2, 6]);
+    });
+  });
+
   it("does not attach an earlier Ruby local read to a later assignment, but sees a later method", async () => {
     const source = [
       "puts value",
@@ -231,6 +260,20 @@ describe("forward references (W19)", () => {
       if (method.status === "ok") expect(method.definition.range.start.line).toBe(8);
     });
   });
+
+  it("does not give a SQL assignment whole-file forward coverage", () => {
+    const source = "SELECT amount FROM ledger;\nUPDATE ledger SET amount = 1;";
+    const before = source.indexOf("amount");
+    const declaration = source.lastIndexOf("amount");
+    const binding = {
+      def: {
+        start: { line: 2, column: 19, index: declaration },
+        end: { line: 2, column: 25, index: declaration + "amount".length },
+      },
+    };
+    expect(bindingCoversUse(scopeNodesFor("sql"), "module", binding, before)).toBe(false);
+  });
+
   it("does not invent a C# top-level local before its declaration", async () => {
     const source = ["System.Console.WriteLine(value);", "int value = 1;", "System.Console.WriteLine(value);", ""].join(
       "\n",
@@ -445,6 +488,223 @@ describe("forward references (W19)", () => {
 
       const global = await findReferences(index, { file, line: 1, column: columnOf(source, 1, "value") });
       expect(referenceLines(global)).toEqual([1]);
+    });
+  });
+  it("skips Python class bindings from methods, nested classes, and comprehension elements", async () => {
+    const source = [
+      "x = 1",
+      "class C:",
+      "    x = 2",
+      "    y = x",
+      "    def m(self):",
+      "        return x",
+      "    class Inner:",
+      "        y = x",
+      "def enclosing():",
+      "    hidden = 1",
+      "    class Box:",
+      "        hidden = 2",
+      "        def m(self):",
+      "            return hidden",
+      "    return Box",
+      "class G:",
+      "    xs = [1]",
+      "    ys = [v for v in xs]",
+      "    zs = [xs for v in range(1)]",
+      "",
+    ].join("\n");
+    await withFile("class-scope.py", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      for (const [line, token, target] of [
+        [4, "x", 3],
+        [6, "x", 1],
+        [8, "x", 1],
+        [14, "hidden", 10],
+        [18, "xs", 17],
+      ] as const) {
+        const hit = await goToDefinition(index, { file, line, column: columnOf(source, line, token) });
+        expect(hit.status).toBe("ok");
+        if (hit.status === "ok") expect(hit.definition.range.start.line).toBe(target);
+      }
+      const missing = await goToDefinition(index, { file, line: 19, column: columnOf(source, 19, "xs") });
+      expect(missing.status).toBe("not_found");
+      for (const [line, name, expected] of [
+        [1, "x", [1, 6, 8]],
+        [3, "x", [3, 4]],
+        [10, "hidden", [10, 14]],
+        [17, "xs", [17, 18]],
+      ] as const) {
+        const refs = await findReferences(index, { file, line, column: columnOf(source, line, name) });
+        expect(referenceLines(refs)).toEqual(expected);
+        if (refs.status === "ok") expect(refs.referenceCoverage?.state).toBe("complete");
+      }
+    });
+  });
+
+  it("uses the outer Kotlin property before a later local declaration", async () => {
+    const source = [
+      'val outer = "file"',
+      "fun shadowed(): String {",
+      "    val value = outer",
+      '    val outer = "local"',
+      "    return value",
+      "}",
+      "class Box {",
+      '    val field = "field"',
+      "    fun read(): String {",
+      "        val value = field",
+      '        val field = "local"',
+      "        return value",
+      "    }",
+      "}",
+      "class Later {",
+      "    fun before() = later",
+      "    val later = 1",
+      "}",
+      "",
+    ].join("\n");
+    await withFile("outer.kt", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      for (const [line, token, target] of [
+        [3, "outer", 1],
+        [10, "field", 8],
+        [16, "later", 17],
+      ] as const) {
+        const hit = await goToDefinition(index, { file, line, column: columnOf(source, line, token) });
+        expect(hit.status).toBe("ok");
+        if (hit.status === "ok") expect(hit.definition.range.start.line).toBe(target);
+      }
+      for (const [line, token, expected] of [
+        [1, "outer", [1, 3]],
+        [4, "outer", [4]],
+        [8, "field", [8, 10]],
+        [11, "field", [11]],
+        [17, "later", [16, 17]],
+      ] as const) {
+        const refs = await findReferences(index, { file, line, column: columnOf(source, line, token) });
+        expect(referenceLines(refs)).toEqual(expected);
+        if (refs.status === "ok") expect(refs.referenceCoverage?.state).toBe("complete");
+      }
+    });
+  });
+
+  it("does not resolve a C# field through a later local that hides it for the block", async () => {
+    const source = [
+      "class Before {",
+      "    static int outer = 1;",
+      "    static int Shadowed() {",
+      "        int value = outer;",
+      "        int outer = 2;",
+      "        return value;",
+      "    }",
+      "    static int Unshadowed() { return outer; }",
+      "}",
+      "",
+    ].join("\n");
+    await withFile("shadowed.cs", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const earlier = await goToDefinition(index, { file, line: 4, column: columnOf(source, 4, "outer") });
+      expect(earlier.status).toBe("not_found");
+      const field = await goToDefinition(index, { file, line: 8, column: columnOf(source, 8, "outer") });
+      expect(field.status).toBe("ok");
+      if (field.status === "ok") expect(field.definition.range.start.line).toBe(2);
+      for (const [line, expected] of [
+        [2, [2, 8]],
+        [5, [5]],
+      ] as const) {
+        const refs = await findReferences(index, { file, line, column: columnOf(source, line, "outer") });
+        expect(referenceLines(refs)).toEqual(expected);
+        if (refs.status === "ok") expect(refs.referenceCoverage?.state).toBe("complete");
+      }
+    });
+  });
+
+  it("keeps Go outer references before inner short declarations", async () => {
+    const source = [
+      "package scopego",
+      "var Outer = 1",
+      "func Shadowed() int {",
+      "    value := Outer",
+      "    Outer := 2",
+      "    return value + Outer",
+      "}",
+      "func Block() int {",
+      "    outer := 1",
+      "    func() {",
+      "        value := outer",
+      "        outer := 2",
+      "        _ = value + outer",
+      "    }()",
+      "    return outer",
+      "}",
+      "func Unshadowed() int { return Outer }",
+      "",
+    ].join("\n");
+    await withFile("shadowed.go", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      for (const [line, token, target] of [
+        [4, "Outer", 2],
+        [11, "outer", 9],
+      ] as const) {
+        const hit = await goToDefinition(index, { file, line, column: columnOf(source, line, token) });
+        expect(hit.status).toBe("ok");
+        if (hit.status === "ok") expect(hit.definition.range.start.line).toBe(target);
+      }
+      for (const [line, token, expected] of [
+        [2, "Outer", [2, 4, 17]],
+        [5, "Outer", [5, 6]],
+        [9, "outer", [9, 11, 15]],
+        [12, "outer", [12, 13]],
+      ] as const) {
+        const refs = await findReferences(index, { file, line, column: columnOf(source, line, token) });
+        expect(referenceLines(refs)).toEqual(expected);
+        if (refs.status === "ok") expect(refs.referenceCoverage?.state).toBe("complete");
+      }
+    });
+  });
+
+  it("keeps parenthesized Ruby calls bound to methods despite a same-named local", async () => {
+    const source = [
+      "class Painter",
+      "  def render(value = 0)",
+      "    value",
+      "  end",
+      "  def explicit_call",
+      "    render()",
+      "    render = 1",
+      "    render(1)",
+      "    render",
+      "  end",
+      "end",
+      "",
+    ].join("\n");
+    await withFile("explicit-call.rb", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      for (const line of [6, 8]) {
+        const hit = await goToDefinition(index, { file, line, column: columnOf(source, line, "render") });
+        expect(hit.status).toBe("ok");
+        if (hit.status === "ok") expect(hit.definition.range.start.line).toBe(2);
+      }
+      const bare = await goToDefinition(index, { file, line: 9, column: columnOf(source, 9, "render") });
+      expect(bare.status).toBe("ok");
+      if (bare.status === "ok") expect(bare.definition.range.start.line).toBe(7);
+      for (const [line, expected] of [
+        [2, [2, 6, 8]],
+        [7, [7, 9]],
+      ] as const) {
+        const refs = await findReferences(index, { file, line, column: columnOf(source, line, "render") });
+        expect(referenceLines(refs)).toEqual(expected);
+        if (refs.status === "ok") expect(refs.referenceCoverage?.state).toBe("complete");
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges.filter(
+        (edge) =>
+          edge.label === "calls" &&
+          graph.nodes.get(edge.from)?.name === "explicit_call" &&
+          graph.nodes.get(edge.to)?.name === "render",
+      );
+      expect(calls.map((edge) => edge.site?.range.start.line).sort()).toEqual([6, 8]);
+      expect(calls.every((edge) => graph.nodes.get(edge.to)?.kind === "function")).toBe(true);
     });
   });
 });

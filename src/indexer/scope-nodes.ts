@@ -14,6 +14,8 @@
  * row decides whether a later declaration in that scope names those earlier uses.
  */
 
+import type { SyntaxNodeLike } from "../languages/types.js";
+
 import type { Range } from "../types.js";
 import { SymbolKind } from "./types.js";
 import type { Scope } from "./scope-types.js";
@@ -63,6 +65,8 @@ export type ScopeNodeRow = {
   patternBindingTypes?: ReadonlySet<string>;
   /** Node types whose left-hand side is a pattern (`:=` style declarations). */
   shortVariableDeclarationTypes?: ReadonlySet<string>;
+  /** Explicit unqualified calls use the method namespace, not same-named local variables. */
+  explicitMethodCallTypes?: ReadonlySet<string>;
   /** Node types that put a declared name and a type node side by side, so the type node is skipped. */
   destructuringTypeFieldTypes?: ReadonlySet<string>;
   /** Node types that destructure a value reached through their `value` field. */
@@ -114,6 +118,8 @@ export type ScopeNodeRow = {
    * blocks, Rust `let`, Go locals). Only C++ class member scopes cover earlier uses.
    */
   wholeScopeKinds?: ReadonlySet<Scope["kind"]>;
+  /** A later point-declared local shadows an outer name even for an invalid earlier read (C#). */
+  laterLocalBlocksOuterKinds?: ReadonlySet<Scope["kind"]>;
   /**
    * Declaration node types that cover their whole scope even when the scope kind is absent from
    * `wholeScopeKinds`. Matched against the name's parent, or that parent's parent when the name
@@ -121,6 +127,8 @@ export type ScopeNodeRow = {
    * text; a `let` in the same block is not.
    */
   wholeScopeDeclarationTypes?: ReadonlySet<string>;
+  /** Declaration forms visible before their text only when directly inside a member container. */
+  wholeScopeMemberDeclarationTypes?: ReadonlySet<string>;
   /** Module names used inside function bodies resolve after module initialization (Python). */
   moduleBindingsAtFunctionRuntime?: boolean;
   /**
@@ -135,6 +143,14 @@ export type ScopeNodeRow = {
    * attribute, not a function local.
    */
   variableScopeBoundaryTypes?: ReadonlySet<string>;
+  /** Class-body scopes crossed by nested definitions are not captured by those definitions. */
+  classScopeBoundaryTypes?: ReadonlySet<string>;
+  /** A comprehension runs outside its class, except for its first iterable expression. */
+  classScopeComprehension?: {
+    types: ReadonlySet<string>;
+    firstClauseType: string;
+    iterableField: string;
+  };
   /**
    * Member-access node types whose property name is not a lexical use.
    * Python `self.run` must not attach to a same-named function; the property is a member.
@@ -234,6 +250,12 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     moduleBindingsAtFunctionRuntime: true,
     variableTargetScopeKinds: new Set(["function"]),
     variableScopeBoundaryTypes: new Set(["class_definition"]),
+    classScopeBoundaryTypes: new Set(["function_definition", "lambda", "class_definition"]),
+    classScopeComprehension: {
+      types: new Set(["list_comprehension", "set_comprehension", "dictionary_comprehension", "generator_expression"]),
+      firstClauseType: "for_in_clause",
+      iterableField: "right",
+    },
     nonLexicalMemberPropertyTypes: new Set(["attribute"]),
   },
   php: {
@@ -329,6 +351,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
       "field_declaration",
       "property_declaration",
     ]),
+    laterLocalBlocksOuterKinds: new Set(["function", "block"]),
   },
   rust: {
     parameterParents: new Set(["parameter"]),
@@ -382,7 +405,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberContainerTypes: new Set(["class_body", "class_declaration"]),
     childSkipNameTypes: new Set(["identifier"]),
     wholeScopeKinds: WHOLE_FILE_SCOPE,
-    wholeScopeDeclarationTypes: new Set(["function_declaration", "class_declaration", "property_declaration"]),
+    wholeScopeDeclarationTypes: new Set(["function_declaration", "class_declaration"]),
+    wholeScopeMemberDeclarationTypes: new Set(["property_declaration"]),
   },
   swift: {
     parameterParents: new Set(["parameter"]),
@@ -405,6 +429,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     variableDeclarationTypes: new Set(["assignment"]),
     assignmentDeclarationTypes: new Set(["assignment"]),
     assignmentIdentifierTypes: new Set(["identifier"]),
+    explicitMethodCallTypes: new Set(["call"]),
     memberFunctionTypes: new Set(["method", "singleton_method"]),
     memberContainerTypes: new Set(["class"]),
     childSkipNameTypes: new Set(["identifier"]),
@@ -436,7 +461,6 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     assignmentIdentifierTypes: new Set(["identifier"]),
     childSkipNameTypes: new Set(["identifier"]),
     moduleRootTypes: new Set(["program"]),
-    wholeScopeKinds: WHOLE_FILE_SCOPE,
   },
   scss: {
     parameterParents: new Set(["parameter"]),
@@ -461,6 +485,69 @@ const EMPTY_SCOPE_NODES: ScopeNodeRow = {};
 
 export function scopeNodesFor(languageId: string): ScopeNodeRow {
   return SCOPE_NODE_ROWS[languageId] ?? EMPTY_SCOPE_NODES;
+}
+
+/** Preserve sigils on variable nodes so they cannot collide with import, type, or function names. */
+export function scopeIdentifierKey(
+  row: ScopeNodeRow,
+  name: string,
+  node: SyntaxNodeLike,
+  normalizeIdentifier: (value: string) => string,
+): string {
+  let variable: SyntaxNodeLike | null = null;
+  if (row.assignmentIdentifierTypes?.has(node.type)) variable = node;
+  else if (node.parent && row.assignmentIdentifierTypes?.has(node.parent.type)) variable = node.parent;
+  if (variable?.text.startsWith("$")) return variable.text;
+  return normalizeIdentifier(name);
+}
+
+/** A call with a method name but no receiver does not name a local variable (Ruby). */
+export function isExplicitMethodCall(row: ScopeNodeRow, node: SyntaxNodeLike): boolean {
+  const call = node.parent;
+  if (!call || !row.explicitMethodCallTypes?.has(call.type) || call.childForFieldName("receiver")) return false;
+  const method = call.childForFieldName("method");
+  return !!method && node.startIndex >= method.startIndex && node.endIndex <= method.endIndex;
+}
+
+/** Class bodies are not closures for nested runtime scopes (Python). */
+export function scopeAllowsUse(row: ScopeNodeRow, scope: Scope, use: SyntaxNodeLike): boolean {
+  const boundaries = row.classScopeBoundaryTypes;
+  if (!boundaries || !scope.node.parent || !row.variableScopeBoundaryTypes?.has(scope.node.parent.type)) return true;
+  const comprehension = row.classScopeComprehension;
+  for (let current = use.parent; current; current = current.parent) {
+    if (current.startIndex === scope.node.startIndex && current.endIndex === scope.node.endIndex) break;
+    if (comprehension?.types.has(current.type)) {
+      const firstClause = current.namedChildren.find((child) => child.type === comprehension.firstClauseType);
+      const iterable = firstClause?.childForFieldName(comprehension.iterableField);
+      if (!iterable || use.startIndex < iterable.startIndex || use.endIndex > iterable.endIndex) return false;
+    }
+    if (boundaries.has(current.type)) {
+      const body = current.childForFieldName("body");
+      if (body && use.startIndex >= body.startIndex && use.endIndex <= body.endIndex) return false;
+    }
+  }
+  return true;
+}
+
+/** A later local in this lexical scope makes an earlier outer-name read invalid. */
+export function laterLocalBlocksOuterUse(
+  row: ScopeNodeRow,
+  scope: Scope,
+  canonicalName: string,
+  useStartIndex: number,
+): boolean {
+  if (!row.laterLocalBlocksOuterKinds?.has(scope.kind)) return false;
+  for (let binding = scope.map.get(canonicalName); binding; binding = binding.earlierSameScope) {
+    const declarationIndex = binding.def?.start.index;
+    if (
+      binding.kind === "local" &&
+      !binding.coversEnclosingScope &&
+      declarationIndex !== undefined &&
+      declarationIndex > useStartIndex
+    )
+      return true;
+  }
+  return false;
 }
 
 /** Check a same-file definition found outside lexical lookup against file-scope declaration order. */

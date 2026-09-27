@@ -49,6 +49,41 @@ function baseName(file: string): string {
   return path.basename(file);
 }
 
+async function phpRoleImportProject() {
+  const declarations = [
+    "<?php",
+    "namespace Lib;",
+    "class Base {}",
+    "function Base(): string { return 'function'; }",
+    "const Base = 'constant';",
+    "",
+  ].join("\n");
+  const functionOnly = [
+    "<?php",
+    "namespace FunctionOnly;",
+    "use function Lib\\Base;",
+    "function callIt() { return Base(); }",
+    "function makeIt() { return new Base(); }",
+    "function readIt() { return Base; }",
+    "",
+  ].join("\n");
+  const constOnly = [
+    "<?php",
+    "namespace ConstOnly;",
+    "use const Lib\\Base;",
+    "function readIt() { return Base; }",
+    "function callIt() { return Base(); }",
+    "function makeIt() { return new Base(); }",
+    "",
+  ].join("\n");
+  const { root, index } = await project("cg-audit-php-role-import-", {
+    "lib.php": declarations,
+    "function-only.php": functionOnly,
+    "const-only.php": constOnly,
+  });
+  return { root, index, declarations, functionOnly, constOnly };
+}
+
 describe("Ruby and PHP audit fixes", () => {
   it("resolves Ruby Klass.new across a required file and ignores an unrequired decoy", async () => {
     const widget = ["class Widget", "  def render", "  end", "end", ""].join("\n");
@@ -244,6 +279,110 @@ describe("Ruby and PHP audit fixes", () => {
     const orphanFunction = functionNode(graph, "orphan.php", "Base");
     expect(edgeBetween(graph, orphanType, orphanFunction, "extends")).toBe(false);
     expect(graph.edges.some((edge) => edge.from === orphanType && edge.label === "extends")).toBe(false);
+  });
+
+  it("does not instantiate a PHP function or constant imported without a class binding", async () => {
+    const { root, index, functionOnly, constOnly } = await phpRoleImportProject();
+    for (const [name, source] of [
+      ["function-only.php", functionOnly],
+      ["const-only.php", constOnly],
+    ] as const) {
+      const created = await goToDefinition(index, { file: fileIn(root, name), ...at(source, "new Base()", "Base") });
+      expect(created.status, name).toBe("not_found");
+    }
+
+    const graph = await buildSymbolGraphDetailed(index);
+    for (const name of ["function-only.php", "const-only.php"]) {
+      const make = functionNode(graph, name, "makeIt");
+      expect(
+        graph.edges.some((edge) => edge.from === make && edge.label === "instantiates"),
+        name,
+      ).toBe(false);
+    }
+  });
+
+  it("keeps PHP interface uses out of references to a same-file function with that name", async () => {
+    const source = [
+      "<?php",
+      "namespace SameNs;",
+      "interface Face { public function ping(): void; }",
+      "function Face(): void {}",
+      "class Child implements Face { public function ping(): void {} }",
+      "",
+    ].join("\n");
+    const { root, index } = await project("cg-audit-php-face-role-", { "same.php": source });
+    const file = fileIn(root, "same.php");
+    const resolved = await goToDefinition(index, { file, ...at(source, "implements Face", "Face") });
+    expect(resolved.status).toBe("ok");
+    if (resolved.status !== "ok") return;
+    expect(resolved.definition.range.start.line).toBe(3);
+    const graph = await buildSymbolGraphDetailed(index);
+    expect(
+      edgeBetween(graph, typeNode(graph, "same.php", "Child"), typeNode(graph, "same.php", "Face"), "implements"),
+    ).toBe(true);
+
+    const functionRefs = await findReferences(index, { file, ...at(source, "function Face", "Face") });
+    expect(functionRefs.status).toBe("ok");
+    if (functionRefs.status !== "ok") return;
+    expect(functionRefs.referenceCoverage.state).toBe("complete");
+    expect(functionRefs.references.map((reference) => reference.range.start.line)).toEqual([4]);
+
+    const interfaceRefs = await findReferences(index, { file, ...at(source, "interface Face", "Face") });
+    expect(interfaceRefs.status).toBe("ok");
+    if (interfaceRefs.status !== "ok") return;
+    expect(interfaceRefs.references.map((reference) => reference.range.start.line)).toContain(5);
+    expect(interfaceRefs.references.map((reference) => reference.range.start.line)).not.toContain(4);
+  });
+
+  it("resolves PHP bare constant fetches and calls only through imports of their own role", async () => {
+    const { root, index, declarations, functionOnly, constOnly } = await phpRoleImportProject();
+    const wrongConstant = await goToDefinition(index, {
+      file: fileIn(root, "function-only.php"),
+      ...at(functionOnly, "return Base;", "Base"),
+    });
+    const wrongCall = await goToDefinition(index, {
+      file: fileIn(root, "const-only.php"),
+      ...at(constOnly, "return Base();", "Base"),
+    });
+    expect(wrongConstant.status).toBe("not_found");
+    expect(wrongCall.status).toBe("not_found");
+    const functionCall = await goToDefinition(index, {
+      file: fileIn(root, "function-only.php"),
+      ...at(functionOnly, "return Base();", "Base"),
+    });
+    const constantFetch = await goToDefinition(index, {
+      file: fileIn(root, "const-only.php"),
+      ...at(constOnly, "return Base;", "Base"),
+    });
+    expect(functionCall.status).toBe("ok");
+    expect(constantFetch.status).toBe("ok");
+    if (functionCall.status !== "ok" || constantFetch.status !== "ok") return;
+    expect(functionCall.definition.range.start.line).toBe(at(declarations, "function Base", "Base").line);
+    expect(constantFetch.definition.range.start.line).toBe(at(declarations, "const Base", "Base").line);
+    const lib = fileIn(root, "lib.php");
+    const functionRefs = await findReferences(index, { file: lib, ...at(declarations, "function Base", "Base") });
+    const constRefs = await findReferences(index, { file: lib, ...at(declarations, "const Base", "Base") });
+    expect(functionRefs.status).toBe("ok");
+    expect(constRefs.status).toBe("ok");
+    if (functionRefs.status !== "ok" || constRefs.status !== "ok") return;
+    const functionUses = functionRefs.references
+      .filter((reference) => baseName(reference.file) === "function-only.php" && reference.range.start.line >= 4)
+      .map((reference) => reference.range.start.line);
+    const constantUses = constRefs.references
+      .filter((reference) => baseName(reference.file) === "const-only.php" && reference.range.start.line >= 4)
+      .map((reference) => reference.range.start.line);
+    expect(functionUses).toEqual([4]);
+    expect(constantUses).toEqual([4]);
+
+    const graph = await buildSymbolGraphDetailed(index);
+    expect(
+      edgeBetween(
+        graph,
+        functionNode(graph, "const-only.php", "callIt"),
+        functionNode(graph, "lib.php", "Base"),
+        "calls",
+      ),
+    ).toBe(false);
   });
 
   it("resolves PHP use by qualified name and rejects a required same-name decoy", async () => {

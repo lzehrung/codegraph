@@ -32,6 +32,7 @@ import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../ind
 import {
   ensurePhpNamespaceSymbolIndex,
   phpClassReferenceMatchesDefinition,
+  phpReferenceRoleMatchesKind,
   resolveIndexedPhpClassReference,
   resolvePhpExplicitImport,
 } from "../indexer/php-namespace-symbols.js";
@@ -519,6 +520,7 @@ export async function buildSymbolGraphDetailed(
           ) {
             return null;
           }
+          if (sup.id === "php" && local && !phpReferenceRoleMatchesKind(node, local.kind)) return null;
           return local ?? null;
         }
         if (sup.id === "cpp") {
@@ -527,7 +529,10 @@ export async function buildSymbolGraphDetailed(
           const directed = resolveCppUsingDirectiveName(index, moduleEntry, name, node, src, loadCppParsedFile);
           if (directed !== undefined) return directed;
         }
-        if (binding) return resolveCppAliasTarget(aliasToTargetDef.get(binding.name), node);
+        if (binding) {
+          const target = resolveCppAliasTarget(aliasToTargetDef.get(binding.name), node);
+          return sup.id === "php" && target && !phpReferenceRoleMatchesKind(node, target.kind) ? null : target;
+        }
 
         // C# namespace regions can reopen within one file. Without a lexical binding,
         // resolve through the position-aware unit lookup, not file-wide local names.
@@ -551,12 +556,14 @@ export async function buildSymbolGraphDetailed(
           ) {
             return null;
           }
+          if (sup.id === "php" && !phpReferenceRoleMatchesKind(node, only.kind)) return null;
           return sup.id === "cpp" && only.kind === SymbolKind.Function
             ? resolveCppExportedCallables(index, [only], node, src, loadCppParsedFile)
             : only;
         }
         const aliasTarget = resolveCppAliasTarget(aliasToTargetDef.get(lookupName), node);
-        if (aliasTarget) return aliasTarget;
+        if (aliasTarget && (sup.id !== "php" || phpReferenceRoleMatchesKind(node, aliasTarget.kind)))
+          return aliasTarget;
         // A bare name owned by no scope binding or local declaration can still name a
         // sibling declaration of the file's implicit compilation unit (Go/JVM package,
         // C# namespace, Swift module). Resolve it through the same proven peer relation

@@ -28,10 +28,15 @@ import { getCompilationUnitPeers } from "./compilation-units.js";
 import { findClosestScopeBinding } from "./navigation-local.js";
 import { scopeNodesFor } from "./scope-nodes.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
-import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
+import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
+import { bindingKindToSymbolKind } from "./declarations.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import { isAmbiguousResolutionReason } from "./ambiguous-resolution.js";
-import { ensurePhpNamespaceSymbolIndex, phpNamespaceSymbolIndexFor } from "./php-namespace-symbols.js";
+import {
+  ensurePhpNamespaceSymbolIndex,
+  phpNamespaceSymbolIndexFor,
+  phpReferenceRoleMatchesKind,
+} from "./php-namespace-symbols.js";
 import {
   SymbolKind,
   type ExportEntry,
@@ -163,13 +168,21 @@ export function getCachedScope(
     tree: SyntaxTreeLike;
   },
 ): ScopeIndex {
+  const keepOccurrence = (binding: Binding, occurrence: Range): boolean => {
+    if (exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom) return false;
+    if (parsedCtx.sup.id !== "php" || !binding.def || occurrence.start.index === binding.def.start.index) return true;
+    const kind = bindingKindToSymbolKind(binding.kind);
+    if (kind === SymbolKind.Variable) return true;
+    const start = occurrence.start.index;
+    if (start === undefined) return true;
+    const node = parsedCtx.tree.rootNode.descendantForIndex(start, start);
+    return phpReferenceRoleMatchesKind(node, kind);
+  };
   const fileKey = fileIdentityKey(fileId);
   const cachedScope = index.scopeCache.get(fileKey);
   if (cachedScope) {
     for (const binding of cachedScope.all) {
-      binding.occurrences = binding.occurrences.filter(
-        (occurrence) => !exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom,
-      );
+      binding.occurrences = binding.occurrences.filter((occurrence) => keepOccurrence(binding, occurrence));
     }
     return cachedScope;
   }
@@ -177,9 +190,7 @@ export function getCachedScope(
     tree: parsedCtx.tree,
   });
   for (const binding of scopeIndex.all) {
-    binding.occurrences = binding.occurrences.filter(
-      (occurrence) => !exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom,
-    );
+    binding.occurrences = binding.occurrences.filter((occurrence) => keepOccurrence(binding, occurrence));
   }
   index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;

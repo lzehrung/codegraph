@@ -9,7 +9,15 @@ import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiv
 import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
-import { bindingCoversUse, scopeNodesFor, type ScopeNodeRow } from "./scope-nodes.js";
+import {
+  bindingCoversUse,
+  isExplicitMethodCall,
+  laterLocalBlocksOuterUse,
+  scopeAllowsUse,
+  scopeIdentifierKey,
+  scopeNodesFor,
+  type ScopeNodeRow,
+} from "./scope-nodes.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./types.js";
@@ -127,7 +135,7 @@ export function buildScopeIndexFromSource(
     const name = sliceText(nameNode, source);
     return {
       name,
-      canonicalName: normalizeIdentifier(name),
+      canonicalName: scopeIdentifierKey(row, name, nameNode, normalizeIdentifier),
       kind,
       def: toRange(nameNode),
       node: nameNode,
@@ -175,6 +183,7 @@ export function buildScopeIndexFromSource(
     (!!row.wholeScopeKinds?.size ||
       !!row.wholeScopeDeclarationTypes?.size ||
       !!row.variableTargetScopeKinds?.size ||
+      !!row.laterLocalBlocksOuterKinds?.size ||
       !!row.moduleBindingsAtFunctionRuntime);
   const nodeById = (id: number): SyntaxNodeLike | undefined =>
     tree instanceof ProjectedSyntaxTree ? tree.nodeById(id) : undefined;
@@ -198,14 +207,27 @@ export function buildScopeIndexFromSource(
 
   const declarationCoversScope = (nameNode: SyntaxNodeLike): boolean => {
     const types = row.wholeScopeDeclarationTypes;
-    if (!types) return false;
+    const memberTypes = row.wholeScopeMemberDeclarationTypes;
+    if (!types && !memberTypes) return false;
     let current: SyntaxNodeLike | null = nameNode.parent;
     for (let depth = 0; current && depth < 8; depth += 1) {
-      if (types.has(current.type)) return true;
-      if (current.type === "variable_declarator" && current.parent && types.has(current.parent.type)) return true;
-      // A local under a function body is not that function's declarator. Stop at the
-      // body so only the declarator wrapped around this name (qualified or not) matches.
-      if (support.createsFunctionScope(current) || support.createsBlockScope(current)) break;
+      const functionScope = support.createsFunctionScope(current);
+      if (functionScope) {
+        const declaredName = current.childForFieldName("name");
+        if (
+          !declaredName ||
+          declaredName.startIndex !== nameNode.startIndex ||
+          declaredName.endIndex !== nameNode.endIndex
+        )
+          break;
+      }
+      if (types?.has(current.type)) return true;
+      if (memberTypes?.has(current.type) && current.parent && row.memberContainerTypes?.has(current.parent.type)) {
+        return true;
+      }
+      if (current.type === "variable_declarator" && current.parent && types?.has(current.parent.type)) return true;
+      // A local inside a function is not the function's own declaration.
+      if (functionScope || support.createsBlockScope(current)) break;
       current = current.parent;
     }
     return false;
@@ -427,18 +449,24 @@ export function buildScopeIndexFromSource(
   };
 
   const lookup = (name: string, node?: SyntaxNodeLike): Binding | undefined => {
-    const normalizedName = normalizeIdentifier(name);
+    const normalizedName = node ? scopeIdentifierKey(row, name, node, normalizeIdentifier) : normalizeIdentifier(name);
     const canonicalName =
       support.id === "c" && node && cTagRole(node) ? cScopeName(normalizedName, "tag") : normalizedName;
+    const methodCall = !!node && isExplicitMethodCall(row, node);
     for (let index = stack.length - 1; index >= 0; index--) {
-      const hit = stack[index]!.map.get(canonicalName);
+      const scope = stack[index]!;
+      if (node && !scopeAllowsUse(row, scope, node)) continue;
+      let hit = scope.map.get(canonicalName);
+      while (methodCall && hit?.kind === "local") hit = hit.earlierSameScope;
       if (hit) return hit;
     }
-    return rootScope.map.get(canonicalName);
+    let root = rootScope.map.get(canonicalName);
+    while (methodCall && root?.kind === "local") root = root.earlierSameScope;
+    return root;
   };
 
   const lookupOutsideFunctions = (name: string): Binding | undefined => {
-    const canonicalName = normalizeIdentifier(name);
+    const canonicalName = `$${normalizeIdentifier(name)}`;
     for (let index = stack.length - 1; index >= 0; index -= 1) {
       const scope = stack[index]!;
       if (scope.kind === "function") continue;
@@ -738,7 +766,8 @@ export function buildScopeIndexFromSource(
   };
 
   const canonicalUseName = (name: string, node: SyntaxNodeLike): string => {
-    const normalized = normalizeIdentifier(name);
+    const normalized = scopeIdentifierKey(row, name, node, normalizeIdentifier);
+    if (support.id === "php" && isPhpThisPropertyName(node)) return `$${normalized}`;
     return support.id === "c" && cTagRole(node) ? cScopeName(normalized, "tag") : normalized;
   };
 
@@ -757,6 +786,13 @@ export function buildScopeIndexFromSource(
         const scope = stack[index]!;
         if (binding && scopeOwnsBinding(scope, canonical, binding)) return undefined;
         if (row.variableTargetScopeKinds.has(scope.kind)) return scope;
+      }
+    }
+    if (row.laterLocalBlocksOuterKinds) {
+      for (let index = stack.length - 1; index >= 0; index -= 1) {
+        const scope = stack[index]!;
+        if (binding && scopeOwnsBinding(scope, canonical, binding)) return undefined;
+        if (row.laterLocalBlocksOuterKinds.has(scope.kind)) return scope;
       }
     }
     if (tracksLexicalNames) {
@@ -783,6 +819,7 @@ export function buildScopeIndexFromSource(
   const scopeCanGainCoveringBinding = (scope: Scope): boolean =>
     !!row.wholeScopeKinds?.has(scope.kind) ||
     !!row.variableTargetScopeKinds?.has(scope.kind) ||
+    !!row.laterLocalBlocksOuterKinds?.has(scope.kind) ||
     !!row.wholeScopeDeclarationTypes?.size ||
     (scope.kind === "module" && !!row.moduleBindingsAtFunctionRuntime);
 
@@ -803,16 +840,26 @@ export function buildScopeIndexFromSource(
     phpThis: boolean,
   ): Binding | undefined => {
     const useStart = useNode.startIndex;
+    const methodCall = isExplicitMethodCall(row, useNode);
     let scope = start;
     while (scope) {
+      if (!scopeAllowsUse(row, scope, useNode)) {
+        scope = scope.parent;
+        continue;
+      }
       if (!(phpThis && scope.kind === "function")) {
         let binding = scope.map.get(canonical);
         const atModuleRuntime = scope.kind === "module" && moduleBindingAtFunctionRuntime(useNode);
-        while (binding && !atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart)) {
+        while (
+          binding &&
+          ((methodCall && binding.kind === "local") ||
+            (!atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart)))
+        ) {
           binding = binding.earlierSameScope;
         }
         if (binding) return binding;
       }
+      if (laterLocalBlocksOuterUse(row, scope, canonical, useStart)) return undefined;
       scope = scope.parent;
     }
     return undefined;
@@ -850,6 +897,7 @@ export function buildScopeIndexFromSource(
       const canonical = canonicalUseName(sliceText(useNode, source), useNode);
       const binding = lookupCovering(scope, useNode, canonical, phpThis);
       if (!binding) {
+        if (laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex)) continue;
         if (receiver) queueUse(receiver, id);
         continue;
       }
@@ -1034,10 +1082,20 @@ export function buildScopeIndexFromSource(
       if (name) addDecl(name, "type");
     }
 
+    let declarationName = idSet.has(node.type) && support.isDeclarationName(node);
+    if (declarationName && row.shortVariableDeclarationTypes) {
+      for (let current = node.parent; current; current = current.parent) {
+        if (row.shortVariableDeclarationTypes.has(current.type)) {
+          const left = current.childForFieldName("left");
+          declarationName = !!left && node.startIndex >= left.startIndex && node.endIndex <= left.endIndex;
+          break;
+        }
+        if (support.createsFunctionScope(current) || support.createsBlockScope(current)) break;
+      }
+    }
     if (
       scopeDeclarationNames(node) &&
-      idSet.has(node.type) &&
-      support.isDeclarationName(node) &&
+      declarationName &&
       !isScopedEnumeratorName(node) &&
       !preRegisteredNameSpans.has(nameSpanKey(node))
     ) {
@@ -1046,7 +1104,7 @@ export function buildScopeIndexFromSource(
     }
 
     const nestedIdentifier = node.parent && idSet.has(node.parent.type) && row.childSkipNameTypes?.has(node.type);
-    if (idSet.has(node.type) && !support.isDeclarationName(node) && !nestedIdentifier) {
+    if (idSet.has(node.type) && !declarationName && !nestedIdentifier) {
       const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(node) : null;
       if (qualifiedName) {
         const key = cppQualifiedNameSegments(qualifiedName, source).join("::");

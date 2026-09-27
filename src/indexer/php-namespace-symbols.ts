@@ -228,6 +228,14 @@ export function phpNamespaceSymbolIndexFor(index: ProjectIndex): PhpNamespaceSym
   return cached;
 }
 
+/** A PHP expression resolves only in its syntax-selected class, function, or constant namespace. */
+export function phpReferenceRoleMatchesKind(node: SyntaxNodeLike, kind: SymbolKind): boolean {
+  const role = inferPhpQualifiedReferenceImportType(node) ?? "const";
+  if (role === "class") return PHP_CLASS_LIKE_KINDS.has(kind);
+  if (role === "function") return kind === SymbolKind.Function;
+  return kind === SymbolKind.Variable;
+}
+
 /** Verify a class candidate proven visible through imports also names this exact PHP class. */
 export function phpClassReferenceMatchesDefinition(
   index: ProjectIndex,

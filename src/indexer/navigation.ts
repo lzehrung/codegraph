@@ -24,9 +24,11 @@ import {
   findClosestScopeBinding,
   findDeclarationNameNode,
   getOrBuildScopeIndex,
+  laterLocalShadowsUse,
   resolveNamedDefinition,
   toModuleRef,
 } from "./navigation-local.js";
+import { isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
 import {
   AMBIGUOUS_CPP_OVERLOAD_REASON,
   AMBIGUOUS_CPP_USING_DECLARATION_REASON,
@@ -52,6 +54,7 @@ import {
 import {
   ensurePhpNamespaceSymbolIndex,
   phpClassReferenceMatchesDefinition,
+  phpReferenceRoleMatchesKind,
   resolveIndexedPhpClassReference,
   resolvePhpExplicitImport,
 } from "./php-namespace-symbols.js";
@@ -278,31 +281,33 @@ export async function goToDefinition(
       }
     }
     const scopeIndex = memberAccessNode ? getOrBuildScopeIndex(index, file, source, sup, mod, tree) : null;
-    const memberAccessResult = await resolveMemberAccessDefinition({
-      index,
-      mod,
-      node,
-      source,
-      tree,
-      sup,
-      ...(scopeIndex
-        ? {
-            resolveLexicalBinding: (receiver) => {
-              if (!isReceiverNameNode(sup, receiver.type)) return null;
-              const receiverName = sliceText(receiver, source);
-              const binding = findClosestScopeBinding(scopeIndex, receiverName, receiver, sup);
-              if (
-                binding?.kind === "importDefault" ||
-                binding?.kind === "importNamed" ||
-                binding?.kind === "namespace"
-              ) {
-                return null;
-              }
-              return findClosestBinding(scopeIndex, file, receiverName, receiver, sup, source);
-            },
-          }
-        : {}),
-    });
+    const memberAccessResult =
+      !isExplicitMethodCall(scopeNodesFor(sup.id), node) &&
+      (await resolveMemberAccessDefinition({
+        index,
+        mod,
+        node,
+        source,
+        tree,
+        sup,
+        ...(scopeIndex
+          ? {
+              resolveLexicalBinding: (receiver) => {
+                if (!isReceiverNameNode(sup, receiver.type)) return null;
+                const receiverName = sliceText(receiver, source);
+                const binding = findClosestScopeBinding(scopeIndex, receiverName, receiver, sup);
+                if (
+                  binding?.kind === "importDefault" ||
+                  binding?.kind === "importNamed" ||
+                  binding?.kind === "namespace"
+                ) {
+                  return null;
+                }
+                return findClosestBinding(scopeIndex, file, receiverName, receiver, sup, source);
+              },
+            }
+          : {}),
+      }));
     if (memberAccessResult) {
       return memberAccessResult;
     }
@@ -369,6 +374,14 @@ export async function goToDefinition(
     const lookupName = sup.id === "csharp" ? csharpLookupName(node, source, name) : name;
     const csharpExportName =
       sup.id === "csharp" ? csharpAliasQualifiedLookupName(node, source, lookupName, mod.imports) : lookupName;
+    const phpVariableTypes = sup.id === "php" ? scopeNodesFor(sup.id).assignmentIdentifierTypes : undefined;
+    if (phpVariableTypes?.has(node.type) || (node.parent && phpVariableTypes?.has(node.parent.type))) {
+      const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, mod, tree);
+      const variable = findClosestBinding(scopeIndex, file, lookupName, node, sup, source);
+      if (!variable) return { status: "not_found", reason: "No matching PHP variable definition" };
+      return okGoToResult(index, variable, { resolution: "exact", confidence: "high" });
+    }
+
     if (sup.id === "php") {
       const role = phpImportType ?? "const";
       const binding = findPhpImportAlias(mod.imports, name, role);
@@ -439,11 +452,17 @@ export async function goToDefinition(
     ) {
       return { status: "not_found", reason: "No matching PHP class" };
     }
+    if (sup.id === "php" && local && !phpReferenceRoleMatchesKind(node, local.kind)) {
+      return { status: "not_found", reason: "No matching PHP symbol role" };
+    }
     if (local) {
       return okGoToResult(index, local, {
         resolution: "exact",
         confidence: "high",
       });
+    }
+    if (laterLocalShadowsUse(scopeIndex, lookupName, node, sup)) {
+      return { status: "not_found", reason: "Local is not in scope before its declaration" };
     }
     if (sup.id === "cpp" && closestBinding?.kind === "function" && cppBindingCallableShape(closestBinding)) {
       return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
@@ -506,6 +525,13 @@ export async function goToDefinition(
         !phpClassReferenceMatchesDefinition(index, source, tree, node, lookupName, mod.imports, resolvedName.definition)
       ) {
         return { status: "not_found", reason: "No matching PHP class" };
+      }
+      if (
+        sup.id === "php" &&
+        resolvedName?.status === "ok" &&
+        !phpReferenceRoleMatchesKind(node, resolvedName.definition.kind)
+      ) {
+        return { status: "not_found", reason: "No matching PHP symbol role" };
       }
       if (resolvedName) return resolvedName;
     }

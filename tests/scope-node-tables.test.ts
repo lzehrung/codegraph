@@ -91,6 +91,7 @@ const SCOPE_NODE_LIST_FIELDS = [
   "assignmentDeclarationTypes",
   "assignmentIdentifierTypes",
   "childSkipNameTypes",
+  "classScopeBoundaryTypes",
   "classNameTypes",
   "declarationPatternTypes",
   "destructuringObjectPatternTypes",
@@ -101,6 +102,7 @@ const SCOPE_NODE_LIST_FIELDS = [
   "enumBodyMemberTypes",
   "enumBodyParentTypes",
   "enumMemberLocalTypes",
+  "explicitMethodCallTypes",
   "enumMemberTypes",
   "functionNameTypes",
   "hoistedFunctionTypes",
@@ -121,12 +123,15 @@ const SCOPE_NODE_LIST_FIELDS = [
   "variableDeclaratorTypes",
   "variableScopeBoundaryTypes",
   "wholeScopeDeclarationTypes",
+  "wholeScopeMemberDeclarationTypes",
 ] as const satisfies ReadonlyArray<keyof ScopeNodeRow>;
 
 /** Row fields that hold a call or declaration shape rather than a bare node-type list. */
 const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "requireCall",
+  "classScopeComprehension",
   "moduleBindingsAtFunctionRuntime",
+  "laterLocalBlocksOuterKinds",
   "namelessVariableDeclaration",
   "scopedEnum",
   "variableTargetScopeKinds",
@@ -148,6 +153,13 @@ function declaredNodeTypeLists(row: ScopeNodeRow): Array<{ field: string; types:
   }
   if (row.scopedEnum) {
     lists.push({ field: "scopedEnum.enumDeclarationTypes", types: row.scopedEnum.enumDeclarationTypes });
+  }
+  if (row.classScopeComprehension) {
+    lists.push({ field: "classScopeComprehension.types", types: row.classScopeComprehension.types });
+    lists.push({
+      field: "classScopeComprehension.firstClauseType",
+      types: new Set([row.classScopeComprehension.firstClauseType]),
+    });
   }
   return lists;
 }
