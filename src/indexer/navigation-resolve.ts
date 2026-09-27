@@ -5,7 +5,7 @@ import { foldPhpIdentifierCase, normalizeCsharpQualifiedName } from "../util/ide
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES, isUnitBareNameVisible } from "./compilation-units.js";
 import { phpNamedImportRole } from "./import-types.js";
-import { resolvePythonSubmoduleExact } from "./imports/python.js";
+import { resolvePythonSubmoduleExact } from "../util/resolution/python.js";
 import { PHP_CLASS_LIKE_KINDS } from "./php-namespace-symbols.js";
 import { coalesceEquivalentCsharpPartialExports } from "./shared-owner-identity.js";
 import {

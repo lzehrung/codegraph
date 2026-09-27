@@ -1,4 +1,4 @@
-import type { Dirent } from "node:fs";
+import { readdirSync, statSync, type Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { confineResolvedPath, normalizePath } from "../paths.js";
@@ -182,4 +182,48 @@ export async function resolvePythonModule(
 
 export function clearPythonResolutionCache(): void {
   resolvePythonModuleCache.clear();
+}
+
+/**
+ * The submodule `from pkg import name` binds when `pkg` has no attribute `name`: `name.py`,
+ * `name.pyi`, `name/__init__.py`, `name/__init__.pyi`, then a PEP 420 directory `name/`.
+ * Python compares entries case-sensitively even on case-insensitive filesystems, so `Widget`
+ * never names `widget.py`; the import stays a named binding of the package attribute.
+ */
+export function resolvePythonSubmoduleExact(
+  resolved: string | { external: string },
+  imported: string,
+): string | undefined {
+  if (typeof resolved !== "string") return undefined;
+  let baseDir = resolved;
+  let entries: Dirent[];
+  try {
+    if (!statSync(baseDir).isDirectory()) {
+      const base = path.basename(baseDir);
+      if (base !== "__init__.py" && base !== "__init__.pyi") return undefined;
+      baseDir = path.dirname(baseDir);
+    }
+    entries = readdirSync(baseDir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  for (const fileName of [`${imported}.py`, `${imported}.pyi`]) {
+    if (entries.some((entry) => entry.isFile() && entry.name === fileName)) {
+      return path.join(baseDir, fileName).replace(/\\/g, "/");
+    }
+  }
+  if (!entries.some((entry) => entry.isDirectory() && entry.name === imported)) return undefined;
+  const packageDir = path.join(baseDir, imported);
+  let packageEntries: Dirent[];
+  try {
+    packageEntries = readdirSync(packageDir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  for (const initializer of ["__init__.py", "__init__.pyi"]) {
+    if (packageEntries.some((entry) => entry.isFile() && entry.name === initializer)) {
+      return path.join(packageDir, initializer).replace(/\\/g, "/");
+    }
+  }
+  return packageDir.replace(/\\/g, "/");
 }

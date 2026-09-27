@@ -8,6 +8,7 @@ import { maskPythonCommentsAndStrings, stripPythonCommentsAndStrings } from "../
 import { PYTHON_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { resolvePythonModule } from "../../util/resolution.js";
+import { resolvePythonSubmoduleExact } from "../../util/resolution/python.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
 import { buildScopeIndexFromSource } from "../scope.js";
 import type { ImportBinding } from "../types.js";
@@ -45,47 +46,6 @@ async function pushStarImport(
     mechanism: "python",
     moduleLevel,
   });
-}
-
-/**
- * The submodule `from pkg import name` binds when `pkg` has no attribute `name`: `name.py`,
- * `name.pyi`, `name/__init__.py`, `name/__init__.pyi`, then a PEP 420 directory `name/`.
- * Python compares entries case-sensitively even on case-insensitive filesystems, so `Widget`
- * never names `widget.py`; the import stays a named binding of the package attribute.
- */
-export function resolvePythonSubmoduleExact(resolved: ResolvedImportTarget, imported: string): string | undefined {
-  if (typeof resolved !== "string") return undefined;
-  let baseDir = resolved;
-  let entries: fs.Dirent[];
-  try {
-    if (!fs.statSync(baseDir).isDirectory()) {
-      const base = path.basename(baseDir);
-      if (base !== "__init__.py" && base !== "__init__.pyi") return undefined;
-      baseDir = path.dirname(baseDir);
-    }
-    entries = fs.readdirSync(baseDir, { withFileTypes: true });
-  } catch {
-    return undefined;
-  }
-  for (const fileName of [`${imported}.py`, `${imported}.pyi`]) {
-    if (entries.some((entry) => entry.isFile() && entry.name === fileName)) {
-      return path.join(baseDir, fileName).replace(/\\/g, "/");
-    }
-  }
-  if (!entries.some((entry) => entry.isDirectory() && entry.name === imported)) return undefined;
-  const packageDir = path.join(baseDir, imported);
-  let packageEntries: fs.Dirent[];
-  try {
-    packageEntries = fs.readdirSync(packageDir, { withFileTypes: true });
-  } catch {
-    return undefined;
-  }
-  for (const initializer of ["__init__.py", "__init__.pyi"]) {
-    if (packageEntries.some((entry) => entry.isFile() && entry.name === initializer)) {
-      return path.join(packageDir, initializer).replace(/\\/g, "/");
-    }
-  }
-  return packageDir.replace(/\\/g, "/");
 }
 
 type PythonPackageSource = {

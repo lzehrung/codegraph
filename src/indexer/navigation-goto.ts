@@ -68,7 +68,7 @@ import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
 import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./php-namespace-symbols.js";
-import { resolvePythonSubmoduleExact } from "./imports/python.js";
+import { resolvePythonSubmoduleExact } from "../util/resolution/python.js";
 import {
   cjsRequireValueBinding,
   memberContainerForDefinition,
