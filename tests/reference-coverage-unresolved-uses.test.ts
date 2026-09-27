@@ -14,7 +14,7 @@ function definitionFor(index: ProjectIndex, file: string, localName: string): Sy
 }
 
 /**
- * Checklist item F3: a same-name use in a scanned candidate file that resolves to nothing must
+ * A same-name use in a scanned candidate file that resolves to nothing must
  * never leave coverage `complete` - it has to become `partial` with a reason, naming the file.
  * A follow-up resolution fix that makes the use fully navigable is an even better outcome than
  * the honest `partial` this item requires, so accept either: `complete` must come with the real
@@ -39,9 +39,9 @@ function expectHonestCoverageForUnverifiedUse(
   expect(result.referenceCoverage.affectedFiles).toContain(consumerFile);
 }
 
-describe("Audit F3: no complete coverage while a same-name use resolves to nothing", () => {
+describe("no complete coverage while a same-name use resolves to nothing", () => {
   it("marks a JS require() whole-module member access partial instead of silently complete", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-require-"));
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-require-"));
     try {
       const utilFile = path.join(root, "util.js").replace(/\\/g, "/");
       const consumerFile = path.join(root, "consumer.js").replace(/\\/g, "/");
@@ -62,7 +62,7 @@ describe("Audit F3: no complete coverage while a same-name use resolves to nothi
   });
 
   it("marks a TS dynamic import() whole-module member access partial instead of silently complete", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-dynamic-import-"));
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-dynamic-import-"));
     try {
       const lazyFile = path.join(root, "lazy.ts").replace(/\\/g, "/");
       const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
@@ -92,7 +92,7 @@ describe("Audit F3: no complete coverage while a same-name use resolves to nothi
   });
 
   it("keeps complete coverage when a dynamic-import consumer's only same-name node is an unrelated exported declaration", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-decoy-dynamic-import-"));
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-decoy-dynamic-import-"));
     try {
       const lazyFile = path.join(root, "lazy.ts").replace(/\\/g, "/");
       const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
@@ -132,7 +132,7 @@ describe("Audit F3: no complete coverage while a same-name use resolves to nothi
   });
 
   it("keeps complete coverage when a require() consumer's only same-name node is an unrelated local declaration", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-decoy-require-"));
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-decoy-require-"));
     try {
       const utilFile = path.join(root, "util.js").replace(/\\/g, "/");
       const consumerFile = path.join(root, "consumer.js").replace(/\\/g, "/");
@@ -168,7 +168,7 @@ describe("Audit F3: no complete coverage while a same-name use resolves to nothi
   });
 
   it("keeps complete coverage when a candidate file only mentions the name in a string or comment", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-decoy-text-"));
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-decoy-text-"));
     try {
       const utilFile = path.join(root, "util.js").replace(/\\/g, "/");
       const consumerFile = path.join(root, "consumer.js").replace(/\\/g, "/");
@@ -197,7 +197,7 @@ describe("Audit F3: no complete coverage while a same-name use resolves to nothi
     }
   });
   it("does not report complete coverage when a default-imported constructor call fails to resolve its member", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-jsts-default-"));
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-jsts-default-"));
     try {
       const widgetFile = path.join(root, "widget.ts").replace(/\\/g, "/");
       const useFile = path.join(root, "use.ts").replace(/\\/g, "/");
@@ -228,7 +228,7 @@ describe("Audit F3: no complete coverage while a same-name use resolves to nothi
   });
 
   it("keeps complete coverage when a constructed call resolves to another class's own render", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-other-render-"));
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-other-render-"));
     try {
       const widgetFile = path.join(root, "widget.ts").replace(/\\/g, "/");
       const useFile = path.join(root, "use.ts").replace(/\\/g, "/");
@@ -260,7 +260,7 @@ describe("Audit F3: no complete coverage while a same-name use resolves to nothi
   });
 
   it("keeps complete coverage when a fully known local class has no render and no base", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-other-empty-"));
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-other-empty-"));
     try {
       const widgetFile = path.join(root, "widget.ts").replace(/\\/g, "/");
       const useFile = path.join(root, "use.ts").replace(/\\/g, "/");
@@ -288,7 +288,7 @@ describe("Audit F3: no complete coverage while a same-name use resolves to nothi
   });
 
   it("keeps partial coverage when a Kotlin extension is called on an unresolvable receiver", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-audit-coverage-kotlin-extension-"));
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-kotlin-extension-"));
     try {
       const file = path.join(root, "widget.kt").replace(/\\/g, "/");
       await fsp.writeFile(

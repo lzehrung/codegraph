@@ -28,7 +28,7 @@ import {
   resolveNamedDefinition,
   toModuleRef,
 } from "./navigation-local.js";
-import { typescriptCollapsedOverloadCandidates } from "./ts-callables.js";
+import { typescriptCallableCandidatesInContainer, typescriptCollapsedOverloadCandidates } from "./ts-callables.js";
 import { isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
 import {
   AMBIGUOUS_CPP_OVERLOAD_REASON,
@@ -73,6 +73,7 @@ import {
   getCachedReferenceCandidateFiles,
   getCandidateReferenceNames,
   hasExpandedNamedImport,
+  pythonParentPackageNamespacePaths,
   importBindingDeclarationRangeKeys,
   importBindingIdentityVerificationSites,
   importBindingReferenceSites,
@@ -925,16 +926,21 @@ async function findReferencesInternal(
     !receiverMemberDefinition &&
     localBinding?.sameScopeFunctionBindings
   ) {
-    const candidates = typescriptCollapsedOverloadCandidates(
+    const start = definition.range.start.index ?? 0;
+    const end = definition.range.end.index ?? start;
+    const overloadBindings = typescriptCallableCandidatesInContainer(
       localBinding.sameScopeFunctionBindings,
       parsedContext.tree,
-      (binding) => ({
-        file: definitionFile,
-        localName: binding.name,
-        kind: SymbolKind.Function,
-        range: binding.def!,
-      }),
+      (binding) => binding.def!,
+      start,
+      end,
     );
+    const candidates = typescriptCollapsedOverloadCandidates(overloadBindings, parsedContext.tree, (binding) => ({
+      file: definitionFile,
+      localName: binding.name,
+      kind: SymbolKind.Function,
+      range: binding.def!,
+    }));
     requiresTypeScriptOverloadVerifiedScan = candidates.length > 1;
   }
 
@@ -1581,6 +1587,36 @@ async function findReferencesInternal(
       for (const { range, provenance, via } of ranges) {
         if (hasReachedCollectionLimit()) break;
         pushRef({ file: fileId, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
+      }
+    }
+
+    // Only the exact dotted submodule path can refer to this definition through a
+    // parent-package import. Other same-name uses are proven unrelated.
+    if (parsedContext.sup.id === "python" && !definition.isMember && !hasReachedCollectionLimit()) {
+      for (const { namespace, importBinding } of pythonParentPackageNamespacePaths(module, definitionFile)) {
+        const parsed = await ensureCandidateParsed();
+        const ranges = await collectNamespaceMemberRefs(
+          fileId,
+          namespace,
+          referenceDef.localName,
+          parsed,
+          index.languageExtensions,
+          importBinding,
+          module.imports,
+        );
+        for (const range of ranges) {
+          if (hasReachedCollectionLimit()) break;
+          const hit = await goToDefinition(
+            index,
+            { file: fileId, line: range.start.line, column: range.start.column },
+            parsed,
+          );
+          if (hit.status === "ok") {
+            if (matchesReferenceDefinition(hit.definition)) pushRef({ file: fileId, range });
+          } else {
+            receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
+          }
+        }
       }
     }
 

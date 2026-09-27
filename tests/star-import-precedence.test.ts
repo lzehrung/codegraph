@@ -70,7 +70,7 @@ function edgeBetween(graph: DetailedSymbolGraph, from: string, to: string, label
   return graph.edges.some((edge) => edge.from === from && edge.to === to && edge.label === label);
 }
 
-describe("star-import precedence (W17)", () => {
+describe("star-import precedence", () => {
   it("records each language's star-import conflict rule", () => {
     expect(STAR_IMPORT_PRECEDENCE.python).toBe("last-wins");
     expect(STAR_IMPORT_PRECEDENCE.java).toBe("explicit-beats-star");
@@ -85,7 +85,7 @@ describe("star-import precedence (W17)", () => {
     const pkgA = "class Base\nend\n";
     const pkgB = "class Base\nend\n";
     const worker = 'require_relative "pkg_a/base"\nrequire_relative "pkg_b/base"\n\nclass Worker < Base\nend\n';
-    const { root, index } = await project("cg-audit-w17-ruby-reopen-both-", {
+    const { root, index } = await project("cg-ruby-reopen-both-", {
       "pkg_a/base.rb": pkgA,
       "pkg_b/base.rb": pkgB,
       "worker.rb": worker,
@@ -140,7 +140,7 @@ describe("star-import precedence (W17)", () => {
     const origin = "class Base\nend\n";
     const reopen = 'require_relative "origin"\nclass Base\n  def extra\n  end\nend\n';
     const worker = 'require_relative "reopen"\nrequire_relative "origin"\n\nclass Worker < Base\nend\n';
-    const { root, index } = await project("cg-audit-w17-ruby-reopen-", {
+    const { root, index } = await project("cg-ruby-reopen-", {
       "origin.rb": origin,
       "reopen.rb": reopen,
       "worker.rb": worker,
@@ -194,7 +194,7 @@ describe("star-import precedence (W17)", () => {
     const earlier = "def helper():\n    return 1\n";
     const later = "def helper():\n    return 2\n";
     const main = "from zzz import *\nfrom aaa import *\n\ndef run():\n    helper()\n";
-    const { root, index } = await project("cg-audit-w17-python-", {
+    const { root, index } = await project("cg-python-", {
       "zzz.py": earlier,
       "aaa.py": later,
       "main.py": main,
@@ -214,7 +214,7 @@ describe("star-import precedence (W17)", () => {
     const wildcards =
       "package app;\n\nimport pkg.a.*;\nimport pkg.b.*;\n\npublic class Ambiguous {\n    Base value;\n}\n";
     const only = "package app;\n\nimport pkg.a.*;\n\npublic class Only {\n    Base value;\n}\n";
-    const { root, index } = await project("cg-audit-w17-java-", {
+    const { root, index } = await project("cg-java-", {
       "pkg/a/Base.java": baseA,
       "pkg/b/Base.java": baseB,
       "app/Main.java": explicit,
@@ -268,7 +268,7 @@ describe("star-import precedence (W17)", () => {
     const main =
       "package app;\n\nimport missing.Foo;\nimport pkg.fallback.*;\n\npublic class Main {\n    public int run() {\n" +
       "        Foo value = new Foo();\n        return value.hit();\n    }\n}\n";
-    const { root, index } = await project("cg-audit-w17-java-unresolved-explicit-", {
+    const { root, index } = await project("cg-java-unresolved-explicit-", {
       "pkg/fallback/Foo.java": imported,
       "app/Main.java": main,
     });
@@ -289,7 +289,7 @@ describe("star-import precedence (W17)", () => {
     const wildcard = "package wildcard;\n\npublic class Foo {}\n";
     const main =
       "package app;\n\nimport wildcard.*;\nimport preferred.Foo;\n\npublic class Main {\n    Foo value;\n}\n";
-    const { root, index } = await project("cg-audit-w17-java-resolved-explicit-", {
+    const { root, index } = await project("cg-java-resolved-explicit-", {
       "preferred/Foo.java": preferred,
       "wildcard/Foo.java": wildcard,
       "app/Main.java": main,
@@ -306,7 +306,7 @@ describe("star-import precedence (W17)", () => {
   it("does not let an unresolved later Python import fall back to an earlier star import", async () => {
     const published = "class Thing:\n    def hit(self):\n        return 1\n";
     const main = "from published import *\nfrom missing import Thing\n\ndef run():\n    return Thing().hit()\n";
-    const { root, index } = await project("cg-audit-w17-python-unresolved-explicit-", {
+    const { root, index } = await project("cg-python-unresolved-explicit-", {
       "published.py": published,
       "main.py": main,
     });
@@ -326,7 +326,7 @@ describe("star-import precedence (W17)", () => {
     const imported = "class Thing:\n    def hit(self):\n        return 2\n";
     const main =
       "class Thing:\n    def hit(self):\n        return 1\n\nfrom imported import Thing\n\ndef run():\n    return Thing().hit()\n";
-    const { root, index } = await project("cg-audit-w17-python-later-import-", {
+    const { root, index } = await project("cg-python-later-import-", {
       "imported.py": imported,
       "main.py": main,
     });
@@ -350,7 +350,7 @@ describe("star-import precedence (W17)", () => {
     const imported = "class Thing:\n    def hit(self):\n        return 2\n";
     const main =
       "from imported import Thing\n\nclass Thing:\n    def hit(self):\n        return 1\n\ndef run():\n    return Thing().hit()\n";
-    const { root, index } = await project("cg-audit-w17-python-later-local-", {
+    const { root, index } = await project("cg-python-later-local-", {
       "imported.py": imported,
       "main.py": main,
     });
@@ -374,7 +374,7 @@ describe("star-import precedence (W17)", () => {
     const imported = "class X:\n    pass\n";
     const main =
       "from a import X\n\ndef inner():\n    class X:\n        pass\n    return X()\n\nclass Child(X):\n    pass\n";
-    const { root, index } = await project("cg-audit-w17-python-nested-local-", {
+    const { root, index } = await project("cg-python-nested-local-", {
       "a.py": imported,
       "main.py": main,
     });
@@ -404,7 +404,7 @@ describe("star-import precedence (W17)", () => {
     const consumer = "use crate::left::*;\nuse crate::right::*;\n\npub fn run() -> i32 {\n    shared()\n}\n";
     const only = "use crate::left::*;\n\npub fn run() -> i32 {\n    shared()\n}\n";
     const lib = "pub mod left;\npub mod right;\npub mod consumer;\npub mod only;\n";
-    const { root, index } = await project("cg-audit-w17-rust-", {
+    const { root, index } = await project("cg-rust-", {
       "Cargo.toml": '[package]\nname = "demo"\nversion = "0.1.0"\n',
       "src/lib.rs": lib,
       "src/left.rs": left,
@@ -444,7 +444,7 @@ describe("star-import precedence (W17)", () => {
     const otherBase = "package other;\n\npublic class Base {}\n";
     const wildcard = "package pkg;\n\nimport other.*;\n\npublic class Use {\n    Base value;\n}\n";
     const explicit = "package pkg;\n\nimport other.Base;\n\npublic class Explicit {\n    Base value;\n}\n";
-    const { root, index } = await project("cg-audit-w17-java-package-", {
+    const { root, index } = await project("cg-java-package-", {
       "pkg/Base.java": localBase,
       "other/Base.java": otherBase,
       "pkg/Use.java": wildcard,
@@ -476,7 +476,7 @@ describe("star-import precedence (W17)", () => {
     const internal = "int add(int a, int b);\n";
     const add = '#include "api.h"\nint add(int a, int b) { return a + b; }\n';
     const main = '#include "api.h"\n#include "internal.h"\nint run(void) { return add(1, 2); }\n';
-    const { root, index } = await project("cg-audit-w17-c-headers-", {
+    const { root, index } = await project("cg-c-headers-", {
       "api.h": api,
       "internal.h": internal,
       "add.c": add,

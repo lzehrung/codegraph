@@ -40,7 +40,7 @@ async function project(files: Record<string, string>): Promise<{
   index: Awaited<ReturnType<typeof createTestIndexFromFiles>>;
   file: (name: string) => string;
 }> {
-  const root = (await mkdtemp(path.join(os.tmpdir(), "cg-audit-tsjs-"))).replace(/\\/g, "/");
+  const root = (await mkdtemp(path.join(os.tmpdir(), "cg-tsjs-"))).replace(/\\/g, "/");
   const paths = Object.keys(files).map((name) => `${root}/${name}`);
   await Promise.all(paths.map((filePath, offset) => writeFile(filePath, Object.values(files)[offset]!, "utf8")));
   const index = await createTestIndexFromFiles(root, paths);
@@ -69,7 +69,7 @@ function callTargetIds(graph: SymbolGraph, caller: string): string[] {
   return targets;
 }
 
-describe("TypeScript and JavaScript accuracy audit", () => {
+describe("TypeScript and JavaScript navigation", () => {
   it("keeps overload signatures and resolves calls to the implementation", async () => {
     const fmt = [
       "export function format(value: string): string;",
@@ -267,6 +267,119 @@ describe("TypeScript and JavaScript accuracy audit", () => {
         expect(runTargets.some((id) => id.endsWith(`::${entry.token}::${targetIndex}`))).toBe(true);
       }
       expect(callTargetIds(graph, "wrongArity")).toEqual([]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+  it("keeps overloads in distinct TypeScript namespaces separate", async () => {
+    const namespaces = [
+      "export namespace A {",
+      "  export function select(value: string): string { return value; }",
+      "}",
+      "export declare namespace B {",
+      "  export function select(value: string): string;",
+      "  export function select(value: string, count: number): string;",
+      "}",
+      'export function run(): string { return B.select("b", 2); }',
+      'export function wrongArity(): void { B.select("b", 2, 3); }',
+      "",
+    ].join("\n");
+    const fixture = await project({ "namespaces.ts": namespaces });
+    try {
+      const module = fixture.index.byFile.get(fileIdentityKey(fixture.file("namespaces.ts")));
+      const exportLines = module?.exports.flatMap((entry) =>
+        entry.type === "local" && entry.exportedAs === "select" ? [entry.target.range.start.line] : [],
+      );
+      expect(exportLines).toEqual([2, 5, 6]);
+
+      const result = await goToDefinition(fixture.index, {
+        file: fixture.file("namespaces.ts"),
+        line: 8,
+        column: columnOf(namespaces, 8, "select"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.range.start.line).toBe(6);
+
+      const wrongArity = await goToDefinition(fixture.index, {
+        file: fixture.file("namespaces.ts"),
+        line: 9,
+        column: columnOf(namespaces, 9, "select"),
+      });
+      expect(wrongArity.status).toBe("not_found");
+
+      const refs = await findReferences(fixture.index, {
+        file: fixture.file("namespaces.ts"),
+        line: 6,
+        column: columnOf(namespaces, 6, "select"),
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") return;
+      expect(refs.referenceCoverage?.state).toBe("partial");
+      expect(referenceSites(refs)).toContain("namespaces.ts:8");
+      expect(referenceSites(refs)).not.toContain("namespaces.ts:9");
+
+      // The detailed graph does not resolve same-file namespace member calls yet, so `run` gets no
+      // edge. It must never target namespace A's implementation, and a wrong-arity call gets none.
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      const implementationIndex = tokenIndex(namespaces, 2, "select");
+      expect(callTargetIds(graph, "run").some((id) => id.endsWith(`::select::${implementationIndex}`))).toBe(false);
+      expect(callTargetIds(graph, "wrongArity")).toEqual([]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+  it("selects later signature-only receiver overloads across namespaces and merged interfaces", async () => {
+    const declarations = [
+      "export declare namespace NamespaceApi {",
+      "  function parse(value: string): string;",
+      "  function parse(value: string, flags: number): string;",
+      "}",
+      "export interface Merged {",
+      "  parse(value: string): string;",
+      "}",
+      "export interface Merged {",
+      "  parse(value: string, flags: number): string;",
+      "}",
+      'export function namespaceRun(): string { return NamespaceApi.parse("v", 1); }',
+      'export function interfaceRun(value: Merged): string { return value.parse("v", 1); }',
+      'export function namespaceWrong(): void { NamespaceApi.parse("v", 1, 2); }',
+      'export function interfaceWrong(value: Merged): void { value.parse("v", 1, 2); }',
+      "",
+    ].join("\n");
+    const fixture = await project({ "receiver-overloads.ts": declarations });
+    try {
+      for (const entry of [
+        { line: 11, token: "parse", declarationLine: 3 },
+        { line: 12, token: "parse", declarationLine: 9 },
+      ]) {
+        const result = await goToDefinition(fixture.index, {
+          file: fixture.file("receiver-overloads.ts"),
+          line: entry.line,
+          column: columnOf(declarations, entry.line, entry.token),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(result.definition.range.start.line).toBe(entry.declarationLine);
+      }
+
+      for (const entry of [
+        { line: 13, token: "parse" },
+        { line: 14, token: "parse" },
+      ]) {
+        const result = await goToDefinition(fixture.index, {
+          file: fixture.file("receiver-overloads.ts"),
+          line: entry.line,
+          column: columnOf(declarations, entry.line, entry.token),
+        });
+        expect(result.status).toBe("not_found");
+      }
+
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      const interfaceTarget = tokenIndex(declarations, 9, "parse");
+      expect(callTargetIds(graph, "interfaceRun").some((id) => id.endsWith(`::parse::${interfaceTarget}`))).toBe(true);
+      expect(callTargetIds(graph, "namespaceWrong")).toEqual([]);
+      expect(callTargetIds(graph, "interfaceWrong")).toEqual([]);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }

@@ -30,7 +30,7 @@ function referenceLines(result: FindReferencesResult): number[] {
 }
 
 async function withFile(name: string, source: string, run: (file: string) => Promise<void>): Promise<void> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-w19-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "cg-"));
   const file = path.join(root, name);
   await writeFile(file, source);
   try {
@@ -40,7 +40,7 @@ async function withFile(name: string, source: string, run: (file: string) => Pro
   }
 }
 
-describe("forward references (W19)", () => {
+describe("declaration-order visibility", () => {
   it("finds a TypeScript call to a function declared later, and not the nested decoy", async () => {
     const source = [
       "function a() {",

@@ -179,6 +179,7 @@ async function pushStandardBindings(
       from,
       resolved,
       typeOnly,
+      ...(includeForm ? { includeForm } : {}),
     });
     return;
   }

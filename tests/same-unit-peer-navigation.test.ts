@@ -108,7 +108,7 @@ describe("same-unit peers without an import", () => {
       "}",
     ];
     await withProject(
-      "cg-audit-peers-java-",
+      "cg-peers-java-",
       sourceFiles({
         "p/Foo.java": fooLines,
         "p/Bar.java": barLines,
@@ -180,7 +180,7 @@ describe("same-unit peers without an import", () => {
     ];
     const decoyLines = ["package q", "", "class Foo {", '  fun hello(): String = "no"', "}"];
     await withProject(
-      "cg-audit-peers-kotlin-",
+      "cg-peers-kotlin-",
       sourceFiles({
         "p/Foo.kt": fooLines,
         "p/Bar.kt": barLines,
@@ -247,7 +247,7 @@ describe("same-unit peers without an import", () => {
     ];
     const decoyLines = ["class Foo {", '  func hello() -> String { return "no" }', "}"];
     await withProject(
-      "cg-audit-peers-swift-",
+      "cg-peers-swift-",
       sourceFiles({
         "Foo.swift": fooLines,
         "Bar.swift": barLines,
@@ -285,7 +285,7 @@ describe("same-unit peers without an import", () => {
     // A second directory is a different Swift unit, but without a package manifest the module
     // boundary is unproven, so coverage stays partial. Resolution must still ignore that Foo.
     await withProject(
-      "cg-audit-peers-swift-decoy-",
+      "cg-peers-swift-decoy-",
       sourceFiles({
         "Foo.swift": fooLines,
         "Bar.swift": barLines,
@@ -370,7 +370,7 @@ describe("same-unit peers without an import", () => {
       "}",
     ];
     await withProject(
-      "cg-audit-peers-php-",
+      "cg-peers-php-",
       sourceFiles({
         "Base.php": baseLines,
         "Greetable.php": greetableLines,

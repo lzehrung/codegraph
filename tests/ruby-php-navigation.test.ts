@@ -76,7 +76,7 @@ async function phpRoleImportProject() {
     "function makeIt() { return new Base(); }",
     "",
   ].join("\n");
-  const { root, index } = await project("cg-audit-php-role-import-", {
+  const { root, index } = await project("cg-php-role-import-", {
     "lib.php": declarations,
     "function-only.php": functionOnly,
     "const-only.php": constOnly,
@@ -84,7 +84,7 @@ async function phpRoleImportProject() {
   return { root, index, declarations, functionOnly, constOnly };
 }
 
-describe("Ruby and PHP audit fixes", () => {
+describe("Ruby and PHP cross-file navigation", () => {
   it("resolves Ruby Klass.new across a required file and ignores an unrequired decoy", async () => {
     const widget = ["class Widget", "  def render", "  end", "end", ""].join("\n");
     const decoy = ["class Widget", "  def render", "  end", "end", ""].join("\n");
@@ -100,7 +100,7 @@ describe("Ruby and PHP audit fixes", () => {
       "end",
       "",
     ].join("\n");
-    const { root, index } = await project("cg-audit-w13-", {
+    const { root, index } = await project("cg-", {
       "widget.rb": widget,
       "decoy.rb": decoy,
       "use.rb": use,
@@ -157,7 +157,7 @@ describe("Ruby and PHP audit fixes", () => {
       "",
     ].join("\n");
     const orphan = ["def run", "  w = Widget.new", "  w.render", "end", ""].join("\n");
-    const { root, index } = await project("cg-audit-w13-local-", {
+    const { root, index } = await project("cg-local-", {
       "widget.rb": widget,
       "same.rb": same,
       "orphan.rb": orphan,
@@ -193,7 +193,7 @@ describe("Ruby and PHP audit fixes", () => {
       "function outside() { return new self(); }",
       "",
     ].join("\n");
-    const { root, index } = await project("cg-audit-h8-", { "box.php": source });
+    const { root, index } = await project("cg-", { "box.php": source });
     const file = fileIn(root, "box.php");
     const selfGoto = await goToDefinition(index, { file, ...at(source, "new self()", "self") });
     const staticGoto = await goToDefinition(index, { file, ...at(source, "new static()", "static") });
@@ -250,7 +250,7 @@ describe("Ruby and PHP audit fixes", () => {
     const orphan = ["<?php", "namespace Unrelated;", "function Base() {}", "class Orphan extends Base {}", ""].join(
       "\n",
     );
-    const { root, index } = await project("cg-audit-php-class-role-", {
+    const { root, index } = await project("cg-php-class-role-", {
       "base.php": base,
       "child.php": child,
       "orphan.php": orphan,
@@ -310,7 +310,7 @@ describe("Ruby and PHP audit fixes", () => {
       "class Child implements Face { public function ping(): void {} }",
       "",
     ].join("\n");
-    const { root, index } = await project("cg-audit-php-face-role-", { "same.php": source });
+    const { root, index } = await project("cg-php-face-role-", { "same.php": source });
     const file = fileIn(root, "same.php");
     const resolved = await goToDefinition(index, { file, ...at(source, "implements Face", "Face") });
     expect(resolved.status).toBe("ok");
@@ -348,7 +348,7 @@ describe("Ruby and PHP audit fixes", () => {
       "function missingConst(): mixed { return Only; }",
       "",
     ].join("\n");
-    const { root, index } = await project("cg-audit-php-same-file-roles-", { "same.php": source });
+    const { root, index } = await project("cg-php-same-file-roles-", { "same.php": source });
     const file = fileIn(root, "same.php");
     const call = await goToDefinition(index, { file, ...at(source, "return Base();", "Base") });
     const constant = await goToDefinition(index, { file, ...at(source, "return Base;", "Base") });
@@ -448,7 +448,7 @@ describe("Ruby and PHP audit fixes", () => {
       "class Bad extends Widget {}",
       "",
     ].join("\n");
-    const { root, index } = await project("cg-audit-php-use-qualified-", {
+    const { root, index } = await project("cg-php-use-qualified-", {
       "actual.php": actual,
       "decoy.php": decoy,
       "good.php": good,
@@ -492,7 +492,7 @@ describe("Ruby and PHP audit fixes", () => {
       "}",
       "",
     ].join("\n");
-    const { root, index } = await project("cg-audit-h9-", { "box.php": source });
+    const { root, index } = await project("cg-", { "box.php": source });
     const file = fileIn(root, "box.php");
     const propertyGoto = await goToDefinition(index, { file, ...at(source, "return $this->x;", "x", 1) });
     const earlyGoto = await goToDefinition(index, { file, ...at(source, "return $this->x;", "x") });
@@ -536,7 +536,7 @@ describe("Ruby and PHP audit fixes", () => {
       "end",
       "",
     ].join("\n");
-    const { root, index } = await project("cg-audit-h10-", { "blocks.rb": source });
+    const { root, index } = await project("cg-", { "blocks.rb": source });
     const file = fileIn(root, "blocks.rb");
     const inner = await goToDefinition(index, { file, ...at(source, "    item", "item") });
     const param = await goToDefinition(index, { file, ...at(source, "do |item|", "item") });
@@ -593,7 +593,7 @@ describe("Ruby and PHP audit fixes", () => {
       "end",
       "",
     ].join("\n");
-    const { root, index } = await project("cg-audit-h12-", { "super.rb": source });
+    const { root, index } = await project("cg-", { "super.rb": source });
     const file = fileIn(root, "super.rb");
     const bare = await goToDefinition(index, { file, ...at(source, "    super\n", "super") });
     const empty = await goToDefinition(index, { file, ...at(source, "super()", "super") });
@@ -639,7 +639,7 @@ describe("Ruby and PHP audit fixes", () => {
       "\n",
     );
     const onlyNested = ['require_relative "outer"', "class Only < Base", "end", ""].join("\n");
-    const { root, index } = await project("cg-audit-w18-", {
+    const { root, index } = await project("cg-", {
       "outer.rb": outer,
       "real_base.rb": realBase,
       "worker.rb": worker,
@@ -721,7 +721,7 @@ function callCount(graph: DetailedSymbolGraph, from: string, to: string): number
 describe("Ruby scope-resolution class names follow their lexical nesting", () => {
   it("exports `class Inner::Tool` inside `module Outer` as Outer::Inner::Tool and `class ::Top` as Top", async () => {
     const use = ["require_relative 'defs'", "Outer::Inner::Tool.new", "Inner::Tool.new", "Top.new", ""];
-    const { root, index } = await project("cg-audit-ruby-scope-name-", {
+    const { root, index } = await project("cg-ruby-scope-name-", {
       "defs.rb": "module Outer\n  module Inner\n  end\n  class Inner::Tool\n  end\n  class ::Top\n  end\nend\n",
       "use.rb": use.join("\n"),
     });

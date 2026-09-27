@@ -20,13 +20,19 @@ export async function collectReviewGraphDelta(input: {
   changedFiles: ReadonlySet<string>;
   deletedFiles: readonly string[];
   deletedSnapshots: ReadonlyMap<FileId, DeletedFileSnapshot>;
+  resolutionHints?: readonly string[];
 }): Promise<Edge[]> {
   const graphEdges = new Map<string, Edge>();
   for (const edge of input.index.graph.edges.filter((entry) => input.changedFiles.has(entry.from))) {
     const relativeEdge = toRelativeEdge(input.projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }
-  for (const edge of await collectDeletedImporterEdges(input.index, input.deletedFiles, input.projectRoot)) {
+  for (const edge of await collectDeletedImporterEdges(
+    input.index,
+    input.deletedFiles,
+    input.projectRoot,
+    input.resolutionHints,
+  )) {
     const relativeEdge = toRelativeEdge(input.projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }

@@ -13,6 +13,7 @@ import { IMPLICIT_UNIT_LANGUAGES } from "../indexer/compilation-units.js";
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { cjsRequireValueBinding, resolveExport } from "../indexer/navigation-resolve.js";
 import {
+  typescriptCallableCandidatesInContainer,
   typescriptCollapsedOverloadTarget,
   typescriptCallableContainerKey,
   typescriptCallableRoleAt,
@@ -519,8 +520,17 @@ export async function buildSymbolGraphDetailed(
         }
         const call = node.parent;
         if (isJsTsLanguage(sup.id) && binding?.kind === "function" && call?.type === "call_expression") {
+          const start = binding.def!.start.index ?? 0;
+          const end = binding.def!.end.index ?? start;
+          const candidates = typescriptCallableCandidatesInContainer(
+            binding.sameScopeFunctionBindings ?? [binding],
+            tree,
+            (candidate) => candidate.def!,
+            start,
+            end,
+          );
           const selected = typescriptSelectOverloadCandidate({
-            group: binding.sameScopeFunctionBindings ?? [binding],
+            group: candidates,
             tree,
             definitionOf: (candidate) => ({
               file,

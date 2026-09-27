@@ -43,7 +43,7 @@ function defNodeIdAt(file: string, source: string, name: string, occurrence: num
 
 describe("Rust Cargo manifests are resolution inputs for the warm cache", () => {
   it("drops a path dependency's resolution on a warm build after Cargo.toml removes it", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-warm-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-warm-"));
     try {
       const use = 'use crate_a::greet;\nfn main() { println!("{}", greet()); }\n';
       await writeFixture(root, {
@@ -69,7 +69,7 @@ describe("Rust Cargo manifests are resolution inputs for the warm cache", () => 
     }
   });
   it("revalidates [lib].path on a warm build without falling back to src/lib.rs", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-libpath-warm-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-libpath-warm-"));
     try {
       const use = "use crate_a::greet;\nfn main() { greet(); }\n";
       const manifest = (target: string): string =>
@@ -119,7 +119,7 @@ describe("Rust Cargo manifests are resolution inputs for the warm cache", () => 
 
 describe("Rust path dependencies use the library target declared by Cargo", () => {
   it("resolves an explicit [lib].path instead of a same-named src/lib.rs decoy", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-libpath-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-libpath-"));
     try {
       const core = 'pub fn greet() -> &\'static str { "real" }\n';
       const decoy = 'pub fn greet() -> &\'static str { "decoy" }\n';
@@ -178,7 +178,7 @@ describe("Rust path dependencies use the library target declared by Cargo", () =
     }
   });
   it("walks #[path] modules from a custom library root for crate:: and path dependencies", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-path-tree-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-path-tree-"));
     try {
       const worker = "pub fn greet() {}\n";
       const consumer = "use crate::worker::greet;\npub fn run() { greet(); }\n";
@@ -235,7 +235,7 @@ describe("Rust path dependencies use the library target declared by Cargo", () =
   });
 
   it("keeps crate:: inside the binary module tree when a custom library coexists", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-binary-root-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-binary-root-"));
     try {
       const callLine = "pub fn run() { greet(); from_super(); }";
       const runner = ["use crate::only_bin::greet;", "use super::only_bin::greet as from_super;", callLine, ""].join(
@@ -282,8 +282,8 @@ describe("Rust path dependencies use the library target declared by Cargo", () =
 
 describe("Rust Cargo manifests are read only inside the project root", () => {
   it("ignores a symlinked Cargo.toml whose target lies outside the project", async (context) => {
-    const outside = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-outside-"));
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-symlink-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-outside-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-symlink-"));
     try {
       const use = 'use crate_a::greet;\nfn main() { println!("{}", greet()); }\n';
       await writeFixture(root, {
@@ -319,7 +319,7 @@ describe("Rust Cargo manifests are read only inside the project root", () => {
 
 describe("Rust binaries name their own library by [lib].name", () => {
   it("resolves `use custom::greet` and not the package name when [lib] renames the crate", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-libname-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-libname-"));
     try {
       const main = "use custom::greet;\nuse pkg::greet as wrong;\nfn main() { greet(); wrong(); }\n";
       await writeFixture(root, {
@@ -348,7 +348,7 @@ describe("Rust binaries name their own library by [lib].name", () => {
 
 describe("Rust own-library import target boundaries", () => {
   it("does not treat a different binary as the library when the package has no library target", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-no-lib-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-no-lib-"));
     try {
       const bin = "use pkg::greet;\nfn main() { greet(); }\n";
       await writeFixture(root, {
@@ -369,7 +369,7 @@ describe("Rust own-library import target boundaries", () => {
   });
 
   it("does not expose a library to its own source under its package name", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-lib-self-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-lib-self-"));
     try {
       const lib = "pub fn greet() {}\nuse pkg::greet as called;\npub fn run() { called(); }\n";
       await writeFixture(root, {
@@ -389,7 +389,7 @@ describe("Rust own-library import target boundaries", () => {
   });
 
   it("resolves only binary targets into an explicit library root and its declared module tree", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-core-lib-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cargo-core-lib-"));
     try {
       const use = "use pkg::worker::greet;\nfn main() { greet(); }\n";
       await writeFixture(root, {
@@ -428,9 +428,9 @@ describe("Rust own-library import target boundaries", () => {
   });
 });
 
-describe("Rust impl methods own member_of edges and calls edges (G7)", () => {
+describe("Rust impl methods own member_of edges and calls edges", () => {
   it("emits one calls edge per receiver call to Circle::area, member_of edges for impl methods, and never targets the same-named Square::area", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-g7-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-"));
     try {
       const lib = [
         "pub struct Circle { pub radius: f64 }",
@@ -518,7 +518,7 @@ describe("Rust impl methods own member_of edges and calls edges (G7)", () => {
   });
 
   it("attributes trait-impl and generic impl methods to their self type and trait default methods to the trait", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-g7-forms-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-forms-"));
     try {
       const lib = [
         "pub trait Shape {",
@@ -622,9 +622,9 @@ describe("Rust impl methods own member_of edges and calls edges (G7)", () => {
   });
 });
 
-describe("Rust workspace-inherited dependency (H15)", () => {
+describe("Rust workspace-inherited dependency", () => {
   it("resolves workspace = true into the dependency [lib].path, excluding same-named decoys", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-h15-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-"));
     try {
       const a = 'pub fn greet() -> &\'static str { "hi" }\n';
       const c = 'pub fn greet() -> &\'static str { "decoy" }\n'; // decoy: same name, not a dependency of crate_b
@@ -675,7 +675,7 @@ describe("Rust workspace-inherited dependency (H15)", () => {
   });
 
   it("never reads a workspace manifest outside the project root, keeping an outside-workspace decoy unresolved", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-h15-confine-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-confine-"));
     try {
       const project = path.join(root, "project");
       const decoyGreet = 'pub fn greet() -> &\'static str { "decoy" }\n';
@@ -711,7 +711,7 @@ describe("Rust workspace-inherited dependency (H15)", () => {
   });
 
   it("resolves a path dependency only into a directory whose Cargo.toml names that package", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-h15-manifest-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-manifest-"));
     try {
       const greet = 'pub fn greet() -> &\'static str { "hi" }\n';
       const use = (crate: string): string => `use ${crate}::greet;\nfn main() { println!("{}", greet()); }\n`;

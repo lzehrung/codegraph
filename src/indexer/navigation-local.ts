@@ -5,7 +5,7 @@ import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
-import { typescriptSelectOverloadCandidate } from "./ts-callables.js";
+import { typescriptCallableCandidatesInContainer, typescriptSelectOverloadCandidate } from "./ts-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import {
   bindingCoversUse,
@@ -300,8 +300,17 @@ function selectTypeScriptOverloadBinding(
 ): Binding | null {
   const call = currentNode.parent;
   if (!call || call.type !== "call_expression") return binding;
+  const start = binding.def!.start.index ?? 0;
+  const end = binding.def!.end.index ?? start;
+  const candidates = typescriptCallableCandidatesInContainer(
+    binding.sameScopeFunctionBindings ?? [binding],
+    tree,
+    (candidate) => candidate.def!,
+    start,
+    end,
+  );
   const selected = typescriptSelectOverloadCandidate({
-    group: binding.sameScopeFunctionBindings ?? [binding],
+    group: candidates,
     tree,
     definitionOf: (candidate) => ({
       file,

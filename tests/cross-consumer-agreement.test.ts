@@ -1,9 +1,10 @@
 /**
- * F1: every 2026-09-25 audit fixture (except W19, still in progress, and the cache/API
- * items G1, G2, G6) run through `goToDefinition`, `findReferences`, and
- * `buildSymbolGraphDetailed` together.
+ * Every navigation fixture from the 2026-09-25 accuracy checklist
+ * (docs/plans/audit-2026-09-25-checklist.md) runs through `goToDefinition`, `findReferences`, and
+ * `buildSymbolGraphDetailed` together. Declaration-order cases live in
+ * declaration-order-visibility.test.ts, and cache and agent API cases in their own files.
  *
- * One `it.each` table per language. A checklist item is two rows that share a fixture:
+ * One `it.each` table per language. A scenario is two rows that share a fixture:
  * the use site, and a same-named unrelated declaration that must not match it. Adding
  * a future case is one more use row plus its decoy row.
  *
@@ -137,14 +138,14 @@ async function runAgreementRow(row: AgreementRow): Promise<void> {
   await assertConsumerAgreement(fixture, resolved);
 }
 
-const w9 = {
+const cPrototypeAndDefinition = {
   "util.h": src(["#ifndef UTIL_H", "#define UTIL_H", "int compute(void);", "#endif"]),
   "util.c": src(['#include "util.h"', "int compute(void) { return 1; }"]),
   "extra.c": src(["int compute(void) { return 0; }"]),
   "run.c": src(['#include "util.h"', "int run(void) {", "  return compute();", "}"]),
 };
 
-const w10 = {
+const cppUsingNamespace = {
   "tools.hpp": src([
     "namespace tools {",
     "  int add(int left, int right) { return left + right; }",
@@ -157,14 +158,14 @@ const w10 = {
   "main.cpp": src(['#include "tools.hpp"', "using namespace tools;", "int main() {", "  return add(1, 2);", "}"]),
 };
 
-const h7 = {
+const cppTypedLocalReceiver = {
   "box.hpp": src(["class Box {", "public:", "  int run();", "};"]),
   "box.cpp": src(['#include "box.hpp"', "int Box::run() { return 1; }"]),
   "widget.hpp": src(["class Widget {", "public:", "  int run();", "};"]),
   "use.cpp": src(['#include "box.hpp"', "int callWithLocal() {", "  Box b;", "  return b.run();", "}"]),
 };
 
-const h4 = {
+const csharpConstructedLocal = {
   "n.cs": src([
     "public class Outer {",
     "  public class Inner {",
@@ -181,7 +182,7 @@ const h4 = {
   "other.cs": src(["public class Other {", "  public class Nested {", "    public int Value() => 99;", "  }", "}"]),
 };
 
-const h5 = {
+const csharpTypeAlias = {
   "pt.cs": src([
     "using PT = N.Point;",
     "namespace N {",
@@ -203,7 +204,7 @@ const h5 = {
 
 const goMod = src(["module example.com/proj", "", "go 1.22"]);
 
-const w11 = {
+const goUnexportedCrossPackage = {
   "go.mod": goMod,
   "util/util.go": src(["package util", "", "func hidden() int { return 2 }"]),
   "other/other.go": src(["package other", "", "func hidden() int { return 9 }"]),
@@ -218,7 +219,7 @@ const w11 = {
   ]),
 };
 
-const g3 = {
+const goQualifiedCall = {
   "go.mod": goMod,
   "util/util.go": src(["package util", "", "func Square(x float64) float64 { return x * x }"]),
   "other/other.go": src(["package other", "", "func Square(x float64) float64 { return -1 }"]),
@@ -233,7 +234,7 @@ const g3 = {
   ]),
 };
 
-const w5 = {
+const samePackageCall = {
   "p/Foo.java": src(["package p;", "", "public class Foo {", '  public String hello() { return "hi"; }', "}"]),
   "p/Bar.java": src([
     "package p;",
@@ -247,7 +248,7 @@ const w5 = {
   "q/Foo.java": src(["package q;", "", "public class Foo {", '  public String hello() { return "no"; }', "}"]),
 };
 
-const h6 = {
+const typedParameterReceiver = {
   "a/Greeter.java": src(["package a;", "public class Greeter {", '  public String hello() { return "hi"; }', "}"]),
   "b/User.java": src([
     "package b;",
@@ -264,13 +265,13 @@ const h6 = {
   ]),
 };
 
-const w3 = {
+const requireModuleMember = {
   "util.js": "exports.helper = function helper() { return 1; };",
   "decoy.js": "exports.helper = function helper() { return 2; };",
   "use.js": src(["const util = require('./util');", "function run() { return util.helper(); }"]),
 };
 
-const w20 = {
+const kotlinTypeNameInstanceCall = {
   "Box.kt": src([
     "package p",
     "",
@@ -291,7 +292,7 @@ const w20 = {
   ]),
 };
 
-const h2 = {
+const kotlinCompanionFactory = {
   "w.kt": src([
     "class Widget(val id: Int) {",
     "  companion object {",
@@ -305,7 +306,7 @@ const h2 = {
   ]),
 };
 
-const h3 = {
+const kotlinExtensionFunction = {
   "w.kt": src([
     "class Widget(val id: Int)",
     "class Gadget(val id: Int) {",
@@ -319,19 +320,19 @@ const h3 = {
   ]),
 };
 
-const f2KotlinExplicitImport = {
+const kotlinExplicitImport = {
   "app/Foo.kt": src(["package app", "class Foo"]),
   "other/Foo.kt": src(["package other", "class Foo"]),
   "app/Use.kt": src(["package app", "import other.Foo", "fun use() = Foo()"]),
 };
 
 /** Valid C++ picks `f(int)` for `f(1)` by parameter type; codegraph does not rank overloads. */
-const f3CppAmbiguousOverload = {
+const cppAmbiguousOverload = {
   "api.hpp": src(["int f(int a);", "int f(double a);"]),
   "use.cpp": src(['#include "api.hpp"', "int g() { return f(1); }", "int h() { return f(1.5); }"]),
 };
 
-const h14 = {
+const kotlinConstructorProperty = {
   "G.kt": src([
     "class Gadget(val name: String) {",
     '  fun describe(): String = "x:" + name',
@@ -346,13 +347,13 @@ const h14 = {
   ]),
 };
 
-const w12 = {
+const phpSameNamespacePeers = {
   "Base.php": src(["<?php", "namespace Acme\\App;", "", "class Base", "{", "}"]),
   "Other.php": src(["<?php", "namespace Other\\Ns;", "", "class Base", "{", "}"]),
   "Worker.php": src(["<?php", "namespace Acme\\App;", "", "class Worker extends Base", "{", "}"]),
 };
 
-const h8 = {
+const phpNewSelf = {
   "box.php": src([
     "<?php",
     "class ParentDecoy {}",
@@ -366,7 +367,7 @@ const h8 = {
   "decoy.php": src(["<?php", "class Child {", "  function makeSelf() { return new self(); }", "}"]),
 };
 
-const h9 = {
+const phpPromotedProperty = {
   "box.php": src([
     "<?php",
     "class Box {",
@@ -380,14 +381,14 @@ const h9 = {
   ]),
 };
 
-const w14 = {
+const pythonClassNamedLikeModule = {
   "pkg/__init__.py": "from .widget import Widget",
   "pkg/widget.py": src(["class Widget:", "    def render(self):", "        return 1"]),
   "decoy_pkg/widget.py": src(["class Widget:", "    def render(self):", "        return 999"]),
   "main.py": src(["from pkg import Widget as W", "", "W().render()"]),
 };
 
-const w15 = {
+const pythonDottedModuleImport = {
   "pkg/__init__.py": "",
   "pkg/mod.py": src(["def foo():", "    return 42"]),
   "other.py": src(["def foo():", "    return -1"]),
@@ -401,20 +402,20 @@ const w17Receiver = {
   "main.py": src(["from a import *", "from b import *", "", "def run():", "    return X.m()"]),
 };
 
-const w17 = {
+const starImportCollision = {
   "zzz.py": src(["def helper():", "    return 1"]),
   "aaa.py": src(["def helper():", "    return 2"]),
   "decoy.py": src(["def helper():", "    return 9"]),
   "main.py": src(["from zzz import *", "from aaa import *", "", "def run():", "    helper()"]),
 };
 
-const h11 = {
+const pythonAliasedImportSource = {
   "a.py": src(["def helper():", "    return 1"]),
   "decoy.py": src(["def helper():", "    return -1"]),
   "b.py": src(["from a import helper as h", "", "def run():", "    return h()"]),
 };
 
-const h12 = {
+const superThroughProvenBase = {
   "unrelated.py": src(["class Unrelated:", "    def greet(self):", "        return 99"]),
   "base.py": src(["class Base:", "    def greet(self):", "        return 1"]),
   "derived.py": src([
@@ -426,32 +427,32 @@ const h12 = {
   ]),
 };
 
-const w13 = {
+const rubyCrossFileNew = {
   "widget.rb": src(["class Widget", "  def render", "  end", "end"]),
   "decoy.rb": src(["class Widget", "  def render", "  end", "end"]),
   "use.rb": src(['require_relative "widget"', "def run", "  w = Widget.new", "  w.render", "end"]),
 };
 
-const w18 = {
+const rubyNestedClassExport = {
   "outer.rb": src(["module Outer", "  class Base", "  end", "end"]),
   "real_base.rb": src(["class Base", "end"]),
   "worker.rb": src(['require_relative "outer"', 'require_relative "real_base"', "class Worker < Base", "end"]),
 };
 
-const g4 = {
+const rubyCrossFileInheritance = {
   "ruby_base.rb": src(["class RubyBase", "end"]),
   "decoy_base.rb": src(["class RubyBase", "end"]),
   "ruby_worker.rb": src(['require_relative "ruby_base"', "class RubyWorker < RubyBase", "end"]),
 };
 
-const h10 = {
+const rubyBlockParameter = {
   "blocks.rb": src(["def run", "  item = 1", "  [1, 2].each do |item|", "    item", "  end", "end"]),
   "decoy.rb": src(["def other", "  item = 2", "end"]),
 };
 
 const rustPackage = '[package]\nname = "demo"\nversion = "0.1.0"\n';
 
-const w7 = {
+const rustSuperType = {
   "Cargo.toml": rustPackage,
   "src/lib.rs": src([
     "pub struct Circle { pub radius: f64 }",
@@ -463,7 +464,7 @@ const w7 = {
   "src/decoy.rs": "pub struct Circle { pub radius: f64 }",
 };
 
-const w8 = {
+const rustWorkspacePathDependency = {
   "Cargo.toml": '[workspace]\nmembers = ["crate_a", "crate_b", "crate_c"]\n',
   "crate_a/Cargo.toml": '[package]\nname = "crate_a"\nversion = "0.1.0"\n',
   "crate_a/src/lib.rs": 'pub fn greet() -> &\'static str { "hi" }\n',
@@ -474,7 +475,7 @@ const w8 = {
   "crate_c/src/lib.rs": 'pub fn greet() -> &\'static str { "decoy" }\n',
 };
 
-const g7 = {
+const rustImplMethod = {
   "Cargo.toml": rustPackage,
   "src/lib.rs": src([
     "pub struct Circle { pub radius: f64 }",
@@ -489,7 +490,7 @@ const g7 = {
   ]),
 };
 
-const h13 = {
+const rustZigGlobAndStructLiteral = {
   "Cargo.toml": rustPackage,
   "src/lib.rs": src(["pub mod geometry;", "pub mod decoy;", "pub mod consumer;"]),
   "src/geometry.rs": src(["pub mod util {", "    pub fn square(x: f64) -> f64 { x * x }", "}"]),
@@ -497,7 +498,7 @@ const h13 = {
   "src/consumer.rs": src(["use crate::geometry::util::*;", "pub fn run() -> f64 {", "    square(3.0)", "}"]),
 };
 
-const h15 = {
+const rustWorkspaceInheritedDependency = {
   "Cargo.toml":
     '[workspace]\nmembers = ["crate_a", "crate_b", "crate_c"]\n\n[workspace.dependencies]\ncrate_a = { path = "crate_a" }\n',
   "crate_a/Cargo.toml": '[package]\nname = "crate_a"\nversion = "0.1.0"\n',
@@ -509,7 +510,7 @@ const h15 = {
   "crate_c/src/lib.rs": 'pub fn greet() -> &\'static str { "decoy" }\n',
 };
 
-const w6 = {
+const swiftShadowedSelfMember = {
   "Widget.swift": src([
     "class Widget {",
     "    let name: String",
@@ -526,7 +527,7 @@ const w6 = {
   ]),
 };
 
-const w1 = {
+const tsOverloadCall = {
   "fmt.ts": src([
     "export function format(value: string): string;",
     "export function format(value: number): string;",
@@ -536,7 +537,7 @@ const w1 = {
   "use.ts": src(['import { format } from "./fmt";', 'export function run(): string { return format("hi"); }']),
 };
 
-const w2 = {
+const defaultExportClass = {
   "widget.ts": src([
     "export default class Widget {",
     "  static create(): Widget { return new Widget(); }",
@@ -558,7 +559,7 @@ const w2 = {
   ]),
 };
 
-const w4 = {
+const dynamicImportMember = {
   "lazy.ts": 'export function thing(): string { return "lazy"; }',
   "decoy.ts": 'export function thing(): string { return "decoy"; }',
   "use.ts": src([
@@ -569,13 +570,13 @@ const w4 = {
   ]),
 };
 
-const g5 = {
+const tsStaticCall = {
   "box.ts": src(["export class Box {", "  static create(): Box { return new Box(); }", "}"]),
   "decoy.ts": src(["export class Box {", '  static create(): string { return "decoy"; }', "}"]),
   "use.ts": src(['import { Box } from "./box";', "export function run(): Box {", "  return Box.create();", "}"]),
 };
 
-const h1 = {
+const tsEnumMemberByParameterType = {
   "status.ts": src(["export enum Status {", "  Active,", "  Inactive,", "}"]),
   "decoy.ts": src(["export enum Status {", "  Active,", "}"]),
   "use.ts": src([
@@ -586,7 +587,7 @@ const h1 = {
   ]),
 };
 
-const w16 = {
+const zigSelfMethod = {
   "shapes.zig": src([
     "pub const Circle = struct {",
     "    radius: f64,",
@@ -663,17 +664,17 @@ const uses = (fromFile: string, fromName: string): AgreementRow["edge"] => ({
 
 const rows: AgreementRow[] = [
   useRow(
-    "W9",
+    "C header prototype and definition",
     "C",
-    w9,
+    cPrototypeAndDefinition,
     { file: "run.c", line: 3, token: "compute" },
     { file: "util.h", line: 3 },
     calls("run.c", "run"),
   ),
   decoyRow(
-    "W9",
+    "C header prototype and definition",
     "C",
-    w9,
+    cPrototypeAndDefinition,
     { file: "run.c", line: 3, token: "compute" },
     { file: "extra.c", line: 1, token: "compute" },
     // run.c includes util.h, and the call resolves to that prototype.
@@ -682,55 +683,69 @@ const rows: AgreementRow[] = [
   ),
 
   useRow(
-    "W10",
+    "C++ using namespace",
     "C++",
-    w10,
+    cppUsingNamespace,
     { file: "main.cpp", line: 4, token: "add" },
     { file: "tools.hpp", line: 2 },
     calls("main.cpp", "main"),
   ),
   decoyRow(
-    "W10",
+    "C++ using namespace",
     "C++",
-    w10,
+    cppUsingNamespace,
     { file: "main.cpp", line: 4, token: "add" },
     { file: "tools.hpp", line: 6, token: "add" },
     "using namespace tools does not open namespace unused",
     calls("main.cpp", "main"),
   ),
   useRow(
-    "H7",
+    "C++ member call on a typed local",
     "C++",
-    h7,
+    cppTypedLocalReceiver,
     { file: "use.cpp", line: 4, token: "run" },
     { file: "box.hpp", line: 3 },
     calls("use.cpp", "callWithLocal"),
   ),
   decoyRow(
-    "H7",
+    "C++ member call on a typed local",
     "C++",
-    h7,
+    cppTypedLocalReceiver,
     { file: "use.cpp", line: 4, token: "run" },
     { file: "widget.hpp", line: 3, token: "run" },
     "the local is declared Box, not Widget",
     calls("use.cpp", "callWithLocal"),
   ),
 
-  useRow("H4", "C#", h4, { file: "n.cs", line: 9, token: "Value" }, { file: "n.cs", line: 3 }, calls("n.cs", "Use")),
-  decoyRow(
-    "H4",
+  useRow(
+    "C# member call on a constructed nested or generic local",
     "C#",
-    h4,
+    csharpConstructedLocal,
+    { file: "n.cs", line: 9, token: "Value" },
+    { file: "n.cs", line: 3 },
+    calls("n.cs", "Use"),
+  ),
+  decoyRow(
+    "C# member call on a constructed nested or generic local",
+    "C#",
+    csharpConstructedLocal,
     { file: "n.cs", line: 9, token: "Value" },
     { file: "other.cs", line: 3, token: "Value" },
     "the constructed local is Outer.Inner, not Other.Nested",
     calls("n.cs", "Use"),
   ),
-  useRow("H5", "C#", h5, { file: "pt.cs", line: 11, token: "Sum" }, { file: "pt.cs", line: 4 }, calls("pt.cs", "Use")),
-  decoyRow(
-    "H5",
+  useRow(
+    "C# using alias to a type",
     "C#",
-    h5,
+    csharpTypeAlias,
+    { file: "pt.cs", line: 11, token: "Sum" },
+    { file: "pt.cs", line: 4 },
+    calls("pt.cs", "Use"),
+  ),
+  decoyRow(
+    "C# using alias to a type",
+    "C#",
+    csharpTypeAlias,
     { file: "pt.cs", line: 11, token: "Sum" },
     { file: "other.cs", line: 3, token: "Sum" },
     "using PT = N.Point names N.Point, not N2.Other",
@@ -738,17 +753,17 @@ const rows: AgreementRow[] = [
   ),
 
   useRow(
-    "G3",
+    "Go package-qualified call",
     "Go",
-    g3,
+    goQualifiedCall,
     { file: "main/main.go", line: 6, token: "Square" },
     { file: "util/util.go", line: 3 },
     calls("main/main.go", "main"),
   ),
   decoyRow(
-    "G3",
+    "Go package-qualified call",
     "Go",
-    g3,
+    goQualifiedCall,
     { file: "main/main.go", line: 6, token: "Square" },
     { file: "other/other.go", line: 3, token: "Square" },
     "import u is example.com/proj/util, not package other",
@@ -757,9 +772,9 @@ const rows: AgreementRow[] = [
   // Go rejects an unexported name from another package, so the call is a proven non-reference
   // of util.hidden and must not be recorded as a calls edge.
   useRow(
-    "W11",
+    "Go unexported name from another package",
     "Go",
-    w11,
+    goUnexportedCrossPackage,
     { file: "main/main.go", line: 6, token: "hidden" },
     "not_found",
     calls("main/main.go", "main"),
@@ -769,9 +784,9 @@ const rows: AgreementRow[] = [
     },
   ),
   decoyRow(
-    "W11",
+    "Go unexported name from another package",
     "Go",
-    w11,
+    goUnexportedCrossPackage,
     { file: "main/main.go", line: 6, token: "hidden" },
     { file: "other/other.go", line: 3, token: "hidden" },
     "the selector is u.hidden, and u is package util, not other",
@@ -779,34 +794,34 @@ const rows: AgreementRow[] = [
   ),
 
   useRow(
-    "W5",
+    "same-package call without an import",
     "Java",
-    w5,
+    samePackageCall,
     { file: "p/Bar.java", line: 5, token: "hello" },
     { file: "p/Foo.java", line: 4 },
     calls("p/Bar.java", "direct"),
   ),
   decoyRow(
-    "W5",
+    "same-package call without an import",
     "Java",
-    w5,
+    samePackageCall,
     { file: "p/Bar.java", line: 5, token: "hello" },
     { file: "q/Foo.java", line: 4, token: "hello" },
     "Bar and Foo share package p; package q is not in scope",
     calls("p/Bar.java", "direct"),
   ),
   useRow(
-    "H6",
+    "member call on a typed parameter",
     "Java",
-    h6,
+    typedParameterReceiver,
     { file: "b/User.java", line: 4, token: "hello" },
     { file: "a/Greeter.java", line: 3 },
     calls("b/User.java", "use"),
   ),
   decoyRow(
-    "H6",
+    "member call on a typed parameter",
     "Java",
-    h6,
+    typedParameterReceiver,
     { file: "b/User.java", line: 4, token: "hello" },
     { file: "decoy/Greeter.java", line: 3, token: "hello" },
     "the parameter type is the imported a.Greeter, not package decoy",
@@ -814,17 +829,17 @@ const rows: AgreementRow[] = [
   ),
 
   useRow(
-    "W3",
+    "require() module member call",
     "JavaScript",
-    w3,
+    requireModuleMember,
     { file: "use.js", line: 2, token: "helper" },
     { file: "util.js", line: 1 },
     calls("use.js", "run"),
   ),
   decoyRow(
-    "W3",
+    "require() module member call",
     "JavaScript",
-    w3,
+    requireModuleMember,
     { file: "use.js", line: 2, token: "helper" },
     { file: "decoy.js", line: 1, token: "helper", occurrence: 2 },
     "require('./util') does not bind ./decoy",
@@ -834,9 +849,9 @@ const rows: AgreementRow[] = [
   // Box resolves to a class whose companion scope has no instanceHelper, so the invalid
   // type-name call is a proven non-reference and must not produce a calls edge.
   useRow(
-    "W20",
+    "Kotlin instance method through the type name",
     "Kotlin",
-    w20,
+    kotlinTypeNameInstanceCall,
     { file: "Box.kt", line: 15, token: "instanceHelper" },
     "not_found",
     calls("Box.kt", "useInvalid"),
@@ -846,97 +861,105 @@ const rows: AgreementRow[] = [
     },
   ),
   decoyRow(
-    "W20",
+    "Kotlin instance method through the type name",
     "Kotlin",
-    w20,
+    kotlinTypeNameInstanceCall,
     { file: "Box.kt", line: 15, token: "instanceHelper" },
     { file: "Box.kt", line: 11, token: "instanceHelper" },
     "the receiver is class Box, not class Decoy",
     calls("Box.kt", "useInvalid"),
   ),
   useRow(
-    "H2",
+    "Kotlin companion-object factory",
     "Kotlin",
-    h2,
+    kotlinCompanionFactory,
     { file: "w.kt", line: 9, token: "create" },
     { file: "w.kt", line: 3 },
     calls("w.kt", "use"),
   ),
   decoyRow(
-    "H2",
+    "Kotlin companion-object factory",
     "Kotlin",
-    h2,
+    kotlinCompanionFactory,
     { file: "w.kt", line: 9, token: "create" },
     { file: "w.kt", line: 7, token: "create" },
     "Widget.create() is the companion factory, not Gadget's instance method",
     calls("w.kt", "use"),
   ),
   useRow(
-    "H3",
+    "Kotlin extension function",
     "Kotlin",
-    h3,
+    kotlinExtensionFunction,
     { file: "w.kt", line: 8, token: "describe" },
     { file: "w.kt", line: 5 },
     calls("w.kt", "use"),
   ),
   decoyRow(
-    "H3",
+    "Kotlin extension function",
     "Kotlin",
-    h3,
+    kotlinExtensionFunction,
     { file: "w.kt", line: 8, token: "describe" },
     { file: "w.kt", line: 3, token: "describe" },
     "w is a Widget, so the call is the extension, not Gadget.describe",
     calls("w.kt", "use"),
   ),
   useRow(
-    "H14",
+    "Kotlin method beside a constructor property",
     "Kotlin",
-    h14,
+    kotlinConstructorProperty,
     { file: "G.kt", line: 9, token: "describe" },
     { file: "G.kt", line: 2 },
     calls("G.kt", "use"),
   ),
   decoyRow(
-    "H14",
+    "Kotlin method beside a constructor property",
     "Kotlin",
-    h14,
+    kotlinConstructorProperty,
     { file: "G.kt", line: 9, token: "describe" },
     { file: "G.kt", line: 5, token: "describe" },
     "g is a Gadget, not Other",
     calls("G.kt", "use"),
   ),
   useRow(
-    "F2",
+    "Kotlin explicit import beside a same-package class",
     "Kotlin",
-    f2KotlinExplicitImport,
+    kotlinExplicitImport,
     { file: "app/Use.kt", line: 3, token: "Foo" },
     { file: "other/Foo.kt", line: 2 },
     calls("app/Use.kt", "use"),
   ),
   decoyRow(
-    "F2",
+    "Kotlin explicit import beside a same-package class",
     "Kotlin",
-    f2KotlinExplicitImport,
+    kotlinExplicitImport,
     { file: "app/Use.kt", line: 3, token: "Foo" },
     { file: "app/Foo.kt", line: 2, token: "Foo" },
     "an explicit import beats a same-package class",
   ),
-  useRow("F3", "C++", f3CppAmbiguousOverload, { file: "use.cpp", line: 2, token: "f" }, "not_found", undefined, {
-    declaration: { file: "api.hpp", line: 1, token: "f" },
-  }),
+  useRow(
+    "C++ call that fits several overloads",
+    "C++",
+    cppAmbiguousOverload,
+    { file: "use.cpp", line: 2, token: "f" },
+    "not_found",
+    undefined,
+    {
+      declaration: { file: "api.hpp", line: 1, token: "f" },
+    },
+  ),
 
   useRow(
-    "W12",
+    "PHP same-namespace extends, trait use, and parent::",
     "PHP",
-    w12,
+    phpSameNamespacePeers,
     { file: "Worker.php", line: 4, token: "Base" },
     { file: "Base.php", line: 4 },
     { label: "extends", fromFile: "Worker.php", fromName: "Worker" },
   ),
   decoyRow(
-    "W12",
+    "PHP same-namespace extends, trait use, and parent::",
     "PHP",
-    w12,
+    phpSameNamespacePeers,
     { file: "Worker.php", line: 4, token: "Base" },
     { file: "Other.php", line: 4, token: "Base" },
     "Worker is in Acme\\App; Other\\Ns\\Base is a different namespace",
@@ -945,78 +968,90 @@ const rows: AgreementRow[] = [
   // `self` is a keyword receiver: goto resolves new self() to Child and the instantiates
   // edge is recorded, but the keyword is not a name reference of the class.
   useRow(
-    "H8",
+    "PHP new self() and new static()",
     "PHP",
-    h8,
+    phpNewSelf,
     { file: "box.php", line: 7, token: "self" },
     { file: "box.php", line: 6 },
     { label: "instantiates", fromFile: "box.php", fromName: "makeSelf" },
     { keywordReceiver: true },
   ),
   decoyRow(
-    "H8",
+    "PHP new self() and new static()",
     "PHP",
-    h8,
+    phpNewSelf,
     { file: "box.php", line: 7, token: "self" },
     { file: "decoy.php", line: 2, token: "Child" },
     "new self() binds the enclosing class in box.php, not the other file's Child",
     { label: "instantiates", fromFile: "box.php", fromName: "makeSelf" },
   ),
-  useRow("H9", "PHP", h9, { file: "box.php", line: 3, token: "x" }, { file: "box.php", line: 4 }),
-  decoyRow(
-    "H9",
+  useRow(
+    "PHP constructor-promoted property",
     "PHP",
-    h9,
+    phpPromotedProperty,
+    { file: "box.php", line: 3, token: "x" },
+    { file: "box.php", line: 4 },
+  ),
+  decoyRow(
+    "PHP constructor-promoted property",
+    "PHP",
+    phpPromotedProperty,
     { file: "box.php", line: 3, token: "x" },
     { file: "box.php", line: 7, token: "$x" },
     "$this inside Box reads Box's promoted property, not Other::$x",
   ),
 
-  useRow("W14", "Python", w14, { file: "main.py", line: 3, token: "W" }, { file: "pkg/widget.py", line: 1 }),
-  decoyRow(
-    "W14",
+  useRow(
+    "Python class named like its module",
     "Python",
-    w14,
+    pythonClassNamedLikeModule,
+    { file: "main.py", line: 3, token: "W" },
+    { file: "pkg/widget.py", line: 1 },
+  ),
+  decoyRow(
+    "Python class named like its module",
+    "Python",
+    pythonClassNamedLikeModule,
     { file: "main.py", line: 3, token: "W" },
     { file: "decoy_pkg/widget.py", line: 1, token: "Widget" },
     "from pkg import Widget binds pkg.widget.Widget, not decoy_pkg",
   ),
   useRow(
-    "W15",
+    "Python import pkg.mod then pkg.mod.foo()",
     "Python",
-    w15,
+    pythonDottedModuleImport,
     { file: "main.py", line: 4, token: "foo" },
     { file: "pkg/mod.py", line: 1 },
     calls("main.py", "run"),
   ),
   decoyRow(
-    "W15",
+    "Python import pkg.mod then pkg.mod.foo()",
     "Python",
-    w15,
+    pythonDottedModuleImport,
     { file: "main.py", line: 4, token: "foo" },
     { file: "other.py", line: 1, token: "foo" },
     "import pkg.mod does not bind other.py",
     calls("main.py", "run"),
   ),
   useRow(
-    "W17",
+    "same name through two star imports",
     "Python",
-    w17,
+    starImportCollision,
     { file: "main.py", line: 5, token: "helper" },
     { file: "aaa.py", line: 1 },
     calls("main.py", "run"),
   ),
   decoyRow(
-    "W17",
+    "same name through two star imports",
     "Python",
-    w17,
+    starImportCollision,
     { file: "main.py", line: 5, token: "helper" },
     { file: "decoy.py", line: 1, token: "helper" },
     "decoy.py is never star-imported; the later import rebinds helper to aaa",
     calls("main.py", "run"),
   ),
   useRow(
-    "W17",
+    "same name through two star imports",
     "Python",
     w17Receiver,
     { file: "main.py", line: 5, token: "m" },
@@ -1024,7 +1059,7 @@ const rows: AgreementRow[] = [
     calls("main.py", "run"),
   ),
   decoyRow(
-    "W17",
+    "same name through two star imports",
     "Python",
     w17Receiver,
     { file: "main.py", line: 5, token: "m" },
@@ -1032,27 +1067,33 @@ const rows: AgreementRow[] = [
     "the later star import rebinds X to b.X, so the receiver is b's class",
     calls("main.py", "run"),
   ),
-  useRow("H11", "Python", h11, { file: "b.py", line: 1, token: "helper" }, { file: "a.py", line: 1 }),
-  decoyRow(
-    "H11",
+  useRow(
+    "Python aliased import source name",
     "Python",
-    h11,
+    pythonAliasedImportSource,
+    { file: "b.py", line: 1, token: "helper" },
+    { file: "a.py", line: 1 },
+  ),
+  decoyRow(
+    "Python aliased import source name",
+    "Python",
+    pythonAliasedImportSource,
     { file: "b.py", line: 1, token: "helper" },
     { file: "decoy.py", line: 1, token: "helper" },
     "from a import helper names module a, not decoy",
   ),
   useRow(
-    "H12",
+    "super() through a proven base class",
     "Python",
-    h12,
+    superThroughProvenBase,
     { file: "derived.py", line: 5, token: "greet" },
     { file: "base.py", line: 2 },
     calls("derived.py", "greet"),
   ),
   decoyRow(
-    "H12",
+    "super() through a proven base class",
     "Python",
-    h12,
+    superThroughProvenBase,
     { file: "derived.py", line: 5, token: "greet" },
     { file: "unrelated.py", line: 2, token: "greet" },
     "Derived's base is Base, not Unrelated",
@@ -1060,138 +1101,150 @@ const rows: AgreementRow[] = [
   ),
 
   useRow(
-    "W13",
+    "Ruby Widget.new from another file",
     "Ruby",
-    w13,
+    rubyCrossFileNew,
     { file: "use.rb", line: 4, token: "render" },
     { file: "widget.rb", line: 2 },
     calls("use.rb", "run"),
   ),
   decoyRow(
-    "W13",
+    "Ruby Widget.new from another file",
     "Ruby",
-    w13,
+    rubyCrossFileNew,
     { file: "use.rb", line: 4, token: "render" },
     { file: "decoy.rb", line: 2, token: "render" },
     "use.rb requires widget.rb, not the unrequired decoy",
     calls("use.rb", "run"),
   ),
   useRow(
-    "W18",
+    "Ruby class nested in a module",
     "Ruby",
-    w18,
+    rubyNestedClassExport,
     { file: "worker.rb", line: 3, token: "Base" },
     { file: "real_base.rb", line: 1 },
     { label: "extends", fromFile: "worker.rb", fromName: "Worker" },
   ),
   decoyRow(
-    "W18",
+    "Ruby class nested in a module",
     "Ruby",
-    w18,
+    rubyNestedClassExport,
     { file: "worker.rb", line: 3, token: "Base" },
     { file: "outer.rb", line: 2, token: "Base" },
     "Outer::Base is nested and is not the bare constant real_base.rb exports",
     { label: "extends", fromFile: "worker.rb", fromName: "Worker" },
   ),
   useRow(
-    "G4",
+    "Ruby cross-file extends, include, and extend",
     "Ruby",
-    g4,
+    rubyCrossFileInheritance,
     { file: "ruby_worker.rb", line: 2, token: "RubyBase" },
     { file: "ruby_base.rb", line: 1 },
     { label: "extends", fromFile: "ruby_worker.rb", fromName: "RubyWorker" },
   ),
   decoyRow(
-    "G4",
+    "Ruby cross-file extends, include, and extend",
     "Ruby",
-    g4,
+    rubyCrossFileInheritance,
     { file: "ruby_worker.rb", line: 2, token: "RubyBase" },
     { file: "decoy_base.rb", line: 1, token: "RubyBase" },
     "ruby_worker.rb requires ruby_base.rb, not decoy_base.rb",
     { label: "extends", fromFile: "ruby_worker.rb", fromName: "RubyWorker" },
   ),
-  useRow("H10", "Ruby", h10, { file: "blocks.rb", line: 4, token: "item" }, { file: "blocks.rb", line: 3 }),
-  decoyRow(
-    "H10",
+  useRow(
+    "Ruby block parameter",
     "Ruby",
-    h10,
+    rubyBlockParameter,
+    { file: "blocks.rb", line: 4, token: "item" },
+    { file: "blocks.rb", line: 3 },
+  ),
+  decoyRow(
+    "Ruby block parameter",
+    "Ruby",
+    rubyBlockParameter,
     { file: "blocks.rb", line: 4, token: "item" },
     { file: "decoy.rb", line: 2, token: "item" },
     "the block parameter is lexical to blocks.rb; decoy.rb's item is a different binding",
   ),
 
-  useRow("W7", "Rust", w7, { file: "src/lib.rs", line: 3, token: "Circle" }, { file: "src/lib.rs", line: 1 }),
-  decoyRow(
-    "W7",
+  useRow(
+    "Rust super::Type in a type position",
     "Rust",
-    w7,
+    rustSuperType,
+    { file: "src/lib.rs", line: 3, token: "Circle" },
+    { file: "src/lib.rs", line: 1 },
+  ),
+  decoyRow(
+    "Rust super::Type in a type position",
+    "Rust",
+    rustSuperType,
     { file: "src/lib.rs", line: 3, token: "Circle" },
     { file: "src/decoy.rs", line: 1, token: "Circle" },
     "super::Circle is the parent module's struct, not decoy::Circle",
   ),
   useRow(
-    "W8",
+    "Rust workspace path dependency",
     "Rust",
-    w8,
+    rustWorkspacePathDependency,
     { file: "crate_b/src/main.rs", line: 2, token: "greet" },
     { file: "crate_a/src/lib.rs", line: 1 },
     uses("crate_b/src/main.rs", "main"),
   ),
   decoyRow(
-    "W8",
+    "Rust workspace path dependency",
     "Rust",
-    w8,
+    rustWorkspacePathDependency,
     { file: "crate_b/src/main.rs", line: 2, token: "greet" },
     { file: "crate_c/src/lib.rs", line: 1, token: "greet" },
     "crate_b depends on crate_a by path, not on crate_c",
     uses("crate_b/src/main.rs", "main"),
   ),
   useRow(
-    "G7",
+    "Rust impl method call",
     "Rust",
-    g7,
+    rustImplMethod,
     { file: "src/lib.rs", line: 9, token: "area" },
     { file: "src/lib.rs", line: 4 },
     calls("src/lib.rs", "total"),
   ),
   decoyRow(
-    "G7",
+    "Rust impl method call",
     "Rust",
-    g7,
+    rustImplMethod,
     { file: "src/lib.rs", line: 9, token: "area" },
     { file: "src/lib.rs", line: 7, token: "area" },
     "the parameter type is Circle, not Square",
     calls("src/lib.rs", "total"),
   ),
   useRow(
-    "H13",
+    "Rust glob import and struct-literal receiver",
     "Rust",
-    h13,
+    rustZigGlobAndStructLiteral,
     { file: "src/consumer.rs", line: 3, token: "square" },
     { file: "src/geometry.rs", line: 2 },
     calls("src/consumer.rs", "run"),
   ),
   decoyRow(
-    "H13",
+    "Rust glob import and struct-literal receiver",
     "Rust",
-    h13,
+    rustZigGlobAndStructLiteral,
     { file: "src/consumer.rs", line: 3, token: "square" },
     { file: "src/decoy.rs", line: 1, token: "square" },
     "use crate::geometry::util::* does not import crate::decoy::square",
     calls("src/consumer.rs", "run"),
   ),
   useRow(
-    "H15",
+    "Rust workspace-inherited dependency",
     "Rust",
-    h15,
+    rustWorkspaceInheritedDependency,
     { file: "crate_b/src/main.rs", line: 2, token: "greet" },
     { file: "crate_a/src/lib.rs", line: 1 },
     uses("crate_b/src/main.rs", "main"),
   ),
   decoyRow(
-    "H15",
+    "Rust workspace-inherited dependency",
     "Rust",
-    h15,
+    rustWorkspaceInheritedDependency,
     { file: "crate_b/src/main.rs", line: 2, token: "greet" },
     { file: "crate_c/src/lib.rs", line: 1, token: "greet" },
     "workspace = true inherits crate_a's path, not crate_c",
@@ -1199,42 +1252,42 @@ const rows: AgreementRow[] = [
   ),
 
   useRow(
-    "W6",
+    "Swift self member behind a shadowing parameter",
     "Swift",
-    w6,
+    swiftShadowedSelfMember,
     { file: "Widget.swift", line: 4, token: "name", occurrence: 1 },
     { file: "Widget.swift", line: 2 },
   ),
   decoyRow(
-    "W6",
+    "Swift self member behind a shadowing parameter",
     "Swift",
-    w6,
+    swiftShadowedSelfMember,
     { file: "Widget.swift", line: 4, token: "name", occurrence: 1 },
     { file: "Widget.swift", line: 8, token: "name" },
     "self in Widget.init is Widget, not Other",
   ),
 
   useRow(
-    "W1",
+    "TypeScript overload called from another file",
     "TypeScript",
-    w1,
+    tsOverloadCall,
     { file: "use.ts", line: 2, token: "format" },
     { file: "fmt.ts", line: 3 },
     calls("use.ts", "run"),
   ),
   decoyRow(
-    "W1",
+    "TypeScript overload called from another file",
     "TypeScript",
-    w1,
+    tsOverloadCall,
     { file: "use.ts", line: 2, token: "format" },
     { file: "decoy.ts", line: 1, token: "format" },
     "import { format } from './fmt' does not bind decoy.ts",
     calls("use.ts", "run"),
   ),
   useRow(
-    "W2",
+    "default-exported class member call",
     "TypeScript",
-    w2,
+    defaultExportClass,
     { file: "use.ts", line: 3, token: "render" },
     { file: "widget.ts", line: 3 },
     calls("use.ts", "run"),
@@ -1243,77 +1296,83 @@ const rows: AgreementRow[] = [
   useRow(
     "this-m",
     "TypeScript",
-    w2,
+    defaultExportClass,
     { file: "widget.ts", line: 4, token: "this" },
     { file: "widget.ts", line: 1 },
     undefined,
     { keywordReceiver: true },
   ),
   decoyRow(
-    "W2",
+    "default-exported class member call",
     "TypeScript",
-    w2,
+    defaultExportClass,
     { file: "use.ts", line: 3, token: "render" },
     { file: "decoy.ts", line: 3, token: "render" },
     "the default import binds ./widget, not ./decoy",
     calls("use.ts", "run"),
   ),
   useRow(
-    "W4",
+    "dynamic import() member call",
     "TypeScript",
-    w4,
+    dynamicImportMember,
     { file: "use.ts", line: 3, token: "thing" },
     { file: "lazy.ts", line: 1 },
     calls("use.ts", "run"),
   ),
   decoyRow(
-    "W4",
+    "dynamic import() member call",
     "TypeScript",
-    w4,
+    dynamicImportMember,
     { file: "use.ts", line: 3, token: "thing" },
     { file: "decoy.ts", line: 1, token: "thing" },
     "import('./lazy') does not bind ./decoy",
     calls("use.ts", "run"),
   ),
   useRow(
-    "G5",
+    "TypeScript static method call",
     "TypeScript",
-    g5,
+    tsStaticCall,
     { file: "use.ts", line: 3, token: "create" },
     { file: "box.ts", line: 2 },
     calls("use.ts", "run"),
   ),
   decoyRow(
-    "G5",
+    "TypeScript static method call",
     "TypeScript",
-    g5,
+    tsStaticCall,
     { file: "use.ts", line: 3, token: "create" },
     { file: "decoy.ts", line: 2, token: "create" },
     "import { Box } from './box' does not bind ./decoy",
     calls("use.ts", "run"),
   ),
-  useRow("H1", "TypeScript", h1, { file: "use.ts", line: 3, token: "Active" }, { file: "status.ts", line: 2 }),
-  decoyRow(
-    "H1",
+  useRow(
+    "TypeScript enum member through a parameter type",
     "TypeScript",
-    h1,
+    tsEnumMemberByParameterType,
+    { file: "use.ts", line: 3, token: "Active" },
+    { file: "status.ts", line: 2 },
+  ),
+  decoyRow(
+    "TypeScript enum member through a parameter type",
+    "TypeScript",
+    tsEnumMemberByParameterType,
     { file: "use.ts", line: 3, token: "Active" },
     { file: "decoy.ts", line: 2, token: "Active" },
     "import { Status } from './status' does not bind ./decoy",
   ),
 
   useRow(
-    "W16",
+    "Zig self.method() inside the struct",
     "Zig",
-    w16,
+    zigSelfMethod,
     { file: "shapes.zig", line: 4, token: "area" },
     { file: "shapes.zig", line: 3 },
     calls("shapes.zig", "describe"),
   ),
   decoyRow(
-    "W16",
+    "Zig self.method() inside the struct",
     "Zig",
-    w16,
+    zigSelfMethod,
     { file: "shapes.zig", line: 4, token: "area" },
     { file: "decoy.zig", line: 3, token: "area" },
     "self in Circle.describe is Circle, not Square",

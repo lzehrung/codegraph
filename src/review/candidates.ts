@@ -67,6 +67,7 @@ export async function collectReviewCandidateTests(input: {
       input.deletedFiles,
       input.appliedOptions.testPatterns,
       input.projectRoot,
+      input.appliedOptions.graph?.resolutionHints,
     ),
   )
     .map((candidate) => ({

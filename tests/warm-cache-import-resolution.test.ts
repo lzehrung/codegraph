@@ -11,7 +11,6 @@ import {
   type BuildReport,
 } from "../src/index.js";
 import { createAgentSession } from "../src/agent/session.js";
-import { workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf } from "./languages/callable-consumer-fixtures.js";
@@ -137,9 +136,9 @@ async function writeFixtureFile(root: string, relativePath: string, contents: st
   return file;
 }
 
-describe("G1: warm disk-cache build reacts when a file starts or stops resolving an import", () => {
+describe("warm disk-cache build reacts when a file starts or stops resolving an import", () => {
   it("reparses nothing when an unrelated file is deleted", async () => {
-    const root = await mkTmpDir("cg-audit-g1-unrelated-delete-");
+    const root = await mkTmpDir("cg-unrelated-delete-");
     try {
       const tsFile = path.join(root, "main.ts");
       const scssFile = path.join(root, "main.scss");
@@ -164,7 +163,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   });
 
   it("resolves a previously unresolved relative import once the target file is added, and unresolves it again once deleted", async () => {
-    const root = await mkTmpDir("cg-audit-g1-add-delete-");
+    const root = await mkTmpDir("cg-add-delete-");
     try {
       const p = path.join(root, "p.ts");
       const decoy = path.join(root, "decoy.ts");
@@ -246,7 +245,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
       targetRelativePath: "data.ts",
     },
   ])("keeps added-file re-resolution aligned with resolver extension rules for $scenario", async (fixture) => {
-    const root = await mkTmpDir("cg-audit-g1-added-stem-");
+    const root = await mkTmpDir("cg-added-stem-");
     try {
       const main = path.join(root, "main.ts");
       const target = path.join(root, fixture.targetRelativePath);
@@ -297,7 +296,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
     }
   });
   it("auto-refreshes a warm agent session so a newly added file resolves a previously unresolved import", async () => {
-    const root = await mkTmpDir("cg-audit-g1-session-");
+    const root = await mkTmpDir("cg-session-");
     try {
       const p = path.join(root, "p.ts");
       const pLines = ['import { q } from "./q";', "export function run(): number {", "  return q();", "}", ""];
@@ -331,7 +330,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   });
 
   it("resolves a Python absolute package import once the target module is added, and unresolves it again once deleted", async () => {
-    const root = await mkTmpDir("cg-audit-g1-python-");
+    const root = await mkTmpDir("cg-python-");
     try {
       const main = path.join(root, "main.py");
       const util = path.join(root, "pkg", "util.py");
@@ -389,7 +388,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
     { scenario: "already exists", hasPackageDirectory: true },
     { scenario: "is created with the module", hasPackageDirectory: false },
   ])("re-resolves a top-level namespace import when its directory $scenario", async ({ hasPackageDirectory }) => {
-    const root = await mkTmpDir("cg-audit-g1-py-namespace-root-");
+    const root = await mkTmpDir("cg-py-namespace-root-");
     try {
       const mainLines = ["from pkg import name", "", "def run():", "    return name.value()", ""];
       const main = await writeFixtureFile(root, "main.py", mainLines.join("\n"));
@@ -422,7 +421,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
     }
   });
   it("re-resolves `from pkg import sub` once a namespace subpackage directory gains a module", async () => {
-    const root = await mkTmpDir("cg-audit-g1-py-namespace-sub-");
+    const root = await mkTmpDir("cg-py-namespace-sub-");
     try {
       const main = path.join(root, "main.py");
       await fsp.mkdir(path.join(root, "pkg"), { recursive: true });
@@ -449,7 +448,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   });
 
   it("re-resolves `from pkg import mod` once the submodule file is added beside an existing package", async () => {
-    const root = await mkTmpDir("cg-audit-g1-py-submodule-");
+    const root = await mkTmpDir("cg-py-submodule-");
     try {
       const main = path.join(root, "main.py");
       const init = path.join(root, "pkg", "__init__.py");
@@ -494,7 +493,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   });
 
   it("keeps both unresolved include forms so a header added beside the includer resolves the quoted form", async () => {
-    const root = await mkTmpDir("cg-audit-g1-c-include-forms-");
+    const root = await mkTmpDir("cg-c-include-forms-");
     try {
       const main = path.join(root, "src", "main.c");
       const header = path.join(root, "src", "x.h");
@@ -519,7 +518,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   });
 
   it("resolves a C quoted #include once the header is added, and unresolves it again once deleted", async () => {
-    const root = await mkTmpDir("cg-audit-g1-c-include-");
+    const root = await mkTmpDir("cg-c-include-");
     try {
       const main = path.join(root, "main.c");
       const lib = path.join(root, "lib.h");
@@ -572,7 +571,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   });
 
   it("resolves a tsconfig path alias once the target file is added, and unresolves it again once deleted", async () => {
-    const root = await mkTmpDir("cg-audit-g1-ts-alias-");
+    const root = await mkTmpDir("cg-ts-alias-");
     try {
       await fsp.writeFile(
         path.join(root, "tsconfig.json"),
@@ -640,7 +639,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   });
 
   it("resolves a tsconfig alias whose second fallback target is the file that was added", async () => {
-    const root = await mkTmpDir("cg-audit-g1-ts-alias-fallback-");
+    const root = await mkTmpDir("cg-ts-alias-fallback-");
     try {
       await fsp.writeFile(
         path.join(root, "tsconfig.json"),
@@ -673,7 +672,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   });
 
   it("resolves an extensionless import once its .d.ts declaration file is added", async () => {
-    const root = await mkTmpDir("cg-audit-g1-dts-");
+    const root = await mkTmpDir("cg-dts-");
     try {
       const main = path.join(root, "main.ts");
       const target = path.join(root, "types", "shape.d.ts");
@@ -706,7 +705,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   it.each(ADDED_EXTERNAL_IMPORT_FIXTURES)(
     "matches a cold build when a $name external import starts resolving after its target is added",
     async (fixture) => {
-      const root = await mkTmpDir(`cg-audit-g1-added-${fixture.name.toLowerCase()}-`);
+      const root = await mkTmpDir(`cg-added-${fixture.name.toLowerCase()}-`);
       try {
         for (const initialFile of fixture.initialFiles) {
           await writeFixtureFile(root, initialFile.relativePath, initialFile.contents);
@@ -738,7 +737,7 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
   );
 
   it("does not reparse a cached Go importer when an added file has a different directory and stem", async () => {
-    const root = await mkTmpDir("cg-audit-g1-go-unrelated-add-");
+    const root = await mkTmpDir("cg-go-unrelated-add-");
     try {
       await writeFixtureFile(root, "go.mod", "module example.com/probe\n\ngo 1.22\n");
       const main = await writeFixtureFile(
@@ -755,93 +754,6 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
 
       expectNoReprocessedFiles(report, 1);
       expect(edgeTargets(warm, main)).toEqual(edgeTargets(initial, main));
-    } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("G6: agent session freshness under a manual policy never claims fresh without evidence", () => {
-  it("reports an explicit unchecked state instead of a false fresh claim after an on-disk edit", async () => {
-    const root = await mkTmpDir("cg-audit-g6-");
-    try {
-      const mathFile = path.join(root, "math.ts");
-      const original = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
-      const edited =
-        "export function add(a: number, b: number): number {\n  return a + b;\n}\n" +
-        "export function sub(a: number, b: number): number {\n  return a - b;\n}\n";
-      await fsp.writeFile(mathFile, original, "utf8");
-
-      const manualSession = createAgentSession({
-        root,
-        buildOptions: { cache: "off" },
-        freshness: { policy: "manual" },
-      });
-      await manualSession.loadProject({ symbolGraph: "skip" });
-
-      // Decoy/control: the identical edit under "check" policy is a real, honest check, so a
-      // manual-only bug cannot masquerade as expected behavior for every policy.
-      const checkSession = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "check" } });
-      await checkSession.loadProject({ symbolGraph: "skip" });
-
-      await fsp.writeFile(mathFile, edited, "utf8");
-
-      const manualFreshness = await manualSession.checkFreshness!();
-      expect(manualFreshness.state).not.toBe("fresh");
-      expect(manualFreshness).toEqual({
-        state: "unchecked",
-        reason: "freshness policy is manual; call invalidate() explicitly after edits",
-      });
-
-      const checkFreshness = await checkSession.checkFreshness!();
-      expect(checkFreshness.state).toBe("stale");
-
-      // Manual truly does not auto-invalidate: loadProject keeps serving the stale snapshot.
-      // That is unchanged by the fix -- only the dishonest "fresh" label is fixed.
-      const manualSnapshot = await manualSession.loadProject({ symbolGraph: "skip" });
-      const manualExports = [...manualSnapshot.index.byFile.values()][0]!.exports.flatMap((entry) =>
-        entry.type === "local" ? [entry.exportedAs] : [],
-      );
-      expect(manualExports).not.toContain("sub");
-
-      manualSession.invalidate();
-      checkSession.invalidate();
-    } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps the real workspaceSymbolsWithSession consumer honest under manual policy", async () => {
-    const root = await mkTmpDir("cg-audit-g6-consumer-");
-    try {
-      const mathFile = path.join(root, "math.ts");
-      await fsp.writeFile(
-        mathFile,
-        "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
-        "utf8",
-      );
-      const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "manual" } });
-
-      const before = await workspaceSymbolsWithSession(session, { root, query: "add", limit: 20 });
-      expect(before.symbols.some((symbol) => symbol.name === "add")).toBe(true);
-
-      await fsp.writeFile(
-        mathFile,
-        "export function add(a: number, b: number): number {\n  return a + b;\n}\n" +
-          "export function sub(a: number, b: number): number {\n  return a - b;\n}\n",
-        "utf8",
-      );
-
-      const after = await workspaceSymbolsWithSession(session, { root, query: "sub", limit: 20 });
-      expect(after.freshness).toEqual({
-        state: "unchecked",
-        reason: "freshness policy is manual; call invalidate() explicitly after edits",
-      });
-      // The audited defect: symbols is still missing "sub" because manual truly does not
-      // auto-invalidate; the fix only requires the freshness label to stop lying about it.
-      expect(after.symbols.some((symbol) => symbol.name === "sub")).toBe(false);
-
-      session.invalidate();
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

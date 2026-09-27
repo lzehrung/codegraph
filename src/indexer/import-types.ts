@@ -40,6 +40,8 @@ export type ImportBinding =
       moduleLevel?: boolean;
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
+      /** Copied from the C/C++ star include this binding was expanded from. */
+      includeForm?: CFamilyIncludeForm;
     }
   | {
       kind: "namespace";
@@ -60,6 +62,8 @@ export type ImportBinding =
       moduleLevel?: boolean;
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
+      /** Copied from the C/C++ star include this binding was expanded from. */
+      includeForm?: CFamilyIncludeForm;
     }
   | {
       kind: "star";

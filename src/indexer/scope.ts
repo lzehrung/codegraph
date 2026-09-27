@@ -4,7 +4,7 @@ import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { declarationKindToBindingKind } from "./declarations.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
-import { typescriptCallableRole } from "./ts-callables.js";
+import { typescriptCallableCandidatesInContainer, typescriptCallableRole } from "./ts-callables.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
@@ -344,20 +344,31 @@ export function buildScopeIndexFromSource(
         preserveExtraBinding(existing);
       }
       if (support.id === "ts" || support.id === "tsx") {
-        const collisions = existing.sameScopeFunctionBindings ?? [existing];
-        collisions.push(binding);
-        for (const collision of collisions) collision.sameScopeFunctionBindings = collisions;
-        const existingRole = existing.node ? typescriptCallableRole(existing.node) : "other";
-        const nextRole = typescriptCallableRole(nameNode);
-        if (existingRole === "implementation" && nextRole === "signature") {
-          preserveExtraBinding(binding);
-          return;
-        }
-        if (existingRole === "signature" && nextRole === "implementation") {
-          preserveExtraBinding(existing);
-        } else if (existingRole === "signature" && nextRole === "signature") {
-          preserveExtraBinding(binding);
-          return;
+        const candidates = existing.sameScopeFunctionBindings ?? [existing];
+        const collisions = typescriptCallableCandidatesInContainer(
+          candidates,
+          tree,
+          (candidate) => candidate.def!,
+          nameNode.startIndex,
+          nameNode.endIndex,
+        );
+        if (collisions.includes(existing)) {
+          let grouped: Binding[] = candidates;
+          if (collisions !== candidates) grouped = [...collisions];
+          grouped.push(binding);
+          for (const collision of grouped) collision.sameScopeFunctionBindings = grouped;
+          const existingRole = existing.node ? typescriptCallableRole(existing.node) : "other";
+          const nextRole = typescriptCallableRole(nameNode);
+          if (existingRole === "implementation" && nextRole === "signature") {
+            preserveExtraBinding(binding);
+            return;
+          }
+          if (existingRole === "signature" && nextRole === "implementation") {
+            preserveExtraBinding(existing);
+          } else if (existingRole === "signature" && nextRole === "signature") {
+            preserveExtraBinding(binding);
+            return;
+          }
         }
       }
     }

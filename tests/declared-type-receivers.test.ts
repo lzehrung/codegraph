@@ -5,10 +5,9 @@ import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefini
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 
 /**
- * Regression coverage for the "declared-type receiver proof" audit items:
- * H2 (Kotlin companion-object factory), H3 (Kotlin extension function), H4 (C# member call
- * on a constructed nested/generic local), H5 (C# `using` alias to a concrete type), H6 (member
- * call on an explicitly typed parameter across Java/Kotlin/C#), and H7 (C++ member call on an
+ * Declared-type receiver proof: Kotlin companion-object factories and extension functions, C#
+ * member calls on constructed nested or generic locals and through a `using` alias to a type,
+ * member calls on explicitly typed parameters (Java, Kotlin, C#), and C++ member calls on an
  * explicitly typed local/pointer). Each case asserts goToDefinition, findReferences (including
  * `referenceCoverage.state`), and a `buildSymbolGraphDetailed` `calls` edge, plus a decoy that
  * must NOT match.
@@ -43,13 +42,13 @@ function locate(text: string, needle: string, occurrence = 0): { line: number; c
   return { line: before.split("\n").length, column: idx - lastNewline };
 }
 
-describe("audit: declared-type receiver proof (H2-H7)", () => {
-  describe("H6: member call on an explicitly typed parameter", () => {
+describe("declared-type receiver proof", () => {
+  describe("member call on an explicitly typed parameter", () => {
     it("resolves Java void use(Greeter g) { g.hello(); } across files with an import", async () => {
       const declText = 'package a;\npublic class Greeter {\n  public String hello() { return "hi"; }\n}\n';
       const useText =
         "package b;\nimport a.Greeter;\npublic class User {\n  public String use(Greeter g) { return g.hello(); }\n}\n";
-      const p = await fixture("cg-h6-java-", { "a/Greeter.java": declText, "b/User.java": useText });
+      const p = await fixture("cg-java-", { "a/Greeter.java": declText, "b/User.java": useText });
 
       const goto = await goToDefinition(p.index, { file: p.f("b/User.java"), ...locate(useText, "hello", 0) });
       expect(goto.status).toBe("ok");
@@ -74,7 +73,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
       const declText = 'namespace A;\npublic class Greeter {\n  public string Hello() { return "hi"; }\n}\n';
       const useText =
         "using A;\nnamespace B;\npublic class User {\n  public string Use(Greeter g) { return g.Hello(); }\n}\n";
-      const p = await fixture("cg-h6-csharp-", { "a/Greeter.cs": declText, "b/User.cs": useText });
+      const p = await fixture("cg-csharp-", { "a/Greeter.cs": declText, "b/User.cs": useText });
 
       const goto = await goToDefinition(p.index, { file: p.f("b/User.cs"), ...locate(useText, "Hello", 0) });
       expect(goto.status).toBe("ok");
@@ -91,7 +90,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
     it("resolves Kotlin member calls through an imported typed parameter", async () => {
       const declText = 'package a\nclass Greeter {\n  fun hello(): String = "hi"\n}\n';
       const useText = "package b\nimport a.Greeter\nfun use(g: Greeter): String { return g.hello() }\n";
-      const p = await fixture("cg-h6-kotlin-", { "a/Greeter.kt": declText, "b/User.kt": useText });
+      const p = await fixture("cg-kotlin-", { "a/Greeter.kt": declText, "b/User.kt": useText });
 
       const goto = await goToDefinition(p.index, { file: p.f("b/User.kt"), ...locate(useText, "hello", 0) });
       expect(goto.status).toBe("ok");
@@ -118,7 +117,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
         "}",
         "",
       ].join("\n");
-      const p = await fixture("cg-h6-decoy-", { "P.java": text });
+      const p = await fixture("cg-decoy-", { "P.java": text });
       const goto = await goToDefinition(p.index, { file: p.f("P.java"), ...locate(text, "hello", 2) });
       expect(goto.status).toBe("not_found");
     });
@@ -133,18 +132,18 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
         "}",
         "",
       ].join("\n");
-      const p = await fixture("cg-h6-generic-decoy-", { "Box.java": text });
+      const p = await fixture("cg-generic-decoy-", { "Box.java": text });
       const goto = await goToDefinition(p.index, { file: p.f("Box.java"), ...locate(text, "hello", 1) });
       expect(goto.status).toBe("not_found");
     });
   });
 
-  describe("H7: C++ member call on an explicitly typed local/pointer", () => {
+  describe("C++ member call on an explicitly typed local/pointer", () => {
     it("resolves a stack-local receiver (Box b; b.run();)", async () => {
       const hpp = "class Box {\npublic:\n  int run();\n};\n";
       const cpp = '#include "box.hpp"\nint Box::run() { return 1; }\n';
       const use = '#include "box.hpp"\nint callWithLocal() {\n  Box b;\n  return b.run();\n}\n';
-      const p = await fixture("cg-h7-local-", { "box.hpp": hpp, "box.cpp": cpp, "use.cpp": use });
+      const p = await fixture("cg-local-", { "box.hpp": hpp, "box.cpp": cpp, "use.cpp": use });
 
       const goto = await goToDefinition(p.index, { file: p.f("use.cpp"), ...locate(use, "run", 0) });
       expect(goto.status).toBe("ok");
@@ -171,7 +170,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
       const hpp = "class Box {\npublic:\n  int run();\n};\n";
       const cpp = '#include "box.hpp"\nint Box::run() { return 1; }\n';
       const use = '#include "box.hpp"\nint callWithPointer(Box* raw) {\n  Box* p = raw;\n  return p->run();\n}\n';
-      const p = await fixture("cg-h7-pointer-", { "box.hpp": hpp, "box.cpp": cpp, "use.cpp": use });
+      const p = await fixture("cg-pointer-", { "box.hpp": hpp, "box.cpp": cpp, "use.cpp": use });
 
       const goto = await goToDefinition(p.index, { file: p.f("use.cpp"), ...locate(use, "run", 0) });
       expect(goto.status).toBe("ok");
@@ -185,7 +184,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
       const hpp = "class Box {\npublic:\n  int run();\n  static Box make();\n};\n";
       const cpp = '#include "box.hpp"\nint Box::run() { return 1; }\nBox Box::make() { return Box(); }\n';
       const use = '#include "box.hpp"\nint callWithAuto() {\n  auto b = Box::make();\n  return b.run();\n}\n';
-      const p = await fixture("cg-h7-auto-decoy-", { "box.hpp": hpp, "box.cpp": cpp, "use.cpp": use });
+      const p = await fixture("cg-auto-decoy-", { "box.hpp": hpp, "box.cpp": cpp, "use.cpp": use });
       const goto = await goToDefinition(p.index, { file: p.f("use.cpp"), ...locate(use, "run", 0) });
       expect(goto.status).toBe("not_found");
     });
@@ -208,7 +207,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
         "}",
         "",
       ].join("\n");
-      const p = await fixture("cg-h7-type-decoy-", { "use.cpp": text });
+      const p = await fixture("cg-type-decoy-", { "use.cpp": text });
       const goto = await goToDefinition(p.index, { file: p.f("use.cpp"), ...locate(text, "run", 4) });
       expect(goto.status).toBe("ok");
       // Resolves to Box's own prototype (line 3), never Widget's (line 7) or either
@@ -217,11 +216,11 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
     });
   });
 
-  describe("H2: Kotlin companion-object factory", () => {
+  describe("Kotlin companion-object factory", () => {
     it("resolves Widget.create() to the companion-object member", async () => {
       const text =
         "class Widget(val id: Int) {\n  companion object {\n    fun create(): Widget = Widget(0)\n  }\n}\nfun use(): Widget = Widget.create()\n";
-      const p = await fixture("cg-h2-companion-", { "w.kt": text });
+      const p = await fixture("cg-companion-", { "w.kt": text });
 
       const goto = await goToDefinition(p.index, { file: p.f("w.kt"), ...locate(text, "create", 1) });
       expect(goto.status).toBe("ok");
@@ -252,18 +251,18 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
         "fun use(g: Gadget): Gadget = g.create()",
         "",
       ].join("\n");
-      const p = await fixture("cg-h2-decoy-", { "w.kt": text });
+      const p = await fixture("cg-decoy-", { "w.kt": text });
       const goto = await goToDefinition(p.index, { file: p.f("w.kt"), ...locate(text, "create", 2) });
       expect(goto.status).toBe("ok");
       if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(7);
     });
   });
 
-  describe("H3: Kotlin extension function", () => {
+  describe("Kotlin extension function", () => {
     it("resolves w.describe() to fun Widget.describe() through a proven receiver", async () => {
       const text =
         'class Widget(val id: Int)\nfun Widget.describe(): String = "widget"\nfun use(): String {\n  val w = Widget(0)\n  return w.describe()\n}\n';
-      const p = await fixture("cg-h3-extension-", { "w.kt": text });
+      const p = await fixture("cg-extension-", { "w.kt": text });
 
       const goto = await goToDefinition(p.index, { file: p.f("w.kt"), ...locate(text, "describe", 1) });
       expect(goto.status).toBe("ok");
@@ -293,18 +292,18 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
         "}",
         "",
       ].join("\n");
-      const p = await fixture("cg-h3-decoy-", { "w.kt": text });
+      const p = await fixture("cg-decoy-", { "w.kt": text });
       const goto = await goToDefinition(p.index, { file: p.f("w.kt"), ...locate(text, "describe", 2) });
       expect(goto.status).toBe("ok");
       if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
     });
   });
 
-  describe("H4: C# member call on a constructed nested/generic local", () => {
+  describe("C# member call on a constructed nested/generic local", () => {
     it("resolves i.Value() for var i = new Outer.Inner();", async () => {
       const text =
         "public class Outer {\n  public class Inner {\n    public int Value() => 42;\n  }\n}\npublic class User {\n  public int Use() {\n    var i = new Outer.Inner();\n    return i.Value();\n  }\n}\n";
-      const p = await fixture("cg-h4-nested-", { "n.cs": text });
+      const p = await fixture("cg-nested-", { "n.cs": text });
 
       const goto = await goToDefinition(p.index, { file: p.f("n.cs"), ...locate(text, "Value", 1) });
       expect(goto.status).toBe("ok");
@@ -325,7 +324,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
     it("resolves b.Get() for var b = new Box<int>();", async () => {
       const text =
         "public class Box<T> {\n  public T Item = default!;\n  public T Get() => Item;\n}\npublic class User {\n  public int Use() {\n    var b = new Box<int>();\n    return b.Get();\n  }\n}\n";
-      const p = await fixture("cg-h4-generic-", { "g.cs": text });
+      const p = await fixture("cg-generic-", { "g.cs": text });
 
       const goto = await goToDefinition(p.index, { file: p.f("g.cs"), ...locate(text, "Get", 1) });
       expect(goto.status).toBe("ok");
@@ -352,18 +351,18 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
         "}",
         "",
       ].join("\n");
-      const p = await fixture("cg-h4-decoy-", { "n.cs": text });
+      const p = await fixture("cg-decoy-", { "n.cs": text });
       const goto = await goToDefinition(p.index, { file: p.f("n.cs"), ...locate(text, "Value", 2) });
       expect(goto.status).toBe("ok");
       if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
     });
   });
 
-  describe("H5: C# using alias to a concrete type", () => {
+  describe("C# using alias to a concrete type", () => {
     it("resolves p.Sum() for PT p = new PT(); given using PT = N.Point;", async () => {
       const text =
         "using PT = N.Point;\nnamespace N {\n  public class Point {\n    public int Sum() => 1;\n  }\n}\nnamespace N {\n  public class User {\n    public int Use() {\n      PT p = new PT();\n      return p.Sum();\n    }\n  }\n}\n";
-      const p = await fixture("cg-h5-alias-", { "pt.cs": text });
+      const p = await fixture("cg-alias-", { "pt.cs": text });
 
       const goto = await goToDefinition(p.index, { file: p.f("pt.cs"), ...locate(text, "Sum", 1) });
       expect(goto.status).toBe("ok");
@@ -384,7 +383,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
     it("control: a using namespace alias (using NS = N;) still resolves NS.Point", async () => {
       const text =
         "namespace N {\n  public class Point {\n    public int Sum() => 1;\n  }\n}\nusing NS = N;\nnamespace M {\n  public class User {\n    public int Use() {\n      NS.Point p = new NS.Point();\n      return p.Sum();\n    }\n  }\n}\n";
-      const p = await fixture("cg-h5-control-", { "pt.cs": text });
+      const p = await fixture("cg-control-", { "pt.cs": text });
       const goto = await goToDefinition(p.index, { file: p.f("pt.cs"), ...locate(text, "Sum", 1) });
       expect(goto.status).toBe("ok");
       if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
@@ -413,7 +412,7 @@ describe("audit: declared-type receiver proof (H2-H7)", () => {
         "}",
         "",
       ].join("\n");
-      const p = await fixture("cg-h5-decoy-", { "pt.cs": text });
+      const p = await fixture("cg-decoy-", { "pt.cs": text });
       const goto = await goToDefinition(p.index, { file: p.f("pt.cs"), ...locate(text, "Sum", 2) });
       expect(goto.status).toBe("ok");
       if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);

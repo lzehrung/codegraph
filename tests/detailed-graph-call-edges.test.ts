@@ -1,11 +1,12 @@
 /**
- * 2026-09-25 accuracy audit: F1 (cross-consumer agreement), G3 (Go qualified-call `calls` edge),
- * G4 (Ruby cross-file `extends`/`include`/`extend` edges), G5 (TS static-call `calls` edge).
+ * Detailed-graph edges that navigation already resolves: Go package-qualified calls, Ruby
+ * cross-file `extends`/`include`/`extend`, TypeScript static calls, and explicit imports beside
+ * star imports.
  *
  * Each fixture is asserted through `goToDefinition`, `findReferences`, and
  * `buildSymbolGraphDetailed` together via `tests/helpers/consumer-agreement.ts`, so a future fix
  * that makes one consumer disagree with the others fails here. The language spread proves
- * agreement holds for forms unrelated to G3-G5, across every language named in the assignment.
+ * agreement also holds for forms that were already correct.
  */
 import { describe, expect, it } from "vitest";
 import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
@@ -20,9 +21,9 @@ import {
 // asserting native-only behavior on a host that cannot run it.
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 
-nativeDescribe("G3: Go package-qualified call produces a calls edge", () => {
+nativeDescribe("Go package-qualified call produces a calls edge", () => {
   it("resolves u.Square() to the imported package function and records a calls edge", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-g3-basic-", {
+    const fixture = await buildConsumerAgreementFixture("cg-go-qualified-basic-", {
       "go.mod": "module example.com/proj\n\ngo 1.22\n",
       "util/util.go": "package util\n\nfunc Square(x float64) float64 { return x * x }\n",
       "main/main.go": 'package main\n\nimport u "example.com/proj/util"\n\nfunc main() {\n\t_ = u.Square(3.0)\n}\n',
@@ -41,7 +42,7 @@ nativeDescribe("G3: Go package-qualified call produces a calls edge", () => {
   });
 
   it("does not let a local variable shadowing the package alias resolve through the package", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-g3-decoy-", {
+    const fixture = await buildConsumerAgreementFixture("cg-go-qualified-decoy-", {
       "go.mod": "module example.com/proj\n\ngo 1.22\n",
       "util/util.go": "package util\n\nfunc Square(x float64) float64 { return x * x }\n",
       "main/local.go":
@@ -70,9 +71,9 @@ nativeDescribe("G3: Go package-qualified call produces a calls edge", () => {
   });
 });
 
-nativeDescribe("G4: Ruby cross-file class/include/extend produce detailed-graph edges", () => {
+nativeDescribe("Ruby cross-file class/include/extend produce detailed-graph edges", () => {
   it("records extends and mixin (include + extend) edges for cross-file targets goto resolves", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-g4-basic-", {
+    const fixture = await buildConsumerAgreementFixture("cg-ruby-inherit-basic-", {
       "ruby_base.rb": "class RubyBase\nend\n",
       "greetable.rb": 'module Greetable\n  def greet\n    "hi"\n  end\nend\n',
       "ruby_worker.rb":
@@ -118,9 +119,9 @@ nativeDescribe("G4: Ruby cross-file class/include/extend produce detailed-graph 
   });
 });
 
-nativeDescribe("G5: TypeScript static method call produces a calls edge", () => {
+nativeDescribe("TypeScript static method call produces a calls edge", () => {
   it("records a calls edge for Box.create() matching goToDefinition", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-g5-basic-", {
+    const fixture = await buildConsumerAgreementFixture("cg-ts-static-basic-", {
       "box.ts": "export class Box {\n  static create(): Box { return new Box(); }\n}\n",
       "use.ts": 'import { Box } from "./box";\nexport function run(): Box {\n  return Box.create();\n}\n',
     });
@@ -138,7 +139,7 @@ nativeDescribe("G5: TypeScript static method call produces a calls edge", () => 
   });
 
   it("never attributes an unbound global or an unimported same-named class to the call", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-g5-decoy-", {
+    const fixture = await buildConsumerAgreementFixture("cg-ts-static-decoy-", {
       "box.ts": "export class Box {\n  static create(): Box { return new Box(); }\n}\n",
       "decoy/box.ts": 'export class Box {\n  static create(): string { return "decoy"; }\n}\n',
       "use.ts":
@@ -172,9 +173,9 @@ nativeDescribe("G5: TypeScript static method call produces a calls edge", () => 
   });
 });
 
-nativeDescribe("G6: star-import expansion must not overwrite an explicit alias", () => {
+nativeDescribe("star-import expansion must not overwrite an explicit alias", () => {
   it("Java: an explicit single-type import beats a wildcard package import for the call edge", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-g6-java-", {
+    const fixture = await buildConsumerAgreementFixture("cg-java-", {
       "pkg/a/Foo.java": "package pkg.a;\n\npublic class Foo {\n    public int hit() {\n        return 1;\n    }\n}\n",
       "pkg/b/Foo.java": "package pkg.b;\n\npublic class Foo {\n    public int hit() {\n        return 2;\n    }\n}\n",
       "app/Main.java":
@@ -203,7 +204,7 @@ nativeDescribe("G6: star-import expansion must not overwrite an explicit alias",
   });
 
   it("Python: an explicit import written after a star import keeps last-wins for the call edge", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-g6-python-", {
+    const fixture = await buildConsumerAgreementFixture("cg-python-", {
       "a.py": "class Foo:\n    def hit(self):\n        return 1\n",
       "b.py": "class Foo:\n    def hit(self):\n        return 2\n",
       "main.py": "from a import *\nfrom b import Foo\n\n\ndef run():\n    return Foo().hit()\n",
@@ -230,7 +231,7 @@ nativeDescribe("G6: star-import expansion must not overwrite an explicit alias",
   });
 
   it("C#: two ambiguous `using` namespaces defining the same type produce no call edge to either", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-g6-cs-", {
+    const fixture = await buildConsumerAgreementFixture("cg-cs-", {
       "P/Thing.cs":
         "namespace P {\n  public class Thing {\n    public static int Hit() {\n      return 1;\n    }\n  }\n}\n",
       "Q/Thing.cs":
@@ -267,9 +268,9 @@ nativeDescribe("G6: star-import expansion must not overwrite an explicit alias",
   });
 });
 
-describe("Cross-consumer agreement spread: already-working forms", () => {
+describe("Cross-consumer agreement on forms that already worked", () => {
   it("Python: cross-file class inheritance", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-spread-py-", {
+    const fixture = await buildConsumerAgreementFixture("cg-spread-py-", {
       "base.py": "class Base:\n    def greet(self):\n        return 1\n",
       "derived.py":
         "from base import Base\n\n\nclass Derived(Base):\n    pass\n\n\ndef run():\n    d = Derived()\n    return d.greet()\n",
@@ -288,7 +289,7 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
   });
 
   it("Java: instance method call through a constructed local, cross-file", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-spread-java-", {
+    const fixture = await buildConsumerAgreementFixture("cg-spread-java-", {
       "com/example/Helper.java":
         "package com.example;\n\npublic class Helper {\n    public int compute() {\n        return 1;\n    }\n}\n",
       "com/example/use/Runner.java":
@@ -309,7 +310,7 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
   });
 
   it("C#: static method call through an explicit using, cross-file", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-spread-cs-", {
+    const fixture = await buildConsumerAgreementFixture("cg-spread-cs-", {
       "Helper.cs":
         "namespace Example {\n  public class Helper {\n    public static int Compute() {\n      return 1;\n    }\n  }\n}\n",
       "Runner.cs":
@@ -329,7 +330,7 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
   });
 
   it("Go: same-package unqualified receiver call (no package selector)", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-spread-go-", {
+    const fixture = await buildConsumerAgreementFixture("cg-spread-go-", {
       "go.mod": "module example.test/shapes\n\ngo 1.22\n",
       "shapes.go":
         "package shapes\n\ntype Circle struct {\n\tRadius float64\n}\n\nfunc (c Circle) Area() float64 {\n\treturn c.Radius * c.Radius\n}\n\n" +
@@ -349,7 +350,7 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
   });
 
   it("Rust: same-file self-dispatch to another impl method", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-spread-rust-", {
+    const fixture = await buildConsumerAgreementFixture("cg-spread-rust-", {
       "Cargo.toml": '[package]\nname = "demo"\nversion = "0.1.0"\n',
       "src/lib.rs":
         "pub struct Circle {\n    pub radius: f64,\n}\n\nimpl Circle {\n    pub fn area(&self) -> f64 {\n" +
@@ -368,8 +369,8 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
     }
   });
 
-  it("Ruby: cross-file extends (reused from G4, proving the same fixture generalizes)", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-spread-ruby-", {
+  it("Ruby: cross-file extends", async () => {
+    const fixture = await buildConsumerAgreementFixture("cg-spread-ruby-", {
       "ruby_base.rb": "class RubyBase\nend\n",
       "ruby_worker.rb": 'require_relative "ruby_base"\n\nclass RubyWorker < RubyBase\nend\n',
     });
@@ -388,7 +389,7 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
   });
 
   it("PHP: static call through an explicit use import, cross-file", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-spread-php-", {
+    const fixture = await buildConsumerAgreementFixture("cg-spread-php-", {
       "Helper.php":
         "<?php\nnamespace App;\n\nclass Helper {\n  public static function compute() {\n    return 1;\n  }\n}\n",
       "run.php": "<?php\nnamespace Consumer;\n\nuse App\\Helper;\n\nfunction run() {\n  return Helper::compute();\n}\n",
@@ -407,7 +408,7 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
   });
 
   it("C: quoted-include prototype resolves a cross-file call", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-spread-c-", {
+    const fixture = await buildConsumerAgreementFixture("cg-spread-c-", {
       "util.h": "#ifndef UTIL_H\n#define UTIL_H\nint compute(void);\n#endif\n",
       "util.c": '#include "util.h"\nint compute(void) {\n  return 1;\n}\n',
       "run.c": '#include "util.h"\nint run(void) {\n  return compute();\n}\n',
@@ -426,7 +427,7 @@ describe("Cross-consumer agreement spread: already-working forms", () => {
   });
 
   it("C++: method call through a proven parameter receiver, cross-file", async () => {
-    const fixture = await buildConsumerAgreementFixture("cg-audit-spread-cpp-", {
+    const fixture = await buildConsumerAgreementFixture("cg-spread-cpp-", {
       "box.hpp": "class Box {\npublic:\n  int run();\n};\n",
       "box.cpp": '#include "box.hpp"\nint Box::run() {\n  return 1;\n}\n',
       "use.cpp": '#include "box.hpp"\nint call(Box& box) {\n  return box.run();\n}\n',

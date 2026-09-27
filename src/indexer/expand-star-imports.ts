@@ -103,6 +103,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
               from: imp.from,
               resolved: imp.resolved,
               ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
+              ...(imp.includeForm ? { includeForm: imp.includeForm } : {}),
             }
           : {
               kind: "named",
@@ -112,6 +113,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
               resolved: imp.resolved,
               ...(namespace ? { cNamespace: namespace } : {}),
               ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
+              ...(imp.includeForm ? { includeForm: imp.includeForm } : {}),
             };
         const expandedImportKeyValue = expandedImportKey(expandedImport);
         if (!expandedImportKeyValue || expandedImportKeys.has(expandedImportKeyValue)) continue;

@@ -642,7 +642,9 @@ export function resolveImported(
     }
   }
 
-  if (support?.id === "python") {
+  // A named `from pkg import child` may load child as a submodule. A plain
+  // namespace import of pkg cannot gain child solely because child.py exists.
+  if (support?.id === "python" && imp.kind === "named" && imp.mechanism === "python") {
     const submodule = resolvePythonSubmoduleExact(targetFile, exportedName);
     if (submodule) return { namespace: submodule };
   }

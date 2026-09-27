@@ -16,7 +16,8 @@ import {
   loadWorkspaceConfig,
   type WorkspaceConfig,
 } from "../util/workspace.js";
-import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, normalizePath, normalizeResolutionHints } from "../util/paths.js";
+import type { CFamilyIncludeForm } from "../util/specifiers.js";
 import { assertSafeRevision } from "../util/git.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 const UNSAFE_BATCH_REQUEST_CHARACTERS = /[\0\r\n]/;
@@ -50,22 +51,78 @@ function buildDeletedImportCandidates(fromFile: string, spec: string, targetFile
   return new Set(candidates);
 }
 
+type DeletedImportMatchOptions = {
+  includeForm?: CFamilyIncludeForm;
+  projectRoot?: string;
+  resolutionHints?: readonly string[];
+};
+
 function matchesDeletedImportTarget(
   fromFile: string,
   spec: string,
   resolved: string | undefined,
   deletedFile: string,
+  options?: DeletedImportMatchOptions,
 ): boolean {
   if (resolved && fileIdentityKey(normalizePath(resolved)) === fileIdentityKey(deletedFile)) {
     return true;
   }
-  if (!spec.startsWith(".")) {
-    return false;
+  if (spec.startsWith(".")) {
+    const deletedKey = fileIdentityKey(deletedFile);
+    return [...buildDeletedImportCandidates(fromFile, spec, deletedFile)].some(
+      (candidate) => fileIdentityKey(candidate) === deletedKey,
+    );
   }
+  return cFamilyIncludeMatchesDeletedFile(fromFile, spec, deletedFile, options);
+}
+
+/**
+ * A deleted header is no longer on disk, so a rebuilt include resolves as external.
+ * Quoted includes still name the includer's sibling path, and angle includes still name
+ * a resolution-hint path. Walk those candidates in resolver order and accept the deleted
+ * file as the hit it was before removal. `includeForm` stays on the edge built from the
+ * import binding, so angle and quoted includes of one header do not collapse.
+ */
+function cFamilyIncludeMatchesDeletedFile(
+  fromFile: string,
+  spec: string,
+  deletedFile: string,
+  options?: DeletedImportMatchOptions,
+): boolean {
+  const includeForm = options?.includeForm;
+  if (includeForm !== "literal" && includeForm !== "angle") return false;
+  const inner =
+    includeForm === "angle" && spec.startsWith("<") && spec.endsWith(">") ? spec.slice(1, -1).trim() : spec.trim();
+  if (!inner || inner.includes("\0")) return false;
   const deletedKey = fileIdentityKey(deletedFile);
-  return [...buildDeletedImportCandidates(fromFile, spec, deletedFile)].some(
-    (candidate) => fileIdentityKey(candidate) === deletedKey,
-  );
+  const sameFile = (candidate: string): boolean => fileIdentityKey(normalizePath(candidate)) === deletedKey;
+  const existsAsFile = (candidate: string): boolean => {
+    try {
+      return fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  };
+  if (includeForm === "literal") {
+    const sibling = path.resolve(path.dirname(fromFile), inner);
+    if (sameFile(sibling)) return true;
+    if (existsAsFile(sibling)) return false;
+  }
+  const projectRoot = options?.projectRoot;
+  if (!projectRoot) return false;
+  for (const hint of normalizeResolutionHints([...(options?.resolutionHints ?? [])])) {
+    const baseDir = path.isAbsolute(hint) ? hint : path.resolve(projectRoot, hint);
+    if (!isFilePathWithinRoot(projectRoot, baseDir)) continue;
+    const candidate = path.resolve(baseDir, inner);
+    if (!isFilePathWithinRoot(projectRoot, candidate)) continue;
+    if (sameFile(candidate)) return true;
+    if (existsAsFile(candidate)) return false;
+  }
+  return false;
+}
+
+function importIncludeForm(binding: ImportBinding): CFamilyIncludeForm | undefined {
+  return "includeForm" in binding ? binding.includeForm : undefined;
 }
 
 function getImportResolvedPath(entry: Pick<ImportBinding, "resolved">): string | undefined {
@@ -125,12 +182,13 @@ export async function listDirectDeletedFileImporters(
   index: ProjectIndex,
   deletedFiles: readonly string[],
   projectRoot?: string,
+  resolutionHints?: readonly string[],
 ): Promise<DeletedFileImporter[]> {
   if (!deletedFiles.length) return [];
 
   const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
   const candidates = new Map<string, DeletedFileImporter>();
-  const importsByFile = new Map<FileId, Array<{ spec: string; resolved?: string }>>();
+  const importsByFile = new Map<FileId, Array<{ spec: string; resolved?: string; includeForm?: CFamilyIncludeForm }>>();
   const workspaceConfig = projectRoot ? await loadWorkspaceConfig(projectRoot) : undefined;
 
   for (const edge of index.graph.edges) {
@@ -142,19 +200,22 @@ export async function listDirectDeletedFileImporters(
     imports.push({
       spec: edge.raw,
       ...(edge.to.type === "file" ? { resolved: edge.to.path } : {}),
+      ...(edge.includeForm ? { includeForm: edge.includeForm } : {}),
     });
   }
 
   for (const mod of index.byFile.values()) {
-    const uniqueImports = new Map<string, { spec: string; resolved?: string }>();
+    const uniqueImports = new Map<string, { spec: string; resolved?: string; includeForm?: CFamilyIncludeForm }>();
     for (const entry of importsByFile.get(mod.file) ?? []) {
-      uniqueImports.set(`${entry.spec}::${entry.resolved ?? ""}`, entry);
+      uniqueImports.set(`${entry.spec}::${entry.resolved ?? ""}::${entry.includeForm ?? ""}`, entry);
     }
     for (const imp of mod.imports) {
       const resolved = getImportResolvedPath(imp);
-      uniqueImports.set(`${imp.from}::${resolved ?? ""}`, {
+      const includeForm = importIncludeForm(imp);
+      uniqueImports.set(`${imp.from}::${resolved ?? ""}::${includeForm ?? ""}`, {
         spec: imp.from,
         ...(resolved ? { resolved } : {}),
+        ...(includeForm ? { includeForm } : {}),
       });
     }
     for (const entry of uniqueImports.values()) {
@@ -164,7 +225,13 @@ export async function listDirectDeletedFileImporters(
           resolvedImportPath === deletedFile
             ? resolvedImportPath
             : await resolveDeletedAliasImportTarget(projectRoot, workspaceConfig, mod.file, entry.spec, deletedFile);
-        if (!matchesDeletedImportTarget(mod.file, entry.spec, resolvedAliasTarget, deletedFile)) {
+        if (
+          !matchesDeletedImportTarget(mod.file, entry.spec, resolvedAliasTarget, deletedFile, {
+            ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
+            ...(projectRoot ? { projectRoot } : {}),
+            ...(resolutionHints ? { resolutionHints } : {}),
+          })
+        ) {
           continue;
         }
         candidates.set(`${mod.file}::${deletedFile}`, {
@@ -183,10 +250,11 @@ export async function listDirectDeletedFileTestImporters(
   deletedFiles: readonly string[],
   testPatterns: string[] = [],
   projectRoot?: string,
+  resolutionHints?: readonly string[],
 ): Promise<CandidateTestFile[]> {
   const compiledPatterns = compileTestPatterns(testPatterns);
   const isIndexTestFile = createIndexTestFileMatcher(index, compiledPatterns, projectRoot);
-  return (await listDirectDeletedFileImporters(index, deletedFiles, projectRoot))
+  return (await listDirectDeletedFileImporters(index, deletedFiles, projectRoot, resolutionHints))
     .filter((candidate) => isIndexTestFile(candidate.file))
     .map((candidate) => ({
       file: candidate.file,
@@ -435,6 +503,7 @@ export async function collectDeletedImporterEdges(
   index: ProjectIndex,
   deletedFiles: readonly string[],
   projectRoot?: string,
+  resolutionHints?: readonly string[],
 ): Promise<Edge[]> {
   if (!deletedFiles.length) return [];
   const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
@@ -449,7 +518,12 @@ export async function collectDeletedImporterEdges(
           normalizedResolvedImportPath === deletedFile
             ? normalizedResolvedImportPath
             : await resolveDeletedAliasImportTarget(projectRoot, workspaceConfig, mod.file, imp.from, deletedFile);
-        const matchesDeletedFile = matchesDeletedImportTarget(mod.file, imp.from, resolvedAliasTarget, deletedFile);
+        const includeForm = importIncludeForm(imp);
+        const matchesDeletedFile = matchesDeletedImportTarget(mod.file, imp.from, resolvedAliasTarget, deletedFile, {
+          ...(includeForm ? { includeForm } : {}),
+          ...(projectRoot ? { projectRoot } : {}),
+          ...(resolutionHints ? { resolutionHints } : {}),
+        });
         if (!matchesDeletedFile) continue;
         const edge = edgeFromImportBinding(mod.file, { type: "file", path: deletedFile }, imp);
         edges.set(edgeKey(edge), edge);

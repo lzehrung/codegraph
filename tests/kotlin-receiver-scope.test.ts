@@ -5,19 +5,16 @@ import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefini
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 
 /**
- * Regression coverage for the Kotlin receiver-scope audit items:
- * W20 (an instance method invoked through the type name is invalid Kotlin and must not
- * resolve or count as a reference, while companion-object members still do) and H14 (member
- * call beside a referenced constructor property). Each case asserts goToDefinition,
+ * Kotlin receiver scope: an instance method invoked through the type name is invalid Kotlin and
+ * must not resolve or count as a reference, while companion-object members still do; a member
+ * call beside a referenced constructor property resolves. Each case asserts goToDefinition,
  * findReferences (including `referenceCoverage.state`), and `buildSymbolGraphDetailed`
  * `calls` edges where they apply, plus a decoy that must NOT match.
  *
- * H14 resolved on the integration branch before this work: the same-file shapes pass on
- * 0cfe0c42 and are locked in here (with and without a package declaration). Cross-file
- * same-package resolution was fixed by the earlier same-unit peers merge; the JVM
- * unnamed-package limit (files without a `package` clause are a single-file unit) is
- * documented and stays, so the two-default-package-file case must answer `not_found`
- * with `partial` reference coverage rather than claim `complete` over the missed use.
+ * The same-file constructor-property shapes are covered with and without a package
+ * declaration. The JVM unnamed-package limit (files without a `package` clause are a
+ * single-file unit) is documented and stays, so the two-default-package-file case must answer
+ * `not_found` with `partial` reference coverage rather than claim `complete` over the missed use.
  */
 
 const roots: string[] = [];
@@ -49,8 +46,8 @@ function locate(text: string, needle: string, occurrence = 0): { line: number; c
   return { line: before.split("\n").length, column: idx - lastNewline };
 }
 
-describe("audit: Kotlin receiver scope and constructor-property members (W20, H14)", () => {
-  describe("W20: a bare type-name receiver reaches only companion-object members", () => {
+describe("Kotlin receiver scope and constructor-property members", () => {
+  describe("a bare type-name receiver reaches only companion-object members", () => {
     const text = [
       "package p",
       "",
@@ -77,13 +74,13 @@ describe("audit: Kotlin receiver scope and constructor-property members (W20, H1
     ].join("\n");
 
     it("goToDefinition on Box.instanceHelper() is not_found (invalid Kotlin, instance member via type name)", async () => {
-      const p = await fixture("cg-w20-goto-", { "Box.kt": text });
+      const p = await fixture("cg-goto-", { "Box.kt": text });
       const goto = await goToDefinition(p.index, { file: p.f("Box.kt"), ...locate(text, "instanceHelper", 2) });
       expect(goto.status).toBe("not_found");
     });
 
     it("findReferences on the instance method excludes the invalid Box.instanceHelper() call and the decoy", async () => {
-      const p = await fixture("cg-w20-refs-", { "Box.kt": text });
+      const p = await fixture("cg-refs-", { "Box.kt": text });
       const callSite = locate(text, "instanceHelper", 2);
       const refs = await findReferences(p.index, { file: p.f("Box.kt"), ...locate(text, "instanceHelper", 0) });
       expect(refs.status).toBe("ok");
@@ -97,13 +94,13 @@ describe("audit: Kotlin receiver scope and constructor-property members (W20, H1
         }
         // `Box` resolves to a class whose static (companion) scope has no `instanceHelper`, and it
         // has no unresolved supertype, so the invalid call is a proven non-reference, not an
-        // unverified candidate: coverage stays complete (the F3 classified-receiver rule).
+        // unverified candidate: coverage stays complete (the classified-receiver coverage rule).
         expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
       }
     });
 
     it("the companion factory Box.create() still resolves, and the detailed graph records its call edge", async () => {
-      const p = await fixture("cg-w20-companion-", { "Box.kt": text });
+      const p = await fixture("cg-companion-", { "Box.kt": text });
       const goto = await goToDefinition(p.index, { file: p.f("Box.kt"), ...locate(text, "create", 2) });
       expect(goto.status).toBe("ok");
       if (goto.status === "ok") {
@@ -130,7 +127,7 @@ describe("audit: Kotlin receiver scope and constructor-property members (W20, H1
     });
 
     it("decoy: a same-named instance method and factory on an unrelated class are not matched", async () => {
-      const p = await fixture("cg-w20-decoy-", { "Box.kt": text });
+      const p = await fixture("cg-decoy-", { "Box.kt": text });
       const decoyHelperLine = locate(text, "instanceHelper", 1).line;
       const decoyCreateLine = locate(text, "create", 1).line;
 
@@ -152,7 +149,7 @@ describe("audit: Kotlin receiver scope and constructor-property members (W20, H1
     });
   });
 
-  describe("H14: member call beside a referenced constructor property", () => {
+  describe("member call beside a referenced constructor property", () => {
     const body = [
       "class Gadget(val name: String) {",
       '  fun describe(): String = "x:" + name',
@@ -206,16 +203,16 @@ describe("audit: Kotlin receiver scope and constructor-property members (W20, H1
     }
 
     it("same file without a package declaration: g.describe() resolves with refs complete and a calls edge", async () => {
-      await expectResolvedSameFile("cg-h14-default-", body);
+      await expectResolvedSameFile("cg-default-", body);
     });
 
     it("same file with a package declaration: g.describe() resolves with refs complete and a calls edge", async () => {
-      await expectResolvedSameFile("cg-h14-packaged-", "package p\n" + body);
+      await expectResolvedSameFile("cg-packaged-", "package p\n" + body);
     });
 
     it("decoy: the decoy class's own describe is not matched", async () => {
       const text = body;
-      const p = await fixture("cg-h14-decoy-", { "G.kt": text });
+      const p = await fixture("cg-decoy-", { "G.kt": text });
       const decoyLine = locate(text, "describe", 1).line;
 
       const goto = await goToDefinition(p.index, { file: p.f("G.kt"), ...locate(text, "describe", 2) });
@@ -234,7 +231,7 @@ describe("audit: Kotlin receiver scope and constructor-property members (W20, H1
         "\n",
       );
       const useText = ["fun use() {", '  val g = Gadget("y")', "  g.describe()", "}", ""].join("\n");
-      const p = await fixture("cg-h14-unnamed-", { "Gadget.kt": declText, "use.kt": useText });
+      const p = await fixture("cg-unnamed-", { "Gadget.kt": declText, "use.kt": useText });
 
       const goto = await goToDefinition(p.index, { file: p.f("use.kt"), ...locate(useText, "describe", 0) });
       expect(goto.status).toBe("not_found");

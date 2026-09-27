@@ -1,7 +1,8 @@
+import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
-import { fileIdentityKey } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
 import {
@@ -785,6 +786,34 @@ export function hasExpandedNamedImport(moduleIndex: ModuleIndex, targetFile: str
 
 const referenceCandidateCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
 
+/** A package import may expose a child only along its exact dotted module path. */
+export function pythonParentPackageNamespacePaths(
+  moduleIndex: ModuleIndex,
+  definitionFile: string,
+): Array<{ namespace: string; importBinding: ImportBinding }> {
+  const file = normalizePath(definitionFile);
+  const basename = path.posix.basename(file);
+  if (!file.endsWith(".py") && !file.endsWith(".pyi")) return [];
+  const moduleStem =
+    basename === "__init__.py" || basename === "__init__.pyi"
+      ? path.posix.dirname(file)
+      : file.slice(0, -path.posix.extname(file).length);
+  const paths: Array<{ namespace: string; importBinding: ImportBinding }> = [];
+  for (const imp of moduleIndex.imports) {
+    if (imp.kind !== "namespace" || imp.mechanism !== "python" || typeof imp.resolved !== "string") continue;
+    const target = normalizePath(imp.resolved);
+    const targetName = path.posix.basename(target);
+    const initializer = targetName === "__init__.py" || targetName === "__init__.pyi";
+    if (!initializer && (target.endsWith(".py") || target.endsWith(".pyi"))) continue;
+    const packageDirectory = initializer ? path.posix.dirname(target) : target;
+    const child = path.posix.relative(packageDirectory, moduleStem);
+    if (!child || child.startsWith("..") || path.posix.isAbsolute(child)) continue;
+    const boundName = imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS;
+    paths.push({ namespace: boundName + "." + child.replaceAll("/", "."), importBinding: imp });
+  }
+  return paths;
+}
+
 function referenceCandidateCacheKey(index: ProjectIndex, def: SymbolDef, exportedNames: readonly string[]): string {
   const normalizeIdentifier =
     supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
@@ -1022,6 +1051,15 @@ export function getCachedReferenceCandidateFiles(
     }
   }
 
+  // A plain package import does not prove its child's attribute, but a same-name use
+  // through that package must be checked before coverage can claim completeness.
+  if (languageId === "python" && !def.isMember) {
+    for (const moduleIndex of index.byFile.values()) {
+      if (pythonParentPackageNamespacePaths(moduleIndex, def.file).length) {
+        candidates.set(fileIdentityKey(moduleIndex.file), moduleIndex.file);
+      }
+    }
+  }
   const sorted = [...candidates.values()].sort((left, right) => left.localeCompare(right));
   cache.set(key, sorted);
   return sorted;

@@ -20,7 +20,7 @@ import {
   supportsReceiverMemberNavigation,
 } from "../util/member-access-tables.js";
 import { cppCallableShapeForNode } from "./cpp-callables.js";
-import { typescriptCollapsedOverloadCandidates } from "./ts-callables.js";
+import { typescriptCallableContainerKey, typescriptCollapsedOverloadCandidates } from "./ts-callables.js";
 import {
   effectiveExplicitBinding,
   isExpandedStarBinding,
@@ -68,7 +68,6 @@ import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
 import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./php-namespace-symbols.js";
-import { resolvePythonSubmoduleExact } from "../util/resolution/python.js";
 import {
   cjsRequireValueBinding,
   memberContainerForDefinition,
@@ -669,16 +668,7 @@ export async function resolveMemberAccessDefinition(params: {
         const memberName = sliceText(subProp, source);
         if (base?.kind === "namespace") {
           if (!isGoExportedMemberName(sup.id, memberName)) return null;
-          const hit = resolveExport(index, base.file, memberName, { allowLocalFallback: false });
-          if (hit) return hit;
-          // A resolved package/namespace file with no matching export may still have an
-          // unimported submodule of that exact name, mirroring the same fallback `resolveImported`
-          // already applies for a direct import binding.
-          if (sup.id === "python") {
-            const submodule = resolvePythonSubmoduleExact(base.file, memberName);
-            if (submodule) return { kind: "namespace", file: submodule };
-          }
-          return null;
+          return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
           if (sup.id === "java" || sup.id === "csharp") {
@@ -1763,6 +1753,55 @@ async function resolveMemberDefinitionForBase(
   );
 }
 
+function typescriptMergedInterfaceMemberCandidates(
+  locals: readonly SymbolDef[],
+  member: string,
+  receiverDef: SymbolDef,
+  container: SyntaxNodeLike,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
+  predicate: ((local: SymbolDef) => boolean) | undefined,
+): SymbolDef[] {
+  const matches = findDirectLocalsWithinNode(locals, member, container, targetContext, normalizeIdentifier, predicate);
+  if (!isJsTsLanguage(targetContext.sup.id) || container.type !== "interface_declaration") return matches;
+
+  const receiverStart = receiverDef.range.start.index ?? 0;
+  const receiverEnd = receiverDef.range.end.index ?? receiverStart;
+  const receiverContainerKey = typescriptCallableContainerKey(targetContext.tree, receiverStart, receiverEnd);
+  const seenBodies = new Set<string>();
+  const appendMembers = (interfaceDeclaration: SyntaxNodeLike): void => {
+    const body = interfaceDeclaration.childForFieldName("body");
+    if (!body) return;
+    const bodyKey = typescriptCallableContainerKey(targetContext.tree, body.startIndex, body.endIndex);
+    if (seenBodies.has(bodyKey)) return;
+    seenBodies.add(bodyKey);
+    for (const candidate of findDirectLocalsWithinNode(
+      locals,
+      member,
+      interfaceDeclaration,
+      targetContext,
+      normalizeIdentifier,
+      predicate,
+    )) {
+      if (!matches.includes(candidate)) matches.push(candidate);
+    }
+  };
+
+  const normalizedReceiverName = normalizeIdentifier(receiverDef.localName);
+  for (const local of locals) {
+    if (normalizeIdentifier(local.localName) !== normalizedReceiverName) continue;
+    const start = local.range.start.index;
+    if (start === undefined) continue;
+    const end = local.range.end.index ?? start;
+    if (typescriptCallableContainerKey(targetContext.tree, start, end) !== receiverContainerKey) continue;
+    const nameNode = targetContext.tree.rootNode.descendantForIndex(start, end);
+    const interfaceDeclaration = nameNode.parent;
+    if (interfaceDeclaration?.type !== "interface_declaration") continue;
+    appendMembers(interfaceDeclaration);
+  }
+  return matches;
+}
+
 async function findReceiverMemberDefinition(
   index: ProjectIndex,
   locals: readonly SymbolDef[],
@@ -1778,15 +1817,15 @@ async function findReceiverMemberDefinition(
     memberScope === "any"
       ? undefined
       : (local: SymbolDef) => matchesReceiverMemberScope(local, memberScope, targetContext, container);
-  const containerMatches = findDirectLocalsWithinNode(
+  const allReceiverMatches = typescriptMergedInterfaceMemberCandidates(
     locals,
     member,
+    receiverDef,
     container,
     targetContext,
     normalizeIdentifier,
     memberPredicate,
   );
-  const allReceiverMatches = [...containerMatches];
   if (targetContext.sup.id === "csharp" || targetContext.sup.id === "swift") {
     const shared = await findSharedOwnerMemberDefinitions({
       index,

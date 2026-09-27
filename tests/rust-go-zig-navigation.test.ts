@@ -17,9 +17,9 @@ function columnOf(line: string, token: string, last = false): number {
   return (last ? line.lastIndexOf(token) : line.indexOf(token)) + 1;
 }
 
-describe("Rust super::Type wrong-target navigation (W7)", () => {
+describe("Rust super::Type navigation", () => {
   it("resolves super::Circle to the parent module's struct, never to the use site, keeping an unrelated decoy declaration precise", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-w7-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-"));
     try {
       const lib = [
         "pub mod util {",
@@ -61,7 +61,7 @@ describe("Rust super::Type wrong-target navigation (W7)", () => {
   });
 
   it("includes the super:: use as a reference when the struct is declared before its use", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-w7-refs-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-refs-"));
     try {
       const lib = [
         "pub struct Circle { pub radius: f64 }",
@@ -89,9 +89,9 @@ describe("Rust super::Type wrong-target navigation (W7)", () => {
   });
 });
 
-describe("Rust workspace path dependency (W8)", () => {
+describe("Rust workspace path dependency", () => {
   it("resolves use crate_a::greet from crate_b's Cargo.toml path dependency, excluding an unrelated crate_c with the same function name", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-w8-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-"));
     try {
       const a = 'pub fn greet() -> &\'static str { "hi" }\n';
       const c = 'pub fn greet() -> &\'static str { "decoy" }\n'; // decoy: same name, not a dependency of crate_b
@@ -139,9 +139,9 @@ describe("Rust workspace path dependency (W8)", () => {
   });
 });
 
-describe("Go unexported cross-package access (W11)", () => {
+describe("Go unexported cross-package access", () => {
   it("rejects goto/references/calls-edge for an unexported cross-package selector while same-package peer and exported access keep working", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-w11-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-"));
     try {
       const util =
         "package util\n\nfunc Square(x float64) float64 { return x * x }\n\nfunc hidden() int { return 2 }\n";
@@ -211,7 +211,7 @@ describe("Go unexported cross-package access (W11)", () => {
 
 describe("Go receiver methods across packages", () => {
   it("agrees on hidden and exported Go receiver calls across navigation, references, and graph", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-go-receiver-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-go-receiver-"));
     try {
       const pkg = [
         "package pkg",
@@ -335,7 +335,7 @@ describe("Go receiver methods across packages", () => {
   });
 
   it.each(["v := &pkg.T{}", "var v pkg.T"])("resolves %s in detailed calls", async (binding) => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-go-typed-receiver-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-go-typed-receiver-"));
     try {
       const main = [
         "package main",
@@ -384,9 +384,9 @@ describe("Go receiver methods across packages", () => {
   });
 });
 
-describe("Zig self.method() references (W16)", () => {
+describe("Zig self.method() references", () => {
   it("includes a same-container self.method() call and a cross-file instance call in references, keeping a same-named method on another struct separate", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-w16-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-"));
     try {
       const shapes =
         "pub const Circle = struct {\n" +
@@ -467,9 +467,9 @@ describe("Zig self.method() references (W16)", () => {
   });
 });
 
-describe("Rust/Zig honest fixes (H13)", () => {
+describe("Rust and Zig glob imports and struct-literal receivers", () => {
   it("resolves a bare name through a glob import across a nested inline module, excluding an unrelated sibling module's same-named function", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-h13-glob-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-glob-"));
     try {
       const geometry = "pub mod util {\n    pub fn square(x: f64) -> f64 { x * x }\n}\n";
       const decoy = "pub fn square(x: f64) -> f64 { x + x }\n"; // decoy: unrelated module, must not be conflated
@@ -502,7 +502,7 @@ describe("Rust/Zig honest fixes (H13)", () => {
   });
 
   it("resolves a struct-literal receiver's method, excluding a same-named method on a different struct", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-h13-litrecv-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-litrecv-"));
     try {
       const src = [
         "pub struct Circle { pub radius: f64 }",
@@ -532,7 +532,7 @@ describe("Rust/Zig honest fixes (H13)", () => {
   });
 
   it("resolves a bin target's own-crate-name import to its library crate", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-h13-owncrate-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-owncrate-"));
     try {
       const geometryRs =
         "pub struct Circle { pub radius: f64 }\n" +
@@ -568,7 +568,7 @@ describe("Rust/Zig honest fixes (H13)", () => {
   });
 
   it("resolves a qualified Zig struct-literal receiver's method, excluding a same-named method in another file", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-h13-ziglit-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ziglit-"));
     try {
       const shapes =
         "pub const Circle = struct {\n" +
