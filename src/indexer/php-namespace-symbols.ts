@@ -19,6 +19,7 @@ import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js"
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { definitionIdentityKey } from "./reference-context.js";
+import type { Binding } from "./scope-types.js";
 
 /**
  * Absolute PHP class/trait/interface spellings for `name` at `node`, in PHP lookup order.
@@ -234,6 +235,60 @@ export function phpReferenceRoleMatchesKind(node: SyntaxNodeLike, kind: SymbolKi
   if (role === "class") return PHP_CLASS_LIKE_KINDS.has(kind);
   if (role === "function") return kind === SymbolKind.Function;
   return kind === SymbolKind.Variable;
+}
+
+/** Resolve a PHP role collision from same-scope bindings or module constants. */
+export function resolvePhpSameScopeRoleDefinition(
+  index: ProjectIndex,
+  moduleEntry: ModuleIndex,
+  source: string,
+  tree: SyntaxTreeLike,
+  node: SyntaxNodeLike,
+  name: string,
+  binding: Binding,
+): SymbolDef | null {
+  const role = inferPhpQualifiedReferenceImportType(node) ?? "const";
+  if (findPhpImportAlias(moduleEntry.imports, name, role)) return null;
+  const symbols = phpNamespaceSymbolIndexFor(index);
+  if (!symbols) return null;
+  const candidates = canonicalPhpReferenceNames(
+    name,
+    source,
+    tree,
+    node,
+    role === "const" ? undefined : { imports: moduleEntry.imports, role },
+  );
+  for (const candidateName of candidates) {
+    const key = role === "const" ? phpConstantQualifiedKey(candidateName) : foldPhpIdentifierCase(candidateName);
+    let found: SymbolDef | null = null;
+    for (const local of moduleEntry.locals) {
+      if (local.isMember || !phpReferenceRoleMatchesKind(node, local.kind)) continue;
+      if (role === "const") {
+        // PHP const declarations are indexed as locals but not lexical scope bindings.
+        if (local.localName !== name) continue;
+      } else {
+        let inScope = false;
+        for (let current: Binding | undefined = binding; current; current = current.earlierSameScope) {
+          if (
+            current.def?.start.index === local.range.start.index &&
+            current.def?.end.index === local.range.end.index
+          ) {
+            inScope = true;
+            break;
+          }
+        }
+        if (!inScope) continue;
+      }
+      const canonical = symbols.canonicalByDefinition.get(definitionIdentityKey(local));
+      if (!canonical) continue;
+      const localKey = role === "const" ? phpConstantQualifiedKey(canonical) : foldPhpIdentifierCase(canonical);
+      if (localKey !== key) continue;
+      if (found && definitionIdentityKey(found) !== definitionIdentityKey(local)) return null;
+      found = local;
+    }
+    if (found) return found;
+  }
+  return null;
 }
 
 /** Verify a class candidate proven visible through imports also names this exact PHP class. */

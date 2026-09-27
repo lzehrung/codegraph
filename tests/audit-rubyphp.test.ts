@@ -334,6 +334,51 @@ describe("Ruby and PHP audit fixes", () => {
     expect(interfaceRefs.references.map((reference) => reference.range.start.line)).not.toContain(4);
   });
 
+  it("resolves same-file PHP function and constant names despite a colliding class", async () => {
+    const source = [
+      "<?php",
+      "namespace SameNs;",
+      "function Base(): string { return 'fn'; }",
+      "const Base = 'const';",
+      "class Base {}",
+      "function call(): string { return Base(); }",
+      "function readConst(): string { return Base; }",
+      "class Only {}",
+      "function missingCall(): mixed { return Only(); }",
+      "function missingConst(): mixed { return Only; }",
+      "",
+    ].join("\n");
+    const { root, index } = await project("cg-audit-php-same-file-roles-", { "same.php": source });
+    const file = fileIn(root, "same.php");
+    const call = await goToDefinition(index, { file, ...at(source, "return Base();", "Base") });
+    const constant = await goToDefinition(index, { file, ...at(source, "return Base;", "Base") });
+    expect([call.status, constant.status]).toEqual(["ok", "ok"]);
+    if (call.status !== "ok" || constant.status !== "ok") return;
+    expect(call.definition.range.start.line).toBe(3);
+    expect(constant.definition.range.start.line).toBe(4);
+    for (const phrase of ["return Only();", "return Only;"]) {
+      const missing = await goToDefinition(index, { file, ...at(source, phrase, "Only") });
+      expect(missing.status, phrase).toBe("not_found");
+    }
+
+    const [functionRefs, constRefs] = await Promise.all([
+      findReferences(index, { file, ...at(source, "function Base", "Base") }),
+      findReferences(index, { file, ...at(source, "const Base", "Base") }),
+    ]);
+    expect(functionRefs.status).toBe("ok");
+    expect(constRefs.status).toBe("ok");
+    if (functionRefs.status !== "ok" || constRefs.status !== "ok") return;
+    expect(functionRefs.references.map((reference) => reference.range.start.line)).toEqual([3, 6]);
+    expect(constRefs.references.map((reference) => reference.range.start.line)).toEqual([4, 7]);
+
+    const graph = await buildSymbolGraphDetailed(index);
+    expect(
+      edgeBetween(graph, functionNode(graph, "same.php", "call"), functionNode(graph, "same.php", "Base"), "calls"),
+    ).toBe(true);
+    const missingCaller = functionNode(graph, "same.php", "missingCall");
+    expect(graph.edges.some((edge) => edge.from === missingCaller && edge.label === "calls")).toBe(false);
+  });
+
   it("resolves PHP bare constant fetches and calls only through imports of their own role", async () => {
     const { root, index, declarations, functionOnly, constOnly } = await phpRoleImportProject();
     const wrongConstant = await goToDefinition(index, {

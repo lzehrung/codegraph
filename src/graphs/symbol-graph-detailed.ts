@@ -35,6 +35,7 @@ import {
   phpReferenceRoleMatchesKind,
   resolveIndexedPhpClassReference,
   resolvePhpExplicitImport,
+  resolvePhpSameScopeRoleDefinition,
 } from "../indexer/php-namespace-symbols.js";
 import {
   csharpLookupName,
@@ -520,7 +521,9 @@ export async function buildSymbolGraphDetailed(
           ) {
             return null;
           }
-          if (sup.id === "php" && local && !phpReferenceRoleMatchesKind(node, local.kind)) return null;
+          if (sup.id === "php" && local && !phpReferenceRoleMatchesKind(node, local.kind)) {
+            return resolvePhpSameScopeRoleDefinition(index, moduleEntry, src, tree, node, lookupName, binding);
+          }
           return local ?? null;
         }
         if (sup.id === "cpp") {

@@ -57,6 +57,7 @@ import {
   phpReferenceRoleMatchesKind,
   resolveIndexedPhpClassReference,
   resolvePhpExplicitImport,
+  resolvePhpSameScopeRoleDefinition,
 } from "./php-namespace-symbols.js";
 import {
   buildIndexedCandidateCoverage,
@@ -383,6 +384,11 @@ export async function goToDefinition(
     }
 
     if (sup.id === "php") {
+      // A declaration names itself even when an unrelated namespace uses the same spelling.
+      const declaration = mod.locals.find(
+        (local) => local.range.start.index === node.startIndex && local.range.end.index === node.endIndex,
+      );
+      if (declaration) return okGoToResult(index, declaration, { resolution: "exact", confidence: "high" });
       const role = phpImportType ?? "const";
       const binding = findPhpImportAlias(mod.imports, name, role);
       const alias = binding ? resolvePhpExplicitImport(index, binding, role) : null;
@@ -453,6 +459,10 @@ export async function goToDefinition(
       return { status: "not_found", reason: "No matching PHP class" };
     }
     if (sup.id === "php" && local && !phpReferenceRoleMatchesKind(node, local.kind)) {
+      const sameScope = closestBinding
+        ? resolvePhpSameScopeRoleDefinition(index, mod, source, tree, node, lookupName, closestBinding)
+        : null;
+      if (sameScope) return okGoToResult(index, sameScope, { resolution: "exact", confidence: "high" });
       return { status: "not_found", reason: "No matching PHP symbol role" };
     }
     if (local) {
