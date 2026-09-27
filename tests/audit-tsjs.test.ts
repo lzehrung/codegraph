@@ -14,6 +14,8 @@ import {
   type SymbolGraph,
 } from "../src/index.js";
 import { closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
+import { collectLocalsAndExportsFromSource } from "../src/indexer.js";
+import { supportForFile } from "../src/languages.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
@@ -571,6 +573,44 @@ describe("TypeScript and JavaScript accuracy audit", () => {
       }
     },
   );
+
+  it("records direct CommonJS function values in native and no-native extraction without marking ESM exports", async () => {
+    const cjsSource = "module.exports = function thing() {};\n";
+    const esmSource = "export function exports() {}\n";
+    const fixture = await project({ "cjs.js": cjsSource, "esm.js": esmSource });
+    try {
+      const cjsFile = fixture.file("cjs.js");
+      const esmFile = fixture.file("esm.js");
+      const support = supportForFile(cjsFile)!;
+      const modes = [
+        {
+          name: "native",
+          cjs: fixture.index.byFile.get(fileIdentityKey(cjsFile)),
+          esm: fixture.index.byFile.get(fileIdentityKey(esmFile)),
+        },
+        {
+          name: "no-native",
+          cjs: collectLocalsAndExportsFromSource(cjsFile, cjsSource, support, [], { nativeMode: "off" }),
+          esm: collectLocalsAndExportsFromSource(esmFile, esmSource, support, [], { nativeMode: "off" }),
+        },
+      ];
+      for (const { name, cjs, esm } of modes) {
+        expect(
+          cjs?.exports.some(
+            (entry) =>
+              entry.type === "local" && entry.exportedAs === "exports" && entry.mechanism === "cjs-module-value",
+          ),
+          name,
+        ).toBe(true);
+        expect(
+          esm?.exports.some((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value"),
+          name,
+        ).toBe(false);
+      }
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
 
   it("preserves a direct CommonJS class value across a reopened disk cache", async () => {
     const widget = [

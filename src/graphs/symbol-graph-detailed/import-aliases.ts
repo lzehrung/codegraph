@@ -1,4 +1,4 @@
-import type { ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "../../indexer/types.js";
+import type { ExportEntry, ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "../../indexer/types.js";
 import type { ImportBinding } from "../../indexer/types.js";
 import type { Binding, ScopeIndex } from "../../indexer/scope-types.js";
 import { phpNamedImportRole } from "../../indexer/import-types.js";
@@ -140,7 +140,10 @@ export function buildImportAliasMaps(
     } else if (imp.kind === "default") {
       const defaultExport = resolveExportFrom(targetFile, "default");
       const fallbackExport = isJsTsLanguage(languageId)
-        ? undefined
+        ? targetModule.exports.find(
+            (entry): entry is Extract<ExportEntry, { type: "local" }> =>
+              entry.type === "local" && entry.exportedAs === "exports" && entry.mechanism === "cjs-module-value",
+          )?.target
         : targetModule.exports.find((entry) => entry.type === "local")?.target;
       const raw = defaultExport ?? fallbackExport;
       const container = raw ? memberContainerForDefinition(index, raw) : undefined;

@@ -270,7 +270,10 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
     // Go's unicode_digit is Nd only; a non-decimal number character (No, e.g. "½") is not a
     // valid identifier continuation.
     expect(parseGoImportAlias('import a\u00bd "github.com/acme/pkg"')).toBeNull();
-    expect(edgeKey(externalEdge)).toBe("C:/repo/src/main.ts|external:react|react|1");
+    // Edges that differ only in type-only status or include form must not merge.
+    expect(edgeKey({ ...externalEdge })).toBe(edgeKey(externalEdge));
+    expect(edgeKey({ ...externalEdge, typeOnly: false })).not.toBe(edgeKey(externalEdge));
+    expect(edgeKey({ ...fileEdge, includeForm: "angle" })).not.toBe(edgeKey({ ...fileEdge, includeForm: "literal" }));
     expect(compareEdges(fileEdge, externalEdge)).toBeLessThan(0);
     expect(compareEdges(fileEdge, laterFileEdge)).toBeLessThan(0);
     expect(toRelativeEdge("C:/repo", fileEdge)).toEqual({

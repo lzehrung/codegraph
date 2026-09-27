@@ -75,6 +75,10 @@ const JS_FALLBACK_CJS_FUNCTION_PATTERN = new RegExp(
   String.raw`(?:^|[;\n\r])\s*(?:exports|module\.exports)\.(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*=\s*(function\b|\([^)]*\)\s*=>)`,
   "gu",
 );
+const JS_FALLBACK_CJS_MODULE_FUNCTION_PATTERN = new RegExp(
+  String.raw`(?:^|[;\n\r])\s*module\.exports\s*=\s*(?:async\s+)?(?:function\b\s*\*?\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})?\s*\(|\([^)]*\)\s*=>|${ECMASCRIPT_IDENTIFIER_SOURCE}\s*=>)`,
+  "gu",
+);
 const JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN = new RegExp(
   String.raw`(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*:\s*(function\b|\([^)]*\)\s*=>)`,
   "gu",
@@ -371,6 +375,7 @@ function appendJsLikeRegexFallbackExports(
   JS_FALLBACK_EXPORT_ASSIGN_PATTERN.lastIndex = 0;
   JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN.lastIndex = 0;
   JS_FALLBACK_CJS_FUNCTION_PATTERN.lastIndex = 0;
+  JS_FALLBACK_CJS_MODULE_FUNCTION_PATTERN.lastIndex = 0;
   JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN.lastIndex = 0;
   const reDecl = JS_FALLBACK_DECLARATION_PATTERN;
   const reDefault = JS_FALLBACK_DEFAULT_PATTERN;
@@ -379,6 +384,7 @@ function appendJsLikeRegexFallbackExports(
   const reReexportNs = JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN;
   const reStar = /\bexport\s*\*\s*from\s*("|')([^"']*)\1/gu;
   const reCjsFn = JS_FALLBACK_CJS_FUNCTION_PATTERN;
+  const reCjsModuleFn = JS_FALLBACK_CJS_MODULE_FUNCTION_PATTERN;
   const reCjsObjFn = JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN;
   const moduleExportsObject = /module\.exports\s*=\s*\{([^}]*)\}/su;
   let match: RegExpExecArray | null;
@@ -497,6 +503,25 @@ function appendJsLikeRegexFallbackExports(
     if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
       exports.push({ type: "local", exportedAs, target: local });
     }
+  }
+
+  while ((match = reCjsModuleFn.exec(maskedSource))) {
+    if (exports.some((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value")) continue;
+    const name = match[1];
+    const rhsStart = match[0].indexOf("=", match[0].indexOf("exports")) + 1;
+    let startIndex = match.index + rhsStart;
+    while (/\s/u.test(maskedSource[startIndex] ?? "")) startIndex++;
+    if (name) startIndex = match.index + match[0].lastIndexOf(name);
+    const before = source.slice(0, startIndex);
+    const pos = { line: before.split("\n").length, column: startIndex - before.lastIndexOf("\n"), index: startIndex };
+    const target: SymbolDef = {
+      file,
+      localName: "exports",
+      kind: SymbolKind.Function,
+      range: { start: pos, end: pos },
+    };
+    locals.push(target);
+    exports.push({ type: "local", exportedAs: "exports", target, mechanism: "cjs-module-value" });
   }
 
   const moduleExportsObjMatch = moduleExportsObject.exec(maskedSource);
@@ -1116,7 +1141,13 @@ export function collectLocalsAndExportsFromSource(
         );
         const sym = existing ?? buildSymbolDef(exportedAs, SymbolKind.Function, range, nameNode ?? fnNode);
         if (!existing) locals.push(sym);
-        exports.push({ type: "local", exportedAs, target: sym });
+        const directModuleValue = exportedAs === "exports" && !!map["mod"] && !map["prop"];
+        exports.push({
+          type: "local",
+          exportedAs,
+          target: sym,
+          ...(directModuleValue ? { mechanism: "cjs-module-value" as const } : {}),
+        });
         continue;
       }
       if (map["default"]) {
