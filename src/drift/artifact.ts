@@ -3,6 +3,7 @@ import path from "node:path";
 import { getHotspots } from "../graphs/hotspots.js";
 import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
 import type { Edge, Graph } from "../types.js";
+import { edgeKey } from "../util/graph-edges.js";
 import { isPlainRecord } from "../util/guards.js";
 import { normalizePath } from "../util/paths.js";
 import { countFilesByLanguage } from "./languages.js";
@@ -94,21 +95,24 @@ function parseGraphJson(value: unknown): PortableGraphJson {
     ) {
       continue;
     }
-    const typeOnly = typeof edge.typeOnly === "boolean" ? edge.typeOnly : undefined;
-    const typeOnlyField = typeOnly !== undefined ? { typeOnly } : {};
+    const metadata: Pick<Edge, "typeOnly" | "includeForm"> = {};
+    if (typeof edge.typeOnly === "boolean") metadata.typeOnly = edge.typeOnly;
+    if (edge.includeForm === "literal" || edge.includeForm === "angle" || edge.includeForm === "macro") {
+      metadata.includeForm = edge.includeForm;
+    }
     if (edge.to.type === "file" && typeof edge.to.path === "string") {
       fileEdges.push({
         from: normalizePath(edge.from),
         raw: edge.raw,
         to: { type: "file", path: normalizePath(edge.to.path) },
-        ...typeOnlyField,
+        ...metadata,
       });
     } else if (edge.to.type === "external" && typeof edge.to.name === "string") {
       fileEdges.push({
         from: normalizePath(edge.from),
         raw: edge.raw,
         to: { type: "external", name: edge.to.name },
-        ...typeOnlyField,
+        ...metadata,
       });
     }
   }
@@ -134,11 +138,6 @@ function edgeTarget(edge: Edge): string {
   return `external:${edge.to.name}`;
 }
 
-function edgeKey(edge: Edge): string {
-  const kind = edge.typeOnly ? "type-only" : "runtime";
-  return `${edge.from}\0${edge.raw}\0${edgeTarget(edge)}\0${kind}`;
-}
-
 function graphEdges(edges: readonly Edge[]): ArchitectureGraphEdge[] {
   return edges
     .map((edge) => ({
@@ -147,6 +146,7 @@ function graphEdges(edges: readonly Edge[]): ArchitectureGraphEdge[] {
       to: edgeTarget(edge),
       raw: edge.raw,
       ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+      ...(edge.includeForm ? { includeForm: edge.includeForm } : {}),
     }))
     .sort((left, right) => left.key.localeCompare(right.key));
 }

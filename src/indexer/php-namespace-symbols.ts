@@ -164,7 +164,7 @@ export type PhpNamespaceSymbolIndex = {
   classes: Map<string, SymbolDef[]>;
   functions: Map<string, SymbolDef[]>;
   consts: Map<string, SymbolDef[]>;
-  namesByKind: Map<string, string[]>;
+  functionNames: string[];
   /** Definition identity key -> canonical qualified name without a leading `\\`. */
   canonicalByDefinition: Map<string, string>;
   /** Files explicitly excluded by Composer without another autoload mapping. */
@@ -314,8 +314,8 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
   const classes = new Map<string, SymbolDef[]>();
   const functions = new Map<string, SymbolDef[]>();
   const consts = new Map<string, SymbolDef[]>();
-  const namesByKind = new Map<string, string[]>();
-  const seenByKind = new Map<string, Set<string>>();
+  const functionNames: string[] = [];
+  const seenFunctionNames = new Set<string>();
   const canonicalByDefinition = new Map<string, string>();
   const composerExcludedFiles = new Set<string>();
   const composerAutoloadByImport: PhpNamespaceSymbolIndex["composerAutoloadByImport"] = new WeakMap();
@@ -376,21 +376,14 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
       canonicalByDefinition.set(cacheKey, canonical);
       const folded = foldPhpIdentifierCase(canonical);
       if (PHP_CLASS_LIKE_KINDS.has(local.kind)) pushPhpNamespaceSymbol(classes, folded, local);
-      else if (local.kind === SymbolKind.Function) pushPhpNamespaceSymbol(functions, folded, local);
-      else if (local.kind === SymbolKind.Variable)
+      else if (local.kind === SymbolKind.Function) {
+        pushPhpNamespaceSymbol(functions, folded, local);
+        if (!seenFunctionNames.has(folded)) {
+          seenFunctionNames.add(folded);
+          functionNames.push(canonical);
+        }
+      } else if (local.kind === SymbolKind.Variable)
         pushPhpNamespaceSymbol(consts, phpConstantQualifiedKey(canonical), local);
-      let names = namesByKind.get(local.kind);
-      let seen = seenByKind.get(local.kind);
-      if (!names || !seen) {
-        names = [];
-        seen = new Set();
-        namesByKind.set(local.kind, names);
-        seenByKind.set(local.kind, seen);
-      }
-      if (!seen.has(folded)) {
-        seen.add(folded);
-        names.push(canonical);
-      }
     }
   }
 
@@ -398,7 +391,7 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
     classes,
     functions,
     consts,
-    namesByKind,
+    functionNames,
     canonicalByDefinition,
     composerExcludedFiles,
     composerAutoloadByImport,

@@ -15,6 +15,7 @@ import {
   starImportPrecedence,
 } from "../../indexer/star-import-precedence.js";
 import { supportForFileWithoutHeaderSample } from "../../languages.js";
+import { isJsTsLanguage } from "../../languages/js-family.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 
 export type ImportAliasMaps = {
@@ -138,12 +139,15 @@ export function buildImportAliasMaps(
       }
     } else if (imp.kind === "default") {
       const defaultExport = resolveExportFrom(targetFile, "default");
-      const fallbackExport = targetModule.exports.find((entry) => entry.type === "local")?.target;
+      const fallbackExport = isJsTsLanguage(languageId)
+        ? undefined
+        : targetModule.exports.find((entry) => entry.type === "local")?.target;
       const raw = defaultExport ?? fallbackExport;
       const container = raw ? memberContainerForDefinition(index, raw) : undefined;
       const def = container ?? raw;
       if (def) aliasToTargetDef.set(imp.local, def);
-      aliasToTargetModule.set(imp.local, targetFile);
+      // An ES default binding names one value, never the enclosing module namespace.
+      if (!isJsTsLanguage(languageId)) aliasToTargetModule.set(imp.local, targetFile);
     } else if (imp.kind === "namespace") {
       const classValue = imp.mechanism === "cjs" ? cjsRequireValueBinding(index, targetFile) : undefined;
       if (classValue) {

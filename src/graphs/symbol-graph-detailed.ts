@@ -254,7 +254,11 @@ export async function buildSymbolGraphDetailed(
     let targetDef: SymbolDef | null = null;
     for (const segment of [...names].reverse()) {
       if (!file) break;
-      const resolved = resolveExportNamespace(file, segment);
+      const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
+      const resolved =
+        languageId && isJsTsLanguage(languageId)
+          ? resolveExport(index, file, segment, { allowLocalFallback: false })
+          : resolveExportNamespace(file, segment);
       if (!resolved) {
         targetDef = null;
         break;
@@ -270,7 +274,11 @@ export async function buildSymbolGraphDetailed(
 
     if (targetDef) return targetDef;
     const languageId = supportForFileWithoutHeaderSample(file ?? startFile, index.languageExtensions)?.id;
-    if (languageId === "c" || languageId === "cpp" || (languageId && languageHasDeclarationVisibility(languageId)))
+    if (
+      languageId === "c" ||
+      languageId === "cpp" ||
+      (languageId && (isJsTsLanguage(languageId) || languageHasDeclarationVisibility(languageId)))
+    )
       return null;
 
     const fileKey = typeof file === "string" ? fileIdentityKey(file) : null;

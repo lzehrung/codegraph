@@ -4,12 +4,16 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildSymbolGraphDetailed,
+  buildProjectIndexIncremental,
   findReferences,
   goToDefinition,
   listSymbols,
   type FindReferencesResult,
+  type BuildReport,
+  type ProjectIndex,
   type SymbolGraph,
 } from "../src/index.js";
+import { closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
@@ -382,6 +386,244 @@ describe("TypeScript and JavaScript accuracy audit", () => {
     }
   });
 
+  it("does not bind a default-exported function to a nested class with the same name", async () => {
+    const widget = [
+      "function Widget() {}",
+      "export default Widget;",
+      "function unrelated() {",
+      "  class Widget { static method() {} }",
+      "  return Widget;",
+      "}",
+      "",
+    ].join("\n");
+    const use = ['import Widget from "./widget";', "function run() { Widget.method(); }", ""].join("\n");
+    const fixture = await project({ "widget.js": widget, "use.js": use });
+    try {
+      const result = await goToDefinition(fixture.index, {
+        file: fixture.file("use.js"),
+        line: 2,
+        column: columnOf(use, 2, "method"),
+      });
+      expect(result.status).toBe("not_found");
+
+      const refs = await findReferences(fixture.index, {
+        file: fixture.file("widget.js"),
+        line: 4,
+        column: columnOf(widget, 4, "method"),
+      });
+      expect(refs.status).toBe("ok");
+      expect(referenceSites(refs)).not.toContain("use.js:2");
+
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(callTargetIds(graph, "run")).not.toContain(
+        fixture.file("widget.js") + "::method::" + tokenIndex(widget, 4, "method"),
+      );
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['export { helper } from "./helper";', "helper"],
+    ['export * from "./helper";', "helper"],
+  ])("keeps require as a namespace for a default class with %s", async (reexport, member) => {
+    const widget = ["export default class Widget { static method() {} }", reexport, ""].join("\n");
+    const helper = "export function helper() {}\n";
+    const use = [
+      'const W = require("./widget");',
+      "function run() {",
+      "  W.method();",
+      `  return W.${member}();`,
+      "}",
+      "",
+    ].join("\n");
+    const fixture = await project({ "widget.js": widget, "helper.js": helper, "use.js": use });
+    try {
+      const wrongMember = await goToDefinition(fixture.index, {
+        file: fixture.file("use.js"),
+        line: 3,
+        column: columnOf(use, 3, "method"),
+      });
+      expect(wrongMember.status).toBe("not_found");
+      const exportedMember = await goToDefinition(fixture.index, {
+        file: fixture.file("use.js"),
+        line: 4,
+        column: columnOf(use, 4, "helper"),
+      });
+      expect(exportedMember.status).toBe("ok");
+      if (exportedMember.status !== "ok") return;
+      expect(fileIdentityKey(exportedMember.definition.file)).toBe(fileIdentityKey(fixture.file("helper.js")));
+      expect(exportedMember.definition.range.start.index).toBe(tokenIndex(helper, 1, "helper"));
+
+      const wrongRefs = await findReferences(fixture.index, {
+        file: fixture.file("widget.js"),
+        line: 1,
+        column: columnOf(widget, 1, "method"),
+      });
+      expect(wrongRefs.status).toBe("ok");
+      expect(referenceSites(wrongRefs)).not.toContain("use.js:3");
+      const helperRefs = await findReferences(fixture.index, {
+        file: fixture.file("helper.js"),
+        line: 1,
+        column: columnOf(helper, 1, "helper"),
+      });
+      expect(helperRefs.status).toBe("ok");
+      expect(referenceSites(helperRefs)).toContain("use.js:4");
+
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      const targets = callTargetIds(graph, "run");
+      expect(targets).not.toContain(fixture.file("widget.js") + "::method::" + tokenIndex(widget, 1, "method"));
+      expect(targets).toContain(fixture.file("helper.js") + "::helper::" + tokenIndex(helper, 1, "helper"));
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+  it("keeps require as a namespace for a default class with a namespace re-export", async () => {
+    const widget = 'export default class Widget { static method() {} }\nexport * as helpers from "./helper";\n';
+    const helper = "export function helper() {}\n";
+    const use = [
+      'const W = require("./widget");',
+      "function run() { W.method(); }",
+      "function nested() { return W.helpers.helper(); }",
+      "",
+    ].join("\n");
+    const fixture = await project({ "widget.js": widget, "helper.js": helper, "use.js": use });
+    try {
+      const result = await goToDefinition(fixture.index, {
+        file: fixture.file("use.js"),
+        line: 2,
+        column: columnOf(use, 2, "method"),
+      });
+      expect(result.status).toBe("not_found");
+      const refs = await findReferences(fixture.index, {
+        file: fixture.file("widget.js"),
+        line: 1,
+        column: columnOf(widget, 1, "method"),
+      });
+      expect(refs.status).toBe("ok");
+      expect(referenceSites(refs)).not.toContain("use.js:2");
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(callTargetIds(graph, "run")).not.toContain(
+        fixture.file("widget.js") + "::method::" + tokenIndex(widget, 1, "method"),
+      );
+      const nested = await goToDefinition(fixture.index, {
+        file: fixture.file("use.js"),
+        line: 3,
+        column: columnOf(use, 3, "helper"),
+      });
+      const helperRefs = await findReferences(fixture.index, {
+        file: fixture.file("helper.js"),
+        line: 1,
+        column: columnOf(helper, 1, "helper"),
+      });
+      expect(nested.status).toBe("ok");
+      if (nested.status !== "ok") return;
+      expect(fileIdentityKey(nested.definition.file)).toBe(fileIdentityKey(fixture.file("helper.js")));
+      expect(helperRefs.status).toBe("ok");
+      if (helperRefs.status !== "ok") return;
+      expect(helperRefs.referenceCoverage?.state).toBe("complete");
+      expect(referenceSites(helperRefs)).toContain("use.js:3");
+      expect(callTargetIds(graph, "nested")).toContain(
+        fixture.file("helper.js") + "::helper::" + tokenIndex(helper, 1, "helper"),
+      );
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["module.exports.helper = helper;", "Widget.helper = helper;"])(
+    "retains a direct CommonJS class value with a later %s assignment",
+    async (assignment) => {
+      const widget = [
+        "class Widget { static method() {} }",
+        "function helper() {}",
+        "module.exports = Widget;",
+        assignment,
+        "",
+      ].join("\n");
+      const use = ['const W = require("./widget");', "function run() { W.method(); }", ""].join("\n");
+      const fixture = await project({ "widget.js": widget, "use.js": use });
+      try {
+        const result = await goToDefinition(fixture.index, {
+          file: fixture.file("use.js"),
+          line: 2,
+          column: columnOf(use, 2, "method"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(fixture.file("widget.js")));
+        expect(result.definition.range.start.index).toBe(tokenIndex(widget, 1, "method"));
+
+        const refs = await findReferences(fixture.index, {
+          file: fixture.file("widget.js"),
+          line: 1,
+          column: columnOf(widget, 1, "method"),
+        });
+        expect(refs.status).toBe("ok");
+        expect(referenceSites(refs)).toContain("use.js:2");
+
+        const graph = await buildSymbolGraphDetailed(fixture.index);
+        expect(callTargetIds(graph, "run")).toContain(
+          fixture.file("widget.js") + "::method::" + tokenIndex(widget, 1, "method"),
+        );
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("preserves a direct CommonJS class value across a reopened disk cache", async () => {
+    const widget = [
+      "class Widget { static method() {} }",
+      "function helper() {}",
+      "module.exports = Widget;",
+      "module.exports.helper = helper;",
+      "",
+    ].join("\n");
+    const use = ['const W = require("./widget");', "function run() { W.method(); }", ""].join("\n");
+    const fixture = await project({ "widget.js": widget, "use.js": use });
+    const cacheOptions = { cache: "disk" as const, cacheLocation: "project", threads: 1 };
+    try {
+      const cold = await buildProjectIndexIncremental(fixture.root, cacheOptions);
+      closeDiskCacheDatabase(fixture.root, cacheOptions);
+      const warmReport: BuildReport = { timings: {} };
+      const warm = await buildProjectIndexIncremental(fixture.root, { ...cacheOptions, report: warmReport });
+      expect(warmReport.files?.parsed).toBe(0);
+
+      const observe = async (index: ProjectIndex) => {
+        const module = index.byFile.get(fileIdentityKey(fixture.file("widget.js")));
+        const hasDirectValue = module?.exports.some(
+          (entry) => entry.type === "local" && entry.exportedAs === "default" && entry.mechanism === "cjs-module-value",
+        );
+        const goto = await goToDefinition(index, {
+          file: fixture.file("use.js"),
+          line: 2,
+          column: columnOf(use, 2, "method"),
+        });
+        const refs = await findReferences(index, {
+          file: fixture.file("widget.js"),
+          line: 1,
+          column: columnOf(widget, 1, "method"),
+        });
+        const graph = await buildSymbolGraphDetailed(index);
+        return {
+          hasDirectValue,
+          definition: goto.status === "ok" ? goto.definition.range.start.index : goto.status,
+          references: referenceSites(refs),
+          calls: callTargetIds(graph, "run"),
+        };
+      };
+      const coldResult = await observe(cold);
+      expect(coldResult.hasDirectValue).toBe(true);
+      expect(coldResult.definition).toBe(tokenIndex(widget, 1, "method"));
+      expect(coldResult.references).toContain("use.js:2");
+      expect(coldResult.calls).toContain(fixture.file("widget.js") + "::method::" + tokenIndex(widget, 1, "method"));
+      expect(await observe(warm)).toEqual(coldResult);
+    } finally {
+      closeDiskCacheDatabase(fixture.root, cacheOptions);
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
   it("uses the visible CommonJS RHS binding instead of an earlier nested namesake", async () => {
     const widget = [
       "function decoy() {",

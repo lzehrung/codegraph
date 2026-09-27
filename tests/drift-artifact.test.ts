@@ -179,6 +179,41 @@ describe("architecture drift artifact baselines", () => {
     expect(report.findings.some((entry) => entry.kind === "graph-edge-removed")).toBe(false);
   });
 
+  it("loads two same-target include forms with distinct drift identities from an artifact", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-include-forms-");
+    await writeFile(
+      root,
+      "manifest.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        graphJsonSchema: "codegraph.graph-json",
+        artifacts: { graphJson: "graph.json" },
+      }),
+    );
+    await writeFile(
+      root,
+      "graph.json",
+      JSON.stringify({
+        schemaVersion: 2,
+        format: "codegraph.graph-json",
+        graph: {
+          files: ["src/main.c", "src/x.h"],
+          fileEdges: ["angle", "literal"].map((includeForm) => ({
+            from: "src/main.c",
+            to: { type: "file", path: "src/x.h" },
+            raw: "x.h",
+            includeForm,
+          })),
+          symbols: [],
+        },
+      }),
+    );
+
+    const snapshot = await loadArchitectureSnapshotFromArtifact(root);
+    expect(snapshot.graphEdges.map((edge) => edge.includeForm)).toEqual(["angle", "literal"]);
+    expect(new Set(snapshot.graphEdges.map((edge) => edge.key)).size).toBe(2);
+  });
+
   it("rejects a version-1 artifact instead of misreading its drift edges", async () => {
     const root = await mkTmpDir("cg-drift-artifact-legacy-");
     await writeFile(

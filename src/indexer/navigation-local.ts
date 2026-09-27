@@ -301,7 +301,7 @@ export function findClosestBinding(
   if (support.id === "cpp" && binding.kind === "function" && source) {
     const collisions = binding.sameScopeFunctionBindings ?? [binding];
     if (collisions.length > 1 || cppBindingCallableShape(binding)) {
-      const selected = cppSelectCallableBinding(collisions, currentNode, source);
+      const selected = cppSelectCallableBinding(collisions, currentNode, source, file, file);
       if (!selected?.def) return null;
       return {
         file,

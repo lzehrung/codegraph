@@ -9,9 +9,12 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { C_SUPPORT, CPP_SUPPORT, supportForFile, supportForFileWithSource } from "../../src/languages.js";
+import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
+import { cppSelectCallableBinding } from "../../src/indexer/cpp-callables.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
-import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
+import { ProjectedSyntaxTree } from "../../src/native/projected-tree.js";
+import { getNativeQueryExecution, getNativeSyntaxTreeExecution } from "../../src/native/tree-sitter-native.js";
 import type { LanguageSupport } from "../../src/languages.js";
 import {
   buildProjectIndex,
@@ -390,6 +393,65 @@ describe("C++ native queries", () => {
 });
 
 describe("C++ classification and same-file navigation", () => {
+  it("does not confuse an included overload declaration with a same-span call in another file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-cross-file-callable-"));
+    const header = path.join(root, "api.hpp");
+    const file = path.join(root, "use.cpp");
+    const callLine = "int caller() { return pick(1); }";
+    const useBase = [`#include "api.hpp"`, callLine, ""].join("\n");
+    const headerPrefix = " ".repeat(useBase.indexOf("pick") - "int ".length);
+    const headerSource = [`${headerPrefix}int pick(int, int);`, "int pick(int);", ""].join("\n");
+    const useSource = useBase.padEnd(headerSource.length, " ");
+    const callOffset = useSource.indexOf("pick");
+    expect(callOffset).toBe(headerSource.indexOf("pick"));
+    expect(useSource.length).toBe(headerSource.length);
+    try {
+      await fs.writeFile(header, headerSource, "utf8");
+      await fs.writeFile(file, useSource, "utf8");
+      const bindings = buildScopeIndexFromSource(header, headerSource, CPP_SUPPORT).all.filter(
+        (binding) => binding.kind === "function" && binding.name === "pick",
+      );
+      const parsed = getNativeSyntaxTreeExecution(useSource, CPP_SUPPORT, "on");
+      if (!parsed.tree) throw new Error("Expected a native C++ syntax tree");
+      const call = new ProjectedSyntaxTree(useSource, parsed.tree).rootNode.descendantForIndex(
+        callOffset,
+        callOffset + "pick".length,
+      );
+      expect(call.text).toBe("pick");
+      expect(cppSelectCallableBinding(bindings, call, useSource, file, header)?.def?.start.line).toBe(2);
+
+      const index = await createTestIndexFromFiles(root, [header, file]);
+      const navigation = await goToDefinition(index, { file, line: 2, column: callLine.indexOf("pick") + 1 });
+      expect(navigation.status).toBe("ok");
+      if (navigation.status !== "ok") throw new Error("Expected the one-argument overload");
+      expect(navigation.definition.range.start.line).toBe(2);
+      expect(fileIdentityKey(navigation.definition.file)).toBe(fileIdentityKey(header));
+      const references = await findReferences(index, { file: header, line: 2, column: 5 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.map((ref) => [fileIdentityKey(ref.file), ref.range.start.line])).toEqual([
+          [fileIdentityKey(header), 2],
+          [fileIdentityKey(file), 2],
+        ]);
+      }
+      const otherReferences = await findReferences(index, { file: header, line: 1, column: headerPrefix.length + 5 });
+      expect(otherReferences.status).toBe("ok");
+      if (otherReferences.status === "ok") {
+        expect(otherReferences.references.map((ref) => [fileIdentityKey(ref.file), ref.range.start.line])).toEqual([
+          [fileIdentityKey(header), 1],
+        ]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "caller")
+          .map((edge) => edge.to),
+      ).toEqual([defNodeId(navigation.definition)]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps callable identity consistent across navigation, references, and calls", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-callable-identity-"));
     const file = path.join(root, "probe.cpp");

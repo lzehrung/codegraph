@@ -9,6 +9,7 @@ import {
 } from "../../indexer/declaration-visibility.js";
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import {
+  innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
   resolvePhpObjectCreationTarget,
   resolveRubyVisibleConstant,
@@ -16,13 +17,15 @@ import {
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
-import { resolvePhpExportByImportType } from "../../indexer/navigation-resolve.js";
+import { cjsRequireValueBinding, resolvePhpExportByImportType } from "../../indexer/navigation-resolve.js";
+import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
 import {
   isSwiftConstrainedExtension,
   isSwiftExtensionContainer,
   selectCsharpPartialRepresentative,
 } from "../../indexer/shared-owner-identity.js";
 import type { LanguageSupport } from "../../languages.js";
+import { isJsTsLanguage } from "../../languages/js-family.js";
 import { getCallableArity, getCallArgumentCount, memberLookupBinding } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
@@ -813,7 +816,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     const recordReceiverCall = (node: SyntaxNodeLike, access: ReceiverCallAccess): void => {
       const memberName = sliceText(access.property, context.source);
       if (!memberName) return;
-      const binding = classifyReceiver(
+      let binding = classifyReceiver(
         context.sup,
         access.receiver,
         context.source,
@@ -821,6 +824,22 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         fn.node.startIndex,
         access.accessNode,
       );
+      if (isJsTsLanguage(context.sup.id) && isIdentifierType(context.sup, access.receiver.type)) {
+        const receiverName = sliceText(access.receiver, context.source);
+        const imported =
+          effectiveExplicitBinding(
+            context.moduleEntry.imports,
+            context.sup.id,
+            (candidate) => candidate.kind === "namespace" && candidate.localNS === receiverName,
+            access.receiver.startIndex,
+          ) ?? innermostNamespaceImport(context.moduleEntry.imports, receiverName, access.receiver);
+        if (imported?.mechanism === "cjs" && typeof imported.resolved === "string") {
+          const value = cjsRequireValueBinding(context.index, imported.resolved);
+          const lexical = value ? context.resolveIdentifier(receiverName, access.receiver) : null;
+          if (!value || !declaresMembers(value) || !lexical || defNodeId(value) !== defNodeId(lexical)) return;
+          binding = { kind: "named-type", typeName: receiverName, typeNode: access.receiver, memberScope: "static" };
+        }
+      }
       if (!binding) return;
 
       const site = { file: context.moduleEntry.file, range: toRange(access.property) };

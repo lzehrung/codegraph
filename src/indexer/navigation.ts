@@ -132,6 +132,8 @@ import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
 const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
+const MAX_REFERENCE_NAMESPACE_DEPTH = 8;
+const MAX_REFERENCE_NAMESPACE_PATHS = 64;
 
 function phpImportTypeAtPosition(
   imports: readonly ImportBinding[],
@@ -1229,15 +1231,76 @@ async function findReferencesInternal(
                 [definition, ...equivalentDefinitions].some(
                   (candidate) => fileIdentityKey(targetFile) === fileIdentityKey(candidate.file),
                 );
-          if (!matchesDef) continue;
-          const parsed = await ensureCandidateParsed();
-          // A python multi-segment dotted import (`import a.b`) binds only the first segment
-          // `a`; the source only ever repeats the whole dotted phrase to reach the resolved
-          // leaf module again (`a.b.symbol(...)`), never the bound local name alone. An aliased
-          // import (`import a.b as c`) binds that whole phrase to `c` directly instead, so `c`
-          // alone is the correct single-hop search name, same as any other namespace alias.
+          // Python binds the first segment of an unaliased dotted import, while an alias
+          // binds the whole module. Other namespaces use their local name directly.
           const namespaceSearchName =
             imp.mechanism === "python" && imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS;
+          if (!matchesDef) {
+            const targetModule = index.byFile.get(fileIdentityKey(targetFile));
+            if (
+              !targetModule?.exports.some((entry) => entry.type === "namespaceReexport" || entry.type === "exportStar")
+            ) {
+              continue;
+            }
+            // A namespace re-export exposes a member at paths such as W.helpers.helper,
+            // not as a bare export of the intermediate module. Follow only export-proven
+            // namespace edges, then verify each use through the same goto resolver.
+            const namespacePaths: Array<{ file: FileId; name: string; depth: number }> = [
+              { file: targetFile, name: namespaceSearchName, depth: 0 },
+            ];
+            for (let pathIndex = 0; pathIndex < namespacePaths.length; pathIndex++) {
+              if (pathIndex >= MAX_REFERENCE_NAMESPACE_PATHS) {
+                receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
+                break;
+              }
+              const namespacePath = namespacePaths[pathIndex]!;
+              if (namespacePath.depth) {
+                const nestedHit = resolveExport(index, namespacePath.file, exportedName, {
+                  allowLocalFallback: false,
+                  ...(exportOptions ?? {}),
+                });
+                if (nestedHit?.kind === "resolved" && matchesReferenceDefinition(nestedHit.def)) {
+                  const parsed = await ensureCandidateParsed();
+                  const ranges = await collectNamespaceMemberRefs(
+                    fileId,
+                    namespacePath.name,
+                    exportedName,
+                    parsed,
+                    index.languageExtensions,
+                    imp,
+                    module.imports,
+                  );
+                  for (const range of ranges) {
+                    if (hasReachedCollectionLimit()) break;
+                    const proof = await goToDefinition(
+                      index,
+                      { file: fileId, line: range.start.line, column: range.start.column },
+                      parsed,
+                    );
+                    if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
+                    pushRef({ file: fileId, range, via: { import: imp, namespaceMember: exportedName } });
+                  }
+                }
+              }
+              const exports = resolveModuleExports(index, namespacePath.file, { allowLocalFallback: false });
+              if (namespacePath.depth >= MAX_REFERENCE_NAMESPACE_DEPTH) {
+                if ([...exports.values()].some((entry) => entry.kind === "namespace")) {
+                  receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
+                }
+                continue;
+              }
+              for (const [alias, entry] of exports) {
+                if (entry.kind !== "namespace") continue;
+                namespacePaths.push({
+                  file: entry.file,
+                  name: `${namespacePath.name}.${alias}`,
+                  depth: namespacePath.depth + 1,
+                });
+              }
+            }
+            continue;
+          }
+          const parsed = await ensureCandidateParsed();
           const ranges = await collectNamespaceMemberRefs(
             fileId,
             namespaceSearchName,

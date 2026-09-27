@@ -252,10 +252,6 @@ async function phpCanonicalDefinitionNames(index: ProjectIndex, def: SymbolDef):
   return canonicalNames;
 }
 
-async function phpIndexedCanonicalNames(index: ProjectIndex, kind: SymbolKind): Promise<string[]> {
-  const symbols = await ensurePhpNamespaceSymbolIndex(index);
-  return symbols.namesByKind.get(kind) ?? [];
-}
 function markPhpNameEquivalenceGap(index: ProjectIndex, def: SymbolDef): void {
   let gaps = phpNameEquivalenceGaps.get(index);
   if (!gaps) {
@@ -613,7 +609,7 @@ export async function collectVerifiedNamedNodeReferences(
   const phpCanonicalNames = parsed.sup.id === "php" ? await phpCanonicalDefinitionNames(index, expectedDef) : undefined;
   const phpExistingFunctionNames =
     phpCanonicalNames && expectedDef.kind === SymbolKind.Function
-      ? await phpIndexedCanonicalNames(index, expectedDef.kind)
+      ? (await ensurePhpNamespaceSymbolIndex(index)).functionNames
       : undefined;
   const verified: VerifiedNamedNodeReference[] = [];
   const matchesExpectedDefinition = (definition: SymbolDef): boolean =>
@@ -875,8 +871,14 @@ function filesExportingDefinition(
   languageId: string,
 ): string[] {
   const files = new Map<string, string>([[fileIdentityKey(def.file), def.file]]);
+  const namespaceLinks: Array<{ sourceFile: string; exportedAs: string; targetFile: string }> = [];
   for (const moduleIndex of index.byFile.values()) {
     const fileId = moduleIndex.file;
+    for (const entry of moduleIndex.exports) {
+      if (entry.type === "namespaceReexport") {
+        namespaceLinks.push({ sourceFile: fileId, exportedAs: entry.exportedAs, targetFile: entry.fromModule });
+      }
+    }
     if (fileIdentityKey(fileId) === fileIdentityKey(def.file) || !moduleIndex.exports.length) continue;
     for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
       const resolved = resolveExport(index, fileId, exportedName);
@@ -898,6 +900,23 @@ function filesExportingDefinition(
       )
     ) {
       files.set(fileIdentityKey(fileId), fileId);
+    }
+  }
+  // A namespace re-export can expose an inner symbol through a member chain even
+  // though it does not export that symbol under its own name. Include consumers
+  // only when the visible namespace alias really targets the exporting module.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const link of namespaceLinks) {
+      const sourceKey = fileIdentityKey(link.sourceFile);
+      if (files.has(sourceKey) || !files.has(fileIdentityKey(link.targetFile))) continue;
+      const visible = resolveExport(index, link.sourceFile, link.exportedAs, { allowLocalFallback: false });
+      if (visible?.kind !== "namespace" || fileIdentityKey(visible.file) !== fileIdentityKey(link.targetFile)) {
+        continue;
+      }
+      files.set(sourceKey, link.sourceFile);
+      grew = true;
     }
   }
   return [...files.values()];

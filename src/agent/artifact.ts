@@ -4,6 +4,7 @@ import { getHotspots } from "../graphs/hotspots.js";
 import { type SymbolNode, type SymbolEdge } from "../graphs/symbol-graph.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import type { BuildOptions } from "../indexer/types.js";
+import type { Edge } from "../types.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
 import { isPlainRecord } from "../util/guards.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
@@ -64,6 +65,7 @@ type PortableGraphBody = {
     to: { type: "file"; path: string } | { type: "external"; name: string };
     raw: string;
     typeOnly?: boolean;
+    includeForm?: Edge["includeForm"];
     resolved?: "heuristic" | "precise";
     confidence?: number;
   }>;

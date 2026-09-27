@@ -1189,7 +1189,7 @@ export function buildScopeIndexFromSource(
     return true;
   };
   const assignCppCallableOccurrence = (bindings: readonly Binding[], node: SyntaxNodeLike, range: Range): void => {
-    const selected = cppSelectCallableBinding(bindings, node, source);
+    const selected = cppSelectCallableBinding(bindings, node, source, file, file);
     if (selected) {
       selected.occurrences.push(range);
       return;

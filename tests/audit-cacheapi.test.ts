@@ -326,6 +326,42 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
     }
   });
 
+  it.each([
+    { scenario: "already exists", hasPackageDirectory: true },
+    { scenario: "is created with the module", hasPackageDirectory: false },
+  ])("re-resolves a top-level namespace import when its directory $scenario", async ({ hasPackageDirectory }) => {
+    const root = await mkTmpDir("cg-audit-g1-py-namespace-root-");
+    try {
+      const mainLines = ["from pkg import name", "", "def run():", "    return name.value()", ""];
+      const main = await writeFixtureFile(root, "main.py", mainLines.join("\n"));
+      const decoy = await writeFixtureFile(root, "other/name.py", "def value():\n    return -1\n");
+      if (hasPackageDirectory) await fsp.mkdir(path.join(root, "pkg"));
+
+      const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+      expect(edgeTargets(initial, main)).toContain("external:pkg");
+
+      const target = await writeFixtureFile(root, "pkg/name.py", "def value():\n    return 1\n");
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(importBindings(cold, main)).toEqual([{ kind: "namespace", resolved: normalizePath(target) }]);
+      expect(importBindings(warm, main)).toEqual(importBindings(cold, main));
+      expect(edgeTargets(warm, main)).toEqual(edgeTargets(cold, main));
+
+      for (const index of [cold, warm]) {
+        const goto = await goToDefinition(index, {
+          file: main,
+          line: 4,
+          column: columnOf(mainLines, 4, "value"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status !== "ok") throw new Error("expected the namespace submodule to resolve");
+        expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(target));
+        expect(fileIdentityKey(goto.definition.file)).not.toBe(fileIdentityKey(decoy));
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
   it("re-resolves `from pkg import sub` once a namespace subpackage directory gains a module", async () => {
     const root = await mkTmpDir("cg-audit-g1-py-namespace-sub-");
     try {

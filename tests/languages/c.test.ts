@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { C_SUPPORT, CPP_SUPPORT, KOTLIN_SUPPORT, type LanguageSupport } from "../../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
 import {
+  buildGraphDelta,
   buildProjectIndex,
   buildProjectIndexIncremental,
   buildScopeIndexFromSource,
@@ -290,6 +291,68 @@ describe("C quoted include resolution and same-file references", () => {
       const fileEdges = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
       expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "file", path: normalizePath(header) } }));
       expect(fileEdges).toContainEqual(expect.objectContaining({ to: { type: "external", name: "HEADER" } }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["c", "off"],
+    ["cpp", "off"],
+    ["c", "default"],
+    ["cpp", "default"],
+  ] as const)("preserves both %s include forms in %s mode across a disk-cache rebuild", async (language, mode) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), `cg-${language}-${mode}-include-cache-`));
+    const file = path.join(root, "src", `main.${language}`);
+    const header = path.join(root, "src", "x.h");
+    const lines = ["#include <x.h>", '#include "x.h"', "int main(void) { return x(); }", ""];
+    const nativeOptions = mode === "off" ? { native: "off" as const } : {};
+    const angleRaw = mode === "off" ? "x.h" : "<x.h>";
+    const includeEdges = (index: Awaited<ReturnType<typeof buildProjectIndex>>) =>
+      index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file))
+        .map((edge) => ({ raw: edge.raw, includeForm: edge.includeForm, to: edge.to }));
+    try {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, lines.join("\n"), "utf8");
+      const initial = await buildProjectIndexIncremental(root, { cache: "disk", ...nativeOptions });
+      await writeFile(header, "int x(void);\n", "utf8");
+      if (mode === "off") {
+        const delta = await buildGraphDelta(root, { cache: "disk", native: "off", files: [file] });
+        expect(delta.added).toEqual([
+          expect.objectContaining({ includeForm: "literal", to: { type: "file", path: "src/x.h" } }),
+        ]);
+        expect(delta.removed).toEqual([
+          expect.objectContaining({ includeForm: "literal", to: { type: "external", name: "x.h" } }),
+        ]);
+      }
+      const warm = await buildProjectIndexIncremental(root, { cache: "disk", ...nativeOptions });
+      const cold = await buildProjectIndex(root, { cache: "off", ...nativeOptions });
+
+      expect({ initial: includeEdges(initial), warm: includeEdges(warm) }).toEqual({
+        initial: [
+          { raw: angleRaw, includeForm: "angle", to: { type: "external", name: angleRaw } },
+          { raw: "x.h", includeForm: "literal", to: { type: "external", name: "x.h" } },
+        ],
+        warm: includeEdges(cold),
+      });
+      expect(includeEdges(warm)).toEqual([
+        { raw: angleRaw, includeForm: "angle", to: { type: "external", name: angleRaw } },
+        { raw: "x.h", includeForm: "literal", to: { type: "file", path: normalizePath(header) } },
+      ]);
+      for (const line of [1, 2]) {
+        const column = lines[line - 1]!.indexOf("x.h") + 1;
+        expect(await goToDefinition(warm, { file, line, column })).toEqual(
+          await goToDefinition(cold, { file, line, column }),
+        );
+      }
+      if (mode === "default") {
+        const column = lines[2]!.indexOf("x()") + 1;
+        expect(await goToDefinition(warm, { file, line: 3, column })).toMatchObject({
+          status: "ok",
+          definition: { file: normalizePath(header) },
+        });
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

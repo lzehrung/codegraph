@@ -1,4 +1,5 @@
 import type { BuildOptions } from "../indexer/types.js";
+import type { Edge } from "../types.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
@@ -60,6 +61,7 @@ export interface ArchitectureGraphEdge {
   to: string;
   raw: string;
   typeOnly?: boolean;
+  includeForm?: Edge["includeForm"];
 }
 
 export interface ArchitectureUnresolvedImportSummary {

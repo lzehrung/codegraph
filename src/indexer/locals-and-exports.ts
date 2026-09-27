@@ -414,6 +414,7 @@ function appendJsLikeRegexFallbackExports(
           type: "local",
           exportedAs: "default",
           target: { ...local, kind: SymbolKind.Default },
+          mechanism: "ts-export-assignment",
         });
       }
     }
@@ -1081,6 +1082,7 @@ export function collectLocalsAndExportsFromSource(
             type: "local",
             exportedAs: "default",
             target: { ...local, kind: SymbolKind.Default },
+            mechanism: "cjs-module-value",
           });
         }
         continue;
@@ -1171,6 +1173,7 @@ export function collectLocalsAndExportsFromSource(
             type: "local",
             exportedAs: "default",
             target: { ...local, kind: SymbolKind.Default },
+            mechanism: "ts-export-assignment",
           });
         }
         continue;

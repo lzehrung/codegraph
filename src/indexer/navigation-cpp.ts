@@ -38,7 +38,7 @@ export function resolveCppCallableBindings(
   node: SyntaxNodeLike,
   source: string,
 ): SymbolDef | null {
-  const target = cppSelectCallableBinding(bindings, node, source);
+  const target = cppSelectCallableBinding(bindings, node, source, file, file);
   return target ? cppBindingDefinition(file, target) : null;
 }
 

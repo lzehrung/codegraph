@@ -334,25 +334,31 @@ export function memberContainerForDefinition(index: ProjectIndex, def: SymbolDef
       local.range.start.column === def.range.start.column,
   );
   if (sameRange.length === 1) return sameRange[0];
-  const sameName = moduleEntry.locals.filter((local) => declaresMemberKind(local) && local.localName === def.localName);
-  return sameName.length === 1 ? sameName[0] : undefined;
 }
 
 /**
- * `require()` and `import x = require()` return the module value when the file assigns
- * `module.exports` or `export =`. A default-exported class with other named exports stays a
- * namespace, matching Node's interop object. Named `exports.helper = ...` has no module value.
+ * `require()` and `import x = require()` return a proven direct `module.exports = X` or
+ * TypeScript `export = X` value. A default export accompanied by named exports instead returns
+ * a namespace object, including non-local and star re-exports.
  */
 export function cjsRequireValueBinding(index: ProjectIndex, targetFile: FileId): SymbolDef | undefined {
   const resolved = resolveExport(index, targetFile, "default");
   if (resolved?.kind !== "resolved") return undefined;
-  const classValue = memberContainerForDefinition(index, resolved.def);
   const moduleEntry = index.byFile.get(fileIdentityKey(targetFile));
-  const hasNamedExport = moduleEntry?.exports.some(
-    (entry) => entry.type === "local" && entry.exportedAs !== "default" && !entry.target.isMember,
+  const directModuleValue = moduleEntry?.exports.some(
+    (entry) =>
+      entry.type === "local" &&
+      entry.exportedAs === "default" &&
+      entry.mechanism !== undefined &&
+      sameSymbolDef(index, entry.target, resolved.def),
   );
-  if (hasNamedExport && classValue) return undefined;
-  return classValue ?? resolved.def;
+  const hasNamedExport = moduleEntry?.exports.some((entry) => {
+    if (entry.type === "exportStar") return !entry.typeOnly;
+    if (entry.type === "local") return entry.exportedAs !== "default" && !entry.target.isMember;
+    return entry.exportedAs !== "default" && !entry.typeOnly;
+  });
+  if (hasNamedExport && !directModuleValue) return undefined;
+  return memberContainerForDefinition(index, resolved.def) ?? resolved.def;
 }
 
 export function resolveExport(
