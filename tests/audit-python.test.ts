@@ -2,7 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndex } from "../src/indexer.js";
+import { buildProjectIndex, buildProjectIndexIncremental } from "../src/indexer.js";
 import { buildSymbolGraphDetailed, findReferences, goToDefinition } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
@@ -640,6 +640,276 @@ describe("Python import rebinding in member resolution", () => {
                 fileIdentityKey(reference.file) === fileIdentityKey(f("main.py")) && reference.range.start.line === 6,
             ),
           ).toBe(false);
+        }
+      },
+    );
+  });
+});
+
+describe("Python package attributes before submodules", () => {
+  const mainSource = "from pkg import name\n\ndef run():\n    return name()\n";
+  const relativeSource = "from . import name\n\ndef use():\n    return name()\n";
+  const initSource = "def name():\n    return 1\n";
+  const submoduleSource = "def name():\n    return 2\n";
+
+  it("resolves the package function over a same-named submodule for navigation, references, and calls", async () => {
+    await withFixture(
+      "cg-audit-py-attribute-",
+      {
+        "pkg/__init__.py": initSource,
+        "pkg/name.py": submoduleSource,
+        "pkg/user.py": relativeSource,
+        "main.py": mainSource,
+      },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        for (const [file, source] of [
+          ["main.py", mainSource],
+          ["pkg/user.py", relativeSource],
+        ] as const) {
+          expect(index.byFile.get(fileIdentityKey(f(file)))?.imports).toMatchObject([
+            { kind: "named", resolved: f("pkg/__init__.py") },
+          ]);
+          for (const line of [1, 4]) {
+            const goto = await goToDefinition(index, {
+              file: f(file),
+              line,
+              column: columnOf(source, line, "name"),
+            });
+            expect(goto.status).toBe("ok");
+            if (goto.status === "ok") {
+              expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("pkg/__init__.py")));
+              expect(goto.definition.range.start.line).toBe(1);
+            }
+          }
+        }
+        const refs = await findReferences(index, {
+          file: f("pkg/__init__.py"),
+          line: 1,
+          column: columnOf(initSource, 1, "name"),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(refs.referenceCoverage.state).toBe("complete");
+          for (const file of ["main.py", "pkg/user.py"]) {
+            expect(
+              refs.references
+                .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(f(file)))
+                .map((ref) => ref.range.start.line)
+                .sort(),
+            ).toEqual([1, 4]);
+          }
+          expect(refs.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(f("pkg/name.py")))).toBe(
+            false,
+          );
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        for (const [file, functionName] of [
+          ["main.py", "run"],
+          ["pkg/user.py", "use"],
+        ] as const) {
+          const owner = [...graph.nodes.values()].find(
+            (node) => node.name === functionName && fileIdentityKey(node.file) === fileIdentityKey(f(file)),
+          );
+          const calls = graph.edges.filter((edge) => edge.label === "calls" && edge.from === owner?.id);
+          expect(calls.map((edge) => fileIdentityKey(graph.nodes.get(edge.to)!.file))).toEqual([
+            fileIdentityKey(f("pkg/__init__.py")),
+          ]);
+        }
+      },
+    );
+  });
+
+  it.each([
+    ["no package attribute", ""],
+    ["nested function is not a package attribute", "def outer():\n    def name():\n        pass\n"],
+    ["relative import of the submodule", initSource + "from . import name\n"],
+    ["relative import through the submodule", initSource + "from .name import value\n"],
+    ["absolute import of the submodule", initSource + "import pkg.name\n"],
+  ])("keeps %s bound to the submodule", async (_label, packageSource) => {
+    const source = "from pkg import name\n\ndef run():\n    return name.value()\n";
+    await withFixture(
+      "cg-audit-py-submodule-control-",
+      { "pkg/__init__.py": packageSource, "pkg/name.py": "def value():\n    return 2\n", "main.py": source },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        expect(index.byFile.get(fileIdentityKey(f("main.py")))?.imports).toMatchObject([
+          { kind: "namespace", resolved: f("pkg/name.py") },
+        ]);
+        const goto = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(source, 4, "value"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("pkg/name.py")));
+      },
+    );
+  });
+
+  it.each([
+    ["class", "pkg/__init__.py", "class name:\n    pass\n"],
+    ["assignment", "pkg/__init__.py", "name = lambda: 1\n"],
+    ["stub initializer", "pkg/__init__.pyi", "def name() -> int: ...\n"],
+  ])("finds the %s attribute in the package initializer", async (_label, initializer, packageSource) => {
+    await withFixture(
+      "cg-audit-py-other-attribute-",
+      { [initializer]: packageSource, "pkg/name.py": submoduleSource, "main.py": mainSource },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        expect(index.byFile.get(fileIdentityKey(f("main.py")))?.imports).toMatchObject([
+          { kind: "named", resolved: f(initializer) },
+        ]);
+        const goto = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(mainSource, 4, "name"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f(initializer)));
+      },
+    );
+  });
+
+  it("treats a package re-export as its attribute over the same-named submodule", async () => {
+    const helperSource = "def name():\n    return 3\n";
+    await withFixture(
+      "cg-audit-py-reexport-",
+      {
+        "pkg/__init__.py": "from .helpers import name\n",
+        "pkg/helpers.py": helperSource,
+        "pkg/name.py": submoduleSource,
+        "main.py": mainSource,
+      },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        expect(index.byFile.get(fileIdentityKey(f("main.py")))?.imports).toMatchObject([
+          { kind: "named", resolved: f("pkg/__init__.py") },
+        ]);
+        const goto = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(mainSource, 4, "name"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok")
+          expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("pkg/helpers.py")));
+      },
+    );
+  });
+
+  it("uses an explicitly aliased submodule member as a package attribute", async () => {
+    await withFixture(
+      "cg-audit-py-submodule-member-",
+      {
+        "pkg/__init__.py": "from .name import value as name\n",
+        "pkg/name.py": "def value():\n    return 2\n",
+        "main.py": mainSource,
+      },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        expect(index.byFile.get(fileIdentityKey(f("main.py")))?.imports).toMatchObject([
+          { kind: "named", resolved: f("pkg/__init__.py") },
+        ]);
+        const goto = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(mainSource, 4, "name"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") {
+          expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("pkg/name.py")));
+          expect(goto.definition.range.start.line).toBe(1);
+        }
+      },
+    );
+  });
+
+  it("keeps an imported top-level module attribute ahead of the package submodule", async () => {
+    const source = "from pkg import name\n\ndef run():\n    return name.value()\n";
+    await withFixture(
+      "cg-audit-py-imported-module-",
+      {
+        "pkg/__init__.py": "import name\n",
+        "pkg/name.py": "def value():\n    return 2\n",
+        "name.py": "def value():\n    return 3\n",
+        "main.py": source,
+      },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        expect(index.byFile.get(fileIdentityKey(f("main.py")))?.imports).toMatchObject([
+          { kind: "named", resolved: f("pkg/__init__.py") },
+        ]);
+        const goto = await goToDefinition(index, { file: f("main.py"), line: 4, column: columnOf(source, 4, "value") });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("name.py")));
+      },
+    );
+  });
+
+  it("re-resolves unchanged importers on warm disk builds when a package attribute is added and removed", async () => {
+    await withFixture(
+      "cg-audit-py-attribute-cache-",
+      { "pkg/__init__.py": "", "pkg/name.py": submoduleSource, "main.py": mainSource },
+      async (root, f) => {
+        const initial = await buildProjectIndexIncremental(root, { cache: "disk" });
+        expect(
+          initial.graph.edges.some(
+            (edge) =>
+              fileIdentityKey(edge.from) === fileIdentityKey(f("main.py")) &&
+              edge.to.type === "file" &&
+              fileIdentityKey(edge.to.path) === fileIdentityKey(f("pkg/__init__.py")),
+          ),
+        ).toBe(true);
+        for (const [packageSource, expectedKind, expectedFile] of [
+          [initSource, "named", "pkg/__init__.py"],
+          ["", "namespace", "pkg/name.py"],
+        ] as const) {
+          await fsp.writeFile(f("pkg/__init__.py"), packageSource, "utf8");
+          const warm = await buildProjectIndexIncremental(root, { cache: "disk" });
+          const cold = await buildProjectIndex(root, { cache: "off" });
+          for (const index of [warm, cold]) {
+            expect(index.byFile.get(fileIdentityKey(f("main.py")))?.imports).toMatchObject([
+              { kind: expectedKind, resolved: f(expectedFile) },
+            ]);
+            const goto = await goToDefinition(index, {
+              file: f("main.py"),
+              line: 4,
+              column: columnOf(mainSource, 4, "name"),
+            });
+            expect(goto.status).toBe("ok");
+            if (goto.status === "ok")
+              expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f(expectedFile)));
+            if (expectedKind === "named") {
+              const refs = await findReferences(index, {
+                file: f("pkg/__init__.py"),
+                line: 1,
+                column: columnOf(initSource, 1, "name"),
+              });
+              expect(refs.status).toBe("ok");
+              if (refs.status === "ok") {
+                expect(refs.referenceCoverage.state).toBe("complete");
+                expect(
+                  refs.references
+                    .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(f("main.py")))
+                    .map((ref) => ref.range.start.line)
+                    .sort(),
+                ).toEqual([1, 4]);
+              }
+              const graph = await buildSymbolGraphDetailed(index);
+              const run = [...graph.nodes.values()].find(
+                (node) => node.name === "run" && fileIdentityKey(node.file) === fileIdentityKey(f("main.py")),
+              );
+              expect(
+                graph.edges
+                  .filter((edge) => edge.label === "calls" && edge.from === run?.id)
+                  .map((edge) => fileIdentityKey(graph.nodes.get(edge.to)!.file)),
+              ).toEqual([fileIdentityKey(f("pkg/__init__.py"))]);
+            }
+          }
+          expect(warm.byFile.get(fileIdentityKey(f("main.py")))?.imports).toEqual(
+            cold.byFile.get(fileIdentityKey(f("main.py")))?.imports,
+          );
         }
       },
     );

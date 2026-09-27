@@ -119,12 +119,12 @@ export function collectDeletedTrackedFileDependents(
 const PYTHON_SOURCE_PATTERN = /\.pyi?$/iu;
 
 /**
- * `from pkg import name` resolves to `pkg/__init__.py` until `pkg/name.py` (or a namespace
- * directory `pkg/name/` holding Python code) exists; then the binding is the submodule. That
- * edge is already resolved, so no external edge names the added module. Returns cached Python
- * importers of every package on the added file's directory chain; they are reparsed instead of
- * reused. The walk is conservative: importers whose binding does not change reparse to the same
- * result.
+ * `from pkg import name` binds the `name` attribute of `pkg/__init__.py` when that file defines
+ * one; otherwise, once `pkg/name.py` (or a namespace directory `pkg/name/` holding Python code)
+ * exists, it binds the submodule. That edge is already resolved to `__init__.py`, so no external
+ * edge names the added module. Returns cached Python importers of every package on the added
+ * file's directory chain; they are reparsed instead of reused. The walk is conservative:
+ * importers whose binding does not change reparse to the same result.
  */
 export function collectPythonPackageImporters(
   trackedEntries: Record<string, ManifestFileEntry>,
