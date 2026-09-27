@@ -221,15 +221,16 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
 }
 
 /**
- * The crate's own package name declared in its Cargo.toml `[package]` table, as the Rust
- * identifier spells it (hyphens folded to underscores, since Cargo derives a crate's own
- * identifier from its package name that way), or undefined when the manifest is missing or
- * declares no name (a virtual workspace root). Lets a package's own `src/bin` targets
- * resolve `use pkg_name::item;` back to the package's own library crate.
+ * The identifier a package's own binaries use for its library crate: `[lib] name` when set,
+ * otherwise the `[package]` name, with hyphens folded to underscores as Cargo does. Undefined
+ * when the manifest is missing or declares neither (a virtual workspace root). Lets
+ * `src/bin` targets resolve `use lib_name::item;` back to the package's own library.
  */
-export async function rustCargoPackageIdentifier(cargoRoot: string, projectRoot: string): Promise<string | undefined> {
+export async function rustOwnLibraryIdentifier(cargoRoot: string, projectRoot: string): Promise<string | undefined> {
   const parsed = await parseCargoToml(cargoRoot, projectRoot);
-  const name = parsed ? packageName(parsed) : undefined;
+  if (!parsed) return undefined;
+  const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
+  const name = (lib ? tomlString(lib, "name") : undefined) ?? packageName(parsed);
   return name ? name.replace(/-/gu, "_") : undefined;
 }
 

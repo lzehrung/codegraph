@@ -100,6 +100,35 @@ describe("Rust Cargo manifests are read only inside the project root", () => {
   });
 });
 
+describe("Rust binaries name their own library by [lib].name", () => {
+  it("resolves `use custom::greet` and not the package name when [lib] renames the crate", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-libname-"));
+    try {
+      const main = "use custom::greet;\nuse pkg::greet as wrong;\nfn main() { greet(); wrong(); }\n";
+      await writeFixture(root, {
+        "Cargo.toml": '[package]\nname = "pkg"\nversion = "0.1.0"\n\n[lib]\nname = "custom"\n',
+        "src/lib.rs": "pub fn greet() {}\n",
+        "src/main.rs": main,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const file = path.join(root, "src/main.rs");
+      const lines = main.split("\n");
+      const call = lines[2]!;
+      const custom = await goToDefinition(index, { file, line: 3, column: columnOf(call, "greet") });
+      expect(custom.status).toBe("ok");
+      if (custom.status === "ok") {
+        expect(fileIdentityKey(custom.definition.file)).toBe(fileIdentityKey(path.join(root, "src/lib.rs")));
+      }
+      // Cargo does not expose the library under the package name once [lib] renames it.
+      expect((await goToDefinition(index, { file, line: 3, column: columnOf(call, "wrong") })).status).toBe(
+        "not_found",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Rust impl methods own member_of edges and calls edges (G7)", () => {
   it("emits one calls edge per receiver call to Circle::area, member_of edges for impl methods, and never targets the same-named Square::area", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-g7-"));

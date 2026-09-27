@@ -14,7 +14,7 @@ import { XID_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { lruMapGet, lruMapSet } from "../lru-map.js";
 import { fileIdentityKey, isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
-import { rustCargoPackageIdentifier, rustCrateRootFiles, rustPathDependencyCrateRoot } from "./cargo-targets.js";
+import { rustOwnLibraryIdentifier, rustCrateRootFiles, rustPathDependencyCrateRoot } from "./cargo-targets.js";
 
 function isWithinOrEqual(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
@@ -976,9 +976,9 @@ export async function resolveRustImportPath(
 
   if (cargoRoot && head) {
     // A package's own binary target (`src/bin/*.rs`, `src/main.rs` alongside `src/lib.rs`)
-    // names its own library crate by the package's own name, exactly like an external crate.
-    const ownPackageIdentifier = await rustCargoPackageIdentifier(cargoRoot, projectRoot);
-    if (ownPackageIdentifier && ownPackageIdentifier === head) {
+    // names its own library crate (`[lib] name`, else the package name) like an external crate.
+    const ownLibraryIdentifier = await rustOwnLibraryIdentifier(cargoRoot, projectRoot);
+    if (ownLibraryIdentifier && ownLibraryIdentifier === head) {
       return resolveRustModuleParts(sourceRoot, tail);
     }
     // A workspace path dependency (`[dependencies] head = { path = "../head" }`) names its
