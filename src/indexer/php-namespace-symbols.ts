@@ -131,9 +131,32 @@ export function resolvePhpExplicitImport(
   if (role === "class") matches = symbols.classes.get(key);
   else if (role === "function") matches = symbols.functions.get(key);
   else matches = symbols.consts.get(key);
-  if (matches?.length !== 1) return null;
-  const def = matches[0] ?? null;
-  return def && !symbols.composerExcludedFiles.has(fileIdentityKey(def.file)) ? def : null;
+  if (!matches) return null;
+  const resolvedFile = typeof binding.resolved === "string" ? fileIdentityKey(binding.resolved) : undefined;
+  const visibility = symbols.composerAutoloadByImport.get(binding);
+  let found: SymbolDef | null = null;
+  for (const def of matches) {
+    const fileKey = fileIdentityKey(def.file);
+    if (resolvedFile) {
+      if (fileKey !== resolvedFile) continue;
+    } else if (visibility) {
+      if (!visibility.files.has(path.resolve(def.file))) {
+        const included = visibility.module.imports.some(
+          (candidate) =>
+            candidate.kind === "star" &&
+            candidate.mechanism === "php" &&
+            typeof candidate.resolved === "string" &&
+            fileIdentityKey(candidate.resolved) === fileKey,
+        );
+        if (!included) continue;
+      }
+    } else if (symbols.composerExcludedFiles.has(fileKey)) {
+      continue;
+    }
+    if (found) return null;
+    found = def;
+  }
+  return found;
 }
 
 export type PhpNamespaceSymbolIndex = {
@@ -145,6 +168,8 @@ export type PhpNamespaceSymbolIndex = {
   canonicalByDefinition: Map<string, string>;
   /** Files explicitly excluded by Composer without another autoload mapping. */
   composerExcludedFiles: Set<string>;
+  /** Composer autoload files plus source-proven PHP includes for each importing module. */
+  composerAutoloadByImport: WeakMap<ImportBinding, { files: ReadonlySet<string>; module: ModuleIndex }>;
   source: ProjectIndex["byFile"];
   size: number;
 };
@@ -230,6 +255,7 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
   const seenByKind = new Map<string, Set<string>>();
   const canonicalByDefinition = new Map<string, string>();
   const composerExcludedFiles = new Set<string>();
+  const composerAutoloadByImport: PhpNamespaceSymbolIndex["composerAutoloadByImport"] = new WeakMap();
 
   const phpModules: ModuleIndex[] = [];
   for (const moduleEntry of index.byFile.values()) {
@@ -252,9 +278,23 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
         const composerPath = await findPhpComposerPath(index.projectRoot, moduleEntry.file);
         if (composerPath) {
           const config = await loadPhpComposerConfig(composerPath);
-          if (config && isPhpComposerClassmapExcluded(moduleEntry.file, config)) {
-            const autoloadFiles = await getPhpComposerAutoloadFiles(composerPath, config);
-            if (!autoloadFiles.has(path.resolve(moduleEntry.file))) composerExcludedFiles.add(key);
+          if (config) {
+            const excluded = isPhpComposerClassmapExcluded(moduleEntry.file, config);
+            const hasPhpImports = moduleEntry.imports.some(
+              (binding) => binding.kind === "named" && binding.mechanism === "php",
+            );
+            if (excluded || hasPhpImports) {
+              const autoloadFiles = await getPhpComposerAutoloadFiles(composerPath, config);
+              if (excluded && !autoloadFiles.has(path.resolve(moduleEntry.file))) composerExcludedFiles.add(key);
+              if (hasPhpImports) {
+                const visibility = { files: autoloadFiles, module: moduleEntry };
+                for (const binding of moduleEntry.imports) {
+                  if (binding.kind === "named" && binding.mechanism === "php") {
+                    composerAutoloadByImport.set(binding, visibility);
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -298,6 +338,7 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
     namesByKind,
     canonicalByDefinition,
     composerExcludedFiles,
+    composerAutoloadByImport,
     source: index.byFile,
     size: index.byFile.size,
   };

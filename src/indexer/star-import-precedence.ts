@@ -126,8 +126,10 @@ export type EffectiveExplicitOrLocalBinding = { kind: "explicit"; binding: Impor
 /**
  * Decide whether the explicit import or a module-local declaration owns a simple name at a use.
  * Python executes module statements in source order, while other languages retain their explicit
- * import precedence. Callers still resolve the selected binding and must leave an unresolved
- * winner unresolved rather than falling back to an older binding.
+ * import precedence. A Python function body reads module names after initialization, so callers
+ * set includeLaterModuleBindings to compare all competing module bindings rather than hide a
+ * lone declaration that appears later than the body's text. Callers still resolve the selected
+ * binding and must leave an unresolved winner unresolved rather than falling back to an older one.
  */
 export function effectiveExplicitOrLocalBinding(
   imports: readonly ImportBinding[],
@@ -135,10 +137,12 @@ export function effectiveExplicitOrLocalBinding(
   matches: (binding: ImportBinding) => boolean,
   localStartIndex?: number,
   referenceIndex?: number,
+  includeLaterModuleBindings = false,
 ): EffectiveExplicitOrLocalBinding | undefined {
-  const explicit = effectiveExplicitBinding(imports, languageId, matches, referenceIndex);
+  const bindingReferenceIndex = includeLaterModuleBindings ? undefined : referenceIndex;
+  const explicit = effectiveExplicitBinding(imports, languageId, matches, bindingReferenceIndex);
   const localIsInScope =
-    localStartIndex !== undefined && (referenceIndex === undefined || localStartIndex <= referenceIndex);
+    localStartIndex !== undefined && (bindingReferenceIndex === undefined || localStartIndex <= bindingReferenceIndex);
   if (!explicit) return localIsInScope ? { kind: "local" } : undefined;
   if (starImportPrecedence(languageId) !== "last-wins") return { kind: "explicit", binding: explicit };
   const importStartIndex = explicitBindingStartIndex(explicit);

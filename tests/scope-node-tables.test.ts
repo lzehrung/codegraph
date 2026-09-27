@@ -107,6 +107,7 @@ const SCOPE_NODE_LIST_FIELDS = [
   "hoistedVariableDeclarationTypes",
   "memberContainerTypes",
   "memberFunctionTypes",
+  "memberScopeTypes",
   "moduleRootTypes",
   "nonLexicalMemberPropertyTypes",
   "parameterParents",

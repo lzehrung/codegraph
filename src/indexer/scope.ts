@@ -101,6 +101,8 @@ export function buildScopeIndexFromSource(
   >();
   const cppFunctionCollisionGroups = new Set<Binding[]>();
   const cppFunctionOccurrences: Array<{ binding: Binding; node: SyntaxNodeLike; range: Range }> = [];
+  // Retain imported C tag forwards only when a later same-file declaration completes the tag.
+  let cImportedForwardTags: Map<Binding, Binding> | undefined;
   const extraBindingSpans = new Set<string>();
   const bindingSpanKey = (binding: Binding): string => {
     const start = binding.def?.start.index;
@@ -272,10 +274,18 @@ export function buildScopeIndexFromSource(
     const existing = target.map.get(key);
     if (tagRole === "forward" && existing?.import) {
       existing.occurrences.push(binding.def!);
+      cImportedForwardTags ??= new Map();
+      if (!cImportedForwardTags.has(existing)) cImportedForwardTags.set(existing, binding);
       return;
     }
     if (tagRole === "declaration" && existing?.import) {
       binding.occurrences = existing.occurrences;
+      const forward = cImportedForwardTags?.get(existing);
+      if (forward) {
+        forward.occurrences = binding.occurrences;
+        binding.earlierSameScope = forward;
+      }
+      binding.occurrences.push(binding.def!);
       preserveExtraBinding(existing);
     }
     if (tagRole && existing?.def) {
@@ -284,6 +294,8 @@ export function buildScopeIndexFromSource(
       if (tagRole === "declaration" && existing.node && cTagRole(existing.node) !== "declaration") {
         binding.occurrences.push(existing.def);
         preserveExtraBinding(existing);
+        // The forward tag remains visible from its declaration until this completion.
+        binding.earlierSameScope = existing;
         target.map.set(key, binding);
         return;
       }

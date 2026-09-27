@@ -6,7 +6,7 @@ import { okGoToResult } from "./navigation-provenance.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import { bindingCoversUse, fileScopeDefinitionCoversUse, scopeNodesFor } from "./scope-nodes.js";
-import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
+import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
 import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
 import { phpNamedImportRole } from "./import-types.js";
 import { resolvePhpExplicitImport } from "./php-namespace-symbols.js";
@@ -130,14 +130,33 @@ export function getOrBuildScopeIndex(
   return scopeIndex;
 }
 
-function effectivePythonModuleScopeBinding(binding: Binding, useStartIndex: number): Binding | null {
+/** Python function bodies resolve module names when called, after module initialization. */
+function pythonModuleLookupUsesRuntimeBindings(scope: Scope | undefined, node: SyntaxNodeLike): boolean {
+  for (let current = scope; current; current = current.parent) {
+    if (current.kind !== "function") continue;
+    const body = current.node.childForFieldName("body");
+    if (!body) return false;
+    return node.startIndex >= body.startIndex && node.endIndex <= body.endIndex;
+  }
+  return false;
+}
+
+function effectivePythonModuleScopeBinding(
+  binding: Binding,
+  useStartIndex: number,
+  moduleLookupAtRuntime: boolean,
+): Binding | null {
   let importBinding: ImportBinding | undefined;
   let importSource: Binding | undefined;
   let localBinding: Binding | undefined;
   let latestLocalStart = -1;
   for (let candidate: Binding | undefined = binding; candidate; candidate = candidate.earlierSameScope) {
     const localStart = candidate.def?.start.index;
-    if (localStart !== undefined && localStart <= useStartIndex && localStart > latestLocalStart) {
+    if (
+      localStart !== undefined &&
+      (moduleLookupAtRuntime || localStart <= useStartIndex) &&
+      localStart > latestLocalStart
+    ) {
       localBinding = candidate;
       latestLocalStart = localStart;
     }
@@ -153,6 +172,7 @@ function effectivePythonModuleScopeBinding(binding: Binding, useStartIndex: numb
     () => true,
     localBinding?.def?.start.index,
     useStartIndex,
+    moduleLookupAtRuntime,
   );
   if (effective?.kind === "local") return localBinding ?? null;
   if (effective?.kind === "explicit") return importSource ?? null;
@@ -201,14 +221,22 @@ export function findClosestScopeBinding(
     currentScope = best;
   }
 
+  const pythonModuleLookupAtRuntime =
+    support.id === "python" && pythonModuleLookupUsesRuntimeBindings(currentScope, currentNode);
   const row = scopeNodesFor(support.id);
   while (currentScope) {
     let binding: Binding | undefined = currentScope.map.get(normalizedName);
-    while (binding && !bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex)) {
-      binding = binding.earlierSameScope;
+    if (!pythonModuleLookupAtRuntime || currentScope.kind !== "module") {
+      while (binding && !bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex)) {
+        binding = binding.earlierSameScope;
+      }
     }
     if (support.id === "python" && currentScope.kind === "module" && binding) {
-      const effectiveBinding = effectivePythonModuleScopeBinding(binding, currentNode.startIndex);
+      const effectiveBinding = effectivePythonModuleScopeBinding(
+        binding,
+        currentNode.startIndex,
+        pythonModuleLookupAtRuntime,
+      );
       if (effectiveBinding) return effectiveBinding;
       currentScope = currentScope.parent;
       continue;
