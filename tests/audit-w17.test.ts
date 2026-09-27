@@ -6,6 +6,7 @@ import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../src/graph
 import { buildProjectIndex, findReferences, goToDefinition } from "../src/index.js";
 import { STAR_IMPORT_PRECEDENCE } from "../src/indexer/star-import-precedence.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 const roots: string[] = [];
 
@@ -367,6 +368,34 @@ describe("star-import precedence (W17)", () => {
     const localHit = functionNode(graph, "main.py", "hit");
     expect(edgeBetween(graph, run, localHit, "calls")).toBe(true);
     expect(edgeBetween(graph, run, importedHit, "calls")).toBe(false);
+  });
+
+  it("keeps a module import when a later function declares the same Python name locally", async () => {
+    const imported = "class X:\n    pass\n";
+    const main =
+      "from a import X\n\ndef inner():\n    class X:\n        pass\n    return X()\n\nclass Child(X):\n    pass\n";
+    const { root, index } = await project("cg-audit-w17-python-nested-local-", {
+      "a.py": imported,
+      "main.py": main,
+    });
+    const file = fileIn(root, "main.py");
+    const moduleUse = await goToDefinition(index, { file, ...at(main, "class Child(X)", "X") });
+    expect(moduleUse.status).toBe("ok");
+    if (moduleUse.status === "ok") {
+      expect(fileIdentityKey(moduleUse.definition.file)).toBe(fileIdentityKey(fileIn(root, "a.py")));
+      expect(moduleUse.definition.range.start.line).toBe(1);
+    }
+    const localUse = await goToDefinition(index, { file, ...at(main, "return X()", "X") });
+    expect(localUse.status).toBe("ok");
+    if (localUse.status === "ok") {
+      expect(fileIdentityKey(localUse.definition.file)).toBe(fileIdentityKey(file));
+      expect(localUse.definition.range.start.line).toBe(4);
+    }
+
+    const graph = await buildSymbolGraphDetailed(index);
+    const child = typeNode(graph, "main.py", "Child");
+    expect(edgeBetween(graph, child, typeNode(graph, "a.py", "X"), "extends")).toBe(true);
+    expect(edgeBetween(graph, child, typeNode(graph, "main.py", "X"), "extends")).toBe(false);
   });
 
   it("rejects two Rust glob imports of the same name and still resolves one glob", async () => {

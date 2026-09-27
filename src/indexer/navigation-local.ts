@@ -221,9 +221,9 @@ export function findClosestScopeBinding(
     currentScope = best;
   }
 
-  const pythonModuleLookupAtRuntime =
-    support.id === "python" && pythonModuleLookupUsesRuntimeBindings(currentScope, currentNode);
   const row = scopeNodesFor(support.id);
+  const pythonModuleLookupAtRuntime =
+    !!row.moduleBindingsAtFunctionRuntime && pythonModuleLookupUsesRuntimeBindings(currentScope, currentNode);
   while (currentScope) {
     let binding: Binding | undefined = currentScope.map.get(normalizedName);
     if (!pythonModuleLookupAtRuntime || currentScope.kind !== "module") {
@@ -363,20 +363,32 @@ export function resolveNamedDefinition(
       });
     }
   }
+  const row = scopeNodesFor(support.id);
+  const moduleLookupAtRuntime =
+    !!row.moduleBindingsAtFunctionRuntime &&
+    hit?.kind === "resolved" &&
+    referenceIndex !== undefined &&
+    fileIdentityKey(file) === fileIdentityKey(hit.def.file) &&
+    !!index.scopeCache.get(fileIdentityKey(file))?.allScopes.some((scope) => {
+      if (scope.kind !== "function") return false;
+      const body = scope.node.childForFieldName("body");
+      return !!body && referenceIndex >= body.startIndex && referenceIndex < body.endIndex;
+    });
   const effectiveBinding = effectiveExplicitOrLocalBinding(
     mod.imports,
     support.id,
     matchesExplicitBinding,
     hit?.kind === "resolved" ? hit.def.range.start.index : undefined,
     referenceIndex,
+    moduleLookupAtRuntime,
   );
   const effectiveExplicitImport = effectiveBinding?.kind === "explicit" ? effectiveBinding.binding : undefined;
   if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {
-    const sameFileCOrCppFallback =
-      (support.id === "c" || support.id === "cpp") &&
-      referenceIndex !== undefined &&
-      fileIdentityKey(file) === fileIdentityKey(hit.def.file);
-    if (sameFileCOrCppFallback && !fileScopeDefinitionCoversUse(support.id, hit.def.range, referenceIndex)) {
+    const sameFileFallback = referenceIndex !== undefined && fileIdentityKey(file) === fileIdentityKey(hit.def.file);
+    if (
+      sameFileFallback &&
+      !fileScopeDefinitionCoversUse(support.id, hit.def.range, referenceIndex, hit.def.kind, moduleLookupAtRuntime)
+    ) {
       return null;
     }
     if (support.id !== "python" || effectiveBinding?.kind === "local") {

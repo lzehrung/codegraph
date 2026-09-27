@@ -2,7 +2,7 @@ import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
-import { isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
+import { fileIdentityKey, isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
 
 type TomlTable = Record<string, unknown>;
 
@@ -220,18 +220,50 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
   return { roots: [...roots], probed: [...probed] };
 }
 
-/**
- * The identifier a package's own binaries use for its library crate: `[lib] name` when set,
- * otherwise the `[package]` name, with hyphens folded to underscores as Cargo does. Undefined
- * when the manifest is missing or declares neither (a virtual workspace root). Lets
- * `src/bin` targets resolve `use lib_name::item;` back to the package's own library.
- */
-export async function rustOwnLibraryIdentifier(cargoRoot: string, projectRoot: string): Promise<string | undefined> {
+/** The library root reachable through the package name from one of its binary crate roots. */
+export async function rustOwnLibraryTarget(
+  cargoRoot: string,
+  projectRoot: string,
+  fromFile: string,
+  identifier: string,
+): Promise<string | null> {
   const parsed = await parseCargoToml(cargoRoot, projectRoot);
-  if (!parsed) return undefined;
+  if (!parsed || !isTomlTable(parsed.package)) return null;
   const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
-  const name = (lib ? tomlString(lib, "name") : undefined) ?? packageName(parsed);
-  return name ? name.replace(/-/gu, "_") : undefined;
+  const pkgName = packageName(parsed);
+  const name = (lib ? tomlString(lib, "name") : undefined) ?? pkgName;
+  if (!name || name.replace(/-/gu, "_") !== identifier) return null;
+
+  const from = path.resolve(fromFile);
+  const fromKey = fileIdentityKey(from);
+  let isBinary = false;
+  for (const bin of tomlTables(parsed.bin)) {
+    const explicitPath = tomlString(bin, "path");
+    const binName = tomlString(bin, "name");
+    let paths: string[] = [];
+    if (explicitPath) paths = [explicitPath];
+    else if (binName) paths = inferredNamedTargetPaths("bin", binName, pkgName);
+    if (paths.some((candidate) => fileIdentityKey(path.resolve(cargoRoot, candidate)) === fromKey)) {
+      isBinary = true;
+      break;
+    }
+  }
+  if (!isBinary && packageAutoFlag(parsed, "autobins")) {
+    if (fromKey === fileIdentityKey(path.join(cargoRoot, "src/main.rs"))) {
+      isBinary = true;
+    } else {
+      const binRelative = path.relative(path.join(cargoRoot, "src/bin"), from);
+      const parts = binRelative.split(path.sep);
+      isBinary =
+        (parts.length === 1 && !!parts[0]?.endsWith(".rs")) ||
+        (parts.length === 2 && !!parts[0] && parts[1] === "main.rs");
+    }
+  }
+  if (!isBinary || !(await acceptCrateRoot(from, projectRoot, true))) return null;
+
+  const libPath = lib ? tomlString(lib, "path") : undefined;
+  if (!lib && !packageAutoFlag(parsed, "autolib")) return null;
+  return acceptCrateRoot(path.resolve(cargoRoot, libPath ?? "src/lib.rs"), projectRoot, true);
 }
 
 /** Inline dependency tables naming `crateIdentifier`, across the dependency groups. */

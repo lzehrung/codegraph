@@ -172,7 +172,10 @@ export function buildScopeIndexFromSource(
   const tracksLexicalNames = !!(row.hoistedFunctionTypes || row.hoistedVariableDeclarationTypes);
   const canDeferForward =
     !tracksLexicalNames &&
-    (!!row.wholeScopeKinds?.size || !!row.wholeScopeDeclarationTypes?.size || !!row.variableTargetScopeKinds?.size);
+    (!!row.wholeScopeKinds?.size ||
+      !!row.wholeScopeDeclarationTypes?.size ||
+      !!row.variableTargetScopeKinds?.size ||
+      !!row.moduleBindingsAtFunctionRuntime);
   const nodeById = (id: number): SyntaxNodeLike | undefined =>
     tree instanceof ProjectedSyntaxTree ? tree.nodeById(id) : undefined;
   const attachPendingNames = (scope: Scope): void => {
@@ -780,7 +783,18 @@ export function buildScopeIndexFromSource(
   const scopeCanGainCoveringBinding = (scope: Scope): boolean =>
     !!row.wholeScopeKinds?.has(scope.kind) ||
     !!row.variableTargetScopeKinds?.has(scope.kind) ||
-    (!!row.wholeScopeDeclarationTypes?.size && scope.kind !== "module");
+    !!row.wholeScopeDeclarationTypes?.size ||
+    (scope.kind === "module" && !!row.moduleBindingsAtFunctionRuntime);
+
+  const moduleBindingAtFunctionRuntime = (useNode: SyntaxNodeLike): boolean => {
+    if (!row.moduleBindingsAtFunctionRuntime) return false;
+    for (let current = useNode.parent; current; current = current.parent) {
+      if (!support.createsFunctionScope(current)) continue;
+      const body = current.childForFieldName("body");
+      return !!body && useNode.startIndex >= body.startIndex && useNode.endIndex <= body.endIndex;
+    }
+    return false;
+  };
 
   const lookupCovering = (
     start: Scope | undefined,
@@ -793,7 +807,10 @@ export function buildScopeIndexFromSource(
     while (scope) {
       if (!(phpThis && scope.kind === "function")) {
         let binding = scope.map.get(canonical);
-        while (binding && !bindingCoversUse(row, scope.kind, binding, useStart)) binding = binding.earlierSameScope;
+        const atModuleRuntime = scope.kind === "module" && moduleBindingAtFunctionRuntime(useNode);
+        while (binding && !atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart)) {
+          binding = binding.earlierSameScope;
+        }
         if (binding) return binding;
       }
       scope = scope.parent;
@@ -1028,7 +1045,8 @@ export function buildScopeIndexFromSource(
       addDeclSkippingTypeScope(node, kind);
     }
 
-    if (idSet.has(node.type) && !support.isDeclarationName(node)) {
+    const nestedIdentifier = node.parent && idSet.has(node.parent.type) && row.childSkipNameTypes?.has(node.type);
+    if (idSet.has(node.type) && !support.isDeclarationName(node) && !nestedIdentifier) {
       const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(node) : null;
       if (qualifiedName) {
         const key = cppQualifiedNameSegments(qualifiedName, source).join("::");

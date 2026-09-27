@@ -398,5 +398,5 @@ export function isKeywordReceiver(languageId: string, receiverName: string): boo
 
 /** Whether `receiver.name()` can refer to a free function rather than only a member. */
 export function memberSyntaxNamesFreeFunction(languageId: string): boolean {
-  return MEMBER_ACCESS_ROWS[languageId]?.memberCallNamesFreeFunction === true;
+  return !!MEMBER_ACCESS_ROWS[languageId]?.memberCallNamesFreeFunction;
 }

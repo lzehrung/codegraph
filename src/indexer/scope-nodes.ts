@@ -2,20 +2,12 @@
  * Per-language node-name tables for scope construction in `./scope.js`.
  *
  * Rows are keyed by language id, following the trivia-table precedent in `../util/trivia-tables.js`:
- * the walker keeps the algorithm, the table keeps the node names. Every list is the intersection of
- * the pre-table global list in `scope.js` with the node types the pinned grammar of that language
- * actually produces, so moving the data here is behavior-preserving. `tests/scope-node-tables.test.ts`
- * re-derives both halves from the pinned grammar, fails when a row drifts, and asserts that every
- * function-scope node type with a name field has a name-registration entry.
- *
+ * the walker keeps the algorithm, and the table keeps the pinned grammar's node names and
+ * language-specific visibility rules. `tests/scope-node-tables.test.ts` checks listed node types
+ * against the grammar and verifies that name-bearing function scopes register their names.
  * Fields are optional: an absent field means the language has no node of that shape.
- *
- * Three fields deviate from that intersection on purpose. `assignmentIdentifierTypes` is declared
- * only where the grammar also has `assignmentDeclarationTypes`, and the ECMAScript row omits
- * `enumBodyMemberTypes`, because the walker reads each of them only in conjunction with the second
- * field, which is absent in those rows. Zig's `memberContainerTypes` is deliberately wider than the
- * intersection: Zig has no implicit member scope, so a container's member functions must not land
- * in the file scope.
+ * Zig's `memberContainerTypes` keeps container functions out of the file scope because Zig has
+ * no implicit member scope.
  *
  * `wholeScopeKinds` and `wholeScopeDeclarationTypes` say when a binding covers uses that
  * appear before it. The walker resolves occurrences once the enclosing scope is complete; the
@@ -23,6 +15,7 @@
  */
 
 import type { Range } from "../types.js";
+import { SymbolKind } from "./types.js";
 import type { Scope } from "./scope-types.js";
 
 export type ScopeNodeRow = {
@@ -84,7 +77,8 @@ export type ScopeNodeRow = {
   memberContainerTypes?: ReadonlySet<string>;
   /** Node types whose body is a member scope rather than an ordinary block (C++ classes). */
   memberScopeTypes?: ReadonlySet<string>;
-  /** Child node types skipped when they hold the name or the parameters of a name-registering node. */
+  /** Child node types skipped when they hold the name or parameters of a name-registering node,
+   * or repeat a parent identifier's spelling (PHP `variable_name > name`). */
   childSkipNameTypes?: ReadonlySet<string>;
   /** Node types that are the file root, so no block scope is pushed for them. */
   moduleRootTypes?: ReadonlySet<string>;
@@ -127,6 +121,8 @@ export type ScopeNodeRow = {
    * text; a `let` in the same block is not.
    */
   wholeScopeDeclarationTypes?: ReadonlySet<string>;
+  /** Module names used inside function bodies resolve after module initialization (Python). */
+  moduleBindingsAtFunctionRuntime?: boolean;
   /**
    * Put a variable declaration in the nearest scope of one of these kinds. Python: an assignment
    * anywhere in a function makes that name local to the whole function, not to the block that
@@ -234,22 +230,36 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberContainerTypes: new Set(["class_definition"]),
     childSkipNameTypes: new Set(["identifier", "parameters"]),
     moduleRootTypes: new Set(["module"]),
-    wholeScopeKinds: new Set(["module", "function"]),
-    wholeScopeDeclarationTypes: new Set(["function_definition", "class_definition"]),
+    wholeScopeKinds: new Set(["function"]),
+    moduleBindingsAtFunctionRuntime: true,
     variableTargetScopeKinds: new Set(["function"]),
     variableScopeBoundaryTypes: new Set(["class_definition"]),
     nonLexicalMemberPropertyTypes: new Set(["attribute"]),
   },
   php: {
     functionNameTypes: new Set(["function_definition", "method_declaration"]),
-    classNameTypes: new Set(["class_declaration"]),
+    classNameTypes: new Set(["class_declaration", "trait_declaration"]),
     typeNameTypes: new Set(["interface_declaration", "enum_declaration"]),
     enumMemberTypes: new Set(["enum_case"]),
-    variableDeclarationTypes: new Set(["const_declaration"]),
+    variableDeclarationTypes: new Set(["assignment_expression", "const_declaration"]),
+    assignmentDeclarationTypes: new Set(["assignment_expression"]),
+    assignmentIdentifierTypes: new Set(["variable_name"]),
     memberFunctionTypes: new Set(["method_declaration"]),
-    memberContainerTypes: new Set(["class_declaration"]),
+    memberContainerTypes: new Set([
+      "class_declaration",
+      "interface_declaration",
+      "trait_declaration",
+      "enum_declaration",
+    ]),
+    childSkipNameTypes: new Set(["name"]),
     moduleRootTypes: new Set(["program"]),
-    wholeScopeKinds: WHOLE_FILE_SCOPE,
+    wholeScopeDeclarationTypes: new Set([
+      "function_definition",
+      "class_declaration",
+      "interface_declaration",
+      "trait_declaration",
+      "enum_declaration",
+    ]),
   },
   go: {
     parameterParents: new Set(["parameter_declaration"]),
@@ -296,8 +306,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     parameterParents: new Set(["parameter"]),
     functionNameTypes: new Set(["method_declaration", "local_function_statement"]),
     unnamedFunctionScopeTypes: new Set(["constructor_declaration", "destructor_declaration"]),
-    classNameTypes: new Set(["class_declaration"]),
-    typeNameTypes: new Set(["interface_declaration", "enum_declaration"]),
+    classNameTypes: new Set(["class_declaration", "struct_declaration", "record_declaration"]),
+    typeNameTypes: new Set(["interface_declaration", "enum_declaration", "delegate_declaration"]),
     enumMemberTypes: new Set(["enum_member_declaration"]),
     declarationPatternTypes: new Set(["declaration_pattern"]),
     variableDeclarationTypes: new Set(["variable_declaration", "field_declaration"]),
@@ -306,12 +316,18 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberFunctionTypes: new Set(["method_declaration"]),
     memberContainerTypes: new Set(["class_declaration"]),
     childSkipNameTypes: new Set(["identifier"]),
-    wholeScopeKinds: WHOLE_FILE_SCOPE,
     wholeScopeDeclarationTypes: new Set([
       "method_declaration",
       "local_function_statement",
       "constructor_declaration",
       "class_declaration",
+      "struct_declaration",
+      "record_declaration",
+      "interface_declaration",
+      "enum_declaration",
+      "delegate_declaration",
+      "field_declaration",
+      "property_declaration",
     ]),
   },
   rust: {
@@ -362,13 +378,11 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     classNameTypes: new Set(["class_declaration"]),
     enumMemberTypes: new Set(["enum_entry"]),
     unnamedFunctionScopeTypes: new Set(["lambda_literal"]),
-    variableDeclarationTypes: new Set(["variable_declaration", "assignment"]),
-    assignmentDeclarationTypes: new Set(["assignment"]),
-    assignmentIdentifierTypes: new Set(["identifier"]),
+    variableDeclarationTypes: new Set(["variable_declaration"]),
     memberContainerTypes: new Set(["class_body", "class_declaration"]),
     childSkipNameTypes: new Set(["identifier"]),
     wholeScopeKinds: WHOLE_FILE_SCOPE,
-    wholeScopeDeclarationTypes: new Set(["function_declaration", "class_declaration"]),
+    wholeScopeDeclarationTypes: new Set(["function_declaration", "class_declaration", "property_declaration"]),
   },
   swift: {
     parameterParents: new Set(["parameter"]),
@@ -395,7 +409,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberContainerTypes: new Set(["class"]),
     childSkipNameTypes: new Set(["identifier"]),
     moduleRootTypes: new Set(["program", "module"]),
-    wholeScopeKinds: WHOLE_FILE_SCOPE,
+    wholeScopeDeclarationTypes: new Set(["class", "module", "method", "singleton_method"]),
   },
   zig: {
     parameterParents: new Set(["parameter"]),
@@ -450,7 +464,26 @@ export function scopeNodesFor(languageId: string): ScopeNodeRow {
 }
 
 /** Check a same-file definition found outside lexical lookup against file-scope declaration order. */
-export function fileScopeDefinitionCoversUse(languageId: string, def: Range, useStartIndex: number): boolean {
+export function fileScopeDefinitionCoversUse(
+  languageId: string,
+  def: Range,
+  useStartIndex: number,
+  kind?: SymbolKind,
+  fromFunctionAtRuntime = false,
+): boolean {
   if (def.start.index === undefined) return false;
-  return bindingCoversUse(scopeNodesFor(languageId), "module", { def }, useStartIndex);
+  const row = scopeNodesFor(languageId);
+  if (row.wholeScopeKinds?.has("module")) return true;
+  if (fromFunctionAtRuntime && row.moduleBindingsAtFunctionRuntime) return true;
+  const covering = row.wholeScopeDeclarationTypes;
+  let declarationTypes: ReadonlySet<string> | undefined;
+  if (kind === SymbolKind.Function) declarationTypes = row.functionNameTypes;
+  else if (kind === SymbolKind.Class) declarationTypes = row.classNameTypes;
+  else if (kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias) declarationTypes = row.typeNameTypes;
+  if (covering && declarationTypes) {
+    for (const declarationType of declarationTypes) {
+      if (covering.has(declarationType)) return true;
+    }
+  }
+  return def.start.index <= useStartIndex;
 }

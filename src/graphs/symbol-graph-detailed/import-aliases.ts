@@ -1,5 +1,6 @@
 import type { ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "../../indexer/types.js";
 import type { ImportBinding } from "../../indexer/types.js";
+import type { Binding, ScopeIndex } from "../../indexer/scope-types.js";
 import { phpNamedImportRole } from "../../indexer/import-types.js";
 import {
   cjsRequireValueBinding,
@@ -66,18 +67,21 @@ export function buildImportAliasMaps(
   moduleEntry: ModuleIndex,
   resolveExportNamespace: ResolveExportNamespace,
   resolveExportFrom: ResolveExportFrom,
+  scopeIndex: ScopeIndex,
 ): ImportAliasMaps {
   const aliasToTargetDef = new Map<string, SymbolDef>();
   const aliasToTargetModule = new Map<string, string>();
   const languageId = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id ?? "";
   const pythonLocalStartIndexes = new Map<string, number>();
   if (languageId === "python") {
-    for (const local of moduleEntry.locals) {
-      const startIndex = local.range.start.index;
-      if (startIndex === undefined) continue;
-      const previous = pythonLocalStartIndexes.get(local.localName);
-      if (previous === undefined || startIndex > previous) {
-        pythonLocalStartIndexes.set(local.localName, startIndex);
+    for (const binding of scopeIndex.allScopes[0]?.map.values() ?? []) {
+      for (let current: Binding | undefined = binding; current; current = current.earlierSameScope) {
+        const startIndex = current.def?.start.index;
+        if (startIndex === undefined) continue;
+        const previous = pythonLocalStartIndexes.get(current.name);
+        if (previous === undefined || startIndex > previous) {
+          pythonLocalStartIndexes.set(current.name, startIndex);
+        }
       }
     }
   }

@@ -141,6 +141,135 @@ describe("forward references (W19)", () => {
     });
   });
 
+  it("does not attach an earlier Python module-level read to a later assignment", async () => {
+    const source = ["print(value)", "value = 1", "print(value)", ""].join("\n");
+    await withFile("module-order.py", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const earlier = await goToDefinition(index, { file, line: 1, column: columnOf(source, 1, "value") });
+      expect(earlier.status).toBe("not_found");
+      const later = await goToDefinition(index, { file, line: 3, column: columnOf(source, 3, "value") });
+      expect(later.status).toBe("ok");
+      if (later.status === "ok") expect(later.definition.range.start.line).toBe(2);
+      const refs = await findReferences(index, { file, line: 2, column: columnOf(source, 2, "value") });
+      expect(referenceLines(refs)).toEqual([2, 3]);
+    });
+  });
+
+  it("does not attach a Python module-level call before its function is defined", async () => {
+    const source = ["later()", "def read():", "    return later()", "def later():", "    return 1", "later()", ""].join(
+      "\n",
+    );
+    await withFile("module-function-order.py", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const earlier = await goToDefinition(index, { file, line: 1, column: columnOf(source, 1, "later") });
+      expect(earlier.status).toBe("not_found");
+      const deferred = await goToDefinition(index, { file, line: 3, column: columnOf(source, 3, "later") });
+      expect(deferred.status).toBe("ok");
+      if (deferred.status === "ok") expect(deferred.definition.range.start.line).toBe(4);
+      const refs = await findReferences(index, { file, line: 4, column: columnOf(source, 4, "later") });
+      expect(referenceLines(refs)).toEqual([3, 4, 6]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "later")
+        .map((edge) => graph.nodes.get(edge.from)?.name);
+      expect(callers).toEqual(["read"]);
+    });
+  });
+
+  it("does not attach an earlier PHP variable read to a later assignment, but sees a later function", async () => {
+    const source = [
+      "<?php",
+      "echo $value;",
+      "$value = 1;",
+      "echo $value;",
+      "echo later();",
+      "function later() { return 1; }",
+      "",
+    ].join("\n");
+    await withFile("variable-order.php", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const earlier = await goToDefinition(index, { file, line: 2, column: columnOf(source, 2, "$value") });
+      expect(earlier.status).toBe("not_found");
+      const later = await goToDefinition(index, { file, line: 4, column: columnOf(source, 4, "$value") });
+      expect(later.status).toBe("ok");
+      if (later.status === "ok") expect(later.definition.range.start.line).toBe(3);
+      const refs = await findReferences(index, { file, line: 3, column: columnOf(source, 3, "$value") });
+      expect(referenceLines(refs)).toEqual([3, 4]);
+      if (refs.status === "ok") expect(refs.references.map((ref) => ref.range.start.column)).toEqual([1, 6]);
+      const functionUse = await goToDefinition(index, { file, line: 5, column: columnOf(source, 5, "later") });
+      expect(functionUse.status).toBe("ok");
+      if (functionUse.status === "ok") expect(functionUse.definition.range.start.line).toBe(6);
+    });
+  });
+
+  it("does not attach an earlier Ruby local read to a later assignment, but sees a later method", async () => {
+    const source = [
+      "puts value",
+      "value = 1",
+      "puts value",
+      "class Widget",
+      "  def first",
+      "    later",
+      "  end",
+      "  def later",
+      "    1",
+      "  end",
+      "end",
+      "",
+    ].join("\n");
+    await withFile("variable-order.rb", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const earlier = await goToDefinition(index, { file, line: 1, column: columnOf(source, 1, "value") });
+      expect(earlier.status).toBe("not_found");
+      const later = await goToDefinition(index, { file, line: 3, column: columnOf(source, 3, "value") });
+      expect(later.status).toBe("ok");
+      if (later.status === "ok") expect(later.definition.range.start.line).toBe(2);
+      const refs = await findReferences(index, { file, line: 2, column: columnOf(source, 2, "value") });
+      expect(referenceLines(refs)).toEqual([2, 3]);
+      const method = await goToDefinition(index, { file, line: 6, column: columnOf(source, 6, "later") });
+      expect(method.status).toBe("ok");
+      if (method.status === "ok") expect(method.definition.range.start.line).toBe(8);
+    });
+  });
+  it("does not invent a C# top-level local before its declaration", async () => {
+    const source = ["System.Console.WriteLine(value);", "int value = 1;", "System.Console.WriteLine(value);", ""].join(
+      "\n",
+    );
+    await withFile("statement-order.cs", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const earlier = await goToDefinition(index, { file, line: 1, column: columnOf(source, 1, "value") });
+      expect(earlier.status).toBe("not_found");
+      const later = await goToDefinition(index, { file, line: 3, column: columnOf(source, 3, "value") });
+      expect(later.status).toBe("ok");
+      if (later.status === "ok") expect(later.definition.range.start.line).toBe(2);
+      const refs = await findReferences(index, { file, line: 2, column: columnOf(source, 2, "value") });
+      expect(referenceLines(refs)).toEqual([2, 3]);
+    });
+  });
+
+  it("does not invent a Kotlin declaration from an assignment", async () => {
+    const source = "println(value)\nvalue = 1\n";
+    await withFile("assignment-order.kts", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const earlier = await goToDefinition(index, { file, line: 1, column: columnOf(source, 1, "value") });
+      expect(earlier.status).toBe("not_found");
+      const later = await goToDefinition(index, { file, line: 2, column: columnOf(source, 2, "value") });
+      expect(later.status).toBe("not_found");
+    });
+    const declared = ["var value = 0", "fun update() { value = 1 }", "fun read() = value", ""].join("\n");
+    await withFile("property-order.kt", declared, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const write = await goToDefinition(index, { file, line: 2, column: columnOf(declared, 2, "value") });
+      expect(write.status).toBe("ok");
+      if (write.status === "ok") expect(write.definition.range.start.line).toBe(1);
+      const read = await goToDefinition(index, { file, line: 3, column: columnOf(declared, 3, "value") });
+      expect(read.status).toBe("ok");
+      if (read.status === "ok") expect(read.definition.range.start.line).toBe(1);
+      const refs = await findReferences(index, { file, line: 1, column: columnOf(declared, 1, "value") });
+      expect(referenceLines(refs)).toEqual([1, 2, 3]);
+    });
+  });
+
   it("finds a Rust call to a function declared later, and not the nested decoy", async () => {
     const source = ["fn a() { b(); }", "fn b() {}", "fn decoy() {", "    fn b() {}", "    b();", "}", ""].join("\n");
     await withFile("forward.rs", source, async (file) => {

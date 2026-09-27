@@ -26,6 +26,7 @@ import {
 import { isKeywordReceiver, memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
 import { getCompilationUnitPeers } from "./compilation-units.js";
 import { findClosestScopeBinding } from "./navigation-local.js";
+import { scopeNodesFor } from "./scope-nodes.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -432,6 +433,7 @@ async function collectNamedNodeReferences(
     let nameEquivalenceUnavailable = false;
     const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
     const importDeclarationKeys = importBindingDeclarationRangeKeys(moduleIndex);
+    const row = scopeNodesFor(parsed.sup.id);
     const walk = (node: SyntaxNodeLike): void => {
       if (identifierTypes.has(node.type)) {
         const text = parsed.sup.normalizeIdentifier(sliceText(node, parsed.source));
@@ -440,7 +442,8 @@ async function collectNamedNodeReferences(
           isMatch = text === canonicalSymbolName;
         } else if (
           (node.type === "name" || node.type === "namespace_name") &&
-          isPhpQualifiedReferenceNode(node.parent)
+          (isPhpQualifiedReferenceNode(node.parent) ||
+            (node.parent && identifierTypes.has(node.parent.type) && row.childSkipNameTypes?.has(node.type)))
         ) {
           isMatch = false;
         } else {

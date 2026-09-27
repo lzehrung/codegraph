@@ -126,6 +126,7 @@ const SCOPE_NODE_LIST_FIELDS = [
 /** Row fields that hold a call or declaration shape rather than a bare node-type list. */
 const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "requireCall",
+  "moduleBindingsAtFunctionRuntime",
   "namelessVariableDeclaration",
   "scopedEnum",
   "variableTargetScopeKinds",

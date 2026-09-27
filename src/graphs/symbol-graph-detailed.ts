@@ -368,11 +368,13 @@ export async function buildSymbolGraphDetailed(
       }
       ownershipParsedContexts.set(fileIdentityKey(file), Promise.resolve({ source: src, tree, sup }));
 
+      const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
       const { aliasToTargetDef, aliasToTargetModule } = buildImportAliasMaps(
         index,
         moduleEntry,
         resolveExportNamespace,
         resolveExportFrom,
+        scopeIndex,
       );
       if (sup.id === "c" || sup.id === "cpp") {
         for (const [alias, def] of [...aliasToTargetDef]) {
@@ -438,7 +440,6 @@ export async function buildSymbolGraphDetailed(
       const { memberExpressionType, optionalMemberTypes, propertyIdentifierTypes, resolveMemberChainTarget } =
         memberResolver;
 
-      const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
       recordCallableDeclarationAliases(moduleEntry, sup.id, scopeIndex.all, nodeAliases);
       recordTypeScriptCallableAliases(moduleEntry, sup.id, tree, nodeAliases);
       const cppParsedByFile = sup.id === "cpp" ? new Map<string, ParsedFileContext>() : null;

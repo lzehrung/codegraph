@@ -129,6 +129,88 @@ describe("Rust binaries name their own library by [lib].name", () => {
   });
 });
 
+describe("Rust own-library import target boundaries", () => {
+  it("does not treat a different binary as the library when the package has no library target", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-no-lib-"));
+    try {
+      const bin = "use pkg::greet;\nfn main() { greet(); }\n";
+      await writeFixture(root, {
+        "Cargo.toml": '[package]\nname = "pkg"\nversion = "0.1.0"\n',
+        "src/main.rs": "pub fn greet() {}\nfn main() {}\n",
+        "src/bin/cli.rs": bin,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: path.join(root, "src/bin/cli.rs"),
+        line: 2,
+        column: columnOf(bin.split("\n")[1]!, "greet"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not expose a library to its own source under its package name", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-lib-self-"));
+    try {
+      const lib = "pub fn greet() {}\nuse pkg::greet as called;\npub fn run() { called(); }\n";
+      await writeFixture(root, {
+        "Cargo.toml": '[package]\nname = "pkg"\nversion = "0.1.0"\n',
+        "src/lib.rs": lib,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: path.join(root, "src/lib.rs"),
+        line: 3,
+        column: columnOf(lib.split("\n")[2]!, "called"),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves only binary targets into an explicit library root and its declared module tree", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-core-lib-"));
+    try {
+      const use = "use pkg::worker::greet;\nfn main() { greet(); }\n";
+      await writeFixture(root, {
+        "Cargo.toml":
+          '[package]\nname = "pkg"\nversion = "0.1.0"\n[lib]\npath = "src/core.rs"\n[[bin]]\nname = "custom"\npath = "tools/custom.rs"\n',
+        "src/core.rs": '#[path = "modules/worker.rs"]\npub mod worker;\n',
+        "src/modules/worker.rs": "pub fn greet() {}\n",
+        "src/main.rs": use,
+        "src/bin/extra.rs": use,
+        "tools/custom.rs": use,
+        "src/unrelated.rs": use,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const relative of ["src/main.rs", "src/bin/extra.rs", "tools/custom.rs"]) {
+        const result = await goToDefinition(index, {
+          file: path.join(root, relative),
+          line: 2,
+          column: columnOf(use.split("\n")[1]!, "greet"),
+        });
+        expect(result.status, relative).toBe("ok");
+        if (result.status === "ok") {
+          expect(fileIdentityKey(result.definition.file)).toBe(
+            fileIdentityKey(path.join(root, "src/modules/worker.rs")),
+          );
+        }
+      }
+      const unrelated = await goToDefinition(index, {
+        file: path.join(root, "src/unrelated.rs"),
+        line: 2,
+        column: columnOf(use.split("\n")[1]!, "greet"),
+      });
+      expect(unrelated.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Rust impl methods own member_of edges and calls edges (G7)", () => {
   it("emits one calls edge per receiver call to Circle::area, member_of edges for impl methods, and never targets the same-named Square::area", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-g7-"));

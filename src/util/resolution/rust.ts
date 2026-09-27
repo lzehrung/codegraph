@@ -14,7 +14,7 @@ import { XID_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { lruMapGet, lruMapSet } from "../lru-map.js";
 import { fileIdentityKey, isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
-import { rustOwnLibraryIdentifier, rustCrateRootFiles, rustPathDependencyCrateRoot } from "./cargo-targets.js";
+import { rustCrateRootFiles, rustOwnLibraryTarget, rustPathDependencyCrateRoot } from "./cargo-targets.js";
 
 function isWithinOrEqual(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
@@ -825,21 +825,22 @@ async function resolveAttributedRustModulePath(
   parts: readonly string[],
   sourceRoot: string,
   cargoRoot: string | null,
+  libraryRootFile?: string,
 ): Promise<string | null | undefined> {
   const head = parts[0];
   if (!head) return undefined;
 
-  // `crate`/`self`/`super` start from a proven file (the crate root, the current file, or the
-  // resolved parent module); any file the walk below reaches from one of them is a real
-  // answer even when no segment carries a `#[path]` attribute. Every other head starts from
-  // an unproven guess (see `declaringFileForSpecifierHead`'s default branch), so only a real
-  // `#[path]` attribute earns a defined result there; otherwise the caller's own conventional
-  // fallback (sibling/source-root/own-package/path-dependency resolution) decides instead.
-  const provenStart = head === "crate" || head === "self" || head === "super";
+  // `crate`/`self`/`super` and a verified library root start from a proven file; any file
+  // reached from one of them is a real answer even without a `#[path]` attribute. Other
+  // heads start from an unproven guess, so only an attribute earns a defined result there;
+  // otherwise conventional import resolution decides.
+  const provenStart = head === "crate" || head === "self" || head === "super" || !!libraryRootFile;
 
   let startFile: string | null;
   let startModuleDir: string | undefined;
-  if (head === "super") {
+  if (libraryRootFile) {
+    startFile = libraryRootFile;
+  } else if (head === "super") {
     const context = await rustSuperModuleContext(projectRoot, fromFile, sourceRoot, cargoRoot);
     if (context.status === "ambiguous") return null;
     startFile = context.parentFile;
@@ -852,12 +853,13 @@ async function resolveAttributedRustModulePath(
   if (!startFile) return undefined;
 
   let childParts: readonly string[] = parts;
-  if (head === "crate" || head === "self" || head === "super") {
+  if (libraryRootFile || head === "crate" || head === "self" || head === "super") {
     childParts = parts.slice(1);
   }
   let currentFile = startFile;
   let currentScope = await loadRustPathAttributeScope(currentFile);
-  let currentModuleDir = startModuleDir ?? rustChildModuleDir(currentFile);
+  const rootModuleDir = libraryRootFile ? path.dirname(libraryRootFile) : undefined;
+  let currentModuleDir = rootModuleDir ?? startModuleDir ?? rustChildModuleDir(currentFile);
   if (startModuleDir) {
     currentScope = rustScopeAtDirectory(currentScope, rustChildModuleDir(currentFile), startModuleDir);
   }
@@ -890,6 +892,7 @@ async function resolveAttributedRustModulePath(
       attributeDirectory = currentModuleDir;
       continue;
     }
+    if (libraryRootFile && !currentScope.declaredModules.some((mod) => mod.name === child)) return null;
     const conventional = await resolveRustModuleParts(currentModuleDir, [child]);
     if (!conventional) {
       if (usedAttribute) return null;
@@ -975,11 +978,18 @@ export async function resolveRustImportPath(
   }
 
   if (cargoRoot && head) {
-    // A package's own binary target (`src/bin/*.rs`, `src/main.rs` alongside `src/lib.rs`)
-    // names its own library crate (`[lib] name`, else the package name) like an external crate.
-    const ownLibraryIdentifier = await rustOwnLibraryIdentifier(cargoRoot, projectRoot);
-    if (ownLibraryIdentifier && ownLibraryIdentifier === head) {
-      return resolveRustModuleParts(sourceRoot, tail);
+    // Only a binary target can name this package's existing library as an external crate.
+    const libraryRoot = await rustOwnLibraryTarget(cargoRoot, projectRoot, fromFile, head);
+    if (libraryRoot) {
+      const resolved = await resolveAttributedRustModulePath(
+        projectRoot,
+        fromFile,
+        parts,
+        sourceRoot,
+        cargoRoot,
+        libraryRoot,
+      );
+      return resolved ?? null;
     }
     // A workspace path dependency (`[dependencies] head = { path = "../head" }`) names its
     // own crate root, not a submodule of the current crate.
