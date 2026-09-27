@@ -16,6 +16,7 @@ import {
   goToDefinitionById,
   listSymbols,
   resolveExport,
+  collectGraph,
 } from "../../src/index.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { collectImportsForFile } from "../../src/indexer.js";
@@ -357,6 +358,22 @@ describe("C quoted include resolution and same-file references", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(["off", "default"] as const)(
+    "keeps both include forms in the collected file graph in %s mode",
+    async (mode) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), `cg-c-${mode}-include-graph-`));
+      const file = normalizePath(path.join(root, "src", "main.c"));
+      try {
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, '#include <x.h>\n#include "x.h"\nint main(void) { return 0; }\n', "utf8");
+        const graph = await collectGraph(root, [file], mode === "off" ? { native: "off" } : {});
+        expect(graph.edges.map((edge) => edge.includeForm).sort()).toEqual(["angle", "literal"]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("resolves an angle include through resolution hints and keeps it external without them", async () => {
     const hintRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-angle-hints-"));
