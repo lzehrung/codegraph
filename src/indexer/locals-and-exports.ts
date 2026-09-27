@@ -12,7 +12,7 @@ import {
   type NativeQueryResults,
   type NativeRuntimeMode,
 } from "../native/tree-sitter-native.js";
-import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
+import { maskJsLikeCommentsAndStrings, maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
@@ -77,6 +77,14 @@ const JS_FALLBACK_CJS_FUNCTION_PATTERN = new RegExp(
 );
 const JS_FALLBACK_CJS_MODULE_FUNCTION_PATTERN = new RegExp(
   String.raw`(?:^|[;\n\r])\s*module\.exports\s*=\s*(?:async\s+)?(?:function\b\s*\*?\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})?\s*\(|\([^)]*\)\s*=>|${ECMASCRIPT_IDENTIFIER_SOURCE}\s*=>)`,
+  "gu",
+);
+const JS_FALLBACK_CJS_MODULE_IDENTIFIER_PATTERN = new RegExp(
+  String.raw`(?:^|[;\n\r])\s*module\.exports\s*=\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})(?![$_\p{ID_Continue}\u200c\u200d])(?=\s*(?:;|$|\r|\n))`,
+  "gu",
+);
+const JS_FALLBACK_TOP_LEVEL_LOCAL_PATTERN = new RegExp(
+  String.raw`(?:^|[;{}\n\r])\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?((?:abstract\s+)?class|(?:async\s+)?function|const|let|var)\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})(?![$_\p{ID_Continue}\u200c\u200d])`,
   "gu",
 );
 const JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN = new RegExp(
@@ -376,6 +384,8 @@ function appendJsLikeRegexFallbackExports(
   JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN.lastIndex = 0;
   JS_FALLBACK_CJS_FUNCTION_PATTERN.lastIndex = 0;
   JS_FALLBACK_CJS_MODULE_FUNCTION_PATTERN.lastIndex = 0;
+  JS_FALLBACK_CJS_MODULE_IDENTIFIER_PATTERN.lastIndex = 0;
+  JS_FALLBACK_TOP_LEVEL_LOCAL_PATTERN.lastIndex = 0;
   JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN.lastIndex = 0;
   const reDecl = JS_FALLBACK_DECLARATION_PATTERN;
   const reDefault = JS_FALLBACK_DEFAULT_PATTERN;
@@ -385,6 +395,8 @@ function appendJsLikeRegexFallbackExports(
   const reStar = /\bexport\s*\*\s*from\s*("|')([^"']*)\1/gu;
   const reCjsFn = JS_FALLBACK_CJS_FUNCTION_PATTERN;
   const reCjsModuleFn = JS_FALLBACK_CJS_MODULE_FUNCTION_PATTERN;
+  const reCjsModuleIdentifier = JS_FALLBACK_CJS_MODULE_IDENTIFIER_PATTERN;
+  const reTopLevelLocal = JS_FALLBACK_TOP_LEVEL_LOCAL_PATTERN;
   const reCjsObjFn = JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN;
   const moduleExportsObject = /module\.exports\s*=\s*\{([^}]*)\}/su;
   let match: RegExpExecArray | null;
@@ -522,6 +534,80 @@ function appendJsLikeRegexFallbackExports(
     };
     locals.push(target);
     exports.push({ type: "local", exportedAs: "exports", target, mechanism: "cjs-module-value" });
+  }
+
+  let identifierMatch = reCjsModuleIdentifier.exec(maskedSource);
+  if (identifierMatch && !exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
+    const identifierAssignments = [identifierMatch];
+    while ((identifierMatch = reCjsModuleIdentifier.exec(maskedSource))) identifierAssignments.push(identifierMatch);
+    // Only a single module-scope declaration can prove the value behind module.exports.
+    // The comments/strings/regex mask preserves offsets while keeping nested declarations out.
+    const scopeSource = maskJsLikeCommentsStringsAndRegex(source);
+    let scanIndex = 0;
+    let scanLine = 1;
+    let lastLineBreak = -1;
+    let scopeDepth = 0;
+    const depthAt = (index: number): number => {
+      while (scanIndex < index) {
+        const ch = scopeSource[scanIndex++];
+        if (ch === "{") scopeDepth++;
+        if (ch === "\n") {
+          scanLine++;
+          lastLineBreak = scanIndex - 1;
+        }
+        if (ch === "}") scopeDepth--;
+      }
+      return scopeDepth;
+    };
+    const declarations = new Map<string, SymbolDef[]>();
+    const valueNames = new Set(identifierAssignments.map((assignment) => assignment[1]!));
+    let declarationMatch: RegExpExecArray | null;
+    while ((declarationMatch = reTopLevelLocal.exec(scopeSource))) {
+      const name = declarationMatch[2]!;
+      if (!valueNames.has(name)) continue;
+      const startIndex = declarationMatch.index + declarationMatch[0].lastIndexOf(name);
+      if (depthAt(startIndex)) continue;
+      const declaration = declarationMatch[1]!;
+      let kind = SymbolKind.Variable;
+      if (declaration.endsWith("function")) kind = SymbolKind.Function;
+      if (declaration.endsWith("class")) kind = SymbolKind.Class;
+      const start = { line: scanLine, column: startIndex - lastLineBreak, index: startIndex };
+      const local = locals.find((def) => def.localName === name && def.range.start.index === startIndex) ?? {
+        file,
+        localName: name,
+        kind,
+        range: { start, end: { ...start, column: start.column + name.length, index: startIndex + name.length } },
+      };
+      const namedDeclarations = declarations.get(name) ?? [];
+      namedDeclarations.push(local);
+      declarations.set(name, namedDeclarations);
+    }
+    scanIndex = 0;
+    scopeDepth = 0;
+    const provenValue = (assignment: RegExpExecArray): SymbolDef | undefined => {
+      const name = assignment[1]!;
+      const rhsIndex = assignment.index + assignment[0].lastIndexOf(name);
+      if (depthAt(rhsIndex)) return undefined;
+      // A line break before .method, [key] or a call still belongs to the RHS.
+      let afterRhs = rhsIndex + name.length;
+      while (/\s/u.test(maskedSource[afterRhs] ?? "")) afterRhs++;
+      if (maskedSource[afterRhs] === "." || maskedSource[afterRhs] === "[" || maskedSource[afterRhs] === "(") {
+        return undefined;
+      }
+      const candidates = declarations.get(name);
+      return candidates?.length === 1 ? candidates[0] : undefined;
+    };
+    // As in the native path, a reassigned module.exports has no single proven value.
+    const selected = identifierAssignments.length === 1 ? provenValue(identifierAssignments[0]!) : undefined;
+    if (selected) {
+      if (!locals.includes(selected)) locals.push(selected);
+      exports.push({
+        type: "local",
+        exportedAs: "default",
+        target: { ...selected, kind: SymbolKind.Default },
+        mechanism: "cjs-module-value",
+      });
+    }
   }
 
   const moduleExportsObjMatch = moduleExportsObject.exec(maskedSource);
@@ -913,6 +999,8 @@ export function collectLocalsAndExportsFromSource(
 
     const hasDefaultExport = (): boolean =>
       exports.some((entry) => entry.type === "local" && entry.exportedAs === "default");
+    // A second `module.exports = X` makes the required value depend on control flow.
+    let cjsModuleValueSeen = false;
 
     const excludedCaptures: NativeCapture[] = [];
     for (const match of matches) {
@@ -1101,8 +1189,17 @@ export function collectLocalsAndExportsFromSource(
         continue;
       }
       if (map["cjs_module_value"]) {
+        if (cjsModuleValueSeen) {
+          const previous = exports.findIndex(
+            (entry) =>
+              entry.type === "local" && entry.exportedAs === "default" && entry.mechanism === "cjs-module-value",
+          );
+          if (previous >= 0) exports.splice(previous, 1);
+          continue;
+        }
+        cjsModuleValueSeen = true;
         const local = localVisibleAtCapture(map["cjs_module_value"]);
-        if (local && !exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
+        if (local && !hasDefaultExport()) {
           exports.push({
             type: "local",
             exportedAs: "default",

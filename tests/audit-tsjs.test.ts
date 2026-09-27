@@ -611,6 +611,121 @@ describe("TypeScript and JavaScript accuracy audit", () => {
       await rm(fixture.root, { recursive: true, force: true });
     }
   });
+  const directCjsWidget = [
+    "function decoy() {",
+    "  class Widget { static method() {} }",
+    "  return Widget;",
+    "}",
+    "class Widget { static method() {} }",
+    "module.exports = Widget;",
+    "",
+  ].join("\n");
+
+  it.each(["js", "ts", "tsx"] as const)("resolves native direct CJS identifier exports in %s", async (extension) => {
+    const widgetName = `widget.${extension}`;
+    const useName = `use.${extension}`;
+    const importLine = extension === "js" ? 'const W = require("./widget");' : 'import W = require("./widget");';
+    const use = [importLine, "function run() { W.method(); }", ""].join("\n");
+    const fixture = await project({ [widgetName]: directCjsWidget, [useName]: use });
+    try {
+      const module = fixture.index.byFile.get(fileIdentityKey(fixture.file(widgetName)));
+      const direct = module?.exports.find((entry) => entry.type === "local" && entry.exportedAs === "default");
+      expect(direct?.type).toBe("local");
+      if (direct?.type !== "local") return;
+      expect(direct.mechanism).toBe("cjs-module-value");
+      expect(direct.target.range.start.index).toBe(tokenIndex(directCjsWidget, 5, "Widget"));
+
+      const result = await goToDefinition(fixture.index, {
+        file: fixture.file(useName),
+        line: 2,
+        column: columnOf(use, 2, "method"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.range.start.index).toBe(tokenIndex(directCjsWidget, 5, "method"));
+
+      const refs = await findReferences(fixture.index, {
+        file: fixture.file(widgetName),
+        line: 5,
+        column: columnOf(directCjsWidget, 5, "method"),
+      });
+      expect(refs.status).toBe("ok");
+      expect(referenceSites(refs)).toContain(`${useName}:2`);
+      expect(referenceSites(refs)).not.toContain(`${widgetName}:2`);
+
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(callTargetIds(graph, "run")).toContain(
+        fixture.file(widgetName) + "::method::" + tokenIndex(directCjsWidget, 5, "method"),
+      );
+      expect(callTargetIds(graph, "run")).not.toContain(
+        fixture.file(widgetName) + "::method::" + tokenIndex(directCjsWidget, 2, "method"),
+      );
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["js", "ts", "tsx"] as const)("binds fallback direct CJS identifier exports in %s", async (extension) => {
+    const widgetName = `widget.${extension}`;
+    const fixture = await project({ [widgetName]: directCjsWidget });
+    try {
+      const file = fixture.file(widgetName);
+      const native = fixture.index.byFile.get(fileIdentityKey(file));
+      const fallback = collectLocalsAndExportsFromSource(file, directCjsWidget, supportForFile(file)!, [], {
+        nativeMode: "off",
+      });
+      const direct = fallback.exports.find((entry) => entry.type === "local" && entry.exportedAs === "default");
+      expect(direct?.type).toBe("local");
+      if (direct?.type !== "local") return;
+      expect(direct.mechanism).toBe("cjs-module-value");
+      expect(direct.target.range.start.index).toBe(tokenIndex(directCjsWidget, 5, "Widget"));
+      const nativeDirect = native?.exports.find((entry) => entry.type === "local" && entry.exportedAs === "default");
+      if (nativeDirect?.type === "local") {
+        expect(direct.target.localName).toBe(nativeDirect.target.localName);
+        expect(direct.target.kind).toBe(nativeDirect.target.kind);
+        expect(direct.target.range).toEqual(nativeDirect.target.range);
+      }
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["js", "ts"] as const)("leaves a reassigned module.exports value unproven in %s", async (extension) => {
+    const widgetName = `widget.${extension}`;
+    const useName = `use.${extension}`;
+    const widget = [
+      "class First { static method() {} }",
+      "class Second { static method() {} }",
+      "module.exports = First;",
+      "module.exports = Second;",
+      "",
+    ].join("\n");
+    const importLine = extension === "js" ? 'const W = require("./widget");' : 'import W = require("./widget");';
+    const use = [importLine, "function run() { W.method(); }", ""].join("\n");
+    const fixture = await project({ [widgetName]: widget, [useName]: use });
+    try {
+      const file = fixture.file(widgetName);
+      const fallback = collectLocalsAndExportsFromSource(file, widget, supportForFile(file)!, [], {
+        nativeMode: "off",
+      });
+      for (const exports of [fixture.index.byFile.get(fileIdentityKey(file))?.exports, fallback.exports]) {
+        expect(exports?.some((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value")).toBe(false);
+      }
+      // Node binds the last assignment; codegraph must not name the first class.
+      const result = await goToDefinition(fixture.index, {
+        file: fixture.file(useName),
+        line: 2,
+        column: columnOf(use, 2, "method"),
+      });
+      if (result.status === "ok") {
+        expect(result.definition.range.start.index).not.toBe(tokenIndex(widget, 1, "method"));
+      }
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(callTargetIds(graph, "run")).not.toContain(file + "::method::" + tokenIndex(widget, 1, "method"));
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
 
   it("preserves a direct CommonJS class value across a reopened disk cache", async () => {
     const widget = [

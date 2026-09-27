@@ -112,6 +112,11 @@ const BASE_GRAPH = {
     (export_statement "*" @wild (string) @from) @stmt
     (export_statement (string) @from) @stmt
     (export_assignment (identifier) @ts_export_assign)
+    ;; CJS whole-module value: module.exports = Widget (shared by TypeScript and TSX).
+    ((expression_statement (assignment_expression
+      left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
+      right: (identifier) @cjs_module_value))
+      (#eq? @mod "module") (#eq? @prop "exports"))
   `,
   locals: `
     (function_declaration name: (identifier) @name)
