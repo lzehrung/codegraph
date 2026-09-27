@@ -20,7 +20,7 @@ import {
   supportsReceiverMemberNavigation,
 } from "../util/member-access-tables.js";
 import { cppCallableShapeForNode } from "./cpp-callables.js";
-import { earliestSymbolDef, typescriptCallableRoleAt } from "./ts-callables.js";
+import { typescriptCollapsedOverloadCandidates } from "./ts-callables.js";
 import {
   effectiveExplicitBinding,
   isExpandedStarBinding,
@@ -68,13 +68,13 @@ import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
 import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./php-namespace-symbols.js";
+import { resolvePythonSubmoduleExact } from "./imports/python.js";
 import {
   cjsRequireValueBinding,
   memberContainerForDefinition,
   resolveExport,
   resolveImported,
   resolvePhpExportByImportType,
-  resolvePythonSubmodule,
 } from "./navigation-resolve.js";
 import {
   CSHARP_PARTIAL_CONTAINER_TYPES,
@@ -675,7 +675,7 @@ export async function resolveMemberAccessDefinition(params: {
           // unimported submodule of that exact name, mirroring the same fallback `resolveImported`
           // already applies for a direct import binding.
           if (sup.id === "python") {
-            const submodule = resolvePythonSubmodule(base.file, memberName);
+            const submodule = resolvePythonSubmoduleExact(base.file, memberName);
             if (submodule) return { kind: "namespace", file: submodule };
           }
           return null;
@@ -1932,50 +1932,24 @@ function uniqueReceiverMemberCandidates(candidates: readonly SymbolDef[]): Symbo
   return unique;
 }
 
-async function collapseTypeScriptOverloadCandidates(
+async function selectReceiverMemberCandidates(
   index: ProjectIndex,
   candidates: readonly SymbolDef[],
-): Promise<SymbolDef[]> {
-  if (candidates.length < 2) return [...candidates];
-  const file = candidates[0]?.file;
-  if (!file || candidates.some((candidate) => candidate.file !== file)) return [...candidates];
-  const context = await ensureParsedContext(file, undefined, index.languageExtensions);
-  if (!isJsTsLanguage(context.sup.id)) return [...candidates];
-  const roles = candidates.map((candidate) => ({
-    candidate,
-    role: typescriptCallableRoleAt(
-      context.tree,
-      candidate.range.start.index ?? 0,
-      candidate.range.end.index ?? candidate.range.start.index ?? 0,
-    ),
-  }));
-  if (roles.every((item) => item.role === "other")) return [...candidates];
-  const implementations = roles.filter((item) => item.role === "implementation").map((item) => item.candidate);
-  if (implementations.length === 1) return implementations;
-  if (implementations.length > 1) {
-    return roles.filter((item) => item.role !== "signature").map((item) => item.candidate);
+  knownArgumentCount?: number,
+  allowUniqueArityMismatch = true,
+): Promise<SymbolDef | undefined> {
+  let overloadCandidates = candidates;
+  if (candidates.length > 1) {
+    const file = candidates[0]?.file;
+    if (file && candidates.every((candidate) => candidate.file === file)) {
+      const context = await ensureParsedContext(file, undefined, index.languageExtensions);
+      if (isJsTsLanguage(context.sup.id)) {
+        overloadCandidates = typescriptCollapsedOverloadCandidates(candidates, context.tree, (candidate) => candidate);
+      }
+    }
   }
-  const signatures = roles.filter((item) => item.role === "signature").map((item) => item.candidate);
-  if (signatures.length === 0) return [...candidates];
-  return [earliestSymbolDef(signatures)];
-}
 
-function selectReceiverMemberCandidates(
-  index: ProjectIndex,
-  candidates: readonly SymbolDef[],
-  knownArgumentCount?: number,
-  allowUniqueArityMismatch = true,
-): Promise<SymbolDef | undefined> {
-  return selectCollapsedReceiverMemberCandidates(index, candidates, knownArgumentCount, allowUniqueArityMismatch);
-}
-
-async function selectCollapsedReceiverMemberCandidates(
-  index: ProjectIndex,
-  candidates: readonly SymbolDef[],
-  knownArgumentCount?: number,
-  allowUniqueArityMismatch = true,
-): Promise<SymbolDef | undefined> {
-  const unique = uniqueReceiverMemberCandidates(await collapseTypeScriptOverloadCandidates(index, candidates));
+  const unique = uniqueReceiverMemberCandidates(overloadCandidates);
   if (unique.length === 1 && (allowUniqueArityMismatch || knownArgumentCount === undefined)) return unique[0];
   if (knownArgumentCount === undefined) return undefined;
   const matches: SymbolDef[] = [];

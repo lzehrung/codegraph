@@ -22,6 +22,11 @@ export type ModuleSpecifierExportCondition = "import" | "require";
  */
 export type CFamilyIncludeForm = "literal" | "angle" | "macro";
 
+/** Narrows untrusted input, such as a parsed artifact, to a {@link CFamilyIncludeForm}. */
+export function isCFamilyIncludeForm(value: unknown): value is CFamilyIncludeForm {
+  return value === "literal" || value === "angle" || value === "macro";
+}
+
 /**
  * Classifies one C/C++ include's raw source text: `"..."` is a string-literal include, `<...>` a
  * system-header include, and anything else an identifier macro. Empty text has no form.

@@ -1,17 +1,12 @@
-import fs from "node:fs";
-import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import type { FileId } from "../types.js";
 import { foldPhpIdentifierCase, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
-import {
-  getCompilationUnitPeers,
-  getPackageDeclarationName,
-  IMPLICIT_UNIT_LANGUAGES,
-  isUnitBareNameVisible,
-} from "./compilation-units.js";
+import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES, isUnitBareNameVisible } from "./compilation-units.js";
 import { phpNamedImportRole } from "./import-types.js";
+import { resolvePythonSubmoduleExact } from "./imports/python.js";
+import { PHP_CLASS_LIKE_KINDS } from "./php-namespace-symbols.js";
 import { coalesceEquivalentCsharpPartialExports } from "./shared-owner-identity.js";
 import {
   type ExportEntry,
@@ -22,17 +17,6 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
-
-/**
- * Files that can carry the package declaration each lookup language searches for. Java and Kotlin
- * stay one group because they share a JVM package namespace and each pattern already accepts the
- * other's declaration; every other language is skipped instead of read for a keyword it never uses.
- */
-const PACKAGE_DECLARING_LANGUAGE_IDS: Record<"go" | "java" | "kotlin", ReadonlySet<string>> = {
-  go: new Set(["go"]),
-  java: new Set(["java", "kotlin"]),
-  kotlin: new Set(["java", "kotlin"]),
-};
 
 function cacheKey(file: FileId, canonicalName: string): string {
   return `${fileIdentityKey(file)}::canonical::${canonicalName}`;
@@ -45,15 +29,7 @@ type ModuleNameLookup = {
   locals: Map<string, SymbolDef[]>;
 };
 
-type PackageDirectoryLookup = {
-  byName: Map<string, ModuleIndex[]>;
-};
-
 const moduleNameLookups = new WeakMap<ProjectIndex, Map<string, ModuleNameLookup>>();
-const packageDirectoryLookups = new WeakMap<
-  ProjectIndex,
-  Map<"go" | "java" | "kotlin", Map<string, PackageDirectoryLookup>>
->();
 
 export type ResolveExportOptions = {
   preferredKind?: SymbolKind;
@@ -62,7 +38,6 @@ export type ResolveExportOptions = {
   /** Source position for implicit C# namespace lookup in the initial file. */
   referenceIndex?: number;
 };
-const PHP_CLASS_NAMESPACE_KINDS = [SymbolKind.Class, SymbolKind.Interface, SymbolKind.TypeAlias] as const;
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
   return index.byFile.get(fileIdentityKey(file));
@@ -224,94 +199,29 @@ function resolveImplicitUnitExport(
   return unique.length === 1 ? (unique[0] ?? null) : null;
 }
 
-function packageDirectoryLookup(
-  index: ProjectIndex,
-  languageId: "go" | "java" | "kotlin",
-): Map<string, PackageDirectoryLookup> {
-  let byLanguage = packageDirectoryLookups.get(index);
-  if (!byLanguage) {
-    byLanguage = new Map<"go" | "java" | "kotlin", Map<string, PackageDirectoryLookup>>();
-    packageDirectoryLookups.set(index, byLanguage);
-  }
-  const cached = byLanguage.get(languageId);
-  if (cached) return cached;
-
-  const directories = new Map<string, PackageDirectoryLookup>();
-  for (const moduleEntry of index.byFile.values()) {
-    const directoryKey = fileIdentityKey(path.dirname(moduleEntry.file));
-    let directory = directories.get(directoryKey);
-    if (!directory) {
-      directory = { byName: new Map<string, ModuleIndex[]>() };
-      directories.set(directoryKey, directory);
-    }
-    const moduleLanguageId = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id;
-    if (!moduleLanguageId || !PACKAGE_DECLARING_LANGUAGE_IDS[languageId].has(moduleLanguageId)) continue;
-    const packageName =
-      languageId === "go"
-        ? getPackageDeclarationName(index, moduleEntry.file, "go")
-        : getPackageDeclarationName(index, moduleEntry.file, languageId);
-    if (!packageName) continue;
-    const entries = directory.byName.get(packageName) ?? [];
-    entries.push(moduleEntry);
-    directory.byName.set(packageName, entries);
-  }
-  byLanguage.set(languageId, directories);
-  return directories;
-}
+/**
+ * Same-package Java/Kotlin export that the bare-name unit scan does not answer (a member, for
+ * example). Peers come from `getCompilationUnitPeers`, so Java and Kotlin share one package
+ * rule. An incomplete set (an unreadable peer, or the same package outside this directory)
+ * is not a proven unique answer.
+ */
 function resolveSiblingPackageExport(
   index: ProjectIndex,
   targetFile: string,
   exportedName: string,
-  languageId: "java" | "kotlin",
 ): ResolvedExport | null {
-  const packageName = getPackageDeclarationName(index, targetFile, languageId);
-  if (!packageName) return null;
-  const directory = packageDirectoryLookup(index, languageId).get(fileIdentityKey(path.dirname(targetFile)));
-  if (!directory) return null;
+  const peers = getCompilationUnitPeers(index, targetFile);
+  if (!peers.complete) return null;
   const targetFileKey = fileIdentityKey(targetFile);
   const matches: ResolvedExport[] = [];
-  for (const moduleEntry of directory.byName.get(packageName) ?? []) {
-    if (fileIdentityKey(moduleEntry.file) === targetFileKey) continue;
-    const hit = resolveExport(index, moduleEntry.file, exportedName);
+  for (const peerFile of peers.files) {
+    if (fileIdentityKey(peerFile) === targetFileKey) continue;
+    const hit = resolveExport(index, peerFile, exportedName);
     if (hit && !matches.some((candidate) => sameResolvedExport(index, candidate, hit))) {
       matches.push(hit);
     }
   }
   return matches.length === 1 ? (matches[0] ?? null) : null;
-}
-
-export function resolvePythonSubmodule(targetFile: string, exportedName: string): FileId | null {
-  let baseDir: string;
-  try {
-    const targetStat = fs.statSync(targetFile);
-    if (targetStat.isDirectory()) {
-      baseDir = targetFile;
-    } else if (path.basename(targetFile) === "__init__.py" || path.basename(targetFile) === "__init__.pyi") {
-      baseDir = path.dirname(targetFile);
-    } else {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-
-  const moduleFile = path.join(baseDir, `${exportedName}.py`);
-  const stubModuleFile = path.join(baseDir, `${exportedName}.pyi`);
-  const packageInit = path.join(baseDir, exportedName, "__init__.py");
-  const stubPackageInit = path.join(baseDir, exportedName, "__init__.pyi");
-  const namespacePackage = path.join(baseDir, exportedName);
-  for (const candidate of [moduleFile, stubModuleFile, packageInit, stubPackageInit, namespacePackage]) {
-    try {
-      const candidateStat = fs.statSync(candidate);
-      if (candidate === namespacePackage ? candidateStat.isDirectory() : candidateStat.isFile()) {
-        return normalizePath(candidate);
-      }
-    } catch {
-      // The next candidate can still be a real submodule.
-    }
-  }
-
-  return null;
 }
 
 function declaresMemberKind(def: SymbolDef): boolean {
@@ -336,28 +246,32 @@ export function memberContainerForDefinition(index: ProjectIndex, def: SymbolDef
   if (sameRange.length === 1) return sameRange[0];
 }
 
+/** The export entry that proves a direct CommonJS or TypeScript module value, whatever its public name. */
+export function directModuleValueEntry(moduleEntry: ModuleIndex): Extract<ExportEntry, { type: "local" }> | undefined {
+  return moduleEntry.exports.find(
+    (entry): entry is Extract<ExportEntry, { type: "local" }> =>
+      entry.type === "local" && (entry.mechanism === "cjs-module-value" || entry.mechanism === "ts-export-assignment"),
+  );
+}
+
 /**
  * `require()` and `import x = require()` return a proven direct `module.exports = X` or
  * TypeScript `export = X` value. A default export accompanied by named exports instead returns
  * a namespace object, including non-local and star re-exports.
  */
 export function cjsRequireValueBinding(index: ProjectIndex, targetFile: FileId): SymbolDef | undefined {
+  const moduleEntry = index.byFile.get(fileIdentityKey(targetFile));
+  const directValue = moduleEntry && directModuleValueEntry(moduleEntry);
+  if (directValue) return memberContainerForDefinition(index, directValue.target) ?? directValue.target;
+
   const resolved = resolveExport(index, targetFile, "default");
   if (resolved?.kind !== "resolved") return undefined;
-  const moduleEntry = index.byFile.get(fileIdentityKey(targetFile));
-  const directModuleValue = moduleEntry?.exports.some(
-    (entry) =>
-      entry.type === "local" &&
-      entry.exportedAs === "default" &&
-      entry.mechanism !== undefined &&
-      sameSymbolDef(index, entry.target, resolved.def),
-  );
   const hasNamedExport = moduleEntry?.exports.some((entry) => {
     if (entry.type === "exportStar") return !entry.typeOnly;
     if (entry.type === "local") return entry.exportedAs !== "default" && !entry.target.isMember;
     return entry.exportedAs !== "default" && !entry.typeOnly;
   });
-  if (hasNamedExport && !directModuleValue) return undefined;
+  if (hasNamedExport) return undefined;
   return memberContainerForDefinition(index, resolved.def) ?? resolved.def;
 }
 
@@ -632,7 +546,7 @@ export function resolvePhpExportByImportType(
   importType: "class" | "function" | "const" | undefined,
 ): ResolvedExport | null {
   if (importType === "class") {
-    for (const preferredKind of PHP_CLASS_NAMESPACE_KINDS) {
+    for (const preferredKind of PHP_CLASS_LIKE_KINDS) {
       const hit = resolvePhpCaseInsensitiveExport(index, targetFile, exportedName, preferredKind);
       if (hit) return hit;
     }
@@ -712,10 +626,16 @@ export function resolveImported(
   if (hit?.kind === "resolved") return hit.def;
   if (hit?.kind === "namespace") return { namespace: hit.file };
 
+  if (imp.kind === "default" && exportedName === "default") {
+    const moduleEntry = moduleFor(index, targetFile);
+    const directValue = moduleEntry && directModuleValueEntry(moduleEntry);
+    if (directValue) return directValue.target;
+  }
+
   // Only Java, Kotlin, and Python matter below, so a `.h` target never needs its sample read.
   const support = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions);
   if (support?.id === "java" || support?.id === "kotlin") {
-    const siblingHit = resolveSiblingPackageExport(index, targetFile, exportedName, support.id);
+    const siblingHit = resolveSiblingPackageExport(index, targetFile, exportedName);
     if (siblingHit?.kind === "resolved") return siblingHit.def;
     if (siblingHit?.kind === "namespace") {
       return { namespace: siblingHit.file };
@@ -723,7 +643,7 @@ export function resolveImported(
   }
 
   if (support?.id === "python") {
-    const submodule = resolvePythonSubmodule(targetFile, exportedName);
+    const submodule = resolvePythonSubmoduleExact(targetFile, exportedName);
     if (submodule) return { namespace: submodule };
   }
 

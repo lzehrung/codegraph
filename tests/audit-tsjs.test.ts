@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildSymbolGraphDetailed,
+  buildSymbolGraph,
   buildProjectIndexIncremental,
   findReferences,
   goToDefinition,
@@ -179,6 +180,97 @@ describe("TypeScript and JavaScript accuracy audit", () => {
     }
   });
 
+  it("selects later TypeScript overload signatures by arity across navigation, references, and graph edges", async () => {
+    const overloads = [
+      "export interface Parser {",
+      "  parse(input: string): string;",
+      "  parse(input: string, flags: number): string;",
+      "}",
+      "export declare function declared(input: string): string;",
+      "export declare function declared(input: string, flags: number): string;",
+      "export abstract class AbstractParser {",
+      "  abstract parse(input: string): string;",
+      "  abstract parse(input: string, flags: number): string;",
+      "}",
+      "export function implemented(input: string): string;",
+      "export function implemented(input: string, flags: number): string;",
+      "export function implemented(input: string, flags?: number): string { return input; }",
+      "export function run(parser: Parser, abstractParser: AbstractParser): string {",
+      '  parser.parse("a", 1);',
+      '  abstractParser.parse("a", 1);',
+      '  declared("a", 1);',
+      '  return implemented("a", 1);',
+      "}",
+      'export function wrongArity(parser: Parser): void { parser.parse("a", 1, 2); }',
+      "",
+    ].join("\n");
+    const fixture = await project({ "overloads.ts": overloads });
+    try {
+      const cases = [
+        { line: 15, token: "parse(", declarationLine: 3 },
+        { line: 16, token: "parse(", declarationLine: 9 },
+        { line: 17, token: "declared", declarationLine: 6 },
+        { line: 18, token: "implemented", declarationLine: 13 },
+      ];
+      for (const entry of cases) {
+        const result = await goToDefinition(fixture.index, {
+          file: fixture.file("overloads.ts"),
+          line: entry.line,
+          column: columnOf(overloads, entry.line, entry.token),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(result.definition.range.start.line).toBe(entry.declarationLine);
+      }
+
+      const wrongArity = await goToDefinition(fixture.index, {
+        file: fixture.file("overloads.ts"),
+        line: 20,
+        column: columnOf(overloads, 20, "parse("),
+      });
+      expect(wrongArity.status).toBe("not_found");
+
+      const referenceCoverageStates: Record<number, string | undefined> = {};
+      for (const entry of [
+        { declarationLine: 3, token: "parse", useLine: 15 },
+        { declarationLine: 9, token: "parse", useLine: 16 },
+        { declarationLine: 6, token: "declared", useLine: 17 },
+        { declarationLine: 13, token: "implemented", useLine: 18 },
+      ]) {
+        const refs = await findReferences(fixture.index, {
+          file: fixture.file("overloads.ts"),
+          line: entry.declarationLine,
+          column: columnOf(overloads, entry.declarationLine, entry.token),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") continue;
+        referenceCoverageStates[entry.declarationLine] = refs.referenceCoverage?.state;
+        expect(referenceSites(refs)).toContain(`overloads.ts:${entry.useLine}`);
+        expect(referenceSites(refs)).not.toContain("overloads.ts:20");
+      }
+      expect(referenceCoverageStates).toEqual({
+        3: "partial",
+        6: "complete",
+        9: "partial",
+        13: "complete",
+      });
+
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      const runTargets = callTargetIds(graph, "run");
+      for (const entry of [
+        { line: 3, token: "parse" },
+        { line: 9, token: "parse" },
+        { line: 6, token: "declared" },
+        { line: 13, token: "implemented" },
+      ]) {
+        const targetIndex = tokenIndex(overloads, entry.line, entry.token);
+        expect(runTargets.some((id) => id.endsWith(`::${entry.token}::${targetIndex}`))).toBe(true);
+      }
+      expect(callTargetIds(graph, "wrongArity")).toEqual([]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
   it("resolves an overloaded method through this to its implementation", async () => {
     const box = [
       "export class Box {",
@@ -611,6 +703,108 @@ describe("TypeScript and JavaScript accuracy audit", () => {
       await rm(fixture.root, { recursive: true, force: true });
     }
   });
+  it.each([
+    ["anonymous", "require", "module.exports = function () {};\n", 'const W = require("./w");'],
+    ["anonymous", "default import", "module.exports = function () {};\n", 'import W from "./w";'],
+    ["identifier", "require", "function Widget() {}\nmodule.exports = Widget;\n", 'const W = require("./w");'],
+    ["identifier", "default import", "function Widget() {}\nmodule.exports = Widget;\n", 'import W from "./w";'],
+  ])(
+    "aligns direct CommonJS %s values through %s navigation, references, and graph",
+    async (_shape, mode, source, importLine) => {
+      const use = importLine + "\nnew W();\n";
+      const decoyUse = 'const W = require("./decoy");\nnew W();\n';
+      const fixture = await project({
+        "w.js": source,
+        "main.js": use,
+        "decoy.js": "module.exports = function () {};\n",
+        "decoy-use.js": decoyUse,
+      });
+      try {
+        const file = fixture.file("w.js");
+        const direct = fixture.index.byFile
+          .get(fileIdentityKey(file))
+          ?.exports.find((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value");
+        expect(direct?.type).toBe("local");
+        if (direct?.type !== "local") return;
+
+        for (const line of [1, 2]) {
+          const result = await goToDefinition(fixture.index, {
+            file: fixture.file("main.js"),
+            line,
+            column: columnOf(use, line, "W"),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") return;
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(file));
+          expect(result.definition.range.start.index).toBe(direct.target.range.start.index);
+        }
+
+        const refs = await findReferences(fixture.index, {
+          file,
+          line: direct.target.range.start.line,
+          column: direct.target.range.start.column,
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") return;
+        expect(refs.referenceCoverage?.state).toBe("complete");
+        expect(referenceSites(refs)).toContain("main.js:1");
+        expect(referenceSites(refs)).toContain("main.js:2");
+        expect(referenceSites(refs).some((site) => site.startsWith("decoy"))).toBe(false);
+
+        const graph = await buildSymbolGraphDetailed(fixture.index);
+        const importNode = [...graph.nodes.values()].find(
+          (node) =>
+            node.file === fixture.file("main.js") &&
+            node.name === "W" &&
+            node.kind === (mode === "require" ? "namespaceImport" : "import"),
+        );
+        const targetNode = [...graph.nodes.values()].find(
+          (node) => node.file === file && node.name === direct.target.localName,
+        );
+        expect(importNode).toBeDefined();
+        expect(targetNode).toBeDefined();
+        if (!importNode || !targetNode) return;
+        expect(graph.edges.some((edge) => edge.from === importNode.id && edge.to === targetNode.id)).toBe(true);
+        expect(
+          graph.edges.some(
+            (edge) => edge.from === importNode.id && graph.nodes.get(edge.to)?.file === fixture.file("decoy.js"),
+          ),
+        ).toBe(false);
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not invent a default value from named CommonJS exports", async () => {
+    const source = "exports.helper = function helper() {};\n";
+    const use = 'import W from "./w";\nnew W();\n';
+    const fixture = await project({ "w.js": source, "main.js": use });
+    try {
+      const result = await goToDefinition(fixture.index, {
+        file: fixture.file("main.js"),
+        line: 2,
+        column: columnOf(use, 2, "W"),
+      });
+      expect(result.status).toBe("not_found");
+
+      for (const graph of [await buildSymbolGraph(fixture.index), await buildSymbolGraphDetailed(fixture.index)]) {
+        const importNode = [...graph.nodes.values()].find(
+          (node) => node.file === fixture.file("main.js") && node.name === "W" && node.kind === "import",
+        );
+        expect(importNode).toBeDefined();
+        if (!importNode) return;
+        expect(
+          graph.edges.some(
+            (edge) => edge.from === importNode.id && graph.nodes.get(edge.to)?.file === fixture.file("w.js"),
+          ),
+        ).toBe(false);
+      }
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   const directCjsWidget = [
     "function decoy() {",
     "  class Widget { static method() {} }",

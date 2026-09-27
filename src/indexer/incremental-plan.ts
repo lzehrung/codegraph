@@ -12,7 +12,7 @@ import { listChangedFiles, listUntrackedFiles, type GitDiscoveryCache } from "..
 import { errorMessage } from "../util/errors.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
-import { DEFAULT_RESOLUTION_EXTENSIONS } from "../util/resolution-candidates.js";
+import { DEFAULT_RESOLUTION_EXTENSIONS, stripKnownResolutionExtension } from "../util/resolution-candidates.js";
 import {
   createDiscoveredFileMatcher,
   DEFAULT_PROJECT_PATTERNS,
@@ -212,17 +212,6 @@ function externalSpecifierSegments(value: string, rule: ExternalSpecifierResolut
   return value.split(rule.separator).filter((segment) => segment && segment !== "." && segment !== "..");
 }
 
-function stripSpecifierExtension(segment: string): string {
-  const extension = path.posix.extname(segment);
-  return extension ? segment.slice(0, -extension.length) : segment;
-}
-
-/** Last language-specific specifier segment, extension removed. */
-export function externalSpecifierStem(specifier: string, languageId: string): string {
-  const segments = externalSpecifierSegments(specifier, externalSpecifierResolutionRule(languageId));
-  return stripSpecifierExtension(segments.at(-1) ?? specifier);
-}
-
 function hasAddedFileMatchingRule(rule: ExternalSpecifierResolutionRule, addedFiles: readonly string[]): boolean {
   const extension = rule.reResolveAnyAddedExtension;
   if (!extension) return false;
@@ -236,10 +225,10 @@ function specifierMatchesAddedStem(
 ): boolean {
   const segments = externalSpecifierSegments(specifier, rule);
   const lastSegment = segments.at(-1) ?? specifier;
-  if (addedStems.has(stripSpecifierExtension(lastSegment))) return true;
+  if (addedStems.has(stripKnownResolutionExtension(lastSegment))) return true;
   if (!rule.matchesModuleSegments) return false;
   for (let index = 0; index < segments.length - 1; index += 1) {
-    if (addedStems.has(stripSpecifierExtension(segments[index]!))) return true;
+    if (addedStems.has(stripKnownResolutionExtension(segments[index]!))) return true;
   }
   return false;
 }

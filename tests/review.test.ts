@@ -1752,6 +1752,42 @@ describe("Review report", () => {
     });
   });
 
+  it("keeps angle and quoted includes distinct when a deleted file included one header both ways", async () => {
+    const root = await mkTmpDir("dg-review-deleted-include-forms-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const headerFile = path.join(srcDir, "x.h");
+    const mainFile = path.join(srcDir, "main.c");
+    await fsp.writeFile(headerFile, "int x(void);\n", "utf8");
+    await fsp.writeFile(mainFile, '#include <x.h>\n#include "x.h"\n', "utf8");
+    await fsp.unlink(mainFile);
+
+    const report = await buildReviewReport(root, {
+      files: [mainFile],
+      cache: "memory",
+      native: "off",
+      graph: { resolutionHints: ["src"], native: "off" },
+      diffText: [
+        "diff --git a/src/main.c b/src/main.c",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/main.c",
+        "+++ /dev/null",
+        "@@ -1,2 +0,0 @@",
+        "-#include <x.h>",
+        '-#include "x.h"',
+        "",
+      ].join("\n"),
+    });
+
+    const includeEdges = report.graphDelta.filter((edge) => edge.from === "src/main.c" && edge.raw === "x.h");
+    expect(includeEdges.map((edge) => edge.includeForm).sort()).toEqual(["angle", "literal"]);
+    expect(includeEdges.map((edge) => edge.to)).toEqual([
+      { type: "file", path: "src/x.h" },
+      { type: "file", path: "src/x.h" },
+    ]);
+  });
+
   it("includes deleted consumer import edges in graphDelta", async () => {
     const root = await mkTmpDir("dg-review-deleted-consumer-");
     const srcDir = path.join(root, "src");

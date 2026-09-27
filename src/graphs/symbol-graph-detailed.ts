@@ -1,4 +1,5 @@
 import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/file-prep.js";
+import { getCallArgumentCount } from "../languages/callable-arity.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
@@ -15,6 +16,7 @@ import {
   typescriptCollapsedOverloadTarget,
   typescriptCallableContainerKey,
   typescriptCallableRoleAt,
+  typescriptSelectOverloadCandidate,
 } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
@@ -484,7 +486,7 @@ export async function buildSymbolGraphDetailed(
           const indexedClass = resolveIndexedPhpClassReference(index, src, tree, node, lookupName, moduleEntry.imports);
           if (indexedClass) return indexedClass;
         }
-        const binding = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
+        let binding = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
         const usingTarget = sup.id === "cpp" && binding ? cppUsingDeclarationTarget(binding, src) : undefined;
         if (usingTarget) {
           const visible = resolveVisibleCppCallableName(index, moduleEntry, usingTarget, node, src, loadCppParsedFile);
@@ -514,6 +516,29 @@ export async function buildSymbolGraphDetailed(
           const importType = inferPhpQualifiedReferenceImportType(node) ?? "const";
           const phpImport = findPhpImportAlias(moduleEntry.imports, name, importType);
           if (phpImport) return resolvePhpExplicitImport(index, phpImport, importType);
+        }
+        const call = node.parent;
+        if (isJsTsLanguage(sup.id) && binding?.kind === "function" && call?.type === "call_expression") {
+          const selected = typescriptSelectOverloadCandidate({
+            group: binding.sameScopeFunctionBindings ?? [binding],
+            tree,
+            definitionOf: (candidate) => ({
+              file,
+              localName: candidate.name,
+              kind: SymbolKind.Function,
+              range: candidate.def!,
+            }),
+            declarationOf: (candidate) => candidate.node?.parent,
+            source: src,
+            languageId: sup.id,
+            argumentCount: getCallArgumentCount({
+              languageId: sup.id,
+              source: src,
+              call,
+            }),
+          });
+          if (!selected) return null;
+          binding = selected;
         }
         if (binding?.def) {
           const local = moduleEntry.locals.find(

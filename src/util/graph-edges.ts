@@ -1,6 +1,34 @@
 import type { Edge } from "../types.js";
 import { toProjectDisplayPath } from "./paths.js";
 
+/**
+ * Specifier fields that identify a file-dependency edge.
+ * `from` is the specifier text stored as `raw` when `raw` is omitted.
+ */
+export type EdgeImportSource = {
+  from: string;
+  raw?: string;
+  typeOnly?: boolean;
+  includeForm?: Edge["includeForm"];
+};
+
+/**
+ * Rebuilds a file-dependency edge from an {@link EdgeImportSource}.
+ * Import bindings and deleted-file snapshots both use this so `raw`, type-only,
+ * and C/C++ `includeForm` stay on the edge. Angle and quoted includes of one
+ * header must not collapse.
+ */
+export function edgeFromImportBinding(from: string, to: Edge["to"], source: EdgeImportSource): Edge {
+  const { includeForm } = source;
+  return {
+    from,
+    to,
+    raw: source.raw ?? source.from,
+    ...(source.typeOnly ? { typeOnly: source.typeOnly } : {}),
+    ...(includeForm ? { includeForm } : {}),
+  };
+}
+
 function storedFilePath(file: string): string {
   return file;
 }

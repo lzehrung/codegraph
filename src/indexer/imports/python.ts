@@ -49,17 +49,17 @@ async function pushStarImport(
 
 /**
  * The submodule `from pkg import name` binds when `pkg` has no attribute `name`: `name.py`,
- * `name.pyi`, `name/__init__.py`, or a PEP 420 directory `name/`. Python's importer compares
- * directory entries case-sensitively even on case-insensitive filesystems, so `Widget` never
- * names `widget.py`; that import stays a named binding of the package's `Widget` attribute.
+ * `name.pyi`, `name/__init__.py`, `name/__init__.pyi`, then a PEP 420 directory `name/`.
+ * Python compares entries case-sensitively even on case-insensitive filesystems, so `Widget`
+ * never names `widget.py`; the import stays a named binding of the package attribute.
  */
-function resolvePythonSubmoduleExact(resolved: ResolvedImportTarget, imported: string): string | undefined {
+export function resolvePythonSubmoduleExact(resolved: ResolvedImportTarget, imported: string): string | undefined {
   if (typeof resolved !== "string") return undefined;
   let baseDir = resolved;
   let entries: fs.Dirent[];
   try {
     if (!fs.statSync(baseDir).isDirectory()) {
-      const base = path.basename(baseDir).toLowerCase();
+      const base = path.basename(baseDir);
       if (base !== "__init__.py" && base !== "__init__.pyi") return undefined;
       baseDir = path.dirname(baseDir);
     }
@@ -72,10 +72,20 @@ function resolvePythonSubmoduleExact(resolved: ResolvedImportTarget, imported: s
       return path.join(baseDir, fileName).replace(/\\/g, "/");
     }
   }
-  if (entries.some((entry) => entry.isDirectory() && entry.name === imported)) {
-    return path.join(baseDir, imported).replace(/\\/g, "/");
+  if (!entries.some((entry) => entry.isDirectory() && entry.name === imported)) return undefined;
+  const packageDir = path.join(baseDir, imported);
+  let packageEntries: fs.Dirent[];
+  try {
+    packageEntries = fs.readdirSync(packageDir, { withFileTypes: true });
+  } catch {
+    return undefined;
   }
-  return undefined;
+  for (const initializer of ["__init__.py", "__init__.pyi"]) {
+    if (packageEntries.some((entry) => entry.isFile() && entry.name === initializer)) {
+      return path.join(packageDir, initializer).replace(/\\/g, "/");
+    }
+  }
+  return packageDir.replace(/\\/g, "/");
 }
 
 type PythonPackageSource = {

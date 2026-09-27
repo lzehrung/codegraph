@@ -74,9 +74,6 @@ function inferredNamedTargetPaths(
 
 function explicitTargetPaths(parsed: TomlTable): string[] {
   const paths: string[] = [];
-  const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
-  const libPath = lib ? tomlString(lib, "path") : undefined;
-  if (libPath) paths.push(libPath);
   const pkgName = packageName(parsed);
   for (const key of ["bin", "example", "test", "bench"] as const) {
     for (const target of tomlTables(parsed[key])) {
@@ -125,6 +122,21 @@ async function acceptCrateRoot(
   }
   if (!(await isPhysicalPathWithinRoot(projectRoot, resolved))) return null;
   return resolved;
+}
+/** Verified Cargo library root, or undefined when the package has no library. */
+export async function rustLibraryRootFile(
+  cargoRoot: string,
+  projectRoot: string,
+  parsed?: TomlTable,
+  probed?: Set<string>,
+): Promise<string | undefined> {
+  const manifest = parsed ?? (await parseCargoToml(cargoRoot, projectRoot));
+  if (!manifest || !isTomlTable(manifest.package)) return undefined;
+  const lib = isTomlTable(manifest.lib) ? manifest.lib : undefined;
+  if (!lib && !packageAutoFlag(manifest, "autolib")) return undefined;
+  const candidate = path.resolve(cargoRoot, (lib ? tomlString(lib, "path") : undefined) ?? "src/lib.rs");
+  probed?.add(candidate);
+  return (await acceptCrateRoot(candidate, projectRoot)) ?? undefined;
 }
 
 async function addCrateRoot(
@@ -198,11 +210,8 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
     if (buildScript) {
       await addCrateRoot(roots, probed, path.resolve(root, buildScript), projectRoot);
     }
-    const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
-    const libPath = lib ? tomlString(lib, "path") : undefined;
-    if (!libPath && (lib || packageAutoFlag(parsed, "autolib"))) {
-      await addCrateRoot(roots, probed, path.join(root, "src", "lib.rs"), projectRoot);
-    }
+    const libraryRoot = await rustLibraryRootFile(root, projectRoot, parsed, probed);
+    if (libraryRoot) roots.add(libraryRoot);
     if (packageAutoFlag(parsed, "autobins")) {
       await addCrateRoot(roots, probed, path.join(root, "src", "main.rs"), projectRoot);
     }
@@ -261,9 +270,7 @@ export async function rustOwnLibraryTarget(
   }
   if (!isBinary || !(await acceptCrateRoot(from, projectRoot, true))) return null;
 
-  const libPath = lib ? tomlString(lib, "path") : undefined;
-  if (!lib && !packageAutoFlag(parsed, "autolib")) return null;
-  return acceptCrateRoot(path.resolve(cargoRoot, libPath ?? "src/lib.rs"), projectRoot, true);
+  return (await rustLibraryRootFile(cargoRoot, projectRoot, parsed)) ?? null;
 }
 
 /** Inline dependency tables naming `crateIdentifier`, across the dependency groups. */
@@ -350,15 +357,10 @@ async function workspaceInheritedDependencyPath(
 }
 
 /**
- * Resolves a `path`-only Cargo dependency declared in `cargoRoot`'s own Cargo.toml, named
- * `crateIdentifier` (the Rust identifier form, e.g. `crate_a`), confined to `projectRoot`.
- * A workspace-inherited entry (`{ workspace = true }`) follows the nearest ancestor
- * workspace manifest's `[workspace.dependencies]` `path`, also confined to `projectRoot`.
- * Returns the dependency crate's own root directory, or null when `crateIdentifier` is not a
- * resolvable path dependency, its path escapes the project, or the directory has no Cargo.toml
- * whose `[package]` name is the dependency (Cargo rejects such a dependency).
+ * Resolves a Cargo path dependency (including workspace inheritance) to its verified library
+ * target, rather than assuming the dependency's conventional src/lib.rs file is its root.
  */
-export async function rustPathDependencyCrateRoot(
+export async function rustPathDependencyLibraryRoot(
   cargoRoot: string,
   projectRoot: string,
   crateIdentifier: string,
@@ -380,5 +382,5 @@ export async function rustPathDependencyCrateRoot(
   const actualName = dependencyManifest ? packageName(dependencyManifest) : undefined;
   const expectedName = dependency.packageName ?? crateIdentifier;
   if (!actualName || actualName.replace(/-/gu, "_") !== expectedName.replace(/-/gu, "_")) return null;
-  return resolved;
+  return (await rustLibraryRootFile(resolved, projectRoot, dependencyManifest ?? undefined)) ?? null;
 }

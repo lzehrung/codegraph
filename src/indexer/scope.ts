@@ -344,6 +344,9 @@ export function buildScopeIndexFromSource(
         preserveExtraBinding(existing);
       }
       if (support.id === "ts" || support.id === "tsx") {
+        const collisions = existing.sameScopeFunctionBindings ?? [existing];
+        collisions.push(binding);
+        for (const collision of collisions) collision.sameScopeFunctionBindings = collisions;
         const existingRole = existing.node ? typescriptCallableRole(existing.node) : "other";
         const nextRole = typescriptCallableRole(nameNode);
         if (existingRole === "implementation" && nextRole === "signature") {

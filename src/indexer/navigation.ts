@@ -28,6 +28,7 @@ import {
   resolveNamedDefinition,
   toModuleRef,
 } from "./navigation-local.js";
+import { typescriptCollapsedOverloadCandidates } from "./ts-callables.js";
 import { isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
 import {
   AMBIGUOUS_CPP_OVERLOAD_REASON,
@@ -79,6 +80,7 @@ import {
   referenceSiteKey,
 } from "./navigation-references.js";
 import {
+  directModuleValueEntry,
   resolveExport,
   resolveImported,
   resolveModuleExports,
@@ -149,14 +151,6 @@ function phpImportTypeAtPosition(
     }
   }
   return undefined;
-}
-
-function phpImportMatchesDefinition(imp: ImportBinding, def: SymbolDef): boolean {
-  if (imp.kind !== "named" || imp.mechanism !== "php") return true;
-  const importType = imp.phpImportType ?? "class";
-  if (importType === "function") return def.kind === SymbolKind.Function;
-  if (importType === "const") return def.kind === SymbolKind.Variable;
-  return def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
 }
 
 export async function goToDefinition(
@@ -306,7 +300,7 @@ export async function goToDefinition(
                 ) {
                   return null;
                 }
-                return findClosestBinding(scopeIndex, file, receiverName, receiver, sup, source);
+                return findClosestBinding(scopeIndex, file, receiverName, receiver, sup, source, tree);
               },
             }
           : {}),
@@ -380,7 +374,7 @@ export async function goToDefinition(
     const phpVariableTypes = sup.id === "php" ? scopeNodesFor(sup.id).assignmentIdentifierTypes : undefined;
     if (phpVariableTypes?.has(node.type) || (node.parent && phpVariableTypes?.has(node.parent.type))) {
       const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, mod, tree);
-      const variable = findClosestBinding(scopeIndex, file, lookupName, node, sup, source);
+      const variable = findClosestBinding(scopeIndex, file, lookupName, node, sup, source, tree);
       if (!variable) return { status: "not_found", reason: "No matching PHP variable definition" };
       return okGoToResult(index, variable, { resolution: "exact", confidence: "high" });
     }
@@ -442,7 +436,7 @@ export async function goToDefinition(
         confidence: "high",
       });
     }
-    const local = findClosestBinding(scopeIndex, file, lookupName, node, sup, source);
+    const local = findClosestBinding(scopeIndex, file, lookupName, node, sup, source, tree);
     if (
       sup.id === "swift" &&
       local &&
@@ -924,11 +918,32 @@ async function findReferencesInternal(
     (definition.kind === SymbolKind.Class ||
       definition.kind === SymbolKind.Interface ||
       definition.kind === SymbolKind.TypeAlias);
+  let requiresTypeScriptOverloadVerifiedScan = false;
+  if (
+    (parsedContext.sup.id === "ts" || parsedContext.sup.id === "tsx") &&
+    definition.kind === SymbolKind.Function &&
+    !receiverMemberDefinition &&
+    localBinding?.sameScopeFunctionBindings
+  ) {
+    const candidates = typescriptCollapsedOverloadCandidates(
+      localBinding.sameScopeFunctionBindings,
+      parsedContext.tree,
+      (binding) => ({
+        file: definitionFile,
+        localName: binding.name,
+        kind: SymbolKind.Function,
+        range: binding.def!,
+      }),
+    );
+    requiresTypeScriptOverloadVerifiedScan = candidates.length > 1;
+  }
+
   const requiresSameFileVerifiedScan =
     ((parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
       definition.kind === SymbolKind.Function &&
       !receiverMemberDefinition) ||
-    scansNamespaceReferences;
+    scansNamespaceReferences ||
+    requiresTypeScriptOverloadVerifiedScan;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
   let memberCallOccurrencesNeedVerification = false;
@@ -1155,7 +1170,13 @@ async function findReferencesInternal(
       const bindingMatchesDefinition = async (): Promise<boolean> => {
         if (verifiedBindingMatches !== undefined) return verifiedBindingMatches;
         verifiedBindingMatches = false;
-        if (!phpImportMatchesDefinition(imp, definition)) return verifiedBindingMatches;
+        if (
+          imp.kind === "named" &&
+          imp.mechanism === "php" &&
+          !phpReferenceRoleMatchesKind(imp.phpImportType ?? "class", definition.kind)
+        ) {
+          return verifiedBindingMatches;
+        }
         const parsed = await ensureCandidateParsed();
         for (const verificationSite of importBindingIdentityVerificationSites(imp)) {
           const resolved = await goToDefinition(
@@ -1211,9 +1232,12 @@ async function findReferencesInternal(
         }
         continue;
       }
+      const cjsTargetModule =
+        imp.kind === "namespace" && imp.mechanism === "cjs" ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
+      const cjsExportedName = cjsTargetModule && directModuleValueEntry(cjsTargetModule)?.exportedAs;
       for (const exportedName of exportedNames) {
         if (hasReachedCollectionLimit()) break;
-        const cjsModuleValue = imp.kind === "namespace" && imp.mechanism === "cjs" && exportedName === "default";
+        const cjsModuleValue = cjsExportedName === exportedName;
         if (imp.kind === "namespace" && !cjsModuleValue) {
           if (
             !isGoExportedMemberName(
@@ -1392,7 +1416,7 @@ async function findReferencesInternal(
           const importedLocalName = imp.kind === "namespace" ? imp.localNS : imp.local;
           if (imp.kind === "named") {
             exported = imp.imported;
-          } else if (imp.kind === "default" || cjsModuleValue) {
+          } else if (imp.kind === "default") {
             exported = "default";
           }
           const hit = resolveExport(index, targetFile, exported, exportOptions);

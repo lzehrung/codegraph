@@ -1,4 +1,5 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import { getCallableArity } from "../languages/callable-arity.js";
 import type { SymbolDef } from "./types.js";
 
 const OVERLOAD_SIGNATURE_NODE_TYPES: ReadonlySet<string> = new Set([
@@ -69,12 +70,51 @@ export function typescriptCallableContainerKey(tree: SyntaxTreeLike, start: numb
   return "module";
 }
 
-export function earliestSymbolDef(defs: readonly SymbolDef[]): SymbolDef {
-  let earliest = defs[0]!;
-  for (const def of defs) {
-    const start = def.range.start.index ?? 0;
-    const earliestStart = earliest.range.start.index ?? 0;
-    if (start < earliestStart) earliest = def;
+/**
+ * Collapse an overload group only when one implementation is proven. Otherwise each
+ * declaration remains an arity candidate.
+ */
+export function typescriptCollapsedOverloadCandidates<T>(
+  group: readonly T[],
+  tree: SyntaxTreeLike,
+  definitionOf: (entry: T) => SymbolDef,
+): readonly T[] {
+  if (group.length < 2) return group;
+  const implementation = typescriptCollapsedOverloadTarget(group, tree, definitionOf);
+  return implementation ? [implementation] : group;
+}
+
+/**
+ * Select one collapsed TypeScript callable for a call with a proven argument count.
+ * Unresolvable or ambiguous signature groups deliberately stay unresolved.
+ */
+export function typescriptSelectOverloadCandidate<T>(params: {
+  group: readonly T[];
+  tree: SyntaxTreeLike;
+  definitionOf: (entry: T) => SymbolDef;
+  declarationOf: (entry: T) => SyntaxNodeLike | null | undefined;
+  source: string;
+  languageId: string;
+  argumentCount: number | null;
+}): T | undefined {
+  const candidates = typescriptCollapsedOverloadCandidates(params.group, params.tree, params.definitionOf);
+  if (candidates.length === 1) return candidates[0];
+  if (params.argumentCount === null) return undefined;
+
+  let selected: T | undefined;
+  for (const candidate of candidates) {
+    const declaration = params.declarationOf(candidate);
+    const arity = declaration
+      ? getCallableArity({ languageId: params.languageId, source: params.source, declaration })
+      : null;
+    if (
+      arity &&
+      (params.argumentCount < arity.minArgs || (arity.maxArgs !== null && params.argumentCount > arity.maxArgs))
+    ) {
+      continue;
+    }
+    if (selected) return undefined;
+    selected = candidate;
   }
-  return earliest;
+  return selected;
 }

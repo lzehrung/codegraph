@@ -855,7 +855,7 @@ The SQLite export is a first-class query interface for agent workflows.
 
 - `files(path TEXT PRIMARY KEY, is_external INTEGER)`
 - `symbols(id TEXT PRIMARY KEY, file TEXT, name TEXT, kind TEXT, docstring TEXT, line_span INTEGER, complexity INTEGER, visibility TEXT)`
-- `file_edges(from_path TEXT, to_path TEXT, to_type TEXT, raw TEXT, type_only INTEGER)`
+- `file_edges(from_path TEXT, to_path TEXT, to_type TEXT, raw TEXT, type_only INTEGER, include_form TEXT)`
 - `symbol_edges(from_id TEXT, to_id TEXT, label TEXT)`
 - `graph_metadata(key TEXT PRIMARY KEY, value TEXT)`
 - `graph_snapshots(id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER, mode TEXT, changed_files INTEGER, deleted_files INTEGER, file_nodes INTEGER, file_edges INTEGER, symbol_nodes INTEGER, symbol_edges INTEGER)`

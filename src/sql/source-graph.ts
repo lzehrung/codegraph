@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 
 import { uniqueByKey } from "../util/collections.js";
+import { edgeKey } from "../util/graph-edges.js";
 import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
 import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
@@ -257,8 +258,7 @@ export async function collectSqlEdgesForFile(
     for (const objectName of referenceObjectNames(fact)) {
       const match = sqlDefinitionCandidates(cache, objectName);
       for (const edge of sqlEdgesForCandidates(normalizedFile, fact, objectName, match)) {
-        const targetPath = edge.to.type === "file" ? edge.to.path : "";
-        const key = `${edge.from}:${targetPath}:${edge.raw}`;
+        const key = edgeKey(edge);
         if (seen.has(key)) continue;
         seen.add(key);
         edges.push(edge);

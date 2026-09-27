@@ -14,7 +14,12 @@ import { XID_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { lruMapGet, lruMapSet } from "../lru-map.js";
 import { fileIdentityKey, isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
-import { rustCrateRootFiles, rustOwnLibraryTarget, rustPathDependencyCrateRoot } from "./cargo-targets.js";
+import {
+  rustCrateRootFiles,
+  rustLibraryRootFile,
+  rustOwnLibraryTarget,
+  rustPathDependencyLibraryRoot,
+} from "./cargo-targets.js";
 
 function isWithinOrEqual(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
@@ -129,6 +134,7 @@ type RustModuleTree = {
   signatures: Map<string, string>;
   truncated: boolean;
   reachable: Set<string>;
+  crateRoots: Map<string, string | null>;
   owners: Map<string, AttributedModuleParent[]>;
   validatedAt: number;
 };
@@ -527,6 +533,8 @@ async function rustModuleTreeSignaturesMatch(tree: RustModuleTree): Promise<bool
 async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Promise<RustModuleTree> {
   const signatures = new Map<string, string>();
   const reachable = new Set<string>();
+  const owningRoots = new Map<string, string | null>();
+  const visitedRootFiles = new Set<string>();
   const ownerSets = new Map<string, Map<string, AttributedModuleParent>>();
   let truncated = false;
 
@@ -536,12 +544,11 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
   }
 
   const crateRoots = await rustCrateRootFiles(cargoRoot, projectRoot);
-  const crateRootSet = new Set(crateRoots.roots.map((file) => rustPathIdentity(file)));
   for (const candidate of crateRoots.probed) {
     await recordPathStat(candidate, signatures);
   }
 
-  const walkFile = async (file: string, depth: number): Promise<void> => {
+  const walkFile = async (file: string, depth: number, crateRoot: string): Promise<void> => {
     if (truncated) return;
     if (depth > MAX_RUST_MODULE_TREE_DEPTH) {
       truncated = true;
@@ -549,17 +556,25 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
     }
     const resolved = path.resolve(file);
     const identity = rustPathIdentity(resolved);
-    if (reachable.has(identity)) return;
+    const rootIdentity = rustPathIdentity(crateRoot);
+    const visitKey = `${identity}\0${rootIdentity}`;
+    if (visitedRootFiles.has(visitKey)) return;
     const stat = await recordPathStat(resolved, signatures);
     if (!(await isExistingAttributedPathInsideProject(projectRoot, resolved, stat))) return;
-    if (reachable.size >= MAX_RUST_MODULE_TREE_FILES) {
+    if (visitedRootFiles.size >= MAX_RUST_MODULE_TREE_FILES) {
       truncated = true;
       return;
     }
+    visitedRootFiles.add(visitKey);
     reachable.add(identity);
+    if (owningRoots.has(identity) && owningRoots.get(identity) !== crateRoot) {
+      owningRoots.set(identity, null);
+    } else {
+      owningRoots.set(identity, crateRoot);
+    }
     const scope = await loadRustPathAttributeScope(resolved);
-    const moduleDir = crateRootSet.has(identity) ? path.dirname(resolved) : rustChildModuleDir(resolved);
-    await walkScope(scope, resolved, moduleDir, path.dirname(resolved), depth);
+    const moduleDir = identity === rootIdentity ? path.dirname(resolved) : rustChildModuleDir(resolved);
+    await walkScope(scope, resolved, moduleDir, path.dirname(resolved), depth, crateRoot);
   };
 
   const walkScope = async (
@@ -568,6 +583,7 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
     currentModuleDir: string,
     attributeDirectory: string,
     depth: number,
+    crateRoot: string,
   ): Promise<void> => {
     if (truncated) return;
     if (depth > MAX_RUST_MODULE_TREE_DEPTH) {
@@ -587,24 +603,24 @@ async function buildRustModuleTree(cargoRoot: string, projectRoot: string): Prom
       } else {
         target = await resolveDeclaredConventionalModule(projectRoot, currentModuleDir, name, signatures);
       }
-      if (target) await walkFile(target, depth + 1);
+      if (target) await walkFile(target, depth + 1, crateRoot);
     }
     for (const [name, child] of scope.inlineModules) {
       if (truncated) return;
       const nextDir = path.resolve(currentModuleDir, child.inlineLocation?.directory ?? name);
-      await walkScope(child, currentFile, nextDir, nextDir, depth + 1);
+      await walkScope(child, currentFile, nextDir, nextDir, depth + 1, crateRoot);
     }
   };
 
   for (const crateRoot of crateRoots.roots) {
-    await walkFile(crateRoot, 0);
+    await walkFile(crateRoot, 0, crateRoot);
   }
 
   const owners = new Map<string, AttributedModuleParent[]>();
   for (const [target, set] of ownerSets) {
     owners.set(target, [...set.values()]);
   }
-  return { signatures, truncated, reachable, owners, validatedAt: Date.now() };
+  return { signatures, truncated, reachable, crateRoots: owningRoots, owners, validatedAt: Date.now() };
 }
 
 async function getRustModuleTree(cargoRoot: string, projectRoot: string): Promise<RustModuleTree> {
@@ -778,6 +794,18 @@ async function rustSuperModuleContext(
   }
   const currentDir = path.dirname(fromFile);
   const parentModuleDir = parentRustModuleDir(fromFile, currentDir);
+  if (cargoRoot) {
+    const tree = await getRustModuleTree(cargoRoot, projectRoot);
+    if (tree.truncated) return { status: "ambiguous" };
+    const owningRoot = tree.crateRoots.get(rustPathIdentity(fromFile));
+    if (owningRoot === null) return { status: "ambiguous" };
+    if (owningRoot && rustPathIdentity(owningRoot) === rustPathIdentity(fromFile)) {
+      return { status: "ambiguous" };
+    }
+    if (owningRoot && rustPathIdentity(path.dirname(owningRoot)) === rustPathIdentity(parentModuleDir)) {
+      return { status: "resolved", parentFile: owningRoot, parentModuleDir };
+    }
+  }
   return {
     status: "resolved",
     parentFile: await resolveRustModuleParts(parentModuleDir, []),
@@ -791,10 +819,11 @@ async function declaringFileForSpecifierHead(
   sourceRoot: string,
   cargoRoot: string | null,
   head: string,
+  crateRootFile?: string | null,
 ): Promise<DeclaringFileForHead> {
   if (head === "*") return { status: "resolved", file: null };
   if (head === "crate") {
-    return { status: "resolved", file: await resolveRustModuleParts(sourceRoot, []) };
+    return { status: "resolved", file: crateRootFile ?? (await resolveRustModuleParts(sourceRoot, [])) };
   }
   if (head === "self") {
     return { status: "resolved", file: path.resolve(fromFile) };
@@ -826,6 +855,7 @@ async function resolveAttributedRustModulePath(
   sourceRoot: string,
   cargoRoot: string | null,
   libraryRootFile?: string,
+  crateRootFile?: string | null,
 ): Promise<string | null | undefined> {
   const head = parts[0];
   if (!head) return undefined;
@@ -846,7 +876,14 @@ async function resolveAttributedRustModulePath(
     startFile = context.parentFile;
     startModuleDir = context.parentModuleDir;
   } else {
-    const declaring = await declaringFileForSpecifierHead(projectRoot, fromFile, sourceRoot, cargoRoot, head);
+    const declaring = await declaringFileForSpecifierHead(
+      projectRoot,
+      fromFile,
+      sourceRoot,
+      cargoRoot,
+      head,
+      crateRootFile,
+    );
     if (declaring.status === "ambiguous") return null;
     startFile = declaring.file;
   }
@@ -858,7 +895,8 @@ async function resolveAttributedRustModulePath(
   }
   let currentFile = startFile;
   let currentScope = await loadRustPathAttributeScope(currentFile);
-  const rootModuleDir = libraryRootFile ? path.dirname(libraryRootFile) : undefined;
+  const rootFile = libraryRootFile ?? (head === "crate" ? crateRootFile : null);
+  const rootModuleDir = rootFile ? path.dirname(rootFile) : undefined;
   let currentModuleDir = rootModuleDir ?? startModuleDir ?? rustChildModuleDir(currentFile);
   if (startModuleDir) {
     currentScope = rustScopeAtDirectory(currentScope, rustChildModuleDir(currentFile), startModuleDir);
@@ -867,7 +905,8 @@ async function resolveAttributedRustModulePath(
   if (startModuleDir) attributeDirectory = startModuleDir;
   let usedAttribute = false;
 
-  for (const child of childParts) {
+  for (let i = 0; i < childParts.length; i += 1) {
+    const child = childParts[i];
     if (!child || child === "*") {
       if (provenStart || usedAttribute) return currentFile;
       return undefined;
@@ -892,7 +931,9 @@ async function resolveAttributedRustModulePath(
       attributeDirectory = currentModuleDir;
       continue;
     }
-    if (libraryRootFile && !currentScope.declaredModules.some((mod) => mod.name === child)) return null;
+    if (libraryRootFile && !currentScope.declaredModules.some((mod) => mod.name === child)) {
+      return i === childParts.length - 1 ? currentFile : null;
+    }
     const conventional = await resolveRustModuleParts(currentModuleDir, [child]);
     if (!conventional) {
       if (usedAttribute) return null;
@@ -947,14 +988,31 @@ export async function resolveRustImportPath(
 
   const cargoRoot = await findNearestCargoRoot(fromFile, projectRoot);
   const sourceRoot = crateSourceRoot(cargoRoot, projectRoot);
-  const walked = await resolveAttributedRustModulePath(projectRoot, fromFile, parts, sourceRoot, cargoRoot);
+  const head = parts[0];
+  const tail = parts.slice(1);
+  let crateRootFile: string | null = null;
+  if (cargoRoot && head === "crate") {
+    const tree = await getRustModuleTree(cargoRoot, projectRoot);
+    if (tree.truncated) return null;
+    const owningRoot = tree.crateRoots.get(rustPathIdentity(fromFile));
+    if (owningRoot === null) return null;
+    crateRootFile = owningRoot ?? (await rustLibraryRootFile(cargoRoot, projectRoot)) ?? null;
+  }
+  const walked = await resolveAttributedRustModulePath(
+    projectRoot,
+    fromFile,
+    parts,
+    sourceRoot,
+    cargoRoot,
+    undefined,
+    crateRootFile,
+  );
   if (walked !== undefined) return walked;
 
   const currentDir = path.dirname(fromFile);
-  const head = parts[0];
-  const tail = parts.slice(1);
 
   if (head === "crate") {
+    if (crateRootFile) return null;
     return resolveRustModuleParts(sourceRoot, tail);
   }
   if (head === "self") {
@@ -993,9 +1051,17 @@ export async function resolveRustImportPath(
     }
     // A workspace path dependency (`[dependencies] head = { path = "../head" }`) names its
     // own crate root, not a submodule of the current crate.
-    const dependencyRoot = await rustPathDependencyCrateRoot(cargoRoot, projectRoot, head);
-    if (dependencyRoot) {
-      return resolveRustModuleParts(crateSourceRoot(dependencyRoot, projectRoot), tail);
+    const dependencyLibraryRoot = await rustPathDependencyLibraryRoot(cargoRoot, projectRoot, head);
+    if (dependencyLibraryRoot) {
+      const resolved = await resolveAttributedRustModulePath(
+        projectRoot,
+        fromFile,
+        parts,
+        sourceRoot,
+        cargoRoot,
+        dependencyLibraryRoot,
+      );
+      return resolved ?? null;
     }
   }
   return null;

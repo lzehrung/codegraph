@@ -3,9 +3,10 @@ import path from "node:path";
 import { getHotspots } from "../graphs/hotspots.js";
 import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
 import type { Edge, Graph } from "../types.js";
-import { edgeKey } from "../util/graph-edges.js";
+import { edgeFromImportBinding, edgeKey } from "../util/graph-edges.js";
 import { isPlainRecord } from "../util/guards.js";
 import { normalizePath } from "../util/paths.js";
+import { isCFamilyIncludeForm } from "../util/specifiers.js";
 import { countFilesByLanguage } from "./languages.js";
 import {
   ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,
@@ -95,26 +96,20 @@ function parseGraphJson(value: unknown): PortableGraphJson {
     ) {
       continue;
     }
-    const metadata: Pick<Edge, "typeOnly" | "includeForm"> = {};
-    if (typeof edge.typeOnly === "boolean") metadata.typeOnly = edge.typeOnly;
-    if (edge.includeForm === "literal" || edge.includeForm === "angle" || edge.includeForm === "macro") {
-      metadata.includeForm = edge.includeForm;
-    }
+    const source = {
+      from: edge.raw,
+      ...(typeof edge.typeOnly === "boolean" ? { typeOnly: edge.typeOnly } : {}),
+      ...(isCFamilyIncludeForm(edge.includeForm) ? { includeForm: edge.includeForm } : {}),
+    };
+    let to: Edge["to"] | undefined;
     if (edge.to.type === "file" && typeof edge.to.path === "string") {
-      fileEdges.push({
-        from: normalizePath(edge.from),
-        raw: edge.raw,
-        to: { type: "file", path: normalizePath(edge.to.path) },
-        ...metadata,
-      });
+      to = { type: "file", path: normalizePath(edge.to.path) };
     } else if (edge.to.type === "external" && typeof edge.to.name === "string") {
-      fileEdges.push({
-        from: normalizePath(edge.from),
-        raw: edge.raw,
-        to: { type: "external", name: edge.to.name },
-        ...metadata,
-      });
+      to = { type: "external", name: edge.to.name };
     }
+    if (!to) continue;
+    const rebuilt = edgeFromImportBinding(normalizePath(edge.from), to, source);
+    fileEdges.push(source.typeOnly === false ? { ...rebuilt, typeOnly: false } : rebuilt);
   }
   const symbols = Array.isArray(value.graph.symbols)
     ? value.graph.symbols.filter((entry): entry is { file: string; name: string; kind: string } => {

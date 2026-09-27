@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { collectImportsForFile } from "../src/indexer/imports.js";
 import {
   buildProjectIndex,
   buildProjectIndexIncremental,
@@ -11,6 +12,12 @@ import {
 } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
+
+/** File identity of an import target, or the external specifier when it did not resolve to a file. */
+function resolvedFileKey(resolved: string | { external: string } | undefined): string | undefined {
+  if (resolved === undefined) return undefined;
+  return typeof resolved === "string" ? fileIdentityKey(resolved) : resolved.external;
+}
 
 async function writeFixture(root: string, files: Record<string, string>): Promise<void> {
   for (const [rel, text] of Object.entries(files)) {
@@ -57,6 +64,216 @@ describe("Rust Cargo manifests are resolution inputs for the warm cache", () => 
       const cold = await buildProjectIndex(root, { cache: "off" });
       expect((await goToDefinition(cold, request)).status).toBe("not_found");
       expect((await goToDefinition(warm, request)).status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("revalidates [lib].path on a warm build without falling back to src/lib.rs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-libpath-warm-"));
+    try {
+      const use = "use crate_a::greet;\nfn main() { greet(); }\n";
+      const manifest = (target: string): string =>
+        '[package]\nname = "crate_a"\nversion = "0.1.0"\n[lib]\npath = "src/' + target + '.rs"\n';
+      await writeFixture(root, {
+        "a/Cargo.toml": manifest("core"),
+        "a/src/core.rs": "pub fn greet() {}\n",
+        "a/src/other.rs": "pub fn greet() {}\n",
+        "a/src/lib.rs": "pub fn greet() {}\n",
+        "b/Cargo.toml": '[package]\nname = "crate_b"\nversion = "0.1.0"\n[dependencies]\ncrate_a = { path = "../a" }\n',
+        "b/src/main.rs": use,
+      });
+      const main = path.join(root, "b/src/main.rs");
+      const request = { file: main, line: 2, column: columnOf(use.split("\n")[1]!, "greet") };
+      const first = await buildProjectIndexIncremental(root, { cache: "disk" });
+      const before = await goToDefinition(first, request);
+      expect(before.status).toBe("ok");
+      if (before.status === "ok") {
+        expect(fileIdentityKey(before.definition.file)).toBe(fileIdentityKey(path.join(root, "a/src/core.rs")));
+      }
+
+      await writeFile(path.join(root, "a/Cargo.toml"), manifest("other"));
+      const warm = await buildProjectIndexIncremental(root, { cache: "disk" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      for (const index of [warm, cold]) {
+        const goto = await goToDefinition(index, request);
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") {
+          expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(path.join(root, "a/src/other.rs")));
+        }
+        const old = await findReferences(index, { file: path.join(root, "a/src/core.rs"), line: 1, column: 8 });
+        expect(old.status).toBe("ok");
+        if (old.status === "ok") {
+          expect(old.references.map((ref) => fileIdentityKey(ref.file))).toEqual([
+            fileIdentityKey(path.join(root, "a/src/core.rs")),
+          ]);
+        }
+      }
+      await writeFile(path.join(root, "a/Cargo.toml"), manifest("missing"));
+      const missing = await buildProjectIndexIncremental(root, { cache: "disk" });
+      expect((await goToDefinition(missing, request)).status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Rust path dependencies use the library target declared by Cargo", () => {
+  it("resolves an explicit [lib].path instead of a same-named src/lib.rs decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-libpath-"));
+    try {
+      const core = 'pub fn greet() -> &\'static str { "real" }\n';
+      const decoy = 'pub fn greet() -> &\'static str { "decoy" }\n';
+      const use = "use crate_a::greet;\nfn main() { greet(); }\n";
+      await writeFixture(root, {
+        "a/Cargo.toml": '[package]\nname = "crate_a"\nversion = "0.1.0"\n[lib]\npath = "src/core.rs"\n',
+        "a/src/core.rs": core,
+        "a/src/lib.rs": decoy,
+        "b/Cargo.toml": '[package]\nname = "crate_b"\nversion = "0.1.0"\n[dependencies]\ncrate_a = { path = "../a" }\n',
+        "b/src/main.rs": use,
+      });
+      const coreFile = path.join(root, "a/src/core.rs");
+      const decoyFile = path.join(root, "a/src/lib.rs");
+      const mainFile = path.join(root, "b/src/main.rs");
+      const imports = await collectImportsForFile(mainFile, root);
+      const namedImport = imports.find((entry) => entry.kind === "named" && entry.imported === "greet");
+      expect(resolvedFileKey(namedImport?.resolved)).toBe(fileIdentityKey(coreFile));
+      expect(resolvedFileKey(namedImport?.resolved)).not.toBe(fileIdentityKey(decoyFile));
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const goto = await goToDefinition(index, {
+        file: mainFile,
+        line: 2,
+        column: columnOf(use.split("\n")[1]!, "greet"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(coreFile));
+
+      const refs = await findReferences(index, { file: coreFile, line: 1, column: columnOf(core, "greet") });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        const targets = refs.references.map((reference) => [
+          fileIdentityKey(reference.file),
+          reference.range.start.line,
+        ]);
+        expect(targets).toEqual([
+          [fileIdentityKey(coreFile), 1],
+          [fileIdentityKey(mainFile), 1],
+          [fileIdentityKey(mainFile), 2],
+        ]);
+      }
+      const decoyRefs = await findReferences(index, { file: decoyFile, line: 1, column: columnOf(decoy, "greet") });
+      expect(decoyRefs.status).toBe("ok");
+      if (decoyRefs.status === "ok") {
+        expect(decoyRefs.references.map((reference) => fileIdentityKey(reference.file))).toEqual([
+          fileIdentityKey(decoyFile),
+        ]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const mainId = defNodeIdAt(mainFile, use, "main", 0);
+      const coreId = defNodeIdAt(coreFile, core, "greet", 0);
+      const calls = graph.edges.filter((edge) => edge.label === "calls" && edge.from === mainId);
+      expect(calls.map((edge) => edge.to)).toEqual([coreId]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("walks #[path] modules from a custom library root for crate:: and path dependencies", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-path-tree-"));
+    try {
+      const worker = "pub fn greet() {}\n";
+      const consumer = "use crate::worker::greet;\npub fn run() { greet(); }\n";
+      const main = "use crate_a::worker::greet;\nfn main() { greet(); }\n";
+      await writeFixture(root, {
+        "a/Cargo.toml": '[package]\nname = "crate_a"\nversion = "0.1.0"\n[lib]\npath = "src/core.rs"\n',
+        "a/src/core.rs": '#[path = "modules/worker.rs"]\npub mod worker;\npub mod consumer;\n',
+        "a/src/modules/worker.rs": worker,
+        "a/src/consumer.rs": consumer,
+        "a/src/lib.rs": "pub mod worker;\n",
+        "a/src/worker.rs": worker,
+        "b/Cargo.toml": '[package]\nname = "crate_b"\nversion = "0.1.0"\n[dependencies]\ncrate_a = { path = "../a" }\n',
+        "b/src/main.rs": main,
+      });
+      const workerFile = path.join(root, "a/src/modules/worker.rs");
+      const decoyFile = path.join(root, "a/src/worker.rs");
+      const consumerFile = path.join(root, "a/src/consumer.rs");
+      const mainFile = path.join(root, "b/src/main.rs");
+      for (const file of [consumerFile, mainFile]) {
+        const imports = await collectImportsForFile(file, root);
+        const named = imports.find((entry) => entry.kind === "named" && entry.imported === "greet");
+        expect(resolvedFileKey(named?.resolved)).toBe(fileIdentityKey(workerFile));
+      }
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const [file, text] of [
+        [consumerFile, consumer],
+        [mainFile, main],
+      ] as const) {
+        const goto = await goToDefinition(index, {
+          file,
+          line: 2,
+          column: columnOf(text.split("\n")[1]!, "greet"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(workerFile));
+      }
+      const refs = await findReferences(index, { file: workerFile, line: 1, column: columnOf(worker, "greet") });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.map((ref) => fileIdentityKey(ref.file)).sort()).toEqual(
+          [
+            fileIdentityKey(workerFile),
+            fileIdentityKey(consumerFile),
+            fileIdentityKey(consumerFile),
+            fileIdentityKey(mainFile),
+            fileIdentityKey(mainFile),
+          ].sort(),
+        );
+        expect(refs.references.map((ref) => fileIdentityKey(ref.file))).not.toContain(fileIdentityKey(decoyFile));
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps crate:: inside the binary module tree when a custom library coexists", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-binary-root-"));
+    try {
+      const callLine = "pub fn run() { greet(); from_super(); }";
+      const runner = ["use crate::only_bin::greet;", "use super::only_bin::greet as from_super;", callLine, ""].join(
+        "\n",
+      );
+      await writeFixture(root, {
+        "Cargo.toml": '[package]\nname = "pkg"\nversion = "0.1.0"\n[lib]\npath = "src/core.rs"\n',
+        "src/core.rs": '#[path = "modules/only_bin.rs"]\npub mod only_bin;\n',
+        "src/lib.rs": '#[path = "modules/only_bin.rs"]\npub mod only_bin;\n',
+        "src/modules/only_bin.rs": "pub fn greet() {}\n",
+        "src/main.rs": "mod runner;\nmod only_bin;\nfn main() { runner::run(); }\n",
+        "src/runner.rs": runner,
+        "src/only_bin.rs": "pub fn greet() {}\n",
+      });
+      const runnerFile = path.join(root, "src/runner.rs");
+      const binaryFile = path.join(root, "src/only_bin.rs");
+      const imports = await collectImportsForFile(runnerFile, root);
+      const named = imports.find((entry) => entry.kind === "named" && entry.imported === "greet");
+      expect(resolvedFileKey(named?.resolved)).toBe(fileIdentityKey(binaryFile));
+      const superImport = imports.find((entry) => entry.kind === "named" && entry.local === "from_super");
+      expect(resolvedFileKey(superImport?.resolved)).toBe(fileIdentityKey(binaryFile));
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const goto = await goToDefinition(index, {
+        file: runnerFile,
+        line: 3,
+        column: columnOf(callLine, "greet"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(binaryFile));
+      const superGoto = await goToDefinition(index, {
+        file: runnerFile,
+        line: 3,
+        column: columnOf(callLine, "from_super"),
+      });
+      expect(superGoto.status).toBe("ok");
+      if (superGoto.status === "ok") {
+        expect(fileIdentityKey(superGoto.definition.file)).toBe(fileIdentityKey(binaryFile));
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -406,7 +623,7 @@ describe("Rust impl methods own member_of edges and calls edges (G7)", () => {
 });
 
 describe("Rust workspace-inherited dependency (H15)", () => {
-  it("resolves use crate_a::greet through workspace = true to the root [workspace.dependencies] path, excluding a decoy crate with the same function", async () => {
+  it("resolves workspace = true into the dependency [lib].path, excluding same-named decoys", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-h15-"));
     try {
       const a = 'pub fn greet() -> &\'static str { "hi" }\n';
@@ -415,15 +632,16 @@ describe("Rust workspace-inherited dependency (H15)", () => {
       await writeFixture(root, {
         "Cargo.toml":
           '[workspace]\nmembers = ["crate_a", "crate_b", "crate_c"]\n\n[workspace.dependencies]\ncrate_a = { path = "crate_a" }\n',
-        "crate_a/Cargo.toml": '[package]\nname = "crate_a"\nversion = "0.1.0"\n',
-        "crate_a/src/lib.rs": a,
+        "crate_a/Cargo.toml": '[package]\nname = "crate_a"\nversion = "0.1.0"\n[lib]\npath = "src/core.rs"\n',
+        "crate_a/src/core.rs": a,
+        "crate_a/src/lib.rs": c,
         "crate_b/Cargo.toml":
           '[package]\nname = "crate_b"\nversion = "0.1.0"\n[dependencies]\ncrate_a = { workspace = true }\n',
         "crate_b/src/main.rs": b,
         "crate_c/Cargo.toml": '[package]\nname = "crate_c"\nversion = "0.1.0"\n',
         "crate_c/src/lib.rs": c,
       });
-      const aFile = path.join(root, "crate_a/src/lib.rs");
+      const aFile = path.join(root, "crate_a/src/core.rs");
       const bFile = path.join(root, "crate_b/src/main.rs");
       const index = await buildProjectIndex(root, { cache: "off" });
 
@@ -440,6 +658,7 @@ describe("Rust workspace-inherited dependency (H15)", () => {
       const refFiles = refs.references.map((reference) => fileIdentityKey(reference.file)).sort();
       expect(refFiles).toEqual([fileIdentityKey(aFile), fileIdentityKey(bFile), fileIdentityKey(bFile)].sort());
       expect(refFiles).not.toContain(fileIdentityKey(path.join(root, "crate_c/src/lib.rs")));
+      expect(refFiles).not.toContain(fileIdentityKey(path.join(root, "crate_a/src/lib.rs")));
       expect(refs.referenceCoverage?.state).toBe("complete");
 
       const graph = await buildSymbolGraphDetailed(index);

@@ -7,7 +7,7 @@ import { buildSymbolGraphDetailed, findReferences, goToDefinition } from "../src
 import { fileIdentityKey } from "../src/util/paths.js";
 
 /**
- * Regressions for the 2026-09-25 accuracy audit's Python findings:
+ * Regressions for Python accuracy audits:
  * - W14: a class named like its own module (`widget.py` / `Widget`), reached through a package
  *   `__init__.py` re-export plus an aliased import, must not lose its consumers from findReferences.
  * - W15: `import pkg.mod` followed by `pkg.mod.foo()` must navigate and find references like the
@@ -15,6 +15,7 @@ import { fileIdentityKey } from "../src/util/paths.js";
  * - H11: the source-side name in `from a import helper as h` must navigate like the unaliased form.
  * - H12 (Python half): `super().m()` must resolve through a proven base class, same-file or
  *   imported, while an unproven (missing) base stays `not_found`.
+ * - D1/D2: submodule bindings target regular-package initializers and never infer the wrong case.
  */
 
 async function withFixture(
@@ -641,6 +642,137 @@ describe("Python import rebinding in member resolution", () => {
             ),
           ).toBe(false);
         }
+      },
+    );
+  });
+});
+
+describe("Python submodule bindings are case-exact and target package initializers", () => {
+  const packageSource = "value = 1\n";
+  const mainSource = "from pkg import sub\n\nprint(sub.value)\n";
+  const packageFiles = {
+    "pkg/__init__.py": "",
+    "pkg/sub/__init__.py": packageSource,
+    "main.py": mainSource,
+  };
+
+  it("navigates, references, and links a regular-package submodule member", async () => {
+    await withFixture("cg-audit-py-package-submodule-", packageFiles, async (root, f) => {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      expect(index.byFile.get(fileIdentityKey(f("main.py")))?.imports).toMatchObject([
+        { kind: "namespace", resolved: f("pkg/sub/__init__.py") },
+      ]);
+      const goto = await goToDefinition(index, {
+        file: f("main.py"),
+        line: 3,
+        column: columnOf(mainSource, 3, "value"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") {
+        expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("pkg/sub/__init__.py")));
+      }
+
+      const refs = await findReferences(index, { file: f("pkg/sub/__init__.py"), line: 1, column: 1 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.referenceCoverage.state).toBe("complete");
+        const sites = refs.references.map((ref) => `${fileIdentityKey(ref.file)}:${ref.range.start.line}`).sort();
+        expect(sites).toEqual(
+          [`${fileIdentityKey(f("main.py"))}:3`, `${fileIdentityKey(f("pkg/sub/__init__.py"))}:1`].sort(),
+        );
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges.some((edge) => {
+          const from = graph.nodes.get(edge.from);
+          const to = graph.nodes.get(edge.to);
+          return (
+            edge.label === "value" &&
+            fileIdentityKey(from?.file ?? "") === fileIdentityKey(f("main.py")) &&
+            fileIdentityKey(to?.file ?? "") === fileIdentityKey(f("pkg/sub/__init__.py")) &&
+            to?.name === "value"
+          );
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("keeps the regular-package submodule binding identical after a warm disk build", async () => {
+    await withFixture("cg-audit-py-package-submodule-cache-", packageFiles, async (root, f) => {
+      await buildProjectIndexIncremental(root, { cache: "disk" });
+      const warm = await buildProjectIndexIncremental(root, { cache: "disk" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      for (const index of [warm, cold]) {
+        expect(index.byFile.get(fileIdentityKey(f("main.py")))?.imports).toMatchObject([
+          { kind: "namespace", resolved: f("pkg/sub/__init__.py") },
+        ]);
+        const goto = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 3,
+          column: columnOf(mainSource, 3, "value"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") {
+          expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("pkg/sub/__init__.py")));
+        }
+        const refs = await findReferences(index, { file: f("pkg/sub/__init__.py"), line: 1, column: 1 });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(refs.referenceCoverage.state).toBe("complete");
+          expect(
+            refs.references.some(
+              (ref) => fileIdentityKey(ref.file) === fileIdentityKey(f("main.py")) && ref.range.start.line === 3,
+            ),
+          ).toBe(true);
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        expect(
+          graph.edges.some(
+            (edge) =>
+              edge.label === "value" &&
+              fileIdentityKey(graph.nodes.get(edge.from)?.file ?? "") === fileIdentityKey(f("main.py")) &&
+              fileIdentityKey(graph.nodes.get(edge.to)?.file ?? "") === fileIdentityKey(f("pkg/sub/__init__.py")),
+          ),
+        ).toBe(true);
+      }
+      expect(warm.byFile.get(fileIdentityKey(f("main.py")))?.imports).toEqual(
+        cold.byFile.get(fileIdentityKey(f("main.py")))?.imports,
+      );
+    });
+  });
+
+  it("does not invent a differently cased submodule for package member navigation", async () => {
+    const source = "import pkg\n\nx = pkg.Widget\n";
+    await withFixture(
+      "cg-audit-py-case-exact-submodule-",
+      { "pkg/__init__.py": "", "pkg/widget.py": "class Widget:\n    pass\n", "main.py": source },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const goto = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 3,
+          column: columnOf(source, 3, "Widget"),
+        });
+        expect(goto.status).toBe("not_found");
+
+        const refs = await findReferences(index, { file: f("pkg/widget.py"), line: 1, column: 7 });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(refs.referenceCoverage.state).toBe("complete");
+          expect(refs.references.map((ref) => `${fileIdentityKey(ref.file)}:${ref.range.start.line}`)).toEqual([
+            `${fileIdentityKey(f("pkg/widget.py"))}:1`,
+          ]);
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        expect(
+          graph.edges.some(
+            (edge) =>
+              fileIdentityKey(graph.nodes.get(edge.from)?.file ?? "") === fileIdentityKey(f("main.py")) &&
+              fileIdentityKey(graph.nodes.get(edge.to)?.file ?? "") === fileIdentityKey(f("pkg/widget.py")) &&
+              graph.nodes.get(edge.to)?.name === "Widget",
+          ),
+        ).toBe(false);
       },
     );
   });

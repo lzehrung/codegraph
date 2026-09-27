@@ -7,7 +7,6 @@ import {
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
   externalSpecifierMatchesAddedStem,
-  externalSpecifierStem,
   tsconfigAliasMappedTails,
   listUntrackedProjectFiles,
   resolveIncrementalFileList,
@@ -378,10 +377,6 @@ describe("added-file specifier stems", () => {
     const csharpFiles = ["/proj/p/Thing.cs"];
     const csharpStems = addedResolutionStems(csharpFiles, "csharp");
 
-    expect(externalSpecifierStem("p.Item", "java")).toBe("Item");
-    expect(externalSpecifierStem("p.Item", "kotlin")).toBe("Item");
-    expect(externalSpecifierStem("crate::foo", "rust")).toBe("foo");
-    expect(externalSpecifierStem("example.com/probe/thing", "go")).toBe("thing");
     expect(externalSpecifierMatchesAddedStem("p.Item", "java", javaStems)).toBe(true);
     expect(externalSpecifierMatchesAddedStem("p.Item", "kotlin", kotlinStems)).toBe(true);
     expect(externalSpecifierMatchesAddedStem("crate::foo", "rust", rustStems)).toBe(true);

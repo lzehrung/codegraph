@@ -237,6 +237,65 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
     }
   });
 
+  it.each([
+    { scenario: "an extensionless specifier", specifier: "./q", targetRelativePath: "q.ts" },
+    { scenario: "a dotted literal stem", specifier: "./data.model", targetRelativePath: "data.model.ts" },
+    {
+      scenario: "a JavaScript compatibility-family specifier",
+      specifier: "./data.js",
+      targetRelativePath: "data.ts",
+    },
+  ])("keeps added-file re-resolution aligned with resolver extension rules for $scenario", async (fixture) => {
+    const root = await mkTmpDir("cg-audit-g1-added-stem-");
+    try {
+      const main = path.join(root, "main.ts");
+      const target = path.join(root, fixture.targetRelativePath);
+      const mainLines = [
+        `import { q } from "${fixture.specifier}";`,
+        "export function run(): number {",
+        "  return q();",
+        "}",
+        "",
+      ];
+      const targetLines = ["export function q(): number {", "  return 1;", "}", ""];
+      await fsp.writeFile(main, mainLines.join("\n"), "utf8");
+
+      const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+      expect(edgeTargets(initial, main)).toEqual([`external:${fixture.specifier}`]);
+
+      await fsp.writeFile(target, targetLines.join("\n"), "utf8");
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targets = await expectWarmMatchesCold(root, main, warm);
+      expect(targets).toEqual([`file:${normalizePath(target)}`]);
+      expect(targets).not.toContain(`external:${fixture.specifier}`);
+
+      const goto = await goToDefinition(warm, { file: main, line: 3, column: columnOf(mainLines, 3, "q(") });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("expected goToDefinition to resolve after the target was added");
+      expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(target));
+
+      const refs = await findReferences(warm, { file: target, line: 1, column: columnOf(targetLines, 1, "q(") });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("expected findReferences to resolve after the target was added");
+      expect(refs.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))).toBe(true);
+      expect(refs.referenceCoverage.state).toBe("complete");
+
+      const detailed = await buildSymbolGraphDetailed(warm);
+      const qNode = [...detailed.nodes.values()].find(
+        (node) => node.file === normalizePath(target) && node.name === "q",
+      );
+      const runNode = [...detailed.nodes.values()].find(
+        (node) => node.file === normalizePath(main) && node.name === "run",
+      );
+      expect(qNode).toBeTruthy();
+      expect(runNode).toBeTruthy();
+      expect(
+        detailed.edges.some((edge) => edge.label === "calls" && edge.from === runNode!.id && edge.to === qNode!.id),
+      ).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
   it("auto-refreshes a warm agent session so a newly added file resolves a previously unresolved import", async () => {
     const root = await mkTmpDir("cg-audit-g1-session-");
     try {

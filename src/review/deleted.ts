@@ -9,7 +9,7 @@ import { collectLocalsAndExportsFromSource } from "../indexer/locals-and-exports
 import { type ExportEntry, type ImportBinding, type ModuleIndex, type ProjectIndex } from "../indexer/types.js";
 import { supportForFile } from "../languages.js";
 import type { Edge, FileId } from "../types.js";
-import { edgeKey } from "../util/graph-edges.js";
+import { edgeFromImportBinding, edgeKey } from "../util/graph-edges.js";
 import { listResolutionCandidates, loadNearestTsconfigFor } from "../util/resolution.js";
 import {
   listWorkspacePackageResolutionCandidates,
@@ -451,12 +451,7 @@ export async function collectDeletedImporterEdges(
             : await resolveDeletedAliasImportTarget(projectRoot, workspaceConfig, mod.file, imp.from, deletedFile);
         const matchesDeletedFile = matchesDeletedImportTarget(mod.file, imp.from, resolvedAliasTarget, deletedFile);
         if (!matchesDeletedFile) continue;
-        const edge: Edge = {
-          from: mod.file,
-          to: { type: "file", path: deletedFile },
-          raw: imp.from,
-          ...(imp.typeOnly ? { typeOnly: imp.typeOnly } : {}),
-        };
+        const edge = edgeFromImportBinding(mod.file, { type: "file", path: deletedFile }, imp);
         edges.set(edgeKey(edge), edge);
       }
     }
@@ -487,12 +482,7 @@ export async function collectDeletedSnapshotEdges(
         knownDeletedFileSet: deletedSnapshotFileSet,
         ...(imp.resolved ? { resolved: imp.resolved } : {}),
       });
-      const edge: Edge = {
-        from: file,
-        to,
-        raw: imp.from,
-        ...(imp.typeOnly ? { typeOnly: imp.typeOnly } : {}),
-      };
+      const edge = edgeFromImportBinding(file, to, imp);
       edges.set(edgeKey(edge), edge);
     }
     for (const entry of listReviewableExports(snapshot.module)) {
@@ -504,13 +494,10 @@ export async function collectDeletedSnapshotEdges(
         knownDeletedFiles: deletedSnapshotFiles,
         knownDeletedFileSet: deletedSnapshotFileSet,
       });
-      const raw = entry.moduleSpecifier ?? entry.fromModule;
-      const edge: Edge = {
-        from: file,
-        to,
-        raw,
+      const edge = edgeFromImportBinding(file, to, {
+        from: entry.moduleSpecifier ?? entry.fromModule,
         ...(entry.typeOnly ? { typeOnly: entry.typeOnly } : {}),
-      };
+      });
       edges.set(edgeKey(edge), edge);
     }
   }

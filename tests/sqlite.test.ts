@@ -248,7 +248,7 @@ export function run() { helper(); new Widget(); }
     const tables = dbQuery(db, "SELECT name FROM sqlite_master WHERE type='table';");
     expect(tables).toContain("graph_snapshots");
     const schemaVersion = dbQuery(db, "SELECT value FROM graph_metadata WHERE key = 'schema_version';");
-    expect(schemaVersion[0]).toBe("3");
+    expect(schemaVersion[0]).toBe("4");
     db.close();
   });
 
@@ -377,6 +377,69 @@ export function run() { helper(); new Widget(); }
       .map((row) => String((row as { name?: unknown }).name));
     expect(tables).toEqual(["graph_metadata"]);
     db.close();
+  });
+
+  it("migrates v3 schema_version databases and accepts new include_form rows", async () => {
+    const root = await mkTmpDir("dg-sqlite-v3-version-");
+    const dbPath = path.join(root, "graph.sqlite");
+    const db = new SqliteDatabase(dbPath);
+    const { ensureSchema, readGraphSchemaVersion } = await import("../src/sqlite/schema.js");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS graph_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      INSERT INTO graph_metadata (key, value) VALUES ('schema_version', '3');
+      CREATE TABLE IF NOT EXISTS file_edges (
+        from_path TEXT NOT NULL,
+        to_path TEXT NOT NULL,
+        to_type TEXT NOT NULL,
+        raw TEXT,
+        type_only INTEGER
+      );
+      INSERT INTO file_edges (from_path, to_path, to_type, raw, type_only)
+        VALUES ('src/main.c', 'src/x.h', 'file', 'x.h', 0);
+    `);
+
+    ensureSchema(db);
+    db.prepare(
+      "INSERT INTO file_edges (from_path, to_path, to_type, raw, type_only, include_form) VALUES (?, ?, ?, ?, ?, ?);",
+    ).run(["src/main.c", "src/x.h", "file", "x.h", 0, "angle"]);
+    const forms = db
+      .prepare("SELECT include_form FROM file_edges ORDER BY rowid;")
+      .raw()
+      .all()
+      .map((row) => (Array.isArray(row) ? row[0] : undefined));
+    expect({ version: readGraphSchemaVersion(db), forms }).toEqual({ version: 4, forms: [null, "angle"] });
+    db.close();
+  });
+
+  it("stores angle and quoted includes as distinct file_edges rows", async () => {
+    const root = await mkTmpDir("dg-sqlite-include-form-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "x.h"), "int x(void);\n", "utf8");
+    await fsp.writeFile(path.join(srcDir, "main.c"), '#include <x.h>\n#include "x.h"\n', "utf8");
+
+    const index = await buildProjectIndex(root, {
+      cache: "off",
+      native: "off",
+      graph: { resolutionHints: ["src"], native: "off" },
+    });
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const rows = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT include_form FROM file_edges WHERE raw = ? ORDER BY include_form;",
+      ["x.h"],
+    );
+    expect(rows.rows).toEqual([["angle"], ["literal"]]);
   });
 
   it("updates changed files incrementally", async () => {

@@ -115,11 +115,11 @@ const insertSymbols = (db: SqliteDatabase, nodes: SymbolNode[]) => {
 
 const insertFileEdges = (db: SqliteDatabase, edges: Graph["edges"]) => {
   const stmt = db.prepare(
-    "INSERT INTO file_edges (from_path, to_path, to_type, raw, type_only) VALUES (?, ?, ?, ?, ?);",
+    "INSERT INTO file_edges (from_path, to_path, to_type, raw, type_only, include_form) VALUES (?, ?, ?, ?, ?, ?);",
   );
   for (const edge of edges) {
     const toPath = edge.to.type === "file" ? edge.to.path : edge.to.name;
-    stmt.run([edge.from, toPath, edge.to.type, edge.raw, edge.typeOnly ? 1 : 0]);
+    stmt.run([edge.from, toPath, edge.to.type, edge.raw, edge.typeOnly ? 1 : 0, edge.includeForm ?? null]);
   }
 };
 

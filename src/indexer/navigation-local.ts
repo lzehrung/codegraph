@@ -1,9 +1,11 @@
 import type { LanguageSupport } from "../languages.js";
+import { getCallArgumentCount } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
+import { typescriptSelectOverloadCandidate } from "./ts-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import {
   bindingCoversUse,
@@ -288,6 +290,33 @@ export function laterLocalShadowsUse(
   return false;
 }
 
+function selectTypeScriptOverloadBinding(
+  binding: Binding,
+  file: FileId,
+  currentNode: SyntaxNodeLike,
+  source: string,
+  tree: SyntaxTreeLike,
+  languageId: string,
+): Binding | null {
+  const call = currentNode.parent;
+  if (!call || call.type !== "call_expression") return binding;
+  const selected = typescriptSelectOverloadCandidate({
+    group: binding.sameScopeFunctionBindings ?? [binding],
+    tree,
+    definitionOf: (candidate) => ({
+      file,
+      localName: candidate.name,
+      kind: SymbolKind.Function,
+      range: candidate.def!,
+    }),
+    declarationOf: (candidate) => candidate.node?.parent,
+    source,
+    languageId,
+    argumentCount: getCallArgumentCount({ languageId, source, call }),
+  });
+  return selected ?? null;
+}
+
 export function findClosestBinding(
   scopeIndex: ScopeIndex,
   file: FileId,
@@ -295,8 +324,9 @@ export function findClosestBinding(
   currentNode: SyntaxNodeLike,
   support: LanguageSupport,
   source?: string,
+  tree?: SyntaxTreeLike,
 ): SymbolDef | null {
-  const binding = findClosestScopeBinding(scopeIndex, bindingName, currentNode, support);
+  let binding = findClosestScopeBinding(scopeIndex, bindingName, currentNode, support);
   if (!binding?.def) return null;
   if (support.id === "cpp" && binding.kind === "function" && source) {
     const collisions = binding.sameScopeFunctionBindings ?? [binding];
@@ -311,6 +341,11 @@ export function findClosestBinding(
       };
     }
   }
+  if ((support.id === "ts" || support.id === "tsx") && binding.kind === "function" && source && tree) {
+    const selected = selectTypeScriptOverloadBinding(binding, file, currentNode, source, tree, support.id);
+    if (!selected?.def) return null;
+    binding = selected;
+  }
   let kind = SymbolKind.Variable;
   if (binding.kind === "function") {
     kind = SymbolKind.Function;
@@ -319,12 +354,14 @@ export function findClosestBinding(
   } else if (binding.kind === "type") {
     kind = SymbolKind.TypeAlias;
   }
+  const range = binding.def;
+  if (!range) return null;
   const tagRole = support.id === "c" && binding.node ? cTagRole(binding.node) : undefined;
   return {
     file,
     localName: binding.name,
     kind,
-    range: binding.def,
+    range,
     ...(tagRole ? { cTag: tagRole } : {}),
   };
 }

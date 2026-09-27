@@ -104,7 +104,8 @@ export function resolveFirstIndexedPhpSymbol(
   return null;
 }
 
-const PHP_CLASS_LIKE_KINDS: ReadonlySet<string> = new Set([
+/** PHP's class import namespace: classes (including traits), interfaces, and enums. */
+export const PHP_CLASS_LIKE_KINDS: ReadonlySet<SymbolKind> = new Set([
   SymbolKind.Class,
   SymbolKind.Interface,
   SymbolKind.TypeAlias,
@@ -229,9 +230,18 @@ export function phpNamespaceSymbolIndexFor(index: ProjectIndex): PhpNamespaceSym
   return cached;
 }
 
-/** A PHP expression resolves only in its syntax-selected class, function, or constant namespace. */
-export function phpReferenceRoleMatchesKind(node: SyntaxNodeLike, kind: SymbolKind): boolean {
-  const role = inferPhpQualifiedReferenceImportType(node) ?? "const";
+/**
+ * A PHP class, function, or constant role names only declarations in that namespace.
+ * Pass the reference node to infer the role, or the role of a `use` binding directly.
+ */
+export function phpReferenceRoleMatchesKind(
+  nodeOrRole: SyntaxNodeLike | "class" | "function" | "const",
+  kind: SymbolKind,
+): boolean {
+  const role =
+    nodeOrRole === "class" || nodeOrRole === "function" || nodeOrRole === "const"
+      ? nodeOrRole
+      : (inferPhpQualifiedReferenceImportType(nodeOrRole) ?? "const");
   if (role === "class") return PHP_CLASS_LIKE_KINDS.has(kind);
   if (role === "function") return kind === SymbolKind.Function;
   return kind === SymbolKind.Variable;
