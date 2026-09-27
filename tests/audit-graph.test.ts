@@ -172,6 +172,101 @@ nativeDescribe("G5: TypeScript static method call produces a calls edge", () => 
   });
 });
 
+nativeDescribe("G6: star-import expansion must not overwrite an explicit alias", () => {
+  it("Java: an explicit single-type import beats a wildcard package import for the call edge", async () => {
+    const fixture = await buildConsumerAgreementFixture("cg-audit-g6-java-", {
+      "pkg/a/Foo.java": "package pkg.a;\n\npublic class Foo {\n    public int hit() {\n        return 1;\n    }\n}\n",
+      "pkg/b/Foo.java": "package pkg.b;\n\npublic class Foo {\n    public int hit() {\n        return 2;\n    }\n}\n",
+      "app/Main.java":
+        "package app;\n\nimport pkg.b.*;\nimport pkg.a.Foo;\n\npublic class Main {\n    public int run() {\n" +
+        "        Foo instance = new Foo();\n        return instance.hit();\n    }\n}\n",
+    });
+    try {
+      await assertConsumerAgreement(fixture, {
+        file: "app/Main.java",
+        line: 9,
+        token: "hit",
+        expected: { file: "pkg/a/Foo.java", line: 4 },
+        edges: [
+          { label: "calls", from: { file: "app/Main.java", name: "run" } },
+          {
+            label: "calls",
+            from: { file: "app/Main.java", name: "run" },
+            to: { file: "pkg/b/Foo.java", name: "hit" },
+            absent: true,
+          },
+        ],
+      });
+    } finally {
+      await disposeConsumerAgreementFixture(fixture);
+    }
+  });
+
+  it("Python: an explicit import written after a star import keeps last-wins for the call edge", async () => {
+    const fixture = await buildConsumerAgreementFixture("cg-audit-g6-python-", {
+      "a.py": "class Foo:\n    def hit(self):\n        return 1\n",
+      "b.py": "class Foo:\n    def hit(self):\n        return 2\n",
+      "main.py": "from a import *\nfrom b import Foo\n\n\ndef run():\n    return Foo().hit()\n",
+    });
+    try {
+      await assertConsumerAgreement(fixture, {
+        file: "main.py",
+        line: 6,
+        token: "hit",
+        expected: { file: "b.py", line: 2 },
+        edges: [
+          { label: "calls", from: { file: "main.py", name: "run" } },
+          {
+            label: "calls",
+            from: { file: "main.py", name: "run" },
+            to: { file: "a.py", name: "hit" },
+            absent: true,
+          },
+        ],
+      });
+    } finally {
+      await disposeConsumerAgreementFixture(fixture);
+    }
+  });
+
+  it("C#: two ambiguous `using` namespaces defining the same type produce no call edge to either", async () => {
+    const fixture = await buildConsumerAgreementFixture("cg-audit-g6-cs-", {
+      "P/Thing.cs":
+        "namespace P {\n  public class Thing {\n    public static int Hit() {\n      return 1;\n    }\n  }\n}\n",
+      "Q/Thing.cs":
+        "namespace Q {\n  public class Thing {\n    public static int Hit() {\n      return 2;\n    }\n  }\n}\n",
+      "Runner.cs":
+        "using P;\nusing Q;\n\nnamespace Consumer {\n  public class Runner {\n    public int Run() {\n" +
+        "      return Thing.Hit();\n    }\n  }\n}\n",
+    });
+    try {
+      await assertConsumerAgreement(fixture, {
+        file: "Runner.cs",
+        line: 7,
+        token: "Thing",
+        expected: "not_found",
+        sameNameDeclaration: { file: "P/Thing.cs", line: 3, token: "Hit" },
+        edges: [
+          {
+            label: "calls",
+            from: { file: "Runner.cs", name: "Run" },
+            to: { file: "P/Thing.cs", name: "Hit" },
+            absent: true,
+          },
+          {
+            label: "calls",
+            from: { file: "Runner.cs", name: "Run" },
+            to: { file: "Q/Thing.cs", name: "Hit" },
+            absent: true,
+          },
+        ],
+      });
+    } finally {
+      await disposeConsumerAgreementFixture(fixture);
+    }
+  });
+});
+
 describe("Cross-consumer agreement spread: already-working forms", () => {
   it("Python: cross-file class inheritance", async () => {
     const fixture = await buildConsumerAgreementFixture("cg-audit-spread-py-", {

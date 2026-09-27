@@ -119,10 +119,12 @@ export function collectDeletedTrackedFileDependents(
 const PYTHON_SOURCE_PATTERN = /\.pyi?$/iu;
 
 /**
- * `from pkg import name` resolves to `pkg/__init__.py` until `pkg/name.py` exists; then the
- * binding is the submodule. That edge is already resolved, so no external edge names the
- * added module. Returns cached Python importers of each package an added module (or a new
- * subpackage `__init__`) extends; they are reparsed instead of reused.
+ * `from pkg import name` resolves to `pkg/__init__.py` until `pkg/name.py` (or a namespace
+ * directory `pkg/name/` holding Python code) exists; then the binding is the submodule. That
+ * edge is already resolved, so no external edge names the added module. Returns cached Python
+ * importers of every package on the added file's directory chain; they are reparsed instead of
+ * reused. The walk is conservative: importers whose binding does not change reparse to the same
+ * result.
  */
 export function collectPythonPackageImporters(
   trackedEntries: Record<string, ManifestFileEntry>,
@@ -131,13 +133,15 @@ export function collectPythonPackageImporters(
   const packageInits = new Set<string>();
   for (const file of addedFiles) {
     if (!PYTHON_SOURCE_PATTERN.test(file)) continue;
-    const normalized = normalizePath(file);
-    const moduleDir = path.posix.dirname(normalized);
-    const packageDir = path.posix.basename(normalized).startsWith("__init__.")
-      ? path.posix.dirname(moduleDir)
-      : moduleDir;
-    for (const init of ["__init__.py", "__init__.pyi"])
-      packageInits.add(fileIdentityKey(path.posix.join(packageDir, init)));
+    let directory = path.posix.dirname(normalizePath(file));
+    let previous: string;
+    do {
+      for (const init of ["__init__.py", "__init__.pyi"]) {
+        packageInits.add(fileIdentityKey(path.posix.join(directory, init)));
+      }
+      previous = directory;
+      directory = path.posix.dirname(directory);
+    } while (directory !== previous);
   }
   const importers = new Set<string>();
   if (!packageInits.size) return importers;
@@ -156,8 +160,31 @@ const MULTI_PART_RESOLUTION_EXTENSIONS = DEFAULT_RESOLUTION_EXTENSIONS.filter(
   (extension) => extension.lastIndexOf(".") > 0,
 );
 
-/** Stems an added file can satisfy: its own name, plus the directory for an entry file. */
-export function addedResolutionStems(addedFiles: readonly string[]): Set<string> {
+type ExternalSpecifierResolutionRule = {
+  separator: RegExp;
+  importNamesDirectory?: boolean;
+  reResolveAnyAddedExtension?: string;
+  matchesModuleSegments?: boolean;
+};
+
+const DEFAULT_EXTERNAL_SPECIFIER_RULE: ExternalSpecifierResolutionRule = { separator: /[/\\]/u };
+
+const EXTERNAL_SPECIFIER_RESOLUTION_RULES: Readonly<Record<string, ExternalSpecifierResolutionRule>> = {
+  csharp: { separator: /[/\\]/u, reResolveAnyAddedExtension: ".cs" },
+  go: { separator: /\//u, importNamesDirectory: true },
+  java: { separator: /\./u },
+  kotlin: { separator: /\./u },
+  python: { separator: /[./\\]/u },
+  rust: { separator: /::/u, matchesModuleSegments: true },
+};
+
+function externalSpecifierResolutionRule(languageId: string): ExternalSpecifierResolutionRule {
+  return EXTERNAL_SPECIFIER_RESOLUTION_RULES[languageId] ?? DEFAULT_EXTERNAL_SPECIFIER_RULE;
+}
+
+/** Stems an added file can satisfy, plus directories used by language-specific module imports. */
+export function addedResolutionStems(addedFiles: readonly string[], languageId = "default"): Set<string> {
+  const rule = externalSpecifierResolutionRule(languageId);
   const stems = new Set<string>();
   for (const file of addedFiles) {
     const base = path.basename(file);
@@ -170,17 +197,16 @@ export function addedResolutionStems(addedFiles: readonly string[]): Set<string>
     for (const stem of fileStems) {
       if (!stem) continue;
       stems.add(stem);
-      if (!RESOLUTION_ENTRY_STEMS.has(stem)) continue;
+      if (!RESOLUTION_ENTRY_STEMS.has(stem) && !rule.importNamesDirectory) continue;
       const directory = path.basename(path.dirname(file));
-      if (directory && directory !== "." && directory !== stem) stems.add(directory);
+      if (directory && directory !== ".") stems.add(directory);
     }
   }
   return stems;
 }
 
-function lastSpecifierSegment(value: string): string {
-  const parts = value.split(/[/\\]/).filter((part) => part.length > 0 && part !== "." && part !== "..");
-  return parts.at(-1) ?? value;
+function externalSpecifierSegments(value: string, rule: ExternalSpecifierResolutionRule): string[] {
+  return value.split(rule.separator).filter((segment) => segment && segment !== "." && segment !== "..");
 }
 
 function stripSpecifierExtension(segment: string): string {
@@ -188,10 +214,31 @@ function stripSpecifierExtension(segment: string): string {
   return extension ? segment.slice(0, -extension.length) : segment;
 }
 
-/** Last specifier segment, extension removed. Python dotted names become slashes first. */
+/** Last language-specific specifier segment, extension removed. */
 export function externalSpecifierStem(specifier: string, languageId: string): string {
-  const normalized = languageId === "python" ? specifier.replace(/\./g, "/") : specifier;
-  return stripSpecifierExtension(lastSpecifierSegment(normalized));
+  const segments = externalSpecifierSegments(specifier, externalSpecifierResolutionRule(languageId));
+  return stripSpecifierExtension(segments.at(-1) ?? specifier);
+}
+
+function hasAddedFileMatchingRule(rule: ExternalSpecifierResolutionRule, addedFiles: readonly string[]): boolean {
+  const extension = rule.reResolveAnyAddedExtension;
+  if (!extension) return false;
+  return addedFiles.some((file) => path.extname(file).toLowerCase() === extension);
+}
+
+function specifierMatchesAddedStem(
+  specifier: string,
+  rule: ExternalSpecifierResolutionRule,
+  addedStems: ReadonlySet<string>,
+): boolean {
+  const segments = externalSpecifierSegments(specifier, rule);
+  const lastSegment = segments.at(-1) ?? specifier;
+  if (addedStems.has(stripSpecifierExtension(lastSegment))) return true;
+  if (!rule.matchesModuleSegments) return false;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (addedStems.has(stripSpecifierExtension(segments[index]!))) return true;
+  }
+  return false;
 }
 
 /**
@@ -233,10 +280,14 @@ export function externalSpecifierMatchesAddedStem(
   languageId: string,
   addedStems: ReadonlySet<string>,
   mappedTails: readonly string[] = [],
+  addedFiles: readonly string[] = [],
 ): boolean {
-  if (!specifier || addedStems.size === 0) return false;
-  if (addedStems.has(externalSpecifierStem(specifier, languageId))) return true;
-  return mappedTails.some((tail) => addedStems.has(externalSpecifierStem(tail, languageId)));
+  if (!specifier) return false;
+  const rule = externalSpecifierResolutionRule(languageId);
+  if (hasAddedFileMatchingRule(rule, addedFiles)) return true;
+  if (!addedStems.size) return false;
+  if (specifierMatchesAddedStem(specifier, rule, addedStems)) return true;
+  return mappedTails.some((tail) => specifierMatchesAddedStem(tail, rule, addedStems));
 }
 
 /**

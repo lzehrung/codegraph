@@ -450,3 +450,25 @@ function edgeBetween(graph: DetailedSymbolGraph, from: string, to: string, label
 function callCount(graph: DetailedSymbolGraph, from: string, to: string): number {
   return graph.edges.filter((edge) => edge.from === from && edge.to === to && edge.label === "calls").length;
 }
+
+describe("Ruby scope-resolution class names follow their lexical nesting", () => {
+  it("exports `class Inner::Tool` inside `module Outer` as Outer::Inner::Tool and `class ::Top` as Top", async () => {
+    const use = ["require_relative 'defs'", "Outer::Inner::Tool.new", "Inner::Tool.new", "Top.new", ""];
+    const { root, index } = await project("cg-audit-ruby-scope-name-", {
+      "defs.rb": "module Outer\n  module Inner\n  end\n  class Inner::Tool\n  end\n  class ::Top\n  end\nend\n",
+      "use.rb": use.join("\n"),
+    });
+    const file = path.join(root, "use.rb").replace(/\\/g, "/");
+    const at = async (line: number, token: string) =>
+      await goToDefinition(index, { file, line, column: use[line - 1]!.lastIndexOf(token) + 1 });
+
+    const nested = await at(2, "Tool");
+    expect(nested.status).toBe("ok");
+    if (nested.status === "ok") expect(nested.definition.range.start.line).toBe(4);
+    // At the top level `Inner` is not defined, so `Inner::Tool` names nothing.
+    expect((await at(3, "Tool")).status).toBe("not_found");
+    const top = await at(4, "Top");
+    expect(top.status).toBe("ok");
+    if (top.status === "ok") expect(top.definition.range.start.line).toBe(6);
+  });
+});

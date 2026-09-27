@@ -977,7 +977,7 @@ export async function resolveRustImportPath(
   if (cargoRoot && head) {
     // A package's own binary target (`src/bin/*.rs`, `src/main.rs` alongside `src/lib.rs`)
     // names its own library crate by the package's own name, exactly like an external crate.
-    const ownPackageIdentifier = await rustCargoPackageIdentifier(cargoRoot);
+    const ownPackageIdentifier = await rustCargoPackageIdentifier(cargoRoot, projectRoot);
     if (ownPackageIdentifier && ownPackageIdentifier === head) {
       return resolveRustModuleParts(sourceRoot, tail);
     }

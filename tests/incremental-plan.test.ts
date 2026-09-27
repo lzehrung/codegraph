@@ -7,6 +7,7 @@ import {
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
   externalSpecifierMatchesAddedStem,
+  externalSpecifierStem,
   tsconfigAliasMappedTails,
   listUntrackedProjectFiles,
   resolveIncrementalFileList,
@@ -367,5 +368,28 @@ describe("added-file specifier stems", () => {
     expect(externalSpecifierMatchesAddedStem("./types/foo", "ts", stems)).toBe(true);
     expect(externalSpecifierMatchesAddedStem("./api", "ts", stems)).toBe(true);
     expect(externalSpecifierMatchesAddedStem("./types/bar", "ts", stems)).toBe(false);
+  });
+
+  it("uses language-specific import segments, directory imports, and C# namespace imports", () => {
+    const javaStems = addedResolutionStems(["/proj/p/Item.java"], "java");
+    const kotlinStems = addedResolutionStems(["/proj/p/Item.kt"], "kotlin");
+    const rustStems = addedResolutionStems(["/proj/foo.rs"], "rust");
+    const goStems = addedResolutionStems(["/proj/thing/widget.go"], "go");
+    const csharpFiles = ["/proj/p/Thing.cs"];
+    const csharpStems = addedResolutionStems(csharpFiles, "csharp");
+
+    expect(externalSpecifierStem("p.Item", "java")).toBe("Item");
+    expect(externalSpecifierStem("p.Item", "kotlin")).toBe("Item");
+    expect(externalSpecifierStem("crate::foo", "rust")).toBe("foo");
+    expect(externalSpecifierStem("example.com/probe/thing", "go")).toBe("thing");
+    expect(externalSpecifierMatchesAddedStem("p.Item", "java", javaStems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("p.Item", "kotlin", kotlinStems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("crate::foo", "rust", rustStems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("crate::foo::Thing", "rust", rustStems)).toBe(true);
+    expect(goStems.has("thing")).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("example.com/probe/thing", "go", goStems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("example.com/probe/other", "go", goStems)).toBe(false);
+    expect(externalSpecifierMatchesAddedStem("P", "csharp", csharpStems, [], csharpFiles)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("P", "csharp", csharpStems, [], ["/proj/p/Thing.ts"])).toBe(false);
   });
 });

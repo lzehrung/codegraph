@@ -424,3 +424,224 @@ describe("H12 (Python): super() through a proven base class", () => {
     });
   });
 });
+
+describe("Python import rebinding in member resolution", () => {
+  it("uses the last explicit named import for a static member and excludes the shadowed member", async () => {
+    const aSource = "class Thing:\n    @staticmethod\n    def hit():\n        return 'a'\n";
+    const bSource = "class Thing:\n    @staticmethod\n    def hit():\n        return 'b'\n";
+    const mainSource = "from a import Thing\nfrom b import Thing\n\nThing.hit()\n";
+    await withFixture(
+      "cg-audit-python-explicit-rebinding-",
+      { "a.py": aSource, "b.py": bSource, "main.py": mainSource },
+      async (_root, f) => {
+        const index = await buildProjectIndex(_root, { cache: "off" });
+        const goto = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(mainSource, 4, "hit"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("b.py")));
+
+        const bReferences = await findReferences(index, {
+          file: f("b.py"),
+          line: 3,
+          column: columnOf(bSource, 3, "hit"),
+        });
+        expect(bReferences.status).toBe("ok");
+        if (bReferences.status === "ok") {
+          expect(bReferences.referenceCoverage.state).toBe("complete");
+          expect(
+            bReferences.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(f("main.py")) && reference.range.start.line === 4,
+            ),
+          ).toBe(true);
+        }
+
+        const aReferences = await findReferences(index, {
+          file: f("a.py"),
+          line: 3,
+          column: columnOf(aSource, 3, "hit"),
+        });
+        expect(aReferences.status).toBe("ok");
+        if (aReferences.status === "ok") {
+          expect(
+            aReferences.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(f("main.py")) && reference.range.start.line === 4,
+            ),
+          ).toBe(false);
+        }
+      },
+    );
+  });
+
+  it("uses the last namespace alias for a member and excludes the shadowed module", async () => {
+    const aSource = "def hit():\n    return 'a'\n";
+    const bSource = "def hit():\n    return 'b'\n";
+    const mainSource = "import a as x\nimport b as x\n\nx.hit()\n";
+    await withFixture(
+      "cg-audit-python-namespace-rebinding-",
+      { "a.py": aSource, "b.py": bSource, "main.py": mainSource },
+      async (_root, f) => {
+        const index = await buildProjectIndex(_root, { cache: "off" });
+        const goto = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(mainSource, 4, "hit"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("b.py")));
+
+        const bReferences = await findReferences(index, {
+          file: f("b.py"),
+          line: 1,
+          column: columnOf(bSource, 1, "hit"),
+        });
+        expect(bReferences.status).toBe("ok");
+        if (bReferences.status === "ok") {
+          expect(bReferences.referenceCoverage.state).toBe("complete");
+          expect(
+            bReferences.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(f("main.py")) && reference.range.start.line === 4,
+            ),
+          ).toBe(true);
+        }
+
+        const aReferences = await findReferences(index, {
+          file: f("a.py"),
+          line: 1,
+          column: columnOf(aSource, 1, "hit"),
+        });
+        expect(aReferences.status).toBe("ok");
+        if (aReferences.status === "ok") {
+          expect(
+            aReferences.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(f("main.py")) && reference.range.start.line === 4,
+            ),
+          ).toBe(false);
+        }
+      },
+    );
+  });
+
+  it("uses the last star-imported namespace for a member and excludes the shadowed submodule", async () => {
+    const initSource = "from . import mod\n\n__all__ = ['mod']\n";
+    const aModSource = "def hit():\n    return 'a'\n";
+    const bModSource = "def hit():\n    return 'b'\n";
+    const mainSource = "from a import *\nfrom b import *\n\nmod.hit()\n";
+    await withFixture(
+      "cg-audit-python-star-namespace-rebinding-",
+      {
+        "a/__init__.py": initSource,
+        "a/mod.py": aModSource,
+        "b/__init__.py": initSource,
+        "b/mod.py": bModSource,
+        "main.py": mainSource,
+      },
+      async (_root, f) => {
+        const index = await buildProjectIndex(_root, { cache: "off" });
+        const goto = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(mainSource, 4, "hit"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("b/mod.py")));
+
+        const bReferences = await findReferences(index, {
+          file: f("b/mod.py"),
+          line: 1,
+          column: columnOf(bModSource, 1, "hit"),
+        });
+        expect(bReferences.status).toBe("ok");
+        if (bReferences.status === "ok") {
+          expect(bReferences.referenceCoverage.state).toBe("complete");
+          expect(
+            bReferences.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(f("main.py")) && reference.range.start.line === 4,
+            ),
+          ).toBe(true);
+        }
+
+        const aReferences = await findReferences(index, {
+          file: f("a/mod.py"),
+          line: 1,
+          column: columnOf(aModSource, 1, "hit"),
+        });
+        expect(aReferences.status).toBe("ok");
+        if (aReferences.status === "ok") {
+          expect(
+            aReferences.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(f("main.py")) && reference.range.start.line === 4,
+            ),
+          ).toBe(false);
+        }
+      },
+    );
+  });
+
+  it("uses the last imported base for inherited member lookup and excludes the shadowed base member", async () => {
+    const aSource = "class Base:\n    def hit(self):\n        return 'a'\n";
+    const bSource = "class Base:\n    def hit(self):\n        return 'b'\n";
+    const mainSource = [
+      "from a import Base",
+      "from b import Base",
+      "",
+      "class Child(Base):",
+      "    def call(self):",
+      "        return super().hit()",
+      "",
+    ].join("\n");
+    await withFixture(
+      "cg-audit-python-inherited-rebinding-",
+      { "a.py": aSource, "b.py": bSource, "main.py": mainSource },
+      async (_root, f) => {
+        const index = await buildProjectIndex(_root, { cache: "off" });
+        const goto = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 6,
+          column: columnOf(mainSource, 6, "hit"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f("b.py")));
+
+        const bReferences = await findReferences(index, {
+          file: f("b.py"),
+          line: 2,
+          column: columnOf(bSource, 2, "hit"),
+        });
+        expect(bReferences.status).toBe("ok");
+        if (bReferences.status === "ok") {
+          expect(bReferences.referenceCoverage.state).toBe("complete");
+          expect(
+            bReferences.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(f("main.py")) && reference.range.start.line === 6,
+            ),
+          ).toBe(true);
+        }
+
+        const aReferences = await findReferences(index, {
+          file: f("a.py"),
+          line: 2,
+          column: columnOf(aSource, 2, "hit"),
+        });
+        expect(aReferences.status).toBe("ok");
+        if (aReferences.status === "ok") {
+          expect(
+            aReferences.references.some(
+              (reference) =>
+                fileIdentityKey(reference.file) === fileIdentityKey(f("main.py")) && reference.range.start.line === 6,
+            ),
+          ).toBe(false);
+        }
+      },
+    );
+  });
+});

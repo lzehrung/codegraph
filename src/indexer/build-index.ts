@@ -548,12 +548,14 @@ async function externalSpecifierResolutionChanged(
   graphOptions: GraphBuildOptions,
   languageExtensions: BuildOptions["languageExtensions"],
   loadMatchPath: (file: string) => Promise<MatchPathFn | undefined>,
-  addedStems: ReadonlySet<string>,
+  addedFiles: readonly string[],
+  addedStemsForLanguage: (languageId: string) => ReadonlySet<string>,
   loadTsconfigPaths: (file: string) => Promise<Record<string, readonly string[]> | undefined>,
 ): Promise<boolean> {
-  if (addedStems.size === 0) return false;
   const support = supportForFileWithoutHeaderSample(file, languageExtensions);
   if (!support) return false;
+  const addedStems = addedStemsForLanguage(support.id);
+  if (!addedStems.size) return false;
   const externalEdges = entry.edges.filter((edge) => edge.to.type === "external");
   if (!externalEdges.length) return false;
 
@@ -562,7 +564,7 @@ async function externalSpecifierResolutionChanged(
   const needsAlias: Edge[] = [];
   for (const edge of externalEdges) {
     const specifier = specifierOf(edge);
-    if (externalSpecifierMatchesAddedStem(specifier, support.id, addedStems)) {
+    if (externalSpecifierMatchesAddedStem(specifier, support.id, addedStems, [], addedFiles)) {
       matching.push(edge);
       continue;
     }
@@ -574,7 +576,10 @@ async function externalSpecifierResolutionChanged(
     if (paths && Object.keys(paths).length) {
       for (const edge of needsAlias) {
         const mapped = tsconfigAliasMappedTails(specifierOf(edge), paths);
-        if (mapped.length && externalSpecifierMatchesAddedStem(specifierOf(edge), support.id, addedStems, mapped)) {
+        if (
+          mapped.length &&
+          externalSpecifierMatchesAddedStem(specifierOf(edge), support.id, addedStems, mapped, addedFiles)
+        ) {
           matching.push(edge);
         }
       }
@@ -2317,7 +2322,14 @@ export async function buildProjectIndexIncremental(
           }
           markAsChanged(candidate);
         };
-        const addedStems = addedResolutionStems(addedFiles);
+        const addedStemsByLanguage = new Map<string, ReadonlySet<string>>();
+        const addedStemsForLanguage = (languageId: string): ReadonlySet<string> => {
+          const existing = addedStemsByLanguage.get(languageId);
+          if (existing) return existing;
+          const stems = addedResolutionStems(addedFiles, languageId);
+          addedStemsByLanguage.set(languageId, stems);
+          return stems;
+        };
         const externalEdgeCandidates = collectExternalEdgeCandidates(trackedEntries, true);
         if (externalEdgeCandidates.size) {
           const candidateFiles = Array.from(externalEdgeCandidates);
@@ -2333,7 +2345,8 @@ export async function buildProjectIndexIncremental(
               graphOptions,
               opts?.languageExtensions,
               loadMatchPathForFile,
-              addedStems,
+              addedFiles,
+              addedStemsForLanguage,
               (importer) =>
                 loadTsconfigResolutionInputsFor(importer, projectRoot, opts?.logLevel).then((inputs) => inputs?.paths),
             );

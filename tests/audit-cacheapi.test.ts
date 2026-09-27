@@ -39,9 +39,102 @@ async function expectWarmMatchesCold(
   return warmTargets;
 }
 
-function expectNoReprocessedFiles(report: BuildReport): void {
-  expect(report.files?.parsed ?? 0).toBe(0);
-  expect(report.files?.changed ?? 0).toBe(0);
+function expectNoReprocessedFiles(report: BuildReport, addedFiles = 0): void {
+  expect((report.files?.parsed ?? 0) - addedFiles).toBe(0);
+  expect((report.files?.changed ?? 0) - addedFiles).toBe(0);
+}
+
+type AddedImportFixtureFile = {
+  relativePath: string;
+  contents: string;
+};
+
+type AddedExternalImportFixture = {
+  name: string;
+  consumerRelativePath: string;
+  consumerLines: readonly string[];
+  targetRelativePath: string;
+  targetContents: string;
+  initialFiles: readonly AddedImportFixtureFile[];
+  queryLine: number;
+  queryNeedle: string;
+};
+
+const ADDED_EXTERNAL_IMPORT_FIXTURES = [
+  {
+    name: "Java",
+    consumerRelativePath: "p/Main.java",
+    consumerLines: ["package p;", "import p.Item;", "class Main {", "  Item item = new Item();", "}", ""],
+    targetRelativePath: "p/Item.java",
+    targetContents: "package p;\npublic class Item {}\n",
+    initialFiles: [],
+    queryLine: 4,
+    queryNeedle: "Item item",
+  },
+  {
+    name: "Kotlin",
+    consumerRelativePath: "p/Main.kt",
+    consumerLines: ["package p", "import p.Item", "fun use(item: Item): Item = item", ""],
+    targetRelativePath: "p/Item.kt",
+    targetContents: "package p\nclass Item\n",
+    initialFiles: [],
+    queryLine: 3,
+    queryNeedle: "Item):",
+  },
+  {
+    name: "Rust",
+    consumerRelativePath: "src/consumer.rs",
+    consumerLines: ["use crate::foo::Thing;", "", "pub fn run() {", "    Thing::hit();", "}", ""],
+    targetRelativePath: "src/foo.rs",
+    targetContents: ["pub struct Thing;", "impl Thing {", "    pub fn hit() {}", "}", ""].join("\n"),
+    initialFiles: [
+      { relativePath: "Cargo.toml", contents: '[package]\nname = "cache-probe"\nversion = "0.1.0"\n' },
+      { relativePath: "src/lib.rs", contents: "pub mod consumer;\npub mod foo;\n" },
+    ],
+    queryLine: 4,
+    queryNeedle: "hit",
+  },
+  {
+    name: "C#",
+    consumerRelativePath: "Program.cs",
+    consumerLines: ["using P;", "class Program {", "  static int Run() => Thing.Value();", "}", ""],
+    targetRelativePath: "p/Thing.cs",
+    targetContents: "namespace P;\npublic class Thing { public static int Value() => 1; }\n",
+    initialFiles: [],
+    queryLine: 3,
+    queryNeedle: "Thing",
+  },
+  {
+    name: "Go",
+    consumerRelativePath: "main.go",
+    consumerLines: [
+      "package probe",
+      'import "example.com/probe/thing"',
+      "func run() int {",
+      "  return thing.Value()",
+      "}",
+      "",
+    ],
+    targetRelativePath: "thing/widget.go",
+    targetContents: "package thing\nfunc Value() int { return 1 }\n",
+    initialFiles: [{ relativePath: "go.mod", contents: "module example.com/probe\n\ngo 1.22\n" }],
+    queryLine: 4,
+    queryNeedle: "Value",
+  },
+] satisfies readonly AddedExternalImportFixture[];
+
+function importBindings(index: ProjectIndex, file: string): Array<{ kind: string; resolved: unknown }> {
+  return (index.byFile.get(fileIdentityKey(file))?.imports ?? []).map((binding) => ({
+    kind: binding.kind,
+    resolved: typeof binding.resolved === "string" ? normalizePath(binding.resolved) : binding.resolved,
+  }));
+}
+
+async function writeFixtureFile(root: string, relativePath: string, contents: string): Promise<string> {
+  const file = path.join(root, relativePath);
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  await fsp.writeFile(file, contents, "utf8");
+  return file;
 }
 
 describe("G1: warm disk-cache build reacts when a file starts or stops resolving an import", () => {
@@ -228,6 +321,33 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
       const warmAfterDelete = await buildProjectIndexIncremental(root, DISK_BUILD);
       const targetsAfterDelete = await expectWarmMatchesCold(root, main, warmAfterDelete);
       expect(targetsAfterDelete).toEqual(["external:pkg.util"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-resolves `from pkg import sub` once a namespace subpackage directory gains a module", async () => {
+    const root = await mkTmpDir("cg-audit-g1-py-namespace-sub-");
+    try {
+      const main = path.join(root, "main.py");
+      await fsp.mkdir(path.join(root, "pkg"), { recursive: true });
+      await fsp.writeFile(path.join(root, "pkg", "__init__.py"), "", "utf8");
+      await fsp.writeFile(main, ["from pkg import sub", "", "def run():", "    return sub", ""].join("\n"), "utf8");
+
+      await buildProjectIndexIncremental(root, DISK_BUILD);
+      // `pkg/sub/` has no __init__.py: a PEP 420 namespace directory one level below the package.
+      await fsp.mkdir(path.join(root, "pkg", "sub"), { recursive: true });
+      await fsp.writeFile(path.join(root, "pkg", "sub", "thing.py"), "def value():\n    return 1\n", "utf8");
+
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      const bindings = (index: ProjectIndex) =>
+        (index.byFile.get(fileIdentityKey(main))?.imports ?? []).map((imp) => ({
+          kind: imp.kind,
+          resolved: typeof imp.resolved === "string" ? normalizePath(imp.resolved) : imp.resolved,
+        }));
+      expect(bindings(cold).some((binding) => binding.kind === "namespace")).toBe(true);
+      expect(bindings(warm)).toEqual(bindings(cold));
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -483,6 +603,63 @@ describe("G1: warm disk-cache build reacts when a file starts or stops resolving
       const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
       const targets = await expectWarmMatchesCold(root, main, warm);
       expect(targets).toContain(`file:${normalizePath(target)}`);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(ADDED_EXTERNAL_IMPORT_FIXTURES)(
+    "matches a cold build when a $name external import starts resolving after its target is added",
+    async (fixture) => {
+      const root = await mkTmpDir(`cg-audit-g1-added-${fixture.name.toLowerCase()}-`);
+      try {
+        for (const initialFile of fixture.initialFiles) {
+          await writeFixtureFile(root, initialFile.relativePath, initialFile.contents);
+        }
+        const consumer = await writeFixtureFile(root, fixture.consumerRelativePath, fixture.consumerLines.join("\n"));
+
+        const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+        expect(edgeTargets(initial, consumer).some((target) => target.startsWith("external:"))).toBe(true);
+
+        const target = await writeFixtureFile(root, fixture.targetRelativePath, fixture.targetContents);
+        const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+        const cold = await buildProjectIndex(root, { cache: "off" });
+        expect(importBindings(warm, consumer)).toEqual(importBindings(cold, consumer));
+
+        const targetDefinition = await goToDefinition(warm, {
+          file: consumer,
+          line: fixture.queryLine,
+          column: columnOf(fixture.consumerLines, fixture.queryLine, fixture.queryNeedle),
+        });
+        expect(targetDefinition.status).toBe("ok");
+        if (targetDefinition.status !== "ok") {
+          throw new Error(`expected ${fixture.name} goToDefinition to resolve after its target was added`);
+        }
+        expect(fileIdentityKey(targetDefinition.definition.file)).toBe(fileIdentityKey(target));
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not reparse a cached Go importer when an added file has a different directory and stem", async () => {
+    const root = await mkTmpDir("cg-audit-g1-go-unrelated-add-");
+    try {
+      await writeFixtureFile(root, "go.mod", "module example.com/probe\n\ngo 1.22\n");
+      const main = await writeFixtureFile(
+        root,
+        "main.go",
+        ["package probe", 'import "example.com/probe/thing"', "func run() { thing.Value() }", ""].join("\n"),
+      );
+      const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+      expect(edgeTargets(initial, main)).toContain("external:example.com/probe/thing");
+
+      await writeFixtureFile(root, "other/decoy.go", "package other\nfunc Decoy() {}\n");
+      const report: BuildReport = { timings: {} };
+      const warm = await buildProjectIndexIncremental(root, { ...DISK_BUILD, report });
+
+      expectNoReprocessedFiles(report, 1);
+      expect(edgeTargets(warm, main)).toEqual(edgeTargets(initial, main));
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

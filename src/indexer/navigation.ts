@@ -34,9 +34,11 @@ import {
   AMBIGUOUS_STAR_IMPORT_REASON,
 } from "./ambiguous-resolution.js";
 import {
+  effectiveExplicitBinding,
   findRubyReopenedConstantParts,
   isExpandedStarBinding,
   resolveStarImportedDefinition,
+  resolveStarImportedNamespace,
 } from "./star-import-precedence.js";
 import { createNavigationProvenance, okGoToResult } from "./navigation-provenance.js";
 import {
@@ -67,7 +69,12 @@ import {
   rangeIdentityKey,
   referenceSiteKey,
 } from "./navigation-references.js";
-import { resolveExport, resolveImported, resolvePhpExportByImportType } from "./navigation-resolve.js";
+import {
+  resolveExport,
+  resolveImported,
+  resolveModuleExports,
+  resolvePhpExportByImportType,
+} from "./navigation-resolve.js";
 import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import type { ScopeIndex } from "./scope.js";
@@ -1014,6 +1021,33 @@ async function findReferencesInternal(
         graphLinkedOrphans.set(key, importer);
       }
     }
+    // A star import can expose a namespace reexport rather than the member definition itself.
+    // Include direct star importers of that package so their namespace member use is verified.
+    const namespaceTargetKeys = new Set(
+      [definition, ...equivalentDefinitions].map((candidate) => fileIdentityKey(candidate.file)),
+    );
+    for (const namespaceOwner of index.byFile.values()) {
+      const reexportsDefinitionAsNamespace = namespaceOwner.exports.some(
+        (entry) => entry.type === "namespaceReexport" && namespaceTargetKeys.has(fileIdentityKey(entry.fromModule)),
+      );
+      if (!reexportsDefinitionAsNamespace) continue;
+      const namespaceOwnerKey = fileIdentityKey(namespaceOwner.file);
+      if (namespaceOwnerKey !== fileIdentityKey(definitionFile) && !candidateFileKeys.has(namespaceOwnerKey)) {
+        graphLinkedOrphans.set(namespaceOwnerKey, namespaceOwner.file);
+      }
+      for (const importer of getReverseNeighbors(adjacency, namespaceOwner.file)) {
+        const key = fileIdentityKey(importer);
+        if (key === fileIdentityKey(definitionFile) || candidateFileKeys.has(key)) continue;
+        const importerModule = index.byFile.get(key);
+        const importsNamespaceOwner = importerModule?.imports.some(
+          (candidate) =>
+            candidate.kind === "star" &&
+            typeof candidate.resolved === "string" &&
+            fileIdentityKey(candidate.resolved) === namespaceOwnerKey,
+        );
+        if (importsNamespaceOwner) graphLinkedOrphans.set(key, importer);
+      }
+    }
     for (const [key, file] of graphLinkedOrphans) {
       candidateFiles.push(file);
       candidateFileKeys.add(key);
@@ -1184,36 +1218,71 @@ async function findReferencesInternal(
         } else if (imp.kind === "star") {
           const result = resolveImported(index, imp, exportedName, exportOptions);
           const matchesDef = !!result && !("namespace" in result) && matchesReferenceDefinition(result);
-          if (
-            !matchesDef &&
-            !cppCanonicalStructuralExport(index, targetFile, exportedName, definition, parsedContext.sup.id)
-          )
-            continue;
-          if (hasExpandedNamedImport(module, targetFile, exportedName)) {
+          const matchesStructural = cppCanonicalStructuralExport(
+            index,
+            targetFile,
+            exportedName,
+            definition,
+            parsedContext.sup.id,
+          );
+          if (matchesDef || matchesStructural) {
+            if (hasExpandedNamedImport(module, targetFile, exportedName)) {
+              continue;
+            }
+            const remainingReferences = remainingCollectionSlots();
+            const ranges = await collectVerifiedNamedNodeReferences(
+              index,
+              fileId,
+              parsedContext.sup.id === "cpp" || parsedContext.sup.id === "ruby"
+                ? (exportedName.split("::").pop() ?? exportedName)
+                : exportedName,
+              definition,
+              (params, parsed) => goToDefinition(index, params, parsed),
+              remainingReferences,
+              verifiedReferenceFilter(fileId),
+              (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
+              equivalentDefinitions,
+            );
+            for (const { range, provenance, via } of ranges) {
+              if (hasReachedCollectionLimit()) break;
+              pushRef({
+                file: fileId,
+                range,
+                via: { import: imp, ...(via ?? {}) },
+                ...(provenance ? { provenance } : {}),
+              });
+            }
             continue;
           }
-          const remainingReferences = remainingCollectionSlots();
-          const ranges = await collectVerifiedNamedNodeReferences(
-            index,
-            fileId,
-            parsedContext.sup.id === "cpp" || parsedContext.sup.id === "ruby"
-              ? (exportedName.split("::").pop() ?? exportedName)
-              : exportedName,
-            definition,
-            (params, parsed) => goToDefinition(index, params, parsed),
-            remainingReferences,
-            verifiedReferenceFilter(fileId),
-            (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
-            equivalentDefinitions,
-          );
-          for (const { range, provenance, via } of ranges) {
-            if (hasReachedCollectionLimit()) break;
-            pushRef({
-              file: fileId,
-              range,
-              via: { import: imp, ...(via ?? {}) },
-              ...(provenance ? { provenance } : {}),
-            });
+
+          // A star import can publish a namespace such as a package submodule. Resolve that
+          // namespace under the same precedence as navigation before attributing its member use.
+          const namespaceExports = resolveModuleExports(index, targetFile);
+          const parsed = await ensureCandidateParsed();
+          for (const [namespaceName, namespaceResult] of namespaceExports) {
+            if (namespaceResult.kind !== "namespace") continue;
+            if (
+              ![definition, ...equivalentDefinitions].some(
+                (candidate) => fileIdentityKey(namespaceResult.file) === fileIdentityKey(candidate.file),
+              )
+            ) {
+              continue;
+            }
+            const namespaceDecision = resolveStarImportedNamespace(index, module, parsed.sup.id, namespaceName);
+            if (namespaceDecision.status !== "resolved" || namespaceDecision.imp !== imp) continue;
+            const ranges = await collectNamespaceMemberRefs(
+              fileId,
+              namespaceName,
+              exportedName,
+              parsed,
+              index.languageExtensions,
+              undefined,
+              module.imports,
+            );
+            for (const range of ranges) {
+              if (hasReachedCollectionLimit()) break;
+              pushRef({ file: fileId, range, via: { import: imp, namespaceMember: exportedName } });
+            }
           }
         } else {
           let exported = exportedName;
@@ -1975,7 +2044,7 @@ export async function collectNamespaceMemberRefs(
   member: string,
   parsedContext?: ParsedFileContext,
   languageExtensions?: LanguageExtensionMap,
-  namespaceImport?: Extract<ImportBinding, { kind: "namespace" }>,
+  importBinding?: ImportBinding,
   imports?: readonly ImportBinding[],
 ): Promise<Range[]> {
   const parsed = parsedContext ?? (await ensureParsedContext(file, undefined, languageExtensions));
@@ -1988,6 +2057,21 @@ export async function collectNamespaceMemberRefs(
   const normalize = sup.normalizeIdentifier;
   const normalizedNs = normalize(ns);
   const normalizedMember = normalize(member);
+  let effectivePythonBinding: ImportBinding | undefined;
+  if (sup.id === "python" && importBinding && imports) {
+    let bindingName: string | undefined;
+    if (importBinding.kind === "namespace") bindingName = importBinding.localNS;
+    else if (importBinding.kind === "named" || importBinding.kind === "default") bindingName = importBinding.local;
+    if (bindingName) {
+      const normalizedBindingName = normalize(bindingName);
+      effectivePythonBinding = effectiveExplicitBinding(imports, sup.id, (binding) => {
+        if (binding.kind === "namespace") return normalize(binding.localNS) === normalizedBindingName;
+        return (
+          (binding.kind === "named" || binding.kind === "default") && normalize(binding.local) === normalizedBindingName
+        );
+      });
+    }
+  }
   const walk = (node: SyntaxNodeLike): void => {
     if (isMemberAccessNode(sup, node)) {
       const { object: obj, property: prop } = getMemberAccessParts(sup, node);
@@ -2002,12 +2086,16 @@ export async function collectNamespaceMemberRefs(
           ? normalize(objectName) === normalizedNs
           : isMemberObjectIdentifier(obj.type) && normalize(objectName) === normalizedNs;
         if (objectMatches && normalize(propertyName) === normalizedMember) {
+          const inPythonBindingScope =
+            sup.id !== "python" || !effectivePythonBinding || effectivePythonBinding === importBinding;
           const inAliasScope =
-            sup.id !== "csharp" ||
-            !namespaceImport ||
-            !imports ||
-            !namespaceImport.localRange ||
-            innermostNamespaceImport(imports, objectName, obj, normalize) === namespaceImport;
+            inPythonBindingScope &&
+            (sup.id !== "csharp" ||
+              !importBinding ||
+              !imports ||
+              importBinding.kind !== "namespace" ||
+              !importBinding.localRange ||
+              innermostNamespaceImport(imports, objectName, obj, normalize) === importBinding);
           if (inAliasScope) ranges.push(toRange(prop));
         }
       }

@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { mapLimit } from "../../util/concurrency.js";
-import { isFilePathWithinRoot } from "../../util/paths.js";
+import { isFilePathWithinRoot, isPhysicalPathWithinRoot } from "../../util/paths.js";
 import { supportForFileWithoutHeaderSample } from "../../languages.js";
 import { graphOnlyLanguageSupportsImportAliases } from "../../document-links.js";
 import { loadTsconfigResolutionInputsFor } from "../../util/resolution/tsconfig.js";
@@ -135,6 +135,33 @@ async function installedPackageManifests(projectRoot: string, root: string): Pro
   return inputs.length > MAX_PACKAGE_MANIFESTS ? null : inputs;
 }
 
+/** Cargo.toml files inside the project root, from each Rust source's directory up to the root. */
+async function cargoManifestInputs(
+  projectRoot: string,
+  files: readonly string[],
+  opts: Pick<BuildOptions, "languageExtensions">,
+): Promise<ResolutionInput[]> {
+  const manifests = new Set<string>();
+  const visited = new Set<string>();
+  for (const file of files) {
+    if (supportForFileWithoutHeaderSample(file, opts.languageExtensions)?.id !== "rust") continue;
+    let directory = path.dirname(file);
+    while (isFilePathWithinRoot(projectRoot, directory) && !visited.has(directory)) {
+      visited.add(directory);
+      manifests.add(path.join(directory, "Cargo.toml"));
+      if (path.resolve(directory) === path.resolve(projectRoot)) break;
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+  }
+  const inputs = await mapLimit([...manifests], RESOLUTION_INPUT_CONCURRENCY, async (manifest) =>
+    (await isPhysicalPathWithinRoot(projectRoot, manifest)) ? await statInput(projectRoot, manifest) : null,
+  );
+  return inputs
+    .filter((input): input is ResolutionInput => input !== null)
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
 /**
  * Fingerprints effective TypeScript and workspace resolution inputs once per cached build.
  * Installed-package inputs are included only when node_modules resolution is enabled.
@@ -189,8 +216,14 @@ export async function computeResolverEnvironmentFingerprint(
       `workspace\0${JSON.stringify([pkg.name, normalizedRelativePath(projectRoot, pkg.path), pkg.main, pkg.exports])}\n`,
     );
   }
+  // Rust `use` resolution reads each crate's Cargo.toml and the ancestor workspace manifest for
+  // path and `workspace = true` dependencies, so those files are resolution inputs too.
+  const cargoInputs = await cargoManifestInputs(projectRoot, files, opts);
+  for (const input of cargoInputs) {
+    hash.update(`cargo\0${input.path}\0${input.size}\0${input.contentHash}\n`);
+  }
   if (!nodeModulesRoots) {
-    return configInputs.size || packages.length ? hash.digest("hex") : undefined;
+    return configInputs.size || packages.length || cargoInputs.length ? hash.digest("hex") : undefined;
   }
   const inputs: ResolutionInput[] = [];
   for (const name of PROJECT_RESOLUTION_INPUTS) {

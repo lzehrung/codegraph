@@ -58,6 +58,16 @@ export type StarImportDecision =
   | { status: "ambiguous" }
   | { status: "resolved"; imp: StarImportCandidate["imp"]; definition: SymbolDef };
 
+export type StarImportNamespaceCandidate = {
+  imp: Extract<ImportBinding, { kind: "star" }>;
+  namespace: string;
+};
+
+export type StarImportNamespaceDecision =
+  | { status: "none" }
+  | { status: "ambiguous" }
+  | { status: "resolved"; imp: StarImportNamespaceCandidate["imp"]; namespace: string };
+
 function resolvedImportKey(resolved: ImportBinding["resolved"]): string {
   if (!resolved) return "";
   return typeof resolved === "string" ? `file:${fileIdentityKey(resolved)}` : `external:${resolved.external}`;
@@ -83,6 +93,19 @@ export function isExpandedStarBinding(binding: ImportBinding, imports: readonly 
       candidate.from === binding.from &&
       resolvedImportKey(candidate.resolved) === resolved,
   );
+}
+
+/**
+ * The import binding effective at a simple-name use. Python overwrites a prior binding;
+ * other supported languages either reject duplicate explicit imports or retain the first.
+ */
+export function effectiveExplicitBinding(
+  imports: readonly ImportBinding[],
+  languageId: string,
+  matches: (binding: ImportBinding) => boolean,
+): ImportBinding | undefined {
+  const candidates = starImportPrecedence(languageId) === "last-wins" ? [...imports].reverse() : imports;
+  return candidates.find((binding) => !isExpandedStarBinding(binding, imports) && matches(binding));
 }
 
 export function resolveStarImportedDefinition(
@@ -345,6 +368,35 @@ export function resolveStarImportedName(
     return last ? { status: "resolved", imp: last.imp, definition: last.def } : { status: "none" };
   }
   return decideStarImportCandidates(index, languageId, candidates, mod.file);
+}
+
+/**
+ * One namespace-valued simple name through every star import of a module, under the same
+ * precedence as declaration-valued star imports. Distinct namespace targets are ambiguous
+ * outside Python; Python's later star binding replaces the earlier one.
+ */
+export function resolveStarImportedNamespace(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  languageId: string,
+  name: string,
+): StarImportNamespaceDecision {
+  const candidates: StarImportNamespaceCandidate[] = [];
+  for (const imp of mod.imports) {
+    if (imp.kind !== "star") continue;
+    const result = resolveImported(index, imp, name);
+    if (!result || !("namespace" in result)) continue;
+    candidates.push({ imp, namespace: result.namespace });
+  }
+  if (!candidates.length) return { status: "none" };
+  if (starImportPrecedence(languageId) === "last-wins") {
+    const last = candidates.at(-1)!;
+    return { status: "resolved", imp: last.imp, namespace: last.namespace };
+  }
+  const namespaces = new Set(candidates.map((candidate) => fileIdentityKey(candidate.namespace)));
+  if (namespaces.size !== 1) return { status: "ambiguous" };
+  const first = candidates[0]!;
+  return { status: "resolved", imp: first.imp, namespace: first.namespace };
 }
 
 export type RubyReopenedConstant = {

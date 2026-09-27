@@ -1,9 +1,16 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+} from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 async function writeFixture(root: string, files: Record<string, string>): Promise<void> {
   for (const [rel, text] of Object.entries(files)) {
@@ -26,6 +33,72 @@ function defNodeIdAt(file: string, source: string, name: string, occurrence: num
   }
   return `${file.replace(/\\/g, "/")}::${name}::${index}`;
 }
+
+describe("Rust Cargo manifests are resolution inputs for the warm cache", () => {
+  it("drops a path dependency's resolution on a warm build after Cargo.toml removes it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-warm-"));
+    try {
+      const use = 'use crate_a::greet;\nfn main() { println!("{}", greet()); }\n';
+      await writeFixture(root, {
+        "a/Cargo.toml": '[package]\nname = "crate_a"\nversion = "0.1.0"\n',
+        "a/src/lib.rs": 'pub fn greet() -> &\'static str { "hi" }\n',
+        "b/Cargo.toml": '[package]\nname = "crate_b"\nversion = "0.1.0"\n[dependencies]\ncrate_a = { path = "../a" }\n',
+        "b/src/main.rs": use,
+      });
+      const main = path.join(root, "b/src/main.rs");
+      const request = { file: main, line: 2, column: columnOf(use.split("\n")[1]!, "greet") };
+      const disk = { cache: "disk" as const };
+
+      const first = await buildProjectIndexIncremental(root, disk);
+      expect((await goToDefinition(first, request)).status).toBe("ok");
+
+      await writeFile(path.join(root, "b/Cargo.toml"), '[package]\nname = "crate_b"\nversion = "0.1.0"\n');
+      const warm = await buildProjectIndexIncremental(root, disk);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect((await goToDefinition(cold, request)).status).toBe("not_found");
+      expect((await goToDefinition(warm, request)).status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Rust Cargo manifests are read only inside the project root", () => {
+  it("ignores a symlinked Cargo.toml whose target lies outside the project", async (context) => {
+    const outside = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-outside-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-cargo-symlink-"));
+    try {
+      const use = 'use crate_a::greet;\nfn main() { println!("{}", greet()); }\n';
+      await writeFixture(root, {
+        "a/Cargo.toml": '[package]\nname = "crate_a"\nversion = "0.1.0"\n',
+        "a/src/lib.rs": 'pub fn greet() -> &\'static str { "hi" }\n',
+        "b/src/main.rs": use,
+      });
+      // The only manifest declaring the dependency lives outside the root.
+      const external = path.join(outside, "Cargo.toml");
+      await writeFile(
+        external,
+        '[package]\nname = "crate_b"\nversion = "0.1.0"\n[dependencies]\ncrate_a = { path = "../a" }\n',
+      );
+      try {
+        await symlink(external, path.join(root, "b", "Cargo.toml"), "file");
+      } catch (error) {
+        if (isSymlinkUnavailable(error)) context.skip();
+        throw error;
+      }
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const goto = await goToDefinition(index, {
+        file: path.join(root, "b/src/main.rs"),
+        line: 2,
+        column: columnOf(use.split("\n")[1]!, "greet"),
+      });
+      expect(goto.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("Rust impl methods own member_of edges and calls edges (G7)", () => {
   it("emits one calls edge per receiver call to Circle::area, member_of edges for impl methods, and never targets the same-named Square::area", async () => {

@@ -93,9 +93,16 @@ function explicitTargetPaths(parsed: TomlTable): string[] {
   return paths;
 }
 
-async function parseCargoToml(cargoRoot: string): Promise<TomlTable | null> {
+/**
+ * The Cargo.toml in `cargoRoot`, read only when the manifest file itself physically lies
+ * inside `projectRoot`: a symlinked manifest from outside the project must not steer
+ * crate targets or dependency resolution.
+ */
+async function parseCargoToml(cargoRoot: string, projectRoot: string): Promise<TomlTable | null> {
+  const manifest = path.join(cargoRoot, "Cargo.toml");
+  if (!(await isPhysicalPathWithinRoot(projectRoot, manifest))) return null;
   try {
-    const raw = await readUtf8WithoutBom(path.join(cargoRoot, "Cargo.toml"));
+    const raw = await readUtf8WithoutBom(manifest);
     const parsed = parseToml(raw);
     return isTomlTable(parsed) ? parsed : null;
   } catch {
@@ -177,7 +184,7 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
   const root = path.resolve(cargoRoot);
   const roots = new Set<string>();
   const probed = new Set<string>();
-  const parsed = await parseCargoToml(root);
+  const parsed = await parseCargoToml(root, projectRoot);
 
   if (parsed && !isTomlTable(parsed.package)) {
     return { roots: [], probed: [] };
@@ -220,8 +227,8 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
  * declares no name (a virtual workspace root). Lets a package's own `src/bin` targets
  * resolve `use pkg_name::item;` back to the package's own library crate.
  */
-export async function rustCargoPackageIdentifier(cargoRoot: string): Promise<string | undefined> {
-  const parsed = await parseCargoToml(cargoRoot);
+export async function rustCargoPackageIdentifier(cargoRoot: string, projectRoot: string): Promise<string | undefined> {
+  const parsed = await parseCargoToml(cargoRoot, projectRoot);
   const name = parsed ? packageName(parsed) : undefined;
   return name ? name.replace(/-/gu, "_") : undefined;
 }
@@ -289,7 +296,7 @@ async function workspaceInheritedDependencyPath(
   const root = path.resolve(projectRoot);
   let current = path.resolve(cargoRoot);
   while (await isPhysicalPathWithinRoot(root, current)) {
-    const parsed = await parseCargoToml(current);
+    const parsed = await parseCargoToml(current, root);
     const workspace = parsed && isTomlTable(parsed.workspace) ? parsed.workspace : undefined;
     if (workspace) {
       const table = isTomlTable(workspace.dependencies) ? workspace.dependencies : undefined;
@@ -323,7 +330,7 @@ export async function rustPathDependencyCrateRoot(
   projectRoot: string,
   crateIdentifier: string,
 ): Promise<string | null> {
-  const parsed = await parseCargoToml(cargoRoot);
+  const parsed = await parseCargoToml(cargoRoot, projectRoot);
   if (!parsed) return null;
   let manifestDir = cargoRoot;
   let dependency = pathDependencySpec(parsed, crateIdentifier);
@@ -336,7 +343,7 @@ export async function rustPathDependencyCrateRoot(
   if (!dependency) return null;
   const resolved = path.resolve(manifestDir, dependency.depPath);
   if (!(await isPhysicalPathWithinRoot(projectRoot, resolved))) return null;
-  const dependencyManifest = await parseCargoToml(resolved);
+  const dependencyManifest = await parseCargoToml(resolved, projectRoot);
   const actualName = dependencyManifest ? packageName(dependencyManifest) : undefined;
   const expectedName = dependency.packageName ?? crateIdentifier;
   if (!actualName || actualName.replace(/-/gu, "_") !== expectedName.replace(/-/gu, "_")) return null;
