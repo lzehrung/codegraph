@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
+import { isGoExportedMemberName } from "../../indexer/declaration-visibility.js";
 import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
@@ -32,6 +33,8 @@ export type ReceiverCallCandidate = {
   /** Resolve only through supertypes, for explicit `parent`/`super`/`base` receivers. */
   viaSupertypes: boolean;
   memberName: string;
+  /** Files proven to share the caller's Go package; only those see unexported methods. */
+  goPackagePeerFiles?: ReadonlySet<string>;
   /** Match the member name with PHP's ASCII case-insensitive method rule. */
   caseInsensitiveMemberName?: boolean;
   /**
@@ -408,6 +411,8 @@ export type ReceiverBinding =
   | {
       kind: "named-type";
       typeName: string;
+      /** Syntax proving the type, including an imported qualified type such as `pkg.T`. */
+      typeNode: SyntaxNodeLike;
       memberScope: ReceiverMemberScope;
       /** Set when `typeName` names the type a constructor expression built. */
       constructed?: true;
@@ -1282,6 +1287,7 @@ export function classifyReceiver(
     return {
       kind: "named-type",
       typeName: sliceText(proof.constructed, source),
+      typeNode: proof.constructed,
       memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
       constructed: true,
     };
@@ -1307,12 +1313,14 @@ export function classifyReceiver(
     return {
       kind: "named-type",
       typeName: text,
+      typeNode: receiver,
       memberScope: UNBOUND_INSTANCE_CALL_LANGUAGE_IDS[sup.id] ? "any" : "static",
     };
   }
   return {
     kind: "named-type",
     typeName: text,
+    typeNode: receiver,
     memberScope: hasStaticMemberDistinction(sup.id) && typeScoped ? "static" : "any",
   };
 }
@@ -1782,6 +1790,13 @@ function provenMemberTarget(
         ? foldPhpIdentifierCase(node.name) === foldPhpIdentifierCase(candidate.memberName)
         : node.name === candidate.memberName;
       if (!nameMatches) continue;
+      if (
+        candidate.goPackagePeerFiles &&
+        !isGoExportedMemberName("go", node.name) &&
+        !candidate.goPackagePeerFiles.has(node.file)
+      ) {
+        continue;
+      }
       const scope = memberScopes.get(memberId) ?? memberScopes.get(canonicalId);
       if (memberScope !== "any" && scope !== memberScope) continue;
       matches.add(canonicalId);

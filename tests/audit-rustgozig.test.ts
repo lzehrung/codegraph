@@ -209,6 +209,181 @@ describe("Go unexported cross-package access (W11)", () => {
   });
 });
 
+describe("Go receiver methods across packages", () => {
+  it("agrees on hidden and exported Go receiver calls across navigation, references, and graph", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-go-receiver-"));
+    try {
+      const pkg = [
+        "package pkg",
+        "",
+        "type T struct{}",
+        "",
+        "func (T) hidden() {}",
+        "func (T) Visible() {}",
+        "",
+        "func useHidden() {",
+        "  v := T{}",
+        "  v.hidden()",
+        "}",
+        "",
+      ].join("\n");
+      const main = [
+        "package main",
+        "",
+        'import "example.com/probe/pkg"',
+        "",
+        "func run() {",
+        "  v := pkg.T{}",
+        "  v.hidden()",
+        "  v.Visible()",
+        "}",
+        "",
+      ].join("\n");
+      await writeFixture(root, {
+        "go.mod": "module example.com/probe\n",
+        "pkg/t.go": pkg,
+        "main.go": main,
+      });
+      const pkgFile = path.join(root, "pkg/t.go");
+      const mainFile = path.join(root, "main.go");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const hiddenGoto = await goToDefinition(index, {
+        file: mainFile,
+        line: 7,
+        column: columnOf("  v.hidden()", "hidden"),
+      });
+      expect(hiddenGoto.status).toBe("not_found");
+      const visibleGoto = await goToDefinition(index, {
+        file: mainFile,
+        line: 8,
+        column: columnOf("  v.Visible()", "Visible"),
+      });
+      expect(visibleGoto.status).toBe("ok");
+      if (visibleGoto.status === "ok") {
+        expect(fileIdentityKey(visibleGoto.definition.file)).toBe(fileIdentityKey(pkgFile));
+        expect(visibleGoto.definition.range.start.line).toBe(6);
+      }
+      const localGoto = await goToDefinition(index, {
+        file: pkgFile,
+        line: 10,
+        column: columnOf("  v.hidden()", "hidden"),
+      });
+      expect(localGoto.status).toBe("ok");
+      if (localGoto.status === "ok") {
+        expect(fileIdentityKey(localGoto.definition.file)).toBe(fileIdentityKey(pkgFile));
+        expect(localGoto.definition.range.start.line).toBe(5);
+      }
+
+      const hiddenRefs = await findReferences(index, {
+        file: pkgFile,
+        line: 5,
+        column: columnOf(pkg.split("\n")[4]!, "hidden"),
+      });
+      expect(hiddenRefs.status).toBe("ok");
+      if (hiddenRefs.status === "ok") {
+        expect(hiddenRefs.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(mainFile))).toBe(
+          false,
+        );
+        expect(
+          hiddenRefs.references.some(
+            (ref) => fileIdentityKey(ref.file) === fileIdentityKey(pkgFile) && ref.range.start.line === 10,
+          ),
+        ).toBe(true);
+      }
+      const visibleRefs = await findReferences(index, {
+        file: pkgFile,
+        line: 6,
+        column: columnOf(pkg.split("\n")[5]!, "Visible"),
+      });
+      expect(visibleRefs.status).toBe("ok");
+      if (visibleRefs.status === "ok") {
+        expect(
+          visibleRefs.references.some(
+            (ref) => fileIdentityKey(ref.file) === fileIdentityKey(mainFile) && ref.range.start.line === 8,
+          ),
+        ).toBe(true);
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const idFor = (name: string, file: string): string | undefined =>
+        [...graph.nodes.entries()].find(
+          ([, node]) => node.name === name && fileIdentityKey(node.file) === fileIdentityKey(file),
+        )?.[0];
+      const runId = idFor("run", mainFile);
+      const localId = idFor("useHidden", pkgFile);
+      const hiddenId = idFor("hidden", pkgFile);
+      const visibleId = idFor("Visible", pkgFile);
+      expect(runId).toBeDefined();
+      expect(localId).toBeDefined();
+      expect(hiddenId).toBeDefined();
+      expect(visibleId).toBeDefined();
+      const runCalls = graph.edges.filter((edge) => edge.label === "calls" && edge.from === runId);
+      expect(runCalls.some((edge) => edge.to === hiddenId)).toBe(false);
+      expect(runCalls.some((edge) => edge.to === visibleId && edge.site?.range.start.line === 8)).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.label === "calls" &&
+            edge.from === localId &&
+            edge.to === hiddenId &&
+            edge.site?.range.start.line === 10,
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["v := &pkg.T{}", "var v pkg.T"])("resolves %s in detailed calls", async (binding) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-go-typed-receiver-"));
+    try {
+      const main = [
+        "package main",
+        "",
+        'import "example.com/probe/pkg"',
+        "",
+        "func run() {",
+        "  " + binding,
+        "  v.Visible()",
+        "}",
+        "",
+      ].join("\n");
+      await writeFixture(root, {
+        "go.mod": "module example.com/probe\n",
+        "pkg/t.go": "package pkg\n\ntype T struct{}\n\nfunc (T) Visible() {}\n",
+        "main.go": main,
+      });
+      const pkgFile = path.join(root, "pkg/t.go");
+      const mainFile = path.join(root, "main.go");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const goto = await goToDefinition(index, {
+        file: mainFile,
+        line: 7,
+        column: columnOf("  v.Visible()", "Visible"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(pkgFile));
+      const graph = await buildSymbolGraphDetailed(index);
+      const runId = [...graph.nodes.entries()].find(
+        ([, node]) => node.name === "run" && fileIdentityKey(node.file) === fileIdentityKey(mainFile),
+      )?.[0];
+      const visibleId = [...graph.nodes.entries()].find(
+        ([, node]) => node.name === "Visible" && fileIdentityKey(node.file) === fileIdentityKey(pkgFile),
+      )?.[0];
+      expect(runId).toBeDefined();
+      expect(visibleId).toBeDefined();
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.label === "calls" && edge.from === runId && edge.to === visibleId && edge.site?.range.start.line === 7,
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Zig self.method() references (W16)", () => {
   it("includes a same-container self.method() call and a cross-file instance call in references, keeping a same-named method on another struct separate", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-audit-w16-"));

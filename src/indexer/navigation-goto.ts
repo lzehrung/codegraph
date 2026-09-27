@@ -879,7 +879,12 @@ export async function resolveMemberAccessDefinition(params: {
             );
           }
 
-          if (memberDef && !crossFilePeerMemberHidden(mod.file, memberDef, targetContext)) {
+          if (
+            memberDef &&
+            (isGoExportedMemberName(sup.id, member) ||
+              getCompilationUnitPeers(index, mod.file).files.has(memberDef.file)) &&
+            !crossFilePeerMemberHidden(mod.file, memberDef, targetContext)
+          ) {
             return okGoToResult(index, memberDef, {
               via: { exportedName: member },
               resolution: "member-access",

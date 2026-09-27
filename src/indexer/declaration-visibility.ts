@@ -276,9 +276,9 @@ export function isExportedDeclaration(languageId: string, node: SyntaxNodeLike):
  * upper case. Unlike every `DeclarationVisibilityRow` above, this must never filter a Go
  * file's module exports: Go's own compilation-unit peers (any file in the same package)
  * legitimately see an unexported name, and that same-package lookup reads the same export
- * list. Only a reference that explicitly crosses a namespace-import boundary into a
- * *different* package may not see an unexported name; callers that resolve a member reached
- * through such an import call this directly instead of adding a `GO_ROW` here.
+ * list. Only a reference that crosses into a different Go package, whether by namespace
+ * selector (`pkg.hidden`) or by a proven receiver of an imported type (`v.hidden()`), must
+ * reject an unexported name. Both paths call this rule instead of adding a `GO_ROW` here.
  */
 export function isGoExportedMemberName(languageId: string | undefined, name: string): boolean {
   if (languageId !== "go") return true;

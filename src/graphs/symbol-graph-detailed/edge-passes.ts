@@ -1,5 +1,6 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
+import { getCompilationUnitPeers } from "../../indexer/compilation-units.js";
 import {
   isExportedDeclaration,
   isGoExportedMemberName,
@@ -619,6 +620,10 @@ function resolveNamedType(
   node: SyntaxNodeLike,
   rubyConstructed = false,
 ): SymbolDef | null {
+  if (context.sup.id === "go" && context.optionalMemberTypes.has(node.type)) {
+    const qualified = context.resolveMemberChainTarget(node);
+    return qualified && declaresMembers(qualified) ? qualified : null;
+  }
   const target = context.resolveIdentifier(name, node);
   if (target && declaresMembers(target)) return target;
   // A parameter/annotation type name is a closer scope binding than the class it names.
@@ -825,7 +830,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         ? getCallArgumentCount({ languageId: context.sup.id, source: context.source, call: node })
         : null;
       if (binding.kind === "named-type") {
-        const typeDef = resolveNamedType(context, binding.typeName, access.receiver, binding.constructed);
+        const typeDef = resolveNamedType(context, binding.typeName, binding.typeNode, binding.constructed);
         if (!typeDef) return;
         context.receiverCalls.push({
           callerId: fromId,
@@ -835,6 +840,9 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           argumentCount,
           site,
           memberScope: binding.memberScope,
+          ...(context.sup.id === "go" && !isGoExportedMemberName(context.sup.id, memberName)
+            ? { goPackagePeerFiles: getCompilationUnitPeers(context.index, context.moduleEntry.file).files }
+            : {}),
           caseInsensitiveMemberName: phpCaseInsensitive,
         });
         return;

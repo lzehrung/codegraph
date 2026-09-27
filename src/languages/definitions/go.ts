@@ -66,11 +66,9 @@ export const GO_DEF: LanguageDefinition = {
   },
   nodeTypes: {
     identifier: ["identifier", "field_identifier", "type_identifier", "package_identifier"],
-    // tree-sitter-go names a selector_expression's right-hand identifier `field_identifier`,
-    // not `property_identifier` (the shared default). Without this, collectMemberAccessChain's
-    // pushPropertyName never recognizes a Go selector's property name, so every package-qualified
-    // chain (`pkg.Symbol`) silently drops its property and the whole chain resolves to nothing.
-    propertyIdentifier: ["field_identifier"],
+    // Selectors use `field_identifier`; qualified types use `type_identifier`. The shared
+    // member-chain walker needs both to resolve `pkg.Symbol` and `pkg.T{}` through imports.
+    propertyIdentifier: ["field_identifier", "type_identifier"],
     memberExpression: "selector_expression",
   },
   supportsCrossModuleSymbols: true,
