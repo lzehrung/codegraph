@@ -49,7 +49,12 @@ import {
   normalizePhpQualifiedReference,
   phpLastIdentifierSegment,
 } from "./navigation-php.js";
-import { ensurePhpNamespaceSymbolIndex, resolveIndexedPhpClassReference } from "./php-namespace-symbols.js";
+import {
+  ensurePhpNamespaceSymbolIndex,
+  phpClassReferenceMatchesDefinition,
+  resolveIndexedPhpClassReference,
+  resolvePhpExplicitImport,
+} from "./php-namespace-symbols.js";
 import {
   buildIndexedCandidateCoverage,
   buildPhpQualifiedNames,
@@ -146,28 +151,6 @@ function phpImportMatchesDefinition(imp: ImportBinding, def: SymbolDef): boolean
   if (importType === "function") return def.kind === SymbolKind.Function;
   if (importType === "const") return def.kind === SymbolKind.Variable;
   return def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
-}
-
-async function resolvePhpAliasDefinition(
-  index: ProjectIndex,
-  mod: ModuleIndex,
-  file: FileId,
-  localName: string,
-  importType: "class" | "function" | "const",
-): Promise<{ def: SymbolDef; targetFile: FileId } | null> {
-  const imp = findPhpImportAlias(mod.imports, localName, importType);
-  if (!imp) return null;
-  let targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
-  if (!targetFile && index.projectRoot) {
-    const resolved = await resolveImportSpecifier(index.projectRoot, file, imp.from, "php", {
-      phpImportType: importType,
-    });
-    if (typeof resolved === "string") targetFile = resolved;
-  }
-  if (!targetFile) return null;
-  const resolved = resolveImported(index, { ...imp, resolved: targetFile }, imp.imported);
-  if (!resolved || "namespace" in resolved) return null;
-  return { def: resolved, targetFile };
 }
 
 export async function goToDefinition(
@@ -387,14 +370,31 @@ export async function goToDefinition(
     const csharpExportName =
       sup.id === "csharp" ? csharpAliasQualifiedLookupName(node, source, lookupName, mod.imports) : lookupName;
     if (sup.id === "php") {
-      const alias = await resolvePhpAliasDefinition(index, mod, file, name, phpImportType ?? "const");
+      const role = phpImportType ?? "const";
+      const binding = findPhpImportAlias(mod.imports, name, role);
+      const alias = binding ? resolvePhpExplicitImport(index, binding, role) : null;
       if (alias) {
-        return okGoToResult(index, alias.def, {
-          via: { importedFrom: alias.targetFile, exportedName: alias.def.localName },
+        return okGoToResult(index, alias, {
+          via: { importedFrom: alias.file, exportedName: alias.localName },
           resolution: "import",
           confidence: "high",
         });
       }
+    }
+    // A PHP class-reference form cannot bind a same-named function in the lexical scope.
+    // The same syntactic role selects the class namespace in the detailed graph.
+    const phpClassReference = sup.id === "php" && inferPhpQualifiedReferenceImportType(node) === "class";
+    if (phpClassReference) {
+      const phpClass = resolveIndexedPhpClassReference(index, source, tree, node, lookupName, mod.imports);
+      if (phpClass) {
+        return okGoToResult(index, phpClass, {
+          via: { exportedName: phpClass.localName },
+          resolution: "php-qualified",
+          confidence: "high",
+        });
+      }
+      // Some import graphs resolve through scope/export lookup rather than the namespace index.
+      // Those fallbacks may only name this exact PHP class, never a same-named function.
     }
     const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, mod, tree);
     const closestBinding = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
@@ -431,6 +431,13 @@ export async function goToDefinition(
       // Method-local bindings still win; only module-level names yield to proven members.
       const member = await resolveImplicitSelfMember(index, mod, node, lookupName, source, sup.id);
       if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
+    }
+    if (
+      local &&
+      phpClassReference &&
+      !phpClassReferenceMatchesDefinition(index, source, tree, node, lookupName, mod.imports, local)
+    ) {
+      return { status: "not_found", reason: "No matching PHP class" };
     }
     if (local) {
       return okGoToResult(index, local, {
@@ -493,17 +500,14 @@ export async function goToDefinition(
           return { status: "not_found", reason: "No matching Swift member definition" };
         }
       }
-      if (resolvedName) return resolvedName;
-      if (sup.id === "php" && node) {
-        const phpClass = resolveIndexedPhpClassReference(index, source, tree, node, lookupName, mod.imports);
-        if (phpClass) {
-          return okGoToResult(index, phpClass, {
-            via: { exportedName: phpClass.localName },
-            resolution: "php-qualified",
-            confidence: "high",
-          });
-        }
+      if (
+        phpClassReference &&
+        resolvedName?.status === "ok" &&
+        !phpClassReferenceMatchesDefinition(index, source, tree, node, lookupName, mod.imports, resolvedName.definition)
+      ) {
+        return { status: "not_found", reason: "No matching PHP class" };
       }
+      if (resolvedName) return resolvedName;
     }
   }
 

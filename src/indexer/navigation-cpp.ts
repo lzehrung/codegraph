@@ -11,6 +11,7 @@ import {
   cppSelectCallableBinding,
 } from "./cpp-callables.js";
 import { getOrBuildScopeIndex } from "./navigation-local.js";
+import { fileScopeDefinitionCoversUse } from "./scope-nodes.js";
 import type { Binding } from "./scope-types.js";
 import { definitionIdentityKey } from "./reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
@@ -118,6 +119,43 @@ export function collectVisibleCppFunctionExports(
   return defs;
 }
 
+/** A same-file overload enters the visible set at its first declaration, not its definition. */
+function visibleCppFunctionExportsAt(
+  index: ProjectIndex,
+  sourceModule: ModuleIndex,
+  defs: SymbolDef[],
+  node: SyntaxNodeLike,
+  loadParsedFile: (file: string) => CppParsedFile | null,
+): SymbolDef[] {
+  const sourceKey = fileIdentityKey(sourceModule.file);
+  const useStart = node.startIndex;
+  const laterInFile = (def: SymbolDef): boolean =>
+    fileIdentityKey(def.file) === sourceKey && !fileScopeDefinitionCoversUse("cpp", def.range, useStart);
+  if (!defs.some(laterInFile)) return defs;
+
+  const parsed = loadParsedFile(sourceModule.file);
+  const support = parsed?.sup ?? supportForFileWithoutHeaderSample(sourceModule.file, index.languageExtensions);
+  const scopeIndex =
+    parsed && support
+      ? getOrBuildScopeIndex(index, sourceModule.file, parsed.source, support, sourceModule, parsed.tree)
+      : null;
+  return defs.filter((def) => {
+    if (!laterInFile(def)) return true;
+    const binding = scopeIndex?.all.find(
+      (candidate) =>
+        candidate.kind === "function" &&
+        candidate.def?.start.index === def.range.start.index &&
+        candidate.def?.end.index === def.range.end.index,
+    );
+    return (
+      !!binding &&
+      cppEquivalentCallableBindings(binding).some(
+        (equivalent) => !!equivalent.def && fileScopeDefinitionCoversUse("cpp", equivalent.def, useStart),
+      )
+    );
+  });
+}
+
 function localDefForBinding(index: ProjectIndex, file: FileId, binding: Binding): SymbolDef | null {
   const synthesized = cppBindingDefinition(file, binding);
   if (!synthesized) return null;
@@ -213,7 +251,9 @@ export function resolveVisibleCppCallableName(
 ): SymbolDef | null | undefined {
   const defs = collectVisibleCppFunctionExports(index, sourceModule, name);
   if (!defs.length) return undefined;
-  return resolveCppExportedCallables(index, defs, node, source, loadParsedFile);
+  const visibleDefs = visibleCppFunctionExportsAt(index, sourceModule, defs, node, loadParsedFile);
+  if (!visibleDefs.length) return undefined;
+  return resolveCppExportedCallables(index, visibleDefs, node, source, loadParsedFile);
 }
 
 export async function resolveVisibleCppCallableNameAsync(
@@ -238,13 +278,10 @@ export async function resolveVisibleCppCallableNameAsync(
       /* reduced mode: skip files that cannot be parsed */
     }
   }
-  return resolveCppExportedCallables(
-    index,
-    defs,
-    node,
-    source,
-    (file) => parsedByFile.get(fileIdentityKey(file)) ?? null,
-  );
+  const loadParsedFile = (file: string): CppParsedFile | null => parsedByFile.get(fileIdentityKey(file)) ?? null;
+  const visibleDefs = visibleCppFunctionExportsAt(index, sourceModule, defs, node, loadParsedFile);
+  if (!visibleDefs.length) return undefined;
+  return resolveCppExportedCallables(index, visibleDefs, node, source, loadParsedFile);
 }
 
 const CPP_USING_DIRECTIVE_NAME_TYPES: Record<string, true> = {

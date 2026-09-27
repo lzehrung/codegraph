@@ -80,6 +80,10 @@ describe("TypeScript and JavaScript accuracy audit", () => {
         (symbol) => symbol.name === "format",
       );
       expect(symbols.map((symbol) => symbol.range?.start.line).sort()).toEqual([1, 2, 3]);
+      const exported = fixture.index.byFile
+        .get(fileIdentityKey(fixture.file("fmt.ts")))
+        ?.exports.flatMap((entry) => (entry.type === "local" && entry.exportedAs === "format" ? [entry] : []));
+      expect(exported?.map((entry) => entry.target.range.start.line)).toEqual([3]);
 
       const result = await goToDefinition(fixture.index, {
         file: fixture.file("use.ts"),
@@ -108,6 +112,62 @@ describe("TypeScript and JavaScript accuracy audit", () => {
       const targets = callTargetIds(graph, "run");
       expect(targets.some((id) => id.endsWith(`::format::${implIndex}`))).toBe(true);
       expect(targets.some((id) => id.includes("decoy.ts"))).toBe(false);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains overload signatures without exactly one implementation and member overloads", async () => {
+    const declarations = [
+      "export declare function f(a: string): void;",
+      "export declare function f(a: number): void;",
+      "export interface Contract {",
+      "  apply(a: string): void;",
+      "  apply(a: number): void;",
+      "}",
+      "export abstract class AbstractWorker {",
+      "  abstract apply(a: string): void;",
+      "  abstract apply(a: number): void;",
+      "}",
+      "",
+    ].join("\n");
+    const duplicateBodies = [
+      "export function g(a: string): void;",
+      "export function g(a: string): void {}",
+      "export function g(a: number): void {}",
+      "",
+    ].join("\n");
+    const use = ['import { f } from "./declarations";', 'f("hello");', ""].join("\n");
+    const fixture = await project({
+      "declarations.ts": declarations,
+      "duplicates.ts": duplicateBodies,
+      "use.ts": use,
+    });
+    try {
+      const module = fixture.index.byFile.get(fileIdentityKey(fixture.file("declarations.ts")));
+      const exportLines = module?.exports.flatMap((entry) =>
+        entry.type === "local" && entry.exportedAs === "f" ? [entry.target.range.start.line] : [],
+      );
+      expect(exportLines).toEqual([1, 2]);
+
+      const duplicated = fixture.index.byFile.get(fileIdentityKey(fixture.file("duplicates.ts")));
+      const duplicateLines = duplicated?.exports.flatMap((entry) =>
+        entry.type === "local" && entry.exportedAs === "g" ? [entry.target.range.start.line] : [],
+      );
+      expect(duplicateLines).toEqual([1, 2, 3]);
+
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      const applyIds = [...graph.nodes.values()]
+        .filter(
+          (node) =>
+            node.name === "apply" && fileIdentityKey(node.file) === fileIdentityKey(fixture.file("declarations.ts")),
+        )
+        .map((node) => node.id);
+      expect(applyIds.sort()).toEqual(
+        [4, 5, 8, 9]
+          .map((line) => fixture.file("declarations.ts") + "::apply::" + tokenIndex(declarations, line, "apply"))
+          .sort(),
+      );
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -317,6 +377,77 @@ describe("TypeScript and JavaScript accuracy audit", () => {
       const sites = referenceSites(refs);
       expect(sites).toContain("use.js:4");
       expect(sites.some((site) => site.startsWith("decoy"))).toBe(false);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the visible CommonJS RHS binding instead of an earlier nested namesake", async () => {
+    const widget = [
+      "function decoy() {",
+      "  class Widget { render() { return 'decoy'; } }",
+      "  return Widget;",
+      "}",
+      "class Widget { render() { return 'real'; } }",
+      "module.exports = Widget;",
+      "",
+    ].join("\n");
+    const use = ['const W = require("./widget");', "function run() { return new W().render(); }", ""].join("\n");
+    const fixture = await project({ "widget.js": widget, "use.js": use });
+    try {
+      const module = fixture.index.byFile.get(fileIdentityKey(fixture.file("widget.js")));
+      const defaultExport = module?.exports.find((entry) => entry.type === "local" && entry.exportedAs === "default");
+      expect(defaultExport?.type).toBe("local");
+      if (defaultExport?.type !== "local") return;
+      expect(defaultExport.target.range.start.line).toBe(5);
+
+      const result = await goToDefinition(fixture.index, {
+        file: fixture.file("use.js"),
+        line: 2,
+        column: columnOf(use, 2, "render"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.range.start.line).toBe(5);
+      expect(result.definition.range.start.index).toBe(tokenIndex(widget, 5, "render"));
+
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      const targets = callTargetIds(graph, "run");
+      expect(targets.some((id) => id.endsWith("::render::" + tokenIndex(widget, 5, "render")))).toBe(true);
+      expect(targets.some((id) => id.endsWith("::render::" + tokenIndex(widget, 2, "render")))).toBe(false);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("honors a nested CommonJS RHS binding that shadows a module class", async () => {
+    const widget = [
+      "class Widget { render() { return 'outer'; } }",
+      "function install() {",
+      "  class Widget { render() { return 'inner'; } }",
+      "  module.exports = Widget;",
+      "}",
+      "install();",
+      "",
+    ].join("\n");
+    const use = ['const W = require("./widget");', "function run() { return new W().render(); }", ""].join("\n");
+    const fixture = await project({ "widget.js": widget, "use.js": use });
+    try {
+      const module = fixture.index.byFile.get(fileIdentityKey(fixture.file("widget.js")));
+      const target = module?.exports.find((entry) => entry.type === "local" && entry.exportedAs === "default");
+      expect(target?.type).toBe("local");
+      if (target?.type !== "local") return;
+      expect(target.target.range.start.line).toBe(3);
+
+      const result = await goToDefinition(fixture.index, {
+        file: fixture.file("use.js"),
+        line: 2,
+        column: columnOf(use, 2, "render"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.definition.range.start.line).toBe(3);
+      expect(result.definition.range.start.index).toBe(tokenIndex(widget, 3, "render"));
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }

@@ -82,6 +82,8 @@ export type ScopeNodeRow = {
   memberFunctionTypes?: ReadonlySet<string>;
   /** Node types that make a nested function a member rather than a file-scope declaration. */
   memberContainerTypes?: ReadonlySet<string>;
+  /** Node types whose body is a member scope rather than an ordinary block (C++ classes). */
+  memberScopeTypes?: ReadonlySet<string>;
   /** Child node types skipped when they hold the name or the parameters of a name-registering node. */
   childSkipNameTypes?: ReadonlySet<string>;
   /** Node types that are the file root, so no block scope is pushed for them. */
@@ -114,8 +116,8 @@ export type ScopeNodeRow = {
    * Scope kinds whose bindings cover the whole scope, including uses that textually precede
    * the declaration. JS `let`/`const` still name the inner binding from the start of the block
    * (temporal dead zone). Absent kinds expose a binding only at and after its declaration, so a
-   * later declaration does not capture an earlier use in that scope (C and C++ blocks, Rust
-   * `let`, Go locals).
+   * later declaration does not capture an earlier use in that scope (C and C++ files and
+   * blocks, Rust `let`, Go locals). Only C++ class member scopes cover earlier uses.
    */
   wholeScopeKinds?: ReadonlySet<Scope["kind"]>;
   /**
@@ -145,6 +147,7 @@ export type ScopeNodeRow = {
 };
 
 const WHOLE_FILE_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["module"]);
+const CPP_MEMBER_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["member"]);
 const WHOLE_LEXICAL_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["module", "function", "block", "type"]);
 
 /**
@@ -209,8 +212,6 @@ const C_SCOPE_NODES: ScopeNodeRow = {
   variableDeclarationTypes: new Set(["field_declaration"]),
   destructuringTypeFieldTypes: new Set(["parameter_declaration"]),
   childSkipNameTypes: new Set(["identifier", "type_identifier"]),
-  wholeScopeKinds: WHOLE_FILE_SCOPE,
-  wholeScopeDeclarationTypes: new Set(["function_declarator"]),
 };
 
 const DOCUMENT_SCOPE_NODES: ScopeNodeRow = {};
@@ -346,6 +347,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
   c: C_SCOPE_NODES,
   cpp: {
     ...C_SCOPE_NODES,
+    memberScopeTypes: new Set(["field_declaration_list"]),
+    wholeScopeKinds: CPP_MEMBER_SCOPE,
     typeParameterTypes: new Set(["type_parameter_declaration"]),
     destructuringTypeFieldTypes: new Set(["parameter_declaration", "variadic_parameter_declaration"]),
     scopedEnum: {
@@ -444,4 +447,10 @@ const EMPTY_SCOPE_NODES: ScopeNodeRow = {};
 
 export function scopeNodesFor(languageId: string): ScopeNodeRow {
   return SCOPE_NODE_ROWS[languageId] ?? EMPTY_SCOPE_NODES;
+}
+
+/** Check a same-file definition found outside lexical lookup against file-scope declaration order. */
+export function fileScopeDefinitionCoversUse(languageId: string, def: Range, useStartIndex: number): boolean {
+  if (def.start.index === undefined) return false;
+  return bindingCoversUse(scopeNodesFor(languageId), "module", { def }, useStartIndex);
 }

@@ -10,10 +10,15 @@ import {
 } from "../native/tree-sitter-native.js";
 import { IMPLICIT_UNIT_LANGUAGES } from "../indexer/compilation-units.js";
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
-import { cjsRequireValueBinding, resolveExport, resolvePhpExportByImportType } from "../indexer/navigation-resolve.js";
-import { typescriptCallableContainerKey, typescriptCallableRoleAt } from "../indexer/ts-callables.js";
+import { cjsRequireValueBinding, resolveExport } from "../indexer/navigation-resolve.js";
+import {
+  typescriptCollapsedOverloadTarget,
+  typescriptCallableContainerKey,
+  typescriptCallableRoleAt,
+} from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
+import { fileScopeDefinitionCoversUse } from "../indexer/scope-nodes.js";
 import { csharpAliasQualifiedLookupName, innermostNamespaceImport } from "../indexer/navigation-goto.js";
 import {
   cppUsingDeclarationTarget,
@@ -24,7 +29,12 @@ import {
   resolveVisibleCppCallableName,
 } from "../indexer/navigation-cpp.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
-import { ensurePhpNamespaceSymbolIndex, resolveIndexedPhpClassReference } from "../indexer/php-namespace-symbols.js";
+import {
+  ensurePhpNamespaceSymbolIndex,
+  phpClassReferenceMatchesDefinition,
+  resolveIndexedPhpClassReference,
+  resolvePhpExplicitImport,
+} from "../indexer/php-namespace-symbols.js";
 import {
   csharpLookupName,
   findClosestScopeBinding,
@@ -155,16 +165,9 @@ function recordTypeScriptCallableAliases(
   }
   for (const group of groups.values()) {
     if (group.length < 2) continue;
-    const implementations = group.filter((local) => {
-      const start = local.range.start.index ?? 0;
-      const end = local.range.end.index ?? start;
-      return typescriptCallableRoleAt(tree, start, end) === "implementation";
-    });
-    // One implementation body makes the signatures one callable. A signature-only set (an
-    // interface, `declare`, or abstract overloads) keeps one node per signature, so type
-    // hierarchy sees each arity and rejects the ambiguous member instead of guessing.
-    if (implementations.length !== 1) continue;
-    const canonical = implementations[0]!;
+    // Signature-only and multiply implemented groups keep their distinct declarations.
+    const canonical = typescriptCollapsedOverloadTarget(group, tree, (local) => local);
+    if (!canonical) continue;
     const canonicalId = defNodeId(canonical);
     for (const local of group) {
       const id = defNodeId(local);
@@ -461,6 +464,15 @@ export async function buildSymbolGraphDetailed(
         const lookupName = sup.id === "csharp" ? csharpLookupName(node, src, name) : name;
         const csharpExportName =
           sup.id === "csharp" ? csharpAliasQualifiedLookupName(node, src, lookupName, moduleEntry.imports) : lookupName;
+        // PHP class and function names occupy separate namespaces. Dispatch class syntax
+        // before the lexical function binding or generic same-file name lookup can win.
+        const phpClassReference = sup.id === "php" && inferPhpQualifiedReferenceImportType(node) === "class";
+        if (phpClassReference) {
+          const phpImport = findPhpImportAlias(moduleEntry.imports, name, "class");
+          if (phpImport) return resolvePhpExplicitImport(index, phpImport, "class");
+          const indexedClass = resolveIndexedPhpClassReference(index, src, tree, node, lookupName, moduleEntry.imports);
+          if (indexedClass) return indexedClass;
+        }
         const binding = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
         const usingTarget = sup.id === "cpp" && binding ? cppUsingDeclarationTarget(binding, src) : undefined;
         if (usingTarget) {
@@ -487,23 +499,26 @@ export async function buildSymbolGraphDetailed(
         const cppCollision =
           sup.id === "cpp" && binding ? resolveCppCollidingBinding(file, binding, node, src) : undefined;
         if (cppCollision !== undefined) return cppCollision;
-        if (binding?.def) {
-          return (
-            moduleEntry.locals.find(
-              (local) =>
-                sup.normalizeIdentifier(local.localName) === binding.canonicalName &&
-                local.range.start.index === binding.def?.start.index &&
-                local.range.end.index === binding.def?.end.index,
-            ) ?? null
-          );
-        }
-        if (sup.id === "php") {
+        if (sup.id === "php" && !phpClassReference) {
           const importType = inferPhpQualifiedReferenceImportType(node) ?? "const";
           const phpImport = findPhpImportAlias(moduleEntry.imports, name, importType);
-          if (phpImport && typeof phpImport.resolved === "string") {
-            const resolved = resolvePhpExportByImportType(index, phpImport.resolved, phpImport.imported, importType);
-            if (resolved?.kind === "resolved") return resolved.def;
+          if (phpImport) return resolvePhpExplicitImport(index, phpImport, importType);
+        }
+        if (binding?.def) {
+          const local = moduleEntry.locals.find(
+            (candidate) =>
+              sup.normalizeIdentifier(candidate.localName) === binding.canonicalName &&
+              candidate.range.start.index === binding.def?.start.index &&
+              candidate.range.end.index === binding.def?.end.index,
+          );
+          if (
+            phpClassReference &&
+            (!local ||
+              !phpClassReferenceMatchesDefinition(index, src, tree, node, lookupName, moduleEntry.imports, local))
+          ) {
+            return null;
           }
+          return local ?? null;
         }
         if (sup.id === "cpp") {
           const visible = resolveVisibleCppCallableName(index, moduleEntry, name, node, src, loadCppParsedFile);
@@ -523,6 +538,18 @@ export async function buildSymbolGraphDetailed(
               );
         if (localCandidates.length === 1) {
           const only = localCandidates[0]!;
+          if (
+            (sup.id === "c" || sup.id === "cpp") &&
+            !fileScopeDefinitionCoversUse(sup.id, only.range, node.startIndex)
+          ) {
+            return null;
+          }
+          if (
+            phpClassReference &&
+            !phpClassReferenceMatchesDefinition(index, src, tree, node, lookupName, moduleEntry.imports, only)
+          ) {
+            return null;
+          }
           return sup.id === "cpp" && only.kind === SymbolKind.Function
             ? resolveCppExportedCallables(index, [only], node, src, loadCppParsedFile)
             : only;
@@ -541,9 +568,30 @@ export async function buildSymbolGraphDetailed(
           });
           if (resolved?.kind === "resolved") return resolved.def;
         }
-        if (localCandidates.length === 0 && sup.id === "php") {
-          const phpClass = resolveIndexedPhpClassReference(index, src, tree, node, lookupName, moduleEntry.imports);
-          if (phpClass) return phpClass;
+        if (phpClassReference) {
+          const imported = resolveNamedDefinition(
+            index,
+            moduleEntry,
+            file,
+            sup,
+            lookupName,
+            undefined,
+            node.startIndex,
+          );
+          if (
+            imported?.status === "ok" &&
+            phpClassReferenceMatchesDefinition(
+              index,
+              src,
+              tree,
+              node,
+              lookupName,
+              moduleEntry.imports,
+              imported.definition,
+            )
+          ) {
+            return imported.definition;
+          }
         }
         return null;
       };

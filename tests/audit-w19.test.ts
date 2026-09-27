@@ -2,7 +2,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndex, findReferences, goToDefinition, type FindReferencesResult } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+  type FindReferencesResult,
+} from "../src/index.js";
 
 function columnOf(source: string, line: number, token: string, occurrence = 0): number {
   const text = source.split("\n")[line - 1] ?? "";
@@ -208,6 +214,108 @@ describe("forward references (W19)", () => {
       const decoy = await findReferences(index, { file, line: 7, column: columnOf(source, 7, "x") });
       expect(referenceLines(decoy)).toEqual([7, 8]);
       if (decoy.status === "ok") expect(decoy.referenceCoverage?.state).toBe("complete");
+    });
+  });
+
+  it.each([
+    ["C", "c"],
+    ["C++", "cpp"],
+  ])("does not resolve a %s file-scope variable before its declaration", async (_language, extension) => {
+    const source = [
+      "int before(void) { return value; }",
+      "int value = 1;",
+      "int after(void) { return value; }",
+      "",
+    ].join("\n");
+    await withFile(`forward.${extension}`, source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const earlier = await goToDefinition(index, { file, line: 1, column: columnOf(source, 1, "value") });
+      expect(earlier.status).toBe("not_found");
+
+      const later = await goToDefinition(index, { file, line: 3, column: columnOf(source, 3, "value") });
+      expect(later.status).toBe("ok");
+      if (later.status === "ok") expect(later.definition.range.start.line).toBe(2);
+
+      const refs = await findReferences(index, { file, line: 2, column: columnOf(source, 2, "value") });
+      expect(referenceLines(refs)).toEqual([2, 3]);
+      if (refs.status === "ok") expect(refs.referenceCoverage?.state).toBe("complete");
+    });
+  });
+
+  it.each([
+    ["C", "c"],
+    ["C++", "cpp"],
+  ])("omits a %s call before its declaration from the graph", async (_language, extension) => {
+    const source = [
+      "int before(void) { return later(); }",
+      "int later(void) { return 1; }",
+      "int after(void) { return later(); }",
+      "",
+    ].join("\n");
+    await withFile(`call-forward.${extension}`, source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "later")
+        .map((edge) => graph.nodes.get(edge.from)?.name);
+      expect(callers).toEqual(["after"]);
+
+      const earlier = await goToDefinition(index, { file, line: 1, column: columnOf(source, 1, "later") });
+      expect(earlier.status).toBe("not_found");
+      const later = await goToDefinition(index, { file, line: 3, column: columnOf(source, 3, "later") });
+      expect(later.status).toBe("ok");
+      if (later.status === "ok") expect(later.definition.range.start.line).toBe(2);
+      const refs = await findReferences(index, { file, line: 2, column: columnOf(source, 2, "later") });
+      expect(referenceLines(refs)).toEqual([2, 3]);
+    });
+  });
+
+  it("keeps a C++ forward prototype visible before its later definition", async () => {
+    const source = [
+      "int later(void);",
+      "int before(void) { return later(); }",
+      "int later(void) { return 1; }",
+      "int after(void) { return later(); }",
+      "",
+    ].join("\n");
+    await withFile("prototype.cpp", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const before = await goToDefinition(index, { file, line: 2, column: columnOf(source, 2, "later") });
+      expect(before.status).toBe("ok");
+      if (before.status === "ok") expect(before.definition.range.start.line).toBe(3);
+      const refs = await findReferences(index, { file, line: 1, column: columnOf(source, 1, "later") });
+      expect(referenceLines(refs)).toEqual([1, 2, 3, 4]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "later")
+        .map((edge) => graph.nodes.get(edge.from)?.name)
+        .sort();
+      expect(callers).toEqual(["after", "before"]);
+    });
+  });
+
+  it("resolves a C++ class member declared after its use in an earlier member function", async () => {
+    const source = [
+      "int value = 99;",
+      "struct Widget {",
+      "  int read() { return value; }",
+      "  int value;",
+      "};",
+      "",
+    ].join("\n");
+    await withFile("member.cpp", source, async (file) => {
+      const index = await buildProjectIndex(path.dirname(file), { cache: "off" });
+      const memberUse = await goToDefinition(index, { file, line: 3, column: columnOf(source, 3, "value") });
+      expect(memberUse.status).toBe("ok");
+      if (memberUse.status === "ok") expect(memberUse.definition.range.start.line).toBe(4);
+
+      const member = await findReferences(index, { file, line: 4, column: columnOf(source, 4, "value") });
+      expect(referenceLines(member)).toEqual([3, 4]);
+      if (member.status === "ok") expect(member.referenceCoverage?.state).toBe("complete");
+
+      const global = await findReferences(index, { file, line: 1, column: columnOf(source, 1, "value") });
+      expect(referenceLines(global)).toEqual([1]);
     });
   });
 });

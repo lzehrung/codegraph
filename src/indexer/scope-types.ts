@@ -42,7 +42,7 @@ export type Binding = {
 };
 
 export type Scope = {
-  kind: "module" | "function" | "block" | "type";
+  kind: "module" | "function" | "block" | "member" | "type";
   map: Map<string, Binding>;
   node: SyntaxNodeLike;
   parent: Scope | undefined;

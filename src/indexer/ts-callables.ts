@@ -39,6 +39,24 @@ export function typescriptCallableRoleAt(tree: SyntaxTreeLike, start: number, en
   return typescriptCallableRole(tree.rootNode.descendantForIndex(start, end));
 }
 
+/** Only a single implementation can stand in for every signature of an overload group. */
+export function typescriptCollapsedOverloadTarget<T>(
+  group: readonly T[],
+  tree: SyntaxTreeLike,
+  definitionOf: (entry: T) => SymbolDef,
+): T | undefined {
+  let implementation: T | undefined;
+  for (const entry of group) {
+    const def = definitionOf(entry);
+    const start = def.range.start.index ?? 0;
+    const end = def.range.end.index ?? start;
+    if (typescriptCallableRoleAt(tree, start, end) !== "implementation") continue;
+    if (implementation) return undefined;
+    implementation = entry;
+  }
+  return implementation;
+}
+
 /** Class, interface, or enum body that owns the callable, or the module when it is free. */
 export function typescriptCallableContainerKey(tree: SyntaxTreeLike, start: number, end: number): string {
   let current: SyntaxNodeLike | null = tree.rootNode.descendantForIndex(start, end);

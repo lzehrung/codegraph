@@ -95,17 +95,57 @@ export function isExpandedStarBinding(binding: ImportBinding, imports: readonly 
   );
 }
 
+function explicitBindingStartIndex(binding: ImportBinding): number | undefined {
+  if (binding.kind === "star") return undefined;
+  if (binding.localRange?.start.index !== undefined) return binding.localRange.start.index;
+  return binding.kind === "named" ? binding.importedRange?.start.index : undefined;
+}
+
 /**
- * The import binding effective at a simple-name use. Python overwrites a prior binding;
+ * The explicit import binding effective at a simple-name use. Python overwrites a prior binding;
  * other supported languages either reject duplicate explicit imports or retain the first.
+ * A positioned use never sees an import whose source binding begins after that use.
  */
 export function effectiveExplicitBinding(
   imports: readonly ImportBinding[],
   languageId: string,
   matches: (binding: ImportBinding) => boolean,
+  referenceIndex?: number,
 ): ImportBinding | undefined {
   const candidates = starImportPrecedence(languageId) === "last-wins" ? [...imports].reverse() : imports;
-  return candidates.find((binding) => !isExpandedStarBinding(binding, imports) && matches(binding));
+  return candidates.find((binding) => {
+    if (isExpandedStarBinding(binding, imports) || !matches(binding)) return false;
+    if (referenceIndex === undefined) return true;
+    const startIndex = explicitBindingStartIndex(binding);
+    return startIndex !== undefined && startIndex <= referenceIndex;
+  });
+}
+
+export type EffectiveExplicitOrLocalBinding = { kind: "explicit"; binding: ImportBinding } | { kind: "local" };
+
+/**
+ * Decide whether the explicit import or a module-local declaration owns a simple name at a use.
+ * Python executes module statements in source order, while other languages retain their explicit
+ * import precedence. Callers still resolve the selected binding and must leave an unresolved
+ * winner unresolved rather than falling back to an older binding.
+ */
+export function effectiveExplicitOrLocalBinding(
+  imports: readonly ImportBinding[],
+  languageId: string,
+  matches: (binding: ImportBinding) => boolean,
+  localStartIndex?: number,
+  referenceIndex?: number,
+): EffectiveExplicitOrLocalBinding | undefined {
+  const explicit = effectiveExplicitBinding(imports, languageId, matches, referenceIndex);
+  const localIsInScope =
+    localStartIndex !== undefined && (referenceIndex === undefined || localStartIndex <= referenceIndex);
+  if (!explicit) return localIsInScope ? { kind: "local" } : undefined;
+  if (starImportPrecedence(languageId) !== "last-wins") return { kind: "explicit", binding: explicit };
+  const importStartIndex = explicitBindingStartIndex(explicit);
+  if (localIsInScope && (importStartIndex === undefined || localStartIndex > importStartIndex)) {
+    return { kind: "local" };
+  }
+  return { kind: "explicit", binding: explicit };
 }
 
 export function resolveStarImportedDefinition(

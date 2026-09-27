@@ -344,7 +344,13 @@ export function buildScopeIndexFromSource(
       if (binding.def) existing.occurrences.push(binding.def);
       return;
     }
-    if (!sameSpan && existing && !extraBindingSpans.has(bindingSpanKey(existing))) {
+    // Preserving an overload as an extra binding must not hide it from earlier C++ uses.
+    if (
+      !sameSpan &&
+      existing &&
+      (!extraBindingSpans.has(bindingSpanKey(existing)) ||
+        (support.id === "cpp" && kind === "function" && existing.kind === "function"))
+    ) {
       binding.earlierSameScope = existing;
     }
     target.map.set(key, binding);
@@ -891,7 +897,7 @@ export function buildScopeIndexFromSource(
       support.id === "cpp" && node.type === "namespace_definition" ? node.childForFieldName("name") : null;
     const cppNamespaceIsInline = !!cppNamespaceName && /^\s*inline\s+namespace\b/u.test(sliceText(node, source));
     const createsCppNamespaceScope = !!cppNamespaceName && !cppNamespaceIsInline;
-    const createsCppMemberScope = support.id === "cpp" && node.type === "field_declaration_list";
+    const createsMemberScope = !!row.memberScopeTypes?.has(node.type);
     if (createsCppNamespaceScope) {
       const name = cppNamespaceName;
       const segments = sliceText(name, source).replace(/\s+/gu, "").split("::").filter(Boolean);
@@ -938,10 +944,10 @@ export function buildScopeIndexFromSource(
       if (params) addPatternDecls(params, "param");
       collectHoistedDeclarations(node);
       attachPendingNames(scope);
-    } else if (support.createsBlockScope(node) || createsCppMemberScope) {
+    } else if (support.createsBlockScope(node) || createsMemberScope) {
       if (!row.moduleRootTypes?.has(node.type)) {
         const scope: Scope = {
-          kind: "block",
+          kind: createsMemberScope ? "member" : "block",
           map: new Map(),
           node,
           parent: stack[stack.length - 1],

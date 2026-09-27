@@ -6,7 +6,9 @@ import {
   memberContainerForDefinition,
   resolveImported,
 } from "../../indexer/navigation-resolve.js";
+import { resolvePhpExplicitImport } from "../../indexer/php-namespace-symbols.js";
 import {
+  effectiveExplicitOrLocalBinding,
   isExpandedStarBinding,
   resolveStarImportedName,
   starImportPrecedence,
@@ -36,6 +38,12 @@ function isCIncludeBinding(imp: ImportBinding): boolean {
   return imp.kind === "named" && !!imp.cNamespace;
 }
 
+function explicitBindingLocalName(imp: ImportBinding): string | undefined {
+  if (imp.kind === "namespace") return imp.localNS;
+  if (imp.kind === "named" || imp.kind === "default") return imp.local;
+  return undefined;
+}
+
 /**
  * Every simple name reachable only through a star import, read off the extra bindings
  * `expandStarImports` already appended to `moduleEntry.imports` (one per exported name per star
@@ -62,16 +70,42 @@ export function buildImportAliasMaps(
   const aliasToTargetDef = new Map<string, SymbolDef>();
   const aliasToTargetModule = new Map<string, string>();
   const languageId = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id ?? "";
-  // Position (index into moduleEntry.imports) of the explicit import that most recently claimed
-  // each alias, so a `last-wins` language can still tell whether a later star import rebinds it.
-  const explicitPosition = new Map<string, number>();
+  const pythonLocalStartIndexes = new Map<string, number>();
+  if (languageId === "python") {
+    for (const local of moduleEntry.locals) {
+      const startIndex = local.range.start.index;
+      if (startIndex === undefined) continue;
+      const previous = pythonLocalStartIndexes.get(local.localName);
+      if (previous === undefined || startIndex > previous) {
+        pythonLocalStartIndexes.set(local.localName, startIndex);
+      }
+    }
+  }
 
-  moduleEntry.imports.forEach((imp, position) => {
+  moduleEntry.imports.forEach((imp) => {
     // Star expansion republishes the star's own names as extra bindings with no source range.
     // Resolving those here would let whichever copy this array places last silently overwrite
     // an explicit import, regardless of source order or the language's star precedence;
     // star-only names are resolved separately below instead.
     if (!isCIncludeBinding(imp) && isExpandedStarBinding(imp, moduleEntry.imports)) return;
+    const bindingName = explicitBindingLocalName(imp);
+    if (languageId === "python" && bindingName) {
+      const effectiveBinding = effectiveExplicitOrLocalBinding(
+        moduleEntry.imports,
+        languageId,
+        (candidate) => explicitBindingLocalName(candidate) === bindingName,
+        pythonLocalStartIndexes.get(bindingName),
+      );
+      if (effectiveBinding?.kind !== "explicit" || effectiveBinding.binding !== imp) return;
+    }
+    if (imp.kind === "named") {
+      const phpRole = phpNamedImportRole(imp);
+      if (phpRole) {
+        const resolved = resolvePhpExplicitImport(index, imp, phpRole);
+        if (resolved) aliasToTargetDef.set(imp.local, resolved);
+        return;
+      }
+    }
     const targetModule = targetModuleForImport(index, imp);
     const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
     if (!targetModule || !targetFile) return;
@@ -82,20 +116,6 @@ export function buildImportAliasMaps(
         const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
         if (resolved && !("namespace" in resolved)) {
           aliasToTargetDef.set(imp.local, resolved);
-          explicitPosition.set(imp.local, position);
-        }
-        return;
-      }
-      if (phpNamedImportRole(imp) !== undefined) {
-        // PHP class, function, and constant imports are independent namespaces that can share
-        // one alias spelling, so this plain-name map cannot identify a target across roles and
-        // keeps only a fallback entry. Use recording resolves each occurrence through its own
-        // namespace; this map still serves call targets and receiver typing when the
-        // occurrence's namespace has no matching import.
-        const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
-        if (resolved && !("namespace" in resolved)) {
-          aliasToTargetDef.set(imp.local, resolved);
-          explicitPosition.set(imp.local, position);
         }
         return;
       }
@@ -109,10 +129,8 @@ export function buildImportAliasMaps(
       const resolved = resolveExportNamespace(targetFile, imp.imported) ?? fallbackResolved;
       if (resolved?.kind === "resolved") {
         aliasToTargetDef.set(imp.local, resolved.def);
-        explicitPosition.set(imp.local, position);
       } else if (resolved?.kind === "namespace") {
         aliasToTargetModule.set(imp.local, normalizePath(resolved.file));
-        explicitPosition.set(imp.local, position);
       }
     } else if (imp.kind === "default") {
       const defaultExport = resolveExportFrom(targetFile, "default");
@@ -122,7 +140,6 @@ export function buildImportAliasMaps(
       const def = container ?? raw;
       if (def) aliasToTargetDef.set(imp.local, def);
       aliasToTargetModule.set(imp.local, targetFile);
-      explicitPosition.set(imp.local, position);
     } else if (imp.kind === "namespace") {
       const classValue = imp.mechanism === "cjs" ? cjsRequireValueBinding(index, targetFile) : undefined;
       if (classValue) {
@@ -130,24 +147,26 @@ export function buildImportAliasMaps(
       } else {
         aliasToTargetModule.set(imp.localNS, targetFile);
       }
-      explicitPosition.set(imp.localNS, position);
     }
   });
 
-  // Star-only names: whatever no explicit import above already claimed.
-  // `resolveStarImportedName` mirrors `resolveNamedDefinition`'s exact precedence per language:
-  // Java/Kotlin/Rust keep the explicit entry above untouched (explicit beats star
-  // unconditionally); Python can still let a star import that is textually after the explicit
-  // one rebind it (last-wins, including explicit-vs-star order); every other language leaves
-  // the name unresolved when two stars disagree (ambiguous), instead of guessing.
+  // Star-only names use the same explicit/local winner as navigation. A missing effective
+  // explicit binding blocks an earlier star rather than leaving a stale alias target behind.
   const precedence = starImportPrecedence(languageId);
   for (const name of starReachableNames(moduleEntry)) {
     const decision = resolveStarImportedName(index, moduleEntry, languageId, name);
     if (decision.status !== "resolved") continue;
-    const explicitAt = explicitPosition.get(name);
-    if (explicitAt !== undefined) {
+    const effectiveBinding = effectiveExplicitOrLocalBinding(
+      moduleEntry.imports,
+      languageId,
+      (candidate) => explicitBindingLocalName(candidate) === name,
+      pythonLocalStartIndexes.get(name),
+    );
+    if (effectiveBinding?.kind === "local") continue;
+    if (effectiveBinding?.kind === "explicit") {
       if (precedence !== "last-wins") continue;
       const starAt = moduleEntry.imports.indexOf(decision.imp);
+      const explicitAt = moduleEntry.imports.indexOf(effectiveBinding.binding);
       if (explicitAt > starAt) continue;
     }
     aliasToTargetModule.delete(name);

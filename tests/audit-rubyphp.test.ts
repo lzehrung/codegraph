@@ -209,6 +209,89 @@ describe("Ruby and PHP audit fixes", () => {
     expect(graph.edges.some((edge) => edge.label === "instantiates" && edge.from === outside)).toBe(false);
   });
 
+  it("resolves a PHP base to the namespace class instead of a same-named local function", async () => {
+    const base = ["<?php", "namespace Acme;", "class Base {}", ""].join("\n");
+    const child = ["<?php", "namespace Acme;", "function Base() {}", "class Child extends Base {}", ""].join("\n");
+    const orphan = ["<?php", "namespace Unrelated;", "function Base() {}", "class Orphan extends Base {}", ""].join(
+      "\n",
+    );
+    const { root, index } = await project("cg-audit-php-class-role-", {
+      "base.php": base,
+      "child.php": child,
+      "orphan.php": orphan,
+    });
+    const resolved = await goToDefinition(index, {
+      file: fileIn(root, "child.php"),
+      ...at(child, "extends Base", "Base"),
+    });
+    expect(resolved.status).toBe("ok");
+    if (resolved.status !== "ok") return;
+    expect(baseName(resolved.definition.file)).toBe("base.php");
+    expect(resolved.definition.range.start.line).toBe(3);
+    const unresolved = await goToDefinition(index, {
+      file: fileIn(root, "orphan.php"),
+      ...at(orphan, "extends Base", "Base"),
+    });
+    expect(unresolved.status).toBe("not_found");
+
+    const graph = await buildSymbolGraphDetailed(index);
+    const childType = typeNode(graph, "child.php", "Child");
+    const baseType = typeNode(graph, "base.php", "Base");
+    const localFunction = functionNode(graph, "child.php", "Base");
+    expect(edgeBetween(graph, childType, baseType, "extends")).toBe(true);
+    expect(edgeBetween(graph, childType, localFunction, "extends")).toBe(false);
+    const orphanType = typeNode(graph, "orphan.php", "Orphan");
+    const orphanFunction = functionNode(graph, "orphan.php", "Base");
+    expect(edgeBetween(graph, orphanType, orphanFunction, "extends")).toBe(false);
+    expect(graph.edges.some((edge) => edge.from === orphanType && edge.label === "extends")).toBe(false);
+  });
+
+  it("resolves PHP use by qualified name and rejects a required same-name decoy", async () => {
+    const actual = ["<?php", "namespace App\\Utils;", "class UtilityClass {}", ""].join("\n");
+    const decoy = ["<?php", "namespace Other;", "class Widget {}", ""].join("\n");
+    const good = [
+      "<?php",
+      "namespace Client;",
+      "use App\\Utils\\UtilityClass;",
+      "class Good extends UtilityClass {}",
+      "",
+    ].join("\n");
+    const bad = [
+      "<?php",
+      "namespace Client;",
+      "require './decoy.php';",
+      "use Missing\\Widget;",
+      "class Bad extends Widget {}",
+      "",
+    ].join("\n");
+    const { root, index } = await project("cg-audit-php-use-qualified-", {
+      "actual.php": actual,
+      "decoy.php": decoy,
+      "good.php": good,
+      "bad.php": bad,
+    });
+    const bound = await goToDefinition(index, {
+      file: fileIn(root, "good.php"),
+      ...at(good, "extends UtilityClass", "UtilityClass"),
+    });
+    expect(bound.status).toBe("ok");
+    if (bound.status !== "ok") return;
+    expect(baseName(bound.definition.file)).toBe("actual.php");
+    const unbound = await goToDefinition(index, {
+      file: fileIn(root, "bad.php"),
+      ...at(bad, "extends Widget", "Widget"),
+    });
+    expect(unbound.status).toBe("not_found");
+
+    const graph = await buildSymbolGraphDetailed(index);
+    const goodType = typeNode(graph, "good.php", "Good");
+    const actualType = typeNode(graph, "actual.php", "UtilityClass");
+    const badType = typeNode(graph, "bad.php", "Bad");
+    const decoyType = typeNode(graph, "decoy.php", "Widget");
+    expect(edgeBetween(graph, goodType, actualType, "extends")).toBe(true);
+    expect(edgeBetween(graph, badType, decoyType, "extends")).toBe(false);
+    expect(graph.edges.some((edge) => edge.from === badType && edge.label === "extends")).toBe(false);
+  });
   it("treats PHP constructor promotions as properties and ignores plain and non-constructor promotions", async () => {
     const source = [
       "<?php",

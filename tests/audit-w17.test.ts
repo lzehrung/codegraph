@@ -57,6 +57,13 @@ function typeNode(graph: DetailedSymbolGraph, file: string, name: string): strin
   expect(matches, name).toHaveLength(1);
   return matches[0]?.id ?? "";
 }
+function functionNode(graph: DetailedSymbolGraph, file: string, name: string): string {
+  const matches = [...graph.nodes.values()].filter(
+    (node) => node.kind === "function" && node.name === name && path.basename(node.file) === file,
+  );
+  expect(matches, name).toHaveLength(1);
+  return matches[0]?.id ?? "";
+}
 
 function edgeBetween(graph: DetailedSymbolGraph, from: string, to: string, label: string): boolean {
   return graph.edges.some((edge) => edge.from === from && edge.to === to && edge.label === label);
@@ -252,6 +259,114 @@ describe("star-import precedence (W17)", () => {
       (reference) => path.basename(reference.file) === "Ambiguous.java",
     );
     expect(ambiguousUses).toEqual([]);
+  });
+
+  it("does not let a Java wildcard rescue an unresolved explicit import", async () => {
+    const imported =
+      "package pkg.fallback;\n\npublic class Foo {\n    public int hit() {\n        return 1;\n    }\n}\n";
+    const main =
+      "package app;\n\nimport missing.Foo;\nimport pkg.fallback.*;\n\npublic class Main {\n    public int run() {\n" +
+      "        Foo value = new Foo();\n        return value.hit();\n    }\n}\n";
+    const { root, index } = await project("cg-audit-w17-java-unresolved-explicit-", {
+      "pkg/fallback/Foo.java": imported,
+      "app/Main.java": main,
+    });
+    const unresolved = await goToDefinition(index, {
+      file: fileIn(root, "app/Main.java"),
+      ...at(main, "Foo value", "Foo"),
+    });
+    expect(unresolved.status).toBe("not_found");
+
+    const graph = await buildSymbolGraphDetailed(index);
+    const run = functionNode(graph, "Main.java", "run");
+    const hit = functionNode(graph, "Foo.java", "hit");
+    expect(edgeBetween(graph, run, hit, "calls")).toBe(false);
+  });
+
+  it("keeps a resolved Java explicit import ahead of a wildcard", async () => {
+    const preferred = "package preferred;\n\npublic class Foo {}\n";
+    const wildcard = "package wildcard;\n\npublic class Foo {}\n";
+    const main =
+      "package app;\n\nimport wildcard.*;\nimport preferred.Foo;\n\npublic class Main {\n    Foo value;\n}\n";
+    const { root, index } = await project("cg-audit-w17-java-resolved-explicit-", {
+      "preferred/Foo.java": preferred,
+      "wildcard/Foo.java": wildcard,
+      "app/Main.java": main,
+    });
+    const resolved = await goToDefinition(index, {
+      file: fileIn(root, "app/Main.java"),
+      ...at(main, "Foo value", "Foo"),
+    });
+    expect(resolved.status).toBe("ok");
+    if (resolved.status !== "ok") return;
+    expect(resolved.definition.file.replace(/\\/g, "/")).toMatch(/preferred\/Foo\.java$/);
+  });
+
+  it("does not let an unresolved later Python import fall back to an earlier star import", async () => {
+    const published = "class Thing:\n    def hit(self):\n        return 1\n";
+    const main = "from published import *\nfrom missing import Thing\n\ndef run():\n    return Thing().hit()\n";
+    const { root, index } = await project("cg-audit-w17-python-unresolved-explicit-", {
+      "published.py": published,
+      "main.py": main,
+    });
+    const unresolved = await goToDefinition(index, {
+      file: fileIn(root, "main.py"),
+      ...at(main, "Thing().hit()", "Thing"),
+    });
+    expect(unresolved.status).toBe("not_found");
+
+    const graph = await buildSymbolGraphDetailed(index);
+    const run = functionNode(graph, "main.py", "run");
+    const hit = functionNode(graph, "published.py", "hit");
+    expect(edgeBetween(graph, run, hit, "calls")).toBe(false);
+  });
+
+  it("uses the later Python import over an earlier local class in navigation and graph calls", async () => {
+    const imported = "class Thing:\n    def hit(self):\n        return 2\n";
+    const main =
+      "class Thing:\n    def hit(self):\n        return 1\n\nfrom imported import Thing\n\ndef run():\n    return Thing().hit()\n";
+    const { root, index } = await project("cg-audit-w17-python-later-import-", {
+      "imported.py": imported,
+      "main.py": main,
+    });
+    const resolved = await goToDefinition(index, {
+      file: fileIn(root, "main.py"),
+      ...at(main, "Thing().hit()", "Thing"),
+    });
+    expect(resolved.status).toBe("ok");
+    if (resolved.status !== "ok") return;
+    expect(baseName(resolved.definition.file)).toBe("imported.py");
+
+    const graph = await buildSymbolGraphDetailed(index);
+    const run = functionNode(graph, "main.py", "run");
+    const importedHit = functionNode(graph, "imported.py", "hit");
+    const localHit = functionNode(graph, "main.py", "hit");
+    expect(edgeBetween(graph, run, importedHit, "calls")).toBe(true);
+    expect(edgeBetween(graph, run, localHit, "calls")).toBe(false);
+  });
+
+  it("uses the later Python local class over an earlier import", async () => {
+    const imported = "class Thing:\n    def hit(self):\n        return 2\n";
+    const main =
+      "from imported import Thing\n\nclass Thing:\n    def hit(self):\n        return 1\n\ndef run():\n    return Thing().hit()\n";
+    const { root, index } = await project("cg-audit-w17-python-later-local-", {
+      "imported.py": imported,
+      "main.py": main,
+    });
+    const resolved = await goToDefinition(index, {
+      file: fileIn(root, "main.py"),
+      ...at(main, "Thing().hit()", "Thing"),
+    });
+    expect(resolved.status).toBe("ok");
+    if (resolved.status !== "ok") return;
+    expect(baseName(resolved.definition.file)).toBe("main.py");
+
+    const graph = await buildSymbolGraphDetailed(index);
+    const run = functionNode(graph, "main.py", "run");
+    const importedHit = functionNode(graph, "imported.py", "hit");
+    const localHit = functionNode(graph, "main.py", "hit");
+    expect(edgeBetween(graph, run, localHit, "calls")).toBe(true);
+    expect(edgeBetween(graph, run, importedHit, "calls")).toBe(false);
   });
 
   it("rejects two Rust glob imports of the same name and still resolves one glob", async () => {

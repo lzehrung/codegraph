@@ -1,5 +1,12 @@
+import path from "node:path";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
+import {
+  findPhpComposerPath,
+  getPhpComposerAutoloadFiles,
+  isPhpComposerClassmapExcluded,
+  loadPhpComposerConfig,
+} from "../util/resolution/php-composer.js";
 import type { ImportBinding } from "./import-types.js";
 import {
   canonicalPhpReferenceNames,
@@ -102,12 +109,42 @@ const PHP_CLASS_LIKE_KINDS: ReadonlySet<string> = new Set([
   SymbolKind.TypeAlias,
 ]);
 
+/** PHP namespace segments fold case; the final constant identifier does not. */
+function phpConstantQualifiedKey(name: string): string {
+  const separator = name.lastIndexOf("\\");
+  return separator < 0 ? name : foldPhpIdentifierCase(name.slice(0, separator)) + name.slice(separator);
+}
+
+/** A PHP use binds a qualified symbol name, even without a Composer file mapping. */
+export function resolvePhpExplicitImport(
+  index: ProjectIndex,
+  binding: Extract<ImportBinding, { kind: "named" }>,
+  role: "class" | "function" | "const",
+): SymbolDef | null {
+  if (binding.mechanism !== "php" || (binding.phpImportType ?? "class") !== role) return null;
+  const symbols = phpNamespaceSymbolIndexFor(index);
+  if (!symbols) return null;
+  const qualifiedName = binding.from.trim().replace(/^\\+/, "");
+  if (!qualifiedName) return null;
+  const key = role === "const" ? phpConstantQualifiedKey(qualifiedName) : foldPhpIdentifierCase(qualifiedName);
+  let matches: SymbolDef[] | undefined;
+  if (role === "class") matches = symbols.classes.get(key);
+  else if (role === "function") matches = symbols.functions.get(key);
+  else matches = symbols.consts.get(key);
+  if (matches?.length !== 1) return null;
+  const def = matches[0] ?? null;
+  return def && !symbols.composerExcludedFiles.has(fileIdentityKey(def.file)) ? def : null;
+}
+
 export type PhpNamespaceSymbolIndex = {
   classes: Map<string, SymbolDef[]>;
   functions: Map<string, SymbolDef[]>;
+  consts: Map<string, SymbolDef[]>;
   namesByKind: Map<string, string[]>;
   /** Definition identity key -> canonical qualified name without a leading `\\`. */
   canonicalByDefinition: Map<string, string>;
+  /** Files explicitly excluded by Composer without another autoload mapping. */
+  composerExcludedFiles: Set<string>;
   source: ProjectIndex["byFile"];
   size: number;
 };
@@ -166,12 +203,33 @@ export function phpNamespaceSymbolIndexFor(index: ProjectIndex): PhpNamespaceSym
   return cached;
 }
 
+/** Verify a class candidate proven visible through imports also names this exact PHP class. */
+export function phpClassReferenceMatchesDefinition(
+  index: ProjectIndex,
+  source: string,
+  tree: SyntaxTreeLike,
+  node: SyntaxNodeLike,
+  name: string,
+  imports: readonly ImportBinding[],
+  def: SymbolDef,
+): boolean {
+  if (!PHP_CLASS_LIKE_KINDS.has(def.kind)) return false;
+  const canonical = phpNamespaceSymbolIndexFor(index)?.canonicalByDefinition.get(definitionIdentityKey(def));
+  if (!canonical) return false;
+  const expected = foldPhpIdentifierCase(canonical);
+  return canonicalPhpReferenceNames(name, source, tree, node, { imports, role: "class" }).some(
+    (candidate) => foldPhpIdentifierCase(candidate.replace(/^\\+/, "")) === expected,
+  );
+}
+
 async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNamespaceSymbolIndex> {
   const classes = new Map<string, SymbolDef[]>();
   const functions = new Map<string, SymbolDef[]>();
+  const consts = new Map<string, SymbolDef[]>();
   const namesByKind = new Map<string, string[]>();
   const seenByKind = new Map<string, Set<string>>();
   const canonicalByDefinition = new Map<string, string>();
+  const composerExcludedFiles = new Set<string>();
 
   const phpModules: ModuleIndex[] = [];
   for (const moduleEntry of index.byFile.values()) {
@@ -190,6 +248,16 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
       } catch {
         parsedByFile.set(key, null);
       }
+      if (index.projectRoot) {
+        const composerPath = await findPhpComposerPath(index.projectRoot, moduleEntry.file);
+        if (composerPath) {
+          const config = await loadPhpComposerConfig(composerPath);
+          if (config && isPhpComposerClassmapExcluded(moduleEntry.file, config)) {
+            const autoloadFiles = await getPhpComposerAutoloadFiles(composerPath, config);
+            if (!autoloadFiles.has(path.resolve(moduleEntry.file))) composerExcludedFiles.add(key);
+          }
+        }
+      }
     }),
   );
 
@@ -206,6 +274,8 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
       const folded = foldPhpIdentifierCase(canonical);
       if (PHP_CLASS_LIKE_KINDS.has(local.kind)) pushPhpNamespaceSymbol(classes, folded, local);
       else if (local.kind === SymbolKind.Function) pushPhpNamespaceSymbol(functions, folded, local);
+      else if (local.kind === SymbolKind.Variable)
+        pushPhpNamespaceSymbol(consts, phpConstantQualifiedKey(canonical), local);
       let names = namesByKind.get(local.kind);
       let seen = seenByKind.get(local.kind);
       if (!names || !seen) {
@@ -221,5 +291,14 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
     }
   }
 
-  return { classes, functions, namesByKind, canonicalByDefinition, source: index.byFile, size: index.byFile.size };
+  return {
+    classes,
+    functions,
+    consts,
+    namesByKind,
+    canonicalByDefinition,
+    composerExcludedFiles,
+    source: index.byFile,
+    size: index.byFile.size,
+  };
 }

@@ -16,6 +16,7 @@ import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
+import { findClosestScopeBinding } from "./navigation-local.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
 import { isPythonInstanceAttributeDeclaration } from "../languages/definitions/python.js";
@@ -29,7 +30,11 @@ import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/ide
 import { isExportedDeclaration } from "./declaration-visibility.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { cppCallableIsDefinition, cppCallableShapeForNode } from "./cpp-callables.js";
-import { earliestSymbolDef, typescriptCallableContainerKey, typescriptCallableRoleAt } from "./ts-callables.js";
+import {
+  typescriptCollapsedOverloadTarget,
+  typescriptCallableContainerKey,
+  typescriptCallableRoleAt,
+} from "./ts-callables.js";
 
 /**
  * Matches one `exportScopeBlockers` entry against an ancestor node. A plain entry compares the
@@ -315,19 +320,10 @@ function collapseTypeScriptCallableExports(
   const drop = new Set<ExportEntry>();
   for (const group of groups.values()) {
     if (group.length < 2) continue;
-    const implementations = group.filter((entry) => {
-      const start = entry.target.range.start.index ?? 0;
-      const end = entry.target.range.end.index ?? start;
-      return typescriptCallableRoleAt(tree, start, end) === "implementation";
-    });
-    let keep: Extract<ExportEntry, { type: "local" }>[] = implementations;
-    if (implementations.length === 0) {
-      const earliest = earliestSymbolDef(group.map((entry) => entry.target));
-      const signature = group.find((entry) => entry.target === earliest);
-      keep = signature ? [signature] : [];
-    }
+    const canonical = typescriptCollapsedOverloadTarget(group, tree, (entry) => entry.target);
+    if (!canonical) continue;
     for (const entry of group) {
-      if (!keep.includes(entry)) drop.add(entry);
+      if (entry !== canonical) drop.add(entry);
     }
   }
   if (drop.size === 0) return exports;
@@ -781,12 +777,13 @@ export function collectLocalsAndExportsFromSource(
     }
   };
 
+  let scopeIndexForExports: ReturnType<typeof buildScopeIndexFromSource> | undefined;
   const usedQueryLocals = extractLocalsFromNativeQueries();
   if (!usedQueryLocals) {
     const scopeTree = ensureTree();
     if (scopeTree) {
-      const scopeIdx = buildScopeIndexFromSource(file, source, support, imports, { tree: scopeTree });
-      for (const b of scopeIdx.all) {
+      scopeIndexForExports = buildScopeIndexFromSource(file, source, support, imports, { tree: scopeTree });
+      for (const b of scopeIndexForExports.all) {
         if (!b.def) continue;
         const kind = bindingKindToSymbolKind(b.kind);
         pushLocal(b.name, kind, b.def, b.node);
@@ -864,6 +861,21 @@ export function collectLocalsAndExportsFromSource(
       if (!capture || !treeForEnrichment) return undefined;
       const range = rangeFromNativeCapture(capture, ensureByteIndexMap());
       return treeForEnrichment.rootNode.descendantForIndex(range.start.index ?? 0, range.end.index ?? 0) ?? undefined;
+    };
+
+    const localVisibleAtCapture = (capture: NativeCapture): SymbolDef | undefined => {
+      const node = nodeForCapture(capture);
+      if (!node || !treeForEnrichment) return undefined;
+      scopeIndexForExports ??= buildScopeIndexFromSource(file, source, support, imports, { tree: treeForEnrichment });
+      const binding = findClosestScopeBinding(scopeIndexForExports, capture.text, node, support);
+      const definition = binding?.def;
+      if (!definition) return undefined;
+      return locals.find(
+        (local) =>
+          local.localName === binding.name &&
+          local.range.start.index === definition.start.index &&
+          local.range.end.index === definition.end.index,
+      );
     };
 
     const defaultDeclarationNameNode = (node: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined => {
@@ -1063,8 +1075,7 @@ export function collectLocalsAndExportsFromSource(
         continue;
       }
       if (map["cjs_module_value"]) {
-        const localName = map["cjs_module_value"].text;
-        const local = locals.find((def) => def.localName === localName);
+        const local = localVisibleAtCapture(map["cjs_module_value"]);
         if (local && !exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
           exports.push({
             type: "local",

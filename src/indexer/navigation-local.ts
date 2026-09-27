@@ -5,12 +5,15 @@ import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
-import { bindingCoversUse, scopeNodesFor } from "./scope-nodes.js";
+import { bindingCoversUse, fileScopeDefinitionCoversUse, scopeNodesFor } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
 import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
+import { phpNamedImportRole } from "./import-types.js";
+import { resolvePhpExplicitImport } from "./php-namespace-symbols.js";
 import { AMBIGUOUS_STAR_IMPORT_REASON } from "./ambiguous-resolution.js";
 import {
   decideStarImportCandidates,
+  effectiveExplicitOrLocalBinding,
   isExpandedStarBinding,
   resolveStarImportedDefinition,
   starImportPrecedence,
@@ -127,6 +130,35 @@ export function getOrBuildScopeIndex(
   return scopeIndex;
 }
 
+function effectivePythonModuleScopeBinding(binding: Binding, useStartIndex: number): Binding | null {
+  let importBinding: ImportBinding | undefined;
+  let importSource: Binding | undefined;
+  let localBinding: Binding | undefined;
+  let latestLocalStart = -1;
+  for (let candidate: Binding | undefined = binding; candidate; candidate = candidate.earlierSameScope) {
+    const localStart = candidate.def?.start.index;
+    if (localStart !== undefined && localStart <= useStartIndex && localStart > latestLocalStart) {
+      localBinding = candidate;
+      latestLocalStart = localStart;
+    }
+    if (!importBinding && candidate.import) {
+      importBinding = candidate.import;
+      importSource = candidate;
+    }
+  }
+  const imports = importBinding ? [importBinding] : [];
+  const effective = effectiveExplicitOrLocalBinding(
+    imports,
+    "python",
+    () => true,
+    localBinding?.def?.start.index,
+    useStartIndex,
+  );
+  if (effective?.kind === "local") return localBinding ?? null;
+  if (effective?.kind === "explicit") return importSource ?? null;
+  return null;
+}
+
 export function findClosestScopeBinding(
   scopeIndex: ScopeIndex,
   bindingName: string,
@@ -174,6 +206,12 @@ export function findClosestScopeBinding(
     let binding: Binding | undefined = currentScope.map.get(normalizedName);
     while (binding && !bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex)) {
       binding = binding.earlierSameScope;
+    }
+    if (support.id === "python" && currentScope.kind === "module" && binding) {
+      const effectiveBinding = effectivePythonModuleScopeBinding(binding, currentNode.startIndex);
+      if (effectiveBinding) return effectiveBinding;
+      currentScope = currentScope.parent;
+      continue;
     }
     if (binding) return binding;
     currentScope = currentScope.parent;
@@ -275,6 +313,12 @@ export function resolveNamedDefinition(
   const suppressCppUnqualifiedLocalExport = support.id === "cpp" && !name.includes("::");
   let hit: ResolvedExport | null = null;
   const precedence = starImportPrecedence(support.id);
+  const matchesExplicitBinding = (imp: ImportBinding): boolean => {
+    if (isExpandedStarBinding(imp, mod.imports)) return false;
+    if (imp.kind === "default") return support.normalizeIdentifier(imp.local) === normalizedName;
+    if (imp.kind === "named") return !imp.cNamespace && support.normalizeIdentifier(imp.local) === normalizedName;
+    return imp.kind === "namespace" && support.normalizeIdentifier(imp.localNS) === normalizedName;
+  };
   // Explicit-beats-star languages: an explicit import, then the compilation unit (Java and
   // Kotlin same-package peers), then a wildcard. resolveExport's compilation-unit hit must wait
   // until explicit imports have had a chance to win and must still beat star imports. In Rust a
@@ -291,16 +335,33 @@ export function resolveNamedDefinition(
       });
     }
   }
+  const effectiveBinding = effectiveExplicitOrLocalBinding(
+    mod.imports,
+    support.id,
+    matchesExplicitBinding,
+    hit?.kind === "resolved" ? hit.def.range.start.index : undefined,
+    referenceIndex,
+  );
+  const effectiveExplicitImport = effectiveBinding?.kind === "explicit" ? effectiveBinding.binding : undefined;
   if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {
-    const importedFrom =
-      support.id === "c" && fileIdentityKey(file) !== fileIdentityKey(hit.def.file) ? hit.def.file : undefined;
-    return okGoToResult(index, hit.def, {
-      via: { exportedName: name, ...(importedFrom ? { importedFrom } : {}) },
-      resolution: importedFrom ? "import" : "exact",
-      confidence: "high",
-    });
+    const sameFileCOrCppFallback =
+      (support.id === "c" || support.id === "cpp") &&
+      referenceIndex !== undefined &&
+      fileIdentityKey(file) === fileIdentityKey(hit.def.file);
+    if (sameFileCOrCppFallback && !fileScopeDefinitionCoversUse(support.id, hit.def.range, referenceIndex)) {
+      return null;
+    }
+    if (support.id !== "python" || effectiveBinding?.kind === "local") {
+      const importedFrom =
+        support.id === "c" && fileIdentityKey(file) !== fileIdentityKey(hit.def.file) ? hit.def.file : undefined;
+      return okGoToResult(index, hit.def, {
+        via: { exportedName: name, ...(importedFrom ? { importedFrom } : {}) },
+        resolution: importedFrom ? "import" : "exact",
+        confidence: "high",
+      });
+    }
   }
-  if (hit?.kind === "namespace") {
+  if (hit?.kind === "namespace" && effectiveBinding?.kind !== "explicit") {
     const targetMod = index.byFile.get(fileIdentityKey(hit.file));
     const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
     if (firstExport) {
@@ -330,6 +391,8 @@ export function resolveNamedDefinition(
     // Star expansion republishes the same names. Judging those copies as explicit
     // imports would hide a second star import behind the first expanded binding.
     if (isExpandedStarBinding(imp, mod.imports)) continue;
+    const matchesExplicit = matchesExplicitBinding(imp);
+    if (matchesExplicit && effectiveExplicitImport !== imp) continue;
 
     let matched: GoToResult | null = null;
     if (imp.kind === "default" && support.normalizeIdentifier(imp.local) === normalizedName) {
@@ -345,7 +408,25 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "named" && support.normalizeIdentifier(imp.local) === normalizedName) {
-      const result = resolveImported(index, imp, imp.imported, cNamespace ? { cNamespace } : undefined);
+      const phpRole = phpNamedImportRole(imp);
+      let result: SymbolDef | { namespace: FileId } | null;
+      if (phpRole) {
+        // This role-blind fallback cannot choose between PHP class, function, and constant aliases.
+        const hasPhpRoleCollision = mod.imports.some(
+          (candidate) =>
+            candidate !== imp &&
+            candidate.kind === "named" &&
+            phpNamedImportRole(candidate) !== undefined &&
+            support.normalizeIdentifier(candidate.local) === normalizedName,
+        );
+        if (hasPhpRoleCollision) {
+          result = null;
+        } else {
+          result = resolvePhpExplicitImport(index, imp, phpRole);
+        }
+      } else {
+        result = resolveImported(index, imp, imp.imported, cNamespace ? { cNamespace } : undefined);
+      }
       if (result && !("namespace" in result)) {
         matched = okGoToResult(index, result, {
           via: {
@@ -398,7 +479,13 @@ export function resolveNamedDefinition(
       }
     }
 
-    if (!matched) continue;
+    if (!matched) {
+      if (matchesExplicit && effectiveExplicitImport === imp) {
+        if (precedence !== "last-wins") return null;
+        lastWinsResult = null;
+      }
+      continue;
+    }
     const taken = acceptBinding(matched, imp);
     if (taken) return taken;
   }
