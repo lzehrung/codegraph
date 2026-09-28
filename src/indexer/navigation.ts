@@ -113,6 +113,7 @@ import {
 import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
 import {
   createLoadingParsedFileProvider,
+  phpImportTypeAtPosition,
   resolveBareName,
   settleNameResolution,
   type BareNameUse,
@@ -125,22 +126,6 @@ const MAX_NAME_RESOLUTION_LOADS = 4;
 const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
 const MAX_REFERENCE_NAMESPACE_DEPTH = 8;
 const MAX_REFERENCE_NAMESPACE_PATHS = 64;
-
-function phpImportTypeAtPosition(
-  imports: readonly ImportBinding[],
-  line: number,
-  column: number,
-): "class" | "function" | "const" | undefined {
-  for (const imp of imports) {
-    if (imp.kind !== "named" || imp.mechanism !== "php") continue;
-    if (
-      importBindingReferenceSites(imp).some((site) => rangeContains(site.range, { row: line + 1, column: column + 1 }))
-    ) {
-      return imp.phpImportType ?? "class";
-    }
-  }
-  return undefined;
-}
 
 export async function goToDefinition(
   index: ProjectIndex,

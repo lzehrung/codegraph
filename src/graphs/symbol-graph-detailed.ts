@@ -1,5 +1,10 @@
+import {
+  definitionWithoutDeferredSteps,
+  nameResolutionPreloadFiles,
+  phpImportTypeAtPosition,
+  resolveBareName,
+} from "../indexer/name-resolution.js";
 import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/file-prep.js";
-import { getCallArgumentCount } from "../languages/callable-arity.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
@@ -9,51 +14,25 @@ import {
   getNativeSyntaxTreeExecution,
   isNativeRequiredUnavailableError,
 } from "../native/tree-sitter-native.js";
-import { IMPLICIT_UNIT_LANGUAGES } from "../indexer/compilation-units.js";
+
 import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { cjsRequireValueBinding, resolveExport } from "../indexer/navigation-resolve.js";
 import {
-  typescriptCallableCandidatesInContainer,
   typescriptCollapsedOverloadTarget,
   typescriptCallableContainerKey,
   typescriptCallableRoleAt,
-  typescriptSelectOverloadCandidate,
   typescriptOverloadImplementationAcceptsCount,
 } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
-import { fallbackDefinitionVisibleAtUse, fileScopeDefinitionCoversUse, scopeNodesFor } from "../indexer/scope-nodes.js";
-import {
-  csharpAliasQualifiedLookupName,
-  innermostNamespaceImport,
-  resolveMemberAccessDefinition,
-} from "../indexer/navigation-goto.js";
-import {
-  cppUsingDeclarationTarget,
-  cppStarImportClosure,
-  resolveCppCallableBindings,
-  resolveCppCollidingBinding,
-  resolveCppExportedCallables,
-  resolveCppUsingDirectiveName,
-  resolveVisibleCppCallableName,
-} from "../indexer/navigation-cpp.js";
-import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
-import {
-  ensurePhpNamespaceSymbolIndex,
-  phpClassReferenceMatchesDefinition,
-  phpReferenceRoleMatchesKind,
-  resolveIndexedPhpClassReference,
-  resolvePhpExplicitImport,
-  resolvePhpSameScopeRoleDefinition,
-} from "../indexer/php-namespace-symbols.js";
-import {
-  csharpLookupName,
-  findClosestScopeBinding,
-  getOrBuildScopeIndex,
-  resolveNamedDefinition,
-} from "../indexer/navigation-local.js";
+
+import { innermostNamespaceImport, resolveMemberAccessDefinition } from "../indexer/navigation-goto.js";
+
+import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
+import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
+import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
-import { effectiveExplicitBinding, resolveStarImportedName } from "../indexer/star-import-precedence.js";
+
 import {
   SymbolKind,
   type ModuleIndex,
@@ -102,26 +81,6 @@ export type DetailedSymbolGraph = SymbolGraph & {
 };
 
 const CPP_CLASS_DECLARATION_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
-
-/** Syntax that joins a qualifier and a member name across the supported grammars. */
-const QUALIFIED_NAME_NODE_TYPES = new Set([
-  "scoped_type_identifier",
-  "scoped_identifier",
-  "qualified_name",
-  "qualified_identifier",
-  "qualified_type",
-  "nested_type_identifier",
-  "member_expression",
-  "field_access",
-  "navigation_expression",
-  "user_type",
-]);
-
-/** Whether `node` is a segment after the first in a qualified name such as `Host.Nested`. */
-function isQualifiedNameTail(node: SyntaxNodeLike): boolean {
-  const parent = node.parent;
-  return !!parent && QUALIFIED_NAME_NODE_TYPES.has(parent.type) && parent.namedChildren[0] !== node;
-}
 
 function symbolDefForBinding(moduleEntry: ModuleIndex, binding: Binding): SymbolDef | null {
   const bindingRange = binding.def;
@@ -208,6 +167,17 @@ function recordTypeScriptCallableAliases(
       if (id !== canonicalId) nodeAliases.set(id, canonicalId);
     }
   }
+}
+
+/** Whether a definition is one of its file's indexed symbols (not a parameter or block local). */
+function isIndexedSymbol(index: ProjectIndex, def: SymbolDef): boolean {
+  const module = index.byFile.get(fileIdentityKey(def.file));
+  return !!module?.locals.some(
+    (local) =>
+      local.localName === def.localName &&
+      local.range.start.index === def.range.start.index &&
+      local.range.end.index === def.range.end.index,
+  );
 }
 
 export async function buildSymbolGraphDetailed(
@@ -428,45 +398,6 @@ export async function buildSymbolGraphDetailed(
         }
       }
 
-      let importedTypeScriptCallableContexts: Map<string, ParsedFileContext> | undefined;
-      if (sup.id === "ts" || sup.id === "tsx") {
-        for (const target of aliasToTargetDef.values()) {
-          if (target.kind !== SymbolKind.Function) continue;
-          const targetKey = fileIdentityKey(target.file);
-          if (targetKey === fileIdentityKey(file) || importedTypeScriptCallableContexts?.has(targetKey)) continue;
-          const targetModule = index.byFile.get(targetKey);
-          if (
-            !targetModule?.locals.some(
-              (candidate) =>
-                candidate.kind === target.kind &&
-                candidate.localName === target.localName &&
-                candidate.range.start.index !== target.range.start.index,
-            )
-          ) {
-            continue;
-          }
-          const parsed = await loadParsedFile(target.file);
-          if (parsed && (parsed.sup.id === "ts" || parsed.sup.id === "tsx")) {
-            (importedTypeScriptCallableContexts ??= new Map()).set(targetKey, parsed);
-          }
-        }
-      }
-      const importedCallableAcceptsCount = (target: SymbolDef | null, node: SyntaxNodeLike): boolean => {
-        if (!target || target.kind !== SymbolKind.Function || node.parent?.type !== "call_expression") return true;
-        const targetKey = fileIdentityKey(target.file);
-        const parsed = importedTypeScriptCallableContexts?.get(targetKey);
-        const targetModule = index.byFile.get(targetKey);
-        if (!parsed || !targetModule) return true;
-        return typescriptOverloadImplementationAcceptsCount({
-          implementation: target,
-          locals: targetModule.locals,
-          tree: parsed.tree,
-          source: parsed.source,
-          languageId: parsed.sup.id,
-          argumentCount: getCallArgumentCount({ languageId: sup.id, source: src, call: node.parent }),
-        });
-      };
-
       const { functionNodes, classNodes, constStringOf } = collectDetailedDeclarations(
         tree.rootNode,
         sup,
@@ -523,246 +454,42 @@ export async function buildSymbolGraphDetailed(
 
       recordCallableDeclarationAliases(moduleEntry, sup.id, scopeIndex.all, nodeAliases);
       recordTypeScriptCallableAliases(moduleEntry, sup.id, tree, nodeAliases);
-      const cppParsedByFile = sup.id === "cpp" ? new Map<string, ParsedFileContext>() : null;
-      if (cppParsedByFile) {
-        cppParsedByFile.set(fileIdentityKey(file), { source: src, tree, sup });
-        const importedFiles = new Set<string>();
-        for (const imp of moduleEntry.imports) {
-          if (typeof imp.resolved === "string") importedFiles.add(imp.resolved);
-        }
-        for (const reachable of cppStarImportClosure(index, moduleEntry)) {
-          importedFiles.add(reachable.file);
-        }
-        for (const importedFile of importedFiles) {
-          const parsedImport = await loadParsedFile(importedFile);
-          if (parsedImport) cppParsedByFile.set(fileIdentityKey(importedFile), parsedImport);
-        }
+      // Files the shared name lookup reads synchronously for this module (imports, C++ includes).
+      const parsedForResolution = new Map<string, ParsedFileContext>([
+        [fileIdentityKey(file), { source: src, tree, sup }],
+      ]);
+      for (const preload of nameResolutionPreloadFiles(index, moduleEntry, sup.id)) {
+        const key = fileIdentityKey(preload);
+        if (parsedForResolution.has(key)) continue;
+        const parsedFile = await loadParsedFile(preload);
+        if (parsedFile) parsedForResolution.set(key, parsedFile);
       }
-      const loadCppParsedFile = (targetFile: string): ParsedFileContext | null =>
-        cppParsedByFile?.get(fileIdentityKey(targetFile)) ?? null;
-      const resolveCppAliasTarget = (target: SymbolDef | undefined, node: SyntaxNodeLike): SymbolDef | null => {
-        if (!target) return null;
-        if (sup.id !== "cpp" || target.kind !== SymbolKind.Function) return target;
-        return resolveCppExportedCallables(index, [target], node, src, loadCppParsedFile);
+      const resolutionFiles = {
+        get: (target: string): ParsedFileContext | null => parsedForResolution.get(fileIdentityKey(target)) ?? null,
       };
+      const moduleParsed: ParsedFileContext = { source: src, tree, sup };
       const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null => {
-        const lookupName = sup.id === "csharp" ? csharpLookupName(node, src, name) : name;
-        const csharpExportName =
-          sup.id === "csharp" ? csharpAliasQualifiedLookupName(node, src, lookupName, moduleEntry.imports) : lookupName;
-        // PHP class and function names occupy separate namespaces. Dispatch class syntax
-        // before the lexical function binding or generic same-file name lookup can win.
-        const phpClassReference = sup.id === "php" && inferPhpQualifiedReferenceImportType(node) === "class";
-        if (phpClassReference) {
-          const phpImport = findPhpImportAlias(moduleEntry.imports, name, "class");
-          if (phpImport) return resolvePhpExplicitImport(index, phpImport, "class");
-          const indexedClass = resolveIndexedPhpClassReference(index, src, tree, node, lookupName, moduleEntry.imports);
-          if (indexedClass) return indexedClass;
-        }
-        let binding = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
-        const usingTarget = sup.id === "cpp" && binding ? cppUsingDeclarationTarget(binding, src) : undefined;
-        if (usingTarget) {
-          const visible = resolveVisibleCppCallableName(index, moduleEntry, usingTarget, node, src, loadCppParsedFile);
-          if (visible !== undefined) return visible;
-          const target = resolveNamedDefinition(index, moduleEntry, file, sup, usingTarget);
-          return target?.status === "ok" ? target.definition : null;
-        }
-        if (sup.id === "cpp" && name.includes("::")) {
-          const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(name);
-          if (qualifiedBindings) return resolveCppCallableBindings(file, qualifiedBindings, node, src);
-          const visibleQualified = resolveVisibleCppCallableName(
+        const phpImportType =
+          sup.id === "php"
+            ? (phpImportTypeAtPosition(moduleEntry.imports, node.startPosition.row, node.startPosition.column) ??
+              inferPhpQualifiedReferenceImportType(node))
+            : undefined;
+        const definition = definitionWithoutDeferredSteps(
+          resolveBareName({
             index,
-            moduleEntry,
-            name,
-            node,
-            src,
-            loadCppParsedFile,
-          );
-          if (visibleQualified !== undefined) return visibleQualified;
-          const qualifiedDefinition = resolveNamedDefinition(index, moduleEntry, file, sup, name);
-          if (qualifiedDefinition?.status === "ok") return qualifiedDefinition.definition;
-        }
-        const cppCollision =
-          sup.id === "cpp" && binding ? resolveCppCollidingBinding(file, binding, node, src) : undefined;
-        if (cppCollision !== undefined) return cppCollision;
-        if (sup.id === "php" && !phpClassReference) {
-          const importType = inferPhpQualifiedReferenceImportType(node) ?? "const";
-          const phpImport = findPhpImportAlias(moduleEntry.imports, name, importType);
-          if (phpImport) return resolvePhpExplicitImport(index, phpImport, importType);
-        }
-        const call = node.parent;
-        if (isJsTsLanguage(sup.id) && binding?.kind === "function" && call?.type === "call_expression") {
-          const start = binding.def!.start.index ?? 0;
-          const end = binding.def!.end.index ?? start;
-          const candidates = typescriptCallableCandidatesInContainer(
-            binding.sameScopeFunctionBindings ?? [binding],
-            tree,
-            (candidate) => candidate.def!,
-            start,
-            end,
-          );
-          const selected = typescriptSelectOverloadCandidate({
-            group: candidates,
-            tree,
-            definitionOf: (candidate) => ({
-              file,
-              localName: candidate.name,
-              kind: SymbolKind.Function,
-              range: candidate.def!,
-            }),
-            declarationOf: (candidate) => candidate.node?.parent,
-            source: src,
-            languageId: sup.id,
-            argumentCount: getCallArgumentCount({
-              languageId: sup.id,
-              source: src,
-              call,
-            }),
-          });
-          if (!selected) return null;
-          binding = selected;
-        }
-        if (binding?.def) {
-          const local = moduleEntry.locals.find(
-            (candidate) =>
-              sup.normalizeIdentifier(candidate.localName) === binding.canonicalName &&
-              candidate.range.start.index === binding.def?.start.index &&
-              candidate.range.end.index === binding.def?.end.index,
-          );
-          if (
-            phpClassReference &&
-            (!local ||
-              !phpClassReferenceMatchesDefinition(index, src, tree, node, lookupName, moduleEntry.imports, local))
-          ) {
-            return null;
-          }
-          if (sup.id === "php" && local && !phpReferenceRoleMatchesKind(node, local.kind)) {
-            return resolvePhpSameScopeRoleDefinition(index, moduleEntry, src, tree, node, lookupName, binding);
-          }
-          return local ?? null;
-        }
-        if (sup.id === "cpp") {
-          const visible = resolveVisibleCppCallableName(index, moduleEntry, name, node, src, loadCppParsedFile);
-          if (visible !== undefined) return visible;
-          const directed = resolveCppUsingDirectiveName(index, moduleEntry, name, node, src, loadCppParsedFile);
-          if (directed !== undefined) return directed;
-        }
-        // Java and Kotlin: a same-package declaration beats a wildcard import, and only an explicit
-        // single-name import beats the package, matching navigation's precedence.
-        const jvm = sup.id === "java" || sup.id === "kotlin";
-        const explicitJvmImport =
-          jvm &&
-          !!effectiveExplicitBinding(
-            moduleEntry.imports,
-            sup.id,
-            (imp) => imp.kind === "named" && imp.local === lookupName,
-          );
-        // Only a same-file declaration whose scope the use can see hides the package. Members of the
-        // caller's own class or its bases were already tried by the implicit-receiver path.
-        const visibleSameFileDeclaration =
-          jvm &&
-          moduleEntry.locals.some(
-            (local) =>
-              local.localName === lookupName &&
-              fallbackDefinitionVisibleAtUse(scopeIndex, scopeNodesFor(sup.id), local.range.start.index, node),
-          );
-        if (jvm && !explicitJvmImport && !visibleSameFileDeclaration) {
-          const peer = resolveExport(index, file, lookupName);
-          if (peer?.kind === "resolved") return importedCallableAcceptsCount(peer.def, node) ? peer.def : null;
-        }
-        if (binding) {
-          const target = resolveCppAliasTarget(aliasToTargetDef.get(binding.name), node);
-          if (!importedCallableAcceptsCount(target, node)) return null;
-          return sup.id === "php" && target && !phpReferenceRoleMatchesKind(node, target.kind) ? null : target;
-        }
-
-        // C# namespace regions can reopen within one file. Without a lexical binding,
-        // resolve through the position-aware unit lookup, not file-wide local names.
-        const localCandidates =
-          sup.id === "csharp"
-            ? []
-            : moduleEntry.locals.filter(
-                (local) => sup.normalizeIdentifier(local.localName) === sup.normalizeIdentifier(name),
-              );
-        if (localCandidates.length === 1) {
-          const only = localCandidates[0]!;
-          if (
-            (sup.id === "c" || sup.id === "cpp") &&
-            !fileScopeDefinitionCoversUse(sup.id, only.range, node.startIndex)
-          ) {
-            return null;
-          }
-          // A lexical lookup just refused this name, so a file-wide candidate may only bind when
-          // the use can see the candidate's declaring scope: a sibling function's local or a
-          // namespace member is not visible bare. Members stay reachable through inheritance
-          // (except Python, whose class bodies are not visible from methods), and a later segment
-          // of a qualified name (`Host.Nested`) is reached through its qualifier.
-          if (
-            (sup.id === "python" || !only.isMember) &&
-            !isQualifiedNameTail(node) &&
-            !fallbackDefinitionVisibleAtUse(scopeIndex, scopeNodesFor(sup.id), only.range.start.index, node)
-          ) {
-            return null;
-          }
-          if (
-            phpClassReference &&
-            !phpClassReferenceMatchesDefinition(index, src, tree, node, lookupName, moduleEntry.imports, only)
-          ) {
-            return null;
-          }
-          if (sup.id === "php" && !phpReferenceRoleMatchesKind(node, only.kind)) return null;
-          return sup.id === "cpp" && only.kind === SymbolKind.Function
-            ? resolveCppExportedCallables(index, [only], node, src, loadCppParsedFile)
-            : only;
-        }
-        const aliasTarget = resolveCppAliasTarget(aliasToTargetDef.get(lookupName), node);
-        if (aliasTarget && (sup.id !== "php" || phpReferenceRoleMatchesKind(node, aliasTarget.kind))) {
-          return importedCallableAcceptsCount(aliasTarget, node) ? aliasTarget : null;
-        }
-        if (jvm) {
-          const star = resolveStarImportedName(index, moduleEntry, sup.id, lookupName);
-          if (star.status === "resolved") {
-            return importedCallableAcceptsCount(star.definition, node) ? star.definition : null;
-          }
-          if (star.status === "ambiguous") return null;
-        }
-        // A bare name owned by no scope binding or local declaration can still name a
-        // sibling declaration of the file's implicit compilation unit (Go/JVM package,
-        // C# namespace, Swift module). Resolve it through the same proven peer relation
-        // navigation uses rather than a project-wide name scan, so the graph and
-        // navigation agree on the target. The C# use site is pinned to its namespace
-        // region by `referenceIndex`; every other unit language reads its whole unit.
-        if (localCandidates.length === 0 && IMPLICIT_UNIT_LANGUAGES[sup.id]) {
-          const resolved = resolveExport(index, file, csharpExportName, {
-            ...(sup.id === "csharp" ? { referenceIndex: node.startIndex } : {}),
-          });
-          if (resolved?.kind === "resolved") return resolved.def;
-        }
-        if (phpClassReference) {
-          const imported = resolveNamedDefinition(
-            index,
-            moduleEntry,
+            mod: moduleEntry,
             file,
-            sup,
-            lookupName,
-            undefined,
-            node.startIndex,
-          );
-          if (
-            imported?.status === "ok" &&
-            phpClassReferenceMatchesDefinition(
-              index,
-              src,
-              tree,
-              node,
-              lookupName,
-              moduleEntry.imports,
-              imported.definition,
-            )
-          ) {
-            return imported.definition;
-          }
-        }
-        return null;
+            parsed: moduleParsed,
+            scopeIndex,
+            files: resolutionFiles,
+            node,
+            name,
+            ...(phpImportType ? { phpImportType } : {}),
+          }),
+        );
+        // The graph has nodes only for indexed symbols; a parameter or function-local binding
+        // that navigation resolves has no node, so it gets no edge.
+        return definition && isIndexedSymbol(index, definition) ? definition : null;
       };
 
       const edgePassContext = {
@@ -786,7 +513,7 @@ export async function buildSymbolGraphDetailed(
         resolveExportFrom,
         resolveMemberChainTarget,
         cppDeclaresClass: (def: SymbolDef): boolean => {
-          const parsed = cppParsedByFile?.get(fileIdentityKey(def.file));
+          const parsed = parsedForResolution.get(fileIdentityKey(def.file));
           if (!parsed) return false;
           const start = def.range.start.index ?? 0;
           const nameNode = parsed.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start);

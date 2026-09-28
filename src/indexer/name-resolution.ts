@@ -22,7 +22,9 @@ import {
 } from "./ambiguous-resolution.js";
 import { cppBindingCallableShape } from "./cpp-callables.js";
 import {
+  cppStarImportClosure,
   cppUsingDeclarationTarget,
+  resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppUsingDirectiveName,
   resolveVisibleCppCallableName,
@@ -30,6 +32,7 @@ import {
 import { resolveCppOutOfLineImplicitMember, resolveImplicitSelfMember } from "./navigation-goto.js";
 import {
   csharpLookupName,
+  definitionForBinding,
   findClosestBinding,
   findClosestScopeBinding,
   laterLocalShadowsUse,
@@ -49,7 +52,34 @@ import {
 import type { ScopeIndex } from "./scope.js";
 import { scopeNodesFor } from "./scope-nodes.js";
 import { typescriptOverloadImplementationAcceptsCount } from "./ts-callables.js";
-import { type GoToResult, type ModuleIndex, type ProjectIndex, SymbolKind } from "./types.js";
+import {
+  type GoToResult,
+  type ImportBinding,
+  type ModuleIndex,
+  type ProjectIndex,
+  type SymbolDef,
+  SymbolKind,
+} from "./types.js";
+import { importBindingReferenceSites } from "./navigation-references.js";
+import { resolveImported } from "./navigation-resolve.js";
+import { rangeContains } from "./reference-context.js";
+
+/** PHP import role (class, function, or const) of the import that covers a 0-based position. */
+export function phpImportTypeAtPosition(
+  imports: readonly ImportBinding[],
+  line: number,
+  column: number,
+): "class" | "function" | "const" | undefined {
+  for (const imp of imports) {
+    if (imp.kind !== "named" || imp.mechanism !== "php") continue;
+    if (
+      importBindingReferenceSites(imp).some((site) => rangeContains(site.range, { row: line + 1, column: column + 1 }))
+    ) {
+      return imp.phpImportType ?? "class";
+    }
+  }
+  return undefined;
+}
 
 /** Synchronous access to parsed files. A miss is recorded so an async caller can load and retry. */
 export type ParsedFileProvider = {
@@ -144,6 +174,22 @@ export function resolveBareName(use: BareNameUse): NameResolution | null {
   if (sup.id === "rust" && rustTokenTreeNameFollowsSeparator(node)) {
     return { status: "not_found", reason: "No resolvable receiver inside a Rust macro token tree" };
   }
+  // A C++ qualified name (`ns::f`, `Box::make`) names a namespace or static member directly.
+  if (sup.id === "cpp" && name.includes("::")) {
+    const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(name);
+    if (qualifiedBindings) {
+      const selected = resolveCppCallableBindings(file, qualifiedBindings, node, source);
+      if (!selected) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
+      return okGoToResult(index, selected, { resolution: "exact", confidence: "high" });
+    }
+    const visibleQualified = resolveVisibleCppCallableName(index, mod, name, node, source, loadParsed);
+    if (visibleQualified !== undefined) {
+      if (!visibleQualified) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
+      return okGoToResult(index, visibleQualified, { resolution: "exact", confidence: "high" });
+    }
+    const qualifiedDefinition = resolveNamedDefinition(index, mod, file, sup, name);
+    if (qualifiedDefinition) return qualifiedDefinition;
+  }
   const lookupName = sup.id === "csharp" ? csharpLookupName(node, source, name) : name;
   const csharpExportName =
     sup.id === "csharp" ? csharpAliasQualifiedLookupName(node, source, lookupName, mod.imports) : lookupName;
@@ -206,7 +252,7 @@ export function resolveBareName(use: BareNameUse): NameResolution | null {
       if (!cppCollision) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
       return okGoToResult(index, cppCollision, { resolution: "exact", confidence: "high" });
     }
-    const local = findClosestBinding(scopeIndex, file, lookupName, node, sup, source, tree);
+    const local = closestBinding ? definitionForBinding(closestBinding, file, node, sup, source, tree) : null;
     if (
       sup.id === "swift" &&
       local &&
@@ -324,7 +370,11 @@ export function resolveBareName(use: BareNameUse): NameResolution | null {
         const argumentCount = getCallArgumentCount({ languageId: sup.id, source, call: node.parent });
         const target = resolvedName.definition;
         const targetModule = index.byFile.get(fileIdentityKey(target.file));
-        const targetContext = argumentCount !== null && targetModule ? files.get(target.file) : null;
+        // Only an overload set needs the target's syntax; a single implementation accepts any count.
+        const targetContext =
+          argumentCount !== null && targetModule && hasSameNameSiblings(targetModule, target)
+            ? files.get(target.file)
+            : null;
         if (
           targetContext &&
           targetModule &&
@@ -430,4 +480,52 @@ export async function settleNameResolution(
     current = fallback;
   }
   return current;
+}
+
+/**
+ * Files a synchronous consumer must load before resolving names in `mod`: the file itself, its
+ * resolved imports (TS/TSX overload checks read import targets), and for C++ the transitive
+ * include closure. A lookup that reads any other file finds it missing and skips that check.
+ */
+export function nameResolutionPreloadFiles(index: ProjectIndex, mod: ModuleIndex, languageId: string): FileId[] {
+  const files = new Map<string, FileId>([[fileIdentityKey(mod.file), mod.file]]);
+  if (languageId !== "cpp" && languageId !== "ts" && languageId !== "tsx") return [...files.values()];
+  for (const imp of mod.imports) {
+    if (languageId === "cpp" && typeof imp.resolved === "string")
+      files.set(fileIdentityKey(imp.resolved), imp.resolved);
+    // A re-exported overload set lives in another file than the module the import names.
+    if (imp.kind === "named" || imp.kind === "default") {
+      const target = resolveImported(index, imp, imp.kind === "default" ? "default" : imp.imported);
+      const targetModule =
+        target && !("namespace" in target) ? index.byFile.get(fileIdentityKey(target.file)) : undefined;
+      if (target && !("namespace" in target) && targetModule && hasSameNameSiblings(targetModule, target)) {
+        files.set(fileIdentityKey(target.file), target.file);
+      }
+    }
+  }
+  if (languageId === "cpp") {
+    for (const reachable of cppStarImportClosure(index, mod))
+      files.set(fileIdentityKey(reachable.file), reachable.file);
+  }
+  return [...files.values()];
+}
+
+/**
+ * The definition a resolution names without running deferred member steps: a deferred step
+ * contributes its fallback. For consumers that settle member lookups separately.
+ */
+export function definitionWithoutDeferredSteps(resolution: NameResolution | null): SymbolDef | null {
+  let current = resolution;
+  while (current?.status === "deferred") current = current.fallback;
+  return current?.status === "ok" ? current.definition : null;
+}
+
+/** Whether a TypeScript function shares its name with another function in its file (an overload set). */
+function hasSameNameSiblings(module: ModuleIndex, def: SymbolDef): boolean {
+  return module.locals.some(
+    (candidate) =>
+      candidate.kind === def.kind &&
+      candidate.localName === def.localName &&
+      candidate.range.start.index !== def.range.start.index,
+  );
 }
