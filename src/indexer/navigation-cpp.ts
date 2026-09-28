@@ -319,7 +319,7 @@ const cppUsingDirectivesByTree = new WeakMap<SyntaxTreeLike, CachedCppUsingDirec
 
 const cppStarImportClosureCache = new WeakMap<ProjectIndex, Map<string, readonly ModuleIndex[]>>();
 
-function cppStarImportClosure(index: ProjectIndex, sourceModule: ModuleIndex): readonly ModuleIndex[] {
+export function cppStarImportClosure(index: ProjectIndex, sourceModule: ModuleIndex): readonly ModuleIndex[] {
   let byModule = cppStarImportClosureCache.get(index);
   if (!byModule) {
     byModule = new Map();

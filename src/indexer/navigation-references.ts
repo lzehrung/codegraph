@@ -666,6 +666,14 @@ export async function collectVerifiedNamedNodeReferences(
       pushVerified({ range });
       continue;
     }
+    if (parsed.sup.id === "c" && expectedDef.kind === SymbolKind.Function) {
+      let enclosing = node.parent;
+      while (enclosing && enclosing.type !== "field_declaration" && enclosing.type !== "translation_unit") {
+        enclosing = enclosing.parent;
+      }
+      // A C struct function-pointer field is not a declaration or use of a free function.
+      if (enclosing?.type === "field_declaration") continue;
+    }
     const exportFrom = exportFromIdentifier(index, fileId, range, parsed);
     if (exportFrom?.entry) {
       const reexported = resolveExport(index, exportFrom.entry.fromModule, exportFrom.entry.sourceSpecifier);

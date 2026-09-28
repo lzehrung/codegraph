@@ -3,7 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { buildProjectIndex, findReferences, goToDefinition, resolveExport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+  resolveExport,
+  type SymbolGraph,
+} from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import type { ModuleIndex } from "../src/indexer/types.js";
 import { testGoToDefinition } from "./test-utils.js";
@@ -16,6 +23,13 @@ function tokenColumn(line: string, token: string): number {
 
 function localExportNames(mod: ModuleIndex | undefined): string[] {
   return (mod?.exports ?? []).flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []));
+}
+
+function callTargetNamesAtLine(graph: SymbolGraph, file: string, line: number): string[] {
+  return graph.edges
+    .filter((edge) => edge.label === "calls" && edge.site?.file === file && edge.site.range.start.line === line)
+    .map((edge) => graph.nodes.get(edge.to)?.name)
+    .filter((name): name is string => name !== undefined);
 }
 
 async function withTempRoot(prefix: string, run: (root: string) => Promise<void>): Promise<void> {
@@ -117,6 +131,12 @@ describe("declaration visibility module exports", () => {
         "not_found",
       );
       await testGoToDefinition(index, consumerFile, 10, tokenColumn(consumerSuper, "super_vis"), visFile, 4);
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(callTargetNamesAtLine(graph, consumerFile, 7)).toContain("exported");
+      expect(callTargetNamesAtLine(graph, consumerFile, 8)).toEqual([]);
+      if (hiddenRefs.status === "ok") {
+        expect(hiddenRefs.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      }
     });
   });
 
@@ -263,6 +283,13 @@ describe("declaration visibility module exports", () => {
         undefined,
         "not_found",
       );
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(callTargetNamesAtLine(graph, consumerFile, 12)).toContain("in_path_vis");
+      expect(callTargetNamesAtLine(graph, consumerFile, 10)).toEqual([]);
+      expect(callTargetNamesAtLine(graph, consumerFile, 11)).toEqual([]);
+      if (selfRefs.status === "ok") {
+        expect(selfRefs.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      }
     });
   });
 
@@ -353,6 +380,18 @@ describe("declaration visibility module exports", () => {
         undefined,
         "not_found",
       );
+      const innerSelfRefs = await findReferences(index, {
+        file: visFile,
+        line: 5,
+        column: tokenColumn(innerSelfDef, "inner_self"),
+      });
+      expect(innerSelfRefs.status).toBe("ok");
+      if (innerSelfRefs.status === "ok") {
+        expect(innerSelfRefs.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(callTargetNamesAtLine(graph, consumerFile, 11)).toContain("inner_super");
+      expect(callTargetNamesAtLine(graph, consumerFile, 12)).toEqual([]);
     });
   });
 
@@ -433,6 +472,12 @@ describe("declaration visibility module exports", () => {
         undefined,
         "not_found",
       );
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(callTargetNamesAtLine(graph, consumerFile, 6)).toContain("visible");
+      expect(callTargetNamesAtLine(graph, consumerFile, 7)).toEqual([]);
+      if (hiddenRefs.status === "ok") {
+        expect(hiddenRefs.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      }
     });
   });
 
@@ -600,6 +645,13 @@ describe("declaration visibility module exports", () => {
         undefined,
         "not_found",
       );
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(callTargetNamesAtLine(graph, consumerFile, 5)).toContain("visible");
+      expect(callTargetNamesAtLine(graph, consumerFile, 6)).toEqual([]);
+      expect(callTargetNamesAtLine(graph, consumerFile, 7)).toEqual([]);
+      if (hiddenRefs.status === "ok") {
+        expect(hiddenRefs.references.some((reference) => reference.file === consumerFile)).toBe(false);
+      }
     });
   });
 

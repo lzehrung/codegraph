@@ -66,6 +66,7 @@ export function collectDetailedDeclarations(
   const propertyIdentifierTypes = memberPropertyIdentifierTypes(sup);
   const functionNodeTypes = new Set([
     "function_declaration",
+    "generator_function_declaration",
     "function_definition",
     "method_declaration",
     "method_definition",
@@ -87,6 +88,7 @@ export function collectDetailedDeclarations(
     "record_declaration",
     "abstract_class_declaration",
     "class_definition",
+    "object_declaration",
     "class",
     "interface_declaration",
     "module",
@@ -136,7 +138,12 @@ export function collectDetailedDeclarations(
         const def = findDefinition(name, nameNode!);
         if (def) functionNodes.push({ name, node, def });
       }
-    } else if (typeNodeTypes.has(node.type)) {
+    } else if (
+      typeNodeTypes.has(node.type) ||
+      ((sup.id === "ts" || sup.id === "tsx") &&
+        node.type === "type_alias_declaration" &&
+        node.childForFieldName("value")?.type === "object_type")
+    ) {
       const nameNode = node.childForFieldName("name");
       const name = nameNode ? sliceText(nameNode, source) : undefined;
       if (name) {

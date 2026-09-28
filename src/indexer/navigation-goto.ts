@@ -22,7 +22,7 @@ import {
 import { cppCallableShapeForNode } from "./cpp-callables.js";
 import {
   typescriptCallableContainerKey,
-  typescriptCollapsedOverloadCandidates,
+  typescriptMergedNamespaceContainers,
   typescriptSelectOverloadCandidate,
 } from "./ts-callables.js";
 import {
@@ -30,6 +30,7 @@ import {
   isExpandedStarBinding,
   resolveStarImportedName,
   resolveStarImportedNamespace,
+  starImportPrecedence,
 } from "./star-import-precedence.js";
 import {
   classifyReceiver,
@@ -55,6 +56,7 @@ import {
   type ReceiverMemberScope,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
+  CALLABLE_DECLARATION_NODE_TYPES,
   getCallableArity,
   getCallArgumentCount,
   memberLookupBinding,
@@ -610,6 +612,9 @@ export async function resolveMemberAccessDefinition(params: {
           const container = asMemberContainer(index, result);
           return { kind: "resolved", def: container ?? result };
         }
+        // Last-wins precedence (Python): the explicit import rebound the name, and an
+        // unresolved winner stays unresolved instead of falling back to an older star import.
+        if (starImportPrecedence(sup.id) === "last-wins") return null;
       }
 
       if (sup.id === "csharp") {
@@ -824,6 +829,32 @@ export async function resolveMemberAccessDefinition(params: {
       });
     }
 
+    if (sup.id === "cpp" && memberNode.type === "qualified_identifier") {
+      const qualified = cppQualifiedNameSegments(memberNode, source);
+      const ownerPath = qualified.slice(0, -1);
+      const owner = await resolveCppQualifiedMemberContainer(index, mod, ownerPath);
+      if (owner) {
+        const knownArgumentCount =
+          getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined;
+        // Inside a member function, `Owner::member()` can name an instance member of the class or a
+        // base through the implicit `this`; elsewhere only static members qualify.
+        const memberScope = cppCallHasImplicitThis(memberNode, source, sup) ? "any" : "static";
+        const memberDef = await resolveKeywordReceiverMember(
+          index,
+          mod,
+          node,
+          member,
+          memberScope,
+          false,
+          knownArgumentCount,
+          owner,
+        );
+        return memberDef
+          ? okGoToResult(index, memberDef, { resolution: "member-access", confidence: "high" })
+          : { status: "not_found", reason: "No matching C++ static member definition" };
+      }
+    }
+
     const receiver = await resolveReceiverDefinition(index, obj, source, sup, resolveExpression, mod);
 
     if (receiver) {
@@ -856,7 +887,22 @@ export async function resolveMemberAccessDefinition(params: {
           const knownArgumentCount =
             getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined;
           let memberDef: SymbolDef | undefined;
-          if (receiver.runtimeTypeOnly || targetContext.sup.id === "java") {
+          if (
+            (targetContext.sup.id === "ts" || targetContext.sup.id === "tsx") &&
+            (container.type === "internal_module" || container.type === "module")
+          ) {
+            memberDef = await findReceiverMemberDefinition(
+              index,
+              targetModule.locals,
+              member,
+              objDef,
+              container,
+              targetContext,
+              normalizeIdentifier,
+              receiver.memberScope,
+              knownArgumentCount,
+            );
+          } else if (receiver.runtimeTypeOnly || targetContext.sup.id === "java") {
             const candidates = findDirectLocalsWithinNode(
               targetModule.locals,
               member,
@@ -879,10 +925,10 @@ export async function resolveMemberAccessDefinition(params: {
               knownArgumentCount,
             );
           }
-
           if (
             memberDef &&
-            (isGoExportedMemberName(sup.id, member) ||
+            (sup.id === "cpp" ||
+              isGoExportedMemberName(sup.id, member) ||
               getCompilationUnitPeers(index, mod.file).files.has(memberDef.file)) &&
             !crossFilePeerMemberHidden(mod.file, memberDef, targetContext)
           ) {
@@ -1556,6 +1602,45 @@ export async function resolveImplicitSelfMember(
   );
 }
 
+const CPP_CLASS_SPECIFIER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
+
+/**
+ * Whether a C++ use sits in a member function (an out-of-line `Owner::f` definition or a function
+ * defined in a class body), where `Owner::member()` has an implicit `this` for the enclosing class
+ * and its bases.
+ */
+export function cppCallHasImplicitThis(node: SyntaxNodeLike, source: string, sup: LanguageSupport): boolean {
+  if (cppOutOfLineOwnerPath(node, source, sup)) return true;
+  for (let current = node.parent; current; current = current.parent) {
+    if (CPP_CLASS_SPECIFIER_TYPES.has(current.type)) return true;
+  }
+  return false;
+}
+
+/** Proven unqualified member call from an out-of-line C++ method definition. */
+export async function resolveCppOutOfLineImplicitMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  name: string,
+  source: string,
+  sup: LanguageSupport,
+): Promise<SymbolDef | null | undefined> {
+  if (node.parent?.type !== "call_expression" || node.parent.childForFieldName("function")?.id !== node.id) {
+    return undefined;
+  }
+  const ownerPath = cppOutOfLineOwnerPath(node, source, sup);
+  const owner = ownerPath ? await resolveCppQualifiedMemberContainer(index, mod, ownerPath) : null;
+  if (!owner) return undefined;
+  const argumentCount = getCallArgumentCount({ languageId: "cpp", source, call: node.parent }) ?? undefined;
+  const matching = await resolveKeywordReceiverMember(index, mod, node, name, "any", false, argumentCount, owner);
+  if (matching || argumentCount === undefined) return matching;
+  // A class member hides a same-named global even when this call cannot accept its arity. The
+  // only member is still the call's target for navigation; an ambiguous overload set is not.
+  const unmatched = await resolveKeywordReceiverMember(index, mod, node, name, "any", false, undefined, owner);
+  return unmatched ?? undefined;
+}
+
 export { supportsReceiverCallEdges, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
 
 type ResolvedReceiverDefinition = {
@@ -1817,6 +1902,30 @@ function typescriptMergedInterfaceMemberCandidates(
   return matches;
 }
 
+/** Same-name namespace reopenings, excluding members of a decoy namespace or nested owner. */
+export function findTypeScriptNamespaceMemberCandidates(
+  locals: readonly SymbolDef[],
+  member: string,
+  receiverDef: SymbolDef,
+  context: ParsedFileContext,
+): SymbolDef[] {
+  if (!isJsTsLanguage(context.sup.id)) return [];
+  const containers = typescriptMergedNamespaceContainers(context.tree, locals, receiverDef);
+  const matches: SymbolDef[] = [];
+  for (const container of containers) {
+    for (const candidate of findDirectLocalsWithinNode(
+      locals,
+      member,
+      container,
+      context,
+      context.sup.normalizeIdentifier,
+    )) {
+      if (!matches.includes(candidate)) matches.push(candidate);
+    }
+  }
+  return matches;
+}
+
 async function findReceiverMemberDefinition(
   index: ProjectIndex,
   locals: readonly SymbolDef[],
@@ -1832,6 +1941,13 @@ async function findReceiverMemberDefinition(
     memberScope === "any"
       ? undefined
       : (local: SymbolDef) => matchesReceiverMemberScope(local, memberScope, targetContext, container);
+  if (
+    (targetContext.sup.id === "ts" || targetContext.sup.id === "tsx") &&
+    (container.type === "internal_module" || container.type === "module")
+  ) {
+    const candidates = findTypeScriptNamespaceMemberCandidates(locals, member, receiverDef, targetContext);
+    return await selectReceiverMemberCandidates(index, candidates, knownArgumentCount);
+  }
   const allReceiverMatches = typescriptMergedInterfaceMemberCandidates(
     locals,
     member,
@@ -1939,13 +2055,15 @@ async function getCallableArityForDef(index: ProjectIndex, def: SymbolDef): Prom
   const container = nearestMemberContainer(nameNode);
   let current: SyntaxNodeLike | null = nameNode;
   while (current && current !== container) {
-    const range = getCallableArity({
-      languageId: context.sup.id,
-      source: context.source,
-      declaration: current,
-      binding: memberLookupBinding(context.sup.id),
-    });
-    if (range) return range;
+    if (CALLABLE_DECLARATION_NODE_TYPES[current.type]) {
+      const range = getCallableArity({
+        languageId: context.sup.id,
+        source: context.source,
+        declaration: current,
+        binding: memberLookupBinding(context.sup.id),
+      });
+      if (range) return range;
+    }
     current = current.parent;
   }
   return undefined;
@@ -1992,29 +2110,26 @@ async function selectReceiverMemberCandidates(
   knownArgumentCount?: number,
   allowUniqueArityMismatch = true,
 ): Promise<SymbolDef | undefined> {
-  let overloadCandidates = candidates;
   if (candidates.length > 1) {
     const file = candidates[0]?.file;
     if (file && candidates.every((candidate) => candidate.file === file)) {
       const context = await ensureParsedContext(file, undefined, index.languageExtensions);
       if (isJsTsLanguage(context.sup.id)) {
-        overloadCandidates = typescriptCollapsedOverloadCandidates(candidates, context.tree, (candidate) => candidate);
-        if (overloadCandidates.length === 1) {
-          return typescriptSelectOverloadCandidate({
-            group: candidates,
-            tree: context.tree,
-            definitionOf: (candidate) => candidate,
-            declarationOf: (candidate) => nameNodeForDef(context, candidate)?.parent,
-            source: context.source,
-            languageId: context.sup.id,
-            argumentCount: knownArgumentCount ?? null,
-          });
-        }
+        // Signature-only overloads still need arity selection before generic member deduplication.
+        return typescriptSelectOverloadCandidate({
+          group: candidates,
+          tree: context.tree,
+          definitionOf: (candidate) => candidate,
+          declarationOf: (candidate) => nameNodeForDef(context, candidate)?.parent,
+          source: context.source,
+          languageId: context.sup.id,
+          argumentCount: knownArgumentCount ?? null,
+        });
       }
     }
   }
 
-  const unique = uniqueReceiverMemberCandidates(overloadCandidates);
+  const unique = uniqueReceiverMemberCandidates(candidates);
   if (unique.length === 1 && (allowUniqueArityMismatch || knownArgumentCount === undefined)) return unique[0];
   if (knownArgumentCount === undefined) return undefined;
   const matches: SymbolDef[] = [];
@@ -2119,9 +2234,14 @@ function findDirectLocalsWithinNode(
         current.type === "class_body" &&
         !!current.parent &&
         TRANSPARENT_MEMBER_CONTAINER_TYPES[current.parent.type] === true;
+      const definingDeclarator =
+        current.type === "function_definition" ? current.childForFieldName("declarator") : null;
+      const isOwnFunctionDeclaration =
+        !!definingDeclarator && definingDeclarator.startIndex <= startIndex && definingDeclarator.endIndex >= endIndex;
       if (
         !isDeclarationParent &&
         !isDirectBody &&
+        !isOwnFunctionDeclaration &&
         !isTransparentBody &&
         ((current.type === "class_body" && current.parent !== container) ||
           NESTED_MEMBER_LOCAL_CONTAINERS.has(current.type))

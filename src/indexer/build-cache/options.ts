@@ -124,8 +124,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 67 resolves a C# `using` alias to a type declared in one of several files that share
  * its namespace, including partial-type owners, and leaves an ambiguous type unresolved.
  * The alias's namespace qualifies the bound type, so a same-named peer in another namespace is not chosen.
+ * Epoch 68 makes go-to-definition and detailed call edges agree: Swift `import Module` bindings
+ * keep their source range, the graph applies navigation's visibility, arity, star-import, and
+ * namespace-member rules, and Rust macro arguments produce call edges.
  */
-export const CORE_ALGORITHM_EPOCH = 67;
+export const CORE_ALGORITHM_EPOCH = 68;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

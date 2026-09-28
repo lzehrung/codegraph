@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { isSymlinkUnavailable } from "../helpers/filesystem.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
+import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { buildProjectIndex, collectGraph, findReferences, goToDefinition, resolveExport } from "../../src/index.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
@@ -354,6 +355,51 @@ describe("Rust macro_rules! structure", () => {
     });
 
     expect(chunks).toContainEqual(expect.objectContaining({ type: "macro", name: "make_answer" }));
+  });
+
+  it("resolves a macro invocation to its macro_rules! declaration without a graph call edge", async () => {
+    const source =
+      "macro_rules! make_answer {\n    () => { 42 };\n}\n\npub fn invoke() -> i32 {\n    make_answer!()\n}\n";
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-macro-invoke-"));
+    try {
+      await writeFile(path.join(root, "lib.rs"), source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // A macro invocation names the macro, not a function call: goto answers with the
+      // macro_rules! declaration, and the detailed graph records no calls edge for it.
+      const goto = await goToDefinition(index, {
+        file: path.join(root, "lib.rs"),
+        line: 6,
+        column: source.split("\n")[5]!.indexOf("make_answer") + 1,
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") {
+        expect(goto.definition.localName).toBe("make_answer");
+        expect(goto.definition.range.start.line).toBe(1);
+      }
+
+      const references = await findReferences(index, {
+        file: path.join(root, "lib.rs"),
+        line: 1,
+        column: source.split("\n")[0]!.indexOf("make_answer") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(path.join(root, "lib.rs")) &&
+              reference.range.start.line === 6,
+          ),
+        ).toBe(true);
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const invoke = [...graph.nodes.values()].find((node) => node.name === "invoke");
+      expect(invoke).toBeDefined();
+      expect(graph.edges.filter((edge) => edge.label === "calls" && edge.from === invoke?.id)).toHaveLength(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

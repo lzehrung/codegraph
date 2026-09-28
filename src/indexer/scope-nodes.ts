@@ -18,7 +18,7 @@ import type { SyntaxNodeLike } from "../languages/types.js";
 
 import type { Range } from "../types.js";
 import { SymbolKind } from "./types.js";
-import type { Scope } from "./scope-types.js";
+import type { Scope, ScopeIndex } from "./scope-types.js";
 
 export type ScopeNodeRow = {
   /** Ancestor node types that mark an identifier as a parameter rather than a declaration. */
@@ -546,6 +546,42 @@ export function laterLocalBlocksOuterUse(
       declarationIndex > useStartIndex
     )
       return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a file-wide same-name fallback may bind the declaration starting at `defStartIndex`
+ * for a use the lexical lookup refused: the declaring scope must sit on the use's lexical
+ * chain, and a class body only binds uses inside itself (Python class scopes are not
+ * closures for nested runtime scopes). Declarations outside the scope model stay accepted.
+ */
+export function fallbackDefinitionVisibleAtUse(
+  scopeIndex: ScopeIndex,
+  row: ScopeNodeRow,
+  defStartIndex: number | undefined,
+  use: SyntaxNodeLike,
+): boolean {
+  if (defStartIndex === undefined) return true;
+  let declared: Scope | undefined;
+  for (const scope of scopeIndex.allScopes) {
+    if (scope.node.startIndex <= defStartIndex && defStartIndex < scope.node.endIndex) {
+      if (!declared || scope.node.startIndex > declared.node.startIndex) declared = scope;
+    }
+  }
+  if (!declared) return true;
+  let current: Scope | undefined;
+  for (const scope of scopeIndex.allScopes) {
+    if (
+      use.startIndex >= scope.node.startIndex &&
+      use.endIndex <= scope.node.endIndex &&
+      (!current || (scope.node.startIndex >= current.node.startIndex && scope.node.endIndex <= current.node.endIndex))
+    )
+      current = scope;
+  }
+  while (current) {
+    if (current === declared) return scopeAllowsUse(row, declared, use);
+    current = current.parent;
   }
   return false;
 }

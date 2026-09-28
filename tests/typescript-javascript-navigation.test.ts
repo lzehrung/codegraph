@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildSymbolGraphDetailed,
   buildSymbolGraph,
+  buildProjectIndex,
   buildProjectIndexIncremental,
   findReferences,
   goToDefinition,
@@ -119,6 +120,135 @@ describe("TypeScript and JavaScript navigation", () => {
       const targets = callTargetIds(graph, "run");
       expect(targets.some((id) => id.endsWith(`::format::${implIndex}`))).toBe(true);
       expect(targets.some((id) => id.includes("decoy.ts"))).toBe(false);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["ts", "js"] as const)(
+    "rejects enclosing declaration fallback for unresolved %s callees",
+    async (extension) => {
+      const header =
+        extension === "ts"
+          ? "export function run(args: string[], store: unknown, value: string): void {"
+          : "export function run(args, store, value) {";
+      const source = [
+        header,
+        "  const handle = args[0]?.trim();",
+        '  const lazy = import("./other");',
+        "  /re/.test(value);",
+        "  store?.close();",
+        "  void handle; void lazy;",
+        "}",
+        "",
+      ].join("\n");
+      const file = `calls.${extension}`;
+      const fixture = await project({ [file]: source, [`other.${extension}`]: "export const item = 1;\n" });
+      try {
+        for (const index of [fixture.index, await buildProjectIndex(fixture.root, { cache: "off", native: "off" })]) {
+          for (const [line, token] of [
+            [2, "trim"],
+            [3, "import"],
+            [4, "test"],
+            [5, "close"],
+          ] as const) {
+            const request = { file: fixture.file(file), line, column: columnOf(source, line, token) };
+            expect((await goToDefinition(index, request)).status).toBe("not_found");
+            expect((await findReferences(index, request)).status).toBe("not_found");
+          }
+          const declaration = await goToDefinition(index, {
+            file: fixture.file(file),
+            line: 2,
+            column: columnOf(source, 2, "handle"),
+          });
+          expect(declaration.status).toBe("ok");
+          if (declaration.status === "ok") expect(declaration.definition.localName).toBe("handle");
+        }
+        const graph = await buildSymbolGraphDetailed(fixture.index);
+        expect(callTargetIds(graph, "run")).toEqual([]);
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not attribute invalid multiple-superclass receiver calls", async () => {
+    const source = [
+      "class Left { helper(): number { return 1; } }",
+      "class Right { helper(): number { return 2; } }",
+      "class Ambiguous extends Left, Right {",
+      "  throughThis(): number { return this.helper(); }",
+      "  throughSuper(): number { return super.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const fixture = await project({ "ambiguous.ts": source });
+    try {
+      for (const line of [4, 5]) {
+        const request = { file: fixture.file("ambiguous.ts"), line, column: columnOf(source, line, "helper()") };
+        expect((await goToDefinition(fixture.index, request)).status).toBe("not_found");
+        expect((await findReferences(fixture.index, request)).status).toBe("not_found");
+      }
+      for (const line of [1, 2]) {
+        const refs = await findReferences(fixture.index, {
+          file: fixture.file("ambiguous.ts"),
+          line,
+          column: columnOf(source, line, "helper()"),
+        });
+        expect(refs.status).toBe("ok");
+        expect(referenceSites(refs)).not.toContain("ambiguous.ts:4");
+        expect(referenceSites(refs)).not.toContain("ambiguous.ts:5");
+      }
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(callTargetIds(graph, "throughThis")).toEqual([]);
+      expect(callTargetIds(graph, "throughSuper")).toEqual([]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("distinguishes callable receiver properties from same-named non-callable members", async () => {
+    const source = [
+      "export function helper(): number { return 3; }",
+      "export class Box {",
+      "  helper = () => 1;",
+      "  caller(): number { return this.helper(); }",
+      "}",
+      "export class Counter {",
+      "  helper = 2;",
+      "  readNumber(): number { return this.helper(); }",
+      "}",
+      "",
+    ].join("\n");
+    const fixture = await project({ "properties.ts": source });
+    try {
+      for (const [callLine, declarationLine] of [
+        [4, 3],
+        [8, 7],
+      ] as const) {
+        const result = await goToDefinition(fixture.index, {
+          file: fixture.file("properties.ts"),
+          line: callLine,
+          column: columnOf(source, callLine, "helper()"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.range.start.line).toBe(declarationLine);
+        const refs = await findReferences(fixture.index, {
+          file: fixture.file("properties.ts"),
+          line: declarationLine,
+          column: columnOf(source, declarationLine, "helper"),
+        });
+        expect(refs.status).toBe("ok");
+        expect(referenceSites(refs)).toContain("properties.ts:" + callLine);
+      }
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(callTargetIds(graph, "caller")).toContain(
+        fixture.file("properties.ts") + "::helper::" + tokenIndex(source, 3, "helper"),
+      );
+      expect(callTargetIds(graph, "caller")).not.toContain(
+        fixture.file("properties.ts") + "::helper::" + tokenIndex(source, 1, "helper"),
+      );
+      expect(callTargetIds(graph, "readNumber")).toEqual([]);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -432,11 +562,11 @@ describe("TypeScript and JavaScript navigation", () => {
       expect(referenceSites(refs)).toContain("namespaces.ts:8");
       expect(referenceSites(refs)).not.toContain("namespaces.ts:9");
 
-      // The detailed graph does not resolve same-file namespace member calls yet, so `run` gets no
-      // edge. It must never target namespace A's implementation, and a wrong-arity call gets none.
       const graph = await buildSymbolGraphDetailed(fixture.index);
-      const implementationIndex = tokenIndex(namespaces, 2, "select");
-      expect(callTargetIds(graph, "run").some((id) => id.endsWith(`::select::${implementationIndex}`))).toBe(false);
+      const declarationIndex = tokenIndex(namespaces, 6, "select");
+      const decoyIndex = tokenIndex(namespaces, 2, "select");
+      expect(callTargetIds(graph, "run")).toContain(fixture.file("namespaces.ts") + "::select::" + declarationIndex);
+      expect(callTargetIds(graph, "run").some((id) => id.endsWith(`::select::${decoyIndex}`))).toBe(false);
       expect(callTargetIds(graph, "wrongArity")).toEqual([]);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
@@ -489,6 +619,10 @@ describe("TypeScript and JavaScript navigation", () => {
       }
 
       const graph = await buildSymbolGraphDetailed(fixture.index);
+      const namespaceTarget = tokenIndex(declarations, 3, "parse");
+      expect(callTargetIds(graph, "namespaceRun")).toContain(
+        fixture.file("receiver-overloads.ts") + "::parse::" + namespaceTarget,
+      );
       const interfaceTarget = tokenIndex(declarations, 9, "parse");
       expect(callTargetIds(graph, "interfaceRun").some((id) => id.endsWith(`::parse::${interfaceTarget}`))).toBe(true);
       expect(callTargetIds(graph, "namespaceWrong")).toEqual([]);

@@ -60,6 +60,43 @@ export function typescriptCallableContainerKey(tree: SyntaxTreeLike, start: numb
   return "module";
 }
 
+function typescriptNamespaceForDefinition(tree: SyntaxTreeLike, def: SymbolDef): SyntaxNodeLike | null {
+  const start = def.range.start.index;
+  if (start === undefined) return null;
+  let node: SyntaxNodeLike | null = tree.rootNode.descendantForIndex(start, def.range.end.index ?? start);
+  while (node) {
+    if (node.type === "internal_module" || node.type === "module") {
+      return node.childForFieldName("name")?.startIndex === start ? node : null;
+    }
+    node = node.parent;
+  }
+  return null;
+}
+
+/** Namespace reopenings with the same name and lexical parent share a member set. */
+export function typescriptMergedNamespaceContainers(
+  tree: SyntaxTreeLike,
+  locals: readonly SymbolDef[],
+  receiver: SymbolDef,
+): SyntaxNodeLike[] {
+  const container = typescriptNamespaceForDefinition(tree, receiver);
+  if (!container) return [];
+  const parent = container.parent;
+  const parentKey = parent ? typescriptCallableContainerKey(tree, parent.startIndex, parent.endIndex) : "module";
+  const containers: SyntaxNodeLike[] = [];
+  for (const local of locals) {
+    if (local.kind !== receiver.kind || local.localName !== receiver.localName) continue;
+    const candidate = typescriptNamespaceForDefinition(tree, local);
+    if (!candidate) continue;
+    const candidateParent = candidate.parent;
+    const candidateKey = candidateParent
+      ? typescriptCallableContainerKey(tree, candidateParent.startIndex, candidateParent.endIndex)
+      : "module";
+    if (candidateKey === parentKey) containers.push(candidate);
+  }
+  return containers;
+}
+
 /** Keep only candidates whose declaration belongs to the requested callable container. */
 export function typescriptCallableCandidatesInContainer<T>(
   group: readonly T[],

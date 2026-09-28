@@ -655,6 +655,57 @@ describe("Python super() lexical shadowing", () => {
   });
 });
 
+describe("Python class-body bindings and graph call edges", () => {
+  it("keeps a class-body assignment invisible inside methods for goto and the graph", async () => {
+    const classScope = "class Box:\n    helper = lambda: 1\n\n    def run(self):\n        return helper()\n";
+    const moduleScope = "helper = lambda: 1\n\n\ndef run():\n    return helper()\n";
+    await withFixture(
+      "cg-py-class-scope-",
+      { "class_scope.py": classScope, "module_scope.py": moduleScope },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        // A class body is not an enclosing scope for its methods: the bare `helper` call
+        // inside `run` cannot name the class attribute.
+        const shadowed = await goToDefinition(index, {
+          file: f("class_scope.py"),
+          line: 5,
+          column: columnOf(classScope, 5, "helper"),
+        });
+        expect(shadowed.status).toBe("not_found");
+
+        const visible = await goToDefinition(index, {
+          file: f("module_scope.py"),
+          line: 5,
+          column: columnOf(moduleScope, 5, "helper"),
+        });
+        expect(visible.status).toBe("ok");
+        if (visible.status === "ok") {
+          expect(visible.definition.localName).toBe("helper");
+          expect(visible.definition.range.start.line).toBe(1);
+        }
+
+        const graph = await buildSymbolGraphDetailed(index);
+        for (const [file, calls] of [
+          ["class_scope.py", 0],
+          ["module_scope.py", 1],
+        ] as const) {
+          const run = [...graph.nodes.values()].find(
+            (node) => node.name === "run" && fileIdentityKey(node.file) === fileIdentityKey(f(file)),
+          );
+          expect(run).toBeDefined();
+          const edges = graph.edges.filter((edge) => edge.label === "calls" && edge.from === run?.id);
+          expect(edges).toHaveLength(calls);
+          if (calls === 1) {
+            const target = graph.nodes.get(edges[0]!.to);
+            expect(target?.name).toBe("helper");
+            expect(fileIdentityKey(target!.file)).toBe(fileIdentityKey(f(file)));
+          }
+        }
+      },
+    );
+  });
+});
+
 describe("Python import rebinding in member resolution", () => {
   it("uses the last explicit named import for a static member and excludes the shadowed member", async () => {
     const aSource = "class Thing:\n    @staticmethod\n    def hit():\n        return 'a'\n";
@@ -1208,6 +1259,54 @@ describe("Python package attributes before submodules", () => {
     );
   });
 
+  it("keeps a submodule binding uncallable for bare calls but reachable through members", async () => {
+    const mainSource = "from pkg import name\n\ndef run():\n    return name()\n\ndef use():\n    return name.value()\n";
+    await withFixture(
+      "cg-py-submodule-call-",
+      {
+        "pkg/__init__.py": "",
+        "pkg/name.py": "def name():\n    return 2\n\ndef value():\n    return 3\n",
+        "main.py": mainSource,
+      },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        // `from pkg import name` with no package attribute binds the submodule object, and a
+        // module is not callable: the bare call is an error, not a call to pkg/name.py's
+        // same-named function. Member access through the binding still resolves.
+        const call = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(mainSource, 4, "name"),
+        });
+        expect(call.status).toBe("not_found");
+
+        const member = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 7,
+          column: columnOf(mainSource, 7, "value"),
+        });
+        expect(member.status).toBe("ok");
+        if (member.status === "ok") {
+          expect(fileIdentityKey(member.definition.file)).toBe(fileIdentityKey(f("pkg/name.py")));
+          expect(member.definition.range.start.line).toBe(4);
+        }
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const run = [...graph.nodes.values()].find(
+          (node) => node.name === "run" && fileIdentityKey(node.file) === fileIdentityKey(f("main.py")),
+        );
+        const use = [...graph.nodes.values()].find(
+          (node) => node.name === "use" && fileIdentityKey(node.file) === fileIdentityKey(f("main.py")),
+        );
+        expect(run).toBeDefined();
+        expect(use).toBeDefined();
+        expect(graph.edges.filter((edge) => edge.label === "calls" && edge.from === run?.id)).toHaveLength(0);
+        const useCalls = graph.edges.filter((edge) => edge.label === "calls" && edge.from === use?.id);
+        expect(useCalls.map((edge) => graph.nodes.get(edge.to)?.name)).toEqual(["value"]);
+      },
+    );
+  });
+
   it("re-resolves unchanged importers on warm disk builds when a package attribute is added and removed", async () => {
     await withFixture(
       "cg-py-attribute-cache-",
@@ -1238,9 +1337,15 @@ describe("Python package attributes before submodules", () => {
               line: 4,
               column: columnOf(mainSource, 4, "name"),
             });
-            expect(goto.status).toBe("ok");
-            if (goto.status === "ok")
-              expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f(expectedFile)));
+            if (expectedKind === "namespace") {
+              // The submodule binding is a module object, not a callable: the bare call in
+              // `return name()` is an error, not a call to the submodule's first export.
+              expect(goto.status).toBe("not_found");
+            } else {
+              expect(goto.status).toBe("ok");
+              if (goto.status === "ok")
+                expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(f(expectedFile)));
+            }
             if (expectedKind === "named") {
               const refs = await findReferences(index, {
                 file: f("pkg/__init__.py"),

@@ -531,6 +531,7 @@ function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): Syntax
   // matches; a language without that field (TS/PHP's `constructor` field, or none) falls through.
   const typeField = node.childForFieldName("type");
   if (typeField) {
+    if (isMemberAccessNode(sup, typeField)) return typeField;
     const unwrapped = unwrapNamedType(typeField, sup);
     if (unwrapped) return unwrapped;
   }
@@ -1307,7 +1308,7 @@ export function classifyReceiver(
   const typeScoped = TYPE_SCOPED_ACCESS_TYPES[accessNode.type] === true || between.includes("::");
   if (receiver.type !== "type_identifier" && !typeScoped) {
     // A capitalized bare name is type proof where construction already types
-    // `Box()` as a Box, and for C# static type-name receivers (`Box.Left()`).
+    // `Box()` as a Box, and for static type-name receivers (`Box.Left()`).
     // The named type must still resolve to a members-declaring definition
     // before any call edge is recorded, so a name alone never invents a target.
     if (!capitalizedTypeReceiverName(sup, receiver, text)) return null;
@@ -1341,7 +1342,9 @@ const UNBOUND_INSTANCE_CALL_LANGUAGE_IDS: Record<string, true> = {
  */
 const STATIC_TYPE_NAME_RECEIVER_LANGUAGE_IDS: Record<string, true> = {
   csharp: true,
+  java: true,
   js: true,
+  kotlin: true,
   ts: true,
   tsx: true,
 };

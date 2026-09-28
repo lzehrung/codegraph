@@ -8,6 +8,7 @@ import {
   memberContainerForDefinition,
   resolveImported,
 } from "../../indexer/navigation-resolve.js";
+import { languageHasDeclarationVisibility } from "../../indexer/declaration-visibility.js";
 import { resolvePhpExplicitImport } from "../../indexer/php-namespace-symbols.js";
 import {
   effectiveExplicitOrLocalBinding,
@@ -125,9 +126,9 @@ export function buildImportAliasMaps(
         }
         return;
       }
-      if (languageId === "csharp") {
-        // Same qualified lookup as navigation. A first local named `Point` in the
-        // resolved file can be a different namespace's type than the alias names.
+      if (languageHasDeclarationVisibility(languageId)) {
+        // Navigation only admits declarations exported by the imported module. The raw
+        // locals also contain private Rust/JVM names and names in other C# namespaces.
         const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
         if (resolved && !("namespace" in resolved)) {
           aliasToTargetDef.set(imp.local, resolved);

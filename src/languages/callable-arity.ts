@@ -424,7 +424,12 @@ export const CALLABLE_ARITY_LANGUAGE_PROFILES: Record<CallableArityLanguageId, C
     trailingClosureNodeTypes: ["lambda_literal"],
   },
   // Callsites expose no argument-list node; scan for the call parentheses instead.
-  zig: { ...GENERIC_PROFILE, parameterNodeTypes: ["parameter"], callsiteParenthesesFallback: true },
+  zig: {
+    ...GENERIC_PROFILE,
+    receiver: { ...GENERIC_PROFILE.receiver, firstParameterTypedPrefixes: ["self:", "self :"] },
+    parameterNodeTypes: ["parameter"],
+    callsiteParenthesesFallback: true,
+  },
 };
 
 /**
