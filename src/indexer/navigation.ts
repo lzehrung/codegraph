@@ -456,6 +456,7 @@ export async function goToDefinition(
       const implicitMember = await resolveCppOutOfLineImplicitMember(index, mod, node, name, source, sup);
       if (implicitMember)
         return okGoToResult(index, implicitMember, { resolution: "member-access", confidence: "high" });
+      if (implicitMember === null) return { status: "not_found", reason: "No matching C++ static member definition" };
     }
     const cppCollision =
       sup.id === "cpp" && closestBinding ? resolveCppCollidingBinding(file, closestBinding, node, source) : undefined;

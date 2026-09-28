@@ -409,6 +409,8 @@ describe("Rust macro_rules! structure", () => {
       "    macro_rules! local { () => { helper() }; }",
       "    my_dsl!(helper(x));",
       '    println!("{}", helper());',
+      "    my_dsl::println!(helper(x));",
+      '    std::println!("{}", helper());',
       "    0",
       "}",
       "",
@@ -422,8 +424,9 @@ describe("Rust macro_rules! structure", () => {
       const lines = graph.edges
         .filter((edge) => edge.label === "calls" && edge.from === run?.id)
         .map((edge) => edge.site?.range.start.line);
-      // A macro_rules! body and a custom macro's input are raw tokens until expansion.
-      expect(lines).toEqual([5]);
+      // A macro_rules! body and a custom macro's input are raw tokens until expansion, including a
+      // custom macro that shares a standard macro's name.
+      expect(lines).toEqual([5, 7]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -1710,9 +1710,16 @@ export async function resolveCppOutOfLineImplicitMember(
     (argumentCount === undefined
       ? undefined
       : await resolveKeywordReceiverMember(index, mod, node, name, memberScope, false, undefined, owner));
-  if (!member) return undefined;
-  // The call graph records no edge for a call its target cannot accept: `null` reports a hiding
-  // member without letting the caller fall back to a same-named free function.
+  if (!member) {
+    // In a static member function, an instance member still hides a same-named global: the call
+    // is ill-formed, so neither consumer may fall back to the global.
+    const hidden =
+      memberScope === "static" &&
+      (await resolveKeywordReceiverMember(index, mod, node, name, "any", false, undefined, owner));
+    return hidden ? null : undefined;
+  }
+  // The call graph records no edge for a call its target cannot accept. `null` means a member hides
+  // the name but is not the call's target, so no consumer may fall back to a same-named free function.
   const rejected =
     requireAcceptedArity &&
     argumentCount !== undefined &&

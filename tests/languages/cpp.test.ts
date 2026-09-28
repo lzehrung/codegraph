@@ -1820,24 +1820,30 @@ describe("C++ implicit this in qualified and bare member calls", () => {
         "  int helper();",
         "  int run();",
         "  int ok();",
+        "  static int shared();",
         "};",
         "int Box::helper() { return 0; }",
         "int Box::run() { return helper(1); }",
         "int Box::ok() { return helper(); }",
         "int outside() { return helper(2); }",
+        "int Box::shared() { return helper(3); }",
         "",
       ];
       await fs.writeFile(file, lines.join("\n"), "utf8");
       const index = await buildProjectIndex(root, { cache: "off", native: "on" });
-      for (const line of [8, 9]) {
-        const goto = await goToDefinition(index, { file, line, column: lines[line - 1]!.indexOf("helper(") + 1 });
+      const gotoAt = (line: number) =>
+        goToDefinition(index, { file, line, column: lines[line - 1]!.indexOf("helper(") + 1 });
+      for (const line of [9, 10]) {
+        const goto = await gotoAt(line);
         expect(goto.status).toBe("ok");
         if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
       }
+      // A static member has no `this`, but the instance member still hides the global.
+      expect((await gotoAt(12)).status).toBe("not_found");
       const free = await findReferences(index, { file, line: 1, column: 5 });
       expect(free.status).toBe("ok");
       if (free.status !== "ok") throw new Error("Expected free-function references");
-      expect(free.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([1, 10]);
+      expect(free.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([1, 11]);
       const graph = await buildSymbolGraphDetailed(index);
       const calls = graph.edges
         .filter((edge) => edge.label === "calls")
@@ -1847,7 +1853,7 @@ describe("C++ implicit this in qualified and bare member calls", () => {
         )
         .sort();
       // `helper(1)` names the zero-parameter member, so it has no edge and no free-function fallback.
-      expect(calls).toEqual(["ok->member:9", "outside->free:10"]);
+      expect(calls).toEqual(["ok->member:10", "outside->free:11"]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

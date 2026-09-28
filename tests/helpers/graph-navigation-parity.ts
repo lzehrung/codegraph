@@ -25,6 +25,7 @@ import type { DetailedSymbolGraph } from "../../src/graphs/symbol-graph-detailed
 import type { ParsedFileContext } from "../../src/indexer/parse-context.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
 import { rustTokenTreeHoldsExpressions } from "../../src/util/member-access.js";
+import { cppStarImportClosure } from "../../src/indexer/navigation-cpp.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 
 export type GraphNavigationMismatch = {
@@ -196,8 +197,14 @@ function enclosingCallers(
   const owners: string[] = [];
   for (let node = call.parent; node; node = node.parent) {
     if (!CALLER_HEADER.test(node.type)) continue;
-    // The caller's name sits in the header, before the body or value.
-    const body = node.childForFieldName("body") ?? node.childForFieldName("value") ?? node.childForFieldName("right");
+    // The caller's name sits in the header, before the body or value. Kotlin's `function_body`
+    // (a block or `= expression`) is an unfielded child.
+    const body =
+      node.childForFieldName("body") ??
+      node.childForFieldName("value") ??
+      node.childForFieldName("right") ??
+      node.namedChildren.find((child) => child.type === "function_body") ??
+      null;
     // Without a body or value there is no header boundary, so nothing inside can be proven
     // to be the caller's name.
     if (!body || body.startIndex <= node.startIndex) continue;
@@ -373,9 +380,13 @@ export async function collectGraphNavigationMismatches(
     }
     const lines = parsed.source.split("\n");
     const fileEdges = edgesByFile.get(file) ?? [];
+    // A C++ out-of-line definition folds into a class declared in any header its includes reach.
     const visibleFiles = new Set([
       file,
       ...module.imports.flatMap((imp) => (typeof imp.resolved === "string" ? [normalizePath(imp.resolved)] : [])),
+      ...(parsed.sup.id === "cpp"
+        ? cppStarImportClosure(index, module).map((reachable) => normalizePath(reachable.file))
+        : []),
     ]);
     for (const { call, name: nameNode } of callSites(parsed.tree.rootNode, parsed.source)) {
       const owners = enclosingCallers(call, file, visibleFiles, callers);

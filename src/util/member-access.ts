@@ -263,12 +263,19 @@ const RUST_EXPRESSION_ARGUMENT_MACROS = new Set([
   "writeln",
 ]);
 
+const RUST_STANDARD_CRATES = new Set(["std", "core", "alloc"]);
+
 /** Whether a Rust token tree is (nested in) the arguments of a standard expression macro. */
 export function rustTokenTreeHoldsExpressions(tokenTree: SyntaxNodeLike): boolean {
   let current: SyntaxNodeLike | null = tokenTree;
   while (current?.type === "token_tree") current = current.parent;
   if (current?.type !== "macro_invocation") return false;
   const macro = current.childForFieldName("macro");
-  const name = macro?.text.split("::").pop()?.trim();
-  return !!name && RUST_EXPRESSION_ARGUMENT_MACROS.has(name);
+  if (!macro) return false;
+  // `my_dsl::println!` is a custom macro that only shares a name; a path proves a standard macro
+  // only when it is rooted at a standard crate (`std::println!`, `::core::assert!`).
+  const segments = macro.text.replace(/\s+/g, "").replace(/^::/, "").split("::");
+  const name = segments.pop()!;
+  const standardPath = !segments.length || (segments.length === 1 && RUST_STANDARD_CRATES.has(segments[0]!));
+  return standardPath && RUST_EXPRESSION_ARGUMENT_MACROS.has(name);
 }

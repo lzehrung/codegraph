@@ -656,7 +656,17 @@ export async function buildSymbolGraphDetailed(
             sup.id,
             (imp) => imp.kind === "named" && imp.local === lookupName,
           );
-        if (jvm && !explicitJvmImport && !moduleEntry.locals.some((local) => local.localName === lookupName)) {
+        // A same-file member, or a declaration whose scope the use can see, still wins; a local of
+        // another method is out of scope and must not hide the package.
+        const visibleSameFileDeclaration =
+          jvm &&
+          moduleEntry.locals.some(
+            (local) =>
+              local.localName === lookupName &&
+              (local.isMember ||
+                fallbackDefinitionVisibleAtUse(scopeIndex, scopeNodesFor(sup.id), local.range.start.index, node)),
+          );
+        if (jvm && !explicitJvmImport && !visibleSameFileDeclaration) {
           const peer = resolveExport(index, file, lookupName);
           if (peer?.kind === "resolved") return importedCallableAcceptsCount(peer.def, node) ? peer.def : null;
         }
