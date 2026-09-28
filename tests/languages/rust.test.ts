@@ -402,6 +402,33 @@ describe("Rust macro_rules! structure", () => {
     }
   });
 
+  it("records calls only inside standard expression macros, not macro_rules! bodies or custom macro input", async () => {
+    const source = [
+      "fn helper() -> i32 { 1 }",
+      "pub fn run() -> i32 {",
+      "    macro_rules! local { () => { helper() }; }",
+      "    my_dsl!(helper(x));",
+      '    println!("{}", helper());',
+      "    0",
+      "}",
+      "",
+    ].join("\n");
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-macro-token-trees-"));
+    try {
+      await writeFile(path.join(root, "lib.rs"), source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const run = [...graph.nodes.values()].find((node) => node.name === "run");
+      const lines = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from === run?.id)
+        .map((edge) => edge.site?.range.start.line);
+      // A macro_rules! body and a custom macro's input are raw tokens until expansion.
+      expect(lines).toEqual([5]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps member and path calls with comments after the separator unresolved inside macro arguments", async () => {
     const source = [
       "pub fn bump() -> i32 { 1 }",

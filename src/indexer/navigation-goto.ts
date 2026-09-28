@@ -832,7 +832,10 @@ export async function resolveMemberAccessDefinition(params: {
     }
 
     if (sup.id === "cpp" && memberNode.type === "qualified_identifier") {
-      const qualified = cppQualifiedNameSegments(memberNode, source);
+      // `a::C::run` nests `C::run` inside `a::(...)`; only the outermost node carries the full owner.
+      let outermost = memberNode;
+      while (outermost.parent?.type === "qualified_identifier") outermost = outermost.parent;
+      const qualified = cppQualifiedNameSegments(outermost, source);
       const ownerPath = qualified.slice(0, -1);
       const owner = await resolveCppQualifiedMemberContainer(index, mod, ownerPath);
       if (owner) {
@@ -1685,6 +1688,7 @@ export async function resolveCppOutOfLineImplicitMember(
   name: string,
   source: string,
   sup: LanguageSupport,
+  requireAcceptedArity = false,
 ): Promise<SymbolDef | null | undefined> {
   if (node.parent?.type !== "call_expression" || node.parent.childForFieldName("function")?.id !== node.id) {
     return undefined;
@@ -1699,11 +1703,21 @@ export async function resolveCppOutOfLineImplicitMember(
       ? "any"
       : "static";
   const matching = await resolveKeywordReceiverMember(index, mod, node, name, memberScope, false, argumentCount, owner);
-  if (matching || argumentCount === undefined) return matching;
   // A class member hides a same-named global even when this call cannot accept its arity. The
   // only member is still the call's target for navigation; an ambiguous overload set is not.
-  const unmatched = await resolveKeywordReceiverMember(index, mod, node, name, memberScope, false, undefined, owner);
-  return unmatched ?? undefined;
+  const member =
+    matching ??
+    (argumentCount === undefined
+      ? undefined
+      : await resolveKeywordReceiverMember(index, mod, node, name, memberScope, false, undefined, owner));
+  if (!member) return undefined;
+  // The call graph records no edge for a call its target cannot accept: `null` reports a hiding
+  // member without letting the caller fall back to a same-named free function.
+  const rejected =
+    requireAcceptedArity &&
+    argumentCount !== undefined &&
+    !(await receiverMemberAcceptsArgumentCount(index, member, argumentCount));
+  return rejected ? null : member;
 }
 
 export { supportsReceiverCallEdges, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";

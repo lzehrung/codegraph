@@ -161,7 +161,9 @@ export function collectDetailedDeclarations(
       const nameNode = functionNameNode(node);
       const name = nameNode ? sliceText(nameNode, source) : undefined;
       if (name) {
-        const def = findDefinition(name, nameNode!);
+        // A declaration is modeled only through the symbol at its own name. Falling back to a
+        // same-named symbol elsewhere would give this body another declaration's identity.
+        const def = findDefinitionAt(name, nameNode!);
         if (def) functionNodes.push({ name, node, def });
       }
     } else if (
@@ -173,7 +175,7 @@ export function collectDetailedDeclarations(
       const nameNode = node.childForFieldName("name");
       const name = nameNode ? sliceText(nameNode, source) : undefined;
       if (name) {
-        const def = findDefinition(name, nameNode!);
+        const def = findDefinitionAt(name, nameNode!);
         if (def) classNodes.push({ name, node, def });
       }
     } else if (
@@ -192,7 +194,7 @@ export function collectDetailedDeclarations(
         const valueType = String(valueNode.type || "");
         if (/arrow_function|function/.test(valueType)) {
           const name = sliceText(nameNode, source);
-          const def = findDefinition(name, nameNode);
+          const def = findDefinitionAt(name, nameNode);
           if (def) functionNodes.push({ name, node: valueNode, def });
         }
       }

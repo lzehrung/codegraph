@@ -26,6 +26,9 @@ export const cFamilyIncludeQuery = `
 
 const cFamilyParameterListTypes = new Set(["parameter_declaration", "parameter_list"]);
 
+/** Deepest `a::b::C::f` qualification captured as a definition name (scope segments). */
+const CPP_QUALIFIED_DEFINITION_DEPTH = 5;
+
 export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: boolean): string {
   const identifierTypes = includeFieldIdentifier ? ["identifier", "field_identifier"] : ["identifier"];
   const patterns: string[] = [];
@@ -45,16 +48,28 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
     }
   }
   if (includeFieldIdentifier) {
+    // `Box::run`, `ns::Box::run`, and `a::b::Box::run` nest one qualified_identifier per scope
+    // segment, and `T* Box::make()` wraps the function declarator in a pointer declarator.
+    const leaves = [
+      `(identifier) @${captureName}`,
+      `(destructor_name) @${captureName}`,
+      `(operator_name) @${captureName}`,
+      `(template_function name: (identifier) @${captureName})`,
+    ];
+    for (const leaf of leaves) {
+      let qualified = leaf;
+      for (let depth = 0; depth < CPP_QUALIFIED_DEFINITION_DEPTH; depth += 1) {
+        qualified = `(qualified_identifier name: ${qualified})`;
+        patterns.push(
+          `(function_declarator declarator: ${qualified})`,
+          `(reference_declarator (function_declarator declarator: ${qualified}))`,
+          `(pointer_declarator declarator: (function_declarator declarator: ${qualified}))`,
+        );
+      }
+    }
     patterns.push(
-      `(function_declarator declarator: (qualified_identifier name: (identifier) @${captureName}))`,
-      `(function_declarator declarator: (qualified_identifier name: (destructor_name) @${captureName}))`,
-      `(function_declarator declarator: (qualified_identifier name: (operator_name) @${captureName}))`,
-      `(function_declarator declarator: (qualified_identifier name: (template_function name: (identifier) @${captureName})))`,
       `(function_declarator declarator: (destructor_name) @${captureName})`,
       `(function_declarator declarator: (operator_name) @${captureName})`,
-      `(reference_declarator (function_declarator declarator: (qualified_identifier name: (identifier) @${captureName})))`,
-      `(reference_declarator (function_declarator declarator: (qualified_identifier name: (destructor_name) @${captureName})))`,
-      `(reference_declarator (function_declarator declarator: (qualified_identifier name: (operator_name) @${captureName})))`,
       `(reference_declarator (function_declarator declarator: (operator_name) @${captureName}))`,
     );
   }

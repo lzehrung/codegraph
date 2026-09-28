@@ -1763,6 +1763,96 @@ describe("C++20 modules", () => {
 });
 
 describe("C++ implicit this in qualified and bare member calls", () => {
+  it("gives namespace-qualified and pointer-returning out-of-line definitions their own member identity", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-nested-qualified-"));
+    try {
+      const file = path.join(root, "c.cpp").replace(/\\/g, "/");
+      const lines = [
+        "int one() { return 1; }",
+        "int two() { return 2; }",
+        "namespace a { struct C { int run(); int* make(); }; }",
+        "namespace b { struct C { int run(); }; }",
+        "int a::C::run() { return one(); }",
+        "int b::C::run() { return two(); }",
+        "int* a::C::make() { static int v = one(); return &v; }",
+        "",
+      ];
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const label = (id: string): string => {
+        const node = graph.nodes.get(id);
+        const start = Number(id.slice(id.lastIndexOf("::") + 2));
+        const line = lines.join("\n").slice(0, start).split("\n").length;
+        return `${node?.name}@${line}`;
+      };
+      const edges = graph.edges
+        .filter((edge) => edge.label === "calls" || edge.label === "member_of")
+        .map((edge) => `${edge.label} ${label(edge.from)} -> ${label(edge.to)}`)
+        .sort();
+      // Each definition folds into its own class's declaration; neither borrows the other's.
+      expect(edges).toEqual([
+        "calls make@3 -> one@1",
+        "calls run@3 -> one@1",
+        "calls run@4 -> two@2",
+        "member_of make@3 -> C@3",
+        "member_of run@3 -> C@3",
+        "member_of run@4 -> C@4",
+      ]);
+      const references = await findReferences(index, { file, line: 3, column: lines[2]!.indexOf("run") + 1 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected a::C::run references");
+      expect(references.references.map((reference) => reference.range.start.line).sort((l, r) => l - r)).toEqual([
+        3, 5,
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lets an owner member hide a same-named global in out-of-line bodies across goto, references, and calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-member-hides-global-"));
+    try {
+      const file = path.join(root, "c.cpp").replace(/\\/g, "/");
+      const lines = [
+        "int helper(int x) { return x; }",
+        "struct Box {",
+        "  int helper();",
+        "  int run();",
+        "  int ok();",
+        "};",
+        "int Box::helper() { return 0; }",
+        "int Box::run() { return helper(1); }",
+        "int Box::ok() { return helper(); }",
+        "int outside() { return helper(2); }",
+        "",
+      ];
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      for (const line of [8, 9]) {
+        const goto = await goToDefinition(index, { file, line, column: lines[line - 1]!.indexOf("helper(") + 1 });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
+      }
+      const free = await findReferences(index, { file, line: 1, column: 5 });
+      expect(free.status).toBe("ok");
+      if (free.status !== "ok") throw new Error("Expected free-function references");
+      expect(free.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([1, 10]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map(
+          (edge) =>
+            `${graph.nodes.get(edge.from)?.name}->${edge.to.endsWith("::4") ? "free" : "member"}:${edge.site?.range.start.line}`,
+        )
+        .sort();
+      // `helper(1)` names the zero-parameter member, so it has no edge and no free-function fallback.
+      expect(calls).toEqual(["ok->member:9", "outside->free:10"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("classifies qualified owners by full path and reaches instance members only through the caller's own class or bases", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-qualified-owner-"));
     const file = normalizePath(path.join(root, "q.cpp"));
@@ -1789,9 +1879,10 @@ describe("C++ implicit this in qualified and bare member calls", () => {
         const result = await goToDefinition(index, { file, line, column });
         return result.status === "ok" ? result.definition.range.start.line : null;
       };
-      // `b::C` is a namespace even though a class `a::C` is also reachable.
+      // `b::C` is a namespace even though a class `a::C` is also reachable. A class member resolves
+      // to its in-class declaration, as `Base::helper` does below.
       expect(await targetLine(5, "b::C::f")).toBe(4);
-      expect(await targetLine(5, "a::C::f")).toBe(3);
+      expect(await targetLine(5, "a::C::f")).toBe(1);
       // A base-qualified call reaches the base's instance member; an unrelated class's does not.
       expect(await targetLine(11, "Base::helper")).toBe(6);
       expect(await targetLine(11, "D::instance")).toBeNull();

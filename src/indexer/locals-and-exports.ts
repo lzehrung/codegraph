@@ -177,9 +177,13 @@ function cppQualifiedExportName(
   let qualifiedSegments: string[] | null = null;
   let current: SyntaxNodeLike | null = nameNode;
   while (current) {
-    if (!qualifiedSegments && current.type === "qualified_identifier" && current.parent?.type !== "using_declaration") {
-      const segments = cppQualifiedNameSegments(current, source);
-      if (segments.length > 1) qualifiedSegments = segments;
+    if (!qualifiedSegments && current.type === "qualified_identifier") {
+      // `a::C::run` nests `C::run` inside `a::(...)`; the outermost node carries the full path.
+      while (current.parent?.type === "qualified_identifier") current = current.parent;
+      if (current.parent?.type !== "using_declaration") {
+        const segments = cppQualifiedNameSegments(current, source);
+        if (segments.length > 1) qualifiedSegments = segments;
+      }
     }
     if (current.type === "namespace_definition") {
       const namespaceName = current.childForFieldName("name");

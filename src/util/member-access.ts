@@ -234,3 +234,41 @@ export function rustTokenTreeNameFollowsSeparator(name: SyntaxNodeLike): boolean
   }
   return previous?.type === "." || previous?.type === "::";
 }
+
+/**
+ * Standard Rust macros whose arguments are ordinary expressions (after an optional format string
+ * or target). Any other macro, and every `macro_rules!` definition, takes raw tokens whose meaning
+ * depends on its expansion, so `name(...)` inside them is not a proven call.
+ */
+const RUST_EXPRESSION_ARGUMENT_MACROS = new Set([
+  "assert",
+  "assert_eq",
+  "assert_ne",
+  "debug_assert",
+  "debug_assert_eq",
+  "debug_assert_ne",
+  "dbg",
+  "eprint",
+  "eprintln",
+  "format",
+  "format_args",
+  "panic",
+  "print",
+  "println",
+  "todo",
+  "unimplemented",
+  "unreachable",
+  "vec",
+  "write",
+  "writeln",
+]);
+
+/** Whether a Rust token tree is (nested in) the arguments of a standard expression macro. */
+export function rustTokenTreeHoldsExpressions(tokenTree: SyntaxNodeLike): boolean {
+  let current: SyntaxNodeLike | null = tokenTree;
+  while (current?.type === "token_tree") current = current.parent;
+  if (current?.type !== "macro_invocation") return false;
+  const macro = current.childForFieldName("macro");
+  const name = macro?.text.split("::").pop()?.trim();
+  return !!name && RUST_EXPRESSION_ARGUMENT_MACROS.has(name);
+}

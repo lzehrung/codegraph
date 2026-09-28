@@ -448,6 +448,15 @@ export async function goToDefinition(
       }
       return { status: "not_found", reason: AMBIGUOUS_CPP_USING_DECLARATION_REASON };
     }
+    // Inside an out-of-line member definition, a member of the owner class (or its bases) hides a
+    // same-named file-scope name; parameters and function locals still win, as in the call graph.
+    const fileScopeOrUnbound =
+      !closestBinding || scopeIndex.allScopes[0]?.map.get(closestBinding.canonicalName) === closestBinding;
+    if (sup.id === "cpp" && fileScopeOrUnbound) {
+      const implicitMember = await resolveCppOutOfLineImplicitMember(index, mod, node, name, source, sup);
+      if (implicitMember)
+        return okGoToResult(index, implicitMember, { resolution: "member-access", confidence: "high" });
+    }
     const cppCollision =
       sup.id === "cpp" && closestBinding ? resolveCppCollidingBinding(file, closestBinding, node, source) : undefined;
     if (cppCollision !== undefined) {
@@ -515,12 +524,6 @@ export async function goToDefinition(
     }
 
     if (sup.id === "cpp") {
-      const implicitMember = await resolveCppOutOfLineImplicitMember(index, mod, node, name, source, sup);
-      if (implicitMember !== undefined) {
-        return implicitMember
-          ? okGoToResult(index, implicitMember, { resolution: "member-access", confidence: "high" })
-          : { status: "not_found", reason: "No matching C++ member arity" };
-      }
       const visible = await resolveVisibleCppCallableNameAsync(index, mod, name, node, source, {
         file,
         parsed: { source, tree, sup },

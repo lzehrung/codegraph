@@ -24,6 +24,7 @@ import {
 import type { DetailedSymbolGraph } from "../../src/graphs/symbol-graph-detailed.js";
 import type { ParsedFileContext } from "../../src/indexer/parse-context.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
+import { rustTokenTreeHoldsExpressions } from "../../src/util/member-access.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 
 export type GraphNavigationMismatch = {
@@ -105,13 +106,13 @@ type Edge = DetailedSymbolGraph["edges"][number];
 type CallerIndex = {
   /** Callable node ids keyed by file, then by the node's name start index. */
   byFile: Map<string, Map<number, string>>;
-  /** Callable members keyed by `Owner::member` with the owner's file, from `member_of` edges. */
+  /** Callable members keyed by the full `ns::Owner::member` path, from `member_of` edges. */
   byOwnerMember: Map<string, Array<{ id: string; ownerFile: string }>>;
   /** Every node id keyed by file, then name, for a function assigned to an existing binding. */
   byFileName: Map<string, Map<string, string[]>>;
 };
 
-function callerIndex(graph: DetailedSymbolGraph): CallerIndex {
+async function callerIndex(graph: DetailedSymbolGraph): Promise<CallerIndex> {
   const byFile = new Map<string, Map<number, string>>();
   const byFileName = new Map<string, Map<string, string[]>>();
   for (const node of graph.nodes.values()) {
@@ -132,7 +133,9 @@ function callerIndex(graph: DetailedSymbolGraph): CallerIndex {
     const member = graph.nodes.get(edge.from);
     const owner = graph.nodes.get(edge.to);
     if (!member || !owner || member.kind !== "function") continue;
-    const key = `${owner.name}::${member.name}`;
+    const ownerPath = await declarationScopePath(owner.file, Number(owner.id.slice(owner.id.lastIndexOf("::") + 2)));
+    if (!ownerPath) continue;
+    const key = [...ownerPath, owner.name, member.name].join("::");
     byOwnerMember.set(key, [
       ...(byOwnerMember.get(key) ?? []),
       { id: member.id, ownerFile: normalizePath(owner.file) },
@@ -141,23 +144,45 @@ function callerIndex(graph: DetailedSymbolGraph): CallerIndex {
   return { byFile, byOwnerMember, byFileName };
 }
 
-/** `Owner::member` for a C++ out-of-line definition header (`int Box::run()`), else null. */
+const CPP_SCOPE_TYPES = new Set(["namespace_definition", "class_specifier", "struct_specifier", "union_specifier"]);
+
+/** Names of the namespaces and classes enclosing `node`, outermost first. */
+function lexicalScopePath(node: SyntaxNodeLike): string[] {
+  const path: string[] = [];
+  for (let current = node.parent; current; current = current.parent) {
+    if (!CPP_SCOPE_TYPES.has(current.type)) continue;
+    const name = current.childForFieldName("name");
+    if (name) path.unshift(...name.text.split("::").map((segment) => segment.trim()));
+  }
+  return path;
+}
+
+/** The enclosing namespace/class path of the declaration named at `start` in `file`. */
+async function declarationScopePath(file: string, start: number): Promise<string[] | null> {
+  if (!Number.isFinite(start)) return null;
+  const parsed = await parseFile(file);
+  const nameNode = parsed.tree.rootNode.descendantForIndex(start, start + 1);
+  const declaration = nameNode.parent;
+  return declaration ? lexicalScopePath(declaration) : null;
+}
+
+/**
+ * The full `ns::Owner::member` path a C++ out-of-line definition header declares (`int ns::Box::run()`
+ * inside `namespace outer {}` is `outer::ns::Box::run`), else null.
+ */
 function outOfLineMemberKey(node: SyntaxNodeLike, headerEnd: number): string | null {
-  let key: string | null = null;
-  const visit = (current: SyntaxNodeLike): void => {
-    if (key || current.startIndex >= headerEnd || /parameter/.test(current.type)) return;
+  const stack: SyntaxNodeLike[] = [...node.namedChildren].reverse();
+  while (stack.length) {
+    const current = stack.pop()!;
+    if (current.startIndex >= headerEnd || /parameter/.test(current.type)) continue;
     if (current.type === "qualified_identifier") {
-      const scope = current.childForFieldName("scope");
-      const name = current.childForFieldName("name");
-      if (scope && name && !name.namedChildren.length) {
-        key = `${scope.text.split("::").pop()!.replace(/<.*$/s, "").trim()}::${name.text}`;
-        return;
-      }
+      const segments = current.text.split("::").map((segment) => segment.replace(/<.*$/s, "").trim());
+      return [...lexicalScopePath(node), ...segments].join("::");
     }
-    for (const child of current.namedChildren) visit(child);
-  };
-  visit(node);
-  return key;
+    for (let index = current.namedChildren.length - 1; index >= 0; index -= 1)
+      stack.push(current.namedChildren[index]!);
+  }
+  return null;
 }
 
 /** Caller node ids of the innermost enclosing declaration the graph models. */
@@ -231,7 +256,9 @@ function* callSites(root: SyntaxNodeLike, source: string): Generator<{ call: Syn
       if (name) yield { call: node, name };
       continue;
     }
-    if (node.type !== "token_tree") continue;
+    // Only a standard expression macro's arguments are proven expressions; other macros and
+    // `macro_rules!` bodies are raw tokens.
+    if (node.type !== "token_tree" || !rustTokenTreeHoldsExpressions(node)) continue;
     const children = node.namedChildren;
     for (let i = 0; i + 1 < children.length; i += 1) {
       const name = children[i]!;
@@ -333,7 +360,7 @@ export async function collectGraphNavigationMismatches(
     list.push(edge);
     edgesByFile.set(file, list);
   }
-  const callers = callerIndex(graph);
+  const callers = await callerIndex(graph);
   const mismatches: GraphNavigationMismatch[] = [];
 
   for (const module of index.byFile.values()) {

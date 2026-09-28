@@ -9,9 +9,10 @@ import {
   isSwiftCrossFileHiddenSharedOwnerMember,
   isSwiftFileHiddenSharedOwnerMember,
 } from "../../indexer/declaration-visibility.js";
-import { cppFunctionHasImplicitThis, resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
+import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import {
   cppQualifiedOwnerHasImplicitThis,
+  resolveCppOutOfLineImplicitMember,
   findTypeScriptNamespaceMemberCandidates,
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
@@ -42,6 +43,7 @@ import { sliceText, toRange } from "../../util/ast.js";
 import {
   getMemberAccessParts,
   isMemberAccessNode,
+  rustTokenTreeHoldsExpressions,
   rustTokenTreeNameFollowsSeparator,
 } from "../../util/member-access.js";
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
@@ -281,7 +283,7 @@ function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: 
  * navigation's refusals inside token trees.
  */
 function recordRustMacroArgumentCalls(context: EdgePassContext, tokenTree: SyntaxNodeLike, fromId: string): void {
-  if (context.sup.id !== "rust") return;
+  if (context.sup.id !== "rust" || !rustTokenTreeHoldsExpressions(tokenTree)) return;
   const children = tokenTree.namedChildren;
   for (let index = 0; index + 1 < children.length; index += 1) {
     const name = children[index]!;
@@ -859,6 +861,7 @@ export async function emitFunctionBodyEdges(
     }
     const seenAliases = new Set<string>();
     const ambiguousCIncludes: SyntaxNodeLike[] = [];
+    const outOfLineBareCalls: SyntaxNodeLike[] = [];
     const qualifiedCppCalls: Array<{
       node: SyntaxNodeLike;
       access: ReceiverCallAccess;
@@ -867,16 +870,6 @@ export async function emitFunctionBodyEdges(
     }> = [];
     const hasRepeatedCIncludes =
       context.sup.id === "c" && context.moduleEntry.imports.filter((imp) => imp.kind === "star").length > 1;
-    const cppImplicitThis =
-      context.sup.id === "cpp" &&
-      (await cppFunctionHasImplicitThis(
-        context.index,
-        context.moduleEntry,
-        fn.node,
-        context.source,
-        context.sup,
-        context.loadParsedFile,
-      ));
     const cppOutOfLinePath = cppOutOfLineOwnerPath(fn.node, context.source, context.sup);
     const cppOutOfLineOwner = cppOutOfLinePath
       ? await resolveCppQualifiedMemberContainer(
@@ -1163,16 +1156,9 @@ export async function emitFunctionBodyEdges(
       if (cppOutOfLineOwner && isIdentifierType(context.sup, callee.type)) {
         const memberName = sliceText(callee, context.source);
         if (!context.hasNonModuleBinding(memberName, callee)) {
-          context.receiverCalls.push({
-            callerId: fromId,
-            ownerId: ensureNode(context, cppOutOfLineOwner),
-            viaSupertypes: false,
-            memberName,
-            argumentCount: getCallArgumentCount({ languageId: "cpp", source: context.source, call: node }),
-            site: { file: context.moduleEntry.file, range: toRange(callee) },
-            // A static member function has no `this`, so only static members qualify.
-            memberScope: cppImplicitThis ? "any" : "static",
-          });
+          // A member of the owner (or its bases) hides a same-named free function; when the owner
+          // declares none, the bare name is an ordinary call. Navigation decides after the walk.
+          outOfLineBareCalls.push(callee);
           return;
         }
       }
@@ -1300,6 +1286,19 @@ export async function emitFunctionBodyEdges(
     };
 
     walkFunctionBody(fn.node, true);
+    for (const callee of outOfLineBareCalls) {
+      const member = await resolveCppOutOfLineImplicitMember(
+        context.index,
+        context.moduleEntry,
+        callee,
+        sliceText(callee, context.source),
+        context.source,
+        context.sup,
+        true,
+      );
+      if (member) recordDefEdge(context, fromId, member, "calls", callee);
+      else if (member === undefined) tryResolveNode(context, callee, fromId, "calls");
+    }
     for (const call of qualifiedCppCalls) {
       const owner = call.ownerPath.length
         ? await resolveCppQualifiedMemberContainer(
