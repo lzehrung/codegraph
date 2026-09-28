@@ -20,7 +20,6 @@ import {
   findClosestScopeBinding,
   findDeclarationNameNode,
   getOrBuildScopeIndex,
-  resolveNamedDefinition,
   toModuleRef,
 } from "./navigation-local.js";
 import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
@@ -92,12 +91,7 @@ import {
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { cppCallableShapeForNode, cppEquivalentCallableBindings } from "./cpp-callables.js";
 import type { Binding } from "./scope-types.js";
-import {
-  resolveCppCallableBindings,
-  resolveCppExportedCallables,
-  resolveCppQualifiedMemberContainer,
-  resolveVisibleCppCallableNameAsync,
-} from "./navigation-cpp.js";
+import { resolveCppExportedCallables, resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import {
   type FindReferencesResult,
   type GoToRequest,
@@ -116,13 +110,12 @@ import {
   phpImportTypeAtPosition,
   resolveBareName,
   settleNameResolution,
+  withParsedFiles,
   type BareNameUse,
 } from "./name-resolution.js";
+import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
-/** Load-and-retry passes for a bare-name lookup that reads files it has not parsed yet. */
-const MAX_NAME_RESOLUTION_LOADS = 4;
-
 const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
 const MAX_REFERENCE_NAMESPACE_DEPTH = 8;
 const MAX_REFERENCE_NAMESPACE_PATHS = 64;
@@ -291,29 +284,12 @@ export async function goToDefinition(
       return memberAccessResult;
     }
     if (sup.id === "cpp" && scopeIndex && memberAccessNode) {
+      const files = createLoadingParsedFileProvider(index, { file, parsed: context });
       const qualifiedName = cppQualifiedNameSegments(memberAccessNode, source).join("::");
-      const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(qualifiedName);
-      if (qualifiedBindings) {
-        const target = resolveCppCallableBindings(file, qualifiedBindings, node, source);
-        if (!target) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
-        return okGoToResult(index, target, {
-          resolution: "exact",
-          confidence: "high",
-        });
-      }
-      const visibleQualified = await resolveVisibleCppCallableNameAsync(index, mod, qualifiedName, node, source, {
-        file,
-        parsed: { source, tree, sup },
-      });
-      if (visibleQualified !== undefined) {
-        if (!visibleQualified) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
-        return okGoToResult(index, visibleQualified, {
-          resolution: "exact",
-          confidence: "high",
-        });
-      }
-      const qualifiedDefinition = resolveNamedDefinition(index, mod, file, sup, qualifiedName);
-      if (qualifiedDefinition) return qualifiedDefinition;
+      const qualified = await withParsedFiles(files, () =>
+        resolveCppQualifiedName({ index, mod, file, parsed: context, scopeIndex, files, node, name: qualifiedName }),
+      );
+      if (qualified) return qualified;
     }
     if (isUnresolvedReceiverMemberProperty(sup, node)) {
       return { status: "not_found", reason: "No matching receiver member definition" };
@@ -363,14 +339,7 @@ export async function goToDefinition(
       name,
       ...(phpImportType ? { phpImportType } : {}),
     };
-    // A pass that read an unloaded file reruns once that file is parsed.
-    let resolution = resolveBareName(use);
-    for (let attempt = 0; attempt < MAX_NAME_RESOLUTION_LOADS; attempt += 1) {
-      const missing = files.takeMisses();
-      if (!missing.length) break;
-      await files.load(missing);
-      resolution = resolveBareName(use);
-    }
+    const resolution = await withParsedFiles(files, () => resolveBareName(use));
     const settled = await settleNameResolution(use, resolution, {
       recoverIncludedStar: (lookupName, cNamespace) =>
         recoverIncludedCallableStar(index, mod, sup.id, lookupName, cNamespace, node, source),

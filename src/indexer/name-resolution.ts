@@ -96,6 +96,21 @@ export function createLoadingParsedFileProvider(
   };
 }
 
+/** Load-and-retry passes for a lookup that reads files it has not parsed yet. */
+const MAX_NAME_RESOLUTION_LOADS = 4;
+
+/** Runs a synchronous lookup step, parsing any file it missed and rerunning it. */
+export async function withParsedFiles<T>(files: LoadingParsedFileProvider, step: () => T): Promise<T> {
+  let result = step();
+  for (let attempt = 0; attempt < MAX_NAME_RESOLUTION_LOADS; attempt += 1) {
+    const missing = files.takeMisses();
+    if (!missing.length) break;
+    await files.load(missing);
+    result = step();
+  }
+  return result;
+}
+
 /** A lookup step that needs async member resolution before its answer is known. */
 export type DeferredNameRequest =
   /** Inside an out-of-line C++ member body, a member of the owner hides a file-scope name. */

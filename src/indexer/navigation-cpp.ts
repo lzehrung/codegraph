@@ -256,34 +256,6 @@ export function resolveVisibleCppCallableName(
   return resolveCppExportedCallables(index, visibleDefs, node, source, loadParsedFile);
 }
 
-export async function resolveVisibleCppCallableNameAsync(
-  index: ProjectIndex,
-  sourceModule: ModuleIndex,
-  name: string,
-  node: SyntaxNodeLike,
-  source: string,
-  currentFile?: { file: FileId; parsed: CppParsedFile },
-): Promise<SymbolDef | null | undefined> {
-  const defs = collectVisibleCppFunctionExports(index, sourceModule, name);
-  if (!defs.length) return undefined;
-  const parsedByFile = new Map<string, CppParsedFile>();
-  if (currentFile) parsedByFile.set(fileIdentityKey(currentFile.file), currentFile.parsed);
-  for (const def of defs) {
-    const fileKey = fileIdentityKey(def.file);
-    if (parsedByFile.has(fileKey)) continue;
-    try {
-      const parsed = await ensureParsedContext(def.file, index.parsed?.get(fileKey), index.languageExtensions);
-      parsedByFile.set(fileKey, parsed);
-    } catch {
-      /* reduced mode: skip files that cannot be parsed */
-    }
-  }
-  const loadParsedFile = (file: string): CppParsedFile | null => parsedByFile.get(fileIdentityKey(file)) ?? null;
-  const visibleDefs = visibleCppFunctionExportsAt(index, sourceModule, defs, node, loadParsedFile);
-  if (!visibleDefs.length) return undefined;
-  return resolveCppExportedCallables(index, visibleDefs, node, source, loadParsedFile);
-}
-
 const CPP_USING_DIRECTIVE_NAME_TYPES: Record<string, true> = {
   identifier: true,
   namespace_identifier: true,
@@ -595,38 +567,6 @@ export function resolveCppUsingDirectiveName(
   }
   if (otherDefs.length === 1) return otherDefs[0]!;
   return null;
-}
-
-export async function resolveCppUsingDirectiveNameAsync(
-  index: ProjectIndex,
-  sourceModule: ModuleIndex,
-  name: string,
-  node: SyntaxNodeLike,
-  source: string,
-  currentFile?: { file: FileId; parsed: CppParsedFile },
-): Promise<SymbolDef | null | undefined> {
-  const parsedByFile = new Map<string, CppParsedFile>();
-  if (currentFile) parsedByFile.set(fileIdentityKey(currentFile.file), currentFile.parsed);
-  for (const moduleEntry of cppStarImportClosure(index, sourceModule)) {
-    const key = fileIdentityKey(moduleEntry.file);
-    if (parsedByFile.has(key)) continue;
-    try {
-      parsedByFile.set(
-        key,
-        await ensureParsedContext(moduleEntry.file, index.parsed?.get(key), index.languageExtensions),
-      );
-    } catch {
-      /* reduced mode: skip files that cannot be parsed */
-    }
-  }
-  return resolveCppUsingDirectiveName(
-    index,
-    sourceModule,
-    name,
-    node,
-    source,
-    (file) => parsedByFile.get(fileIdentityKey(file)) ?? null,
-  );
 }
 
 function cppMemberContainerForDefinition(tree: SyntaxTreeLike, def: SymbolDef): SyntaxNodeLike | null {

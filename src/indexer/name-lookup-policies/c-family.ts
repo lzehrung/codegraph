@@ -48,24 +48,26 @@ export const cLookupPolicy: NameLookupPolicy = {
   afterCrossModule: (state, resolved) => deferIncludedStarRecovery(state, resolved, cNamespaceOf(state.use.node)),
 };
 
+/** A qualified name (`ns::f`, `Box::make`) names a namespace or static member directly. */
+export function resolveCppQualifiedName(use: BareNameUse): GoToResult | undefined {
+  const { index, mod, file, node, name, scopeIndex, parsed } = use;
+  if (!name.includes("::")) return undefined;
+  const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(name);
+  if (qualifiedBindings) {
+    const selected = resolveCppCallableBindings(file, qualifiedBindings, node, parsed.source);
+    if (!selected) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
+    return okGoToResult(index, selected, { resolution: "exact", confidence: "high" });
+  }
+  const visible = resolveVisibleCppCallableName(index, mod, name, node, parsed.source, loadParsed(use));
+  if (visible !== undefined) {
+    if (!visible) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
+    return okGoToResult(index, visible, { resolution: "exact", confidence: "high" });
+  }
+  return resolveNamedDefinition(index, mod, file, parsed.sup, name) ?? undefined;
+}
+
 export const cppLookupPolicy: NameLookupPolicy = {
-  // A qualified name (`ns::f`, `Box::make`) names a namespace or static member directly.
-  beforeLexical(use) {
-    const { index, mod, file, node, name, scopeIndex, parsed } = use;
-    if (!name.includes("::")) return undefined;
-    const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(name);
-    if (qualifiedBindings) {
-      const selected = resolveCppCallableBindings(file, qualifiedBindings, node, parsed.source);
-      if (!selected) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
-      return okGoToResult(index, selected, { resolution: "exact", confidence: "high" });
-    }
-    const visible = resolveVisibleCppCallableName(index, mod, name, node, parsed.source, loadParsed(use));
-    if (visible !== undefined) {
-      if (!visible) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
-      return okGoToResult(index, visible, { resolution: "exact", confidence: "high" });
-    }
-    return resolveNamedDefinition(index, mod, file, parsed.sup, name) ?? undefined;
-  },
+  beforeLexical: resolveCppQualifiedName,
 
   // `using ns::f;` binds the name to that namespace member.
   fromClosestBinding({ use, closestBinding }) {
