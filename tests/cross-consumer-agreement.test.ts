@@ -73,7 +73,12 @@ const built = new Map<Readonly<Record<string, string>>, Promise<ConsumerAgreemen
 function loadFixture(row: AgreementRow): Promise<ConsumerAgreementFixture> {
   const existing = built.get(row.files);
   if (existing) return existing;
-  const pending = buildConsumerAgreementFixture(`cg-agree-${row.id}-`, row.files);
+  // Scenario labels contain characters such as `::`, which Windows rejects in directory names.
+  const slug = row.id
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  const pending = buildConsumerAgreementFixture(`cg-agree-${slug}-`, row.files);
   built.set(row.files, pending);
   return pending;
 }

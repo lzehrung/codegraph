@@ -9,7 +9,7 @@ import {
 } from "../../languages/import-statement-parsers.js";
 import { CSHARP_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
-import { resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
+import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/resolution/rust.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
@@ -201,22 +201,32 @@ async function applyCsharpStatementOverride(
   }
   if (parsed.alias) {
     const fromParts = parsed.from.split(".");
-    if (typeof resolved !== "string" && fromParts.length > 1) {
+    if (fromParts.length > 1) {
       const fallbackFrom = fromParts.slice(0, -1).join(".");
       if (fallbackFrom) {
         // The full path isn't itself a declared namespace (checked above): `using PT = N.Point;`
-        // names a TYPE (`Point`) inside namespace `N`, not a namespace itself. Resolving the
-        // parent path as a namespace finds `Point`'s declaring file so `imported` below (`Point`)
-        // resolves the same way a plain `using N;` peer reference already does.
+        // names a TYPE (`Point`) inside namespace `N`. A namespace that lives in one file can
+        // use that file directly. When several files declare it, the type name is resolved
+        // across all of them (partial parts share one owner). An ambiguous set stays external
+        // instead of keeping a path-like first match such as `N/Point.cs`.
         const fallbackNamespaceTargets = await resolveCsharpNamespaceImportPaths(
           context.projectRoot,
           fallbackFrom,
           context.file,
         );
-        if (fallbackNamespaceTargets.length === 1) {
+        if (fallbackNamespaceTargets.length > 1) {
+          const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, parsed.from, context.file);
+          if (typeMatch.status === "found") {
+            fromValue = fallbackFrom;
+            resolved = typeMatch.file;
+          } else {
+            fromValue = parsed.from;
+            resolved = { external: parsed.from };
+          }
+        } else if (typeof resolved !== "string" && fallbackNamespaceTargets.length === 1) {
           fromValue = fallbackFrom;
           resolved = fallbackNamespaceTargets[0]!.replace(/\\/g, "/");
-        } else {
+        } else if (typeof resolved !== "string") {
           const fallbackResolved = await context.resolveFrom(fallbackFrom);
           if (typeof fallbackResolved === "string") {
             fromValue = fallbackFrom;

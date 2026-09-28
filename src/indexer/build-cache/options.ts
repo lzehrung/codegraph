@@ -121,8 +121,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * bindings; Python, Ruby, Rust, Go, Zig, C, and C++ resolution corrections; star-import
  * precedence; same-file forward references; honest reference coverage for unverified uses;
  * and cached `includeForm` so warm builds re-resolve specifiers a new file can satisfy.
+ * Epoch 67 resolves a C# `using` alias to a type declared in one of several files that share
+ * its namespace, including partial-type owners, and leaves an ambiguous type unresolved.
+ * The alias's namespace qualifies the bound type, so a same-named peer in another namespace is not chosen.
  */
-export const CORE_ALGORITHM_EPOCH = 66;
+export const CORE_ALGORITHM_EPOCH = 67;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

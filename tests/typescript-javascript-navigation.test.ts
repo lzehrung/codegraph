@@ -124,6 +124,119 @@ describe("TypeScript and JavaScript navigation", () => {
     }
   });
 
+  it.each([
+    {
+      label: "free function",
+      files: {
+        "free.ts": [
+          "export function choose(a: string): string;",
+          "export function choose(a: string, b: number): string;",
+          "export function choose(a: string, b?: number, c?: boolean): string { return a; }",
+          'export function accepted(): string { return choose("a", 1); }',
+          'export function rejected(): string { return choose("a", 1, true); }',
+          "export function spread(values: [string, number, boolean]): string { return choose(...values); }",
+        ].join("\n"),
+      },
+      declared: "free.ts",
+      use: "free.ts",
+      name: "choose",
+      impl: 3,
+      accepted: 4,
+      rejected: 5,
+      spread: 6,
+      coverage: "complete",
+    },
+    {
+      label: "method through this",
+      files: {
+        "method.ts": [
+          "export class Handler {",
+          "  handle(a: string): string;",
+          "  handle(a: string, b: number): string;",
+          "  handle(a: string, b?: number, c?: boolean): string { return a; }",
+          '  accepted(): string { return this.handle("a", 1); }',
+          '  rejected(): string { return this.handle("a", 1, true); }',
+          "  spread(values: [string, number, boolean]): string { return this.handle(...values); }",
+          "}",
+        ].join("\n"),
+      },
+      declared: "method.ts",
+      use: "method.ts",
+      name: "handle",
+      impl: 4,
+      accepted: 5,
+      rejected: 6,
+      spread: 7,
+      coverage: "partial",
+    },
+    {
+      label: "named import",
+      files: {
+        "declared.ts": [
+          "export function format(a: string): string;",
+          "export function format(a: string, b: number): string;",
+          "export function format(a: string, b?: number, c?: boolean): string { return a; }",
+        ].join("\n"),
+        "use.ts": [
+          'import { format } from "./declared";',
+          'export function accepted(): string { return format("a", 1); }',
+          'export function rejected(): string { return format("a", 1, true); }',
+          "export function spread(values: [string, number, boolean]): string { return format(...values); }",
+        ].join("\n"),
+      },
+      declared: "declared.ts",
+      use: "use.ts",
+      name: "format",
+      impl: 3,
+      accepted: 2,
+      rejected: 3,
+      spread: 4,
+      coverage: "complete",
+    },
+  ])("rejects implementation-only arity for $label", async (scenario) => {
+    const { files, declared, use, name, impl, accepted, rejected, spread, coverage } = scenario;
+    const fileSources: Record<string, string> = files;
+    const fixture = await project(fileSources);
+    try {
+      const source = fileSources[declared]!;
+      const useSource = fileSources[use]!;
+      for (const [line, status] of [
+        [accepted, "ok"],
+        [rejected, "not_found"],
+        [spread, "ok"],
+      ] as const) {
+        const result = await goToDefinition(fixture.index, {
+          file: fixture.file(use),
+          line,
+          column: columnOf(useSource, line, name + "("),
+        });
+        expect(result.status).toBe(status);
+        if (result.status === "ok") {
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(fixture.file(declared)));
+          expect(result.definition.range.start.line).toBe(impl);
+        }
+      }
+      const refs = await findReferences(fixture.index, {
+        file: fixture.file(declared),
+        line: impl,
+        column: columnOf(source, impl, name),
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") return;
+      expect(refs.referenceCoverage?.state).toBe(coverage);
+      expect(referenceSites(refs)).toContain(use + ":" + accepted);
+      expect(referenceSites(refs)).toContain(use + ":" + spread);
+      expect(referenceSites(refs)).not.toContain(use + ":" + rejected);
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      const target = fixture.file(declared) + "::" + name + "::" + tokenIndex(source, impl, name);
+      expect(callTargetIds(graph, "accepted")).toContain(target);
+      expect(callTargetIds(graph, "spread")).toContain(target);
+      expect(callTargetIds(graph, "rejected")).toEqual([]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it("retains overload signatures without exactly one implementation and member overloads", async () => {
     const declarations = [
       "export declare function f(a: string): void;",

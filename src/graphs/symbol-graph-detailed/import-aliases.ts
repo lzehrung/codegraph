@@ -125,6 +125,17 @@ export function buildImportAliasMaps(
         }
         return;
       }
+      if (languageId === "csharp") {
+        // Same qualified lookup as navigation. A first local named `Point` in the
+        // resolved file can be a different namespace's type than the alias names.
+        const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
+        if (resolved && !("namespace" in resolved)) {
+          aliasToTargetDef.set(imp.local, resolved);
+        } else if (resolved && "namespace" in resolved) {
+          aliasToTargetModule.set(imp.local, normalizePath(resolved.namespace));
+        }
+        return;
+      }
       const localFallback = targetModule.locals.find((local) => local.localName === imp.imported);
       const fallbackResolved: ResolvedExport | null = localFallback
         ? {

@@ -1261,8 +1261,9 @@ export function classifyReceiver(
   proofCache: Map<string, ReceiverProof>,
   cacheScope: number,
   accessNode: SyntaxNodeLike,
+  hasLexicalBinding: (callee: SyntaxNodeLike) => boolean,
 ): ReceiverBinding | null {
-  const text = receiverKeywordText(sup, receiver, source);
+  const text = receiverKeywordText(sup, receiver, source, hasLexicalBinding);
   if (!text) return null;
   const keywordKind = keywordReceiverKind(sup.id, text);
   if (keywordKind) {
@@ -1606,6 +1607,7 @@ export function emitReceiverCallEdges(
   ownerAnchors: ReadonlyMap<string, string> = new Map(),
   accessibleMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   fileHiddenMemberIds: ReadonlySet<string> = new Set(),
+  acceptsCallTarget?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1680,6 +1682,11 @@ export function emitReceiverCallEdges(
         candidate.site.file,
       );
       if (lookup.status === "unique") {
+        if (acceptsCallTarget && !acceptsCallTarget(lookup.memberId, candidate)) {
+          receiverDisposition = "ambiguous";
+          if (existingTargets.size) rejectedCallSites.add(siteKey);
+          break;
+        }
         receiverDisposition = "resolved";
         const combinedTargets = new Set(existingTargets);
         combinedTargets.add(lookup.memberId);

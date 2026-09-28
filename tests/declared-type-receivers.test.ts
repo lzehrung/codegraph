@@ -380,6 +380,52 @@ describe("declared-type receiver proof", () => {
       expect(calls).toHaveLength(1);
     });
 
+    it("resolves p.Sum() when namespace N is split across files and Point lives in one of them", async () => {
+      const point = "namespace N {\n  public class Point {\n    public int Sum() => 1;\n  }\n}\n";
+      const other = "namespace N {\n  public class Widget {\n    public int Sum() => 2;\n  }\n}\n";
+      const decoy = "namespace M {\n  public class Point {\n    public int Sum() => 9;\n  }\n}\n";
+      const use =
+        "using PT = N.Point;\nnamespace Z {\n  public class User {\n    public int Use() {\n      PT p = new PT();\n      return p.Sum();\n    }\n  }\n}\n";
+      const p = await fixture("cg-alias-split-", {
+        "Point.cs": point,
+        "Other.cs": other,
+        "Decoy.cs": decoy,
+        "Use.cs": use,
+      });
+
+      const aliasGoto = await goToDefinition(p.index, { file: p.f("Use.cs"), ...locate(use, "PT", 1) });
+      expect(aliasGoto.status).toBe("ok");
+      if (aliasGoto.status === "ok") {
+        expect(normalizeTestPath(aliasGoto.definition.file)).toBe(p.f("Point.cs"));
+        expect(aliasGoto.definition.localName).toBe("Point");
+      }
+
+      const goto = await goToDefinition(p.index, { file: p.f("Use.cs"), ...locate(use, "Sum", 0) });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") {
+        expect(normalizeTestPath(goto.definition.file)).toBe(p.f("Point.cs"));
+        expect(goto.definition.range.start.line).toBe(3);
+      }
+
+      const refs = await findReferences(p.index, { file: p.f("Point.cs"), ...locate(point, "Sum", 0) });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.some((ref) => normalizeTestPath(ref.file) === p.f("Use.cs"))).toBe(true);
+        expect(refs.references.some((ref) => normalizeTestPath(ref.file) === p.f("Decoy.cs"))).toBe(false);
+        expect(refs.referenceCoverage.state).toBe("complete");
+      }
+
+      const graph = await buildSymbolGraphDetailed(p.index);
+      const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Sum");
+      expect(calls).toHaveLength(1);
+      expect(normalizeTestPath(graph.nodes.get(calls[0]!.to)?.file ?? "")).toBe(p.f("Point.cs"));
+
+      const fileTargets = p.index.graph.edges
+        .filter((edge) => normalizeTestPath(edge.from) === p.f("Use.cs") && edge.to.type === "file")
+        .map((edge) => normalizeTestPath(edge.to.type === "file" ? edge.to.path : ""));
+      expect(fileTargets).toEqual([p.f("Point.cs")]);
+    });
+
     it("control: a using namespace alias (using NS = N;) still resolves NS.Point", async () => {
       const text =
         "namespace N {\n  public class Point {\n    public int Sum() => 1;\n  }\n}\nusing NS = N;\nnamespace M {\n  public class User {\n    public int Use() {\n      NS.Point p = new NS.Point();\n      return p.Sum();\n    }\n  }\n}\n";

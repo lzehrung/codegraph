@@ -93,10 +93,15 @@ const RECEIVER_KEYWORD_CALL_NODE_TYPES: Record<string, true> = { call: true, cal
  * The text used to classify a receiver as an own-type or supertype keyword. Ordinarily this is
  * the receiver node's own source spelling, but a language whose row sets `receiverKeywordCallShape`
  * may also spell a keyword receiver as a zero-argument call to that keyword - Python's `super()`,
- * which (unlike `self`/`cls`) has no bare-name form. Unwrap that call to the keyword's own text
- * before the caller matches it against `receiverKeywords`.
+ * which (unlike `self`/`cls`) has no bare-name form. Only unwrap that call when its callee is
+ * not shadowed by a visible lexical binding.
  */
-export function receiverKeywordText(sup: LanguageSupport, node: SyntaxNodeLike, source: string): string {
+export function receiverKeywordText(
+  sup: LanguageSupport,
+  node: SyntaxNodeLike,
+  source: string,
+  hasLexicalBinding: (callee: SyntaxNodeLike) => boolean,
+): string {
   const text = sliceText(node, source).trim();
   if (!MEMBER_ACCESS_ROWS[sup.id]?.receiverKeywordCallShape || !RECEIVER_KEYWORD_CALL_NODE_TYPES[node.type]) {
     return text;
@@ -105,7 +110,7 @@ export function receiverKeywordText(sup: LanguageSupport, node: SyntaxNodeLike, 
   const args = node.childForFieldName("arguments") ?? node.childForFieldName("argument_list");
   if (!callee || (args && args.namedChildren.length)) return text;
   const calleeText = sliceText(callee, source).trim();
-  return isKeywordReceiver(sup.id, calleeText) ? calleeText : text;
+  return isKeywordReceiver(sup.id, calleeText) && !hasLexicalBinding(callee) ? calleeText : text;
 }
 
 export function getNavigationExpressionProperty(sup: LanguageSupport, expr: SyntaxNodeLike): SyntaxNodeLike | null {

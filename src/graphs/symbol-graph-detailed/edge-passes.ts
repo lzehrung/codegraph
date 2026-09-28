@@ -16,6 +16,7 @@ import {
   resolveSharedOwnerContainers,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
+import { findClosestScopeBinding } from "../../indexer/navigation-local.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
 import { cjsRequireValueBinding, resolvePhpExportByImportType } from "../../indexer/navigation-resolve.js";
 import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
@@ -705,6 +706,10 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
   ]);
   // Receiver typing and lexical member lookup are initialized only for receiver calls.
   const receiverProofs = new Map<string, ReceiverProof>();
+  const hasLexicalBinding = (callee: SyntaxNodeLike): boolean => {
+    const scope = context.index.scopeCache.get(fileIdentityKey(context.moduleEntry.file));
+    return !scope || !!findClosestScopeBinding(scope, sliceText(callee, context.source), callee, context.sup);
+  };
   let membersByContainer: Map<number, DetailedFunctionNode[]> | undefined;
   const lexicalMembers = (container: SyntaxNodeLike): DetailedFunctionNode[] => {
     if (!membersByContainer) {
@@ -823,6 +828,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         receiverProofs,
         fn.node.startIndex,
         access.accessNode,
+        hasLexicalBinding,
       );
       if (isJsTsLanguage(context.sup.id) && isIdentifierType(context.sup, access.receiver.type)) {
         const receiverName = sliceText(access.receiver, context.source);

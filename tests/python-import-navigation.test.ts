@@ -13,8 +13,8 @@ import { fileIdentityKey } from "../src/util/paths.js";
  * - `import pkg.mod` followed by `pkg.mod.foo()` must navigate and find references like the
  *   equivalent `from pkg import mod` and `import pkg.mod as m` forms already do.
  * - the source-side name in `from a import helper as h` must navigate like the unaliased form.
- * - `super().m()` must resolve through a proven base class, same-file or
- *   imported, while an unproven (missing) base stays `not_found`.
+ * - `super().m()` resolves through a proven base class, same-file or imported, unless `super` is
+ *   lexically shadowed; an unproven (missing) base stays `not_found`.
  * - Submodule bindings target regular-package initializers and never infer the wrong case.
  */
 
@@ -549,6 +549,109 @@ describe("super() through a proven base class", () => {
       expect(standaloneGreet).toBeDefined();
       expect(graph.edges.filter((edge) => edge.label === "calls" && edge.from === standaloneGreet!.id)).toHaveLength(0);
     });
+  });
+});
+
+describe("Python super() lexical shadowing", () => {
+  const baseSource = "class Base:\n    def helper(self):\n        return 1\n";
+  const controlSource = [
+    "from base import Base",
+    "class Control(Base):",
+    "    super = lambda: object()",
+    "    def run(self):",
+    "        return super().helper()",
+    "",
+  ].join("\n");
+
+  it.each([
+    ["parameter", "class Derived(Base):\n    def run(self, super):\n        return super().helper()\n"],
+    [
+      "local assignment",
+      "class Derived(Base):\n    def run(self):\n        super = lambda: object()\n        return super().helper()\n",
+    ],
+    [
+      "module import",
+      "from factory import super\nclass Derived(Base):\n    def run(self):\n        return super().helper()\n",
+    ],
+    [
+      "module assignment",
+      "super = lambda: object()\nclass Derived(Base):\n    def run(self):\n        return super().helper()\n",
+    ],
+    ["class-body assignment", "class Derived(Base):\n    super = lambda: object()\n    value = super().helper()\n"],
+  ])("does not resolve a %s named super as the built-in receiver", async (_case, derivedBody) => {
+    const derivedSource = `from base import Base\n${derivedBody}`;
+    const derivedLine = derivedSource.split("\n").findIndex((line) => line.includes("super().helper()")) + 1;
+    await withFixture(
+      "cg-shadow-super-",
+      {
+        "base.py": baseSource,
+        "factory.py": "def super():\n    return object()\n",
+        "derived.py": derivedSource,
+        "control.py": controlSource,
+      },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const shadowed = await goToDefinition(index, {
+          file: f("derived.py"),
+          line: derivedLine,
+          column: columnOf(derivedSource, derivedLine, "helper"),
+        });
+        expect(shadowed.status).toBe("not_found");
+
+        const unshadowed = await goToDefinition(index, {
+          file: f("control.py"),
+          line: 5,
+          column: columnOf(controlSource, 5, "helper"),
+        });
+        expect(unshadowed.status).toBe("ok");
+        if (unshadowed.status === "ok") {
+          expect(fileIdentityKey(unshadowed.definition.file)).toBe(fileIdentityKey(f("base.py")));
+          expect(unshadowed.definition.range.start.line).toBe(2);
+        }
+
+        const references = await findReferences(index, {
+          file: f("base.py"),
+          line: 2,
+          column: columnOf(baseSource, 2, "helper"),
+        });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          expect(references.referenceCoverage.state).toBe("partial");
+          expect(
+            references.references.some(
+              (ref) =>
+                fileIdentityKey(ref.file) === fileIdentityKey(f("derived.py")) && ref.range.start.line === derivedLine,
+            ),
+          ).toBe(false);
+          expect(
+            references.references.some(
+              (ref) => fileIdentityKey(ref.file) === fileIdentityKey(f("control.py")) && ref.range.start.line === 5,
+            ),
+          ).toBe(true);
+        }
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const baseHelper = [...graph.nodes.values()].find(
+          (node) => node.name === "helper" && fileIdentityKey(node.file) === fileIdentityKey(f("base.py")),
+        );
+        expect(baseHelper).toBeDefined();
+        const baseCalls = graph.edges.filter((edge) => edge.label === "calls" && edge.to === baseHelper?.id);
+        expect(
+          baseCalls.some(
+            (edge) =>
+              fileIdentityKey(edge.site?.file ?? "") === fileIdentityKey(f("derived.py")) &&
+              edge.site?.range.start.line === derivedLine,
+          ),
+        ).toBe(false);
+        expect(
+          baseCalls.some(
+            (edge) =>
+              fileIdentityKey(edge.site?.file ?? "") === fileIdentityKey(f("control.py")) &&
+              edge.site?.range.start.line === 5,
+          ),
+        ).toBe(true);
+      },
+    );
   });
 });
 

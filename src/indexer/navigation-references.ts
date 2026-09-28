@@ -554,7 +554,20 @@ async function receiverProofUnavailable(
     if (isMemberAccessNode(parsed.sup, current)) {
       const { object, property } = getMemberAccessParts(parsed.sup, current);
       if (!object || !property || property.startIndex !== range.start.index) return false;
-      const receiver = classifyReceiver(parsed.sup, object, parsed.source, new Map(), current.startIndex, current);
+      const receiver = classifyReceiver(
+        parsed.sup,
+        object,
+        parsed.source,
+        new Map(),
+        current.startIndex,
+        current,
+        (callee) => {
+          const mod = index.byFile.get(fileIdentityKey(fileId));
+          if (!mod) return true;
+          const scope = getCachedScope(index, fileId, mod, parsed);
+          return !!findClosestScopeBinding(scope, sliceText(callee, parsed.source), callee, parsed.sup);
+        },
+      );
       // A recognized shape is not proof. Exclude it only when the type is a resolved
       // member-declaring definition, every supertype resolves, and none declare this member.
       let unavailable: boolean;

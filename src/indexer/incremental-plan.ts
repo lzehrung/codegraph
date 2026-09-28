@@ -283,19 +283,22 @@ export function externalSpecifierMatchesAddedStem(
 }
 
 /**
- * Tracked files that still have an external edge. Used only when the tracked set gained a
- * file; the caller then keeps specifiers whose stem matches an added file. A deletion does
- * not call this: collectDeletedTrackedFileDependents already rebuilds importers of the
- * deleted file, and a lost file cannot make an unresolved specifier start resolving.
+ * Tracked files with a module-specifier edge. Used only when the tracked set gained a file;
+ * the caller keeps only specifiers whose stem matches an added file. A deletion does not call
+ * this: collectDeletedTrackedFileDependents already rebuilds importers of the deleted file,
+ * and a lost file cannot make an unresolved specifier start resolving.
+ *
+ * Resolved edges stay candidates too: a newly added higher-priority file can supersede their
+ * current target just as it can resolve an external edge.
  */
-export function collectExternalEdgeCandidates(
+export function collectSpecifierEdgeCandidates(
   trackedEntries: Record<string, ManifestFileEntry>,
   trackedFileSetChanged: boolean,
 ): Set<string> {
   const candidates = new Set<string>();
   if (!trackedFileSetChanged) return candidates;
   for (const [file, entry] of Object.entries(trackedEntries)) {
-    if (entry.edges.some((edge) => edge.to.type === "external")) candidates.add(file);
+    if (entry.edges.length) candidates.add(file);
   }
   return candidates;
 }

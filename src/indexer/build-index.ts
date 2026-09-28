@@ -132,7 +132,7 @@ import {
   addedResolutionStems,
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
-  collectExternalEdgeCandidates,
+  collectSpecifierEdgeCandidates,
   collectPythonPackageImporters,
   externalSpecifierMatchesAddedStem,
   tsconfigAliasMappedTails,
@@ -528,7 +528,7 @@ function externalEdgeTargetKey(to: Edge["to"]): string {
   return to.type === "file" ? `file:${fileIdentityKey(to.path)}` : `external:${to.name}`;
 }
 
-const PRECISE_EXTERNAL_RESOLUTION_LANGUAGES: Record<string, true> = {
+const PRECISE_SPECIFIER_RESOLUTION_LANGUAGES: Record<string, true> = {
   c: true,
   cpp: true,
   js: true,
@@ -538,7 +538,7 @@ const PRECISE_EXTERNAL_RESOLUTION_LANGUAGES: Record<string, true> = {
   tsx: true,
 };
 
-async function externalSpecifierResolutionChanged(
+async function specifierResolutionChanged(
   file: string,
   entry: ManifestFileEntry,
   projectRoot: string,
@@ -554,13 +554,13 @@ async function externalSpecifierResolutionChanged(
   if (!support) return false;
   const addedStems = addedStemsForLanguage(support.id);
   if (!addedStems.size) return false;
-  const externalEdges = entry.edges.filter((edge) => edge.to.type === "external");
-  if (!externalEdges.length) return false;
+  const specifierEdges = entry.edges;
+  if (!specifierEdges.length) return false;
 
   const specifierOf = (edge: Edge): string => (edge.to.type === "external" ? edge.raw || edge.to.name : edge.raw);
   const matching: Edge[] = [];
   const needsAlias: Edge[] = [];
-  for (const edge of externalEdges) {
+  for (const edge of specifierEdges) {
     const specifier = specifierOf(edge);
     if (externalSpecifierMatchesAddedStem(specifier, support.id, addedStems, [], addedFiles)) {
       matching.push(edge);
@@ -586,7 +586,7 @@ async function externalSpecifierResolutionChanged(
   if (!matching.length) return false;
   // Stylesheet, document, and other unstored per-occurrence inputs cannot be
   // re-resolved from the edge. The caller only reaches this on an add.
-  if (!PRECISE_EXTERNAL_RESOLUTION_LANGUAGES[support.id]) return true;
+  if (!PRECISE_SPECIFIER_RESOLUTION_LANGUAGES[support.id]) return true;
   if (
     (support.id === "c" || support.id === "cpp") &&
     matching.some((edge) => edge.includeForm === undefined && !isCppNamedModuleSpecifier(edge.raw))
@@ -2328,14 +2328,14 @@ export async function buildProjectIndexIncremental(
           addedStemsByLanguage.set(languageId, stems);
           return stems;
         };
-        const externalEdgeCandidates = collectExternalEdgeCandidates(trackedEntries, true);
-        if (externalEdgeCandidates.size) {
-          const candidateFiles = Array.from(externalEdgeCandidates);
+        const specifierEdgeCandidates = collectSpecifierEdgeCandidates(trackedEntries, true);
+        if (specifierEdgeCandidates.size) {
+          const candidateFiles = Array.from(specifierEdgeCandidates);
           const staleResolutions = await mapLimit(candidateFiles, conc, async (candidate) => {
             if (!allFiles.has(candidate) || changedFiles.has(candidate)) return false;
             const entry = trackedEntries[candidate];
             if (!entry) return false;
-            return externalSpecifierResolutionChanged(
+            return specifierResolutionChanged(
               candidate,
               entry,
               projectRoot,

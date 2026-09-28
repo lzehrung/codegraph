@@ -569,6 +569,44 @@ describe("warm disk-cache build reacts when a file starts or stops resolving an 
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  it("re-resolves a cached quoted include from a resolution hint when a sibling header takes precedence", async () => {
+    const root = await mkTmpDir("cg-c-hint-supersedes-");
+    try {
+      const main = path.join(root, "src", "main.c");
+      const hintedHeader = path.join(root, "include", "foo.h");
+      const siblingHeader = path.join(root, "src", "foo.h");
+      const build = { ...DISK_BUILD, graph: { resolutionHints: ["include"] } };
+      const mainLines = ['#include "foo.h"', "int run(void) { return selected(); }", ""];
+      const hintedLines = ["int selected(void) { return 2; }", ""];
+      const siblingLines = ["int selected(void) { return 1; }", ""];
+      await writeFixtureFile(root, "include/foo.h", hintedLines.join("\n"));
+      await writeFixtureFile(root, "src/main.c", mainLines.join("\n"));
+
+      const initial = await buildProjectIndexIncremental(root, build);
+      expect(edgeTargets(initial, main)).toEqual([`file:${normalizePath(hintedHeader)}`]);
+
+      await writeFixtureFile(root, "src/foo.h", siblingLines.join("\n"));
+      const warm = await buildProjectIndexIncremental(root, build);
+      const targets = await expectWarmMatchesCold(root, main, warm, { graph: build.graph });
+      expect(targets).toEqual([`file:${normalizePath(siblingHeader)}`]);
+
+      const goto = await goToDefinition(warm, { file: main, line: 2, column: columnOf(mainLines, 2, "selected(") });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("expected goToDefinition to use the sibling header");
+      expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(siblingHeader));
+
+      const refs = await findReferences(warm, {
+        file: siblingHeader,
+        line: 1,
+        column: columnOf(siblingLines, 1, "selected("),
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("expected findReferences to use the sibling header");
+      expect(refs.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 
   it("resolves a tsconfig path alias once the target file is added, and unresolves it again once deleted", async () => {
     const root = await mkTmpDir("cg-ts-alias-");
@@ -666,6 +704,86 @@ describe("warm disk-cache build reacts when a file starts or stops resolving an 
       const targets = await expectWarmMatchesCold(root, main, warm);
       expect(targets).toContain(`file:${normalizePath(target)}`);
       expect(targets).not.toContain("external:@lib/foo");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it.each([
+    {
+      scenario: "a tsconfig path fallback",
+      specifier: "@lib/foo",
+      initialRelativePath: "second/foo.ts",
+      addedRelativePath: "first/foo.ts",
+      tsconfig: JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["first/*", "second/*"] } },
+      }),
+    },
+    {
+      scenario: "a directory index import",
+      specifier: "./foo",
+      initialRelativePath: "foo/index.ts",
+      addedRelativePath: "foo.ts",
+      tsconfig: undefined,
+    },
+  ])("matches a cold build when $scenario is superseded by an added file", async (fixture) => {
+    const root = await mkTmpDir("cg-added-supersedes-");
+    try {
+      if (fixture.tsconfig) await writeFixtureFile(root, "tsconfig.json", fixture.tsconfig);
+      const main = path.join(root, "main.ts");
+      const initialTarget = await writeFixtureFile(
+        root,
+        fixture.initialRelativePath,
+        "export function selected(): number { return 2; }\n",
+      );
+      const preferredTarget = path.join(root, fixture.addedRelativePath);
+      const mainLines = [
+        `import { selected } from "${fixture.specifier}";`,
+        "export function run(): number {",
+        "  return selected();",
+        "}",
+        "",
+      ];
+      const targetLines = ["export function selected(): number {", "  return 1;", "}", ""];
+      await fsp.writeFile(main, mainLines.join("\n"), "utf8");
+
+      const initial = await buildProjectIndexIncremental(root, DISK_BUILD);
+      expect(edgeTargets(initial, main)).toEqual([`file:${normalizePath(initialTarget)}`]);
+
+      await fsp.mkdir(path.dirname(preferredTarget), { recursive: true });
+      await fsp.writeFile(preferredTarget, targetLines.join("\n"), "utf8");
+      const warm = await buildProjectIndexIncremental(root, DISK_BUILD);
+      const targets = await expectWarmMatchesCold(root, main, warm);
+      expect(targets).toEqual([`file:${normalizePath(preferredTarget)}`]);
+
+      const goto = await goToDefinition(warm, { file: main, line: 3, column: columnOf(mainLines, 3, "selected(") });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("expected goToDefinition to use the added higher-priority target");
+      expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(preferredTarget));
+
+      const refs = await findReferences(warm, {
+        file: preferredTarget,
+        line: 1,
+        column: columnOf(targetLines, 1, "selected("),
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("expected findReferences to use the added higher-priority target");
+      expect(refs.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))).toBe(true);
+      expect(refs.referenceCoverage.state).toBe("complete");
+
+      const detailed = await buildSymbolGraphDetailed(warm);
+      const selectedNode = [...detailed.nodes.values()].find(
+        (node) => node.file === normalizePath(preferredTarget) && node.name === "selected",
+      );
+      const runNode = [...detailed.nodes.values()].find(
+        (node) => node.file === normalizePath(main) && node.name === "run",
+      );
+      expect(selectedNode).toBeTruthy();
+      expect(runNode).toBeTruthy();
+      expect(
+        detailed.edges.some(
+          (edge) => edge.label === "calls" && edge.from === runNode!.id && edge.to === selectedNode!.id,
+        ),
+      ).toBe(true);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

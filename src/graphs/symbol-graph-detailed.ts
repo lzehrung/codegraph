@@ -18,6 +18,7 @@ import {
   typescriptCallableContainerKey,
   typescriptCallableRoleAt,
   typescriptSelectOverloadCandidate,
+  typescriptOverloadImplementationAcceptsCount,
 } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
@@ -399,6 +400,45 @@ export async function buildSymbolGraphDetailed(
         }
       }
 
+      let importedTypeScriptCallableContexts: Map<string, ParsedFileContext> | undefined;
+      if (sup.id === "ts" || sup.id === "tsx") {
+        for (const target of aliasToTargetDef.values()) {
+          if (target.kind !== SymbolKind.Function) continue;
+          const targetKey = fileIdentityKey(target.file);
+          if (targetKey === fileIdentityKey(file) || importedTypeScriptCallableContexts?.has(targetKey)) continue;
+          const targetModule = index.byFile.get(targetKey);
+          if (
+            !targetModule?.locals.some(
+              (candidate) =>
+                candidate.kind === target.kind &&
+                candidate.localName === target.localName &&
+                candidate.range.start.index !== target.range.start.index,
+            )
+          ) {
+            continue;
+          }
+          const parsed = await loadParsedFile(target.file);
+          if (parsed && (parsed.sup.id === "ts" || parsed.sup.id === "tsx")) {
+            (importedTypeScriptCallableContexts ??= new Map()).set(targetKey, parsed);
+          }
+        }
+      }
+      const importedCallableAcceptsCount = (target: SymbolDef | null, node: SyntaxNodeLike): boolean => {
+        if (!target || target.kind !== SymbolKind.Function || node.parent?.type !== "call_expression") return true;
+        const targetKey = fileIdentityKey(target.file);
+        const parsed = importedTypeScriptCallableContexts?.get(targetKey);
+        const targetModule = index.byFile.get(targetKey);
+        if (!parsed || !targetModule) return true;
+        return typescriptOverloadImplementationAcceptsCount({
+          implementation: target,
+          locals: targetModule.locals,
+          tree: parsed.tree,
+          source: parsed.source,
+          languageId: parsed.sup.id,
+          argumentCount: getCallArgumentCount({ languageId: sup.id, source: src, call: node.parent }),
+        });
+      };
+
       const { functionNodes, classNodes, constStringOf } = collectDetailedDeclarations(
         tree.rootNode,
         sup,
@@ -577,6 +617,7 @@ export async function buildSymbolGraphDetailed(
         }
         if (binding) {
           const target = resolveCppAliasTarget(aliasToTargetDef.get(binding.name), node);
+          if (!importedCallableAcceptsCount(target, node)) return null;
           return sup.id === "php" && target && !phpReferenceRoleMatchesKind(node, target.kind) ? null : target;
         }
 
@@ -608,8 +649,9 @@ export async function buildSymbolGraphDetailed(
             : only;
         }
         const aliasTarget = resolveCppAliasTarget(aliasToTargetDef.get(lookupName), node);
-        if (aliasTarget && (sup.id !== "php" || phpReferenceRoleMatchesKind(node, aliasTarget.kind)))
-          return aliasTarget;
+        if (aliasTarget && (sup.id !== "php" || phpReferenceRoleMatchesKind(node, aliasTarget.kind))) {
+          return importedCallableAcceptsCount(aliasTarget, node) ? aliasTarget : null;
+        }
         // A bare name owned by no scope binding or local declaration can still name a
         // sibling declaration of the file's implicit compilation unit (Go/JVM package,
         // C# namespace, Swift module). Resolve it through the same proven peer relation
@@ -701,6 +743,41 @@ export async function buildSymbolGraphDetailed(
   const callableReceiverCalls = receiverCalls.filter((candidate) =>
     hasCallableNamed(candidate.memberName, candidate.caseInsensitiveMemberName),
   );
+  let typeScriptReceiverFiles: Set<string> | undefined;
+  let typeScriptReceiverNames: Set<string> | undefined;
+  for (const candidate of callableReceiverCalls) {
+    if (candidate.argumentCount === null) continue;
+    const languageId = supportForFileWithoutHeaderSample(candidate.site.file, index.languageExtensions)?.id;
+    if (languageId !== "ts" && languageId !== "tsx") continue;
+    (typeScriptReceiverFiles ??= new Set()).add(fileIdentityKey(candidate.site.file));
+    (typeScriptReceiverNames ??= new Set()).add(candidate.memberName);
+  }
+  const typeScriptReceiverTargets = typeScriptReceiverNames?.size
+    ? new Map<string, { def: SymbolDef; module: ModuleIndex; parsed: ParsedFileContext | null }>()
+    : undefined;
+  if (typeScriptReceiverTargets && typeScriptReceiverNames) {
+    for (const node of nodes.values()) {
+      if (!typeScriptReceiverNames.has(node.name)) continue;
+      const targetLanguageId = supportForFileWithoutHeaderSample(node.file, index.languageExtensions)?.id;
+      if (targetLanguageId !== "ts" && targetLanguageId !== "tsx") continue;
+      const module = index.byFile.get(fileIdentityKey(node.file));
+      const def = module?.locals.find((candidate) => defNodeId(candidate) === node.id);
+      if (!module || !def || def.kind !== SymbolKind.Function) continue;
+      if (
+        !module.locals.some(
+          (candidate) =>
+            candidate.kind === SymbolKind.Function &&
+            candidate.localName === def.localName &&
+            candidate.range.start.index !== def.range.start.index,
+        )
+      ) {
+        continue;
+      }
+      const parsed = await loadParsedFile(def.file);
+      typeScriptReceiverTargets.set(node.id, { def, module, parsed });
+    }
+  }
+
   const removedReceiverEdges = emitReceiverCallEdges(
     { nodes, edges },
     callableReceiverCalls,
@@ -711,6 +788,22 @@ export async function buildSymbolGraphDetailed(
     sharedOwnerAnchors,
     sharedOwnerAccessibleMembers,
     fileHiddenMemberIds,
+    (targetId, candidate) => {
+      if (candidate.argumentCount === null || !typeScriptReceiverFiles?.has(fileIdentityKey(candidate.site.file))) {
+        return true;
+      }
+      const target = typeScriptReceiverTargets?.get(targetId);
+      if (!target) return true;
+      if (!target.parsed) return false;
+      return typescriptOverloadImplementationAcceptsCount({
+        implementation: target.def,
+        locals: target.module.locals,
+        tree: target.parsed.tree,
+        source: target.parsed.source,
+        languageId: target.parsed.sup.id,
+        argumentCount: candidate.argumentCount,
+      });
+    },
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

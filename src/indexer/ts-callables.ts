@@ -132,8 +132,8 @@ export function typescriptCollapsedOverloadCandidates<T>(
 }
 
 /**
- * Select one collapsed TypeScript callable for a call with a proven argument count.
- * Unresolvable or ambiguous signature groups deliberately stay unresolved.
+ * Select the canonical implementation only when a declared overload accepts a known count.
+ * Unknown counts retain the implementation; signature-only groups need one matching declaration.
  */
 export function typescriptSelectOverloadCandidate<T>(params: {
   group: readonly T[];
@@ -145,7 +145,31 @@ export function typescriptSelectOverloadCandidate<T>(params: {
   argumentCount: number | null;
 }): T | undefined {
   const candidates = typescriptCollapsedOverloadCandidates(params.group, params.tree, params.definitionOf);
-  if (candidates.length === 1) return candidates[0];
+  if (candidates.length === 1) {
+    const implementation = candidates[0]!;
+    if (params.argumentCount === null || params.group.length === 1) return implementation;
+    let hasSignature = false;
+    for (const candidate of params.group) {
+      if (candidate === implementation) continue;
+      const def = params.definitionOf(candidate);
+      const start = def.range.start.index ?? 0;
+      const end = def.range.end.index ?? start;
+      if (typescriptCallableRoleAt(params.tree, start, end) !== "signature") continue;
+      hasSignature = true;
+      const declaration = params.declarationOf(candidate);
+      const arity = declaration
+        ? getCallableArity({ languageId: params.languageId, source: params.source, declaration })
+        : null;
+      if (
+        arity &&
+        params.argumentCount >= arity.minArgs &&
+        (arity.maxArgs === null || params.argumentCount <= arity.maxArgs)
+      ) {
+        return implementation;
+      }
+    }
+    return hasSignature ? undefined : implementation;
+  }
   if (params.argumentCount === null) return undefined;
 
   let selected: T | undefined;
@@ -164,4 +188,50 @@ export function typescriptSelectOverloadCandidate<T>(params: {
     selected = candidate;
   }
   return selected;
+}
+
+/** Check an imported canonical implementation against its declaration-only overloads. */
+export function typescriptOverloadImplementationAcceptsCount(params: {
+  implementation: SymbolDef;
+  locals: readonly SymbolDef[];
+  tree: SyntaxTreeLike;
+  source: string;
+  languageId: string;
+  argumentCount: number | null;
+}): boolean {
+  if (params.argumentCount === null) return true;
+  const { implementation, tree } = params;
+  let first: SymbolDef | undefined;
+  let sameName: SymbolDef[] | undefined;
+  for (const candidate of params.locals) {
+    if (candidate.kind !== implementation.kind || candidate.localName !== implementation.localName) continue;
+    if (sameName) sameName.push(candidate);
+    else if (first) sameName = [first, candidate];
+    else first = candidate;
+  }
+  if (!sameName) return true;
+  const start = implementation.range.start.index ?? 0;
+  const end = implementation.range.end.index ?? start;
+  const group = typescriptCallableCandidatesInContainer(sameName, tree, (candidate) => candidate.range, start, end);
+  const canonical = typescriptCollapsedOverloadTarget(group, tree, (candidate) => candidate);
+  if (
+    !canonical ||
+    canonical.range.start.index !== implementation.range.start.index ||
+    canonical.range.end.index !== implementation.range.end.index
+  ) {
+    return true;
+  }
+  return !!typescriptSelectOverloadCandidate({
+    group,
+    tree,
+    definitionOf: (candidate) => candidate,
+    declarationOf: (candidate) => {
+      const candidateStart = candidate.range.start.index ?? 0;
+      const candidateEnd = candidate.range.end.index ?? candidateStart;
+      return tree.rootNode.descendantForIndex(candidateStart, candidateEnd)?.parent;
+    },
+    source: params.source,
+    languageId: params.languageId,
+    argumentCount: params.argumentCount,
+  });
 }

@@ -20,7 +20,11 @@ import {
   supportsReceiverMemberNavigation,
 } from "../util/member-access-tables.js";
 import { cppCallableShapeForNode } from "./cpp-callables.js";
-import { typescriptCallableContainerKey, typescriptCollapsedOverloadCandidates } from "./ts-callables.js";
+import {
+  typescriptCallableContainerKey,
+  typescriptCollapsedOverloadCandidates,
+  typescriptSelectOverloadCandidate,
+} from "./ts-callables.js";
 import {
   effectiveExplicitBinding,
   isExpandedStarBinding,
@@ -63,7 +67,13 @@ import {
   isSwiftCrossFileHiddenSharedOwnerMember,
 } from "./declaration-visibility.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
-import { csharpLookupName, csharpQualifiedNameNode, resolveNamedDefinition } from "./navigation-local.js";
+import {
+  csharpLookupName,
+  csharpQualifiedNameNode,
+  findClosestScopeBinding,
+  getOrBuildScopeIndex,
+  resolveNamedDefinition,
+} from "./navigation-local.js";
 import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
@@ -739,6 +749,7 @@ export async function resolveMemberAccessDefinition(params: {
         obj,
         member,
         source,
+        tree,
         sup,
         resolveExpression,
       );
@@ -1284,6 +1295,10 @@ export async function provenClassifiedReceiverOmitsMember(
     new Map(),
     accessNode.startIndex,
     accessNode,
+    (callee) => {
+      const scope = getOrBuildScopeIndex(index, fileId, parsed.source, parsed.sup, mod, parsed.tree);
+      return !!findClosestScopeBinding(scope, sliceText(callee, parsed.source), callee, parsed.sup);
+    },
   );
   if (!receiver) return false;
   if (receiver.kind === "named-type") {
@@ -1984,6 +1999,17 @@ async function selectReceiverMemberCandidates(
       const context = await ensureParsedContext(file, undefined, index.languageExtensions);
       if (isJsTsLanguage(context.sup.id)) {
         overloadCandidates = typescriptCollapsedOverloadCandidates(candidates, context.tree, (candidate) => candidate);
+        if (overloadCandidates.length === 1) {
+          return typescriptSelectOverloadCandidate({
+            group: candidates,
+            tree: context.tree,
+            definitionOf: (candidate) => candidate,
+            declarationOf: (candidate) => nameNodeForDef(context, candidate)?.parent,
+            source: context.source,
+            languageId: context.sup.id,
+            argumentCount: knownArgumentCount ?? null,
+          });
+        }
       }
     }
   }
@@ -2402,10 +2428,11 @@ async function resolvePythonReceiverMember(
   obj: SyntaxNodeLike,
   member: string,
   source: string,
+  tree: SyntaxTreeLike,
   sup: LanguageSupport,
   resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
 ): Promise<SymbolDef | undefined> {
-  const classRef = await pythonReceiverClassRef(index, mod, node, obj, source, sup, resolveExpression);
+  const classRef = await pythonReceiverClassRef(index, mod, node, obj, source, tree, sup, resolveExpression);
   if (!classRef) return undefined;
   return lookupPythonClassMember(index, classRef.ref, member, classRef.startAtSupertype);
 }
@@ -2418,10 +2445,14 @@ async function pythonReceiverClassRef(
   node: SyntaxNodeLike,
   obj: SyntaxNodeLike,
   source: string,
+  tree: SyntaxTreeLike,
   sup: LanguageSupport,
   resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
 ): Promise<PythonReceiverClassRef | null> {
-  const receiverName = receiverKeywordText(sup, obj, source);
+  const receiverName = receiverKeywordText(sup, obj, source, (callee) => {
+    const scope = getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree);
+    return !!findClosestScopeBinding(scope, sliceText(callee, source), callee, sup);
+  });
   const keywordKind = keywordReceiverKind(sup.id, receiverName);
   if (keywordKind) {
     const container = findEnclosingClassContainer(node);

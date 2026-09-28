@@ -1,4 +1,5 @@
 import { cTagRole } from "../languages/definitions/c.js";
+import { getCallArgumentCount } from "../languages/callable-arity.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
@@ -28,7 +29,10 @@ import {
   resolveNamedDefinition,
   toModuleRef,
 } from "./navigation-local.js";
-import { typescriptCallableCandidatesInContainer, typescriptCollapsedOverloadCandidates } from "./ts-callables.js";
+import {
+  typescriptCallableCandidatesInContainer,
+  typescriptOverloadImplementationAcceptsCount,
+} from "./ts-callables.js";
 import { isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
 import {
   AMBIGUOUS_CPP_OVERLOAD_REASON,
@@ -468,6 +472,13 @@ export async function goToDefinition(
         confidence: "high",
       });
     }
+    if (
+      (sup.id === "ts" || sup.id === "tsx") &&
+      closestBinding?.kind === "function" &&
+      node.parent?.type === "call_expression"
+    ) {
+      return { status: "not_found", reason: "No matching TypeScript overload signature" };
+    }
     if (laterLocalShadowsUse(scopeIndex, lookupName, node, sup)) {
       return { status: "not_found", reason: "Local is not in scope before its declaration" };
     }
@@ -539,6 +550,41 @@ export async function goToDefinition(
         !phpReferenceRoleMatchesKind(node, resolvedName.definition.kind)
       ) {
         return { status: "not_found", reason: "No matching PHP symbol role" };
+      }
+      if (
+        (sup.id === "ts" || sup.id === "tsx") &&
+        node.parent?.type === "call_expression" &&
+        resolvedName?.status === "ok" &&
+        resolvedName.definition.kind === SymbolKind.Function
+      ) {
+        const argumentCount = getCallArgumentCount({ languageId: sup.id, source, call: node.parent });
+        if (argumentCount !== null) {
+          const target = resolvedName.definition;
+          const targetModule = index.byFile.get(fileIdentityKey(target.file));
+          if (targetModule) {
+            const targetContext =
+              fileIdentityKey(target.file) === fileIdentityKey(file)
+                ? context
+                : await ensureParsedContext(
+                    target.file,
+                    index.parsed?.get(fileIdentityKey(target.file)),
+                    index.languageExtensions,
+                  );
+            if (
+              (targetContext.sup.id === "ts" || targetContext.sup.id === "tsx") &&
+              !typescriptOverloadImplementationAcceptsCount({
+                implementation: target,
+                locals: targetModule.locals,
+                tree: targetContext.tree,
+                source: targetContext.source,
+                languageId: targetContext.sup.id,
+                argumentCount,
+              })
+            ) {
+              return { status: "not_found", reason: "No matching TypeScript overload signature" };
+            }
+          }
+        }
       }
       if (resolvedName) return resolvedName;
     }
@@ -935,13 +981,7 @@ async function findReferencesInternal(
       start,
       end,
     );
-    const candidates = typescriptCollapsedOverloadCandidates(overloadBindings, parsedContext.tree, (binding) => ({
-      file: definitionFile,
-      localName: binding.name,
-      kind: SymbolKind.Function,
-      range: binding.def!,
-    }));
-    requiresTypeScriptOverloadVerifiedScan = candidates.length > 1;
+    requiresTypeScriptOverloadVerifiedScan = overloadBindings.length > 1;
   }
 
   const requiresSameFileVerifiedScan =
@@ -953,7 +993,12 @@ async function findReferencesInternal(
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
   let memberCallOccurrencesNeedVerification = false;
-  if (localBinding && localBinding.occurrencesComplete !== false && !scansReceiverReferences) {
+  if (
+    localBinding &&
+    localBinding.occurrencesComplete !== false &&
+    !scansReceiverReferences &&
+    !requiresTypeScriptOverloadVerifiedScan
+  ) {
     const verifyMemberCalls = memberSyntaxNamesFreeFunction(parsedContext.sup.id);
     for (const occurrence of localBinding.occurrences) {
       if (hasReachedCollectionLimit()) break;

@@ -1,7 +1,7 @@
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import type { FileId } from "../types.js";
-import { foldPhpIdentifierCase, normalizeCsharpQualifiedName } from "../util/identifiers.js";
+import { foldPhpIdentifierCase, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES, isUnitBareNameVisible } from "./compilation-units.js";
 import { phpNamedImportRole } from "./import-types.js";
@@ -294,9 +294,12 @@ export function resolveExport(
     if (!names) return null;
     const normalizedFile = normalizePath(moduleEntry.file);
     const referenceIndex = fileIdentityKey(fileInner) === fileIdentityKey(file) ? opts?.referenceIndex : undefined;
+    const csharpFile = supportForFileWithoutHeaderSample(normalizedFile, index.languageExtensions)?.id === "csharp";
+    // A dotted name is a namespace path even when the caller has no source position
+    // (`using PT = N.Inner.Point` resolves through the bound file, not a use site).
+    // A bare name still needs a source position before namespace visibility applies.
     const filtersUseNamespace =
-      referenceIndex !== undefined &&
-      supportForFileWithoutHeaderSample(normalizedFile, index.languageExtensions)?.id === "csharp";
+      csharpFile && (referenceIndex !== undefined || name.includes(".") || name.startsWith("global::"));
     const separator = filtersUseNamespace ? name.lastIndexOf(".") : -1;
     let qualification: string | undefined;
     let unqualifiedName = name;
@@ -343,7 +346,7 @@ export function resolveExport(
               declarationFile: target.file,
               declaration: target.range,
               useFile: file,
-              useIndex: referenceIndex,
+              ...(referenceIndex !== undefined ? { useIndex: referenceIndex } : {}),
               ...(qualification !== undefined ? { qualification } : {}),
             }))) &&
         !localCandidates.some((candidate) => sameSymbolDef(index, candidate, target))
@@ -454,7 +457,7 @@ export function resolveExport(
               declarationFile: local.file,
               declaration: local.range,
               useFile: file,
-              useIndex: referenceIndex,
+              ...(referenceIndex !== undefined ? { useIndex: referenceIndex } : {}),
               ...(qualification !== undefined ? { qualification } : {}),
             }))
         ) {
@@ -605,6 +608,23 @@ export function resolveModuleExports(
   return resolved;
 }
 
+/**
+ * Qualified name a C# using-alias binds. `from` is either the namespace (`N.Inner`
+ * for `using PT = N.Inner.Point`) or the full dotted type when an earlier resolver
+ * already kept it (`Utils.UtilsClass`). A bare imported name must not be searched on
+ * its own: compilation-unit lookup would accept a same-named type in another namespace.
+ */
+function csharpNamedImportLookupName(from: string, exportedName: string): string {
+  if (!exportedName || exportedName.includes(".") || exportedName.startsWith("global::")) return exportedName;
+  const normalizedFrom = from.trim();
+  if (!normalizedFrom) return exportedName;
+  const parts = normalizedFrom.split(".").filter(Boolean);
+  const tail = parts[parts.length - 1];
+  if (!tail) return exportedName;
+  if (normalizeCsharpIdentifier(tail) === normalizeCsharpIdentifier(exportedName)) return normalizedFrom;
+  return `${normalizedFrom}.${exportedName}`;
+}
+
 export function resolveImported(
   index: ProjectIndex,
   imp: ImportBinding,
@@ -617,9 +637,18 @@ export function resolveImported(
   if (opts?.cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== opts.cNamespace) return null;
 
   const phpRole = phpNamedImportRole(imp);
+  // A C# `using PT = N.Inner.Point` stores the namespace in `from` and the type in
+  // `imported`. A bare `Point` lookup is an implicit compilation-unit search, so a peer
+  // `N.Point` is the only bare-visible match when this file also declares outer `N`.
+  // The alias names one namespace, and that qualified name is what every consumer resolves.
+  const support = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions);
+  const lookupName =
+    support?.id === "csharp" && imp.kind === "named"
+      ? csharpNamedImportLookupName(imp.from, exportedName)
+      : exportedName;
   const hit = phpRole
     ? resolvePhpExportByImportType(index, targetFile, exportedName, phpRole)
-    : resolveExport(index, targetFile, exportedName, {
+    : resolveExport(index, targetFile, lookupName, {
         ...opts,
         ...(namespace ? { cNamespace: namespace } : {}),
       });
@@ -633,7 +662,6 @@ export function resolveImported(
   }
 
   // Only Java, Kotlin, and Python matter below, so a `.h` target never needs its sample read.
-  const support = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions);
   if (support?.id === "java" || support?.id === "kotlin") {
     const siblingHit = resolveSiblingPackageExport(index, targetFile, exportedName);
     if (siblingHit?.kind === "resolved") return siblingHit.def;
