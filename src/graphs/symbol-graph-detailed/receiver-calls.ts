@@ -612,6 +612,31 @@ function rubyNewReceiverNameNode(node: SyntaxNodeLike, source: string, sup: Lang
 
 const NULLISH_TYPE_TEXT = new Set(["undefined", "null", "void"]);
 
+/**
+ * The `typeof import("spec")` type query a TypeScript annotation names, ignoring `| undefined` and
+ * `| null`: such a binding holds the module namespace of `spec`.
+ */
+export function typescriptImportTypeQuery(annotation: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = annotation;
+  while (current?.type === "type_annotation") current = current.namedChildren[0] ?? null;
+  if (current?.type === "union_type") {
+    const members: SyntaxNodeLike[] = current.namedChildren.filter(
+      (member) => !NULLISH_TYPE_TEXT.has(member.text.trim()),
+    );
+    current = members.length === 1 ? members[0]! : null;
+  }
+  if (current?.type !== "type_query") return null;
+  const call = current.namedChildren[0];
+  return call?.type === "call_expression" && call.childForFieldName("function")?.type === "import" ? current : null;
+}
+
+/** The module specifier of a `typeof import("spec")` type query. */
+export function importTypeQuerySpecifier(typeQuery: SyntaxNodeLike): string | null {
+  const argument = typeQuery.namedChildren[0]?.childForFieldName("arguments")?.namedChildren[0];
+  if (argument?.type !== "string") return null;
+  return argument.namedChildren.find((child) => child.type === "string_fragment")?.text ?? null;
+}
+
 export function unwrapNamedType(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   let current: SyntaxNodeLike | null = node;
   while (current) {
@@ -891,7 +916,7 @@ function bindingProof(node: SyntaxNodeLike, receiverName: string, source: string
   if (!BINDING_DECLARATION_TYPES.has(node.type)) return { status: "none" };
   if (!bindingDeclaresReceiverName(node, receiverName, source, sup)) return { status: "none" };
   const annotation = isJsTsLanguage(sup.id) ? node.childForFieldName("type") : null;
-  const annotated = annotation ? unwrapNamedType(annotation, sup) : null;
+  const annotated = annotation ? (unwrapNamedType(annotation, sup) ?? typescriptImportTypeQuery(annotation)) : null;
   if (annotated) return { status: "declared", node: annotated };
   const typeNode = constructionTypeFromBinding(node, receiverName, source, sup);
   if (typeNode) return { status: "type", node: typeNode };

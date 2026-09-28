@@ -22,7 +22,11 @@ import {
 } from "../../indexer/navigation-goto.js";
 import { findClosestScopeBinding, resolveNamedDefinition } from "../../indexer/navigation-local.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
-import { cjsRequireValueBinding, resolvePhpExportByImportType } from "../../indexer/navigation-resolve.js";
+import {
+  cjsRequireValueBinding,
+  resolveImportTypeMember,
+  resolvePhpExportByImportType,
+} from "../../indexer/navigation-resolve.js";
 import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
 import { typescriptSelectOverloadCandidate } from "../../indexer/ts-callables.js";
 import {
@@ -73,6 +77,8 @@ import {
   type ReceiverMemberScope,
   type MemberArityRange,
   type ReceiverProof,
+  receiverConstructorExpression,
+  importTypeQuerySpecifier,
 } from "./receiver-calls.js";
 
 type EdgePassContext = {
@@ -757,6 +763,18 @@ function recordTypeScriptNamespaceCall(
   return true;
 }
 
+/** A member call on a `typeof import("spec")` binding names that module's export. */
+function recordImportTypeCall(context: EdgePassContext, access: ReceiverCallAccess, fromId: string): boolean {
+  if (!isJsTsLanguage(context.sup.id)) return false;
+  const importType = receiverConstructorExpression(access.receiver, context.source, context.sup);
+  const specifier = importType?.type === "type_query" ? importTypeQuerySpecifier(importType) : null;
+  if (!specifier) return false;
+  const member = sliceText(access.property, context.source);
+  const target = resolveImportTypeMember(context.index, context.moduleEntry.file, specifier, member);
+  if (target) recordDefEdge(context, fromId, target, "calls", access.property);
+  return true;
+}
+
 /** Swift `Foo()` / `Worker(name:)` is construction. Record `instantiates` and skip the call path. */
 function recordSwiftCapitalizedConstruction(context: EdgePassContext, node: SyntaxNodeLike, fromId: string): boolean {
   if (context.sup.id !== "swift") return false;
@@ -1067,6 +1085,7 @@ export async function emitFunctionBodyEdges(
       const access = receiverCallAccess(context.sup, node, callee);
       if (access) {
         if (recordTypeScriptNamespaceCall(context, node, access, fromId)) return;
+        if (recordImportTypeCall(context, access, fromId)) return;
         const receiverName = sliceText(access.receiver, context.source);
         const typeScopedCppCall =
           context.sup.id === "cpp" &&

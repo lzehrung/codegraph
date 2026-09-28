@@ -275,6 +275,26 @@ export function cjsRequireValueBinding(index: ProjectIndex, targetFile: FileId):
   return memberContainerForDefinition(index, resolved.def) ?? resolved.def;
 }
 
+/**
+ * A member of the module a `typeof import("spec")` receiver holds, resolved through the file
+ * dependency edge the index recorded for that specifier.
+ */
+export function resolveImportTypeMember(
+  index: ProjectIndex,
+  fromFile: FileId,
+  specifier: string,
+  member: string,
+): SymbolDef | null {
+  const fromKey = fileIdentityKey(fromFile);
+  const edge = index.graph.edges.find(
+    (candidate) =>
+      candidate.raw === specifier && candidate.to.type === "file" && fileIdentityKey(candidate.from) === fromKey,
+  );
+  if (edge?.to.type !== "file") return null;
+  const hit = resolveExport(index, edge.to.path, member);
+  return hit?.kind === "resolved" ? hit.def : null;
+}
+
 export function resolveExport(
   index: ProjectIndex,
   file: FileId,

@@ -47,6 +47,7 @@ import {
   keywordReceiverMemberScope,
   kotlinExtensionReceiverTypeNode,
   nodeInStaticMemberContext,
+  importTypeQuerySpecifier,
   receiverConstructorExpression,
   rustImplSelfTypeNode,
   supportsStaticMemberScope,
@@ -86,6 +87,7 @@ import {
   resolveExport,
   resolveImported,
   resolvePhpExportByImportType,
+  resolveImportTypeMember,
 } from "./navigation-resolve.js";
 import {
   CSHARP_PARTIAL_CONTAINER_TYPES,
@@ -855,6 +857,18 @@ export async function resolveMemberAccessDefinition(params: {
       }
     }
 
+    const importType = isJsTsLanguage(sup.id) ? receiverConstructorExpression(obj, source, sup) : null;
+    const importSpecifier = importType?.type === "type_query" ? importTypeQuerySpecifier(importType) : null;
+    if (importSpecifier) {
+      const memberDef = resolveImportTypeMember(index, mod.file, importSpecifier, member);
+      return memberDef
+        ? okGoToResult(index, memberDef, {
+            via: { exportedName: member },
+            resolution: "member-access",
+            confidence: "medium",
+          })
+        : null;
+    }
     const receiver = await resolveReceiverDefinition(index, obj, source, sup, resolveExpression, mod);
 
     if (receiver) {
