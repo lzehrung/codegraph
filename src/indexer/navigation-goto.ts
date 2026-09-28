@@ -2346,6 +2346,29 @@ function isSwiftShadowingNonMember(declarationNode: SyntaxNodeLike): boolean {
   return false;
 }
 
+/** Parameter lists whose entries are locals of the function, not members of its type. */
+const PARAMETER_LIST_TYPES = new Set([
+  "formal_parameters",
+  "parameter_list",
+  "parameters",
+  "function_value_parameters",
+]);
+
+/**
+ * A parameter that also declares a property of the enclosing type: a TypeScript parameter
+ * property (`constructor(readonly path: string)`) or a PHP promoted constructor property.
+ */
+function isPropertyParameter(declarationNode: SyntaxNodeLike, list: SyntaxNodeLike): boolean {
+  let parameter: SyntaxNodeLike | null = declarationNode;
+  while (parameter && parameter.parent !== list) parameter = parameter.parent;
+  if (!parameter) return false;
+  if (parameter.type === "property_promotion_parameter") return true;
+  return parameter.namedChildren.some(
+    (child) =>
+      child.type === "accessibility_modifier" || child.type === "override_modifier" || child.text === "readonly",
+  );
+}
+
 export function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike, container: SyntaxNodeLike): boolean {
   if (isSwiftShadowingNonMember(declarationNode)) return false;
   if (nearestMemberContainer(declarationNode) !== container) return false;
@@ -2358,6 +2381,8 @@ export function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike
       (current.type === "block" || current.type === "compound_statement" || current.type === "statement_block") &&
       current.parent !== container;
     if (isMethodBody) return false;
+    // A method parameter is a local of that method, unless it also declares a property.
+    if (PARAMETER_LIST_TYPES.has(current.type)) return isPropertyParameter(declarationNode, current);
     current = current.parent;
   }
   return current === container;

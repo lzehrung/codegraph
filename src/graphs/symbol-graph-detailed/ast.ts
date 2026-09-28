@@ -2,6 +2,7 @@ import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import type { SymbolDef } from "../../indexer/types.js";
 import { sliceText, unquote } from "../../util/ast.js";
+import { isJsTsLanguage } from "../../languages/js-family.js";
 import {
   getMemberAccessParts,
   memberExpressionTypeFor,
@@ -31,6 +32,22 @@ export const isIdentifierType = (sup: LanguageSupport, type: string): boolean =>
 const FUNCTION_NAME_NODE_TYPES = new Set(["identifier", "field_identifier", "operator_name", "destructor_name"]);
 
 /** C and C++ put the function name in a nested declarator, not a `name` field. */
+const FUNCTION_EXPRESSION_TYPES = new Set(["function_expression", "function", "generator_function"]);
+
+/**
+ * A named JavaScript/TypeScript function expression that no binding names: an object property
+ * value (`{ value: function render() {} }`), a callback, or an IIFE. It is a caller in its own
+ * right. A function expression that a declarator or assignment binds is recorded under that name.
+ */
+function isStandaloneNamedFunctionExpression(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
+  if (!isJsTsLanguage(sup.id) || !FUNCTION_EXPRESSION_TYPES.has(node.type) || !node.childForFieldName("name")) {
+    return false;
+  }
+  const parent = node.parent;
+  if (parent?.type === "variable_declarator" && parent.childForFieldName("value")?.id === node.id) return false;
+  return !(parent?.type === "assignment_expression" && parent.childForFieldName("right")?.id === node.id);
+}
+
 function functionNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
   const named = node.childForFieldName("name");
   if (named) return named;
@@ -130,8 +147,17 @@ export function collectDetailedDeclarations(
     return containing[0] ?? candidates[0];
   };
 
+  /** A definition whose name starts inside `nameNode`, without falling back to a same-named one. */
+  const findDefinitionAt = (name: string, nameNode: SyntaxNodeLike): SymbolDef | undefined =>
+    locals.find(
+      (local) =>
+        local.localName === name &&
+        (local.range.start.index ?? Number.NEGATIVE_INFINITY) >= nameNode.startIndex &&
+        (local.range.start.index ?? Number.POSITIVE_INFINITY) < nameNode.endIndex,
+    );
+
   const walk = (node: SyntaxNodeLike): void => {
-    if (functionNodeTypes.has(node.type)) {
+    if (functionNodeTypes.has(node.type) || isStandaloneNamedFunctionExpression(sup, node)) {
       const nameNode = functionNameNode(node);
       const name = nameNode ? sliceText(nameNode, source) : undefined;
       if (name) {
@@ -183,9 +209,21 @@ export function collectDetailedDeclarations(
           } else if (left.type === "identifier") {
             name = sliceText(left, source);
           }
-          if (name) {
-            const def = findDefinition(name, left);
-            if (def) functionNodes.push({ name, node: right, def });
+          // A member target (`exports.handler = function () {}`) binds only a definition declared at
+          // that assignment; a same-named declaration elsewhere in the file is a different symbol.
+          let def: SymbolDef | undefined;
+          if (name)
+            def =
+              left.type === memberExpressionType
+                ? (findDefinitionAt(name, left) ?? findDefinitionAt(name, right))
+                : findDefinition(name, left);
+          if (name && def) {
+            functionNodes.push({ name, node: right, def });
+          } else {
+            // Otherwise a named function expression is the caller under its own name.
+            const ownName = FUNCTION_EXPRESSION_TYPES.has(right.type) ? right.childForFieldName("name") : null;
+            const ownDef = ownName ? findDefinitionAt(sliceText(ownName, source), ownName) : undefined;
+            if (ownName && ownDef) functionNodes.push({ name: sliceText(ownName, source), node: right, def: ownDef });
           }
         }
       }

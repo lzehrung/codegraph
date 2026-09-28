@@ -66,7 +66,7 @@ const COMPUTED_CALLEE = /parenthesized|binary|ternary|conditional/;
 
 /** Declarations that can own a graph caller node through their name. */
 const CALLER_HEADER =
-  /function|method|constructor|declarator|lambda|arrow|closure|init_declaration|accessor|subroutine|operator|getter|setter|property_declaration|variable_declaration|assignment/;
+  /function|method|constructor|declarator|lambda|arrow|closure|init_declaration|accessor|subroutine|operator|getter|setter|property_declaration|assignment/;
 
 function calleeNode(call: SyntaxNodeLike): SyntaxNodeLike | null {
   for (const field of CALLEE_FIELDS) {
@@ -106,11 +106,17 @@ type CallerIndex = {
   byFile: Map<string, Map<number, string>>;
   /** Callable members keyed by `Owner::member` with the owner's file, from `member_of` edges. */
   byOwnerMember: Map<string, Array<{ id: string; ownerFile: string }>>;
+  /** Every node id keyed by file, then name, for a function assigned to an existing binding. */
+  byFileName: Map<string, Map<string, string[]>>;
 };
 
 function callerIndex(graph: DetailedSymbolGraph): CallerIndex {
   const byFile = new Map<string, Map<number, string>>();
+  const byFileName = new Map<string, Map<string, string[]>>();
   for (const node of graph.nodes.values()) {
+    const names = byFileName.get(normalizePath(node.file)) ?? new Map<string, string[]>();
+    names.set(node.name, [...(names.get(node.name) ?? []), node.id]);
+    byFileName.set(normalizePath(node.file), names);
     if (node.kind !== "function" && !node.callable) continue;
     const start = Number(node.id.slice(node.id.lastIndexOf("::") + 2));
     if (!Number.isFinite(start)) continue;
@@ -131,7 +137,7 @@ function callerIndex(graph: DetailedSymbolGraph): CallerIndex {
       { id: member.id, ownerFile: normalizePath(owner.file) },
     ]);
   }
-  return { byFile, byOwnerMember };
+  return { byFile, byOwnerMember, byFileName };
 }
 
 /** `Owner::member` for a C++ out-of-line definition header (`int Box::run()`), else null. */
@@ -165,8 +171,11 @@ function enclosingCallers(
   for (let node = call.parent; node; node = node.parent) {
     if (!CALLER_HEADER.test(node.type)) continue;
     // The caller's name sits in the header, before the body or value.
-    const body = node.childForFieldName("body") ?? node.childForFieldName("value");
-    const headerEnd = body && body.startIndex > node.startIndex ? body.startIndex : node.endIndex;
+    const body = node.childForFieldName("body") ?? node.childForFieldName("value") ?? node.childForFieldName("right");
+    // Without a body or value there is no header boundary, so nothing inside can be proven
+    // to be the caller's name.
+    if (!body || body.startIndex <= node.startIndex) continue;
+    const headerEnd = body.startIndex;
     let found = false;
     for (const [start, id] of starts ?? []) {
       if (start >= node.startIndex && start < headerEnd && !(start >= call.startIndex && start < call.endIndex)) {
@@ -177,6 +186,13 @@ function enclosingCallers(
     // A C++ out-of-line definition folds into its in-class prototype's node, which lives
     // elsewhere; the owner class, declared in this file or one it includes, identifies that node.
     const key = !found && body && node.type === "function_definition" ? outOfLineMemberKey(node, headerEnd) : null;
+    // `listener = () => {...}` makes the function the value of an existing binding, which the
+    // graph may record as the caller.
+    const assignsFunction =
+      /assignment/.test(node.type) && /function|arrow/.test(node.childForFieldName("right")?.type ?? "");
+    const assigned = assignsFunction ? node.childForFieldName("left") : null;
+    if (assigned && /identifier/.test(assigned.type))
+      owners.push(...(callers.byFileName.get(file)?.get(assigned.text) ?? []));
     for (const member of key ? (callers.byOwnerMember.get(key) ?? []) : []) {
       if (visibleFiles.has(member.ownerFile)) owners.push(member.id);
     }

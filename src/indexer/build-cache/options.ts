@@ -126,7 +126,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * The alias's namespace qualifies the bound type, so a same-named peer in another namespace is not chosen.
  * Epoch 68 makes go-to-definition and detailed call edges agree: Swift `import Module` bindings
  * keep their source range, the graph applies navigation's visibility, arity, star-import, and
- * namespace-member rules, and Rust macro arguments produce call edges.
+ * namespace-member rules, Rust macro arguments and named JavaScript function expressions produce
+ * call edges, and TypeScript annotated, optional, and union-typed receivers resolve.
  */
 export const CORE_ALGORITHM_EPOCH = 68;
 /**

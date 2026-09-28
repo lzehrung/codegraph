@@ -40,16 +40,25 @@ export function typescriptCallableRoleAt(tree: SyntaxTreeLike, start: number, en
   return typescriptCallableRole(tree.rootNode.descendantForIndex(start, end));
 }
 
+const TYPESCRIPT_MEMBER_CONTAINER_TYPES = new Set([
+  "class_body",
+  "interface_body",
+  "enum_body",
+  "object_type",
+  "object",
+]);
+
 /**
- * Class, interface, enum, and namespace/module bodies each own their callables.
- * "ambient_declaration" is a declaration wrapper, not a callable container: nested
- * "internal_module"/"module" nodes are found first, while standalone ambient signatures
- * remain in the file-level group.
+ * Class, interface, enum, type-literal, object-literal, and namespace/module bodies each own
+ * their callables, so a type literal's `m(): void` signature and an object literal's `m() {}`
+ * are never one overload set. "ambient_declaration" is a declaration wrapper, not a callable
+ * container: nested "internal_module"/"module" nodes are found first, while standalone ambient
+ * signatures remain in the file-level group.
  */
 export function typescriptCallableContainerKey(tree: SyntaxTreeLike, start: number, end: number): string {
   let current: SyntaxNodeLike | null = tree.rootNode.descendantForIndex(start, end);
   while (current) {
-    if (current.type === "class_body" || current.type === "interface_body" || current.type === "enum_body") {
+    if (TYPESCRIPT_MEMBER_CONTAINER_TYPES.has(current.type)) {
       return "type:" + current.startIndex;
     }
     if (current.type === "internal_module" || current.type === "module") {

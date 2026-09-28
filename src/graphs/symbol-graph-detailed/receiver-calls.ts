@@ -426,7 +426,12 @@ export type ReceiverProof = {
   locallyBound: boolean;
 };
 
-type BindingProof = { status: "none" } | { status: "unproven" } | { status: "type"; node: SyntaxNodeLike };
+type BindingProof =
+  | { status: "none" }
+  | { status: "unproven" }
+  | { status: "type"; node: SyntaxNodeLike }
+  /** A TypeScript type annotation: every later assignment must conform to it. */
+  | { status: "declared"; node: SyntaxNodeLike };
 
 /**
  * Identifier a binding node declares: a `name` or `pattern` field, a nested C/C++
@@ -605,9 +610,19 @@ function rubyNewReceiverNameNode(node: SyntaxNodeLike, source: string, sup: Lang
   return node.namedChildren.find((child) => isReceiverNameNode(sup, child.type) || child.type === "constant") ?? null;
 }
 
+const NULLISH_TYPE_TEXT = new Set(["undefined", "null", "void"]);
+
 export function unwrapNamedType(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   let current: SyntaxNodeLike | null = node;
   while (current) {
+    if (current.type === "union_type") {
+      // `Store | undefined` and `Store | null` still prove `Store` for a member call.
+      const members: SyntaxNodeLike[] = current.namedChildren.filter(
+        (member) => !NULLISH_TYPE_TEXT.has(member.text.trim()),
+      );
+      current = members.length === 1 ? members[0]! : null;
+      continue;
+    }
     if (
       current.type === "type_annotation" ||
       current.type === "named_type" ||
@@ -875,6 +890,9 @@ function constructorFromGoBinding(
 function bindingProof(node: SyntaxNodeLike, receiverName: string, source: string, sup: LanguageSupport): BindingProof {
   if (!BINDING_DECLARATION_TYPES.has(node.type)) return { status: "none" };
   if (!bindingDeclaresReceiverName(node, receiverName, source, sup)) return { status: "none" };
+  const annotation = isJsTsLanguage(sup.id) ? node.childForFieldName("type") : null;
+  const annotated = annotation ? unwrapNamedType(annotation, sup) : null;
+  if (annotated) return { status: "declared", node: annotated };
   const typeNode = constructionTypeFromBinding(node, receiverName, source, sup);
   if (typeNode) return { status: "type", node: typeNode };
   return { status: "unproven" };
@@ -893,10 +911,18 @@ function findPriorConstructorInContainer(
 ): SyntaxNodeLike | null {
   let constructor: SyntaxNodeLike | null = null;
   let sawUnproven = false;
+  let declared = false;
   const visit = (current: SyntaxNodeLike): boolean => {
     if (current.startIndex >= receiver.startIndex) return true;
     if (current !== node && isSkippableBindingContainer(current, receiver)) return true;
     const proof = bindingProof(current, receiverName, source, sup);
+    if (proof.status === "declared") {
+      constructor = proof.node;
+      declared = true;
+      return true;
+    }
+    // A later assignment to an annotated binding cannot change its declared type.
+    if (declared && proof.status !== "none") return true;
     if (proof.status === "unproven") {
       if (constructor) {
         constructor = null;
@@ -936,7 +962,10 @@ function bindingContainerDeclaresNameBefore(
   const visit = (current: SyntaxNodeLike): boolean => {
     if (current.startIndex >= receiver.startIndex) return false;
     if (current !== node && isSkippableBindingContainer(current, receiver)) return false;
+    // A JavaScript/TypeScript assignment updates an existing binding; it declares nothing.
+    const declaresNewBinding = !(isJsTsLanguage(sup.id) && current.type === "assignment_expression");
     if (
+      declaresNewBinding &&
       BINDING_DECLARATION_TYPES.has(current.type) &&
       bindingDeclaresReceiverName(current, receiverName, source, sup)
     ) {
