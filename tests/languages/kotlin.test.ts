@@ -588,24 +588,26 @@ describe("Kotlin same-package sibling classes", () => {
 });
 
 describe("Kotlin implicit-receiver precedence", () => {
-  it("resolves a bare call to an inherited member before a same-package or wildcard-imported function", async () => {
+  it("lets inherited, non-private members beat same-package and wildcard-imported functions", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-inherited-member-"));
     try {
       await fsp.mkdir(path.join(root, "p"), { recursive: true });
       await fsp.mkdir(path.join(root, "q"), { recursive: true });
-      await fsp.writeFile(path.join(root, "p", "Peer.kt"), "package p\n\nfun hit(): Int = 1\n");
+      const peer = normalizePath(path.join(root, "p", "Peer.kt"));
+      await fsp.writeFile(peer, "package p\n\nfun hit(): Int = 1\n\nfun hidden(): Int = 3\n");
       await fsp.writeFile(path.join(root, "q", "Other.kt"), "package q\n\nfun hit(): Int = 2\n");
+      await fsp.writeFile(
+        path.join(root, "p", "Base.kt"),
+        "package p\n\nopen class Base {\n    fun hit(): Int = 4\n    private fun hidden(): Int = 5\n}\n",
+      );
       const lines = [
         "package p",
         "",
         "import q.*",
         "",
-        "open class Base {",
-        "    fun hit(): Int = 4",
-        "}",
-        "",
         "class Derived : Base() {",
         "    fun viaBase(): Int = hit()",
+        "    fun privateBase(): Int = hidden()",
         "}",
         "",
         "fun run(): Int = hit()",
@@ -614,25 +616,30 @@ describe("Kotlin implicit-receiver precedence", () => {
       const use = normalizePath(path.join(root, "p", "Use.kt"));
       await fsp.writeFile(use, lines.join("\n"));
       const index = await buildProjectIndex(root, { cache: "off", native: "on" });
-      const gotoLine = async (line: number) => {
-        const result = await goToDefinition(index, {
-          file: use,
-          line,
-          column: lines[line - 1]!.lastIndexOf("hit") + 1,
-        });
+      const gotoLine = async (line: number, name: string) => {
+        const result = await goToDefinition(index, { file: use, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
         return result.status === "ok"
           ? `${path.basename(result.definition.file)}:${result.definition.range.start.line}`
           : null;
       };
-      // Inside Derived, the inherited member wins; at top level, the package function beats `q.*`.
-      expect(await gotoLine(10)).toBe("Use.kt:6");
-      expect(await gotoLine(13)).toBe("Peer.kt:3");
+      // Inside Derived the inherited member wins; a private base member is not inherited; at top
+      // level the package function beats `q.*`.
+      expect(await gotoLine(6, "hit")).toBe("Base.kt:4");
+      expect(await gotoLine(7, "hidden")).toBe("Peer.kt:5");
+      expect(await gotoLine(10, "hit")).toBe("Peer.kt:3");
+      const peerRefs = await findReferences(index, { file: peer, line: 3, column: 5 });
+      if (peerRefs.status !== "ok") throw new Error("Expected package-function references");
+      expect(
+        peerRefs.references
+          .filter((reference) => normalizePath(reference.file) === use)
+          .map((reference) => reference.range.start.line),
+      ).toEqual([10]);
       const graph = await buildSymbolGraphDetailed(index);
       const calls = graph.edges
         .filter((edge) => edge.label === "calls")
         .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
         .sort();
-      expect(calls).toEqual(["run->Peer.kt", "viaBase->Use.kt"]);
+      expect(calls).toEqual(["privateBase->Peer.kt", "run->Peer.kt", "viaBase->Base.kt"]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

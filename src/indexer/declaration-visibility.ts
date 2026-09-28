@@ -271,6 +271,16 @@ export function isExportedDeclaration(languageId: string, node: SyntaxNodeLike):
 }
 
 /**
+ * Whether `node`'s declaration carries a `private` modifier. A private member is not inherited,
+ * so a subclass cannot reach it through the implicit `this`.
+ */
+export function isPrivateDeclaration(languageId: string, node: SyntaxNodeLike): boolean {
+  const row = VISIBILITY_BY_LANGUAGE[languageId];
+  const declaration = row ? findVisibilityDeclaration(node, row) : null;
+  return !!row && !!declaration && modifierTokens(collectModifierTexts(declaration, row)).includes("private");
+}
+
+/**
  * Go export visibility is spelled in the identifier itself (Go spec, "Exported identifiers"):
  * a name is visible outside its declaring package only when its first Unicode letter is
  * upper case. Unlike every `DeclarationVisibilityRow` above, this must never filter a Go

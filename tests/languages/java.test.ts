@@ -577,20 +577,19 @@ describe("Java constructor and spread-parameter declaration names", () => {
 });
 
 describe("Java implicit-receiver precedence", () => {
-  it("resolves a bare call to an inherited method before a single static import", async () => {
+  it("lets inherited, non-private methods shadow a static import across goto, references, and calls", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-inherited-member-"));
     try {
       const lines = [
         "package j;",
         "",
         "import static j.Util.hit;",
-        "",
-        "class Base {",
-        "  int hit() { return 4; }",
-        "}",
+        "import static j.Util.hidden;",
         "",
         "class Derived extends Base {",
         "  int viaBase() { return hit(); }",
+        "  static int fromStatic() { return hit(); }",
+        "  int privateBase() { return hidden(); }",
         "}",
         "",
         "class Plain {",
@@ -599,31 +598,46 @@ describe("Java implicit-receiver precedence", () => {
         "",
       ];
       const use = normalizePath(path.join(root, "Use.java"));
+      const base = normalizePath(path.join(root, "Base.java"));
+      const util = normalizePath(path.join(root, "Util.java"));
       await writeFile(use, lines.join("\n"));
       await writeFile(
-        path.join(root, "Util.java"),
-        "package j;\n\nclass Util {\n  static int hit() { return 1; }\n}\n",
+        base,
+        "package j;\n\nclass Base {\n  int hit() { return 4; }\n  private int hidden() { return 5; }\n}\n",
+      );
+      await writeFile(
+        util,
+        "package j;\n\nclass Util {\n  static int hit() { return 1; }\n  static int hidden() { return 2; }\n}\n",
       );
       const index = await buildProjectIndex(root, { cache: "off", native: "on" });
-      const gotoLine = async (line: number) => {
-        const result = await goToDefinition(index, {
-          file: use,
-          line,
-          column: lines[line - 1]!.lastIndexOf("hit") + 1,
-        });
+      const gotoLine = async (line: number, name: string) => {
+        const result = await goToDefinition(index, { file: use, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
         return result.status === "ok"
           ? `${path.basename(result.definition.file)}:${result.definition.range.start.line}`
           : null;
       };
-      // The inherited method shadows the static import inside the subclass; elsewhere the import binds.
-      expect(await gotoLine(10)).toBe("Use.java:6");
-      expect(await gotoLine(14)).toBe("Util.java:4");
+      // The inherited method shadows the static import inside the subclass, even in a static
+      // method, where the call is then invalid. A private base method is not inherited.
+      expect(await gotoLine(7, "hit")).toBe("Base.java:4");
+      expect(await gotoLine(8, "hit")).toBeNull();
+      expect(await gotoLine(9, "hidden")).toBe("Util.java:5");
+      expect(await gotoLine(13, "hit")).toBe("Util.java:4");
+      const lineOf = async (file: string, line: number, column: number) => {
+        const result = await findReferences(index, { file, line, column });
+        if (result.status !== "ok") throw new Error("Expected references");
+        return result.references
+          .filter((reference) => normalizePath(reference.file) === use)
+          .map((reference) => reference.range.start.line)
+          .sort((a, b) => a - b);
+      };
+      expect(await lineOf(base, 4, "  int hit".length - 2)).toEqual([7]);
+      expect(await lineOf(util, 4, "  static int hit".length - 2)).toEqual([3, 13]);
       const graph = await buildSymbolGraphDetailed(index);
       const calls = graph.edges
         .filter((edge) => edge.label === "calls")
         .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
         .sort();
-      expect(calls).toEqual(["imported->Util.java", "viaBase->Use.java"]);
+      expect(calls).toEqual(["imported->Util.java", "privateBase->Util.java", "viaBase->Base.java"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

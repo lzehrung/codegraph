@@ -208,6 +208,7 @@ export async function settleNameResolution(
         parsed.sup.id,
       );
       if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
+      if (member === null) return { status: "not_found", reason: "No matching static member definition" };
     } else {
       const recovered = await options.recoverIncludedStar?.(request.lookupName, request.cNamespace);
       if (recovered) return recovered;

@@ -66,6 +66,7 @@ import {
 import { getCompilationUnitPeers } from "./compilation-units.js";
 import {
   isExportedDeclaration,
+  isPrivateDeclaration,
   isGoExportedMemberName,
   isSwiftCrossFileHiddenSharedOwnerMember,
 } from "./declaration-visibility.js";
@@ -1615,20 +1616,47 @@ export async function resolveImplicitSelfMember(
   name: string,
   source: string,
   languageId: string,
-): Promise<SymbolDef | undefined> {
+): Promise<SymbolDef | null | undefined> {
   const call = node.parent ?? node;
   if (languageId !== "swift" && implicitSelfCallee(languageId, call)?.id !== node.id) return undefined;
-  const staticScoped = languageId === "csharp" || languageId === "java" || languageId === "kotlin";
+  const jvm = languageId === "java" || languageId === "kotlin";
+  const staticScoped = languageId === "csharp" || jvm;
   const memberScope: ReceiverMemberScope = staticScoped && nodeInStaticMemberContext(node, source) ? "static" : "any";
-  return resolveKeywordReceiverMember(
-    index,
-    mod,
-    node,
-    name,
-    memberScope,
-    false,
-    getCallArgumentCount({ languageId, source, call }) ?? undefined,
-  );
+  const argumentCount = getCallArgumentCount({ languageId, source, call }) ?? undefined;
+  const lookup = async (scope: ReceiverMemberScope): Promise<SymbolDef | undefined> => {
+    const member = await resolveKeywordReceiverMember(index, mod, node, name, scope, false, argumentCount);
+    // A private member of a base class is not inherited, so it cannot shadow anything.
+    return member && jvm && (await isUninheritedPrivateMember(index, mod, node, member)) ? undefined : member;
+  };
+  const member = await lookup(memberScope);
+  if (member || memberScope !== "static" || !jvm) return member;
+  // In a static context an inherited instance method still shadows a static import or package
+  // function; the call is invalid, so it has no target.
+  return (await lookup("any")) ? null : undefined;
+}
+
+/** Whether a Java or Kotlin member is `private` and declared outside the class enclosing the use. */
+async function isUninheritedPrivateMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  use: SyntaxNodeLike,
+  member: SymbolDef,
+): Promise<boolean> {
+  const container = findEnclosingClassContainer(use);
+  const start = member.range.start.index ?? -1;
+  const ownMember =
+    !!container &&
+    fileIdentityKey(member.file) === fileIdentityKey(mod.file) &&
+    start >= container.startIndex &&
+    start < container.endIndex;
+  if (ownMember) return false;
+  const parsed = await ensureParsedContext(
+    member.file,
+    index.parsed?.get(fileIdentityKey(member.file)),
+    index.languageExtensions,
+  ).catch(() => null);
+  const nameNode = parsed?.tree.rootNode.descendantForIndex(start, member.range.end.index ?? start);
+  return !!parsed && !!nameNode && isPrivateDeclaration(parsed.sup.id, nameNode);
 }
 
 /**
