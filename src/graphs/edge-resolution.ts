@@ -12,7 +12,7 @@ import { type ModuleSpecifier } from "../util/specifiers.js";
 import { type WorkspaceConfig } from "../util/workspace.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
 import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../util/resolution-candidates.js";
-import { resolveCsharpNamespaceImportPaths } from "../util/resolution/csharp.js";
+import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../util/resolution/csharp.js";
 
 type ResolvedSpecifierEdge = {
   to: EdgeTo;
@@ -21,6 +21,7 @@ type ResolvedSpecifierEdge = {
   typeOnly?: boolean;
   resolved?: ModuleSpecifier["resolved"];
   confidence?: number;
+  includeForm?: ModuleSpecifier["includeForm"];
 };
 
 export type ModuleSpecifierResolutionContext = {
@@ -49,6 +50,7 @@ function withSpecifierMetadata(entry: ModuleSpecifier, to: EdgeTo): ResolvedSpec
     ...(entry.typeOnly !== undefined ? { typeOnly: entry.typeOnly } : {}),
     ...(entry.resolved !== undefined ? { resolved: entry.resolved } : {}),
     ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
+    ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
   };
 }
 
@@ -155,6 +157,17 @@ export async function resolveModuleSpecifierEdges(
         : [];
     if (namespaceTargets.length) {
       return namespaceTargets.map((targetPath) => withSpecifierMetadata(entry, edgeToResolvedFile(targetPath)));
+    }
+    if (context.support.id === "csharp") {
+      // `using PT = N.Point` is not a namespace. The same helper the import binding uses
+      // picks the one declaring file, or refuses an ambiguous set instead of a path guess.
+      const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, entry.spec, context.file);
+      if (typeMatch.status === "found") {
+        return [withSpecifierMetadata(entry, edgeToResolvedFile(typeMatch.file))];
+      }
+      if (typeMatch.status === "ambiguous" || typeMatch.status === "partial") {
+        return [withSpecifierMetadata(entry, edgeToExternal(entry.raw ?? entry.spec))];
+      }
     }
     const { resolvePathLikeModule } = await import("../util/resolution.js");
     const pathLike = await resolvePathLikeModule(context.projectRoot, entry.spec);

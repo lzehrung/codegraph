@@ -1,7 +1,7 @@
 import type { SqliteDatabase } from "../sqlite-driver.js";
 import { toSqliteText } from "./common.js";
 
-export const SQLITE_SCHEMA_VERSION = 3;
+export const SQLITE_SCHEMA_VERSION = 4;
 export const GRAPH_SNAPSHOT_RETENTION = 100;
 const GRAPH_SCHEMA_VERSION_KEY = "schema_version";
 
@@ -66,6 +66,9 @@ function migrateGraphSchema(db: SqliteDatabase, fromVersion: number): void {
     writeGraphSchemaVersion(db, version);
   }
 }
+
+const unsupportedGraphSchemaMessage = (currentVersion: number): string =>
+  `Unsupported codegraph SQLite schema version ${currentVersion}; this version supports up to ${SQLITE_SCHEMA_VERSION}.`;
 
 const ensureGraphIndexes = (db: SqliteDatabase): boolean => {
   const indexSpecs: Array<{ name: string; sql: string }> = [
@@ -194,9 +197,7 @@ const ensureGraphIndexes = (db: SqliteDatabase): boolean => {
 export const ensureSchema = (db: SqliteDatabase) => {
   const currentVersion = readGraphSchemaVersion(db);
   if (currentVersion > SQLITE_SCHEMA_VERSION) {
-    throw new Error(
-      `Unsupported codegraph SQLite schema version ${currentVersion}; this version supports up to ${SQLITE_SCHEMA_VERSION}.`,
-    );
+    throw new Error(unsupportedGraphSchemaMessage(currentVersion));
   }
 
   db.pragma("journal_mode = WAL");
@@ -226,6 +227,7 @@ export const ensureSchema = (db: SqliteDatabase) => {
       to_type TEXT NOT NULL,
       raw TEXT,
       type_only INTEGER,
+      include_form TEXT,
       FOREIGN KEY(from_path) REFERENCES files(path),
       FOREIGN KEY(to_path) REFERENCES files(path)
     );
@@ -260,6 +262,10 @@ export const ensureSchema = (db: SqliteDatabase) => {
   `);
 
   migrateGraphSchema(db, currentVersion);
+  // Versions before 4 predate include_form. Existing rows stay NULL.
+  if (currentVersion < SQLITE_SCHEMA_VERSION && !hasColumn(db, "file_edges", "include_form")) {
+    db.exec("ALTER TABLE file_edges ADD COLUMN include_form TEXT;");
+  }
   ensureGraphIndexes(db);
   writeGraphSchemaVersion(db, SQLITE_SCHEMA_VERSION);
 };

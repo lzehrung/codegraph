@@ -2,7 +2,7 @@ import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
-import { isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
+import { fileIdentityKey, isPhysicalPathWithinRoot, readUtf8WithoutBom } from "../paths.js";
 
 type TomlTable = Record<string, unknown>;
 
@@ -74,9 +74,6 @@ function inferredNamedTargetPaths(
 
 function explicitTargetPaths(parsed: TomlTable): string[] {
   const paths: string[] = [];
-  const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
-  const libPath = lib ? tomlString(lib, "path") : undefined;
-  if (libPath) paths.push(libPath);
   const pkgName = packageName(parsed);
   for (const key of ["bin", "example", "test", "bench"] as const) {
     for (const target of tomlTables(parsed[key])) {
@@ -93,9 +90,16 @@ function explicitTargetPaths(parsed: TomlTable): string[] {
   return paths;
 }
 
-async function parseCargoToml(cargoRoot: string): Promise<TomlTable | null> {
+/**
+ * The Cargo.toml in `cargoRoot`, read only when the manifest file itself physically lies
+ * inside `projectRoot`: a symlinked manifest from outside the project must not steer
+ * crate targets or dependency resolution.
+ */
+async function parseCargoToml(cargoRoot: string, projectRoot: string): Promise<TomlTable | null> {
+  const manifest = path.join(cargoRoot, "Cargo.toml");
+  if (!(await isPhysicalPathWithinRoot(projectRoot, manifest))) return null;
   try {
-    const raw = await readUtf8WithoutBom(path.join(cargoRoot, "Cargo.toml"));
+    const raw = await readUtf8WithoutBom(manifest);
     const parsed = parseToml(raw);
     return isTomlTable(parsed) ? parsed : null;
   } catch {
@@ -118,6 +122,21 @@ async function acceptCrateRoot(
   }
   if (!(await isPhysicalPathWithinRoot(projectRoot, resolved))) return null;
   return resolved;
+}
+/** Verified Cargo library root, or undefined when the package has no library. */
+export async function rustLibraryRootFile(
+  cargoRoot: string,
+  projectRoot: string,
+  parsed?: TomlTable,
+  probed?: Set<string>,
+): Promise<string | undefined> {
+  const manifest = parsed ?? (await parseCargoToml(cargoRoot, projectRoot));
+  if (!manifest || !isTomlTable(manifest.package)) return undefined;
+  const lib = isTomlTable(manifest.lib) ? manifest.lib : undefined;
+  if (!lib && !packageAutoFlag(manifest, "autolib")) return undefined;
+  const candidate = path.resolve(cargoRoot, (lib ? tomlString(lib, "path") : undefined) ?? "src/lib.rs");
+  probed?.add(candidate);
+  return (await acceptCrateRoot(candidate, projectRoot)) ?? undefined;
 }
 
 async function addCrateRoot(
@@ -177,7 +196,7 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
   const root = path.resolve(cargoRoot);
   const roots = new Set<string>();
   const probed = new Set<string>();
-  const parsed = await parseCargoToml(root);
+  const parsed = await parseCargoToml(root, projectRoot);
 
   if (parsed && !isTomlTable(parsed.package)) {
     return { roots: [], probed: [] };
@@ -191,11 +210,8 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
     if (buildScript) {
       await addCrateRoot(roots, probed, path.resolve(root, buildScript), projectRoot);
     }
-    const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
-    const libPath = lib ? tomlString(lib, "path") : undefined;
-    if (!libPath && (lib || packageAutoFlag(parsed, "autolib"))) {
-      await addCrateRoot(roots, probed, path.join(root, "src", "lib.rs"), projectRoot);
-    }
+    const libraryRoot = await rustLibraryRootFile(root, projectRoot, parsed, probed);
+    if (libraryRoot) roots.add(libraryRoot);
     if (packageAutoFlag(parsed, "autobins")) {
       await addCrateRoot(roots, probed, path.join(root, "src", "main.rs"), projectRoot);
     }
@@ -211,4 +227,160 @@ export async function rustCrateRootFiles(cargoRoot: string, projectRoot: string)
   }
 
   return { roots: [...roots], probed: [...probed] };
+}
+
+/** The library root reachable through the package name from one of its binary crate roots. */
+export async function rustOwnLibraryTarget(
+  cargoRoot: string,
+  projectRoot: string,
+  fromFile: string,
+  identifier: string,
+): Promise<string | null> {
+  const parsed = await parseCargoToml(cargoRoot, projectRoot);
+  if (!parsed || !isTomlTable(parsed.package)) return null;
+  const lib = isTomlTable(parsed.lib) ? parsed.lib : undefined;
+  const pkgName = packageName(parsed);
+  const name = (lib ? tomlString(lib, "name") : undefined) ?? pkgName;
+  if (!name || name.replace(/-/gu, "_") !== identifier) return null;
+
+  const from = path.resolve(fromFile);
+  const fromKey = fileIdentityKey(from);
+  let isBinary = false;
+  for (const bin of tomlTables(parsed.bin)) {
+    const explicitPath = tomlString(bin, "path");
+    const binName = tomlString(bin, "name");
+    let paths: string[] = [];
+    if (explicitPath) paths = [explicitPath];
+    else if (binName) paths = inferredNamedTargetPaths("bin", binName, pkgName);
+    if (paths.some((candidate) => fileIdentityKey(path.resolve(cargoRoot, candidate)) === fromKey)) {
+      isBinary = true;
+      break;
+    }
+  }
+  if (!isBinary && packageAutoFlag(parsed, "autobins")) {
+    if (fromKey === fileIdentityKey(path.join(cargoRoot, "src/main.rs"))) {
+      isBinary = true;
+    } else {
+      const binRelative = path.relative(path.join(cargoRoot, "src/bin"), from);
+      const parts = binRelative.split(path.sep);
+      isBinary =
+        (parts.length === 1 && !!parts[0]?.endsWith(".rs")) ||
+        (parts.length === 2 && !!parts[0] && parts[1] === "main.rs");
+    }
+  }
+  if (!isBinary || !(await acceptCrateRoot(from, projectRoot, true))) return null;
+
+  return (await rustLibraryRootFile(cargoRoot, projectRoot, parsed)) ?? null;
+}
+
+/** Inline dependency tables naming `crateIdentifier`, across the dependency groups. */
+function dependencyEntries(parsed: TomlTable, crateIdentifier: string): TomlTable[] {
+  const matches: TomlTable[] = [];
+  for (const key of ["dependencies", "dev-dependencies", "build-dependencies"] as const) {
+    const table = isTomlTable(parsed[key]) ? parsed[key] : undefined;
+    if (!table) continue;
+    for (const [depName, entry] of Object.entries(table)) {
+      if (depName.replace(/-/gu, "_") !== crateIdentifier || !isTomlTable(entry)) continue;
+      matches.push(entry);
+    }
+  }
+  return matches;
+}
+
+type PathDependency = {
+  depPath: string;
+  /** `package = "..."` rename: the dependency's real package name, when it differs from the key. */
+  packageName?: string;
+};
+
+/**
+ * A `path`-only Cargo dependency declared under `[dependencies]`, `[dev-dependencies]`, or
+ * `[build-dependencies]` (inline-table `name = { path = "..." }` or dotted-section
+ * `[dependencies.name]` form), matched by the Rust identifier the dependency's own manifest
+ * key spells (hyphens folded to underscores, matching Cargo's own crate-identifier rule). A
+ * version-only or registry dependency has no `path` field and is not returned;
+ * workspace-inherited (`{ workspace = true }`) dependencies carry no `path` here and are
+ * resolved through the workspace manifest instead.
+ */
+function pathDependencySpec(parsed: TomlTable, crateIdentifier: string): PathDependency | undefined {
+  for (const entry of dependencyEntries(parsed, crateIdentifier)) {
+    const depPath = tomlString(entry, "path");
+    if (!depPath) continue;
+    const renamed = tomlString(entry, "package");
+    return renamed ? { depPath, packageName: renamed } : { depPath };
+  }
+  return undefined;
+}
+
+/** Whether the manifest's own dependency entry asks the workspace to supply the spec. */
+function workspaceInheritanceRequested(parsed: TomlTable, crateIdentifier: string): boolean {
+  for (const entry of dependencyEntries(parsed, crateIdentifier)) {
+    const workspace = entry.workspace;
+    if (typeof workspace === "boolean") return workspace;
+  }
+  return false;
+}
+
+/**
+ * The `path` from the nearest ancestor workspace manifest's `[workspace.dependencies]` entry
+ * for `crateIdentifier`, plus the manifest directory the path is relative to. The walk goes
+ * from `cargoRoot` up to and including `projectRoot` and never reads a manifest outside it.
+ * The nearest manifest declaring `[workspace]` governs inheritance, matching Cargo: an entry
+ * missing there is not inherited from a more distant workspace.
+ */
+async function workspaceInheritedDependencyPath(
+  cargoRoot: string,
+  projectRoot: string,
+  crateIdentifier: string,
+): Promise<({ manifestDir: string } & PathDependency) | null> {
+  const root = path.resolve(projectRoot);
+  let current = path.resolve(cargoRoot);
+  while (await isPhysicalPathWithinRoot(root, current)) {
+    const parsed = await parseCargoToml(current, root);
+    const workspace = parsed && isTomlTable(parsed.workspace) ? parsed.workspace : undefined;
+    if (workspace) {
+      const table = isTomlTable(workspace.dependencies) ? workspace.dependencies : undefined;
+      for (const [depName, entry] of Object.entries(table ?? {})) {
+        if (depName.replace(/-/gu, "_") !== crateIdentifier || !isTomlTable(entry)) continue;
+        const depPath = tomlString(entry, "path");
+        if (!depPath) return null;
+        const renamed = tomlString(entry, "package");
+        return renamed ? { manifestDir: current, depPath, packageName: renamed } : { manifestDir: current, depPath };
+      }
+      return null;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+  return null;
+}
+
+/**
+ * Resolves a Cargo path dependency (including workspace inheritance) to its verified library
+ * target, rather than assuming the dependency's conventional src/lib.rs file is its root.
+ */
+export async function rustPathDependencyLibraryRoot(
+  cargoRoot: string,
+  projectRoot: string,
+  crateIdentifier: string,
+): Promise<string | null> {
+  const parsed = await parseCargoToml(cargoRoot, projectRoot);
+  if (!parsed) return null;
+  let manifestDir = cargoRoot;
+  let dependency = pathDependencySpec(parsed, crateIdentifier);
+  if (!dependency && workspaceInheritanceRequested(parsed, crateIdentifier)) {
+    const inherited = await workspaceInheritedDependencyPath(cargoRoot, projectRoot, crateIdentifier);
+    if (!inherited) return null;
+    manifestDir = inherited.manifestDir;
+    dependency = inherited;
+  }
+  if (!dependency) return null;
+  const resolved = path.resolve(manifestDir, dependency.depPath);
+  if (!(await isPhysicalPathWithinRoot(projectRoot, resolved))) return null;
+  const dependencyManifest = await parseCargoToml(resolved, projectRoot);
+  const actualName = dependencyManifest ? packageName(dependencyManifest) : undefined;
+  const expectedName = dependency.packageName ?? crateIdentifier;
+  if (!actualName || actualName.replace(/-/gu, "_") !== expectedName.replace(/-/gu, "_")) return null;
+  return (await rustLibraryRootFile(resolved, projectRoot, dependencyManifest ?? undefined)) ?? null;
 }

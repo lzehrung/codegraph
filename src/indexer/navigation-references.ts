@@ -1,16 +1,18 @@
+import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
-import { fileIdentityKey } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
-import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
+import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
 import {
   classifyReceiver,
   declaresMembers,
   receiverConstructorExpression,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
-import { sameDef } from "./reference-context.js";
+import { definitionIdentityKey, sameDef } from "./reference-context.js";
 import {
   canonicalPhpReferenceNames,
   comparePhpReferenceNames,
@@ -22,11 +24,20 @@ import {
   readPhpNamespaceFromRange,
   selectFirstExistingPhpCanonicalName,
 } from "./navigation-php.js";
-import { isKeywordReceiver } from "../util/member-access-tables.js";
+import { isKeywordReceiver, memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
 import { getCompilationUnitPeers } from "./compilation-units.js";
+import { findClosestScopeBinding } from "./navigation-local.js";
+import { scopeNodesFor } from "./scope-nodes.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
-import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
+import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
+import { bindingKindToSymbolKind } from "./declarations.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
+import { isAmbiguousResolutionReason } from "./ambiguous-resolution.js";
+import {
+  ensurePhpNamespaceSymbolIndex,
+  phpNamespaceSymbolIndexFor,
+  phpReferenceRoleMatchesKind,
+} from "./php-namespace-symbols.js";
 import {
   SymbolKind,
   type ExportEntry,
@@ -49,6 +60,35 @@ const NAMESPACE_EXPORT_PATTERN = new RegExp(
 const EXPORT_FROM_SPECIFIER_PATTERN = new RegExp(String.raw`^(${ECMASCRIPT_IDENTIFIER_SOURCE})`, "u");
 
 type ReexportEntry = Extract<ExportEntry, { type: "reexport" }>;
+
+const importClosureCache = new WeakMap<ProjectIndex, Map<string, ReadonlySet<string>>>();
+
+/** File keys reachable from `file` through resolved imports and includes, including `file`. */
+function importClosure(index: ProjectIndex, file: FileId): ReadonlySet<string> {
+  let byFile = importClosureCache.get(index);
+  if (!byFile) {
+    byFile = new Map();
+    importClosureCache.set(index, byFile);
+  }
+  const startKey = fileIdentityKey(file);
+  const cached = byFile.get(startKey);
+  if (cached) return cached;
+  const reached = new Set<string>([startKey]);
+  const startModule = index.byFile.get(startKey);
+  const pending: ModuleIndex[] = startModule ? [startModule] : [];
+  while (pending.length) {
+    for (const imp of pending.pop()!.imports) {
+      if (typeof imp.resolved !== "string") continue;
+      const key = fileIdentityKey(imp.resolved);
+      if (reached.has(key)) continue;
+      reached.add(key);
+      const moduleEntry = index.byFile.get(key);
+      if (moduleEntry) pending.push(moduleEntry);
+    }
+  }
+  byFile.set(startKey, reached);
+  return reached;
+}
 
 type ExportFromIdentifier = {
   isExportFrom: boolean;
@@ -129,13 +169,21 @@ export function getCachedScope(
     tree: SyntaxTreeLike;
   },
 ): ScopeIndex {
+  const keepOccurrence = (binding: Binding, occurrence: Range): boolean => {
+    if (exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom) return false;
+    if (parsedCtx.sup.id !== "php" || !binding.def || occurrence.start.index === binding.def.start.index) return true;
+    const kind = bindingKindToSymbolKind(binding.kind);
+    if (kind === SymbolKind.Variable) return true;
+    const start = occurrence.start.index;
+    if (start === undefined) return true;
+    const node = parsedCtx.tree.rootNode.descendantForIndex(start, start);
+    return phpReferenceRoleMatchesKind(node, kind);
+  };
   const fileKey = fileIdentityKey(fileId);
   const cachedScope = index.scopeCache.get(fileKey);
   if (cachedScope) {
     for (const binding of cachedScope.all) {
-      binding.occurrences = binding.occurrences.filter(
-        (occurrence) => !exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom,
-      );
+      binding.occurrences = binding.occurrences.filter((occurrence) => keepOccurrence(binding, occurrence));
     }
     return cachedScope;
   }
@@ -143,9 +191,7 @@ export function getCachedScope(
     tree: parsedCtx.tree,
   });
   for (const binding of scopeIndex.all) {
-    binding.occurrences = binding.occurrences.filter(
-      (occurrence) => !exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom,
-    );
+    binding.occurrences = binding.occurrences.filter((occurrence) => keepOccurrence(binding, occurrence));
   }
   index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;
@@ -185,13 +231,8 @@ export async function buildPhpQualifiedNames(
   return readPhpDefinitionNames(index, definitionFile, def);
 }
 
-function definitionIdentityKey(def: SymbolDef): string {
-  return `${fileIdentityKey(def.file)}:${def.range.start.index ?? `${def.range.start.line}:${def.range.start.column}`}`;
-}
-
 const phpCanonicalNamesCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
 const phpNameEquivalenceGaps = new WeakMap<ProjectIndex, Set<string>>();
-const phpIndexedNamesByKindCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
 
 async function phpCanonicalDefinitionNames(index: ProjectIndex, def: SymbolDef): Promise<string[]> {
   let perIndex = phpCanonicalNamesCache.get(index);
@@ -202,34 +243,14 @@ async function phpCanonicalDefinitionNames(index: ProjectIndex, def: SymbolDef):
   const key = definitionIdentityKey(def);
   const cached = perIndex.get(key);
   if (cached) return cached;
+  const indexed = phpNamespaceSymbolIndexFor(index)?.canonicalByDefinition.get(key);
+  if (indexed) {
+    perIndex.set(key, [indexed]);
+    return [indexed];
+  }
   const canonicalNames = (await readPhpDefinitionNames(index, def.file, def)).map((name) => name.replace(/^\\+/, ""));
   perIndex.set(key, canonicalNames);
   return canonicalNames;
-}
-
-async function phpIndexedCanonicalNames(index: ProjectIndex, kind: SymbolKind): Promise<string[]> {
-  let perIndex = phpIndexedNamesByKindCache.get(index);
-  if (!perIndex) {
-    perIndex = new Map();
-    phpIndexedNamesByKindCache.set(index, perIndex);
-  }
-  const cached = perIndex.get(kind);
-  if (cached) return cached;
-  const names: string[] = [];
-  const seen = new Set<string>();
-  for (const moduleIndex of index.byFile.values()) {
-    for (const local of moduleIndex.locals) {
-      if (local.kind !== kind || local.isMember) continue;
-      for (const canonicalName of await phpCanonicalDefinitionNames(index, local)) {
-        const folded = foldPhpIdentifierCase(canonicalName);
-        if (seen.has(folded)) continue;
-        seen.add(folded);
-        names.push(canonicalName);
-      }
-    }
-  }
-  perIndex.set(kind, names);
-  return names;
 }
 
 function markPhpNameEquivalenceGap(index: ProjectIndex, def: SymbolDef): void {
@@ -420,6 +441,7 @@ async function collectNamedNodeReferences(
     let nameEquivalenceUnavailable = false;
     const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
     const importDeclarationKeys = importBindingDeclarationRangeKeys(moduleIndex);
+    const row = scopeNodesFor(parsed.sup.id);
     const walk = (node: SyntaxNodeLike): void => {
       if (identifierTypes.has(node.type)) {
         const text = parsed.sup.normalizeIdentifier(sliceText(node, parsed.source));
@@ -428,7 +450,8 @@ async function collectNamedNodeReferences(
           isMatch = text === canonicalSymbolName;
         } else if (
           (node.type === "name" || node.type === "namespace_name") &&
-          isPhpQualifiedReferenceNode(node.parent)
+          (isPhpQualifiedReferenceNode(node.parent) ||
+            (node.parent && identifierTypes.has(node.parent.type) && row.childSkipNameTypes?.has(node.type)))
         ) {
           isMatch = false;
         } else {
@@ -467,13 +490,59 @@ export type VerifiedNamedNodeReference = {
 type ReferenceDefinitionResolver = (
   params: { file: string; line: number; column: number },
   parsed: ParsedFileContext,
-) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>;
+) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance; reason?: string }>;
+
+/** True when `range` is the property of a member-access expression, not a bare call. */
+export function isMemberAccessPropertyRange(parsed: ParsedFileContext, range: Range): boolean {
+  const startIndex = range.start.index;
+  const node =
+    startIndex !== undefined
+      ? parsed.tree.rootNode.descendantForIndex(startIndex, range.end.index ?? startIndex)
+      : parsed.tree.rootNode.descendantForPosition(
+          { row: range.start.line - 1, column: range.start.column - 1 },
+          { row: range.start.line - 1, column: range.start.column - 1 },
+        );
+  const parent = node.parent;
+  if (!parent || !isMemberAccessNode(parsed.sup, parent)) return false;
+  const property = getMemberAccessParts(parsed.sup, parent).property;
+  return !!property && node.startIndex >= property.startIndex && node.endIndex <= property.endIndex;
+}
+
+/**
+ * A member call on a local, parameter, field, or `this`/`self` cannot name a free function
+ * in a language whose member syntax never calls one. A missing receiver, or a module or
+ * namespace binding (`util.helper()`, `mod.thing()`), stays unproven.
+ */
+function freeFunctionMemberSiteIsProvenNonReference(
+  index: ProjectIndex,
+  fileId: FileId,
+  parsed: ParsedFileContext,
+  objectNode: SyntaxNodeLike,
+  expectedDef: SymbolDef,
+): boolean {
+  if (expectedDef.isMember || expectedDef.kind !== SymbolKind.Function) return false;
+  if (memberSyntaxNamesFreeFunction(parsed.sup.id)) return false;
+  const receiverText = sliceText(objectNode, parsed.source).trim();
+  if (isKeywordReceiver(parsed.sup.id, receiverText)) return true;
+  if (!isReceiverNameNode(parsed.sup, objectNode.type)) return false;
+  const mod = index.byFile.get(fileIdentityKey(fileId));
+  if (!mod) return false;
+  const binding = findClosestScopeBinding(
+    getCachedScope(index, fileId, mod, parsed),
+    receiverText,
+    objectNode,
+    parsed.sup,
+  );
+  return binding?.kind === "local" || binding?.kind === "param";
+}
 
 async function receiverProofUnavailable(
+  index: ProjectIndex,
   fileId: FileId,
   parsed: ParsedFileContext,
   range: Range,
   resolveDefinition: ReferenceDefinitionResolver,
+  expectedDef: SymbolDef,
 ): Promise<boolean> {
   const position = {
     row: range.start.line - 1,
@@ -485,22 +554,51 @@ async function receiverProofUnavailable(
     if (isMemberAccessNode(parsed.sup, current)) {
       const { object, property } = getMemberAccessParts(parsed.sup, current);
       if (!object || !property || property.startIndex !== range.start.index) return false;
-      const receiver = classifyReceiver(parsed.sup, object, parsed.source, new Map(), current.startIndex, current);
-      if (receiver) return false;
-      const receiverRange = toRange(object);
-      const resolvedReceiver = await resolveDefinition(
-        {
-          file: fileId,
-          line: receiverRange.start.line,
-          column: receiverRange.start.column,
+      const receiver = classifyReceiver(
+        parsed.sup,
+        object,
+        parsed.source,
+        new Map(),
+        current.startIndex,
+        current,
+        (callee) => {
+          const mod = index.byFile.get(fileIdentityKey(fileId));
+          if (!mod) return true;
+          const scope = getCachedScope(index, fileId, mod, parsed);
+          return !!findClosestScopeBinding(scope, sliceText(callee, parsed.source), callee, parsed.sup);
         },
-        parsed,
       );
-      return !(
-        resolvedReceiver.status === "ok" &&
-        resolvedReceiver.definition &&
-        declaresMembers(resolvedReceiver.definition)
-      );
+      // A recognized shape is not proof. Exclude it only when the type is a resolved
+      // member-declaring definition, every supertype resolves, and none declare this member.
+      let unavailable: boolean;
+      if (receiver) {
+        const omits = await provenClassifiedReceiverOmitsMember(
+          index,
+          fileId,
+          parsed,
+          current,
+          object,
+          sliceText(property, parsed.source),
+        );
+        unavailable = !omits;
+      } else {
+        const receiverRange = toRange(object);
+        const resolvedReceiver = await resolveDefinition(
+          {
+            file: fileId,
+            line: receiverRange.start.line,
+            column: receiverRange.start.column,
+          },
+          parsed,
+        );
+        unavailable = !(
+          resolvedReceiver.status === "ok" &&
+          resolvedReceiver.definition &&
+          declaresMembers(resolvedReceiver.definition)
+        );
+      }
+      if (!unavailable) return false;
+      return !freeFunctionMemberSiteIsProvenNonReference(index, fileId, parsed, object, expectedDef);
     }
     current = current.parent;
   }
@@ -525,7 +623,7 @@ export async function collectVerifiedNamedNodeReferences(
   const phpCanonicalNames = parsed.sup.id === "php" ? await phpCanonicalDefinitionNames(index, expectedDef) : undefined;
   const phpExistingFunctionNames =
     phpCanonicalNames && expectedDef.kind === SymbolKind.Function
-      ? await phpIndexedCanonicalNames(index, expectedDef.kind)
+      ? (await ensurePhpNamespaceSymbolIndex(index)).functionNames
       : undefined;
   const verified: VerifiedNamedNodeReference[] = [];
   const matchesExpectedDefinition = (definition: SymbolDef): boolean =>
@@ -549,6 +647,16 @@ export async function collectVerifiedNamedNodeReferences(
     });
   const pushVerified = (reference: VerifiedNamedNodeReference): void => {
     if (!includeReference || includeReference(reference)) verified.push(reference);
+  };
+  let definitionVisible: boolean | undefined;
+  const definitionVisibleHere = (): boolean => {
+    if (definitionVisible === undefined) {
+      const closure = importClosure(index, fileId);
+      definitionVisible = [expectedDef, ...equivalentDefinitions].some((definition) =>
+        closure.has(fileIdentityKey(definition.file)),
+      );
+    }
+    return definitionVisible;
   };
   for (const { range, node } of matched) {
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
@@ -586,22 +694,19 @@ export async function collectVerifiedNamedNodeReferences(
       }
       continue;
     }
-    if (onReceiverProofUnavailable && (await receiverProofUnavailable(fileId, parsed, range, resolveDefinition))) {
-      onReceiverProofUnavailable(fileId);
-    }
+    let recoveredByLanguageFallback = false;
     if (parsed.sup.id === "php" && expectedDef.isMember) {
       const memberMatch = await phpCaseInsensitiveReceiverMemberMatch(index, fileId, node, parsed, expectedDef);
       if (memberMatch === "matched") {
         pushVerified({ range, ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}) });
+        recoveredByLanguageFallback = true;
       } else if (memberMatch === "unverified") {
         markPhpNameEquivalenceGap(index, expectedDef);
       }
-      continue;
-    }
-    // PHP names are case-insensitive, but a namespace spelling alone cannot prove a member or
-    // distinguish a class reference from a function call. Restrict the fallback to syntax whose
-    // role matches the namespace-level definition.
-    if (phpCanonicalNames && matchesPhpFallbackDefinition(node, parsed, expectedDef)) {
+    } else if (phpCanonicalNames && matchesPhpFallbackDefinition(node, parsed, expectedDef)) {
+      // PHP names are case-insensitive, but a namespace spelling alone cannot prove a member or
+      // distinguish a class reference from a function call. Restrict the fallback to syntax whose
+      // role matches the namespace-level definition.
       const rawText = getPhpQualifiedReference(node, parsed.source) ?? sliceText(node, parsed.source);
       const imports = index.byFile.get(fileIdentityKey(fileId))?.imports;
       const role = inferPhpQualifiedReferenceImportType(node);
@@ -631,6 +736,21 @@ export async function collectVerifiedNamedNodeReferences(
           }
         }
         pushVerified({ range, ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}) });
+        recoveredByLanguageFallback = true;
+      }
+    }
+    // A same-name node that direct resolution and every language-specific fallback both failed
+    // to place is not provably unrelated: report the file so coverage cannot silently claim
+    // `complete` while this occurrence's status stays unknown. An ambiguous result (star
+    // imports, C++ overloads, or using targets) is the same kind of gap when this definition
+    // (or an equivalent declaration) is visible from this file: one of the candidates may be
+    // it. A name with no binding at all is proven unrelated by scope and stays out.
+    if (!recoveredByLanguageFallback && onReceiverProofUnavailable) {
+      if (
+        (isAmbiguousResolutionReason(resolved.reason) && definitionVisibleHere()) ||
+        (await receiverProofUnavailable(index, fileId, parsed, range, resolveDefinition, expectedDef))
+      ) {
+        onReceiverProofUnavailable(fileId);
       }
     }
   }
@@ -679,6 +799,34 @@ export function hasExpandedNamedImport(moduleIndex: ModuleIndex, targetFile: str
 
 const referenceCandidateCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
 
+/** A package import may expose a child only along its exact dotted module path. */
+export function pythonParentPackageNamespacePaths(
+  moduleIndex: ModuleIndex,
+  definitionFile: string,
+): Array<{ namespace: string; importBinding: ImportBinding }> {
+  const file = normalizePath(definitionFile);
+  const basename = path.posix.basename(file);
+  if (!file.endsWith(".py") && !file.endsWith(".pyi")) return [];
+  const moduleStem =
+    basename === "__init__.py" || basename === "__init__.pyi"
+      ? path.posix.dirname(file)
+      : file.slice(0, -path.posix.extname(file).length);
+  const paths: Array<{ namespace: string; importBinding: ImportBinding }> = [];
+  for (const imp of moduleIndex.imports) {
+    if (imp.kind !== "namespace" || imp.mechanism !== "python" || typeof imp.resolved !== "string") continue;
+    const target = normalizePath(imp.resolved);
+    const targetName = path.posix.basename(target);
+    const initializer = targetName === "__init__.py" || targetName === "__init__.pyi";
+    if (!initializer && (target.endsWith(".py") || target.endsWith(".pyi"))) continue;
+    const packageDirectory = initializer ? path.posix.dirname(target) : target;
+    const child = path.posix.relative(packageDirectory, moduleStem);
+    if (!child || child.startsWith("..") || path.posix.isAbsolute(child)) continue;
+    const boundName = imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS;
+    paths.push({ namespace: boundName + "." + child.replaceAll("/", "."), importBinding: imp });
+  }
+  return paths;
+}
+
 function referenceCandidateCacheKey(index: ProjectIndex, def: SymbolDef, exportedNames: readonly string[]): string {
   const normalizeIdentifier =
     supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.normalizeIdentifier ?? ((name) => name);
@@ -712,7 +860,15 @@ function importCanReferenceDefinition(
   };
 
   if (imp.kind === "named") {
-    return resolvesToDefinition(imp.imported);
+    if (resolvesToDefinition(imp.imported)) return true;
+    // A python `from pkg import name` binds `name` from the package's own namespace; when the
+    // package has no such export, Python's own import system falls back to treating `name` as
+    // an implicit submodule attribute instead (the same fallback `resolveImported` applies at
+    // consumption time). Reusing that fallback here keeps candidate-file discovery in agreement
+    // with the goto/reference-collection consumers that already resolve through it.
+    if (languageId !== "python") return false;
+    const result = resolveImported(index, imp, imp.imported, exportOptions);
+    return !!result && "namespace" in result && fileIdentityKey(result.namespace) === fileIdentityKey(def.file);
   }
   if (imp.kind === "default") {
     return resolvesToDefinition("default");
@@ -757,8 +913,14 @@ function filesExportingDefinition(
   languageId: string,
 ): string[] {
   const files = new Map<string, string>([[fileIdentityKey(def.file), def.file]]);
+  const namespaceLinks: Array<{ sourceFile: string; exportedAs: string; targetFile: string }> = [];
   for (const moduleIndex of index.byFile.values()) {
     const fileId = moduleIndex.file;
+    for (const entry of moduleIndex.exports) {
+      if (entry.type === "namespaceReexport") {
+        namespaceLinks.push({ sourceFile: fileId, exportedAs: entry.exportedAs, targetFile: entry.fromModule });
+      }
+    }
     if (fileIdentityKey(fileId) === fileIdentityKey(def.file) || !moduleIndex.exports.length) continue;
     for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
       const resolved = resolveExport(index, fileId, exportedName);
@@ -780,6 +942,23 @@ function filesExportingDefinition(
       )
     ) {
       files.set(fileIdentityKey(fileId), fileId);
+    }
+  }
+  // A namespace re-export can expose an inner symbol through a member chain even
+  // though it does not export that symbol under its own name. Include consumers
+  // only when the visible namespace alias really targets the exporting module.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const link of namespaceLinks) {
+      const sourceKey = fileIdentityKey(link.sourceFile);
+      if (files.has(sourceKey) || !files.has(fileIdentityKey(link.targetFile))) continue;
+      const visible = resolveExport(index, link.sourceFile, link.exportedAs, { allowLocalFallback: false });
+      if (visible?.kind !== "namespace" || fileIdentityKey(visible.file) !== fileIdentityKey(link.targetFile)) {
+        continue;
+      }
+      files.set(sourceKey, link.sourceFile);
+      grew = true;
     }
   }
   return [...files.values()];
@@ -804,7 +983,7 @@ function getIndexedReferenceCandidateFiles(
     if (
       moduleIndex.imports.some(
         (imp) =>
-          (imp.kind === "star" || imp.kind === "namespace") &&
+          (imp.kind === "star" || imp.kind === "namespace" || (imp.kind === "named" && imp.mechanism === "python")) &&
           importCanReferenceDefinition(index, imp, def, exportedNames, languageId),
       )
     ) {
@@ -885,6 +1064,15 @@ export function getCachedReferenceCandidateFiles(
     }
   }
 
+  // A plain package import does not prove its child's attribute, but a same-name use
+  // through that package must be checked before coverage can claim completeness.
+  if (languageId === "python" && !def.isMember) {
+    for (const moduleIndex of index.byFile.values()) {
+      if (pythonParentPackageNamespacePaths(moduleIndex, def.file).length) {
+        candidates.set(fileIdentityKey(moduleIndex.file), moduleIndex.file);
+      }
+    }
+  }
   const sorted = [...candidates.values()].sort((left, right) => left.localeCompare(right));
   cache.set(key, sorted);
   return sorted;
@@ -1001,7 +1189,7 @@ export function importBindingReferenceSites(
     if (localRange && !rangesEqual(localRange, importedRange)) {
       sites.push({ range: localRange, importBinding: "local" });
     }
-  } else if (imp.kind === "default") {
+  } else if (imp.kind === "default" || imp.kind === "namespace") {
     const { localRange } = bindingTokenRanges(imp);
     if (localRange) {
       sites.push({ range: localRange, importBinding: "local" });

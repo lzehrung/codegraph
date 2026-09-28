@@ -1,19 +1,26 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolvePythonModule } from "../../util/resolution.js";
+import { PY_SUPPORT } from "../../languages.js";
+import type { SyntaxTreeLike } from "../../languages/types.js";
+import { ProjectedSyntaxTree } from "../../native/projected-tree.js";
+import { getNativeSyntaxTreeExecution, type NativeMatch } from "../../native/tree-sitter-native.js";
 import { maskPythonCommentsAndStrings, stripPythonCommentsAndStrings } from "../../util/comments.js";
 import { PYTHON_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
-import type { NativeMatch } from "../../native/tree-sitter-native.js";
+import { fileIdentityKey } from "../../util/paths.js";
+import { resolvePythonModule } from "../../util/resolution.js";
+import { resolvePythonSubmoduleExact } from "../../util/resolution/python.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
-import type { ImportBindingSink, ResolvedImportTarget } from "./context.js";
-import { attributeNamedBindingRanges } from "./binding-ranges.js";
+import { buildScopeIndexFromSource } from "../scope.js";
 import type { ImportBinding } from "../types.js";
+import { attributeNamedBindingRanges } from "./binding-ranges.js";
+import type { ImportBindingSink, ResolvedImportTarget } from "./context.js";
 
 export type PythonImportExtractionContext = ImportBindingSink & {
   file: string;
   projectRoot: string;
   source: string;
   getBindings: () => ImportBinding[];
+  packageSources?: Map<string, PythonPackageSource | null>;
 };
 
 function splitRelativeModuleSpec(moduleSpec: string): { relDots: number; mod: string | null } {
@@ -23,40 +30,6 @@ function splitRelativeModuleSpec(moduleSpec: string): { relDots: number; mod: st
     relDots: match[1]!.length,
     mod: match[2] || null,
   };
-}
-
-function resolvePythonNamespaceMember(resolved: ResolvedImportTarget, imported: string): string | undefined {
-  if (typeof resolved !== "string") return undefined;
-  let baseDir = resolved;
-  try {
-    const stat = fs.statSync(baseDir);
-    if (
-      !stat.isDirectory() &&
-      (baseDir.toLowerCase().endsWith("__init__.py") || baseDir.toLowerCase().endsWith("__init__.pyi"))
-    ) {
-      baseDir = path.dirname(baseDir);
-    }
-  } catch {
-    return undefined;
-  }
-
-  const candidates = [
-    path.join(baseDir, `${imported}.py`),
-    path.join(baseDir, `${imported}.pyi`),
-    path.join(baseDir, imported, "__init__.py"),
-    path.join(baseDir, imported, "__init__.pyi"),
-    path.join(baseDir, imported),
-  ];
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate.replace(/\\/g, "/");
-      }
-    } catch {
-      // Ignore filesystem races and continue trying remaining namespace candidates.
-    }
-  }
-  return undefined;
 }
 
 async function pushStarImport(
@@ -75,6 +48,80 @@ async function pushStarImport(
   });
 }
 
+type PythonPackageSource = {
+  tree: SyntaxTreeLike;
+  moduleBindings: ReturnType<typeof buildScopeIndexFromSource>["allScopes"][number]["map"];
+};
+
+/** Inspect only the resolved package initializer, and only when a competing submodule exists. */
+function pythonPackageSource(context: PythonImportExtractionContext, file: string): PythonPackageSource | null {
+  context.packageSources ??= new Map();
+  if (context.packageSources.has(file)) return context.packageSources.get(file) ?? null;
+  let result: PythonPackageSource | null = null;
+  try {
+    const source = fs.readFileSync(file, "utf8");
+    const syntax = getNativeSyntaxTreeExecution(source, PY_SUPPORT).tree;
+    if (syntax) {
+      const tree = new ProjectedSyntaxTree(source, syntax);
+      const scope = buildScopeIndexFromSource(file, source, PY_SUPPORT, [], { tree });
+      result = { tree, moduleBindings: scope.allScopes[0]!.map };
+    }
+  } catch {
+    // A missing/unreadable initializer gives no proof that a submodule is safe to choose.
+  }
+  context.packageSources.set(file, result);
+  return result;
+}
+
+async function pythonPackageMayBindAttribute(
+  context: PythonImportExtractionContext,
+  resolved: ResolvedImportTarget,
+  imported: string,
+  submodule: string,
+): Promise<boolean> {
+  if (typeof resolved !== "string") return false;
+  const basename = path.basename(resolved);
+  if (basename !== "__init__.py" && basename !== "__init__.pyi") return false;
+  const packageSource = pythonPackageSource(context, resolved);
+  if (!packageSource) return true;
+
+  const localDefinition = packageSource.moduleBindings.get(PY_SUPPORT.normalizeIdentifier(imported))?.def?.start.index;
+  let attribute = localDefinition !== undefined;
+  const submoduleKey = fileIdentityKey(submodule);
+  const packageKey = fileIdentityKey(resolved);
+  for (const statement of packageSource.tree.rootNode.namedChildren) {
+    if (localDefinition !== undefined && statement.startIndex < localDefinition) continue;
+    if (statement.type === "import_from_statement") {
+      const specifier = statement.childForFieldName("module_name")?.text;
+      if (!specifier) continue;
+      const { relDots, mod } = splitRelativeModuleSpec(specifier);
+      const target = await resolvePythonModule(context.projectRoot, resolved, mod, relDots);
+      const targetKey = typeof target === "string" ? fileIdentityKey(target) : undefined;
+      const loadsSubmodule = targetKey === submoduleKey;
+      if (loadsSubmodule) attribute = false;
+      for (const item of statement.namedChildren) {
+        if (item.type !== "aliased_import" && item.type !== "dotted_name") continue;
+        const name = item.type === "aliased_import" ? item.childForFieldName("name")?.text : item.text;
+        const local = item.type === "aliased_import" ? item.childForFieldName("alias")?.text : name;
+        if (targetKey === packageKey && name === imported) attribute = false;
+        else if (local === imported) attribute = true;
+      }
+    } else if (statement.type === "import_statement") {
+      for (const item of statement.namedChildren) {
+        if (item.type !== "aliased_import" && item.type !== "dotted_name") continue;
+        const dotted = item.type === "aliased_import" ? item.childForFieldName("name")?.text : item.text;
+        if (!dotted) continue;
+        const target = await resolvePythonModule(context.projectRoot, resolved, dotted, 0);
+        if (typeof target === "string" && fileIdentityKey(target) === submoduleKey) attribute = false;
+        else if ((item.type === "aliased_import" ? item.childForFieldName("alias")?.text : dotted) === imported) {
+          attribute = true;
+        }
+      }
+    }
+  }
+  return attribute;
+}
+
 async function pushNamedImport(
   context: PythonImportExtractionContext,
   moduleSpec: string,
@@ -85,13 +132,14 @@ async function pushNamedImport(
 ): Promise<void> {
   const { relDots, mod } = splitRelativeModuleSpec(moduleSpec);
   const resolved = await resolvePythonModule(context.projectRoot, context.file, mod, relDots);
-  const namespaceResolved = resolvePythonNamespaceMember(resolved, imported);
-  if (namespaceResolved) {
+  const submodule = resolvePythonSubmoduleExact(resolved, imported);
+  if (submodule && !(await pythonPackageMayBindAttribute(context, resolved, imported, submodule))) {
     context.pushBinding({
       kind: "namespace",
       localNS: local,
       from: moduleSpec,
-      resolved: namespaceResolved,
+      ...(explicitAlias ? { explicitAlias: true } : {}),
+      resolved: submodule,
       mechanism: "python",
       moduleLevel,
     });
@@ -115,12 +163,14 @@ async function pushDefaultImport(
   dotted: string,
   local: string,
   moduleLevel: boolean,
+  explicitAlias: boolean,
 ): Promise<void> {
   const resolved = await resolvePythonModule(context.projectRoot, context.file, dotted, 0);
   context.pushBinding({
     kind: "namespace",
     localNS: local,
     from: dotted,
+    ...(explicitAlias ? { explicitAlias: true } : {}),
     resolved,
     mechanism: "python",
     moduleLevel,
@@ -241,7 +291,13 @@ async function collectPythonImportStatement(
     const aliasMatch = item.match(PYTHON_MODULE_LIST_ITEM_PATTERN);
     if (!aliasMatch) continue;
     const dotted = aliasMatch[1]!;
-    await pushDefaultImport(context, dotted, aliasMatch[2] ?? dotted.split(".")[0]!, moduleLevel);
+    await pushDefaultImport(
+      context,
+      dotted,
+      aliasMatch[2] ?? dotted.split(".")[0]!,
+      moduleLevel,
+      aliasMatch[2] !== undefined,
+    );
   }
   return true;
 }
@@ -314,6 +370,6 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
     const dotted = match[2]!;
     const local = match[3] ?? dotted.split(".")[0]!;
     const moduleLevel = isModuleLevelKeywordInStrippedSource(pySrc, keywordStart);
-    await pushDefaultImport(context, dotted, local, moduleLevel);
+    await pushDefaultImport(context, dotted, local, moduleLevel, match[3] !== undefined);
   }
 }

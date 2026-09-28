@@ -1,7 +1,13 @@
 import type { ImportBinding, ProjectIndex, ResolvedExport, SymbolDef } from "../indexer/types.js";
-import { resolveExport, resolveImported, resolveModuleExports } from "../indexer/navigation-resolve.js";
+import {
+  directModuleValueEntry,
+  resolveExport,
+  resolveImported,
+  resolveModuleExports,
+} from "../indexer/navigation-resolve.js";
 import { importIdRoleSegment, importNodeId, phpNamedImportRole } from "../indexer/import-types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 
@@ -194,9 +200,11 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
           });
         }
         if (targetFile && !addDefinitionEdge(aliasId, targetFile, "default", "default")) {
-          const fallbackExport = index.byFile
-            .get(fileIdentityKey(targetFile))
-            ?.exports.find((entry) => entry.type === "local")?.target;
+          const targetModule = index.byFile.get(fileIdentityKey(targetFile));
+          const languageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
+          const fallbackExport = isJsTsLanguage(languageId ?? "")
+            ? targetModule && directModuleValueEntry(targetModule)?.target
+            : targetModule?.exports.find((entry) => entry.type === "local")?.target;
           if (fallbackExport) {
             const targetId = defNodeId(fallbackExport);
             if (!nodes.has(targetId)) nodes.set(targetId, nodeForDef(fallbackExport));

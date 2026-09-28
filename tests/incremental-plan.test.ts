@@ -3,8 +3,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canUseIncrementalDiscoveryFastPath,
+  addedResolutionStems,
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
+  externalSpecifierMatchesAddedStem,
+  tsconfigAliasMappedTails,
   listUntrackedProjectFiles,
   resolveIncrementalFileList,
 } from "../src/indexer/incremental-plan.js";
@@ -317,5 +320,71 @@ describe("resolveIncrementalFileList", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("added-file specifier stems", () => {
+  it("matches a python module, a C include, an alias tail, and an entry-file directory", () => {
+    const stems = addedResolutionStems([
+      "/proj/app/util.py",
+      "/proj/lib.h",
+      "/proj/lib/target.ts",
+      "/proj/pkg/__init__.py",
+      "/proj/widget/index.ts",
+    ]);
+    expect(stems.has("util")).toBe(true);
+    expect(stems.has("lib")).toBe(true);
+    expect(stems.has("target")).toBe(true);
+    expect(stems.has("pkg")).toBe(true);
+    expect(stems.has("__init__")).toBe(true);
+    expect(stems.has("index")).toBe(true);
+    expect(stems.has("widget")).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("app.util", "python", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("lib.h", "c", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("@alias/target", "ts", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("pkg", "python", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("./widget", "ts", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("./other", "ts", stems)).toBe(false);
+    const mapped = tsconfigAliasMappedTails("@exact", { "@exact": ["./lib/target.ts"] });
+    expect(mapped).toEqual(["./lib/target.ts"]);
+    expect(externalSpecifierMatchesAddedStem("@exact", "ts", stems, mapped)).toBe(true);
+    // A fallback target counts: only the second target matches the added file.
+    const fallback = tsconfigAliasMappedTails("@lib/target", { "@lib/*": ["missing/miss-*", "lib/*"] });
+    expect(fallback).toEqual(["missing/miss-target", "lib/target"]);
+    expect(externalSpecifierMatchesAddedStem("@lib/target", "ts", stems, fallback)).toBe(true);
+    expect(
+      externalSpecifierMatchesAddedStem(
+        "@lib/other",
+        "ts",
+        stems,
+        tsconfigAliasMappedTails("@lib/other", { "@lib/*": ["missing/miss-*", "lib/*"] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("matches a declaration file by its source stem and an index declaration by its directory", () => {
+    const stems = addedResolutionStems(["/proj/types/foo.d.ts", "/proj/api/index.d.mts"]);
+    expect(externalSpecifierMatchesAddedStem("./types/foo", "ts", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("./api", "ts", stems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("./types/bar", "ts", stems)).toBe(false);
+  });
+
+  it("uses language-specific import segments, directory imports, and C# namespace imports", () => {
+    const javaStems = addedResolutionStems(["/proj/p/Item.java"], "java");
+    const kotlinStems = addedResolutionStems(["/proj/p/Item.kt"], "kotlin");
+    const rustStems = addedResolutionStems(["/proj/foo.rs"], "rust");
+    const goStems = addedResolutionStems(["/proj/thing/widget.go"], "go");
+    const csharpFiles = ["/proj/p/Thing.cs"];
+    const csharpStems = addedResolutionStems(csharpFiles, "csharp");
+
+    expect(externalSpecifierMatchesAddedStem("p.Item", "java", javaStems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("p.Item", "kotlin", kotlinStems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("crate::foo", "rust", rustStems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("crate::foo::Thing", "rust", rustStems)).toBe(true);
+    expect(goStems.has("thing")).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("example.com/probe/thing", "go", goStems)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("example.com/probe/other", "go", goStems)).toBe(false);
+    expect(externalSpecifierMatchesAddedStem("P", "csharp", csharpStems, [], csharpFiles)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("P", "csharp", csharpStems, [], ["/proj/p/Thing.ts"])).toBe(false);
   });
 });

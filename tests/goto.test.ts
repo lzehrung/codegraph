@@ -611,9 +611,10 @@ describe("Go to Definition", () => {
 
         const result = await goToDefinition(index, { file: consumerFile, line: 4, column: 11 });
 
+        expect(result.status).toBe("ok");
         if (result.status === "ok") {
-          expect(result.definition.file).not.toBe(serviceFile);
-          expect(result.definition.range.start.line).not.toBe(2);
+          expect(result.definition.file).toBe(serviceFile);
+          expect(result.definition.range.start.line).toBe(5);
         }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
@@ -808,7 +809,7 @@ describe("Go to Definition", () => {
       }
     });
 
-    it("keeps a real Python submodule as a namespace import", async () => {
+    it("keeps a real Python submodule reachable through a from-import binding", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-submodule-import-"));
       const packageDir = path.join(root, "package");
       const packageFile = path.join(packageDir, "__init__.py").replace(/\\/g, "/");
@@ -818,15 +819,21 @@ describe("Go to Definition", () => {
         await fsp.mkdir(packageDir);
         await fsp.writeFile(packageFile, "", "utf8");
         await fsp.writeFile(childFile, "value = 1\n", "utf8");
-        await fsp.writeFile(mainFile, "from package import child\n", "utf8");
+        const mainSource = "from package import child\n\nchild.value\n";
+        await fsp.writeFile(mainFile, mainSource, "utf8");
 
         const index = await createTestIndexFromFiles(root, [packageFile, childFile, mainFile]);
-        const mainModule = index.byFile.get(fileIdentityKey(mainFile));
-        const binding = mainModule?.imports.find((candidate) => candidate.kind === "namespace");
-
-        expect(binding?.kind).toBe("namespace");
-        if (!binding || binding.kind !== "namespace") return;
-        expect(binding.resolved).toBe(childFile);
+        // `child` has no real symbol of its own name in `package/__init__.py`, so the binding
+        // still resolves through the submodule fallback regardless of its internal import kind.
+        const result = await goToDefinition(index, {
+          file: mainFile,
+          line: 3,
+          column: mainSource.split("\n")[2]!.indexOf("value") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(childFile));
+        expect(result.definition.range.start.line).toBe(1);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -1757,6 +1764,34 @@ describe("Go to Definition", () => {
           column: lines[6]!.indexOf("choose") + 1,
         });
         expect(ambiguous).toEqual({ status: "not_found", reason: "Ambiguous C++ overload" });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves each C++ overload declaration name to its own callable", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cpp-overload-decl-goto-"));
+      try {
+        const file = path.join(root, "tools.hpp").replace(/\\/g, "/");
+        const lines = [
+          "namespace tools {",
+          "  int add(int left, int right) { return left + right; }",
+          "  int add(const char* text) { return 1; }",
+          "}",
+          "int f(int a, int b = 0);",
+          "int f(int a);",
+          "int f(int a) { return a; }",
+          "",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+
+        // Each name sits on its own declaration, so no call arity is needed. A prototype
+        // lands on the definition of the same signature, never on the other overload.
+        await testGoToDefinition(index, file, 2, lines[1]!.indexOf("add") + 1, file, 2);
+        await testGoToDefinition(index, file, 3, lines[2]!.indexOf("add") + 1, file, 3);
+        await testGoToDefinition(index, file, 5, lines[4]!.indexOf("f") + 1, file, 5);
+        await testGoToDefinition(index, file, 6, lines[5]!.indexOf("f") + 1, file, 7);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

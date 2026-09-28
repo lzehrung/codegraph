@@ -3,6 +3,7 @@ import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { extractAngularJsReferences, extractAngularJsRegistrations } from "../frameworks/angularjs.js";
 import type { Edge } from "../types.js";
+import { edgeKey } from "../util/graph-edges.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { resolveSpecifier } from "../util/resolution.js";
 import { type WorkspaceConfig } from "../util/workspace.js";
@@ -60,7 +61,7 @@ export async function collectAngularJsFrameworkEdges(
   const edges: Edge[] = [];
   const seen = new Set<string>();
   const pushEdge = (edge: Edge): void => {
-    const key = `${edge.from}::${edge.raw}::${edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`}`;
+    const key = edgeKey(edge);
     if (seen.has(key)) return;
     seen.add(key);
     edges.push(edge);

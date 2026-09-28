@@ -5510,6 +5510,37 @@ describe("Find References: reference coverage honesty", () => {
     try {
       const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
       const useFile = path.join(root, "use.php").replace(/\\/g, "/");
+      const serviceLine = "<?php namespace App; function Service() { return 1; }";
+      await fsp.writeFile(serviceFile, `${serviceLine}\n`, "utf8");
+      await fsp.writeFile(useFile, "<?php namespace App; $svc = service();\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [serviceFile, useFile]);
+
+      const result = await indexer.findReferences(index, {
+        file: serviceFile,
+        line: 1,
+        column: tokenColumn(serviceLine, "Service"),
+      });
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      // `service()` is a function call, but the bare spelling is also a legal constant name,
+      // so this case variant stays unproven. A class-only `new` is covered separately.
+      expectReferenceAt(result, useFile, 1);
+      expect(result.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["name_equivalence_unavailable"],
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports complete coverage for a case-variant PHP class instantiation", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-class-case-"));
+    try {
+      const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
+      const useFile = path.join(root, "use.php").replace(/\\/g, "/");
       const serviceLine = "<?php namespace App; class Service { function run() { return 1; } }";
       await fsp.writeFile(serviceFile, `${serviceLine}\n`, "utf8");
       await fsp.writeFile(useFile, "<?php namespace App; $svc = new service();\n", "utf8");
@@ -5523,14 +5554,9 @@ describe("Find References: reference coverage honesty", () => {
 
       expect(result.status).toBe("ok");
       if (result.status !== "ok") return;
-      // The bare `service` spelling is a legal case-variant reference, but a bare name could
-      // also be a same-named constant, so the equivalence is unproven and coverage says so.
+      // `new service()` can only name a class, and PHP class names are case-insensitive.
       expectReferenceAt(result, useFile, 1);
-      expect(result.referenceCoverage).toEqual({
-        scope: "indexed_candidates",
-        state: "partial",
-        reasons: ["name_equivalence_unavailable"],
-      });
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

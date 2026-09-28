@@ -8,7 +8,7 @@ import { sliceText } from "../util/ast.js";
 import { normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import type { ProjectIndex, SymbolDef } from "./types.js";
+import { SymbolKind, type ProjectIndex, type SymbolDef } from "./types.js";
 
 /**
  * Owner identity shared by C# `partial` type parts and Swift types/extensions.
@@ -411,4 +411,84 @@ export function coalesceEquivalentCsharpPartialExports(
     coalesced.push(selectCsharpPartialRepresentative(group));
   }
   return coalesced;
+}
+
+const CSHARP_NAMESPACE_TYPE_NODES = new Set<string>([
+  ...CSHARP_PARTIAL_CONTAINER_TYPES,
+  "enum_declaration",
+  "delegate_declaration",
+]);
+
+function collectCsharpTypeContainers(node: SyntaxNodeLike, out: SyntaxNodeLike[]): void {
+  if (CSHARP_NAMESPACE_TYPE_NODES.has(node.type)) out.push(node);
+  for (const child of node.namedChildren ?? []) collectCsharpTypeContainers(child, out);
+}
+
+function syntaxNodeRange(node: SyntaxNodeLike): Range {
+  return {
+    start: { line: node.startPosition.row + 1, column: node.startPosition.column + 1, index: node.startIndex },
+    end: { line: node.endPosition.row + 1, column: node.endPosition.column + 1, index: node.endIndex },
+  };
+}
+
+function parseCsharpOwnerFile(file: string): ParsedFileContext | null {
+  let source: string;
+  try {
+    source = fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+  if (source.charCodeAt(0) === 0xfeff) source = source.slice(1);
+  const sup = supportForFileWithoutHeaderSample(file);
+  if (!sup || sup.id !== "csharp") return null;
+  const execution = getNativeSyntaxTreeExecution(source, sup);
+  if (!execution.tree) return null;
+  return { source, tree: new ProjectedSyntaxTree(source, execution.tree), sup, nativeQueries: null };
+}
+
+/**
+ * Among files that each declare namespaceName.typeName, keep a file only when every
+ * matching declaration is one type. Proven-equivalent partial parts collapse through
+ * coalesceEquivalentCsharpPartialExports; anything still distinct is ambiguous.
+ * A file that cannot be parsed makes the set partial so callers do not guess.
+ */
+export function selectUniqueCsharpNamespaceTypeFile(
+  files: readonly string[],
+  namespaceName: string,
+  typeName: string,
+): { status: "found"; file: string } | { status: "not_found" } | { status: "ambiguous" } | { status: "partial" } {
+  const expectedPath = namespaceName + "." + typeName;
+  const parsed = new Map<string, ParsedFileContext>();
+  const matches: SymbolDef[] = [];
+  let unreadable = false;
+
+  for (const file of files) {
+    const context = parseCsharpOwnerFile(file);
+    if (!context) {
+      unreadable = true;
+      continue;
+    }
+    parsed.set(fileIdentityKey(file), context);
+    const containers: SyntaxNodeLike[] = [];
+    collectCsharpTypeContainers(context.tree.rootNode, containers);
+    for (const container of containers) {
+      if (getCSharpFullPath(container, context.source) !== expectedPath) continue;
+      const nameNode = container.childForFieldName("name");
+      if (!nameNode) continue;
+      matches.push({
+        file,
+        localName: typeName,
+        kind: SymbolKind.Class,
+        range: syntaxNodeRange(nameNode),
+      });
+    }
+  }
+
+  if (unreadable) return { status: "partial" };
+  if (matches.length === 0) return { status: "not_found" };
+  if (matches.length === 1) return { status: "found", file: matches[0]!.file };
+
+  const unique = coalesceEquivalentCsharpPartialExports({ parsed } as ProjectIndex, matches);
+  if (unique.length === 1) return { status: "found", file: unique[0]!.file };
+  return { status: "ambiguous" };
 }

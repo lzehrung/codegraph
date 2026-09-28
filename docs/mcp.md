@@ -123,6 +123,7 @@ Text and hybrid searches reuse a prepared handle for `.codegraph/cache/index-v1/
 If the sidecar is busy or unavailable, MCP uses the same exact in-memory matcher. [How it works](./how-it-works.md#cache-and-session-behavior) explains the search cache.
 
 Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits. Concurrent refresh, artifact build, and automatic SQLite artifact refresh operations serialize per MCP server so each bundle is written consistently. With write access, `query_sqlite` refreshes codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
+A session created with `freshness: { policy: "manual" }` (only possible when a library caller passes its own session to `createCodegraphMcpHandlers`) reports `freshness.state: "unchecked"`. It records no file signatures, so it cannot check a SQLite artifact or build a new one: `query_sqlite` rejects a stale artifact with that explanation, and `artifact_build` fails. Rebuild the artifact from a session whose policy is `check` or `auto`, for example with `codegraph artifact --sqlite`.
 `get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server. Legacy paired names (`callers`, `callees`, `supertypes`, `subtypes`, `deps`, and `rdeps`) remain accepted by `tools/call` as aliases, but only the unified tools appear in `tools/list`.
 
@@ -401,7 +402,7 @@ When codegraph MCP tools are available to an agent:
 1. Start with `explore` for a broad question.
 2. Use `orient` when you need a compact first-turn map rather than a question answer.
 3. Use `search` to find anchors and `get_file`, `packet_get`, `refs`, `goto`, `file_deps`, or `path` for focused follow-up.
-4. Check `freshness` on MCP responses after edits; `refreshed` means the answer used an updated snapshot, and `stale` includes a reason plus a bounded changed-file sample.
+4. Check `freshness` on MCP responses after edits; `refreshed` means the answer used an updated snapshot, `stale` includes a reason plus a bounded changed-file sample, and `unchecked` means a manual-policy session did not compare the snapshot with disk.
 5. Use `impact` and `review` for git-range risk analysis.
 6. Use `query_sqlite` only for read-only artifact inspection; rebuild the artifact when it reports stale state.
 7. Use `refresh_index` when you need an explicit rebuild.

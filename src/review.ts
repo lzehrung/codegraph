@@ -356,6 +356,7 @@ export async function buildReviewReport(
     changedFiles,
     deletedFiles,
     deletedSnapshots,
+    ...(appliedOptions.graph?.resolutionHints ? { resolutionHints: appliedOptions.graph.resolutionHints } : {}),
   });
 
   const candidateTests = await collectReviewCandidateTests({

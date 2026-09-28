@@ -59,6 +59,8 @@ type ChangedFileInputs = {
 type AffectedTraversalState = {
   index: ProjectIndex;
   projectRoot: string;
+  /** Include roots that resolve angle includes; a deleted header matches only through them. */
+  resolutionHints?: readonly string[];
   maxDepth: number;
   matchesTestFile: (file: FileId) => boolean;
   passesFilter: (file: string) => boolean;
@@ -132,7 +134,12 @@ async function addDeletedImporterTests(
   const adjacency = state.index.graphAdjacency ?? graphAdjacencyFor(state.index.graph);
   for (const deletedFile of deletedFiles) {
     const reasonSource = toProjectDisplayPath(state.projectRoot, deletedFile);
-    const directImporters = await listDirectDeletedFileImporters(state.index, [deletedFile], state.projectRoot);
+    const directImporters = await listDirectDeletedFileImporters(
+      state.index,
+      [deletedFile],
+      state.projectRoot,
+      state.resolutionHints,
+    );
     const visited = new Set<string>();
     const queue: Array<{ file: string; depth: number }> = [];
     for (const importer of directImporters) {
@@ -330,6 +337,9 @@ async function buildAffectedReportFromContext(context: AffectedCommandContext): 
   const { affected, omittedCounts } = await collectAffectedTests(normalizedChangedFiles, normalizedDeletedFiles, {
     index,
     projectRoot: context.projectRootFs,
+    ...(context.buildOptions.graph?.resolutionHints
+      ? { resolutionHints: context.buildOptions.graph.resolutionHints }
+      : {}),
     maxDepth: depth,
     matchesTestFile,
     passesFilter,

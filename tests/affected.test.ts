@@ -432,6 +432,41 @@ describe("affected CLI", () => {
   );
 
   it(
+    "reports a test whose angle include resolves only through --resolution-hint after the header is deleted",
+    async () => {
+      const root = await createTypescriptProject("cg-affected-deleted-angle-header-", [
+        { path: ".gitignore", contents: ".codegraph-cache/\n" },
+        { path: "include/x.h", contents: "int x(void);\n" },
+        { path: "tests/x_check.c", contents: "#include <x.h>\nint main(void) { return x(); }\n" },
+      ]);
+      runGit(root, ["init"]);
+      runGit(root, ["add", "."]);
+      runGit(root, ["commit", "-m", "base"]);
+      runGit(root, ["rm", "include/x.h"]);
+      runGit(root, ["commit", "-m", "delete header"]);
+
+      const hinted = await runAffectedJson(root, [
+        "--base",
+        "HEAD~1",
+        "--head",
+        "HEAD",
+        "--resolution-hint",
+        "include",
+      ]);
+      expect(hinted.changedFiles).toEqual(["include/x.h"]);
+      expect(hinted.affectedTests.map(({ file, depth }) => ({ file, depth }))).toEqual([
+        { file: "tests/x_check.c", depth: 1 },
+      ]);
+      expectReasonMentions(hinted.affectedTests[0], "include/x.h");
+
+      // Without the hint the angle include never resolved to the header, so nothing depends on it.
+      const unhinted = await runAffectedJson(root, ["--base", "HEAD~1", "--head", "HEAD"]);
+      expect(unhinted.affectedTests).toEqual([]);
+    },
+    affectedCliTimeoutMs,
+  );
+
+  it(
     "prints only stable sorted test paths with --quiet",
     async () => {
       const root = await createTypescriptProject("cg-affected-quiet-", [

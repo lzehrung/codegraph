@@ -241,6 +241,9 @@ function hasSameFreshness(left: AgentFreshnessResult, right: AgentFreshnessResul
   if (left.state === "refreshed") {
     return right.state === "refreshed" && sameStringList(left.changedFiles, right.changedFiles);
   }
+  if (left.state === "unchecked") {
+    return right.state === "unchecked" && left.reason === right.reason;
+  }
   return (
     right.state === "stale" &&
     left.changedFileCount === right.changedFileCount &&

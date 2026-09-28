@@ -5,6 +5,7 @@ import { loadNearestTsconfigFor } from "./util/resolution.js";
 import type { WorkspaceConfig } from "./util/workspace.js";
 import { extractDynamicImportSpecifiers, type ModuleSpecifier } from "./util/specifiers.js";
 import { fileIdentityKey } from "./util/paths.js";
+import { edgeKey } from "./util/graph-edges.js";
 import type { LogLevel } from "./logging.js";
 import {
   graphOnlyLanguageSupportsImportAliases,
@@ -45,6 +46,9 @@ function appendMissingSpecifiers(target: ModuleSpecifier[], incoming: readonly M
  * resolve to one file express a single dependency, and counting them separately would
  * inflate fan-in, hotspots, and drift totals.
  *
+ * C/C++ angle and quoted includes stay distinct even when they resolve to the same file:
+ * their form controls whether an added header can satisfy them.
+ *
  * SQL fact edges are the opposite. They deliberately reuse one file pair to express
  * distinct relationships (`sql:reads_from:...` vs `sql:writes_to:...`), so `raw` is part
  * of their identity and collapsing on it would discard real graph semantics.
@@ -52,10 +56,7 @@ function appendMissingSpecifiers(target: ModuleSpecifier[], incoming: readonly M
 export function deduplicateEdges(edges: Edge[], rawIsIdentity = false): Edge[] {
   const deduplicated = new Map<string, Edge>();
   for (const edge of edges) {
-    const target = edge.to.type === "file" ? fileIdentityKey(edge.to.path) : edge.to.name;
-    const type = edge.typeOnly ? "type-only" : "runtime";
-    const discriminator = rawIsIdentity ? `\0${edge.raw}` : "";
-    const key = `${fileIdentityKey(edge.from)}\0${edge.to.type}\0${target}\0${type}${discriminator}`;
+    const key = edgeKey(edge, rawIsIdentity, fileIdentityKey);
     const previous = deduplicated.get(key);
     if (!previous || hasBetterProvenance(edge, previous)) deduplicated.set(key, edge);
   }
@@ -241,7 +242,7 @@ export async function collectEdgesForFile(
   for (const resolvedEdge of await Promise.all(edgeResolutionTasks)) {
     if (!resolvedEdge) continue;
     for (const edgeEntry of resolvedEdge) {
-      const { to, spec, raw, typeOnly, resolved, confidence } = edgeEntry;
+      const { to, spec, raw, typeOnly, resolved, confidence, includeForm } = edgeEntry;
       edges.push({
         from: normalizedFile,
         to,
@@ -249,6 +250,7 @@ export async function collectEdgesForFile(
         ...(typeOnly !== undefined && { typeOnly }),
         ...(resolved !== undefined && { resolved }),
         ...(confidence !== undefined && { confidence }),
+        ...(includeForm ? { includeForm } : {}),
       });
     }
   }

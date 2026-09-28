@@ -5,6 +5,7 @@ import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "..
 import { buildProjectIndex, buildProjectIndexFromFiles } from "../indexer/build-index.js";
 import { getApiSurface } from "../indexer/symbols.js";
 import type { Edge } from "../types.js";
+import { edgeKey } from "../util/graph-edges.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles } from "../util/project-files.js";
 import { isPathUnderIncludeRoots, normalizeIncludeRootsAbsolute } from "../util/include-roots.js";
 import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
@@ -145,19 +146,16 @@ function edgeTarget(edge: Edge, root: string): string {
   return `external:${edge.to.name}`;
 }
 
-function edgeKey(edge: Edge, root: string): string {
-  const kind = edge.typeOnly ? "type-only" : "runtime";
-  return `${toProjectDisplayPath(root, edge.from)}\0${edge.raw}\0${edgeTarget(edge, root)}\0${kind}`;
-}
-
 function toSnapshotEdges(root: string, edges: readonly Edge[]): ArchitectureGraphEdge[] {
+  const displayPath = (file: string): string => toProjectDisplayPath(root, file);
   return edges
     .map((edge) => ({
-      key: edgeKey(edge, root),
-      from: toProjectDisplayPath(root, edge.from),
+      key: edgeKey(edge, true, displayPath),
+      from: displayPath(edge.from),
       to: edgeTarget(edge, root),
       raw: edge.raw,
       ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+      ...(edge.includeForm ? { includeForm: edge.includeForm } : {}),
     }))
     .sort((left, right) => left.key.localeCompare(right.key));
 }

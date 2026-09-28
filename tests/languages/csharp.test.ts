@@ -466,6 +466,205 @@ describe("C# namespace aliases", () => {
     }
   });
 
+  describe("C# type alias across a split namespace", () => {
+    it("resolves PT when namespace N is in two files and Point is in one, ignoring M.Point", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-split-"));
+      try {
+        const useLines = [
+          "using PT = N.Point;",
+          "namespace Z {",
+          "  public class User {",
+          "    public int Use() {",
+          "      PT p = new PT();",
+          "      return p.Sum();",
+          "    }",
+          "  }",
+          "}",
+        ];
+        const paths = await writeFixtureFiles(root, {
+          "Point.cs": "namespace N {\n  public class Point {\n    public int Sum() => 1;\n  }\n}\n",
+          "Other.cs": "namespace N {\n  public class Widget {\n    public int Sum() => 2;\n  }\n}\n",
+          "Nested.cs":
+            "namespace N {\n  public class Outer {\n    public class Point {\n      public int Sum() => 8;\n    }\n  }\n}\n",
+          "Decoy.cs": "namespace M {\n  public class Point {\n    public int Sum() => 9;\n  }\n}\n",
+          "Use.cs": `${useLines.join("\n")}\n`,
+        });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const useFile = paths["Use.cs"]!;
+        const pointFile = paths["Point.cs"]!;
+        const alias = index.byFile
+          .get(fileIdentityKey(useFile))
+          ?.imports.find((binding) => binding.kind === "named" && binding.local === "PT");
+        expect(alias && typeof alias.resolved === "string" && fileIdentityKey(alias.resolved)).toBe(
+          fileIdentityKey(pointFile),
+        );
+
+        const aliasGoto = await goToDefinition(index, {
+          file: useFile,
+          line: 5,
+          column: columnOf(useLines, 5, "PT"),
+        });
+        expect(aliasGoto.status === "ok" && fileIdentityKey(aliasGoto.definition.file)).toBe(
+          fileIdentityKey(pointFile),
+        );
+        if (aliasGoto.status === "ok") expect(aliasGoto.definition.localName).toBe("Point");
+
+        const member = await goToDefinition(index, {
+          file: useFile,
+          line: 6,
+          column: columnOf(useLines, 6, "Sum"),
+        });
+        expect(member.status === "ok" && fileIdentityKey(member.definition.file)).toBe(fileIdentityKey(pointFile));
+        if (member.status === "ok") expect(member.definition.range.start.line).toBe(3);
+
+        const references = await findReferences(index, { file: pointFile, line: 3, column: 16 });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected Sum references");
+        expect(references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(useFile))).toBe(true);
+        expect(
+          references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(paths["Decoy.cs"]!)),
+        ).toBe(false);
+        expect(references.referenceCoverage.state).toBe("complete");
+
+        const fileTargets = edgesFrom(index, useFile)
+          .filter((edge) => edge.to.type === "file")
+          .map((edge) => fileIdentityKey(edge.to.type === "file" ? edge.to.path : ""));
+        expect(fileTargets).toEqual([fileIdentityKey(pointFile)]);
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Sum");
+        expect(calls).toHaveLength(1);
+        expect(fileIdentityKey(graph.nodes.get(calls[0]!.to)?.file ?? "")).toBe(fileIdentityKey(pointFile));
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not bind an ambiguous N.Point to the first path match", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-ambiguous-"));
+      try {
+        const useLines = ["using PT = N.Point;", "class Use {", "  int M() { return PT.Left(); }", "}"];
+        const paths = await writeFixtureFiles(root, {
+          "N/Point.cs": "namespace N {\n  public class Point {\n    public int Left() => 1;\n  }\n}\n",
+          "Extra.cs": "namespace N {\n  public class Point {\n    public int Right() => 2;\n  }\n}\n",
+          "Use.cs": `${useLines.join("\n")}\n`,
+        });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const useFile = paths["Use.cs"]!;
+        const aliasGoto = await goToDefinition(index, {
+          file: useFile,
+          line: 3,
+          column: columnOf(useLines, 3, "PT"),
+        });
+        expect(aliasGoto.status).toBe("not_found");
+        const member = await goToDefinition(index, {
+          file: useFile,
+          line: 3,
+          column: columnOf(useLines, 3, "Left"),
+        });
+        expect(member.status).toBe("not_found");
+        const fileTargets = edgesFrom(index, useFile).filter((edge) => edge.to.type === "file");
+        expect(fileTargets).toEqual([]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("follows partial-type ownership when several files declare partial N.Point", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-partial-"));
+      try {
+        const useLines = [
+          "using PT = N.Point;",
+          "class Use {",
+          "  int M() {",
+          "    PT p = new PT();",
+          "    return p.Sum() + p.Extra();",
+          "  }",
+          "}",
+        ];
+        const paths = await writeFixtureFiles(root, {
+          "PartA.cs": "namespace N {\n  public partial class Point {\n    public int Sum() => 1;\n  }\n}\n",
+          "PartB.cs": "namespace N {\n  public partial class Point {\n    public int Extra() => 2;\n  }\n}\n",
+          "Use.cs": `${useLines.join("\n")}\n`,
+        });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const representative = [paths["PartA.cs"]!, paths["PartB.cs"]!].sort((left, right) =>
+          fileIdentityKey(left) < fileIdentityKey(right) ? -1 : 1,
+        )[0]!;
+        const useFile = paths["Use.cs"]!;
+        const alias = index.byFile
+          .get(fileIdentityKey(useFile))
+          ?.imports.find((binding) => binding.kind === "named" && binding.local === "PT");
+        expect(alias && typeof alias.resolved === "string" && fileIdentityKey(alias.resolved)).toBe(
+          fileIdentityKey(representative),
+        );
+
+        const sum = await goToDefinition(index, { file: useFile, line: 5, column: columnOf(useLines, 5, "Sum") });
+        expect(sum.status === "ok" && fileIdentityKey(sum.definition.file)).toBe(fileIdentityKey(paths["PartA.cs"]!));
+        const extra = await goToDefinition(index, { file: useFile, line: 5, column: columnOf(useLines, 5, "Extra") });
+        expect(extra.status === "ok" && fileIdentityKey(extra.definition.file)).toBe(
+          fileIdentityKey(paths["PartB.cs"]!),
+        );
+
+        const fileTargets = edgesFrom(index, useFile)
+          .filter((edge) => edge.to.type === "file")
+          .map((edge) => fileIdentityKey(edge.to.type === "file" ? edge.to.path : ""));
+        expect(fileTargets).toEqual([fileIdentityKey(representative)]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("equates @-escaped namespace segments when the alias names the type", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-verbatim-ns-"));
+      try {
+        const useLines = ["using PT = N.Point;", "class Use {", "  int M() { return PT.Sum(); }", "}"];
+        const paths = await writeFixtureFiles(root, {
+          "Point.cs": "namespace @N;\npublic class Point {\n  public int Sum() => 1;\n}\n",
+          "Other.cs": "namespace @N;\npublic class Other {}\n",
+          "Use.cs": `${useLines.join("\n")}\n`,
+        });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const member = await goToDefinition(index, {
+          file: paths["Use.cs"]!,
+          line: 3,
+          column: columnOf(useLines, 3, "Sum"),
+        });
+        expect(member.status === "ok" && fileIdentityKey(member.definition.file)).toBe(
+          fileIdentityKey(paths["Point.cs"]!),
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves a nested namespace type and ignores Point in the outer namespace", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-nested-"));
+      try {
+        const useLines = ["using PT = N.Inner.Point;", "class Use {", "  int M() { return PT.Sum(); }", "}"];
+        const paths = await writeFixtureFiles(root, {
+          "Inner.cs":
+            "namespace N {\n  namespace Inner {\n    public class Point {\n      public int Sum() => 1;\n    }\n  }\n}\n",
+          "Other.cs": "namespace N.Inner {\n  public class Other {}\n}\n",
+          "Decoy.cs": "namespace N {\n  public class Point {\n    public int Sum() => 9;\n  }\n}\n",
+          "Use.cs": `${useLines.join("\n")}\n`,
+        });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const member = await goToDefinition(index, {
+          file: paths["Use.cs"]!,
+          line: 3,
+          column: columnOf(useLines, 3, "Sum"),
+        });
+        expect(member.status === "ok" && fileIdentityKey(member.definition.file)).toBe(
+          fileIdentityKey(paths["Inner.cs"]!),
+        );
+        if (member.status === "ok") expect(member.definition.range.start.line).toBe(4);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("resolves an alias to a later block-scoped namespace in a file that declares several", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-multiple-"));
     const declaration = path.join(root, "Declarations.cs");

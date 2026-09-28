@@ -209,6 +209,21 @@ describe("architecture drift", () => {
     expect(report.findings.some((finding) => finding.kind === "graph-edge-removed")).toBe(false);
   });
 
+  it("compares the angle and quoted C includes of one header as distinct graph edges", async () => {
+    const root = await mkTmpDir("cg-drift-include-forms-");
+    await writeFile(root, "src/main.c", ["#include <x.h>", '#include "x.h"', ""].join("\n"));
+    await writeFile(root, "src/x.h", "int x(void);\n");
+    const head = await buildArchitectureSnapshot(root, {
+      includeRoots: ["src"],
+      native: "off",
+      graph: { resolutionHints: ["src"] },
+    });
+    const report = compareArchitectureSnapshots(makeSnapshot(), head, { failOn: [] });
+    const added = report.findings.filter((finding) => finding.kind === "graph-edge-added");
+    expect(added.map((finding) => finding.edge?.includeForm)).toEqual(["angle", "literal"]);
+    expect(new Set(added.map((finding) => finding.key)).size).toBe(2);
+  });
+
   it("detects a type-only import becoming a runtime dependency", async () => {
     const root = await mkTmpDir("cg-drift-type-only-");
     await writeFile(root, "src/b.ts", "export function b() { return 1; }\nexport type B = number;\n");

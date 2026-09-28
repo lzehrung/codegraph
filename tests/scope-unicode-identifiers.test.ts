@@ -12,7 +12,7 @@ import { supportById } from "../src/languages.js";
 import type { ImportBinding } from "../src/indexer/types.js";
 
 describe("Unicode scope bindings", () => {
-  it("uses one canonical PHP binding for a use alias and same-named variable declaration", () => {
+  it("keeps a PHP variable separate from a same-named use alias", () => {
     const support = supportById("php")!;
     const imports: ImportBinding[] = [{ kind: "named", from: "App\\Widget", imported: "Widget", local: "widget" }];
     const scope = buildScopeIndexFromSource(
@@ -22,13 +22,16 @@ describe("Unicode scope bindings", () => {
       imports,
     );
 
-    // The binding under test is the `use ... as widget` alias, which carries no `$` sigil,
-    // so its exact source spelling and its canonical key are the same string here.
-    const bindings = scope.bindings.get("widget");
-    expect(bindings).toHaveLength(1);
-    expect(bindings![0]!.name).toBe("widget");
-    expect(bindings![0]!.canonicalName).toBe("widget");
-    expect(bindings![0]!.occurrences).not.toHaveLength(0);
+    const imported = scope.bindings.get("widget");
+    expect(imported).toHaveLength(1);
+    expect(imported![0]!.name).toBe("widget");
+    expect(imported![0]!.canonicalName).toBe("widget");
+    expect(imported![0]!.occurrences).toEqual([]);
+    const variable = scope.bindings.get("$widget");
+    expect(variable).toHaveLength(1);
+    expect(variable![0]!.name).toBe("$widget");
+    expect(variable![0]!.canonicalName).toBe("$widget");
+    expect(variable![0]!.occurrences.map((range) => range.start.line)).toEqual([2, 3]);
   });
 
   it("preserves the exact source spelling in workspace symbol output", async () => {

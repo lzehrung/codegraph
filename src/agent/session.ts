@@ -56,7 +56,8 @@ export type AgentFreshnessResult =
       changedFileCount: number;
       omittedChangedFileCount: number;
       reason: string;
-    };
+    }
+  | { state: "unchecked"; reason: string };
 
 export type AgentSessionFreshnessOptions = {
   policy?: AgentFreshnessPolicy;
@@ -571,7 +572,16 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
   const checkFreshness = async (): Promise<AgentFreshnessResult> => {
     const policy = options.freshness?.policy ?? "check";
-    if (policy === "manual") return { state: "fresh" };
+    if (policy === "manual") {
+      // Manual sessions deliberately skip config-hash and file-signature bookkeeping (see
+      // loadFilePlan/loadBase), so there is no evidence to check against. Claiming "fresh"
+      // here would be a confident wrong answer once files change on disk; report an
+      // explicit unchecked state instead and let the caller decide (or call invalidate()).
+      return {
+        state: "unchecked",
+        reason: "freshness policy is manual; call invalidate() explicitly after edits",
+      };
+    }
     if (!cachedBase && !cachedFilePlan && !cachedFiles && !cachedFileSignatures) return { state: "fresh" };
 
     const now = Date.now();

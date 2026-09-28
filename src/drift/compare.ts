@@ -265,7 +265,7 @@ function pushGraphEdgeSummary(
 
 /** Identifies an edge independent of its type-only/runtime kind so kind flips pair up. */
 function edgeKindAgnosticKey(edge: ArchitectureGraphEdge): string {
-  return `${edge.from}\0${edge.raw}\0${edge.to}`;
+  return `${edge.from}\0${edge.raw}\0${edge.to}\0${edge.includeForm ?? ""}`;
 }
 
 function pushGraphEdgeTypeChanged(

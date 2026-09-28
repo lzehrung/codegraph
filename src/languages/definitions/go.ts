@@ -66,6 +66,9 @@ export const GO_DEF: LanguageDefinition = {
   },
   nodeTypes: {
     identifier: ["identifier", "field_identifier", "type_identifier", "package_identifier"],
+    // Selectors use `field_identifier`; qualified types use `type_identifier`. The shared
+    // member-chain walker needs both to resolve `pkg.Symbol` and `pkg.T{}` through imports.
+    propertyIdentifier: ["field_identifier", "type_identifier"],
     memberExpression: "selector_expression",
   },
   supportsCrossModuleSymbols: true,

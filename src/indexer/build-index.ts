@@ -27,7 +27,9 @@ import {
   resolveSpecifier,
   type MatchPathFn,
 } from "../util/resolution.js";
-import { collectCppDeclaredModules } from "../util/resolution/cpp.js";
+import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
+import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
+import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
 import {
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
@@ -127,8 +129,13 @@ import {
   buildIncrementalGitDiffOptions,
   canUseIncrementalDiscoveryFastPath,
   buildTrackedFileReverseDependencies,
+  addedResolutionStems,
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
+  collectSpecifierEdgeCandidates,
+  collectPythonPackageImporters,
+  externalSpecifierMatchesAddedStem,
+  tsconfigAliasMappedTails,
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
   partitionTrackedManifestFiles,
@@ -514,9 +521,113 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): 
 }
 
 function graphEdgeKey(edge: Edge): string {
-  const from = fileIdentityKey(edge.from);
-  const target = edge.to.type === "file" ? `file:${fileIdentityKey(edge.to.path)}` : `external:${edge.to.name}`;
-  return `${from}::${target}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
+  return edgeKey(edge, true, fileIdentityKey);
+}
+
+function externalEdgeTargetKey(to: Edge["to"]): string {
+  return to.type === "file" ? `file:${fileIdentityKey(to.path)}` : `external:${to.name}`;
+}
+
+const PRECISE_SPECIFIER_RESOLUTION_LANGUAGES: Record<string, true> = {
+  c: true,
+  cpp: true,
+  js: true,
+  jsx: true,
+  python: true,
+  ts: true,
+  tsx: true,
+};
+
+async function specifierResolutionChanged(
+  file: string,
+  entry: ManifestFileEntry,
+  projectRoot: string,
+  workspaceConfig: WorkspaceConfig | undefined,
+  graphOptions: GraphBuildOptions,
+  languageExtensions: BuildOptions["languageExtensions"],
+  loadMatchPath: (file: string) => Promise<MatchPathFn | undefined>,
+  addedFiles: readonly string[],
+  addedStemsForLanguage: (languageId: string) => ReadonlySet<string>,
+  loadTsconfigPaths: (file: string) => Promise<Record<string, readonly string[]> | undefined>,
+): Promise<boolean> {
+  const support = supportForFileWithoutHeaderSample(file, languageExtensions);
+  if (!support) return false;
+  const addedStems = addedStemsForLanguage(support.id);
+  if (!addedStems.size) return false;
+  const specifierEdges = entry.edges;
+  if (!specifierEdges.length) return false;
+
+  const specifierOf = (edge: Edge): string => (edge.to.type === "external" ? edge.raw || edge.to.name : edge.raw);
+  const matching: Edge[] = [];
+  const needsAlias: Edge[] = [];
+  for (const edge of specifierEdges) {
+    const specifier = specifierOf(edge);
+    if (externalSpecifierMatchesAddedStem(specifier, support.id, addedStems, [], addedFiles)) {
+      matching.push(edge);
+      continue;
+    }
+    const relative = specifier.startsWith(".") || specifier.startsWith("/") || /^[A-Za-z]:[\\/]/.test(specifier);
+    if ((support.id === "ts" || support.id === "tsx") && specifier && !relative) needsAlias.push(edge);
+  }
+  if (needsAlias.length) {
+    const paths = await loadTsconfigPaths(file);
+    if (paths && Object.keys(paths).length) {
+      for (const edge of needsAlias) {
+        const mapped = tsconfigAliasMappedTails(specifierOf(edge), paths);
+        if (
+          mapped.length &&
+          externalSpecifierMatchesAddedStem(specifierOf(edge), support.id, addedStems, mapped, addedFiles)
+        ) {
+          matching.push(edge);
+        }
+      }
+    }
+  }
+  if (!matching.length) return false;
+  // Stylesheet, document, and other unstored per-occurrence inputs cannot be
+  // re-resolved from the edge. The caller only reaches this on an add.
+  if (!PRECISE_SPECIFIER_RESOLUTION_LANGUAGES[support.id]) return true;
+  if (
+    (support.id === "c" || support.id === "cpp") &&
+    matching.some((edge) => edge.includeForm === undefined && !isCppNamedModuleSpecifier(edge.raw))
+  ) {
+    return true;
+  }
+
+  const matchPath = support.id === "ts" || support.id === "tsx" ? await loadMatchPath(file) : undefined;
+  const groups = new Map<string, Edge[]>();
+  for (const edge of matching) {
+    const key = `${edge.raw}\0${edge.includeForm ?? ""}\0${edge.typeOnly ? 1 : 0}`;
+    const group = groups.get(key);
+    if (group) group.push(edge);
+    else groups.set(key, [edge]);
+  }
+  for (const group of groups.values()) {
+    const sample = group[0]!;
+    const resolved = await resolveModuleSpecifierEdges(
+      {
+        spec: sample.raw,
+        ...(sample.typeOnly ? { typeOnly: true } : {}),
+        ...(sample.includeForm ? { includeForm: sample.includeForm } : {}),
+      },
+      {
+        support,
+        file,
+        projectRoot,
+        workspaceConfig,
+        matchPath,
+        resolveNodeModules: !!graphOptions.resolveNodeModules,
+        ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+      },
+    );
+    const resolvedKeys = (resolved ?? []).map((item) => externalEdgeTargetKey(item.to)).sort();
+    const cachedKeys = group.map((edge) => externalEdgeTargetKey(edge.to)).sort();
+    if (resolvedKeys.length !== cachedKeys.length) return true;
+    for (let index = 0; index < resolvedKeys.length; index += 1) {
+      if (resolvedKeys[index] !== cachedKeys[index]) return true;
+    }
+  }
+  return false;
 }
 
 async function moduleCacheSignatureForFile(
@@ -2120,12 +2231,14 @@ export async function buildProjectIndexIncremental(
       const bloomFilterCache = useBloomFilters
         ? new (await import("../util/bloom-filter.js")).BloomFilterCache()
         : undefined;
+      const addedFiles: string[] = [];
       for (const file of allFiles) {
         const sigInfo = fileSignatures.get(file);
         if (!sigInfo) continue;
         const entry = trackedEntries[file];
         const hasMatchingGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
         const hasMatchingSig = entry?.sig === sigInfo.sig;
+        if (!entry) addedFiles.push(file);
         if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
           changedFiles.add(file);
         }
@@ -2191,6 +2304,59 @@ export async function buildProjectIndexIncremental(
         }
       }
       invalidateCachedDependents();
+      // A deletion cannot make an unresolved specifier start resolving. Dependents of a
+      // deleted file are already rebuilt by collectDeletedTrackedFileDependents. An added
+      // file can: re-resolve only specifiers whose stem matches an added file. Edges that
+      // cannot round-trip (unstored resolution kind, or a C/C++ include with no form) are
+      // reparsed instead of guessed.
+      if (addedFiles.length) {
+        const reparseCachedFile = (candidate: string): void => {
+          const key = fileIdentityKey(candidate);
+          if (modules.has(key)) {
+            modules.delete(key);
+            if (fileReport) {
+              fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
+            }
+          }
+          markAsChanged(candidate);
+        };
+        const addedStemsByLanguage = new Map<string, ReadonlySet<string>>();
+        const addedStemsForLanguage = (languageId: string): ReadonlySet<string> => {
+          const existing = addedStemsByLanguage.get(languageId);
+          if (existing) return existing;
+          const stems = addedResolutionStems(addedFiles, languageId);
+          addedStemsByLanguage.set(languageId, stems);
+          return stems;
+        };
+        const specifierEdgeCandidates = collectSpecifierEdgeCandidates(trackedEntries, true);
+        if (specifierEdgeCandidates.size) {
+          const candidateFiles = Array.from(specifierEdgeCandidates);
+          const staleResolutions = await mapLimit(candidateFiles, conc, async (candidate) => {
+            if (!allFiles.has(candidate) || changedFiles.has(candidate)) return false;
+            const entry = trackedEntries[candidate];
+            if (!entry) return false;
+            return specifierResolutionChanged(
+              candidate,
+              entry,
+              projectRoot,
+              workspaceConfig,
+              graphOptions,
+              opts?.languageExtensions,
+              loadMatchPathForFile,
+              addedFiles,
+              addedStemsForLanguage,
+              (importer) =>
+                loadTsconfigResolutionInputsFor(importer, projectRoot, opts?.logLevel).then((inputs) => inputs?.paths),
+            );
+          });
+          for (let index = 0; index < candidateFiles.length; index += 1) {
+            if (staleResolutions[index]) reparseCachedFile(candidateFiles[index]!);
+          }
+        }
+        for (const importer of collectPythonPackageImporters(trackedEntries, addedFiles)) {
+          if (allFiles.has(importer) && !changedFiles.has(importer)) reparseCachedFile(importer);
+        }
+      }
       const changedList = Array.from(changedFiles);
       // Sized by the work that remains rather than the size of the project: an incremental build
       // touching a handful of files gets a handful of threads, or none.

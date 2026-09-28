@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs";
 import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
-import { SymbolKind, type SymbolDef } from "../../indexer/types.js";
+import { isGoExportedMemberName } from "../../indexer/declaration-visibility.js";
+import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
 import { foldPhpIdentifierCase, XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { fileIdentityKey } from "../../util/paths.js";
 import { keywordReceiverKind, ownReceiverMemberScope } from "../../util/member-access-tables.js";
 import {
   getMemberAccessParts,
@@ -13,6 +15,7 @@ import {
   isMemberAccessNode,
   isMemberReferencePropertyIdentifier,
   isReceiverNameNode,
+  receiverKeywordText,
 } from "../../util/member-access.js";
 import type { SymbolGraph } from "../symbol-graph.js";
 import { declarationMemberArity, findFirstNodeByType, isIdentifierType, PARAMETER_LIST_NODE_TYPES } from "./ast.js";
@@ -30,6 +33,8 @@ export type ReceiverCallCandidate = {
   /** Resolve only through supertypes, for explicit `parent`/`super`/`base` receivers. */
   viaSupertypes: boolean;
   memberName: string;
+  /** Files proven to share the caller's Go package; only those see unexported methods. */
+  goPackagePeerFiles?: ReadonlySet<string>;
   /** Match the member name with PHP's ASCII case-insensitive method rule. */
   caseInsensitiveMemberName?: boolean;
   /**
@@ -90,6 +95,44 @@ export function hasStaticMemberDistinction(languageId: string): boolean {
 }
 
 /**
+ * Languages whose grammar gives members a static-equivalent scope without a `static` keyword:
+ * a Kotlin member of a `companion object` or a named `object` declaration is reachable as
+ * `Outer.member()`. Member lookup classifies those members "static" and every other member
+ * "instance", matching the keyword-`static` languages.
+ */
+const STATIC_EQUIVALENT_MEMBER_CONTAINERS: Record<string, Readonly<Record<string, true>>> = {
+  kotlin: { companion_object: true, object_declaration: true },
+};
+
+/**
+ * Whether `node` is lexically declared inside its language's static-equivalent member
+ * container. The nearest enclosing member container decides: a nested type's members belong
+ * to that type, not to an outer `object`.
+ */
+export function declarationIsStaticEquivalent(languageId: string, node: SyntaxNodeLike): boolean {
+  const containers = STATIC_EQUIVALENT_MEMBER_CONTAINERS[languageId];
+  if (!containers) return false;
+  let current: SyntaxNodeLike | null = node.parent;
+  while (current) {
+    if (containers[current.type] === true) return true;
+    if (MEMBER_CONTAINER_TYPES[current.type] === true) return false;
+    current = current.parent;
+  }
+  return false;
+}
+
+/**
+ * Whether member lookup for `languageId` distinguishes static-equivalent members from
+ * instance members. A bare type-name receiver restricts lookup to the static-equivalent
+ * scope exactly when this holds; otherwise every member must stay reachable.
+ */
+export function supportsStaticMemberScope(languageId: string): boolean {
+  return (
+    STATIC_MEMBER_LANGUAGES[languageId] !== undefined || STATIC_EQUIVALENT_MEMBER_CONTAINERS[languageId] !== undefined
+  );
+}
+
+/**
  * Call nodes that carry the receiver and the member name on the call node itself
  * instead of exposing a member-access callee.
  */
@@ -132,6 +175,17 @@ const CPP_MEMBER_CONTAINER_TYPES: Record<string, true> = {
   union_specifier: true,
 };
 
+/**
+ * Container nodes whose declared members belong to the *enclosing* member container for
+ * direct-member lookup, rather than forming a separate nested type. Kotlin's unnamed
+ * `companion object { ... }` block is the language's static-member mechanism: `create()`
+ * declared inside one is a member of the enclosing class, reachable as `Outer.create()`,
+ * not a member of a distinct "Companion" type the indexer would need to name separately.
+ */
+export const TRANSPARENT_MEMBER_CONTAINER_TYPES: Record<string, true> = {
+  companion_object: true,
+};
+
 /** Nodes holding a call's argument list across the supported grammars. */
 export const CALL_ARGUMENT_NODE_TYPES: Record<string, true> = {
   argument_list: true,
@@ -168,6 +222,9 @@ const VALUE_BINDING_TYPES: Record<string, true> = {
   assignment_expression: true,
   assignment_statement: true,
   class_parameter: true,
+  // C/C++ local variable statement (`Box b;`, `Box* p = raw;`); the declared type sits
+  // beside the declarator, unlike other grammars' dedicated `variable_declaration` node.
+  declaration: true,
   formal_parameter: true,
   init_declarator: true,
   let_declaration: true,
@@ -262,6 +319,8 @@ const BINDING_DECLARATION_TYPES = new Set([
   "property_declaration",
   "local_variable_declaration",
   "local_declaration_statement",
+  // C/C++ local variable statement, e.g. `Box b;`, `Box* p = raw;`, `Box w{5};`.
+  "declaration",
 ]);
 
 const RUBY_CONSTANT_SOURCE = String.raw`(?=\p{Lu})${XID_IDENTIFIER_SOURCE}`;
@@ -286,7 +345,7 @@ const LANGUAGE_CONSTRUCTION_FORMS: Record<
   php: { newExpression: true },
   python: { capitalizedCall: true },
   ruby: { rubyNew: true },
-  rust: { capitalizedCall: true, rustUnitStruct: true },
+  rust: { capitalizedCall: true, rustUnitStruct: true, compositeLiteral: true },
   swift: { capitalizedCall: true },
   ts: { newExpression: true },
   tsx: { newExpression: true },
@@ -349,7 +408,15 @@ export type MemberArityRange = {
 export type ReceiverBinding =
   | { kind: "own-type"; memberScope: ReceiverMemberScope }
   | { kind: "supertype"; memberScope: ReceiverMemberScope }
-  | { kind: "named-type"; typeName: string; memberScope: ReceiverMemberScope };
+  | {
+      kind: "named-type";
+      typeName: string;
+      /** Syntax proving the type, including an imported qualified type such as `pkg.T`. */
+      typeNode: SyntaxNodeLike;
+      memberScope: ReceiverMemberScope;
+      /** Set when `typeName` names the type a constructor expression built. */
+      constructed?: true;
+    };
 
 /** What one receiver expression proves, memoized per enclosing function and text. */
 export type ReceiverProof = {
@@ -362,12 +429,13 @@ export type ReceiverProof = {
 type BindingProof = { status: "none" } | { status: "unproven" } | { status: "type"; node: SyntaxNodeLike };
 
 /**
- * Identifier a binding node declares: a `name` field, a nested C/C++ declarator,
- * an assignment left-hand side, or the last identifier child (C++ parameters hide
- * the name after the type).
+ * Identifier a binding node declares: a `name` or `pattern` field, a nested C/C++
+ * declarator, an assignment left-hand side, or the last identifier child (C++
+ * parameters hide the name after the type). Rust spells parameter and `let` names in
+ * the `pattern` field, where the last-identifier fallback would pick the declared type.
  */
 function bindingIdentifier(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
-  const named = node.childForFieldName("name");
+  const named = node.childForFieldName("name") ?? node.childForFieldName("pattern");
   if (named && (isReceiverNameNode(sup, named.type) || named.type === "field_identifier")) {
     return named;
   }
@@ -458,6 +526,14 @@ function containsIndex(node: SyntaxNodeLike, index: number): boolean {
 }
 
 function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  // A dedicated `type` field (C#'s `object_creation_expression`, C/C++'s `new_expression`) can
+  // wrap a qualified (`Outer.Inner`) or generic (`Box<int>`) shape the fallback scan below never
+  // matches; a language without that field (TS/PHP's `constructor` field, or none) falls through.
+  const typeField = node.childForFieldName("type");
+  if (typeField) {
+    const unwrapped = unwrapNamedType(typeField, sup);
+    if (unwrapped) return unwrapped;
+  }
   const constructor = node.childForFieldName("constructor") ?? node.child(0);
   if (constructor && isReceiverNameNode(sup, constructor.type)) {
     return constructor;
@@ -468,6 +544,59 @@ function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): Syntax
     }
   }
   return null;
+}
+
+const PHP_OBJECT_CREATION_KEYWORDS: Record<string, "self" | "static" | "parent"> = {
+  self: "self",
+  static: "static",
+  parent: "parent",
+};
+
+/** `new self()`, `new static()`, or `new parent()`, or null when `node` is not that keyword. */
+export type PhpObjectCreationKeyword = {
+  keyword: "self" | "static" | "parent";
+  nameNode: SyntaxNodeLike;
+  /** Enclosing class, or null when the keyword is outside a class declaration. */
+  classNode: SyntaxNodeLike | null;
+};
+
+export function phpObjectCreationKeyword(
+  node: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+): PhpObjectCreationKeyword | null {
+  if (sup.id !== "php") return null;
+  let creation: SyntaxNodeLike | null = node;
+  while (creation && creation.type !== "object_creation_expression") {
+    if (
+      creation.type === "method_declaration" ||
+      creation.type === "function_definition" ||
+      creation.type === "class_declaration"
+    ) {
+      return null;
+    }
+    creation = creation.parent;
+  }
+  if (!creation) return null;
+  const nameNode = constructorNameNode(creation, sup);
+  if (!nameNode) return null;
+  const onName = node === creation || (node.startIndex >= nameNode.startIndex && node.endIndex <= nameNode.endIndex);
+  if (!onName) return null;
+  const keyword = PHP_OBJECT_CREATION_KEYWORDS[foldPhpIdentifierCase(sliceText(nameNode, source))];
+  if (!keyword) return null;
+  const container = nearestMemberContainer(creation);
+  const classNode = container?.type === "class_declaration" ? container : null;
+  return { keyword, nameNode, classNode };
+}
+
+/** Members-declaring symbol whose name node is this container's name, when that match is unique. */
+export function memberContainerDef(mod: ModuleIndex, container: SyntaxNodeLike): SymbolDef | null {
+  const nameNode = container.childForFieldName("name");
+  if (!nameNode) return null;
+  const matches = mod.locals.filter(
+    (local) => declaresMembers(local) && local.range.start.index === nameNode.startIndex,
+  );
+  return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
 function rubyNewReceiverNameNode(node: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
@@ -496,6 +625,15 @@ export function unwrapNamedType(node: SyntaxNodeLike, sup: LanguageSupport): Syn
       current = current.childForFieldName("type") ?? current.namedChildren[0] ?? null;
       continue;
     }
+    if (current.type === "qualified_name") {
+      // C#'s `Outer.Inner` names the nested type by its last segment. PHP also parses a
+      // namespaced name as `qualified_name`, but as one flat token with no `name` field, so an
+      // absent field leaves `current` as that whole node instead of nulling the result out.
+      const segment = current.childForFieldName("name");
+      if (!segment) break;
+      current = segment;
+      continue;
+    }
     break;
   }
   if (!current) return null;
@@ -503,6 +641,35 @@ export function unwrapNamedType(node: SyntaxNodeLike, sup: LanguageSupport): Syn
     return current;
   }
   return null;
+}
+
+/**
+ * Kotlin extension-function receiver type, e.g. `Widget` in `fun Widget.describe(): String`.
+ * The receiver type is an unfielded `user_type` positioned before the function's own `name`;
+ * an ordinary function or class member declares no such node.
+ */
+export function kotlinExtensionReceiverTypeNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  if (node.type !== "function_declaration") return null;
+  const nameNode = node.childForFieldName("name");
+  if (!nameNode) return null;
+  const receiverType = node.namedChildren.find(
+    (child) => child.startIndex < nameNode.startIndex && (child.type === "user_type" || child.type === "nullable_type"),
+  );
+  return receiverType ? unwrapNamedType(receiverType, sup) : null;
+}
+
+/**
+ * Self-type name node of a Rust `impl` block: `Circle` in `impl Circle`, `impl Shape for
+ * Circle`, `impl<T> Box<T>`, or `impl Shape for &Circle`. The `type` field always names the
+ * self type (the `trait` field names the implemented trait), and `unwrapNamedType` strips
+ * generic and reference wrappers down to the base type identifier. Shared by member
+ * ownership in the detailed graph and receiver-member navigation so both attribute an
+ * impl method to the same owner.
+ */
+export function rustImplSelfTypeNode(implItem: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  if (implItem.type !== "impl_item") return null;
+  const typeNode = implItem.childForFieldName("type");
+  return typeNode ? unwrapNamedType(typeNode, sup) : null;
 }
 
 function capitalizedCallTypeName(expr: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
@@ -527,11 +694,27 @@ function compositeLiteralTypeName(expr: SyntaxNodeLike, source: string, sup: Lan
     if (!isAddr) return null;
     current = operand;
   }
-  if (current.type !== "composite_literal" && current.type !== "struct_initializer") return null;
+  // tree-sitter-go composite_literal, tree-sitter-zig struct_initializer, tree-sitter-rust
+  // struct_expression: `Type { field: value }` / `Type{ .field = value }`.
+  if (
+    current.type !== "composite_literal" &&
+    current.type !== "struct_initializer" &&
+    current.type !== "struct_expression"
+  ) {
+    return null;
+  }
   const typeNode =
     current.childForFieldName("type") ??
-    current.namedChildren.find((child) => child.type === "type_identifier" || child.type === "identifier") ??
+    current.namedChildren.find(
+      (child) =>
+        child.type === "type_identifier" ||
+        child.type === "identifier" ||
+        child.type === sup.nodeTypes.memberExpression,
+    ) ??
     null;
+  // A qualified literal type (Zig `ns.Struct{...}`) has no dedicated `type` field and is not a
+  // simple named type either; `unwrapNamedType` rejects it, so the member-access node itself is
+  // kept so the caller can resolve it the same way as any other qualified expression.
   return typeNode ? (unwrapNamedType(typeNode, sup) ?? typeNode) : null;
 }
 
@@ -795,6 +978,9 @@ function findVisiblePriorConstructor(
  * Resolves the node naming the type a receiver expression was constructed from, or
  * null when no constructor is proven for it. Shared with detailed symbol-graph call
  * extraction so `goto` and resolved `calls` edges accept the same receiver forms.
+ * A bare name is unit-struct construction only while no local binding of the same
+ * name shadows it; a shadowing binding is a value whose type must come from the
+ * binding, never from the type the name also spells.
  */
 export function receiverConstructorExpression(
   obj: SyntaxNodeLike,
@@ -802,9 +988,9 @@ export function receiverConstructorExpression(
   sup: LanguageSupport,
 ): SyntaxNodeLike | null {
   const direct = constructionTypeName(obj, source, sup);
-  if (direct) return direct;
-  if (!isReceiverNameNode(sup, obj.type)) return null;
+  if (!isReceiverNameNode(sup, obj.type)) return direct;
   const receiverName = sliceText(obj, source);
+  if (direct && !bindsLocalValue(obj, receiverName, source, sup)) return direct;
   return findVisiblePriorConstructor(obj, receiverName, source, sup);
 }
 
@@ -1075,8 +1261,9 @@ export function classifyReceiver(
   proofCache: Map<string, ReceiverProof>,
   cacheScope: number,
   accessNode: SyntaxNodeLike,
+  hasLexicalBinding: (callee: SyntaxNodeLike) => boolean,
 ): ReceiverBinding | null {
-  const text = sliceText(receiver, source).trim();
+  const text = receiverKeywordText(sup, receiver, source, hasLexicalBinding);
   if (!text) return null;
   const keywordKind = keywordReceiverKind(sup.id, text);
   if (keywordKind) {
@@ -1101,7 +1288,9 @@ export function classifyReceiver(
     return {
       kind: "named-type",
       typeName: sliceText(proof.constructed, source),
+      typeNode: proof.constructed,
       memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
+      constructed: true,
     };
   }
   if (!receiverIsName) return null;
@@ -1125,12 +1314,14 @@ export function classifyReceiver(
     return {
       kind: "named-type",
       typeName: text,
+      typeNode: receiver,
       memberScope: UNBOUND_INSTANCE_CALL_LANGUAGE_IDS[sup.id] ? "any" : "static",
     };
   }
   return {
     kind: "named-type",
     typeName: text,
+    typeNode: receiver,
     memberScope: hasStaticMemberDistinction(sup.id) && typeScoped ? "static" : "any",
   };
 }
@@ -1150,6 +1341,9 @@ const UNBOUND_INSTANCE_CALL_LANGUAGE_IDS: Record<string, true> = {
  */
 const STATIC_TYPE_NAME_RECEIVER_LANGUAGE_IDS: Record<string, true> = {
   csharp: true,
+  js: true,
+  ts: true,
+  tsx: true,
 };
 
 /** Whether a receiver name is capitalized like a type in a capitalized-name language. */
@@ -1412,6 +1606,8 @@ export function emitReceiverCallEdges(
   memberArities: ReadonlyMap<string, MemberArityRange> = new Map(),
   ownerAnchors: ReadonlyMap<string, string> = new Map(),
   accessibleMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  fileHiddenMemberIds: ReadonlySet<string> = new Set(),
+  acceptsCallTarget?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1482,8 +1678,15 @@ export function emitReceiverCallEdges(
         memberScopes,
         nodeAliases,
         memberArities,
+        fileHiddenMemberIds,
+        candidate.site.file,
       );
       if (lookup.status === "unique") {
+        if (acceptsCallTarget && !acceptsCallTarget(lookup.memberId, candidate)) {
+          receiverDisposition = "ambiguous";
+          if (existingTargets.size) rejectedCallSites.add(siteKey);
+          break;
+        }
         receiverDisposition = "resolved";
         const combinedTargets = new Set(existingTargets);
         combinedTargets.add(lookup.memberId);
@@ -1575,6 +1778,8 @@ function provenMemberTarget(
   memberScopes: ReadonlyMap<string, ReceiverMemberScope>,
   nodeAliases: ReadonlyMap<string, string>,
   memberArities: ReadonlyMap<string, MemberArityRange>,
+  fileHiddenMemberIds: ReadonlySet<string>,
+  useFile: string,
 ): MemberTargetLookup {
   const matches = new Set<string>();
   for (const ownerId of owners) {
@@ -1582,10 +1787,23 @@ function provenMemberTarget(
       const canonicalId = canonicalMemberId(memberId, nodeAliases);
       const node = graph.nodes.get(memberId) ?? graph.nodes.get(canonicalId);
       if (!node || (node.kind !== "function" && !node.callable)) continue;
+      if (
+        (fileHiddenMemberIds.has(memberId) || fileHiddenMemberIds.has(canonicalId)) &&
+        fileIdentityKey(node.file) !== fileIdentityKey(useFile)
+      ) {
+        continue;
+      }
       const nameMatches = candidate.caseInsensitiveMemberName
         ? foldPhpIdentifierCase(node.name) === foldPhpIdentifierCase(candidate.memberName)
         : node.name === candidate.memberName;
       if (!nameMatches) continue;
+      if (
+        candidate.goPackagePeerFiles &&
+        !isGoExportedMemberName("go", node.name) &&
+        !candidate.goPackagePeerFiles.has(node.file)
+      ) {
+        continue;
+      }
       const scope = memberScopes.get(memberId) ?? memberScopes.get(canonicalId);
       if (memberScope !== "any" && scope !== memberScope) continue;
       matches.add(canonicalId);

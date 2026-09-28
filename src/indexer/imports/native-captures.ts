@@ -107,6 +107,7 @@ function pushNamespaceBinding(
   resolved: ResolvedImportTarget,
   typeOnly: boolean,
   byteIndexMap: ByteToStringIndexMap,
+  mechanism?: "cjs",
 ): void {
   const namespaceCapture = importCapture(caps, "ns");
   if (!namespaceCapture) return;
@@ -117,6 +118,7 @@ function pushNamespaceBinding(
     localRange: rangeFromNativeCapture(namespaceCapture, byteIndexMap),
     resolved,
     typeOnly,
+    ...(mechanism ? { mechanism } : {}),
   });
 }
 
@@ -146,7 +148,8 @@ async function pushStandardBindings(
     });
   }
 
-  pushNamespaceBinding(context, caps, from, resolved, typeOnly, byteIndexMap);
+  const cjsMechanism = caps["req"] || caps["cjs"] ? "cjs" : undefined;
+  pushNamespaceBinding(context, caps, from, resolved, typeOnly, byteIndexMap, cjsMechanism);
 
   const inames = capturesNamed(match, "iname");
   const aliases = capturesNamed(match, "alias");
@@ -176,6 +179,7 @@ async function pushStandardBindings(
       from,
       resolved,
       typeOnly,
+      ...(includeForm ? { includeForm } : {}),
     });
     return;
   }
@@ -187,6 +191,7 @@ async function pushStandardBindings(
       from,
       resolved,
       typeOnly,
+      ...(includeForm ? { includeForm } : {}),
       stmtText,
       ...(statementStartIndex !== undefined ? { stmtStartIndex: statementStartIndex, source: context.source } : {}),
       ...(alias ? { alias } : {}),

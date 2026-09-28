@@ -2557,6 +2557,31 @@ describe("codegraph MCP handlers", () => {
     expect(caught.message).not.toMatch(/artifact_build before query_sqlite/i);
   });
 
+  it("refuses to rebuild a stale SQLite artifact from an unchecked manual session", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-manual-session-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "keep.ts"), "export const keep = 1;\n");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+    buildHandlers.dispose();
+
+    const session = createAgentSession({ root, freshness: { policy: "manual" } });
+    await session.loadProject({ symbolGraph: "skip" });
+    await fs.writeFile(path.join(root, "added.ts"), "export const added = 2;\n");
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, readOnly: false, session });
+
+    const failure = readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    await expect(failure).rejects.toThrow(/SQLite artifact may be stale, and this session cannot check or rebuild it/);
+    await expect(failure).rejects.toThrow(/"check" or "auto"/);
+    // The guidance must not point at a recovery this session cannot perform.
+    await expect(failure).rejects.not.toThrow(/run refresh_index, then/);
+    // A manual session cannot build a SQLite artifact at all, which is why the message says so.
+    await expect(readHandlers.artifact_build({ outDir, sqlite: true, force: true })).rejects.toThrow(
+      /freshness signatures are unavailable/,
+    );
+    session.invalidate();
+  });
+
   it("refuses older SQLite artifacts without freshness metadata in read-only mode", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-legacy-artifact-"));
     const outDir = path.join(root, "out");

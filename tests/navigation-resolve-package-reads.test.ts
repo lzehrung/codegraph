@@ -1,12 +1,21 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildProjectIndex, resolveExport, resolveImported } from "../src/index.js";
-import type { ImportBinding, ProjectIndex } from "../src/indexer/types.js";
+import type { ParsedFileContext } from "../src/indexer/parse-context.js";
+import {
+  SymbolKind,
+  type ImportBinding,
+  type ModuleIndex,
+  type ProjectIndex,
+  type SymbolDef,
+} from "../src/indexer/types.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import { createTempProjectRoot } from "./helpers/filesystem.js";
-import { expectResolvedDef } from "./helpers/narrow.js";
+import { expectResolvedDef, makeTestProjectIndex } from "./helpers/narrow.js";
 
 const GO_CALLER = "package app\n\nfunc Main() {\n\tWidget()\n}\n";
 const GO_WIDGET = "package app\n\nfunc Widget() {\n}\n";
@@ -143,5 +152,91 @@ describe("package export resolution", () => {
     const resolved = resolveImported(index, binding, "Alpha");
 
     expect(resolved && "file" in resolved ? resolved.file : null).toBe(alphaJava);
+  });
+});
+
+describe("sibling package export peers", () => {
+  function memberExport(file: string, exportedName: string): SymbolDef {
+    return {
+      file,
+      localName: exportedName,
+      kind: SymbolKind.Function,
+      isMember: true,
+      range: {
+        start: { line: 3, column: 3, index: 20 },
+        end: { line: 3, column: 3 + exportedName.length, index: 20 + exportedName.length },
+      },
+    };
+  }
+
+  /**
+   * A member export is invisible to the compilation-unit bare-name scan, so sibling package
+   * resolution is the only path that can answer it. Package clauses come from retained source.
+   */
+  function packageMemberIndex(input: {
+    anchor: { file: string; source: string };
+    sibling: { file: string; source: string };
+    exportedName: string;
+    unreadableFile?: string;
+  }): { index: ProjectIndex; member: SymbolDef } {
+    const member = memberExport(input.sibling.file, input.exportedName);
+    const siblingModule: ModuleIndex = {
+      file: input.sibling.file,
+      exports: [{ type: "local", exportedAs: input.exportedName, target: member }],
+      imports: [],
+      locals: [member],
+    };
+    const byFile = new Map<string, ModuleIndex>([
+      [fileIdentityKey(input.anchor.file), { file: input.anchor.file, exports: [], imports: [], locals: [] }],
+      [fileIdentityKey(input.sibling.file), siblingModule],
+    ]);
+    const parsed = new Map<string, ParsedFileContext>([
+      [fileIdentityKey(input.anchor.file), { source: input.anchor.source } as ParsedFileContext],
+      [fileIdentityKey(input.sibling.file), { source: input.sibling.source } as ParsedFileContext],
+    ]);
+    if (input.unreadableFile) {
+      byFile.set(fileIdentityKey(input.unreadableFile), {
+        file: input.unreadableFile,
+        exports: [],
+        imports: [],
+        locals: [],
+      });
+    }
+    return { index: makeTestProjectIndex({ byFile, parsed, modules: byFile }), member };
+  }
+
+  function importedName(resolved: string, exportedName: string): ImportBinding {
+    return { kind: "named", local: exportedName, imported: exportedName, from: `./${exportedName}`, resolved };
+  }
+
+  it("does not resolve a sibling member when a same-directory JVM peer cannot be read", () => {
+    const root = path.resolve("cg-sibling-package-unreadable").replace(/\\/g, "/");
+    const anchor = `${root}/pkg/Anchor.java`;
+    const sibling = `${root}/pkg/Sibling.java`;
+    const unreadable = `${root}/pkg/Missing.java`;
+    const { index } = packageMemberIndex({
+      anchor: { file: anchor, source: "package p;\nclass Anchor {}\n" },
+      sibling: { file: sibling, source: "package p;\nclass Sibling { void Widget() {} }\n" },
+      exportedName: "Widget",
+      unreadableFile: unreadable,
+    });
+
+    // The unread file may declare `Widget` too, so a unique readable sibling is not an answer.
+    expect(resolveImported(index, importedName(anchor, "Widget"), "Widget")).toBeNull();
+  });
+
+  it("resolves a Kotlin package member from Java through the shared peer set", () => {
+    const root = path.resolve("cg-sibling-package-kotlin-member").replace(/\\/g, "/");
+    const anchor = `${root}/pkg/Anchor.java`;
+    const sibling = `${root}/pkg/Sibling.kt`;
+    const { index, member } = packageMemberIndex({
+      anchor: { file: anchor, source: "package p;\nclass Anchor {}\n" },
+      // Kotlin package clauses have no semicolon. A Java package pattern does not see them.
+      sibling: { file: sibling, source: "package p\nclass Sibling { fun Widget() {} }\n" },
+      exportedName: "Widget",
+    });
+
+    const resolved = resolveImported(index, importedName(anchor, "Widget"), "Widget");
+    expect(resolved && "localName" in resolved ? resolved : null).toEqual(member);
   });
 });

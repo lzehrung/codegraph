@@ -12,13 +12,15 @@ import {
   type NativeQueryResults,
   type NativeRuntimeMode,
 } from "../native/tree-sitter-native.js";
-import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
+import { maskJsLikeCommentsAndStrings, maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
+import { findClosestScopeBinding } from "./navigation-local.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
 import { isPythonInstanceAttributeDeclaration } from "../languages/definitions/python.js";
+import { phpConstructorPromotedVariable, phpPropertyPromotionParameter } from "./navigation-php.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { importCapture } from "../languages/graph-captures.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
@@ -28,6 +30,11 @@ import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/ide
 import { isExportedDeclaration } from "./declaration-visibility.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { cppCallableIsDefinition, cppCallableShapeForNode } from "./cpp-callables.js";
+import {
+  typescriptCollapsedOverloadTarget,
+  typescriptCallableContainerKey,
+  typescriptCallableRoleAt,
+} from "./ts-callables.js";
 
 /**
  * Matches one `exportScopeBlockers` entry against an ancestor node. A plain entry compares the
@@ -66,6 +73,18 @@ const JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN = new RegExp(
 );
 const JS_FALLBACK_CJS_FUNCTION_PATTERN = new RegExp(
   String.raw`(?:^|[;\n\r])\s*(?:exports|module\.exports)\.(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*=\s*(function\b|\([^)]*\)\s*=>)`,
+  "gu",
+);
+const JS_FALLBACK_CJS_MODULE_FUNCTION_PATTERN = new RegExp(
+  String.raw`(?:^|[;\n\r])\s*module\.exports\s*=\s*(?:async\s+)?(?:function\b\s*\*?\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})?\s*\(|\([^)]*\)\s*=>|${ECMASCRIPT_IDENTIFIER_SOURCE}\s*=>)`,
+  "gu",
+);
+const JS_FALLBACK_CJS_MODULE_IDENTIFIER_PATTERN = new RegExp(
+  String.raw`(?:^|[;\n\r])\s*module\.exports\s*=\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})(?![$_\p{ID_Continue}\u200c\u200d])(?=\s*(?:;|$|\r|\n))`,
+  "gu",
+);
+const JS_FALLBACK_TOP_LEVEL_LOCAL_PATTERN = new RegExp(
+  String.raw`(?:^|[;{}\n\r])\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?((?:abstract\s+)?class|(?:async\s+)?function|const|let|var)\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})(?![$_\p{ID_Continue}\u200c\u200d])`,
   "gu",
 );
 const JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN = new RegExp(
@@ -118,6 +137,12 @@ const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
   trait_item: true,
   enum_declaration: true,
   enum_item: true,
+  // Zig has no implicit member scope of its own; a function nested in one of these container
+  // forms is a method, matching the receiver-call detection in receiver-calls.ts's
+  // MEMBER_CONTAINER_TYPES, which already lists all three.
+  struct_declaration: true,
+  union_declaration: true,
+  opaque_declaration: true,
 };
 
 const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
@@ -133,6 +158,7 @@ const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
 
 function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
   if (isPythonInstanceAttributeDeclaration(node)) return true;
+  if (phpConstructorPromotedVariable(node)) return true;
   let current = node.parent?.parent ?? null;
   while (current) {
     if (MEMBER_CONTAINER_NODE_TYPES[current.type]) return true;
@@ -177,6 +203,60 @@ function cppQualifiedExportName(
     current = current.parent;
   }
   return [...namespaceSegments.flat(), ...(qualifiedSegments ?? [name])].join("::");
+}
+
+const RUBY_CONTAINER_TYPES = new Set(["class", "module"]);
+
+/** Whether `container`'s own body (not a nested class or module) declares `name`. */
+function rubyContainerDeclares(container: SyntaxNodeLike, name: string, source: string): boolean {
+  const visit = (node: SyntaxNodeLike): boolean => {
+    for (const child of node.namedChildren) {
+      if (RUBY_CONTAINER_TYPES.has(child.type)) {
+        const childName = child.childForFieldName("name");
+        if (childName && sliceText(childName, source) === name) return true;
+        continue;
+      }
+      if (visit(child)) return true;
+    }
+    return false;
+  };
+  return visit(container);
+}
+
+/**
+ * Nested Ruby constants are not top-level names. `module Outer; class Base`
+ * exports as `Outer::Base`, so a `require` cannot bind bare `Base`. A `scope_resolution`
+ * name (`class Inner::Tool`) looks up its first segment lexically, as Ruby does: the
+ * innermost enclosing class or module that declares `Inner` in this file supplies the
+ * prefix (`Outer::Inner::Tool`); otherwise the path is top-level. A leading `::` is absolute.
+ */
+function rubyQualifiedExportName(nameNode: SyntaxNodeLike, source: string, name: string): string {
+  if (name.startsWith("::")) return name.slice(2);
+  const containers: { node: SyntaxNodeLike; text: string }[] = [];
+  for (let current = nameNode.parent; current; current = current.parent) {
+    if (!RUBY_CONTAINER_TYPES.has(current.type)) continue;
+    const containerName = current.childForFieldName("name");
+    if (!containerName) continue;
+    const ownsExport = containerName.startIndex <= nameNode.startIndex && containerName.endIndex >= nameNode.endIndex;
+    if (ownsExport) continue;
+    const text = sliceText(containerName, source);
+    if (text) containers.push({ node: current, text });
+  }
+  // `containers` is innermost first. A plain constant is owned by the innermost container; a
+  // scope-resolution name by the innermost container that declares its first segment.
+  let ownerIndex = 0;
+  if (nameNode.type === "scope_resolution") {
+    const firstSegment = name.split("::")[0] ?? name;
+    ownerIndex = containers.findIndex((container) => rubyContainerDeclares(container.node, firstSegment, source));
+    if (ownerIndex < 0) return name;
+  } else if (nameNode.type !== "constant") {
+    return name;
+  }
+  const prefix = containers
+    .slice(ownerIndex)
+    .reverse()
+    .map((container) => container.text);
+  return prefix.length ? `${prefix.join("::")}::${name}` : name;
 }
 
 const C_DECLARATOR_IDENTIFIER_PATTERN = new RegExp(`^${XID_IDENTIFIER_SOURCE}`, "u");
@@ -231,6 +311,37 @@ function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>, la
   return `${entry.exportedAs}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
 }
 
+function collapseTypeScriptCallableExports(
+  exports: ExportEntry[],
+  tree: SyntaxTreeLike | null,
+  languageId: string,
+): ExportEntry[] {
+  if ((languageId !== "ts" && languageId !== "tsx") || !tree) return exports;
+  const groups = new Map<string, Extract<ExportEntry, { type: "local" }>[]>();
+  for (const entry of exports) {
+    if (entry.type !== "local" || entry.target.kind !== SymbolKind.Function) continue;
+    const start = entry.target.range.start.index ?? 0;
+    const end = entry.target.range.end.index ?? start;
+    const role = typescriptCallableRoleAt(tree, start, end);
+    if (role === "other") continue;
+    const key = `${typescriptCallableContainerKey(tree, start, end)}\0${entry.exportedAs}`;
+    const group = groups.get(key) ?? [];
+    group.push(entry);
+    groups.set(key, group);
+  }
+  const drop = new Set<ExportEntry>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const canonical = typescriptCollapsedOverloadTarget(group, tree, (entry) => entry.target);
+    if (!canonical) continue;
+    for (const entry of group) {
+      if (entry !== canonical) drop.add(entry);
+    }
+  }
+  if (drop.size === 0) return exports;
+  return exports.filter((entry) => !drop.has(entry));
+}
+
 function dedupeExportEntries(entries: ExportEntry[], languageId: string): ExportEntry[] {
   const seen = new Map<string, number>();
   const out: ExportEntry[] = [];
@@ -272,6 +383,9 @@ function appendJsLikeRegexFallbackExports(
   JS_FALLBACK_EXPORT_ASSIGN_PATTERN.lastIndex = 0;
   JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN.lastIndex = 0;
   JS_FALLBACK_CJS_FUNCTION_PATTERN.lastIndex = 0;
+  JS_FALLBACK_CJS_MODULE_FUNCTION_PATTERN.lastIndex = 0;
+  JS_FALLBACK_CJS_MODULE_IDENTIFIER_PATTERN.lastIndex = 0;
+  JS_FALLBACK_TOP_LEVEL_LOCAL_PATTERN.lastIndex = 0;
   JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN.lastIndex = 0;
   const reDecl = JS_FALLBACK_DECLARATION_PATTERN;
   const reDefault = JS_FALLBACK_DEFAULT_PATTERN;
@@ -280,6 +394,9 @@ function appendJsLikeRegexFallbackExports(
   const reReexportNs = JS_FALLBACK_REEXPORT_NAMESPACE_PATTERN;
   const reStar = /\bexport\s*\*\s*from\s*("|')([^"']*)\1/gu;
   const reCjsFn = JS_FALLBACK_CJS_FUNCTION_PATTERN;
+  const reCjsModuleFn = JS_FALLBACK_CJS_MODULE_FUNCTION_PATTERN;
+  const reCjsModuleIdentifier = JS_FALLBACK_CJS_MODULE_IDENTIFIER_PATTERN;
+  const reTopLevelLocal = JS_FALLBACK_TOP_LEVEL_LOCAL_PATTERN;
   const reCjsObjFn = JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN;
   const moduleExportsObject = /module\.exports\s*=\s*\{([^}]*)\}/su;
   let match: RegExpExecArray | null;
@@ -315,6 +432,7 @@ function appendJsLikeRegexFallbackExports(
           type: "local",
           exportedAs: "default",
           target: { ...local, kind: SymbolKind.Default },
+          mechanism: "ts-export-assignment",
         });
       }
     }
@@ -396,6 +514,99 @@ function appendJsLikeRegexFallbackExports(
     }
     if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
       exports.push({ type: "local", exportedAs, target: local });
+    }
+  }
+
+  while ((match = reCjsModuleFn.exec(maskedSource))) {
+    if (exports.some((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value")) continue;
+    const name = match[1];
+    const rhsStart = match[0].indexOf("=", match[0].indexOf("exports")) + 1;
+    let startIndex = match.index + rhsStart;
+    while (/\s/u.test(maskedSource[startIndex] ?? "")) startIndex++;
+    if (name) startIndex = match.index + match[0].lastIndexOf(name);
+    const before = source.slice(0, startIndex);
+    const pos = { line: before.split("\n").length, column: startIndex - before.lastIndexOf("\n"), index: startIndex };
+    const target: SymbolDef = {
+      file,
+      localName: "exports",
+      kind: SymbolKind.Function,
+      range: { start: pos, end: pos },
+    };
+    locals.push(target);
+    exports.push({ type: "local", exportedAs: "exports", target, mechanism: "cjs-module-value" });
+  }
+
+  let identifierMatch = reCjsModuleIdentifier.exec(maskedSource);
+  if (identifierMatch && !exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
+    const identifierAssignments = [identifierMatch];
+    while ((identifierMatch = reCjsModuleIdentifier.exec(maskedSource))) identifierAssignments.push(identifierMatch);
+    // Only a single module-scope declaration can prove the value behind module.exports.
+    // The comments/strings/regex mask preserves offsets while keeping nested declarations out.
+    const scopeSource = maskJsLikeCommentsStringsAndRegex(source);
+    let scanIndex = 0;
+    let scanLine = 1;
+    let lastLineBreak = -1;
+    let scopeDepth = 0;
+    const depthAt = (index: number): number => {
+      while (scanIndex < index) {
+        const ch = scopeSource[scanIndex++];
+        if (ch === "{") scopeDepth++;
+        if (ch === "\n") {
+          scanLine++;
+          lastLineBreak = scanIndex - 1;
+        }
+        if (ch === "}") scopeDepth--;
+      }
+      return scopeDepth;
+    };
+    const declarations = new Map<string, SymbolDef[]>();
+    const valueNames = new Set(identifierAssignments.map((assignment) => assignment[1]!));
+    let declarationMatch: RegExpExecArray | null;
+    while ((declarationMatch = reTopLevelLocal.exec(scopeSource))) {
+      const name = declarationMatch[2]!;
+      if (!valueNames.has(name)) continue;
+      const startIndex = declarationMatch.index + declarationMatch[0].lastIndexOf(name);
+      if (depthAt(startIndex)) continue;
+      const declaration = declarationMatch[1]!;
+      let kind = SymbolKind.Variable;
+      if (declaration.endsWith("function")) kind = SymbolKind.Function;
+      if (declaration.endsWith("class")) kind = SymbolKind.Class;
+      const start = { line: scanLine, column: startIndex - lastLineBreak, index: startIndex };
+      const local = locals.find((def) => def.localName === name && def.range.start.index === startIndex) ?? {
+        file,
+        localName: name,
+        kind,
+        range: { start, end: { ...start, column: start.column + name.length, index: startIndex + name.length } },
+      };
+      const namedDeclarations = declarations.get(name) ?? [];
+      namedDeclarations.push(local);
+      declarations.set(name, namedDeclarations);
+    }
+    scanIndex = 0;
+    scopeDepth = 0;
+    const provenValue = (assignment: RegExpExecArray): SymbolDef | undefined => {
+      const name = assignment[1]!;
+      const rhsIndex = assignment.index + assignment[0].lastIndexOf(name);
+      if (depthAt(rhsIndex)) return undefined;
+      // A line break before .method, [key] or a call still belongs to the RHS.
+      let afterRhs = rhsIndex + name.length;
+      while (/\s/u.test(maskedSource[afterRhs] ?? "")) afterRhs++;
+      if (maskedSource[afterRhs] === "." || maskedSource[afterRhs] === "[" || maskedSource[afterRhs] === "(") {
+        return undefined;
+      }
+      const candidates = declarations.get(name);
+      return candidates?.length === 1 ? candidates[0] : undefined;
+    };
+    // As in the native path, a reassigned module.exports has no single proven value.
+    const selected = identifierAssignments.length === 1 ? provenValue(identifierAssignments[0]!) : undefined;
+    if (selected) {
+      if (!locals.includes(selected)) locals.push(selected);
+      exports.push({
+        type: "local",
+        exportedAs: "default",
+        target: { ...selected, kind: SymbolKind.Default },
+        mechanism: "cjs-module-value",
+      });
     }
   }
 
@@ -659,6 +870,12 @@ export function collectLocalsAndExportsFromSource(
                 );
               }
             }
+          } else if (node && phpPropertyPromotionParameter(node)) {
+            const promoted = phpConstructorPromotedVariable(node, source);
+            if (promoted) {
+              pushLocal(sliceText(promoted, source), SymbolKind.Variable, toRange(promoted), promoted);
+              capturedLocals = true;
+            }
           } else {
             pushLocal(capture.text, classifyLocalCapture(node), nativeRange, node);
           }
@@ -672,12 +889,13 @@ export function collectLocalsAndExportsFromSource(
     }
   };
 
+  let scopeIndexForExports: ReturnType<typeof buildScopeIndexFromSource> | undefined;
   const usedQueryLocals = extractLocalsFromNativeQueries();
   if (!usedQueryLocals) {
     const scopeTree = ensureTree();
     if (scopeTree) {
-      const scopeIdx = buildScopeIndexFromSource(file, source, support, imports, { tree: scopeTree });
-      for (const b of scopeIdx.all) {
+      scopeIndexForExports = buildScopeIndexFromSource(file, source, support, imports, { tree: scopeTree });
+      for (const b of scopeIndexForExports.all) {
         if (!b.def) continue;
         const kind = bindingKindToSymbolKind(b.kind);
         pushLocal(b.name, kind, b.def, b.node);
@@ -757,6 +975,21 @@ export function collectLocalsAndExportsFromSource(
       return treeForEnrichment.rootNode.descendantForIndex(range.start.index ?? 0, range.end.index ?? 0) ?? undefined;
     };
 
+    const localVisibleAtCapture = (capture: NativeCapture): SymbolDef | undefined => {
+      const node = nodeForCapture(capture);
+      if (!node || !treeForEnrichment) return undefined;
+      scopeIndexForExports ??= buildScopeIndexFromSource(file, source, support, imports, { tree: treeForEnrichment });
+      const binding = findClosestScopeBinding(scopeIndexForExports, capture.text, node, support);
+      const definition = binding?.def;
+      if (!definition) return undefined;
+      return locals.find(
+        (local) =>
+          local.localName === binding.name &&
+          local.range.start.index === definition.start.index &&
+          local.range.end.index === definition.end.index,
+      );
+    };
+
     const defaultDeclarationNameNode = (node: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined => {
       if (!node) return undefined;
       return (
@@ -766,6 +999,8 @@ export function collectLocalsAndExportsFromSource(
 
     const hasDefaultExport = (): boolean =>
       exports.some((entry) => entry.type === "local" && entry.exportedAs === "default");
+    // A second `module.exports = X` makes the required value depend on control flow.
+    let cjsModuleValueSeen = false;
 
     const excludedCaptures: NativeCapture[] = [];
     for (const match of matches) {
@@ -953,6 +1188,27 @@ export function collectLocalsAndExportsFromSource(
         });
         continue;
       }
+      if (map["cjs_module_value"]) {
+        if (cjsModuleValueSeen) {
+          const previous = exports.findIndex(
+            (entry) =>
+              entry.type === "local" && entry.exportedAs === "default" && entry.mechanism === "cjs-module-value",
+          );
+          if (previous >= 0) exports.splice(previous, 1);
+          continue;
+        }
+        cjsModuleValueSeen = true;
+        const local = localVisibleAtCapture(map["cjs_module_value"]);
+        if (local && !hasDefaultExport()) {
+          exports.push({
+            type: "local",
+            exportedAs: "default",
+            target: { ...local, kind: SymbolKind.Default },
+            mechanism: "cjs-module-value",
+          });
+        }
+        continue;
+      }
       if (map["cjs_shorthand"]) {
         const nameText = map["cjs_shorthand"].text;
         const local = locals.find((def) => def.localName === nameText);
@@ -975,14 +1231,20 @@ export function collectLocalsAndExportsFromSource(
       if (map["cjs_export_name"] && map["cjs_fn"]) {
         const exportedAs = map["cjs_export_name"].text;
         const fnNode = nodeForCapture(map["cjs_fn"]);
-        const sym = buildSymbolDef(
-          exportedAs,
-          SymbolKind.Function,
-          rangeFromNativeCapture(map["cjs_fn"], ensureByteIndexMap()),
-          fnNode,
+        const nameNode = fnNode?.childForFieldName("name");
+        const range = nameNode ? toRange(nameNode) : rangeFromNativeCapture(map["cjs_fn"], ensureByteIndexMap());
+        const existing = locals.find(
+          (def) => def.localName === exportedAs && def.range.start.index === range.start.index,
         );
-        locals.push(sym);
-        exports.push({ type: "local", exportedAs, target: sym });
+        const sym = existing ?? buildSymbolDef(exportedAs, SymbolKind.Function, range, nameNode ?? fnNode);
+        if (!existing) locals.push(sym);
+        const directModuleValue = exportedAs === "exports" && !!map["mod"] && !map["prop"];
+        exports.push({
+          type: "local",
+          exportedAs,
+          target: sym,
+          ...(directModuleValue ? { mechanism: "cjs-module-value" as const } : {}),
+        });
         continue;
       }
       if (map["default"]) {
@@ -1039,6 +1301,7 @@ export function collectLocalsAndExportsFromSource(
             type: "local",
             exportedAs: "default",
             target: { ...local, kind: SymbolKind.Default },
+            mechanism: "ts-export-assignment",
           });
         }
         continue;
@@ -1073,10 +1336,13 @@ export function collectLocalsAndExportsFromSource(
           ) ?? locals.find((def) => def.localName === nameText);
         if (local) {
           const isDefaultExport = /^\s*export\s+default\b/.test(stmtText);
-          const exportedName =
-            support.id === "cpp" && visibilityNameNode
-              ? cppQualifiedExportName(visibilityNameNode, source, nameText)
-              : nameText;
+          const qualifiedExportName = (): string => {
+            if (!visibilityNameNode) return nameText;
+            if (support.id === "cpp") return cppQualifiedExportName(visibilityNameNode, source, nameText);
+            if (support.id === "ruby") return rubyQualifiedExportName(visibilityNameNode, source, nameText);
+            return nameText;
+          };
+          const exportedName = qualifiedExportName();
           if (!isDefaultExport) {
             exports.push({
               type: "local",
@@ -1327,5 +1593,10 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  return { file, exports: dedupeExportEntries(exports, support.id), imports, locals };
+  return {
+    file,
+    exports: dedupeExportEntries(collapseTypeScriptCallableExports(exports, ensureTree(), support.id), support.id),
+    imports,
+    locals,
+  };
 }

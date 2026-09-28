@@ -40,7 +40,13 @@ export type SymbolDef = {
 };
 
 export type ExportEntry =
-  | { type: "local"; exportedAs: string; target: SymbolDef }
+  | {
+      type: "local";
+      exportedAs: string;
+      target: SymbolDef;
+      /** Proven direct module-value assignment, distinct from an ES default export. */
+      mechanism?: "cjs-module-value" | "ts-export-assignment";
+    }
   | {
       type: "reexport";
       exportedAs: string;

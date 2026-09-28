@@ -1,6 +1,8 @@
 import { declarationMemberArity, isVariadicParameterMarker } from "../graphs/symbol-graph-detailed/ast.js";
 import { callArgumentCount } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
+import { fileIdentityKey } from "../util/paths.js";
+import type { FileId } from "../types.js";
 import type { Binding } from "./scope-types.js";
 
 export type CppCallableShape = {
@@ -427,13 +429,15 @@ function syntaxRoot(node: SyntaxNodeLike): SyntaxNodeLike {
   return current;
 }
 
+/**
+ * Only a binding from the query file can be its declaration site. Its scope index may
+ * come from an earlier parse, so matching trees still requires source spans and text.
+ */
 function isCppDeclarationSite(binding: Binding, node: SyntaxNodeLike): boolean {
   const candidate = binding.node;
   if (!candidate) return false;
   if (candidate.startIndex !== node.startIndex || candidate.endIndex !== node.endIndex) return false;
-  const root = syntaxRoot(candidate);
-  // Offset coincidence across files is not a declaration site.
-  return root === syntaxRoot(node);
+  return candidate.text === node.text && syntaxRoot(candidate).endIndex === syntaxRoot(node).endIndex;
 }
 
 function cppCallArgumentCount(node: SyntaxNodeLike, source: string): number | null {
@@ -530,9 +534,13 @@ export function cppSelectCallableBinding(
   bindings: readonly Binding[],
   node: SyntaxNodeLike,
   source: string,
+  useFile: FileId,
+  bindingsFile: FileId,
 ): Binding | null {
-  const declaration = bindings.find((candidate) => isCppDeclarationSite(candidate, node));
-  if (declaration) return preferredCppCallableBinding(cppEquivalentCallableBindings(declaration));
+  if (useFile === bindingsFile || fileIdentityKey(useFile) === fileIdentityKey(bindingsFile)) {
+    const declaration = bindings.find((candidate) => isCppDeclarationSite(candidate, node));
+    if (declaration) return preferredCppCallableBinding(cppEquivalentCallableBindings(declaration));
+  }
   return cppSelectCallableByCallArity(bindings, node, source);
 }
 

@@ -80,14 +80,26 @@ export function getResolutionExtensions(resolutionExtensions?: readonly string[]
   return Array.from(new Set(extensions));
 }
 
+/**
+ * Removes a final source extension only when the resolver treats it as explicit.
+ * Dotted literal stems such as `statement.model` remain intact for suffix probing.
+ */
+export function stripKnownResolutionExtension(
+  value: string,
+  resolutionExtensions: readonly string[] = DEFAULT_RESOLUTION_EXTENSIONS,
+): string {
+  const extension = path.extname(value).toLowerCase();
+  if (!extension) return value;
+  const isKnownExtension =
+    resolutionExtensions.includes(extension) || Object.hasOwn(EXPLICIT_SPECIFIER_EXTENSION_FAMILIES, extension);
+  if (!isKnownExtension) return value;
+  return value.slice(0, -extension.length);
+}
+
 export function listResolutionCandidates(base: string, resolutionExtensions?: readonly string[]): string[] {
   const extensions = getResolutionExtensions(resolutionExtensions);
-  const baseExt = path.extname(base).toLowerCase();
-  // A final dotted segment can be part of an extensionless basename (for example, `statement.model`).
-  // Only a configured source extension makes the specifier explicit enough to stop suffix probing.
-  const hasKnownExtension =
-    !!baseExt && (extensions.includes(baseExt) || Object.hasOwn(EXPLICIT_SPECIFIER_EXTENSION_FAMILIES, baseExt));
-  if (!hasKnownExtension) {
+  const baseWithoutExt = stripKnownResolutionExtension(base, extensions);
+  if (baseWithoutExt === base) {
     return Array.from(
       new Set([
         base,
@@ -97,8 +109,8 @@ export function listResolutionCandidates(base: string, resolutionExtensions?: re
     );
   }
 
+  const baseExt = path.extname(base).toLowerCase();
   const compatibleExtensions = EXPLICIT_SPECIFIER_EXTENSION_FAMILIES[baseExt] ?? [baseExt];
-  const baseWithoutExt = base.slice(0, -baseExt.length);
   const candidates = compatibleExtensions
     .filter((extension) => extension === baseExt || extensions.includes(extension))
     .map((extension) => `${baseWithoutExt}${extension}`);

@@ -1396,7 +1396,12 @@ describe("agent session", () => {
 
     await writeResolutionHint(root, "B");
 
-    expect(await session.checkFreshness()).toEqual({ state: "fresh" });
+    // G6: manual never claims "fresh" without evidence -- it deliberately skips signature
+    // bookkeeping, so it reports an explicit unchecked state instead of a false "fresh" claim.
+    expect(await session.checkFreshness()).toEqual({
+      state: "unchecked",
+      reason: "freshness policy is manual; call invalidate() explicitly after edits",
+    });
     expect(await session.loadProject({ symbolGraph: "skip" })).toBe(snapshot);
     expect(snapshot.fileGraph.edges).toContainEqual(
       expect.objectContaining({
@@ -1454,7 +1459,12 @@ describe("agent session", () => {
     try {
       nowMs += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
       const freshness = await session.checkFreshness!();
-      expect(freshness).toEqual({ state: "fresh" });
+      // G6: manual never claims "fresh" without evidence; listFiles staying cached below is
+      // the real "manual = no auto tracking" contract this test protects.
+      expect(freshness).toEqual({
+        state: "unchecked",
+        reason: "freshness policy is manual; call invalidate() explicitly after edits",
+      });
 
       const cachedFiles = await session.listFiles!();
       expect(cachedFiles.map((file) => path.basename(file))).toEqual(["before.ts"]);

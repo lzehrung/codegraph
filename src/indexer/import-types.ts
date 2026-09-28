@@ -1,4 +1,5 @@
 import type { FileId, Range } from "../types.js";
+import type { CFamilyIncludeForm } from "../util/specifiers.js";
 
 export type ImportBinding =
   | {
@@ -39,11 +40,19 @@ export type ImportBinding =
       moduleLevel?: boolean;
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
+      /** Copied from the C/C++ star include this binding was expanded from. */
+      includeForm?: CFamilyIncludeForm;
     }
   | {
       kind: "namespace";
       localNS: string;
       from: string;
+      /**
+       * True when the source spells an explicit `as alias` (Python `import a.b as alias`).
+       * A plain `import a.b` also binds a name here (`a`, the first dotted segment), but that
+       * name is not itself an alias for `a.b`'s own spelling.
+       */
+      explicitAlias?: boolean;
       /** UTF-16 range of the namespace binding token. */
       localRange?: Range;
       resolved?: FileId | { external: string };
@@ -53,6 +62,8 @@ export type ImportBinding =
       moduleLevel?: boolean;
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
+      /** Copied from the C/C++ star include this binding was expanded from. */
+      includeForm?: CFamilyIncludeForm;
     }
   | {
       kind: "star";
@@ -64,6 +75,8 @@ export type ImportBinding =
       moduleLevel?: boolean;
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
+      /** Present for a C/C++ include. Older cached bindings omit it. */
+      includeForm?: CFamilyIncludeForm;
     };
 
 /**

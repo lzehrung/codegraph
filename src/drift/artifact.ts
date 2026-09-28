@@ -3,8 +3,10 @@ import path from "node:path";
 import { getHotspots } from "../graphs/hotspots.js";
 import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
 import type { Edge, Graph } from "../types.js";
+import { edgeFromImportBinding, edgeKey } from "../util/graph-edges.js";
 import { isPlainRecord } from "../util/guards.js";
 import { normalizePath } from "../util/paths.js";
+import { isCFamilyIncludeForm } from "../util/specifiers.js";
 import { countFilesByLanguage } from "./languages.js";
 import {
   ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,
@@ -94,23 +96,20 @@ function parseGraphJson(value: unknown): PortableGraphJson {
     ) {
       continue;
     }
-    const typeOnly = typeof edge.typeOnly === "boolean" ? edge.typeOnly : undefined;
-    const typeOnlyField = typeOnly !== undefined ? { typeOnly } : {};
+    const source = {
+      from: edge.raw,
+      ...(typeof edge.typeOnly === "boolean" ? { typeOnly: edge.typeOnly } : {}),
+      ...(isCFamilyIncludeForm(edge.includeForm) ? { includeForm: edge.includeForm } : {}),
+    };
+    let to: Edge["to"] | undefined;
     if (edge.to.type === "file" && typeof edge.to.path === "string") {
-      fileEdges.push({
-        from: normalizePath(edge.from),
-        raw: edge.raw,
-        to: { type: "file", path: normalizePath(edge.to.path) },
-        ...typeOnlyField,
-      });
+      to = { type: "file", path: normalizePath(edge.to.path) };
     } else if (edge.to.type === "external" && typeof edge.to.name === "string") {
-      fileEdges.push({
-        from: normalizePath(edge.from),
-        raw: edge.raw,
-        to: { type: "external", name: edge.to.name },
-        ...typeOnlyField,
-      });
+      to = { type: "external", name: edge.to.name };
     }
+    if (!to) continue;
+    const rebuilt = edgeFromImportBinding(normalizePath(edge.from), to, source);
+    fileEdges.push(source.typeOnly === false ? { ...rebuilt, typeOnly: false } : rebuilt);
   }
   const symbols = Array.isArray(value.graph.symbols)
     ? value.graph.symbols.filter((entry): entry is { file: string; name: string; kind: string } => {
@@ -134,11 +133,6 @@ function edgeTarget(edge: Edge): string {
   return `external:${edge.to.name}`;
 }
 
-function edgeKey(edge: Edge): string {
-  const kind = edge.typeOnly ? "type-only" : "runtime";
-  return `${edge.from}\0${edge.raw}\0${edgeTarget(edge)}\0${kind}`;
-}
-
 function graphEdges(edges: readonly Edge[]): ArchitectureGraphEdge[] {
   return edges
     .map((edge) => ({
@@ -147,6 +141,7 @@ function graphEdges(edges: readonly Edge[]): ArchitectureGraphEdge[] {
       to: edgeTarget(edge),
       raw: edge.raw,
       ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+      ...(edge.includeForm ? { includeForm: edge.includeForm } : {}),
     }))
     .sort((left, right) => left.key.localeCompare(right.key));
 }

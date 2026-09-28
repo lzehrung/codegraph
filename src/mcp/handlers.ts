@@ -453,16 +453,21 @@ function createCodegraphMcpHandlersForSession(
   };
   const formatSqliteFreshnessError = (freshness: AgentFreshnessResult): string => {
     if (freshness.state === "fresh") return "SQLite artifact freshness check unexpectedly failed.";
+    let action = "run artifact_build";
+    if (readOnly) {
+      action = "rebuild the artifact with write access enabled";
+    }
+    if (freshness.state === "unchecked") {
+      // A manual session records no file signatures, so it can neither prove the artifact is
+      // current nor build a SQLite artifact that carries freshness metadata.
+      return `SQLite artifact may be stale, and this session cannot check or rebuild it: ${freshness.reason}. Rebuild the artifact from a session whose freshness policy is "check" or "auto" (for example \`codegraph artifact --sqlite\`), then query again.`;
+    }
     const reason = freshness.state === "stale" ? freshness.reason : "workspace changed after artifact build";
     const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
     const omitted =
       freshness.state === "stale" && freshness.omittedChangedFileCount
         ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
         : "";
-    let action = "run artifact_build";
-    if (readOnly) {
-      action = "rebuild the artifact with write access enabled";
-    }
     if (freshness.state === "stale") {
       action = `run refresh_index, then ${action}`;
     }
@@ -498,12 +503,12 @@ function createCodegraphMcpHandlersForSession(
     refreshOptions?: { allowStaleRebuild?: boolean },
   ): Promise<AgentFreshnessResult> => {
     if (freshness.state === "fresh") return freshness;
-    if (freshness.state === "stale" && !refreshOptions?.allowStaleRebuild) {
+    if ((freshness.state === "stale" || freshness.state === "unchecked") && !refreshOptions?.allowStaleRebuild) {
       throw new Error(formatSqliteFreshnessError(freshness));
     }
     if (!canRefreshSqliteArtifact()) throw new Error(formatSqliteFreshnessError(freshness));
     await rebuildSqliteArtifactForQuery();
-    return { state: "refreshed", changedFiles: freshness.changedFiles };
+    return { state: "refreshed", changedFiles: freshness.state === "unchecked" ? [] : freshness.changedFiles };
   };
   const readSqliteArtifactSignatures = async (
     realSqlitePath: string,
@@ -1009,7 +1014,9 @@ function createCodegraphMcpHandlersForSession(
       let artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
       if (artifactFreshness.state !== "fresh") {
         const sessionFreshness = await checkMcpFreshness();
-        if (sessionFreshness.state === "stale") {
+        // An unchecked (manual) session cannot prove its snapshot matches disk, so rebuilding
+        // the artifact from it is as unsafe as rebuilding from a known-stale one.
+        if (sessionFreshness.state === "stale" || sessionFreshness.state === "unchecked") {
           throw new Error(formatSqliteFreshnessError(sessionFreshness));
         }
         artifactFreshness = await refreshSqliteArtifactForQuery(artifactFreshness, { allowStaleRebuild: true });

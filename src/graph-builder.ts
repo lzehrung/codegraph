@@ -15,6 +15,7 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "./
 import type { BuildReport } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import { collectEdgesForFile, hasBetterProvenance } from "./graph-edge-collector.js";
+import { edgeKey } from "./util/graph-edges.js";
 import { buildSqlFactCache, sqlCorpusSignature } from "./sql/source-graph.js";
 
 type GraphFileSignature = { sig: string; gitSig?: string; cacheSig?: string };
@@ -110,12 +111,9 @@ export async function collectGraph(
     const byKey = new Map<string, Edge>();
     for (const group of edgeGroups) {
       for (const edge of group) {
-        const target = edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`;
-        // typeOnly is part of identity: a runtime import and a type-only import to the same
-        // target are distinct edges (e.g. `import { X }` plus `import type { X }`), and
-        // collapsing them on from/raw/target alone silently drops the weaker of the two.
-        const kind = edge.typeOnly ? "type-only" : "runtime";
-        const key = `${edge.from}::${edge.raw}::${target}::${kind}`;
+        // The shared identity keeps a runtime and a type-only import, and an angle and a quoted
+        // C/C++ include of one header, as distinct edges.
+        const key = edgeKey(edge);
         const previous = byKey.get(key);
         if (!previous || hasBetterProvenance(edge, previous)) byKey.set(key, edge);
       }
