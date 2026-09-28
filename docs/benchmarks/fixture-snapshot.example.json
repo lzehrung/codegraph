@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-28T18:38:55.106Z",
+  "generatedAt": "2026-09-28T19:06:44.848Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 555,
+  "numTotalTests": 556,
   "numFailedTests": 0,
   "languages": [
     {
@@ -55,8 +55,8 @@
       "files": [
         "tests/languages/cpp.test.ts"
       ],
-      "tests": 44,
-      "passed": 44,
+      "tests": 45,
+      "passed": 45,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

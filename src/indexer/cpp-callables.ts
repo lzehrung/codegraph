@@ -1,5 +1,5 @@
 import { declarationMemberArity, isVariadicParameterMarker } from "../graphs/symbol-graph-detailed/ast.js";
-import { callArgumentCount } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { callArgumentCount, cppQualifiedTextSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
@@ -475,15 +475,15 @@ function cppBindingOwnerPath(binding: Binding): string {
   for (let current = node.parent; current?.type === "qualified_identifier"; current = current.parent) {
     qualified = current;
   }
-  const declared = qualified ? qualified.text.split("::").map((segment) => segment.trim()) : [];
+  const declared = qualified ? cppQualifiedTextSegments(qualified.text) : [];
   declared.pop();
   const lexical: string[] = [];
   for (let current = (qualified ?? node).parent; current; current = current.parent) {
     if (!CPP_OWNER_SCOPE_TYPES.has(current.type)) continue;
     const name = current.childForFieldName("name");
-    if (name) lexical.unshift(...name.text.split("::").map((segment) => segment.trim()));
+    if (name) lexical.unshift(...cppQualifiedTextSegments(name.text));
   }
-  return [...lexical, ...declared].filter(Boolean).join("::");
+  return [...lexical, ...declared].join("::");
 }
 
 function cppCallableEntities(

@@ -741,28 +741,29 @@ function provesCallableBinding(context: EdgePassContext, fn: DetailedFunctionNod
  * Whether a resolved member can be a `calls` target: a function, a class, or a binding the
  * declaration pass proved holds a function. A plain value (`export const value = 1`) is not.
  */
+/** A JS/TS class is not callable without `new`; construction is an `instantiates` edge instead. */
 function isCallTarget(context: EdgePassContext, def: SymbolDef): boolean {
-  return (
-    def.kind === SymbolKind.Function || def.kind === SymbolKind.Class || !!context.nodes.get(defNodeId(def))?.callable
-  );
+  return def.kind === SymbolKind.Function || !!context.nodes.get(defNodeId(def))?.callable;
 }
 
-/** Resolve a proven same-file TS namespace receiver with navigation's container and overload rules. */
-function recordTypeScriptNamespaceCall(
+/**
+ * A member of a proven same-file TS namespace receiver, selected with navigation's container and
+ * overload rules. `undefined` means the receiver is not such a namespace.
+ */
+function resolveTypeScriptNamespaceMember(
   context: EdgePassContext,
   call: SyntaxNodeLike,
-  access: ReceiverCallAccess,
-  fromId: string,
-): boolean {
-  if ((context.sup.id !== "ts" && context.sup.id !== "tsx") || !isIdentifierType(context.sup, access.receiver.type))
-    return false;
-  const receiverName = sliceText(access.receiver, context.source);
-  const receiver = context.resolveIdentifier(receiverName, access.receiver);
-  if (!receiver || fileIdentityKey(receiver.file) !== fileIdentityKey(context.moduleEntry.file)) return false;
-  const member = sliceText(access.property, context.source);
+  receiverNode: SyntaxNodeLike,
+  property: SyntaxNodeLike,
+): SymbolDef | null | undefined {
+  if ((context.sup.id !== "ts" && context.sup.id !== "tsx") || !isIdentifierType(context.sup, receiverNode.type))
+    return undefined;
+  const receiver = context.resolveIdentifier(sliceText(receiverNode, context.source), receiverNode);
+  if (!receiver || fileIdentityKey(receiver.file) !== fileIdentityKey(context.moduleEntry.file)) return undefined;
+  const member = sliceText(property, context.source);
   const candidates = findTypeScriptNamespaceMemberCandidates(context.moduleEntry.locals, member, receiver, context);
-  if (!candidates.length) return false;
-  const selected = typescriptSelectOverloadCandidate({
+  if (!candidates.length) return undefined;
+  return typescriptSelectOverloadCandidate({
     group: candidates,
     tree: context.tree,
     definitionOf: (candidate) => candidate,
@@ -774,7 +775,33 @@ function recordTypeScriptNamespaceCall(
     languageId: context.sup.id,
     argumentCount: getCallArgumentCount({ languageId: context.sup.id, source: context.source, call }),
   });
+}
+
+function recordTypeScriptNamespaceCall(
+  context: EdgePassContext,
+  call: SyntaxNodeLike,
+  access: ReceiverCallAccess,
+  fromId: string,
+): boolean {
+  const selected = resolveTypeScriptNamespaceMember(context, call, access.receiver, access.property);
+  if (selected === undefined) return false;
   if (selected && isCallTarget(context, selected)) recordDefEdge(context, fromId, selected, "calls", access.property);
+  return true;
+}
+
+/** `new N.C()` on a same-file TS namespace constructs the namespace's class. */
+function recordTypeScriptNamespaceConstruction(
+  context: EdgePassContext,
+  node: SyntaxNodeLike,
+  target: SyntaxNodeLike,
+  fromId: string,
+): boolean {
+  if (!isMemberAccessNode(context.sup, target)) return false;
+  const { object, property } = getMemberAccessParts(context.sup, target);
+  if (!object || !property) return false;
+  const selected = resolveTypeScriptNamespaceMember(context, node, object, property);
+  if (selected === undefined) return false;
+  if (selected?.kind === SymbolKind.Class) recordDefEdge(context, fromId, selected, "instantiates", property);
   return true;
 }
 
@@ -1263,6 +1290,7 @@ export async function emitFunctionBodyEdges(
         } else {
           const target = constructionTypeName(node, context.source, context.sup) ?? getNewTarget(node);
           if (target) {
+            if (recordTypeScriptNamespaceConstruction(context, node, target, fromId)) return true;
             const property = isMemberAccessNode(context.sup, target)
               ? getMemberAccessParts(context.sup, target).property
               : null;

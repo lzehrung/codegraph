@@ -835,6 +835,9 @@ export async function resolveMemberAccessDefinition(params: {
       // `a::C::run` nests `C::run` inside `a::(...)`; only the outermost node carries the full owner.
       let outermost = memberNode;
       while (outermost.parent?.type === "qualified_identifier") outermost = outermost.parent;
+      // The declarator of an out-of-line definition (`int Box<T>::f() {}`) names the declaration
+      // itself, not a member call; the declaration lookup below resolves it.
+      if (outermost.parent?.type === "function_declarator") return null;
       const qualified = cppQualifiedNameSegments(outermost, source);
       const ownerPath = qualified.slice(0, -1);
       const owner = await resolveCppQualifiedMemberContainer(index, mod, ownerPath);

@@ -1051,7 +1051,11 @@ export function receiverConstructorExpression(
 
 /** Identifier segments in a C++ qualified name, excluding template arguments. */
 export function cppQualifiedNameSegments(node: SyntaxNodeLike, source: string): string[] {
-  const text = sliceText(node, source);
+  return cppQualifiedTextSegments(sliceText(node, source));
+}
+
+/** `::`-separated segments of a C++ qualified name, ignoring `::` inside template arguments and dropping them. */
+export function cppQualifiedTextSegments(text: string): string[] {
   const segments: string[] = [];
   let segmentStart = 0;
   let templateDepth = 0;

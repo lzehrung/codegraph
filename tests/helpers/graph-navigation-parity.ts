@@ -15,7 +15,8 @@
 
 import { goToDefinition, parseFile, type ProjectIndex } from "../../src/index.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
-import type { SymbolDef } from "../../src/indexer/types.js";
+import { SymbolKind, type SymbolDef } from "../../src/indexer/types.js";
+import { isJsTsLanguage } from "../../src/languages/js-family.js";
 import {
   CALLABLE_DECLARATION_NODE_TYPES,
   getCallableArity,
@@ -437,10 +438,14 @@ export async function collectGraphNavigationMismatches(
         : await declaredInsideCallable(goto.definition);
       // A binding whose value is a literal (`const value = 1`) cannot be called, so a `calls` edge to
       // it is wrong. A parameter or a variable holding a function can be called.
+      // A JS/TS class throws when called without `new`, so `C()` gets no edge.
+      const classCalledWithoutNew =
+        isJsTsLanguage(parsed.sup.id) && goto.definition.kind === SymbolKind.Class && call.type === "call_expression";
       const callsNonCallable =
-        covering.some((edge) => edge.label === "calls") && (await initializedWithLiteral(goto.definition));
+        covering.some((edge) => edge.label === "calls") &&
+        (classCalledWithoutNew || (await initializedWithLiteral(goto.definition)));
       if (!callsNonCallable && covering.length && covering.every(matches)) continue;
-      if (!covering.length && notCallable) continue;
+      if (!covering.length && (notCallable || classCalledWithoutNew)) continue;
       // Navigation keeps an incompatible call on its only candidate so an in-progress signature
       // change still finds its callers; the graph may refuse that call as a `calls` edge.
       if (!covering.length && (await rejectsArgumentCount(goto.definition, call, parsed))) continue;

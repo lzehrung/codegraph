@@ -1763,6 +1763,34 @@ describe("C++20 modules", () => {
 });
 
 describe("C++ implicit this in qualified and bare member calls", () => {
+  it("navigates from an out-of-line definition's own name to that definition, including template owners", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-definition-name-"));
+    try {
+      const file = path.join(root, "c.cpp").replace(/\\/g, "/");
+      const lines = [
+        "template <class T> struct Box { int f(); };",
+        "template <class T> int Box<T>::f() { return 0; }",
+        "struct Plain { int g(); };",
+        "int Plain::g() { return 1; }",
+        "",
+      ];
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      for (const [line, name] of [
+        [2, "::f"],
+        [4, "::g"],
+      ] as const) {
+        const column = lines[line - 1]!.indexOf(name) + 3;
+        const goto = await goToDefinition(index, { file, line, column });
+        // The declarator names the definition itself; it is not a member call needing `this`.
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(goto.definition.range.start).toMatchObject({ line, column });
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("gives namespace-qualified and pointer-returning out-of-line definitions their own member identity", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-nested-qualified-"));
     try {

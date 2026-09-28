@@ -656,15 +656,14 @@ export async function buildSymbolGraphDetailed(
             sup.id,
             (imp) => imp.kind === "named" && imp.local === lookupName,
           );
-        // A same-file member, or a declaration whose scope the use can see, still wins; a local of
-        // another method is out of scope and must not hide the package.
+        // Only a same-file declaration whose scope the use can see hides the package. Members of the
+        // caller's own class or its bases were already tried by the implicit-receiver path.
         const visibleSameFileDeclaration =
           jvm &&
           moduleEntry.locals.some(
             (local) =>
               local.localName === lookupName &&
-              (local.isMember ||
-                fallbackDefinitionVisibleAtUse(scopeIndex, scopeNodesFor(sup.id), local.range.start.index, node)),
+              fallbackDefinitionVisibleAtUse(scopeIndex, scopeNodesFor(sup.id), local.range.start.index, node),
           );
         if (jvm && !explicitJvmImport && !visibleSameFileDeclaration) {
           const peer = resolveExport(index, file, lookupName);
