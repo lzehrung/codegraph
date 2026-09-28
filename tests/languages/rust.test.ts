@@ -401,6 +401,43 @@ describe("Rust macro_rules! structure", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps member and path calls with comments after the separator unresolved inside macro arguments", async () => {
+    const source = [
+      "pub fn bump() -> i32 { 1 }",
+      "pub fn run() -> i32 { 2 }",
+      "pub struct Counter;",
+      "impl Counter { pub fn bump(&self) -> i32 { 3 } }",
+      "pub mod m { pub fn run() -> i32 { 4 } }",
+      "pub fn caller(counter: &Counter) {",
+      '    println!("{} {} {}", counter./* note */bump(), m::/* note */run(), bump());',
+      "}",
+      "",
+    ].join("\n");
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-macro-comment-separator-"));
+    const file = path.join(root, "lib.rs");
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const line = source.split("\n")[6]!;
+      // The raw tokens cannot prove `counter`'s type or the `m::` path, so neither may fall back
+      // to the free `bump`/`run`; the bare `bump()` still resolves.
+      const member = await goToDefinition(index, { file, line: 7, column: line.indexOf("bump") + 1 });
+      expect(member.status).toBe("not_found");
+      const pathCall = await goToDefinition(index, { file, line: 7, column: line.indexOf("run") + 1 });
+      expect(pathCall.status).toBe("not_found");
+      const bare = await goToDefinition(index, { file, line: 7, column: line.lastIndexOf("bump") + 1 });
+      expect(bare.status).toBe("ok");
+      if (bare.status === "ok") expect(bare.definition.range.start.line).toBe(1);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const caller = [...graph.nodes.values()].find((node) => node.name === "caller");
+      const calls = graph.edges.filter((edge) => edge.label === "calls" && edge.from === caller?.id);
+      expect(calls.map((edge) => edge.site?.range.start.column)).toEqual([line.lastIndexOf("bump") + 1]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Rust explicit method receivers", () => {

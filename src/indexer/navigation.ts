@@ -106,6 +106,7 @@ import {
   isMemberObjectIdentifier,
   isMemberReferencePropertyIdentifier,
   isReceiverNameNode,
+  rustTokenTreeNameFollowsSeparator,
 } from "../util/member-access.js";
 import {
   cppOutOfLineOwnerPath,
@@ -385,11 +386,7 @@ export async function goToDefinition(
     // Rust macro arguments stay unparsed token trees. A name preceded by `.` or `::` there is
     // a member or path receiver the raw tokens cannot prove, so bare-name resolution would
     // answer with an unrelated same-named free function; stay conservative instead.
-    if (
-      sup.id === "rust" &&
-      node.parent?.type === "token_tree" &&
-      /\.\s*$|::\s*$/.test(source.slice(0, node.startIndex))
-    ) {
+    if (sup.id === "rust" && rustTokenTreeNameFollowsSeparator(node)) {
       return { status: "not_found", reason: "No resolvable receiver inside a Rust macro token tree" };
     }
     const lookupName = sup.id === "csharp" ? csharpLookupName(node, source, name) : name;

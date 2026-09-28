@@ -214,3 +214,23 @@ export function collectMemberAccessChain(args: {
   if (!current || !names.length) return null;
   return { base: current, names };
 }
+
+const RUST_COMMENT_NODE_TYPES = new Set(["line_comment", "block_comment"]);
+
+/**
+ * Whether a name inside a Rust macro token tree follows a `.` or `::` separator, ignoring comments:
+ * `counter.bump()` with a block comment after the dot is still a member call, and `m::run()` with
+ * one after the `::` is still a path call. Raw
+ * tokens cannot prove such a receiver, so both consumers stay conservative there.
+ */
+export function rustTokenTreeNameFollowsSeparator(name: SyntaxNodeLike): boolean {
+  const tree = name.parent;
+  if (tree?.type !== "token_tree") return false;
+  let previous: SyntaxNodeLike | null = null;
+  for (let index = 0; ; index += 1) {
+    const child = tree.child(index);
+    if (!child || child.startIndex >= name.startIndex) break;
+    if (!RUST_COMMENT_NODE_TYPES.has(child.type)) previous = child;
+  }
+  return previous?.type === "." || previous?.type === "::";
+}

@@ -1,4 +1,4 @@
-import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
+import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../../indexer/types.js";
 import { AMBIGUOUS_STAR_IMPORT_REASON } from "../../indexer/ambiguous-resolution.js";
 import { recoverIncludedCallableStar } from "../../indexer/navigation.js";
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
@@ -9,9 +9,12 @@ import {
   isSwiftCrossFileHiddenSharedOwnerMember,
   isSwiftFileHiddenSharedOwnerMember,
 } from "../../indexer/declaration-visibility.js";
-import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import {
-  cppCallHasImplicitThis,
+  cppFunctionHasImplicitThis,
+  cppStarImportClosure,
+  resolveCppQualifiedMemberContainer,
+} from "../../indexer/navigation-cpp.js";
+import {
   findTypeScriptNamespaceMemberCandidates,
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
@@ -39,7 +42,11 @@ import { isJsTsLanguage } from "../../languages/js-family.js";
 import { getCallableArity, getCallArgumentCount, memberLookupBinding } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
-import { getMemberAccessParts, isMemberAccessNode } from "../../util/member-access.js";
+import {
+  getMemberAccessParts,
+  isMemberAccessNode,
+  rustTokenTreeNameFollowsSeparator,
+} from "../../util/member-access.js";
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
 import {
   MEMBER_ACCESS_ROWS,
@@ -285,8 +292,7 @@ function recordRustMacroArgumentCalls(context: EdgePassContext, tokenTree: Synta
     if (name.type !== "identifier" || args.type !== "token_tree") continue;
     if (!args.text.startsWith("(")) continue;
     if (context.source.slice(name.endIndex, args.startIndex).trim()) continue;
-    const before = context.source.slice(0, name.startIndex).replace(/\s+$/, "");
-    if (before.endsWith(".") || before.endsWith("::")) continue;
+    if (rustTokenTreeNameFollowsSeparator(name)) continue;
     tryResolveNode(context, name, fromId, "calls");
   }
 }
@@ -848,6 +854,16 @@ export async function emitFunctionBodyEdges(
     const ambiguousCIncludes: SyntaxNodeLike[] = [];
     const hasRepeatedCIncludes =
       context.sup.id === "c" && context.moduleEntry.imports.filter((imp) => imp.kind === "star").length > 1;
+    const cppImplicitThis =
+      context.sup.id === "cpp" &&
+      (await cppFunctionHasImplicitThis(
+        context.index,
+        context.moduleEntry,
+        fn.node,
+        context.source,
+        context.sup,
+        context.loadParsedFile,
+      ));
     const cppOutOfLinePath = cppOutOfLineOwnerPath(fn.node, context.source, context.sup);
     const cppOutOfLineOwner = cppOutOfLinePath
       ? await resolveCppQualifiedMemberContainer(
@@ -938,7 +954,11 @@ export async function emitFunctionBodyEdges(
      * alongside the caller resolve here; anything needing another module's members
      * becomes a deferred candidate.
      */
-    const recordReceiverCall = (node: SyntaxNodeLike, access: ReceiverCallAccess): void => {
+    const recordReceiverCall = (
+      node: SyntaxNodeLike,
+      access: ReceiverCallAccess,
+      forcedMemberScope?: ReceiverMemberScope,
+    ): void => {
       const memberName = sliceText(access.property, context.source);
       if (!memberName) return;
       let binding = classifyReceiver(
@@ -984,7 +1004,7 @@ export async function emitFunctionBodyEdges(
           memberName,
           argumentCount,
           site,
-          memberScope: binding.memberScope,
+          memberScope: forcedMemberScope ?? binding.memberScope,
           ...(context.sup.id === "go" && !isGoExportedMemberName(context.sup.id, memberName)
             ? { goPackagePeerFiles: getCompilationUnitPeers(context.index, context.moduleEntry.file).files }
             : {}),
@@ -1093,14 +1113,19 @@ export async function emitFunctionBodyEdges(
         if (typeScopedCppCall) {
           const qualifiedName = cppQualifiedNameSegments(access.accessNode, context.source).join("::");
           const qualifiedTarget = context.resolveIdentifier(qualifiedName, access.property);
-          // Outside a member function, `Owner::member()` has no implicit `this`:
-          // with a class owner only a static member qualifies, which the receiver path below proves.
+          // Outside a non-static member function, `Owner::member()` has no implicit `this`: with a
+          // class owner only a static member qualifies, which the receiver path below proves.
           const ownerPath = qualifiedName.split("::").slice(0, -1);
-          const owner = ownerPath.length ? context.resolveIdentifier(ownerPath.join("::"), access.receiver) : null;
-          const implicitThis =
-            !owner ||
-            !context.cppDeclaresClass(owner) ||
-            cppCallHasImplicitThis(access.accessNode, context.source, context.sup);
+          const ownerName = ownerPath.at(-1);
+          const ownerIsClass =
+            !!ownerName &&
+            [context.moduleEntry, ...cppStarImportClosure(context.index, context.moduleEntry)].some((module) =>
+              module.locals.some(
+                (local) =>
+                  local.localName === ownerName && local.kind === SymbolKind.Class && context.cppDeclaresClass(local),
+              ),
+            );
+          const implicitThis = !ownerIsClass || cppImplicitThis;
           if (qualifiedTarget && implicitThis) {
             recordDefEdge(context, fromId, qualifiedTarget, "calls", access.property);
             return;
@@ -1115,7 +1140,8 @@ export async function emitFunctionBodyEdges(
           typeScopedCppCall ||
           !tryResolveChain(context, access.accessNode, fromId, "calls")
         ) {
-          recordReceiverCall(node, access);
+          // Without an implicit `this`, `Owner::member()` can only name a static member.
+          recordReceiverCall(node, access, typeScopedCppCall && !cppImplicitThis ? "static" : undefined);
         }
         return;
       }
@@ -1145,7 +1171,8 @@ export async function emitFunctionBodyEdges(
             memberName,
             argumentCount: getCallArgumentCount({ languageId: "cpp", source: context.source, call: node }),
             site: { file: context.moduleEntry.file, range: toRange(callee) },
-            memberScope: "any",
+            // A static member function has no `this`, so only static members qualify.
+            memberScope: cppImplicitThis ? "any" : "static",
           });
           return;
         }

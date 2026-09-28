@@ -1761,3 +1761,55 @@ describe("C++20 modules", () => {
     }
   });
 });
+
+describe("C++ implicit this in qualified and bare member calls", () => {
+  it("resolves instance members only from non-static member functions", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-static-context-"));
+    const file = normalizePath(path.join(root, "c.cpp"));
+    const source = [
+      "struct C {",
+      "  int instance();",
+      "  static int shared();",
+      "  static int s();",
+      "  int m();",
+      "};",
+      "int C::instance() { return 1; }",
+      "int C::shared() { return 2; }",
+      "int C::s() { return C::instance() + instance() + shared(); }",
+      "int C::m() { return C::instance() + instance() + shared(); }",
+      "namespace ns { int f(); }",
+      "int ns::f() { return C::instance(); }",
+      "",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const lines = source.split("\n");
+      const gotoLine = async (line: number, column: number) =>
+        await goToDefinition(index, { file, line, column: column + 1 });
+      // A static member function and a namespace-qualified free function have no `this`.
+      expect((await gotoLine(9, lines[8]!.indexOf("C::instance") + 3)).status).toBe("not_found");
+      expect((await gotoLine(9, lines[8]!.lastIndexOf("instance"))).status).toBe("not_found");
+      expect((await gotoLine(12, lines[11]!.indexOf("C::instance") + 3)).status).toBe("not_found");
+      const staticCall = await gotoLine(9, lines[8]!.indexOf("shared"));
+      expect(staticCall.status === "ok" && staticCall.definition.range.start.line).toBe(3);
+      // A non-static member function reaches instance members either way.
+      for (const column of [lines[9]!.indexOf("C::instance") + 3, lines[9]!.lastIndexOf("instance")]) {
+        const call = await gotoLine(10, column);
+        expect(call.status === "ok" && call.definition.range.start.line).toBe(2);
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callees = (caller: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => graph.nodes.get(edge.to)?.name)
+          .sort();
+      expect(callees("s")).toEqual(["shared"]);
+      expect(callees("m")).toEqual(["instance", "instance", "shared"]);
+      expect(callees("f")).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

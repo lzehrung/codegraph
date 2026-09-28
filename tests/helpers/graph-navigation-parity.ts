@@ -89,14 +89,15 @@ function calleeName(node: SyntaxNodeLike | null): SyntaxNodeLike | null {
   return null;
 }
 
-/** 1-based line and column of a node, measured in characters of `lines`. */
-function position(node: SyntaxNodeLike, lines: readonly string[], name: string): { line: number; column: number } {
-  const line = node.startPosition.row + 1;
-  const text = lines[line - 1] ?? "";
-  // Tree columns are byte offsets; find the nearest character occurrence at or before it.
-  let column = text.lastIndexOf(name, node.startPosition.column);
-  if (column < 0) column = text.indexOf(name);
-  return { line, column: column + 1 };
+/**
+ * 1-based line and column of a node in characters. Tree columns are UTF-8 byte offsets, so the
+ * position comes from the node's string index, which the parse context maps to characters.
+ */
+function position(node: SyntaxNodeLike, source: string): { line: number; column: number } | null {
+  if (source.slice(node.startIndex, node.endIndex) !== node.text) return null;
+  const lineStart = source.lastIndexOf("\n", node.startIndex - 1) + 1;
+  const line = source.slice(0, lineStart).split("\n").length;
+  return { line, column: node.startIndex - lineStart + 1 };
 }
 
 type Edge = DetailedSymbolGraph["edges"][number];
@@ -327,16 +328,16 @@ export async function collectGraphNavigationMismatches(
     for (const { call, name: nameNode } of callSites(parsed.tree.rootNode, parsed.source)) {
       const owners = enclosingCallers(call, file, visibleFiles, callers);
       if (!owners.length) continue;
-      const name = nameNode.text;
-      const at = position(nameNode, lines, name);
-      if (at.column < 1) continue;
+      const at = position(nameNode, parsed.source);
+      if (!at) continue;
+      // A call edge's site is the callee expression, which ends at the callee's name (`f`,
+      // `a.f`, `A::f`, `new A.F`). An outer call's site that merely contains this name is not
+      // this site.
       const covering = fileEdges.filter(
         (edge) =>
           owners.includes(edge.from) &&
-          edge.site!.range.start.line <= at.line &&
-          edge.site!.range.end.line >= at.line &&
-          (edge.site!.range.start.line < at.line || edge.site!.range.start.column <= at.column) &&
-          (edge.site!.range.end.line > at.line || edge.site!.range.end.column > at.column),
+          edge.site!.range.end.index === nameNode.endIndex &&
+          (edge.site!.range.start.index ?? 0) <= nameNode.startIndex,
       );
       const site = `${relative(file)}:${at.line}:${at.column}`;
       const text = (lines[at.line - 1] ?? "").trim();
@@ -364,7 +365,9 @@ export async function collectGraphNavigationMismatches(
           includeLinked(normalizePath(node.file))
         );
       };
-      if (covering.some(matches)) continue;
+      // Every edge at the site must name goto's declaration; one right edge beside a wrong one
+      // is still a wrong edge.
+      if (covering.length && covering.every(matches)) continue;
       // No call edge can exist to a value that is not callable (an `int` class attribute) or to a
       // parameter or function-local binding, which the graph does not model.
       const notCallable = targetNode

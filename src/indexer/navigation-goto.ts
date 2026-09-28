@@ -77,7 +77,7 @@ import {
   getOrBuildScopeIndex,
   resolveNamedDefinition,
 } from "./navigation-local.js";
-import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
+import { resolveCppQualifiedMemberContainer, cppFunctionHasImplicitThis } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
 import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./php-namespace-symbols.js";
@@ -840,7 +840,10 @@ export async function resolveMemberAccessDefinition(params: {
           getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined;
         // Inside a member function, `Owner::member()` can name an instance member of the class or a
         // base through the implicit `this`; elsewhere only static members qualify.
-        const memberScope = cppCallHasImplicitThis(memberNode, source, sup) ? "any" : "static";
+        const enclosingFunction = cppEnclosingFunctionDefinition(memberNode);
+        const implicitThis =
+          !!enclosingFunction && (await cppFunctionHasImplicitThis(index, mod, enclosingFunction, source, sup));
+        const memberScope = implicitThis ? "any" : "static";
         const memberDef = await resolveKeywordReceiverMember(
           index,
           mod,
@@ -1616,19 +1619,12 @@ export async function resolveImplicitSelfMember(
   );
 }
 
-const CPP_CLASS_SPECIFIER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
-
-/**
- * Whether a C++ use sits in a member function (an out-of-line `Owner::f` definition or a function
- * defined in a class body), where `Owner::member()` has an implicit `this` for the enclosing class
- * and its bases.
- */
-export function cppCallHasImplicitThis(node: SyntaxNodeLike, source: string, sup: LanguageSupport): boolean {
-  if (cppOutOfLineOwnerPath(node, source, sup)) return true;
+/** The C++ function definition enclosing a use, if any. */
+export function cppEnclosingFunctionDefinition(node: SyntaxNodeLike): SyntaxNodeLike | null {
   for (let current = node.parent; current; current = current.parent) {
-    if (CPP_CLASS_SPECIFIER_TYPES.has(current.type)) return true;
+    if (current.type === "function_definition") return current;
   }
-  return false;
+  return null;
 }
 
 /** Proven unqualified member call from an out-of-line C++ method definition. */
@@ -1647,11 +1643,16 @@ export async function resolveCppOutOfLineImplicitMember(
   const owner = ownerPath ? await resolveCppQualifiedMemberContainer(index, mod, ownerPath) : null;
   if (!owner) return undefined;
   const argumentCount = getCallArgumentCount({ languageId: "cpp", source, call: node.parent }) ?? undefined;
-  const matching = await resolveKeywordReceiverMember(index, mod, node, name, "any", false, argumentCount, owner);
+  const enclosingFunction = cppEnclosingFunctionDefinition(node);
+  const memberScope =
+    enclosingFunction && (await cppFunctionHasImplicitThis(index, mod, enclosingFunction, source, sup))
+      ? "any"
+      : "static";
+  const matching = await resolveKeywordReceiverMember(index, mod, node, name, memberScope, false, argumentCount, owner);
   if (matching || argumentCount === undefined) return matching;
   // A class member hides a same-named global even when this call cannot accept its arity. The
   // only member is still the call's target for navigation; an ambiguous overload set is not.
-  const unmatched = await resolveKeywordReceiverMember(index, mod, node, name, "any", false, undefined, owner);
+  const unmatched = await resolveKeywordReceiverMember(index, mod, node, name, memberScope, false, undefined, owner);
   return unmatched ?? undefined;
 }
 
