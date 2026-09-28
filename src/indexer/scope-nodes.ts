@@ -556,6 +556,20 @@ export function laterLocalBlocksOuterUse(
  * chain, and a class body only binds uses inside itself (Python class scopes are not
  * closures for nested runtime scopes). Declarations outside the scope model stay accepted.
  */
+/** Innermost scope whose node contains `currentNode`. */
+export function closestContainingScope(scopeIndex: ScopeIndex, currentNode: SyntaxNodeLike): Scope | undefined {
+  let best: Scope | undefined;
+  for (const scope of scopeIndex.allScopes) {
+    if (
+      currentNode.startIndex >= scope.node.startIndex &&
+      currentNode.endIndex <= scope.node.endIndex &&
+      (!best || (scope.node.startIndex >= best.node.startIndex && scope.node.endIndex <= best.node.endIndex))
+    )
+      best = scope;
+  }
+  return best;
+}
+
 export function fallbackDefinitionVisibleAtUse(
   scopeIndex: ScopeIndex,
   row: ScopeNodeRow,
@@ -570,15 +584,7 @@ export function fallbackDefinitionVisibleAtUse(
     }
   }
   if (!declared) return true;
-  let current: Scope | undefined;
-  for (const scope of scopeIndex.allScopes) {
-    if (
-      use.startIndex >= scope.node.startIndex &&
-      use.endIndex <= scope.node.endIndex &&
-      (!current || (scope.node.startIndex >= current.node.startIndex && scope.node.endIndex <= current.node.endIndex))
-    )
-      current = scope;
-  }
+  let current = closestContainingScope(scopeIndex, use);
   while (current) {
     if (current === declared) return scopeAllowsUse(row, declared, use);
     current = current.parent;

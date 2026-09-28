@@ -26,7 +26,15 @@ export const cFamilyIncludeQuery = `
 
 const cFamilyParameterListTypes = new Set(["parameter_declaration", "parameter_list"]);
 
-/** Deepest `a::b::C::f` qualification captured as a definition name (scope segments). */
+/**
+ * Deepest qualification captured as a definition name, counted in scope segments: 5 covers
+ * `a::b::c::d::Box::run`. Tree-sitter queries cannot match a recursive `qualified_identifier`
+ * chain, so the name nests one alternation per level. A nested alternation keeps query compile
+ * time flat; enumerating each depth as its own pattern tripled C++ query compile time. A deeper
+ * out-of-line definition is not a symbol: its body is not a graph caller, and it never borrows
+ * another declaration's identity, because detailed graphs model a declaration only through the
+ * symbol at its own name.
+ */
 const CPP_QUALIFIED_DEFINITION_DEPTH = 5;
 
 export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: boolean): string {
@@ -56,17 +64,16 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
       `(operator_name) @${captureName}`,
       `(template_function name: (identifier) @${captureName})`,
     ];
-    for (const leaf of leaves) {
-      let qualified = leaf;
-      for (let depth = 0; depth < CPP_QUALIFIED_DEFINITION_DEPTH; depth += 1) {
-        qualified = `(qualified_identifier name: ${qualified})`;
-        patterns.push(
-          `(function_declarator declarator: ${qualified})`,
-          `(reference_declarator (function_declarator declarator: ${qualified}))`,
-          `(pointer_declarator declarator: (function_declarator declarator: ${qualified}))`,
-        );
-      }
+    let names = `[${leaves.join(" ")}]`;
+    for (let depth = 1; depth < CPP_QUALIFIED_DEFINITION_DEPTH; depth += 1) {
+      names = `[${leaves.join(" ")} (qualified_identifier name: ${names})]`;
     }
+    const qualified = `(qualified_identifier name: ${names})`;
+    patterns.push(
+      `(function_declarator declarator: ${qualified})`,
+      `(reference_declarator (function_declarator declarator: ${qualified}))`,
+      `(pointer_declarator declarator: (function_declarator declarator: ${qualified}))`,
+    );
     patterns.push(
       `(function_declarator declarator: (destructor_name) @${captureName})`,
       `(function_declarator declarator: (operator_name) @${captureName})`,

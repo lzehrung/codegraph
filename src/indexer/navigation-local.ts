@@ -15,6 +15,7 @@ import {
   scopeAllowsUse,
   scopeIdentifierKey,
   scopeNodesFor,
+  closestContainingScope,
 } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
 import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -220,19 +221,6 @@ function effectivePythonModuleScopeBinding(
   if (effective?.kind === "local") return localBinding ?? null;
   if (effective?.kind === "explicit") return importSource ?? null;
   return null;
-}
-
-function closestContainingScope(scopeIndex: ScopeIndex, currentNode: SyntaxNodeLike): Scope | undefined {
-  let best: Scope | undefined;
-  for (const scope of scopeIndex.allScopes) {
-    if (
-      currentNode.startIndex >= scope.node.startIndex &&
-      currentNode.endIndex <= scope.node.endIndex &&
-      (!best || (scope.node.startIndex >= best.node.startIndex && scope.node.endIndex <= best.node.endIndex))
-    )
-      best = scope;
-  }
-  return best;
 }
 
 export function findClosestScopeBinding(
