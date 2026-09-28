@@ -1,6 +1,6 @@
+import type { NameResolution } from "../../indexer/name-resolution.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../../indexer/types.js";
-import { AMBIGUOUS_STAR_IMPORT_REASON } from "../../indexer/ambiguous-resolution.js";
-import { recoverIncludedCallableStar } from "../../indexer/navigation.js";
+
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
 import { getCompilationUnitPeers } from "../../indexer/compilation-units.js";
 import {
@@ -12,7 +12,6 @@ import {
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import {
   cppQualifiedOwnerHasImplicitThis,
-  resolveCppOutOfLineImplicitMember,
   findTypeScriptNamespaceMemberCandidates,
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
@@ -21,7 +20,7 @@ import {
   resolveSharedOwnerContainers,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
-import { findClosestScopeBinding, resolveNamedDefinition } from "../../indexer/navigation-local.js";
+import { findClosestScopeBinding } from "../../indexer/navigation-local.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
 import {
   cjsRequireValueBinding,
@@ -101,6 +100,10 @@ type EdgePassContext = {
   aliasToTargetDef: Map<string, SymbolDef>;
   aliasToTargetModule: Map<string, string>;
   resolveIdentifier: (name: string, node: SyntaxNodeLike) => SymbolDef | null;
+  /** The shared lookup's raw answer, including steps deferred to async member lookup. */
+  resolveName: (name: string, node: SyntaxNodeLike) => NameResolution | null;
+  /** Runs deferred steps with the graph's rules; returns an indexed target or null. */
+  settleName: (name: string, node: SyntaxNodeLike, resolution: NameResolution | null) => Promise<SymbolDef | null>;
   /** A name bound inside a Swift type/method rather than at module scope. */
   hasNonModuleBinding: (name: string, node: SyntaxNodeLike) => boolean;
   resolveExportFrom: (file: string, exportedName: string) => SymbolDef | null;
@@ -887,25 +890,15 @@ export async function emitFunctionBodyEdges(
       context.noteCallableName(fn.name, context.sup.id === "php");
     }
     const seenAliases = new Set<string>();
-    const ambiguousCIncludes: SyntaxNodeLike[] = [];
-    const outOfLineBareCalls: SyntaxNodeLike[] = [];
+    // Calls whose target needs an async member lookup (C++ out-of-line owner members, included
+    // C/C++ declarations of one callable); settled after the walk.
+    const deferredCalls: Array<{ callee: SyntaxNodeLike; name: string; resolution: NameResolution }> = [];
     const qualifiedCppCalls: Array<{
       node: SyntaxNodeLike;
       access: ReceiverCallAccess;
       target: SymbolDef | null;
       ownerPath: string[];
     }> = [];
-    const hasRepeatedCIncludes =
-      context.sup.id === "c" && context.moduleEntry.imports.filter((imp) => imp.kind === "star").length > 1;
-    const cppOutOfLinePath = cppOutOfLineOwnerPath(fn.node, context.source, context.sup);
-    const cppOutOfLineOwner = cppOutOfLinePath
-      ? await resolveCppQualifiedMemberContainer(
-          context.index,
-          context.moduleEntry,
-          cppOutOfLinePath,
-          context.loadParsedFile,
-        )
-      : null;
     const nestedFunctions = new Set(
       functionNodes
         .filter(
@@ -1180,34 +1173,15 @@ export async function emitFunctionBodyEdges(
           return;
         }
       }
-      if (cppOutOfLineOwner && isIdentifierType(context.sup, callee.type)) {
-        const memberName = sliceText(callee, context.source);
-        if (!context.hasNonModuleBinding(memberName, callee)) {
-          // A member of the owner (or its bases) hides a same-named free function; when the owner
-          // declares none, the bare name is an ordinary call. Navigation decides after the walk.
-          outOfLineBareCalls.push(callee);
+      if (isIdentifierType(context.sup, callee.type) && !implicitOwnerLanguage) {
+        const name = sliceText(callee, context.source);
+        const resolution = context.resolveName(name, callee);
+        if (resolution?.status === "deferred") {
+          deferredCalls.push({ callee, name, resolution });
           return;
         }
       }
-      if (!tryResolveNode(context, callee, fromId, "calls")) {
-        const resolution =
-          hasRepeatedCIncludes && isIdentifierType(context.sup, callee.type)
-            ? resolveNamedDefinition(
-                context.index,
-                context.moduleEntry,
-                context.moduleEntry.file,
-                context.sup,
-                sliceText(callee, context.source),
-                "ordinary",
-                callee.startIndex,
-              )
-            : null;
-        if (resolution?.status === "not_found" && resolution.reason === AMBIGUOUS_STAR_IMPORT_REASON) {
-          ambiguousCIncludes.push(callee);
-        } else {
-          recordImplicitSelfMemberCall(node, callee);
-        }
-      }
+      if (!tryResolveNode(context, callee, fromId, "calls")) recordImplicitSelfMemberCall(node, callee);
     };
 
     const recordRubySuper = (superNode: SyntaxNodeLike): void => {
@@ -1314,18 +1288,9 @@ export async function emitFunctionBodyEdges(
     };
 
     walkFunctionBody(fn.node, true);
-    for (const callee of outOfLineBareCalls) {
-      const member = await resolveCppOutOfLineImplicitMember(
-        context.index,
-        context.moduleEntry,
-        callee,
-        sliceText(callee, context.source),
-        context.source,
-        context.sup,
-        true,
-      );
-      if (member) recordDefEdge(context, fromId, member, "calls", callee);
-      else if (member === undefined) tryResolveNode(context, callee, fromId, "calls");
+    for (const call of deferredCalls) {
+      const target = await context.settleName(call.name, call.callee, call.resolution);
+      if (target) recordDefEdge(context, fromId, target, "calls", call.callee);
     }
     for (const call of qualifiedCppCalls) {
       const owner = call.ownerPath.length
@@ -1355,18 +1320,6 @@ export async function emitFunctionBodyEdges(
         // Without an implicit `this` of the owner, `Owner::member()` can only name a static member.
         recordReceiverCall(call.node, call.access, implicitThis ? undefined : "static");
       }
-    }
-    for (const callee of ambiguousCIncludes) {
-      const recovered = await recoverIncludedCallableStar(
-        context.index,
-        context.moduleEntry,
-        "c",
-        sliceText(callee, context.source),
-        "ordinary",
-        callee,
-        context.source,
-      );
-      if (recovered?.status === "ok") recordDefEdge(context, fromId, recovered.definition, "calls", callee);
     }
   }
   for (const target of qualifiedConstructionTargets) {

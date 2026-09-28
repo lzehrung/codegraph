@@ -3,7 +3,11 @@ import {
   nameResolutionPreloadFiles,
   phpImportTypeAtPosition,
   resolveBareName,
+  settleNameResolution,
+  type BareNameUse,
+  type NameResolution,
 } from "../indexer/name-resolution.js";
+import { recoverIncludedCallableStar } from "../indexer/navigation.js";
 import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -468,28 +472,44 @@ export async function buildSymbolGraphDetailed(
         get: (target: string): ParsedFileContext | null => parsedForResolution.get(fileIdentityKey(target)) ?? null,
       };
       const moduleParsed: ParsedFileContext = { source: src, tree, sup };
-      const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null => {
+      const bareNameUse = (name: string, node: SyntaxNodeLike): BareNameUse => {
         const phpImportType =
           sup.id === "php"
             ? (phpImportTypeAtPosition(moduleEntry.imports, node.startPosition.row, node.startPosition.column) ??
               inferPhpQualifiedReferenceImportType(node))
             : undefined;
-        const definition = definitionWithoutDeferredSteps(
-          resolveBareName({
-            index,
-            mod: moduleEntry,
-            file,
-            parsed: moduleParsed,
-            scopeIndex,
-            files: resolutionFiles,
-            node,
-            name,
-            ...(phpImportType ? { phpImportType } : {}),
-          }),
-        );
-        // The graph has nodes only for indexed symbols; a parameter or function-local binding
-        // that navigation resolves has no node, so it gets no edge.
-        return definition && isIndexedSymbol(index, definition) ? definition : null;
+        return {
+          index,
+          mod: moduleEntry,
+          file,
+          parsed: moduleParsed,
+          scopeIndex,
+          files: resolutionFiles,
+          node,
+          name,
+          ...(phpImportType ? { phpImportType } : {}),
+        };
+      };
+      // The graph has nodes only for indexed symbols; a parameter or function-local binding
+      // that navigation resolves has no node, so it gets no edge.
+      const indexedOrNull = (definition: SymbolDef | null): SymbolDef | null =>
+        definition && isIndexedSymbol(index, definition) ? definition : null;
+      const resolveName = (name: string, node: SyntaxNodeLike): NameResolution | null =>
+        resolveBareName(bareNameUse(name, node));
+      const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null =>
+        indexedOrNull(definitionWithoutDeferredSteps(resolveName(name, node)));
+      const settleName = async (
+        name: string,
+        node: SyntaxNodeLike,
+        resolution: NameResolution | null,
+      ): Promise<SymbolDef | null> => {
+        const settled = await settleNameResolution(bareNameUse(name, node), resolution, {
+          // A member that cannot accept the call's argument count gets no edge and no fallback.
+          requireAcceptedArity: true,
+          recoverIncludedStar: (lookupName, cNamespace) =>
+            recoverIncludedCallableStar(index, moduleEntry, sup.id, lookupName, cNamespace, node, src),
+        });
+        return indexedOrNull(settled?.status === "ok" ? settled.definition : null);
       };
 
       const edgePassContext = {
@@ -506,6 +526,8 @@ export async function buildSymbolGraphDetailed(
         aliasToTargetDef,
         aliasToTargetModule,
         resolveIdentifier,
+        resolveName,
+        settleName,
         hasNonModuleBinding: (name: string, node: SyntaxNodeLike): boolean => {
           const binding = findClosestScopeBinding(scopeIndex, name, node, sup);
           return !!binding && scopeIndex.allScopes[0]?.map.get(binding.canonicalName) !== binding;

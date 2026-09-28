@@ -7,6 +7,7 @@ import {
   AMBIGUOUS_STAR_IMPORT_REASON,
 } from "../ambiguous-resolution.js";
 import { cppBindingCallableShape } from "../cpp-callables.js";
+import { cppOutOfLineOwnerPath } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   cppStarImportClosure,
   cppUsingDeclarationTarget,
@@ -89,7 +90,8 @@ export const cppLookupPolicy: NameLookupPolicy = {
     const { node, scopeIndex } = use;
     const fileScopeOrUnbound =
       !closestBinding || scopeIndex.allScopes[0]?.map.get(closestBinding.canonicalName) === closestBinding;
-    if (!fileScopeOrUnbound || node.parent?.type !== "call_expression") return rest();
+    const outOfLineBody = !!cppOutOfLineOwnerPath(node, use.parsed.source, use.parsed.sup);
+    if (!fileScopeOrUnbound || !outOfLineBody || node.parent?.type !== "call_expression") return rest();
     return {
       status: "deferred",
       request: { kind: "cpp-out-of-line-member" },
