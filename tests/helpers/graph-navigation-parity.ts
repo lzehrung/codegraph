@@ -160,7 +160,7 @@ function outOfLineMemberKey(node: SyntaxNodeLike, headerEnd: number): string | n
   return key;
 }
 
-/** Caller node ids of every enclosing declaration, innermost first. */
+/** Caller node ids of the innermost enclosing declaration the graph models. */
 function enclosingCallers(
   call: SyntaxNodeLike,
   file: string,
@@ -197,6 +197,18 @@ function enclosingCallers(
     for (const member of key ? (callers.byOwnerMember.get(key) ?? []) : []) {
       if (visibleFiles.has(member.ownerFile)) owners.push(member.id);
     }
+    // A function expression bound by a declarator or assignment (`var h = function named() {}`)
+    // is one caller under either name, so the binding's header joins this level.
+    const binder = node.parent;
+    const boundValue = binder?.childForFieldName("value") ?? binder?.childForFieldName("right");
+    if (binder && boundValue && boundValue.startIndex === node.startIndex && boundValue.endIndex === node.endIndex) {
+      for (const [start, id] of starts ?? []) {
+        if (start >= binder.startIndex && start < node.startIndex) owners.push(id);
+      }
+    }
+    // Only the innermost graph caller owns the call; an outer function's edge for a call made in
+    // a nested named function is misattributed.
+    if (owners.length) return owners;
   }
   return owners;
 }
@@ -270,6 +282,19 @@ async function rejectsArgumentCount(
 function includesFile(index: ProjectIndex, from: string, to: string): boolean {
   const module = index.byFile.get(fileIdentityKey(from));
   return !!module?.imports.some((imp) => typeof imp.resolved === "string" && normalizePath(imp.resolved) === to);
+}
+
+const LITERAL_VALUE =
+  /^(number|integer|float|string|template_string|true|false|null|none|object|array|dictionary|list|tuple|[a-z_]*string_literal|[a-z_]*number_literal|integer_literal|boolean_literal)$/;
+
+/** Whether a definition binds a literal value (`const value = 1`), which is never callable. */
+async function initializedWithLiteral(definition: SymbolDef): Promise<boolean> {
+  const target = await parseFile(definition.file);
+  const start = definition.range.start.index ?? 0;
+  const nameNode = target.tree.rootNode.descendantForIndex(start, definition.range.end.index ?? start);
+  const binding = nameNode.parent;
+  const value = binding?.childForFieldName("value") ?? binding?.childForFieldName("right");
+  return !!value && value.startIndex > nameNode.startIndex && LITERAL_VALUE.test(value.type);
 }
 
 /** Whether a definition is a parameter or sits in a function body, from its source. */
@@ -367,12 +392,16 @@ export async function collectGraphNavigationMismatches(
       };
       // Every edge at the site must name goto's declaration; one right edge beside a wrong one
       // is still a wrong edge.
-      if (covering.length && covering.every(matches)) continue;
       // No call edge can exist to a value that is not callable (an `int` class attribute) or to a
       // parameter or function-local binding, which the graph does not model.
       const notCallable = targetNode
         ? targetNode.kind === "variable" && !targetNode.callable
         : await declaredInsideCallable(goto.definition);
+      // A binding whose value is a literal (`const value = 1`) cannot be called, so a `calls` edge to
+      // it is wrong. A parameter or a variable holding a function can be called.
+      const callsNonCallable =
+        covering.some((edge) => edge.label === "calls") && (await initializedWithLiteral(goto.definition));
+      if (!callsNonCallable && covering.length && covering.every(matches)) continue;
       if (!covering.length && notCallable) continue;
       // Navigation keeps an incompatible call on its only candidate so an in-progress signature
       // change still finds its callers; the graph may refuse that call as a `calls` edge.

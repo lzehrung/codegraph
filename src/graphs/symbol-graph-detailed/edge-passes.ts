@@ -1,4 +1,4 @@
-import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
+import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../../indexer/types.js";
 import { AMBIGUOUS_STAR_IMPORT_REASON } from "../../indexer/ambiguous-resolution.js";
 import { recoverIncludedCallableStar } from "../../indexer/navigation.js";
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
@@ -735,6 +735,16 @@ function provesCallableBinding(context: EdgePassContext, fn: DetailedFunctionNod
   return false;
 }
 
+/**
+ * Whether a resolved member can be a `calls` target: a function, a class, or a binding the
+ * declaration pass proved holds a function. A plain value (`export const value = 1`) is not.
+ */
+function isCallTarget(context: EdgePassContext, def: SymbolDef): boolean {
+  return (
+    def.kind === SymbolKind.Function || def.kind === SymbolKind.Class || !!context.nodes.get(defNodeId(def))?.callable
+  );
+}
+
 /** Resolve a proven same-file TS namespace receiver with navigation's container and overload rules. */
 function recordTypeScriptNamespaceCall(
   context: EdgePassContext,
@@ -762,7 +772,7 @@ function recordTypeScriptNamespaceCall(
     languageId: context.sup.id,
     argumentCount: getCallArgumentCount({ languageId: context.sup.id, source: context.source, call }),
   });
-  if (selected) recordDefEdge(context, fromId, selected, "calls", access.property);
+  if (selected && isCallTarget(context, selected)) recordDefEdge(context, fromId, selected, "calls", access.property);
   return true;
 }
 
@@ -774,7 +784,7 @@ function recordImportTypeCall(context: EdgePassContext, access: ReceiverCallAcce
   if (!specifier) return false;
   const member = sliceText(access.property, context.source);
   const target = resolveImportTypeMember(context.index, context.moduleEntry.file, specifier, member);
-  if (target) recordDefEdge(context, fromId, target, "calls", access.property);
+  if (target && isCallTarget(context, target)) recordDefEdge(context, fromId, target, "calls", access.property);
   return true;
 }
 
