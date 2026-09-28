@@ -82,7 +82,34 @@ function typescriptNamespaceForDefinition(tree: SyntaxTreeLike, def: SymbolDef):
   return null;
 }
 
-/** Namespace reopenings with the same name and lexical parent share a member set. */
+/**
+ * The lexical path of the namespaces enclosing a namespace declaration: `A` for `B` in
+ * `namespace A { namespace B {} }`, whichever `namespace A` block it sits in. A non-namespace
+ * container (a function or class body) ends the path at that exact container.
+ */
+function typescriptNamespaceParentPath(namespace: SyntaxNodeLike): string {
+  const names: string[] = [];
+  for (let current = namespace.parent; current; current = current.parent) {
+    if (current.type === "internal_module" || current.type === "module") {
+      names.unshift(current.childForFieldName("name")?.text ?? "");
+      continue;
+    }
+    if (current.type === "program") break;
+    if (
+      current.type === "statement_block" &&
+      (current.parent?.type === "internal_module" || current.parent?.type === "module")
+    ) {
+      continue;
+    }
+    if (TYPESCRIPT_MEMBER_CONTAINER_TYPES.has(current.type) || current.type === "statement_block") {
+      names.unshift("@" + current.startIndex);
+      break;
+    }
+  }
+  return names.join(".");
+}
+
+/** Namespace reopenings with the same name and lexical namespace path share a member set. */
 export function typescriptMergedNamespaceContainers(
   tree: SyntaxTreeLike,
   locals: readonly SymbolDef[],
@@ -90,18 +117,13 @@ export function typescriptMergedNamespaceContainers(
 ): SyntaxNodeLike[] {
   const container = typescriptNamespaceForDefinition(tree, receiver);
   if (!container) return [];
-  const parent = container.parent;
-  const parentKey = parent ? typescriptCallableContainerKey(tree, parent.startIndex, parent.endIndex) : "module";
+  const parentKey = typescriptNamespaceParentPath(container);
   const containers: SyntaxNodeLike[] = [];
   for (const local of locals) {
     if (local.kind !== receiver.kind || local.localName !== receiver.localName) continue;
     const candidate = typescriptNamespaceForDefinition(tree, local);
     if (!candidate) continue;
-    const candidateParent = candidate.parent;
-    const candidateKey = candidateParent
-      ? typescriptCallableContainerKey(tree, candidateParent.startIndex, candidateParent.endIndex)
-      : "module";
-    if (candidateKey === parentKey) containers.push(candidate);
+    if (typescriptNamespaceParentPath(candidate) === parentKey) containers.push(candidate);
   }
   return containers;
 }

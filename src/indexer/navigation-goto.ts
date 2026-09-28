@@ -840,9 +840,7 @@ export async function resolveMemberAccessDefinition(params: {
           getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined;
         // Inside a member function, `Owner::member()` can name an instance member of the class or a
         // base through the implicit `this`; elsewhere only static members qualify.
-        const enclosingFunction = cppEnclosingFunctionDefinition(memberNode);
-        const implicitThis =
-          !!enclosingFunction && (await cppFunctionHasImplicitThis(index, mod, enclosingFunction, source, sup));
+        const implicitThis = await cppQualifiedOwnerHasImplicitThis(index, mod, memberNode, source, sup, owner);
         const memberScope = implicitThis ? "any" : "static";
         const memberDef = await resolveKeywordReceiverMember(
           index,
@@ -858,6 +856,9 @@ export async function resolveMemberAccessDefinition(params: {
           ? okGoToResult(index, memberDef, { resolution: "member-access", confidence: "high" })
           : { status: "not_found", reason: "No matching C++ static member definition" };
       }
+      // A qualifier that is not a class (a namespace) names a free function, which the qualified
+      // function lookup resolves; the short name must not be read as a same-named class receiver.
+      return null;
     }
 
     const importType = isJsTsLanguage(sup.id) ? receiverConstructorExpression(obj, source, sup) : null;
@@ -1617,6 +1618,55 @@ export async function resolveImplicitSelfMember(
     false,
     getCallArgumentCount({ languageId, source, call }) ?? undefined,
   );
+}
+
+/**
+ * Whether `Owner::member()` at `use` can reach an instance member of `owner` through an implicit
+ * `this`: the enclosing function is a non-static member function of `owner` or of a class that
+ * derives from `owner` through proven bases. Any other context can only name a static member.
+ */
+export async function cppQualifiedOwnerHasImplicitThis(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  use: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+  owner: SymbolDef,
+): Promise<boolean> {
+  const definition = cppEnclosingFunctionDefinition(use);
+  if (!definition || !(await cppFunctionHasImplicitThis(index, mod, definition, source, sup))) return false;
+  const outOfLinePath = cppOutOfLineOwnerPath(definition, source, sup);
+  const enclosingDef = outOfLinePath ? await resolveCppQualifiedMemberContainer(index, mod, outOfLinePath) : null;
+  const enclosing = enclosingDef
+    ? await keywordClassRefFromDef(index, enclosingDef)
+    : await keywordClassRefFromNode(index, mod, definition);
+  const target = await keywordClassRefFromDef(index, owner);
+  if (!enclosing || !target) return false;
+  const targetKey = keywordContainerKey(target.file, target.container);
+  const visited = new Set<string>();
+  let level: KeywordClassRef[] = [enclosing];
+  for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
+    const next: KeywordClassRef[] = [];
+    for (const candidate of level) {
+      const key = keywordContainerKey(candidate.file, candidate.container);
+      if (key === targetKey) return true;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      next.push(
+        ...(await baseRefsFromContainer(
+          index,
+          candidate.module,
+          candidate.container,
+          candidate.context.source,
+          candidate.context.sup,
+          false,
+          candidate.context.tree,
+        )),
+      );
+    }
+    level = next;
+  }
+  return false;
 }
 
 /** The C++ function definition enclosing a use, if any. */

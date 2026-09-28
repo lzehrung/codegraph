@@ -1,4 +1,4 @@
-import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../../indexer/types.js";
+import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
 import { AMBIGUOUS_STAR_IMPORT_REASON } from "../../indexer/ambiguous-resolution.js";
 import { recoverIncludedCallableStar } from "../../indexer/navigation.js";
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
@@ -9,12 +9,9 @@ import {
   isSwiftCrossFileHiddenSharedOwnerMember,
   isSwiftFileHiddenSharedOwnerMember,
 } from "../../indexer/declaration-visibility.js";
+import { cppFunctionHasImplicitThis, resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import {
-  cppFunctionHasImplicitThis,
-  cppStarImportClosure,
-  resolveCppQualifiedMemberContainer,
-} from "../../indexer/navigation-cpp.js";
-import {
+  cppQualifiedOwnerHasImplicitThis,
   findTypeScriptNamespaceMemberCandidates,
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
@@ -852,6 +849,12 @@ export async function emitFunctionBodyEdges(
     }
     const seenAliases = new Set<string>();
     const ambiguousCIncludes: SyntaxNodeLike[] = [];
+    const qualifiedCppCalls: Array<{
+      node: SyntaxNodeLike;
+      access: ReceiverCallAccess;
+      target: SymbolDef | null;
+      ownerPath: string[];
+    }> = [];
     const hasRepeatedCIncludes =
       context.sup.id === "c" && context.moduleEntry.imports.filter((imp) => imp.kind === "star").length > 1;
     const cppImplicitThis =
@@ -1113,35 +1116,21 @@ export async function emitFunctionBodyEdges(
         if (typeScopedCppCall) {
           const qualifiedName = cppQualifiedNameSegments(access.accessNode, context.source).join("::");
           const qualifiedTarget = context.resolveIdentifier(qualifiedName, access.property);
-          // Outside a non-static member function, `Owner::member()` has no implicit `this`: with a
-          // class owner only a static member qualifies, which the receiver path below proves.
-          const ownerPath = qualifiedName.split("::").slice(0, -1);
-          const ownerName = ownerPath.at(-1);
-          const ownerIsClass =
-            !!ownerName &&
-            [context.moduleEntry, ...cppStarImportClosure(context.index, context.moduleEntry)].some((module) =>
-              module.locals.some(
-                (local) =>
-                  local.localName === ownerName && local.kind === SymbolKind.Class && context.cppDeclaresClass(local),
-              ),
-            );
-          const implicitThis = !ownerIsClass || cppImplicitThis;
-          if (qualifiedTarget && implicitThis) {
-            recordDefEdge(context, fromId, qualifiedTarget, "calls", access.property);
-            return;
-          }
-          // A qualified name that resolves to no free function is still a candidate
-          // class-scoped static call. Falling through reaches `recordReceiverCall`
-          // (the `typeScopedCppCall` arm below), which only resolves against a proven
-          // member container, so namespace names cannot be revived by a bare-name match.
+          // Whether the owner is a class, and whether the caller has an implicit `this` of that class,
+          // needs the exact qualified path, so the decision waits until the function body is walked.
+          qualifiedCppCalls.push({
+            node,
+            access,
+            target: qualifiedTarget,
+            ownerPath: qualifiedName.split("::").slice(0, -1),
+          });
+          return;
         }
         if (
           keywordReceiverKind(context.sup.id, receiverName) ||
-          typeScopedCppCall ||
           !tryResolveChain(context, access.accessNode, fromId, "calls")
         ) {
-          // Without an implicit `this`, `Owner::member()` can only name a static member.
-          recordReceiverCall(node, access, typeScopedCppCall && !cppImplicitThis ? "static" : undefined);
+          recordReceiverCall(node, access);
         }
         return;
       }
@@ -1301,6 +1290,35 @@ export async function emitFunctionBodyEdges(
     };
 
     walkFunctionBody(fn.node, true);
+    for (const call of qualifiedCppCalls) {
+      const owner = call.ownerPath.length
+        ? await resolveCppQualifiedMemberContainer(
+            context.index,
+            context.moduleEntry,
+            call.ownerPath,
+            context.loadParsedFile,
+          )
+        : null;
+      if (!owner) {
+        // A namespace (or no) qualifier names the free function directly.
+        if (call.target) recordDefEdge(context, fromId, call.target, "calls", call.access.property);
+        continue;
+      }
+      const implicitThis = await cppQualifiedOwnerHasImplicitThis(
+        context.index,
+        context.moduleEntry,
+        call.access.accessNode,
+        context.source,
+        context.sup,
+        owner,
+      );
+      if (implicitThis && call.target) {
+        recordDefEdge(context, fromId, call.target, "calls", call.access.property);
+      } else {
+        // Without an implicit `this` of the owner, `Owner::member()` can only name a static member.
+        recordReceiverCall(call.node, call.access, implicitThis ? undefined : "static");
+      }
+    }
     for (const callee of ambiguousCIncludes) {
       const recovered = await recoverIncludedCallableStar(
         context.index,

@@ -1763,6 +1763,52 @@ describe("C++20 modules", () => {
 });
 
 describe("C++ implicit this in qualified and bare member calls", () => {
+  it("classifies qualified owners by full path and reaches instance members only through the caller's own class or bases", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-qualified-owner-"));
+    const file = normalizePath(path.join(root, "q.cpp"));
+    const source = [
+      "namespace a { struct C { static int f(); }; }",
+      "namespace b { namespace C { int f(); } }",
+      "int a::C::f() { return 1; }",
+      "int b::C::f() { return 2; }",
+      "int free_call() { return b::C::f() + a::C::f(); }",
+      "struct Base { int helper(); };",
+      "int Base::helper() { return 3; }",
+      "struct Derived : Base { int run(); };",
+      "struct D { int instance(); };",
+      "int D::instance() { return 4; }",
+      "int Derived::run() { return Base::helper() + D::instance(); }",
+      "",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const lines = source.split("\n");
+      const targetLine = async (line: number, qualified: string) => {
+        const column = lines[line - 1]!.indexOf(qualified) + qualified.lastIndexOf(":") + 2;
+        const result = await goToDefinition(index, { file, line, column });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      // `b::C` is a namespace even though a class `a::C` is also reachable.
+      expect(await targetLine(5, "b::C::f")).toBe(4);
+      expect(await targetLine(5, "a::C::f")).toBe(3);
+      // A base-qualified call reaches the base's instance member; an unrelated class's does not.
+      expect(await targetLine(11, "Base::helper")).toBe(6);
+      expect(await targetLine(11, "D::instance")).toBeNull();
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callTargets = (caller: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => graph.nodes.get(edge.to)?.name)
+          .sort();
+      expect(callTargets("free_call")).toEqual(["f", "f"]);
+      expect(callTargets("run")).toEqual(["helper"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves instance members only from non-static member functions", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-static-context-"));
     const file = normalizePath(path.join(root, "c.cpp"));
