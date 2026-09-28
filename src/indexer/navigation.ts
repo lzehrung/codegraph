@@ -252,8 +252,12 @@ export async function goToDefinition(
         memberAccessNode = memberAccessNode.parent;
       }
     }
+    // A receiverless call (Java `hit()`) reuses the member-call node with the name in both slots;
+    // it is a bare name, so the shared lookup (implicit members, imports, package) decides it.
+    const receiverless = !!memberAccessNode && isReceiverlessMemberCall(sup, memberAccessNode);
     const scopeIndex = memberAccessNode ? getOrBuildScopeIndex(index, file, source, sup, mod, tree) : null;
     const memberAccessResult =
+      !receiverless &&
       !isExplicitMethodCall(scopeNodesFor(sup.id), node) &&
       (await resolveMemberAccessDefinition({
         index,
@@ -361,6 +365,12 @@ export async function goToDefinition(
     status: "not_found",
     reason: "No matching local or imported definition",
   };
+}
+
+/** Whether a member-access node has no receiver distinct from its member name. */
+function isReceiverlessMemberCall(sup: LanguageSupport, access: SyntaxNodeLike): boolean {
+  const { object, property } = getMemberAccessParts(sup, access);
+  return !!property && (!object || object.startIndex === property.startIndex);
 }
 
 function swiftNavigationMemberAccess(sup: LanguageSupport, node: SyntaxNodeLike): SyntaxNodeLike | null {

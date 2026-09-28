@@ -1594,10 +1594,20 @@ async function resolveKeywordReceiverMember(
 }
 /**
  * Validate an unqualified member use against its actual lexical owner, including shared
- * owner parts in other files. Swift checks every bare name; C# checks only invocation
- * callees, matching the detailed graph's implicit-self call candidates. A C# static
- * context reaches only static members.
+ * owner parts in other files and inherited members. Swift checks every bare name; C#, Java, and
+ * Kotlin check only bare call callees. A static context reaches only static members.
  */
+/** The callee of a receiverless call (`f()`), which may name a member through the implicit `this`. */
+function implicitSelfCallee(languageId: string, call: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (languageId === "csharp") return call.type === "invocation_expression" ? call.childForFieldName("function") : null;
+  if (languageId === "java") {
+    if (call.type !== "method_invocation" || call.childForFieldName("object")) return null;
+    return call.childForFieldName("name");
+  }
+  if (languageId === "kotlin") return call.type === "call_expression" ? (call.namedChildren[0] ?? null) : null;
+  return null;
+}
+
 export async function resolveImplicitSelfMember(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -1607,14 +1617,9 @@ export async function resolveImplicitSelfMember(
   languageId: string,
 ): Promise<SymbolDef | undefined> {
   const call = node.parent ?? node;
-  if (languageId === "csharp") {
-    const callee = call.type === "invocation_expression" ? call.childForFieldName("function") : null;
-    if (!callee || callee.startIndex !== node.startIndex || callee.endIndex !== node.endIndex) return undefined;
-  } else if (languageId !== "swift") {
-    return undefined;
-  }
-  const memberScope: ReceiverMemberScope =
-    languageId === "csharp" && nodeInStaticMemberContext(node, source) ? "static" : "any";
+  if (languageId !== "swift" && implicitSelfCallee(languageId, call)?.id !== node.id) return undefined;
+  const staticScoped = languageId === "csharp" || languageId === "java" || languageId === "kotlin";
+  const memberScope: ReceiverMemberScope = staticScoped && nodeInStaticMemberContext(node, source) ? "static" : "any";
   return resolveKeywordReceiverMember(
     index,
     mod,

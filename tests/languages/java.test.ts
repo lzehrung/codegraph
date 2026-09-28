@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
+import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { normalizePath } from "../../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
@@ -569,6 +570,60 @@ describe("Java constructor and spread-parameter declaration names", () => {
       // The `variable_declarator` under `spread_parameter` (`int... rest`) is a declared
       // name, so impact classification treats edits to it as a definition change.
       expect(parsed.sup.isDeclarationName(declarator!)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Java implicit-receiver precedence", () => {
+  it("resolves a bare call to an inherited method before a single static import", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-inherited-member-"));
+    try {
+      const lines = [
+        "package j;",
+        "",
+        "import static j.Util.hit;",
+        "",
+        "class Base {",
+        "  int hit() { return 4; }",
+        "}",
+        "",
+        "class Derived extends Base {",
+        "  int viaBase() { return hit(); }",
+        "}",
+        "",
+        "class Plain {",
+        "  int imported() { return hit(); }",
+        "}",
+        "",
+      ];
+      const use = normalizePath(path.join(root, "Use.java"));
+      await writeFile(use, lines.join("\n"));
+      await writeFile(
+        path.join(root, "Util.java"),
+        "package j;\n\nclass Util {\n  static int hit() { return 1; }\n}\n",
+      );
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number) => {
+        const result = await goToDefinition(index, {
+          file: use,
+          line,
+          column: lines[line - 1]!.lastIndexOf("hit") + 1,
+        });
+        return result.status === "ok"
+          ? `${path.basename(result.definition.file)}:${result.definition.range.start.line}`
+          : null;
+      };
+      // The inherited method shadows the static import inside the subclass; elsewhere the import binds.
+      expect(await gotoLine(10)).toBe("Use.java:6");
+      expect(await gotoLine(14)).toBe("Util.java:4");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
+        .sort();
+      expect(calls).toEqual(["imported->Util.java", "viaBase->Use.java"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -63,6 +63,19 @@ const typescriptLookupPolicy: NameLookupPolicy = {
   },
 };
 
+/**
+ * Java and Kotlin: inside a class, a member reached through the implicit `this` (including an
+ * inherited one) wins over a same-named package peer or import. Own members are scope bindings;
+ * this step finds inherited ones.
+ */
+const jvmLookupPolicy: NameLookupPolicy = {
+  afterCrossModule: (state, resolved) => ({
+    status: "deferred",
+    request: { kind: "implicit-self-member", lookupName: state.lookupName },
+    fallback: resolved,
+  }),
+};
+
 /** Python: a module object is not callable. */
 const pythonLookupPolicy: NameLookupPolicy = {
   afterCrossModule({ use }, resolved) {
@@ -90,6 +103,8 @@ const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
   c: cLookupPolicy,
   cpp: cppLookupPolicy,
   csharp: csharpLookupPolicy,
+  java: jvmLookupPolicy,
+  kotlin: jvmLookupPolicy,
   php: phpLookupPolicy,
   python: pythonLookupPolicy,
   rust: rustLookupPolicy,
