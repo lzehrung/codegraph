@@ -12,7 +12,7 @@
  * coverage: the use is not a candidate of that declaration. Not_found rows without it
  * must not claim `complete`.
  */
-import { afterAll, describe, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 import {
   assertConsumerAgreement,
@@ -21,6 +21,7 @@ import {
   type ConsumerAgreementFixture,
   type ConsumerAgreementSite,
 } from "./helpers/consumer-agreement.js";
+import { collectGraphNavigationMismatches } from "./helpers/graph-navigation-parity.js";
 
 const suite = isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -1396,6 +1397,14 @@ suite("cross-consumer agreement", () => {
     describe(language, () => {
       it.each(languageRows.filter((row) => !row.fails))("$id $role", async (row) => {
         await runAgreementRow(row);
+      });
+      // Beyond the named sites, every call site in each fixture must agree between goto and the graph.
+      const fixtureRows = languageRows.filter(
+        (row, position) => languageRows.findIndex((other) => other.files === row.files) === position,
+      );
+      it.each(fixtureRows)("$id: goto and the graph agree on every call site", async (row) => {
+        const fixture = await loadFixture(row);
+        expect(await collectGraphNavigationMismatches(fixture.index, fixture.graph, fixture.root)).toEqual([]);
       });
       const disagreements = languageRows.filter((row) => row.fails);
       if (disagreements.length > 0) {

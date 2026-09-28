@@ -15,6 +15,7 @@ import {
   scopeAllowsUse,
   scopeIdentifierKey,
   scopeNodesFor,
+  closestContainingScope,
 } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
 import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -92,22 +93,48 @@ export function csharpLookupName(node: SyntaxNodeLike, source: string, fallback:
   return (result + source.slice(from, qualified.endIndex)).replace(/\s+/gu, "");
 }
 
+const FALLBACK_DECLARATION_TYPES = new Set([
+  "function_declaration",
+  "class_declaration",
+  "variable_declarator",
+  "interface_declaration",
+  "type_alias_declaration",
+  "function_definition",
+  "class_definition",
+  "assignment",
+]);
+
+const FALLBACK_CLASS_TYPES = new Set(["class_declaration", "class_definition"]);
+
+/** Ordinary JavaScript functions rebind `this`; arrow functions and class methods do not. */
+const DYNAMIC_THIS_FUNCTION_TYPES = new Set([
+  "function_declaration",
+  "function_expression",
+  "function",
+  "generator_function",
+  "generator_function_declaration",
+]);
+
+/**
+ * The declared name for a position on a declaration's own header (its keywords, name, or the
+ * space between them), and the enclosing class name for a JavaScript/TypeScript `this` whose
+ * value is lexically that class (not inside an ordinary nested function).
+ *
+ * A position inside the body or initializer is a use, not the declaration: `trim` in
+ * `const handle = value?.trim()` must never resolve to `handle`.
+ */
 export function findDeclarationNameNode(
   sup: LanguageSupport,
   currentNode: SyntaxNodeLike | null,
 ): SyntaxNodeLike | null {
+  if (!currentNode) return null;
+  const isThis = currentNode.type === "this";
   let current: SyntaxNodeLike | null = currentNode;
   while (current) {
-    if (
-      current.type === "function_declaration" ||
-      current.type === "class_declaration" ||
-      current.type === "variable_declarator" ||
-      current.type === "interface_declaration" ||
-      current.type === "type_alias_declaration" ||
-      current.type === "function_definition" ||
-      current.type === "class_definition" ||
-      current.type === "assignment"
-    ) {
+    if (isThis && current !== currentNode && DYNAMIC_THIS_FUNCTION_TYPES.has(current.type)) return null;
+    // An object-literal method binds `this` to that object, not to the enclosing class.
+    if (isThis && current.type === "method_definition" && current.parent?.type !== "class_body") return null;
+    if (FALLBACK_DECLARATION_TYPES.has(current.type)) {
       let named = current.childForFieldName("name");
       if (!named && current.type === "assignment") {
         const left = current.child(0);
@@ -115,7 +142,14 @@ export function findDeclarationNameNode(
           named = left;
         }
       }
-      if (named && sup.nodeTypes.identifier.includes(named.type)) {
+      const tail =
+        current.childForFieldName("body") ??
+        current.childForFieldName("value") ??
+        (current.type === "assignment" ? current.childForFieldName("right") : null);
+      const headerEnd = tail ? tail.startIndex : current.endIndex;
+      const onHeader = currentNode === current || currentNode.endIndex <= headerEnd;
+      const ownClass = isThis && FALLBACK_CLASS_TYPES.has(current.type);
+      if (named && sup.nodeTypes.identifier.includes(named.type) && (onHeader || ownClass)) {
         return named;
       }
     }
@@ -187,19 +221,6 @@ function effectivePythonModuleScopeBinding(
   if (effective?.kind === "local") return localBinding ?? null;
   if (effective?.kind === "explicit") return importSource ?? null;
   return null;
-}
-
-function closestContainingScope(scopeIndex: ScopeIndex, currentNode: SyntaxNodeLike): Scope | undefined {
-  let best: Scope | undefined;
-  for (const scope of scopeIndex.allScopes) {
-    if (
-      currentNode.startIndex >= scope.node.startIndex &&
-      currentNode.endIndex <= scope.node.endIndex &&
-      (!best || (scope.node.startIndex >= best.node.startIndex && scope.node.endIndex <= best.node.endIndex))
-    )
-      best = scope;
-  }
-  return best;
 }
 
 export function findClosestScopeBinding(

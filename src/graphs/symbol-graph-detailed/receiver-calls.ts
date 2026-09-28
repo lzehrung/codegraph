@@ -426,7 +426,12 @@ export type ReceiverProof = {
   locallyBound: boolean;
 };
 
-type BindingProof = { status: "none" } | { status: "unproven" } | { status: "type"; node: SyntaxNodeLike };
+type BindingProof =
+  | { status: "none" }
+  | { status: "unproven" }
+  | { status: "type"; node: SyntaxNodeLike }
+  /** A TypeScript type annotation: every later assignment must conform to it. */
+  | { status: "declared"; node: SyntaxNodeLike };
 
 /**
  * Identifier a binding node declares: a `name` or `pattern` field, a nested C/C++
@@ -531,6 +536,7 @@ function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): Syntax
   // matches; a language without that field (TS/PHP's `constructor` field, or none) falls through.
   const typeField = node.childForFieldName("type");
   if (typeField) {
+    if (isMemberAccessNode(sup, typeField)) return typeField;
     const unwrapped = unwrapNamedType(typeField, sup);
     if (unwrapped) return unwrapped;
   }
@@ -604,9 +610,44 @@ function rubyNewReceiverNameNode(node: SyntaxNodeLike, source: string, sup: Lang
   return node.namedChildren.find((child) => isReceiverNameNode(sup, child.type) || child.type === "constant") ?? null;
 }
 
+const NULLISH_TYPE_TEXT = new Set(["undefined", "null", "void"]);
+
+/**
+ * The `typeof import("spec")` type query a TypeScript annotation names, ignoring `| undefined` and
+ * `| null`: such a binding holds the module namespace of `spec`.
+ */
+export function typescriptImportTypeQuery(annotation: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = annotation;
+  while (current?.type === "type_annotation") current = current.namedChildren[0] ?? null;
+  if (current?.type === "union_type") {
+    const members: SyntaxNodeLike[] = current.namedChildren.filter(
+      (member) => !NULLISH_TYPE_TEXT.has(member.text.trim()),
+    );
+    current = members.length === 1 ? members[0]! : null;
+  }
+  if (current?.type !== "type_query") return null;
+  const call = current.namedChildren[0];
+  return call?.type === "call_expression" && call.childForFieldName("function")?.type === "import" ? current : null;
+}
+
+/** The module specifier of a `typeof import("spec")` type query. */
+export function importTypeQuerySpecifier(typeQuery: SyntaxNodeLike): string | null {
+  const argument = typeQuery.namedChildren[0]?.childForFieldName("arguments")?.namedChildren[0];
+  if (argument?.type !== "string") return null;
+  return argument.namedChildren.find((child) => child.type === "string_fragment")?.text ?? null;
+}
+
 export function unwrapNamedType(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   let current: SyntaxNodeLike | null = node;
   while (current) {
+    if (current.type === "union_type") {
+      // `Store | undefined` and `Store | null` still prove `Store` for a member call.
+      const members: SyntaxNodeLike[] = current.namedChildren.filter(
+        (member) => !NULLISH_TYPE_TEXT.has(member.text.trim()),
+      );
+      current = members.length === 1 ? members[0]! : null;
+      continue;
+    }
     if (
       current.type === "type_annotation" ||
       current.type === "named_type" ||
@@ -874,6 +915,9 @@ function constructorFromGoBinding(
 function bindingProof(node: SyntaxNodeLike, receiverName: string, source: string, sup: LanguageSupport): BindingProof {
   if (!BINDING_DECLARATION_TYPES.has(node.type)) return { status: "none" };
   if (!bindingDeclaresReceiverName(node, receiverName, source, sup)) return { status: "none" };
+  const annotation = isJsTsLanguage(sup.id) ? node.childForFieldName("type") : null;
+  const annotated = annotation ? (unwrapNamedType(annotation, sup) ?? typescriptImportTypeQuery(annotation)) : null;
+  if (annotated) return { status: "declared", node: annotated };
   const typeNode = constructionTypeFromBinding(node, receiverName, source, sup);
   if (typeNode) return { status: "type", node: typeNode };
   return { status: "unproven" };
@@ -892,10 +936,18 @@ function findPriorConstructorInContainer(
 ): SyntaxNodeLike | null {
   let constructor: SyntaxNodeLike | null = null;
   let sawUnproven = false;
+  let declared = false;
   const visit = (current: SyntaxNodeLike): boolean => {
     if (current.startIndex >= receiver.startIndex) return true;
     if (current !== node && isSkippableBindingContainer(current, receiver)) return true;
     const proof = bindingProof(current, receiverName, source, sup);
+    if (proof.status === "declared") {
+      constructor = proof.node;
+      declared = true;
+      return true;
+    }
+    // A later assignment to an annotated binding cannot change its declared type.
+    if (declared && proof.status !== "none") return true;
     if (proof.status === "unproven") {
       if (constructor) {
         constructor = null;
@@ -935,7 +987,10 @@ function bindingContainerDeclaresNameBefore(
   const visit = (current: SyntaxNodeLike): boolean => {
     if (current.startIndex >= receiver.startIndex) return false;
     if (current !== node && isSkippableBindingContainer(current, receiver)) return false;
+    // A JavaScript/TypeScript assignment updates an existing binding; it declares nothing.
+    const declaresNewBinding = !(isJsTsLanguage(sup.id) && current.type === "assignment_expression");
     if (
+      declaresNewBinding &&
       BINDING_DECLARATION_TYPES.has(current.type) &&
       bindingDeclaresReceiverName(current, receiverName, source, sup)
     ) {
@@ -996,7 +1051,11 @@ export function receiverConstructorExpression(
 
 /** Identifier segments in a C++ qualified name, excluding template arguments. */
 export function cppQualifiedNameSegments(node: SyntaxNodeLike, source: string): string[] {
-  const text = sliceText(node, source);
+  return cppQualifiedTextSegments(sliceText(node, source));
+}
+
+/** `::`-separated segments of a C++ qualified name, ignoring `::` inside template arguments and dropping them. */
+export function cppQualifiedTextSegments(text: string): string[] {
   const segments: string[] = [];
   let segmentStart = 0;
   let templateDepth = 0;
@@ -1307,7 +1366,7 @@ export function classifyReceiver(
   const typeScoped = TYPE_SCOPED_ACCESS_TYPES[accessNode.type] === true || between.includes("::");
   if (receiver.type !== "type_identifier" && !typeScoped) {
     // A capitalized bare name is type proof where construction already types
-    // `Box()` as a Box, and for C# static type-name receivers (`Box.Left()`).
+    // `Box()` as a Box, and for static type-name receivers (`Box.Left()`).
     // The named type must still resolve to a members-declaring definition
     // before any call edge is recorded, so a name alone never invents a target.
     if (!capitalizedTypeReceiverName(sup, receiver, text)) return null;
@@ -1341,7 +1400,9 @@ const UNBOUND_INSTANCE_CALL_LANGUAGE_IDS: Record<string, true> = {
  */
 const STATIC_TYPE_NAME_RECEIVER_LANGUAGE_IDS: Record<string, true> = {
   csharp: true,
+  java: true,
   js: true,
+  kotlin: true,
   ts: true,
   tsx: true,
 };

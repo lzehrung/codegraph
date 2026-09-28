@@ -18,7 +18,7 @@ import type { SyntaxNodeLike } from "../languages/types.js";
 
 import type { Range } from "../types.js";
 import { SymbolKind } from "./types.js";
-import type { Scope } from "./scope-types.js";
+import type { Scope, ScopeIndex } from "./scope-types.js";
 
 export type ScopeNodeRow = {
   /** Ancestor node types that mark an identifier as a parameter rather than a declaration. */
@@ -546,6 +546,48 @@ export function laterLocalBlocksOuterUse(
       declarationIndex > useStartIndex
     )
       return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a file-wide same-name fallback may bind the declaration starting at `defStartIndex`
+ * for a use the lexical lookup refused: the declaring scope must sit on the use's lexical
+ * chain, and a class body only binds uses inside itself (Python class scopes are not
+ * closures for nested runtime scopes). Declarations outside the scope model stay accepted.
+ */
+/** Innermost scope whose node contains `currentNode`. */
+export function closestContainingScope(scopeIndex: ScopeIndex, currentNode: SyntaxNodeLike): Scope | undefined {
+  let best: Scope | undefined;
+  for (const scope of scopeIndex.allScopes) {
+    if (
+      currentNode.startIndex >= scope.node.startIndex &&
+      currentNode.endIndex <= scope.node.endIndex &&
+      (!best || (scope.node.startIndex >= best.node.startIndex && scope.node.endIndex <= best.node.endIndex))
+    )
+      best = scope;
+  }
+  return best;
+}
+
+export function fallbackDefinitionVisibleAtUse(
+  scopeIndex: ScopeIndex,
+  row: ScopeNodeRow,
+  defStartIndex: number | undefined,
+  use: SyntaxNodeLike,
+): boolean {
+  if (defStartIndex === undefined) return true;
+  let declared: Scope | undefined;
+  for (const scope of scopeIndex.allScopes) {
+    if (scope.node.startIndex <= defStartIndex && defStartIndex < scope.node.endIndex) {
+      if (!declared || scope.node.startIndex > declared.node.startIndex) declared = scope;
+    }
+  }
+  if (!declared) return true;
+  let current = closestContainingScope(scopeIndex, use);
+  while (current) {
+    if (current === declared) return scopeAllowsUse(row, declared, use);
+    current = current.parent;
   }
   return false;
 }

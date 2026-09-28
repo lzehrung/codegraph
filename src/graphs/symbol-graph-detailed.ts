@@ -22,10 +22,15 @@ import {
 } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
-import { fileScopeDefinitionCoversUse } from "../indexer/scope-nodes.js";
-import { csharpAliasQualifiedLookupName, innermostNamespaceImport } from "../indexer/navigation-goto.js";
+import { fallbackDefinitionVisibleAtUse, fileScopeDefinitionCoversUse, scopeNodesFor } from "../indexer/scope-nodes.js";
+import {
+  csharpAliasQualifiedLookupName,
+  innermostNamespaceImport,
+  resolveMemberAccessDefinition,
+} from "../indexer/navigation-goto.js";
 import {
   cppUsingDeclarationTarget,
+  cppStarImportClosure,
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppExportedCallables,
@@ -48,6 +53,7 @@ import {
   resolveNamedDefinition,
 } from "../indexer/navigation-local.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
+import { effectiveExplicitBinding, resolveStarImportedName } from "../indexer/star-import-precedence.js";
 import {
   SymbolKind,
   type ModuleIndex,
@@ -94,6 +100,28 @@ export type DetailedSymbolGraph = SymbolGraph & {
   limits?: { edges: number };
   omittedCounts?: { edges: number };
 };
+
+const CPP_CLASS_DECLARATION_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
+
+/** Syntax that joins a qualifier and a member name across the supported grammars. */
+const QUALIFIED_NAME_NODE_TYPES = new Set([
+  "scoped_type_identifier",
+  "scoped_identifier",
+  "qualified_name",
+  "qualified_identifier",
+  "qualified_type",
+  "nested_type_identifier",
+  "member_expression",
+  "field_access",
+  "navigation_expression",
+  "user_type",
+]);
+
+/** Whether `node` is a segment after the first in a qualified name such as `Host.Nested`. */
+function isQualifiedNameTail(node: SyntaxNodeLike): boolean {
+  const parent = node.parent;
+  return !!parent && QUALIFIED_NAME_NODE_TYPES.has(parent.type) && parent.namedChildren[0] !== node;
+}
 
 function symbolDefForBinding(moduleEntry: ModuleIndex, binding: Binding): SymbolDef | null {
   const bindingRange = binding.def;
@@ -502,6 +530,9 @@ export async function buildSymbolGraphDetailed(
         for (const imp of moduleEntry.imports) {
           if (typeof imp.resolved === "string") importedFiles.add(imp.resolved);
         }
+        for (const reachable of cppStarImportClosure(index, moduleEntry)) {
+          importedFiles.add(reachable.file);
+        }
         for (const importedFile of importedFiles) {
           const parsedImport = await loadParsedFile(importedFile);
           if (parsedImport) cppParsedByFile.set(fileIdentityKey(importedFile), parsedImport);
@@ -615,6 +646,29 @@ export async function buildSymbolGraphDetailed(
           const directed = resolveCppUsingDirectiveName(index, moduleEntry, name, node, src, loadCppParsedFile);
           if (directed !== undefined) return directed;
         }
+        // Java and Kotlin: a same-package declaration beats a wildcard import, and only an explicit
+        // single-name import beats the package, matching navigation's precedence.
+        const jvm = sup.id === "java" || sup.id === "kotlin";
+        const explicitJvmImport =
+          jvm &&
+          !!effectiveExplicitBinding(
+            moduleEntry.imports,
+            sup.id,
+            (imp) => imp.kind === "named" && imp.local === lookupName,
+          );
+        // Only a same-file declaration whose scope the use can see hides the package. Members of the
+        // caller's own class or its bases were already tried by the implicit-receiver path.
+        const visibleSameFileDeclaration =
+          jvm &&
+          moduleEntry.locals.some(
+            (local) =>
+              local.localName === lookupName &&
+              fallbackDefinitionVisibleAtUse(scopeIndex, scopeNodesFor(sup.id), local.range.start.index, node),
+          );
+        if (jvm && !explicitJvmImport && !visibleSameFileDeclaration) {
+          const peer = resolveExport(index, file, lookupName);
+          if (peer?.kind === "resolved") return importedCallableAcceptsCount(peer.def, node) ? peer.def : null;
+        }
         if (binding) {
           const target = resolveCppAliasTarget(aliasToTargetDef.get(binding.name), node);
           if (!importedCallableAcceptsCount(target, node)) return null;
@@ -637,6 +691,18 @@ export async function buildSymbolGraphDetailed(
           ) {
             return null;
           }
+          // A lexical lookup just refused this name, so a file-wide candidate may only bind when
+          // the use can see the candidate's declaring scope: a sibling function's local or a
+          // namespace member is not visible bare. Members stay reachable through inheritance
+          // (except Python, whose class bodies are not visible from methods), and a later segment
+          // of a qualified name (`Host.Nested`) is reached through its qualifier.
+          if (
+            (sup.id === "python" || !only.isMember) &&
+            !isQualifiedNameTail(node) &&
+            !fallbackDefinitionVisibleAtUse(scopeIndex, scopeNodesFor(sup.id), only.range.start.index, node)
+          ) {
+            return null;
+          }
           if (
             phpClassReference &&
             !phpClassReferenceMatchesDefinition(index, src, tree, node, lookupName, moduleEntry.imports, only)
@@ -651,6 +717,13 @@ export async function buildSymbolGraphDetailed(
         const aliasTarget = resolveCppAliasTarget(aliasToTargetDef.get(lookupName), node);
         if (aliasTarget && (sup.id !== "php" || phpReferenceRoleMatchesKind(node, aliasTarget.kind))) {
           return importedCallableAcceptsCount(aliasTarget, node) ? aliasTarget : null;
+        }
+        if (jvm) {
+          const star = resolveStarImportedName(index, moduleEntry, sup.id, lookupName);
+          if (star.status === "resolved") {
+            return importedCallableAcceptsCount(star.definition, node) ? star.definition : null;
+          }
+          if (star.status === "ambiguous") return null;
         }
         // A bare name owned by no scope binding or local declaration can still name a
         // sibling declaration of the file's implicit compilation unit (Go/JVM package,
@@ -696,6 +769,7 @@ export async function buildSymbolGraphDetailed(
         index,
         sup,
         source: src,
+        tree,
         moduleEntry,
         nodes,
         membersOnly,
@@ -711,6 +785,31 @@ export async function buildSymbolGraphDetailed(
         },
         resolveExportFrom,
         resolveMemberChainTarget,
+        cppDeclaresClass: (def: SymbolDef): boolean => {
+          const parsed = cppParsedByFile?.get(fileIdentityKey(def.file));
+          if (!parsed) return false;
+          const start = def.range.start.index ?? 0;
+          const nameNode = parsed.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start);
+          return CPP_CLASS_DECLARATION_TYPES.has(nameNode.parent?.type ?? "");
+        },
+        resolveMemberAccessTarget: async (node: SyntaxNodeLike): Promise<SymbolDef | null> => {
+          const useNode = tree.rootNode.descendantForIndex(node.startIndex, node.endIndex);
+          const resolved = await resolveMemberAccessDefinition({
+            index,
+            mod: moduleEntry,
+            node: useNode,
+            source: src,
+            tree,
+            sup,
+            resolveLexicalBinding: (expression: SyntaxNodeLike): SymbolDef | null => {
+              const name = src.slice(expression.startIndex, expression.endIndex);
+              const imported = aliasToTargetDef.get(name);
+              if (imported) return imported;
+              return resolveIdentifier(name, expression);
+            },
+          });
+          return resolved?.status === "ok" ? resolved.definition : null;
+        },
         recordEdge,
         receiverCalls,
         receiverMemberScopes,
@@ -724,7 +823,7 @@ export async function buildSymbolGraphDetailed(
         loadParsedFile,
       };
       emitPythonDecoratorEdges(edgePassContext, tree.rootNode);
-      emitFunctionBodyEdges(edgePassContext, functionNodes);
+      await emitFunctionBodyEdges(edgePassContext, functionNodes);
       await emitMemberOwnershipEdges(edgePassContext, functionNodes, classNodes);
       await emitClassInheritanceEdges(edgePassContext, classNodes);
       emitRustImplEdges(edgePassContext, tree.rootNode);

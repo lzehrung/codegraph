@@ -214,3 +214,68 @@ export function collectMemberAccessChain(args: {
   if (!current || !names.length) return null;
   return { base: current, names };
 }
+
+const RUST_COMMENT_NODE_TYPES = new Set(["line_comment", "block_comment"]);
+
+/**
+ * Whether a name inside a Rust macro token tree follows a `.` or `::` separator, ignoring comments:
+ * `counter.bump()` with a block comment after the dot is still a member call, and `m::run()` with
+ * one after the `::` is still a path call. Raw
+ * tokens cannot prove such a receiver, so both consumers stay conservative there.
+ */
+export function rustTokenTreeNameFollowsSeparator(name: SyntaxNodeLike): boolean {
+  const tree = name.parent;
+  if (tree?.type !== "token_tree") return false;
+  let previous: SyntaxNodeLike | null = null;
+  for (let index = 0; ; index += 1) {
+    const child = tree.child(index);
+    if (!child || child.startIndex >= name.startIndex) break;
+    if (!RUST_COMMENT_NODE_TYPES.has(child.type)) previous = child;
+  }
+  return previous?.type === "." || previous?.type === "::";
+}
+
+/**
+ * Standard Rust macros whose arguments are ordinary expressions (after an optional format string
+ * or target). Any other macro, and every `macro_rules!` definition, takes raw tokens whose meaning
+ * depends on its expansion, so `name(...)` inside them is not a proven call.
+ */
+const RUST_EXPRESSION_ARGUMENT_MACROS = new Set([
+  "assert",
+  "assert_eq",
+  "assert_ne",
+  "debug_assert",
+  "debug_assert_eq",
+  "debug_assert_ne",
+  "dbg",
+  "eprint",
+  "eprintln",
+  "format",
+  "format_args",
+  "panic",
+  "print",
+  "println",
+  "todo",
+  "unimplemented",
+  "unreachable",
+  "vec",
+  "write",
+  "writeln",
+]);
+
+const RUST_STANDARD_CRATES = new Set(["std", "core", "alloc"]);
+
+/** Whether a Rust token tree is (nested in) the arguments of a standard expression macro. */
+export function rustTokenTreeHoldsExpressions(tokenTree: SyntaxNodeLike): boolean {
+  let current: SyntaxNodeLike | null = tokenTree;
+  while (current?.type === "token_tree") current = current.parent;
+  if (current?.type !== "macro_invocation") return false;
+  const macro = current.childForFieldName("macro");
+  if (!macro) return false;
+  // `my_dsl::println!` is a custom macro that only shares a name; a path proves a standard macro
+  // only when it is rooted at a standard crate (`std::println!`, `::core::assert!`).
+  const segments = macro.text.replace(/\s+/g, "").replace(/^::/, "").split("::");
+  const name = segments.pop()!;
+  const standardPath = !segments.length || (segments.length === 1 && RUST_STANDARD_CRATES.has(segments[0]!));
+  return standardPath && RUST_EXPRESSION_ARGUMENT_MACROS.has(name);
+}

@@ -1,6 +1,6 @@
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { cppOutOfLineOwnerPath, cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import { ensureParsedContext } from "./parse-context.js";
@@ -319,7 +319,7 @@ const cppUsingDirectivesByTree = new WeakMap<SyntaxTreeLike, CachedCppUsingDirec
 
 const cppStarImportClosureCache = new WeakMap<ProjectIndex, Map<string, readonly ModuleIndex[]>>();
 
-function cppStarImportClosure(index: ProjectIndex, sourceModule: ModuleIndex): readonly ModuleIndex[] {
+export function cppStarImportClosure(index: ProjectIndex, sourceModule: ModuleIndex): readonly ModuleIndex[] {
   let byModule = cppStarImportClosureCache.get(index);
   if (!byModule) {
     byModule = new Map();
@@ -742,4 +742,55 @@ export function resolveCppQualifiedMemberContainer(
     byPath.set(key, pending);
   }
   return pending;
+}
+
+function hasStaticStorageClass(node: SyntaxNodeLike): boolean {
+  return node.namedChildren.some((child) => child.type === "storage_class_specifier" && child.text === "static");
+}
+
+/** The name a member declarator declares: `f` in `int f(int)`, `int A::f(int)`, or `int* f()`. */
+function cppDeclaredMemberName(declaration: SyntaxNodeLike, source: string): string | null {
+  let declarator = declaration.childForFieldName("declarator");
+  while (declarator && declarator.type !== "function_declarator") {
+    declarator = declarator.childForFieldName("declarator");
+  }
+  const name = declarator?.childForFieldName("declarator");
+  if (!name) return null;
+  return cppQualifiedNameSegments(name, source).at(-1) ?? null;
+}
+
+/**
+ * Whether code inside a C++ function definition has an implicit `this`: the function is a
+ * non-static member function, defined in its class body or out of line as `Owner::f`. A free
+ * function (including a namespace-qualified one) and a static member function have none, so an
+ * instance member cannot be named without an object there. Mixed static and non-static
+ * declarations of the same name are not proven either way and count as static.
+ */
+export async function cppFunctionHasImplicitThis(
+  index: ProjectIndex,
+  sourceModule: ModuleIndex,
+  definition: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+  loadParsedFile?: CppParsedFileLoader,
+): Promise<boolean> {
+  if (sup.id !== "cpp" || definition.type !== "function_definition") return false;
+  if (hasStaticStorageClass(definition)) return false;
+  const ownerPath = cppOutOfLineOwnerPath(definition, source, sup);
+  if (!ownerPath) {
+    for (let current = definition.parent; current; current = current.parent) {
+      if (CPP_MEMBER_CONTAINER_TYPES.has(current.type)) return true;
+    }
+    return false;
+  }
+  const owner = await resolveCppQualifiedMemberContainer(index, sourceModule, ownerPath, loadParsedFile);
+  if (!owner) return false;
+  const parsed = loadParsedFile
+    ? await loadParsedFile(owner.file)
+    : await ensureParsedContext(owner.file, undefined, index.languageExtensions);
+  const body = parsed ? cppMemberContainerForDefinition(parsed.tree, owner)?.childForFieldName("body") : null;
+  const memberName = cppDeclaredMemberName(definition, source);
+  if (!body || !parsed || !memberName) return false;
+  const declarations = body.namedChildren.filter((child) => cppDeclaredMemberName(child, parsed.source) === memberName);
+  return declarations.length > 0 && declarations.every((declaration) => !hasStaticStorageClass(declaration));
 }

@@ -275,6 +275,41 @@ export function cjsRequireValueBinding(index: ProjectIndex, targetFile: FileId):
   return memberContainerForDefinition(index, resolved.def) ?? resolved.def;
 }
 
+type FileEdgeTargets = { edges: ProjectIndex["graph"]["edges"]; length: number; targets: Map<string, FileId> };
+
+const fileEdgeTargetsCache = new WeakMap<ProjectIndex, FileEdgeTargets>();
+
+/** First resolved file target per importer and raw specifier; rebuilt when the edge list changes. */
+function fileEdgeTargetsFor(index: ProjectIndex): ReadonlyMap<string, FileId> {
+  const edges = index.graph.edges;
+  const cached = fileEdgeTargetsCache.get(index);
+  if (cached && cached.edges === edges && cached.length === edges.length) return cached.targets;
+  const targets = new Map<string, FileId>();
+  for (const edge of edges) {
+    if (edge.to.type !== "file") continue;
+    const key = `${fileIdentityKey(edge.from)}\0${edge.raw}`;
+    if (!targets.has(key)) targets.set(key, edge.to.path);
+  }
+  fileEdgeTargetsCache.set(index, { edges, length: edges.length, targets });
+  return targets;
+}
+
+/**
+ * A member of the module a `typeof import("spec")` receiver holds, resolved through the file
+ * dependency edge the index recorded for that specifier.
+ */
+export function resolveImportTypeMember(
+  index: ProjectIndex,
+  fromFile: FileId,
+  specifier: string,
+  member: string,
+): SymbolDef | null {
+  const target = fileEdgeTargetsFor(index).get(`${fileIdentityKey(fromFile)}\0${specifier}`);
+  if (!target) return null;
+  const hit = resolveExport(index, target, member);
+  return hit?.kind === "resolved" ? hit.def : null;
+}
+
 export function resolveExport(
   index: ProjectIndex,
   file: FileId,

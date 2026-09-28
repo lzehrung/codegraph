@@ -1,4 +1,6 @@
-import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
+import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../../indexer/types.js";
+import { AMBIGUOUS_STAR_IMPORT_REASON } from "../../indexer/ambiguous-resolution.js";
+import { recoverIncludedCallableStar } from "../../indexer/navigation.js";
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
 import { getCompilationUnitPeers } from "../../indexer/compilation-units.js";
 import {
@@ -9,6 +11,9 @@ import {
 } from "../../indexer/declaration-visibility.js";
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import {
+  cppQualifiedOwnerHasImplicitThis,
+  resolveCppOutOfLineImplicitMember,
+  findTypeScriptNamespaceMemberCandidates,
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
   resolvePhpObjectCreationTarget,
@@ -16,10 +21,15 @@ import {
   resolveSharedOwnerContainers,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
-import { findClosestScopeBinding } from "../../indexer/navigation-local.js";
+import { findClosestScopeBinding, resolveNamedDefinition } from "../../indexer/navigation-local.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
-import { cjsRequireValueBinding, resolvePhpExportByImportType } from "../../indexer/navigation-resolve.js";
+import {
+  cjsRequireValueBinding,
+  resolveImportTypeMember,
+  resolvePhpExportByImportType,
+} from "../../indexer/navigation-resolve.js";
 import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
+import { typescriptSelectOverloadCandidate } from "../../indexer/ts-callables.js";
 import {
   isSwiftConstrainedExtension,
   isSwiftExtensionContainer,
@@ -30,7 +40,12 @@ import { isJsTsLanguage } from "../../languages/js-family.js";
 import { getCallableArity, getCallArgumentCount, memberLookupBinding } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
-import { getMemberAccessParts } from "../../util/member-access.js";
+import {
+  getMemberAccessParts,
+  isMemberAccessNode,
+  rustTokenTreeHoldsExpressions,
+  rustTokenTreeNameFollowsSeparator,
+} from "../../util/member-access.js";
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
 import {
   MEMBER_ACCESS_ROWS,
@@ -68,12 +83,15 @@ import {
   type ReceiverMemberScope,
   type MemberArityRange,
   type ReceiverProof,
+  receiverConstructorExpression,
+  importTypeQuerySpecifier,
 } from "./receiver-calls.js";
 
 type EdgePassContext = {
   index: ProjectIndex;
   sup: LanguageSupport;
   source: string;
+  tree: SyntaxTreeLike;
   moduleEntry: ModuleIndex;
   nodes: SymbolGraph["nodes"];
   membersOnly: boolean;
@@ -87,6 +105,9 @@ type EdgePassContext = {
   hasNonModuleBinding: (name: string, node: SyntaxNodeLike) => boolean;
   resolveExportFrom: (file: string, exportedName: string) => SymbolDef | null;
   resolveMemberChainTarget: (chainNode: SyntaxNodeLike) => SymbolDef | null;
+  resolveMemberAccessTarget: (node: SyntaxNodeLike) => Promise<SymbolDef | null>;
+  /** Whether a C++ definition declares a class, struct, or union (not a namespace). */
+  cppDeclaresClass: (def: SymbolDef) => boolean;
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean;
   /** Receiver calls whose target needs the completed graph; resolved after every module. */
   receiverCalls: ReceiverCallCandidate[];
@@ -240,6 +261,9 @@ function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: 
     const name = sliceText(node, context.source);
     const target = context.resolveIdentifier(name, node);
     if (target) {
+      // Zig struct declarations require an explicit type receiver (`Self.helper()`).
+      // An unqualified identifier is not a call to a member of its enclosing struct.
+      if (label === "calls" && context.sup.id === "zig" && target.isMember) return false;
       recordDefEdge(context, fromId, target, label, node);
       return true;
     }
@@ -250,6 +274,28 @@ function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: 
   return false;
 }
 
+/**
+ * Rust macro arguments stay unparsed token trees, so `println!("{}", greet())` never forms a
+ * call node even though goto resolves the identifier. An `identifier` directly followed by a
+ * `(` group is a call in the argument list, resolved like a bare call. The macro's own name
+ * sits outside the token tree and is never a call; a `!` gap marks a nested macro invocation,
+ * and a `.` or `::` gap marks a member or path receiver that raw tokens cannot prove, matching
+ * navigation's refusals inside token trees.
+ */
+function recordRustMacroArgumentCalls(context: EdgePassContext, tokenTree: SyntaxNodeLike, fromId: string): void {
+  if (context.sup.id !== "rust" || !rustTokenTreeHoldsExpressions(tokenTree)) return;
+  const children = tokenTree.namedChildren;
+  for (let index = 0; index + 1 < children.length; index += 1) {
+    const name = children[index]!;
+    const args = children[index + 1]!;
+    if (name.type !== "identifier" || args.type !== "token_tree") continue;
+    if (!args.text.startsWith("(")) continue;
+    if (context.source.slice(name.endIndex, args.startIndex).trim()) continue;
+    if (rustTokenTreeNameFollowsSeparator(name)) continue;
+    tryResolveNode(context, name, fromId, "calls");
+  }
+}
+
 function getCallTarget(node: SyntaxNodeLike): SyntaxNodeLike | null {
   const explicitTarget =
     node.childForFieldName("function") ??
@@ -258,6 +304,11 @@ function getCallTarget(node: SyntaxNodeLike): SyntaxNodeLike | null {
     node.childForFieldName("method") ??
     node.childForFieldName("member") ??
     node.childForFieldName("expression");
+  // tree-sitter-typescript parses `await f<T>(x)` as a call whose callee is `await f`; the awaited
+  // value is the call's result, so the callee is `f`.
+  if (explicitTarget?.type === "await_expression" && node.childForFieldName("type_arguments")) {
+    return explicitTarget.namedChildren[0] ?? null;
+  }
   if (explicitTarget) return explicitTarget;
   // Kotlin and Swift calls name no callee field, so the sole non-argument child is it.
   const nonArgumentChildren = node.namedChildren.filter((child) => !CALL_ARGUMENT_NODE_TYPES[child.type]);
@@ -686,7 +737,106 @@ function provesCallableBinding(context: EdgePassContext, fn: DetailedFunctionNod
   return false;
 }
 
-export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: DetailedFunctionNode[]): void {
+/**
+ * Whether a resolved member can be a `calls` target: a function, a class, or a binding the
+ * declaration pass proved holds a function. A plain value (`export const value = 1`) is not.
+ */
+/** A JS/TS class is not callable without `new`; construction is an `instantiates` edge instead. */
+function isCallTarget(context: EdgePassContext, def: SymbolDef): boolean {
+  return def.kind === SymbolKind.Function || !!context.nodes.get(defNodeId(def))?.callable;
+}
+
+/**
+ * A member of a proven same-file TS namespace receiver, selected with navigation's container and
+ * overload rules. `undefined` means the receiver is not such a namespace.
+ */
+function resolveTypeScriptNamespaceMember(
+  context: EdgePassContext,
+  call: SyntaxNodeLike,
+  receiverNode: SyntaxNodeLike,
+  property: SyntaxNodeLike,
+): SymbolDef | null | undefined {
+  if ((context.sup.id !== "ts" && context.sup.id !== "tsx") || !isIdentifierType(context.sup, receiverNode.type))
+    return undefined;
+  const receiver = context.resolveIdentifier(sliceText(receiverNode, context.source), receiverNode);
+  if (!receiver || fileIdentityKey(receiver.file) !== fileIdentityKey(context.moduleEntry.file)) return undefined;
+  const member = sliceText(property, context.source);
+  const candidates = findTypeScriptNamespaceMemberCandidates(context.moduleEntry.locals, member, receiver, context);
+  if (!candidates.length) return undefined;
+  return typescriptSelectOverloadCandidate({
+    group: candidates,
+    tree: context.tree,
+    definitionOf: (candidate) => candidate,
+    declarationOf: (candidate) => {
+      const start = candidate.range.start.index ?? 0;
+      return context.tree.rootNode.descendantForIndex(start, candidate.range.end.index ?? start).parent;
+    },
+    source: context.source,
+    languageId: context.sup.id,
+    argumentCount: getCallArgumentCount({ languageId: context.sup.id, source: context.source, call }),
+  });
+}
+
+function recordTypeScriptNamespaceCall(
+  context: EdgePassContext,
+  call: SyntaxNodeLike,
+  access: ReceiverCallAccess,
+  fromId: string,
+): boolean {
+  const selected = resolveTypeScriptNamespaceMember(context, call, access.receiver, access.property);
+  if (selected === undefined) return false;
+  if (selected && isCallTarget(context, selected)) recordDefEdge(context, fromId, selected, "calls", access.property);
+  return true;
+}
+
+/** `new N.C()` on a same-file TS namespace constructs the namespace's class. */
+function recordTypeScriptNamespaceConstruction(
+  context: EdgePassContext,
+  node: SyntaxNodeLike,
+  target: SyntaxNodeLike,
+  fromId: string,
+): boolean {
+  if (!isMemberAccessNode(context.sup, target)) return false;
+  const { object, property } = getMemberAccessParts(context.sup, target);
+  if (!object || !property) return false;
+  const selected = resolveTypeScriptNamespaceMember(context, node, object, property);
+  if (selected === undefined) return false;
+  if (selected?.kind === SymbolKind.Class) recordDefEdge(context, fromId, selected, "instantiates", property);
+  return true;
+}
+
+/** A member call on a `typeof import("spec")` binding names that module's export. */
+function recordImportTypeCall(context: EdgePassContext, access: ReceiverCallAccess, fromId: string): boolean {
+  if (!isJsTsLanguage(context.sup.id)) return false;
+  const importType = receiverConstructorExpression(access.receiver, context.source, context.sup);
+  const specifier = importType?.type === "type_query" ? importTypeQuerySpecifier(importType) : null;
+  if (!specifier) return false;
+  const member = sliceText(access.property, context.source);
+  const target = resolveImportTypeMember(context.index, context.moduleEntry.file, specifier, member);
+  if (target && isCallTarget(context, target)) recordDefEdge(context, fromId, target, "calls", access.property);
+  return true;
+}
+
+/** Swift `Foo()` / `Worker(name:)` is construction. Record `instantiates` and skip the call path. */
+function recordSwiftCapitalizedConstruction(context: EdgePassContext, node: SyntaxNodeLike, fromId: string): boolean {
+  if (context.sup.id !== "swift") return false;
+  const constructed = constructionTypeName(node, context.source, context.sup);
+  if (!constructed) return false;
+  const target = context.resolveIdentifier(sliceText(constructed, context.source), constructed);
+  if (!target || !declaresMembers(target)) return false;
+  recordDefEdge(context, fromId, target, "instantiates", constructed);
+  return true;
+}
+
+export async function emitFunctionBodyEdges(
+  context: EdgePassContext,
+  functionNodes: DetailedFunctionNode[],
+): Promise<void> {
+  const qualifiedConstructionTargets: Array<{
+    fromId: string;
+    member: SyntaxNodeLike;
+    target: SyntaxNodeLike;
+  }> = [];
   const callNodeTypes = new Set<string>([
     "call_expression",
     "call",
@@ -737,6 +887,25 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       context.noteCallableName(fn.name, context.sup.id === "php");
     }
     const seenAliases = new Set<string>();
+    const ambiguousCIncludes: SyntaxNodeLike[] = [];
+    const outOfLineBareCalls: SyntaxNodeLike[] = [];
+    const qualifiedCppCalls: Array<{
+      node: SyntaxNodeLike;
+      access: ReceiverCallAccess;
+      target: SymbolDef | null;
+      ownerPath: string[];
+    }> = [];
+    const hasRepeatedCIncludes =
+      context.sup.id === "c" && context.moduleEntry.imports.filter((imp) => imp.kind === "star").length > 1;
+    const cppOutOfLinePath = cppOutOfLineOwnerPath(fn.node, context.source, context.sup);
+    const cppOutOfLineOwner = cppOutOfLinePath
+      ? await resolveCppQualifiedMemberContainer(
+          context.index,
+          context.moduleEntry,
+          cppOutOfLinePath,
+          context.loadParsedFile,
+        )
+      : null;
     const nestedFunctions = new Set(
       functionNodes
         .filter(
@@ -818,7 +987,11 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
      * alongside the caller resolve here; anything needing another module's members
      * becomes a deferred candidate.
      */
-    const recordReceiverCall = (node: SyntaxNodeLike, access: ReceiverCallAccess): void => {
+    const recordReceiverCall = (
+      node: SyntaxNodeLike,
+      access: ReceiverCallAccess,
+      forcedMemberScope?: ReceiverMemberScope,
+    ): void => {
       const memberName = sliceText(access.property, context.source);
       if (!memberName) return;
       let binding = classifyReceiver(
@@ -864,7 +1037,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           memberName,
           argumentCount,
           site,
-          memberScope: binding.memberScope,
+          memberScope: forcedMemberScope ?? binding.memberScope,
           ...(context.sup.id === "go" && !isGoExportedMemberName(context.sup.id, memberName)
             ? { goPackagePeerFiles: getCompilationUnitPeers(context.index, context.moduleEntry.file).files }
             : {}),
@@ -964,6 +1137,8 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     const resolveCallTarget = (node: SyntaxNodeLike, callee: SyntaxNodeLike | null): void => {
       const access = receiverCallAccess(context.sup, node, callee);
       if (access) {
+        if (recordTypeScriptNamespaceCall(context, node, access, fromId)) return;
+        if (recordImportTypeCall(context, access, fromId)) return;
         const receiverName = sliceText(access.receiver, context.source);
         const typeScopedCppCall =
           context.sup.id === "cpp" &&
@@ -971,18 +1146,18 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         if (typeScopedCppCall) {
           const qualifiedName = cppQualifiedNameSegments(access.accessNode, context.source).join("::");
           const qualifiedTarget = context.resolveIdentifier(qualifiedName, access.property);
-          if (qualifiedTarget) {
-            recordDefEdge(context, fromId, qualifiedTarget, "calls", access.property);
-            return;
-          }
-          // A qualified name that resolves to no free function is still a candidate
-          // class-scoped static call. Falling through reaches `recordReceiverCall`
-          // (the `typeScopedCppCall` arm below), which only resolves against a proven
-          // member container, so namespace names cannot be revived by a bare-name match.
+          // Whether the owner is a class, and whether the caller has an implicit `this` of that class,
+          // needs the exact qualified path, so the decision waits until the function body is walked.
+          qualifiedCppCalls.push({
+            node,
+            access,
+            target: qualifiedTarget,
+            ownerPath: qualifiedName.split("::").slice(0, -1),
+          });
+          return;
         }
         if (
           keywordReceiverKind(context.sup.id, receiverName) ||
-          typeScopedCppCall ||
           !tryResolveChain(context, access.accessNode, fromId, "calls")
         ) {
           recordReceiverCall(node, access);
@@ -994,14 +1169,45 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
       if (implicitOwnerLanguage && isIdentifierType(context.sup, callee.type) && nearestMemberContainer(fn.node)) {
         const name = sliceText(callee, context.source);
         const lexical = context.resolveIdentifier(name, callee);
-        if (!lexical || lexical.isMember || !context.hasNonModuleBinding(name, callee)) {
+        const importedCsharpMember =
+          context.sup.id === "csharp" &&
+          !!lexical?.isMember &&
+          fileIdentityKey(lexical.file) !== fileIdentityKey(context.moduleEntry.file);
+        if (!importedCsharpMember && (!lexical || lexical.isMember || !context.hasNonModuleBinding(name, callee))) {
           // A method's local binding wins. Type members require receiver ownership
           // and static-scope proof; only a free function can be a fallback.
           recordImplicitSelfMemberCall(node, callee, lexical?.isMember ? null : lexical);
           return;
         }
       }
-      if (!tryResolveNode(context, callee, fromId, "calls")) recordImplicitSelfMemberCall(node, callee);
+      if (cppOutOfLineOwner && isIdentifierType(context.sup, callee.type)) {
+        const memberName = sliceText(callee, context.source);
+        if (!context.hasNonModuleBinding(memberName, callee)) {
+          // A member of the owner (or its bases) hides a same-named free function; when the owner
+          // declares none, the bare name is an ordinary call. Navigation decides after the walk.
+          outOfLineBareCalls.push(callee);
+          return;
+        }
+      }
+      if (!tryResolveNode(context, callee, fromId, "calls")) {
+        const resolution =
+          hasRepeatedCIncludes && isIdentifierType(context.sup, callee.type)
+            ? resolveNamedDefinition(
+                context.index,
+                context.moduleEntry,
+                context.moduleEntry.file,
+                context.sup,
+                sliceText(callee, context.source),
+                "ordinary",
+                callee.startIndex,
+              )
+            : null;
+        if (resolution?.status === "not_found" && resolution.reason === AMBIGUOUS_STAR_IMPORT_REASON) {
+          ambiguousCIncludes.push(callee);
+        } else {
+          recordImplicitSelfMemberCall(node, callee);
+        }
+      }
     };
 
     const recordRubySuper = (superNode: SyntaxNodeLike): void => {
@@ -1025,6 +1231,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         recordRubySuper(node);
         return true;
       }
+      if (node.type === "token_tree") recordRustMacroArgumentCalls(context, node, fromId);
       if (callNodeTypes.has(node.type)) {
         if (context.sup.id === "go") {
           const callTarget = getCallTarget(node);
@@ -1066,6 +1273,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           resolveCallTarget(node, callee);
           return false;
         }
+        if (recordSwiftCapitalizedConstruction(context, node, fromId)) return true;
         resolveCallTarget(node, getCallTarget(node));
       }
       if (newNodeTypes.has(node.type)) {
@@ -1081,7 +1289,17 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           if (created) recordDefEdge(context, fromId, created, "instantiates", keyword.nameNode);
         } else {
           const target = constructionTypeName(node, context.source, context.sup) ?? getNewTarget(node);
-          if (target) tryResolveNode(context, target, fromId, "instantiates");
+          if (target) {
+            if (recordTypeScriptNamespaceConstruction(context, node, target, fromId)) return true;
+            const property = isMemberAccessNode(context.sup, target)
+              ? getMemberAccessParts(context.sup, target).property
+              : null;
+            if ((context.sup.id === "java" || context.sup.id === "csharp") && property) {
+              qualifiedConstructionTargets.push({ fromId, member: property, target });
+            } else {
+              tryResolveNode(context, target, fromId, "instantiates");
+            }
+          }
         }
       }
       return true;
@@ -1096,6 +1314,68 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     };
 
     walkFunctionBody(fn.node, true);
+    for (const callee of outOfLineBareCalls) {
+      const member = await resolveCppOutOfLineImplicitMember(
+        context.index,
+        context.moduleEntry,
+        callee,
+        sliceText(callee, context.source),
+        context.source,
+        context.sup,
+        true,
+      );
+      if (member) recordDefEdge(context, fromId, member, "calls", callee);
+      else if (member === undefined) tryResolveNode(context, callee, fromId, "calls");
+    }
+    for (const call of qualifiedCppCalls) {
+      const owner = call.ownerPath.length
+        ? await resolveCppQualifiedMemberContainer(
+            context.index,
+            context.moduleEntry,
+            call.ownerPath,
+            context.loadParsedFile,
+          )
+        : null;
+      if (!owner) {
+        // A namespace (or no) qualifier names the free function directly.
+        if (call.target) recordDefEdge(context, fromId, call.target, "calls", call.access.property);
+        continue;
+      }
+      const implicitThis = await cppQualifiedOwnerHasImplicitThis(
+        context.index,
+        context.moduleEntry,
+        call.access.accessNode,
+        context.source,
+        context.sup,
+        owner,
+      );
+      if (implicitThis && call.target) {
+        recordDefEdge(context, fromId, call.target, "calls", call.access.property);
+      } else {
+        // Without an implicit `this` of the owner, `Owner::member()` can only name a static member.
+        recordReceiverCall(call.node, call.access, implicitThis ? undefined : "static");
+      }
+    }
+    for (const callee of ambiguousCIncludes) {
+      const recovered = await recoverIncludedCallableStar(
+        context.index,
+        context.moduleEntry,
+        "c",
+        sliceText(callee, context.source),
+        "ordinary",
+        callee,
+        context.source,
+      );
+      if (recovered?.status === "ok") recordDefEdge(context, fromId, recovered.definition, "calls", callee);
+    }
+  }
+  for (const target of qualifiedConstructionTargets) {
+    const resolved = await context.resolveMemberAccessTarget(target.member);
+    if (resolved) {
+      recordDefEdge(context, target.fromId, resolved, "instantiates", target.member);
+    } else {
+      tryResolveNode(context, target.target, target.fromId, "instantiates");
+    }
   }
 }
 
@@ -1197,6 +1477,10 @@ function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupp
     return;
   }
   const narrowed = narrowBaseSpecifierNode(node);
+  if ((sup.id === "ts" || sup.id === "tsx") && narrowed.type === "member_expression") {
+    out.push(narrowed);
+    return;
+  }
   if (isIdentifierType(sup, narrowed.type) || narrowed.type === "type_identifier") {
     out.push(narrowed);
     return;
@@ -1230,6 +1514,9 @@ async function recordIdentifierRelations(
       if (!target && qualifiedPath.length > 1) {
         target = context.resolveIdentifier(qualifiedPath.join("::"), identifier);
       }
+    } else if ((context.sup.id === "ts" || context.sup.id === "tsx") && identifier.type === "member_expression") {
+      const qualified = context.resolveMemberChainTarget(identifier);
+      target = qualified && declaresMembers(qualified) ? qualified : null;
     } else {
       const name = sliceText(identifier, context.source);
       target = context.resolveIdentifier(name, identifier);
@@ -1327,6 +1614,12 @@ export async function emitClassInheritanceEdges(
     const fromId = ensureNode(context, cls.def);
     markImplementationTarget(context, fromId, cls.node, context.source, cls.def);
 
+    if ((context.sup.id === "ts" || context.sup.id === "tsx") && cls.node.type === "class_declaration") {
+      const heritage = cls.node.namedChildren.find((child) => child.type === "class_heritage");
+      const superclass = heritage?.namedChildren.find((child) => child.type === "extends_clause");
+      // TypeScript classes have one superclass. Invalid multi-base syntax proves neither target.
+      if (superclass && superclass.namedChildren.length > 1) continue;
+    }
     for (const rule of rules.clauses) {
       const clauses: SyntaxNodeLike[] = [];
       if (rule.each) {

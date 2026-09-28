@@ -22,7 +22,7 @@ import {
 import { cppCallableShapeForNode } from "./cpp-callables.js";
 import {
   typescriptCallableContainerKey,
-  typescriptCollapsedOverloadCandidates,
+  typescriptMergedNamespaceContainers,
   typescriptSelectOverloadCandidate,
 } from "./ts-callables.js";
 import {
@@ -30,6 +30,7 @@ import {
   isExpandedStarBinding,
   resolveStarImportedName,
   resolveStarImportedNamespace,
+  starImportPrecedence,
 } from "./star-import-precedence.js";
 import {
   classifyReceiver,
@@ -46,6 +47,7 @@ import {
   keywordReceiverMemberScope,
   kotlinExtensionReceiverTypeNode,
   nodeInStaticMemberContext,
+  importTypeQuerySpecifier,
   receiverConstructorExpression,
   rustImplSelfTypeNode,
   supportsStaticMemberScope,
@@ -55,6 +57,7 @@ import {
   type ReceiverMemberScope,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
+  CALLABLE_DECLARATION_NODE_TYPES,
   getCallableArity,
   getCallArgumentCount,
   memberLookupBinding,
@@ -74,7 +77,7 @@ import {
   getOrBuildScopeIndex,
   resolveNamedDefinition,
 } from "./navigation-local.js";
-import { resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
+import { resolveCppQualifiedMemberContainer, cppFunctionHasImplicitThis } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
 import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./php-namespace-symbols.js";
@@ -84,6 +87,7 @@ import {
   resolveExport,
   resolveImported,
   resolvePhpExportByImportType,
+  resolveImportTypeMember,
 } from "./navigation-resolve.js";
 import {
   CSHARP_PARTIAL_CONTAINER_TYPES,
@@ -610,6 +614,9 @@ export async function resolveMemberAccessDefinition(params: {
           const container = asMemberContainer(index, result);
           return { kind: "resolved", def: container ?? result };
         }
+        // Last-wins precedence (Python): the explicit import rebound the name, and an
+        // unresolved winner stays unresolved instead of falling back to an older star import.
+        if (starImportPrecedence(sup.id) === "last-wins") return null;
       }
 
       if (sup.id === "csharp") {
@@ -824,6 +831,54 @@ export async function resolveMemberAccessDefinition(params: {
       });
     }
 
+    if (sup.id === "cpp" && memberNode.type === "qualified_identifier") {
+      // `a::C::run` nests `C::run` inside `a::(...)`; only the outermost node carries the full owner.
+      let outermost = memberNode;
+      while (outermost.parent?.type === "qualified_identifier") outermost = outermost.parent;
+      // The declarator of an out-of-line definition (`int Box<T>::f() {}`) names the declaration
+      // itself, not a member call; the declaration lookup below resolves it.
+      if (outermost.parent?.type === "function_declarator") return null;
+      const qualified = cppQualifiedNameSegments(outermost, source);
+      const ownerPath = qualified.slice(0, -1);
+      const owner = await resolveCppQualifiedMemberContainer(index, mod, ownerPath);
+      if (owner) {
+        const knownArgumentCount =
+          getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined;
+        // Inside a member function, `Owner::member()` can name an instance member of the class or a
+        // base through the implicit `this`; elsewhere only static members qualify.
+        const implicitThis = await cppQualifiedOwnerHasImplicitThis(index, mod, memberNode, source, sup, owner);
+        const memberScope = implicitThis ? "any" : "static";
+        const memberDef = await resolveKeywordReceiverMember(
+          index,
+          mod,
+          node,
+          member,
+          memberScope,
+          false,
+          knownArgumentCount,
+          owner,
+        );
+        return memberDef
+          ? okGoToResult(index, memberDef, { resolution: "member-access", confidence: "high" })
+          : { status: "not_found", reason: "No matching C++ static member definition" };
+      }
+      // A qualifier that is not a class (a namespace) names a free function, which the qualified
+      // function lookup resolves; the short name must not be read as a same-named class receiver.
+      return null;
+    }
+
+    const importType = isJsTsLanguage(sup.id) ? receiverConstructorExpression(obj, source, sup) : null;
+    const importSpecifier = importType?.type === "type_query" ? importTypeQuerySpecifier(importType) : null;
+    if (importSpecifier) {
+      const memberDef = resolveImportTypeMember(index, mod.file, importSpecifier, member);
+      return memberDef
+        ? okGoToResult(index, memberDef, {
+            via: { exportedName: member },
+            resolution: "member-access",
+            confidence: "medium",
+          })
+        : null;
+    }
     const receiver = await resolveReceiverDefinition(index, obj, source, sup, resolveExpression, mod);
 
     if (receiver) {
@@ -856,7 +911,22 @@ export async function resolveMemberAccessDefinition(params: {
           const knownArgumentCount =
             getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined;
           let memberDef: SymbolDef | undefined;
-          if (receiver.runtimeTypeOnly || targetContext.sup.id === "java") {
+          if (
+            (targetContext.sup.id === "ts" || targetContext.sup.id === "tsx") &&
+            (container.type === "internal_module" || container.type === "module")
+          ) {
+            memberDef = await findReceiverMemberDefinition(
+              index,
+              targetModule.locals,
+              member,
+              objDef,
+              container,
+              targetContext,
+              normalizeIdentifier,
+              receiver.memberScope,
+              knownArgumentCount,
+            );
+          } else if (receiver.runtimeTypeOnly || targetContext.sup.id === "java") {
             const candidates = findDirectLocalsWithinNode(
               targetModule.locals,
               member,
@@ -879,10 +949,10 @@ export async function resolveMemberAccessDefinition(params: {
               knownArgumentCount,
             );
           }
-
           if (
             memberDef &&
-            (isGoExportedMemberName(sup.id, member) ||
+            (sup.id === "cpp" ||
+              isGoExportedMemberName(sup.id, member) ||
               getCompilationUnitPeers(index, mod.file).files.has(memberDef.file)) &&
             !crossFilePeerMemberHidden(mod.file, memberDef, targetContext)
           ) {
@@ -1556,6 +1626,110 @@ export async function resolveImplicitSelfMember(
   );
 }
 
+/**
+ * Whether `Owner::member()` at `use` can reach an instance member of `owner` through an implicit
+ * `this`: the enclosing function is a non-static member function of `owner` or of a class that
+ * derives from `owner` through proven bases. Any other context can only name a static member.
+ */
+export async function cppQualifiedOwnerHasImplicitThis(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  use: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+  owner: SymbolDef,
+): Promise<boolean> {
+  const definition = cppEnclosingFunctionDefinition(use);
+  if (!definition || !(await cppFunctionHasImplicitThis(index, mod, definition, source, sup))) return false;
+  const outOfLinePath = cppOutOfLineOwnerPath(definition, source, sup);
+  const enclosingDef = outOfLinePath ? await resolveCppQualifiedMemberContainer(index, mod, outOfLinePath) : null;
+  const enclosing = enclosingDef
+    ? await keywordClassRefFromDef(index, enclosingDef)
+    : await keywordClassRefFromNode(index, mod, definition);
+  const target = await keywordClassRefFromDef(index, owner);
+  if (!enclosing || !target) return false;
+  const targetKey = keywordContainerKey(target.file, target.container);
+  const visited = new Set<string>();
+  let level: KeywordClassRef[] = [enclosing];
+  for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
+    const next: KeywordClassRef[] = [];
+    for (const candidate of level) {
+      const key = keywordContainerKey(candidate.file, candidate.container);
+      if (key === targetKey) return true;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      next.push(
+        ...(await baseRefsFromContainer(
+          index,
+          candidate.module,
+          candidate.container,
+          candidate.context.source,
+          candidate.context.sup,
+          false,
+          candidate.context.tree,
+        )),
+      );
+    }
+    level = next;
+  }
+  return false;
+}
+
+/** The C++ function definition enclosing a use, if any. */
+export function cppEnclosingFunctionDefinition(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type === "function_definition") return current;
+  }
+  return null;
+}
+
+/** Proven unqualified member call from an out-of-line C++ method definition. */
+export async function resolveCppOutOfLineImplicitMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  name: string,
+  source: string,
+  sup: LanguageSupport,
+  requireAcceptedArity = false,
+): Promise<SymbolDef | null | undefined> {
+  if (node.parent?.type !== "call_expression" || node.parent.childForFieldName("function")?.id !== node.id) {
+    return undefined;
+  }
+  const ownerPath = cppOutOfLineOwnerPath(node, source, sup);
+  const owner = ownerPath ? await resolveCppQualifiedMemberContainer(index, mod, ownerPath) : null;
+  if (!owner) return undefined;
+  const argumentCount = getCallArgumentCount({ languageId: "cpp", source, call: node.parent }) ?? undefined;
+  const enclosingFunction = cppEnclosingFunctionDefinition(node);
+  const memberScope =
+    enclosingFunction && (await cppFunctionHasImplicitThis(index, mod, enclosingFunction, source, sup))
+      ? "any"
+      : "static";
+  const matching = await resolveKeywordReceiverMember(index, mod, node, name, memberScope, false, argumentCount, owner);
+  // A class member hides a same-named global even when this call cannot accept its arity. The
+  // only member is still the call's target for navigation; an ambiguous overload set is not.
+  const member =
+    matching ??
+    (argumentCount === undefined
+      ? undefined
+      : await resolveKeywordReceiverMember(index, mod, node, name, memberScope, false, undefined, owner));
+  if (!member) {
+    // In a static member function, an instance member still hides a same-named global: the call
+    // is ill-formed, so neither consumer may fall back to the global.
+    const hidden =
+      memberScope === "static" &&
+      (await resolveKeywordReceiverMember(index, mod, node, name, "any", false, undefined, owner));
+    return hidden ? null : undefined;
+  }
+  // The call graph records no edge for a call its target cannot accept. `null` means a member hides
+  // the name but is not the call's target, so no consumer may fall back to a same-named free function.
+  const rejected =
+    requireAcceptedArity &&
+    argumentCount !== undefined &&
+    !(await receiverMemberAcceptsArgumentCount(index, member, argumentCount));
+  return rejected ? null : member;
+}
+
 export { supportsReceiverCallEdges, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
 
 type ResolvedReceiverDefinition = {
@@ -1817,6 +1991,30 @@ function typescriptMergedInterfaceMemberCandidates(
   return matches;
 }
 
+/** Same-name namespace reopenings, excluding members of a decoy namespace or nested owner. */
+export function findTypeScriptNamespaceMemberCandidates(
+  locals: readonly SymbolDef[],
+  member: string,
+  receiverDef: SymbolDef,
+  context: ParsedFileContext,
+): SymbolDef[] {
+  if (!isJsTsLanguage(context.sup.id)) return [];
+  const containers = typescriptMergedNamespaceContainers(context.tree, locals, receiverDef);
+  const matches: SymbolDef[] = [];
+  for (const container of containers) {
+    for (const candidate of findDirectLocalsWithinNode(
+      locals,
+      member,
+      container,
+      context,
+      context.sup.normalizeIdentifier,
+    )) {
+      if (!matches.includes(candidate)) matches.push(candidate);
+    }
+  }
+  return matches;
+}
+
 async function findReceiverMemberDefinition(
   index: ProjectIndex,
   locals: readonly SymbolDef[],
@@ -1832,6 +2030,13 @@ async function findReceiverMemberDefinition(
     memberScope === "any"
       ? undefined
       : (local: SymbolDef) => matchesReceiverMemberScope(local, memberScope, targetContext, container);
+  if (
+    (targetContext.sup.id === "ts" || targetContext.sup.id === "tsx") &&
+    (container.type === "internal_module" || container.type === "module")
+  ) {
+    const candidates = findTypeScriptNamespaceMemberCandidates(locals, member, receiverDef, targetContext);
+    return await selectReceiverMemberCandidates(index, candidates, knownArgumentCount);
+  }
   const allReceiverMatches = typescriptMergedInterfaceMemberCandidates(
     locals,
     member,
@@ -1939,13 +2144,15 @@ async function getCallableArityForDef(index: ProjectIndex, def: SymbolDef): Prom
   const container = nearestMemberContainer(nameNode);
   let current: SyntaxNodeLike | null = nameNode;
   while (current && current !== container) {
-    const range = getCallableArity({
-      languageId: context.sup.id,
-      source: context.source,
-      declaration: current,
-      binding: memberLookupBinding(context.sup.id),
-    });
-    if (range) return range;
+    if (CALLABLE_DECLARATION_NODE_TYPES[current.type]) {
+      const range = getCallableArity({
+        languageId: context.sup.id,
+        source: context.source,
+        declaration: current,
+        binding: memberLookupBinding(context.sup.id),
+      });
+      if (range) return range;
+    }
     current = current.parent;
   }
   return undefined;
@@ -1992,29 +2199,26 @@ async function selectReceiverMemberCandidates(
   knownArgumentCount?: number,
   allowUniqueArityMismatch = true,
 ): Promise<SymbolDef | undefined> {
-  let overloadCandidates = candidates;
   if (candidates.length > 1) {
     const file = candidates[0]?.file;
     if (file && candidates.every((candidate) => candidate.file === file)) {
       const context = await ensureParsedContext(file, undefined, index.languageExtensions);
       if (isJsTsLanguage(context.sup.id)) {
-        overloadCandidates = typescriptCollapsedOverloadCandidates(candidates, context.tree, (candidate) => candidate);
-        if (overloadCandidates.length === 1) {
-          return typescriptSelectOverloadCandidate({
-            group: candidates,
-            tree: context.tree,
-            definitionOf: (candidate) => candidate,
-            declarationOf: (candidate) => nameNodeForDef(context, candidate)?.parent,
-            source: context.source,
-            languageId: context.sup.id,
-            argumentCount: knownArgumentCount ?? null,
-          });
-        }
+        // Signature-only overloads still need arity selection before generic member deduplication.
+        return typescriptSelectOverloadCandidate({
+          group: candidates,
+          tree: context.tree,
+          definitionOf: (candidate) => candidate,
+          declarationOf: (candidate) => nameNodeForDef(context, candidate)?.parent,
+          source: context.source,
+          languageId: context.sup.id,
+          argumentCount: knownArgumentCount ?? null,
+        });
       }
     }
   }
 
-  const unique = uniqueReceiverMemberCandidates(overloadCandidates);
+  const unique = uniqueReceiverMemberCandidates(candidates);
   if (unique.length === 1 && (allowUniqueArityMismatch || knownArgumentCount === undefined)) return unique[0];
   if (knownArgumentCount === undefined) return undefined;
   const matches: SymbolDef[] = [];
@@ -2119,9 +2323,14 @@ function findDirectLocalsWithinNode(
         current.type === "class_body" &&
         !!current.parent &&
         TRANSPARENT_MEMBER_CONTAINER_TYPES[current.parent.type] === true;
+      const definingDeclarator =
+        current.type === "function_definition" ? current.childForFieldName("declarator") : null;
+      const isOwnFunctionDeclaration =
+        !!definingDeclarator && definingDeclarator.startIndex <= startIndex && definingDeclarator.endIndex >= endIndex;
       if (
         !isDeclarationParent &&
         !isDirectBody &&
+        !isOwnFunctionDeclaration &&
         !isTransparentBody &&
         ((current.type === "class_body" && current.parent !== container) ||
           NESTED_MEMBER_LOCAL_CONTAINERS.has(current.type))
@@ -2226,6 +2435,29 @@ function isSwiftShadowingNonMember(declarationNode: SyntaxNodeLike): boolean {
   return false;
 }
 
+/** Parameter lists whose entries are locals of the function, not members of its type. */
+const PARAMETER_LIST_TYPES = new Set([
+  "formal_parameters",
+  "parameter_list",
+  "parameters",
+  "function_value_parameters",
+]);
+
+/**
+ * A parameter that also declares a property of the enclosing type: a TypeScript parameter
+ * property (`constructor(readonly path: string)`) or a PHP promoted constructor property.
+ */
+function isPropertyParameter(declarationNode: SyntaxNodeLike, list: SyntaxNodeLike): boolean {
+  let parameter: SyntaxNodeLike | null = declarationNode;
+  while (parameter && parameter.parent !== list) parameter = parameter.parent;
+  if (!parameter) return false;
+  if (parameter.type === "property_promotion_parameter") return true;
+  return parameter.namedChildren.some(
+    (child) =>
+      child.type === "accessibility_modifier" || child.type === "override_modifier" || child.text === "readonly",
+  );
+}
+
 export function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike, container: SyntaxNodeLike): boolean {
   if (isSwiftShadowingNonMember(declarationNode)) return false;
   if (nearestMemberContainer(declarationNode) !== container) return false;
@@ -2238,6 +2470,8 @@ export function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike
       (current.type === "block" || current.type === "compound_statement" || current.type === "statement_block") &&
       current.parent !== container;
     if (isMethodBody) return false;
+    // A method parameter is a local of that method, unless it also declares a property.
+    if (PARAMETER_LIST_TYPES.has(current.type)) return isPropertyParameter(declarationNode, current);
     current = current.parent;
   }
   return current === container;

@@ -7,7 +7,7 @@ import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
 import { isGoExportedMemberName } from "./declaration-visibility.js";
 import { memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
-import { phpObjectCreationKeyword } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { nodeInStaticMemberContext, phpObjectCreationKeyword } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   csharpAliasQualifiedLookupName,
   findCsharpPartialTypeEquivalents,
@@ -16,6 +16,7 @@ import {
   resolvePhpObjectCreationTarget,
   resolveRubySuperDefinition,
   sharedOwnerMemberUnitComplete,
+  resolveCppOutOfLineImplicitMember,
   resolveImplicitSelfMember,
   supportsReceiverMemberNavigation,
 } from "./navigation-goto.js";
@@ -105,6 +106,7 @@ import {
   isMemberObjectIdentifier,
   isMemberReferencePropertyIdentifier,
   isReceiverNameNode,
+  rustTokenTreeNameFollowsSeparator,
 } from "../util/member-access.js";
 import {
   cppOutOfLineOwnerPath,
@@ -183,6 +185,14 @@ export async function goToDefinition(
     column: Math.max(0, column - 1),
   };
   let node: SyntaxNodeLike | null = tree.rootNode.descendantForPosition(pos, pos);
+  // A position at the start of `b` in `a?.b` also touches the end of the `?.` token, which the
+  // parser reports first. The use is the name that starts at the position.
+  if (node?.type === "optional_chain" && node.parent) {
+    const startsHere = node.parent.namedChildren.find(
+      (child) => child.startPosition.row === pos.row && child.startPosition.column === pos.column,
+    );
+    if (startsHere) node = startsHere;
+  }
 
   if (node && node.type === "variable_declarator") {
     const value = node.childForFieldName("value");
@@ -373,6 +383,12 @@ export async function goToDefinition(
   }
 
   if (name) {
+    // Rust macro arguments stay unparsed token trees. A name preceded by `.` or `::` there is
+    // a member or path receiver the raw tokens cannot prove, so bare-name resolution would
+    // answer with an unrelated same-named free function; stay conservative instead.
+    if (sup.id === "rust" && rustTokenTreeNameFollowsSeparator(node)) {
+      return { status: "not_found", reason: "No resolvable receiver inside a Rust macro token tree" };
+    }
     const lookupName = sup.id === "csharp" ? csharpLookupName(node, source, name) : name;
     const csharpExportName =
       sup.id === "csharp" ? csharpAliasQualifiedLookupName(node, source, lookupName, mod.imports) : lookupName;
@@ -432,6 +448,16 @@ export async function goToDefinition(
       }
       return { status: "not_found", reason: AMBIGUOUS_CPP_USING_DECLARATION_REASON };
     }
+    // Inside an out-of-line member definition, a member of the owner class (or its bases) hides a
+    // same-named file-scope name; parameters and function locals still win, as in the call graph.
+    const fileScopeOrUnbound =
+      !closestBinding || scopeIndex.allScopes[0]?.map.get(closestBinding.canonicalName) === closestBinding;
+    if (sup.id === "cpp" && fileScopeOrUnbound) {
+      const implicitMember = await resolveCppOutOfLineImplicitMember(index, mod, node, name, source, sup);
+      if (implicitMember)
+        return okGoToResult(index, implicitMember, { resolution: "member-access", confidence: "high" });
+      if (implicitMember === null) return { status: "not_found", reason: "No matching C++ static member definition" };
+    }
     const cppCollision =
       sup.id === "cpp" && closestBinding ? resolveCppCollidingBinding(file, closestBinding, node, source) : undefined;
     if (cppCollision !== undefined) {
@@ -465,6 +491,18 @@ export async function goToDefinition(
         : null;
       if (sameScope) return okGoToResult(index, sameScope, { resolution: "exact", confidence: "high" });
       return { status: "not_found", reason: "No matching PHP symbol role" };
+    }
+    const staticMemberCall =
+      sup.id === "csharp" &&
+      !!local &&
+      closestBinding?.kind === "function" &&
+      closestBinding.node?.parent?.type !== "local_function_statement" &&
+      node.parent?.type === "invocation_expression" &&
+      nodeInStaticMemberContext(node, source);
+    if (staticMemberCall) {
+      const visible = await resolveImplicitSelfMember(index, mod, node, lookupName, source, sup.id);
+      if (visible) return okGoToResult(index, visible, { resolution: "member-access", confidence: "medium" });
+      return { status: "not_found", reason: "No matching C# static member definition" };
     }
     if (local) {
       return okGoToResult(index, local, {
@@ -586,15 +624,22 @@ export async function goToDefinition(
           }
         }
       }
+      if (
+        sup.id === "python" &&
+        node.parent?.type === "call" &&
+        resolvedName?.status === "ok" &&
+        resolvedName.provenance?.resolution === "namespace"
+      ) {
+        // A namespace binding holds a module object, and a module is not callable: the call
+        // is an error, not a call to the module's first export.
+        return { status: "not_found", reason: "No callable definition for a Python module binding" };
+      }
       if (resolvedName) return resolvedName;
     }
   }
 
-  const localAtPosition = mod.locals.find((local) =>
-    rangeContains(local.range, {
-      row: line,
-      column: column,
-    }),
+  const localAtPosition = mod.locals.find(
+    (local) => local.range.start.index === node.startIndex && local.range.end.index === node.endIndex,
   );
   if (localAtPosition) {
     return okGoToResult(index, localAtPosition, {
@@ -609,9 +654,15 @@ export async function goToDefinition(
   };
 }
 
+function swiftNavigationMemberAccess(sup: LanguageSupport, node: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (sup.id !== "swift" || node.parent?.type !== "navigation_suffix") return null;
+  const access = node.parent.parent;
+  return access && isMemberAccessNode(sup, access) ? access : null;
+}
+
 function isUnresolvedReceiverMemberProperty(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
-  const parent = node.parent;
-  if (!parent || !supportsReceiverMemberNavigation(sup.id) || !isMemberAccessNode(sup, parent)) {
+  const parent = swiftNavigationMemberAccess(sup, node) ?? node.parent;
+  if (!parent || (!supportsReceiverMemberNavigation(sup.id) && sup.id !== "c") || !isMemberAccessNode(sup, parent)) {
     return false;
   }
   const { object, property } = getMemberAccessParts(sup, parent);
@@ -710,7 +761,7 @@ export async function findRenameReferences(
  * overload set and are chosen by call arity. Non-callables (typedefs, structs)
  * are left to the star-import ambiguity result.
  */
-async function recoverIncludedCallableStar(
+export async function recoverIncludedCallableStar(
   index: ProjectIndex,
   mod: ModuleIndex,
   languageId: string,
@@ -996,6 +1047,7 @@ async function findReferencesInternal(
   if (
     localBinding &&
     localBinding.occurrencesComplete !== false &&
+    !requiresSameFileVerifiedScan &&
     !scansReceiverReferences &&
     !requiresTypeScriptOverloadVerifiedScan
   ) {

@@ -1761,3 +1761,226 @@ describe("C++20 modules", () => {
     }
   });
 });
+
+describe("C++ implicit this in qualified and bare member calls", () => {
+  it("navigates from an out-of-line definition's own name to that definition, including template owners", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-definition-name-"));
+    try {
+      const file = path.join(root, "c.cpp").replace(/\\/g, "/");
+      const lines = [
+        "template <class T> struct Box { int f(); };",
+        "template <class T> int Box<T>::f() { return 0; }",
+        "struct Plain { int g(); };",
+        "int Plain::g() { return 1; }",
+        "",
+      ];
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      for (const [line, name] of [
+        [2, "::f"],
+        [4, "::g"],
+      ] as const) {
+        const column = lines[line - 1]!.indexOf(name) + 3;
+        const goto = await goToDefinition(index, { file, line, column });
+        // The declarator names the definition itself; it is not a member call needing `this`.
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(goto.definition.range.start).toMatchObject({ line, column });
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("gives namespace-qualified and pointer-returning out-of-line definitions their own member identity", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-nested-qualified-"));
+    try {
+      const file = path.join(root, "c.cpp").replace(/\\/g, "/");
+      const lines = [
+        "int one() { return 1; }",
+        "int two() { return 2; }",
+        "namespace a { struct C { int run(); int* make(); }; }",
+        "namespace b { struct C { int run(); }; }",
+        "int a::C::run() { return one(); }",
+        "int b::C::run() { return two(); }",
+        "int* a::C::make() { static int v = one(); return &v; }",
+        "",
+      ];
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const label = (id: string): string => {
+        const node = graph.nodes.get(id);
+        const start = Number(id.slice(id.lastIndexOf("::") + 2));
+        const line = lines.join("\n").slice(0, start).split("\n").length;
+        return `${node?.name}@${line}`;
+      };
+      const edges = graph.edges
+        .filter((edge) => edge.label === "calls" || edge.label === "member_of")
+        .map((edge) => `${edge.label} ${label(edge.from)} -> ${label(edge.to)}`)
+        .sort();
+      // Each definition folds into its own class's declaration; neither borrows the other's.
+      expect(edges).toEqual([
+        "calls make@3 -> one@1",
+        "calls run@3 -> one@1",
+        "calls run@4 -> two@2",
+        "member_of make@3 -> C@3",
+        "member_of run@3 -> C@3",
+        "member_of run@4 -> C@4",
+      ]);
+      const references = await findReferences(index, { file, line: 3, column: lines[2]!.indexOf("run") + 1 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected a::C::run references");
+      expect(references.references.map((reference) => reference.range.start.line).sort((l, r) => l - r)).toEqual([
+        3, 5,
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lets an owner member hide a same-named global in out-of-line bodies across goto, references, and calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-member-hides-global-"));
+    try {
+      const file = path.join(root, "c.cpp").replace(/\\/g, "/");
+      const lines = [
+        "int helper(int x) { return x; }",
+        "struct Box {",
+        "  int helper();",
+        "  int run();",
+        "  int ok();",
+        "  static int shared();",
+        "};",
+        "int Box::helper() { return 0; }",
+        "int Box::run() { return helper(1); }",
+        "int Box::ok() { return helper(); }",
+        "int outside() { return helper(2); }",
+        "int Box::shared() { return helper(3); }",
+        "",
+      ];
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoAt = (line: number) =>
+        goToDefinition(index, { file, line, column: lines[line - 1]!.indexOf("helper(") + 1 });
+      for (const line of [9, 10]) {
+        const goto = await gotoAt(line);
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
+      }
+      // A static member has no `this`, but the instance member still hides the global.
+      expect((await gotoAt(12)).status).toBe("not_found");
+      const free = await findReferences(index, { file, line: 1, column: 5 });
+      expect(free.status).toBe("ok");
+      if (free.status !== "ok") throw new Error("Expected free-function references");
+      expect(free.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([1, 11]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map(
+          (edge) =>
+            `${graph.nodes.get(edge.from)?.name}->${edge.to.endsWith("::4") ? "free" : "member"}:${edge.site?.range.start.line}`,
+        )
+        .sort();
+      // `helper(1)` names the zero-parameter member, so it has no edge and no free-function fallback.
+      expect(calls).toEqual(["ok->member:10", "outside->free:11"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies qualified owners by full path and reaches instance members only through the caller's own class or bases", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-qualified-owner-"));
+    const file = normalizePath(path.join(root, "q.cpp"));
+    const source = [
+      "namespace a { struct C { static int f(); }; }",
+      "namespace b { namespace C { int f(); } }",
+      "int a::C::f() { return 1; }",
+      "int b::C::f() { return 2; }",
+      "int free_call() { return b::C::f() + a::C::f(); }",
+      "struct Base { int helper(); };",
+      "int Base::helper() { return 3; }",
+      "struct Derived : Base { int run(); };",
+      "struct D { int instance(); };",
+      "int D::instance() { return 4; }",
+      "int Derived::run() { return Base::helper() + D::instance(); }",
+      "",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const lines = source.split("\n");
+      const targetLine = async (line: number, qualified: string) => {
+        const column = lines[line - 1]!.indexOf(qualified) + qualified.lastIndexOf(":") + 2;
+        const result = await goToDefinition(index, { file, line, column });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      // `b::C` is a namespace even though a class `a::C` is also reachable. A class member resolves
+      // to its in-class declaration, as `Base::helper` does below.
+      expect(await targetLine(5, "b::C::f")).toBe(4);
+      expect(await targetLine(5, "a::C::f")).toBe(1);
+      // A base-qualified call reaches the base's instance member; an unrelated class's does not.
+      expect(await targetLine(11, "Base::helper")).toBe(6);
+      expect(await targetLine(11, "D::instance")).toBeNull();
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callTargets = (caller: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => graph.nodes.get(edge.to)?.name)
+          .sort();
+      expect(callTargets("free_call")).toEqual(["f", "f"]);
+      expect(callTargets("run")).toEqual(["helper"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves instance members only from non-static member functions", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-static-context-"));
+    const file = normalizePath(path.join(root, "c.cpp"));
+    const source = [
+      "struct C {",
+      "  int instance();",
+      "  static int shared();",
+      "  static int s();",
+      "  int m();",
+      "};",
+      "int C::instance() { return 1; }",
+      "int C::shared() { return 2; }",
+      "int C::s() { return C::instance() + instance() + shared(); }",
+      "int C::m() { return C::instance() + instance() + shared(); }",
+      "namespace ns { int f(); }",
+      "int ns::f() { return C::instance(); }",
+      "",
+    ].join("\n");
+    try {
+      await fs.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const lines = source.split("\n");
+      const gotoLine = async (line: number, column: number) =>
+        await goToDefinition(index, { file, line, column: column + 1 });
+      // A static member function and a namespace-qualified free function have no `this`.
+      expect((await gotoLine(9, lines[8]!.indexOf("C::instance") + 3)).status).toBe("not_found");
+      expect((await gotoLine(9, lines[8]!.lastIndexOf("instance"))).status).toBe("not_found");
+      expect((await gotoLine(12, lines[11]!.indexOf("C::instance") + 3)).status).toBe("not_found");
+      const staticCall = await gotoLine(9, lines[8]!.indexOf("shared"));
+      expect(staticCall.status === "ok" && staticCall.definition.range.start.line).toBe(3);
+      // A non-static member function reaches instance members either way.
+      for (const column of [lines[9]!.indexOf("C::instance") + 3, lines[9]!.lastIndexOf("instance")]) {
+        const call = await gotoLine(10, column);
+        expect(call.status === "ok" && call.definition.range.start.line).toBe(2);
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callees = (caller: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => graph.nodes.get(edge.to)?.name)
+          .sort();
+      expect(callees("s")).toEqual(["shared"]);
+      expect(callees("m")).toEqual(["instance", "instance", "shared"]);
+      expect(callees("f")).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

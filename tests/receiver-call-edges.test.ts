@@ -11,6 +11,8 @@ import {
 import type { SymbolGraph, SymbolNode } from "../src/graphs/symbol-graph.js";
 import { findCallHierarchy } from "../src/indexer/call-hierarchy.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
+import { findReferences, goToDefinition } from "../src/index.js";
+import { SymbolKind } from "../src/indexer/types.js";
 import { extractCallableSignature } from "../src/impact/call-compatibility.js";
 import { prepareSourceInput } from "../src/languages/file-prep.js";
 import { ProjectedSyntaxTree } from "../src/native/projected-tree.js";
@@ -916,7 +918,7 @@ nativeDescribe("receiver method call edge language parity", () => {
       "box.cpp": [
         '#include "box.hpp"',
         "int Box::make(int value) { return value; }",
-        "int Box::run(int value) { return value; }",
+        "int Box::run(int value) { return make(value); }",
         "Box::~Box() {}",
         "int Box::operator()(int value) { return value; }",
         "Box& Box::operator+=(int value) { return *this; }",
@@ -926,6 +928,7 @@ nativeDescribe("receiver method call edge language parity", () => {
         "int use_static() { return Box::make(1); }",
         "int invalid_instance() { return Box::run(1); }",
       ].join("\n"),
+      "decoy.cpp": "int make(int value) { return -1; }",
     };
     const graph = await buildFixture("cg-receiver-cpp-out-of-line-", files);
     const make = nodeIn(graph, "box.hpp", "make");
@@ -947,6 +950,32 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(graph.nodes.get(callOperator)?.implementationTarget).toBe(true);
     expect(graph.nodes.get(addOperator)?.implementationTarget).toBe(true);
     expect(callsiteTexts(graph, make, useStatic, files)).toEqual(["make"]);
+    expect(callsiteTexts(graph, make, run, files)).toEqual(["make"]);
+    expect(callsiteTexts(graph, nodeIn(graph, "decoy.cpp", "make"), run, files)).toBeNull();
+    const root = roots.at(-1)!;
+    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const sourceCall = files["box.cpp"]!.split("\n")[2]!;
+    const navigation = await goToDefinition(index, {
+      file: path.join(root, "box.cpp"),
+      line: 3,
+      column: sourceCall.indexOf("make") + 1,
+    });
+    expect(navigation.status).toBe("ok");
+    if (navigation.status === "ok") {
+      expect(path.basename(navigation.definition.file)).toBe("box.hpp");
+    }
+    const references = await findReferences(index, {
+      file: path.join(root, "box.hpp"),
+      line: 3,
+      column: files["box.hpp"]!.split("\n")[2]!.indexOf("make") + 1,
+    });
+    expect(references.status).toBe("ok");
+    if (references.status === "ok") {
+      expect(
+        references.references.some((ref) => path.basename(ref.file) === "box.cpp" && ref.range.start.line === 3),
+      ).toBe(true);
+      expect(references.references.some((ref) => path.basename(ref.file) === "decoy.cpp")).toBe(false);
+    }
     expect(outgoingCallCount(graph, invalidInstance)).toBe(0);
     expect(
       [...graph.nodes.values()].filter(
@@ -1572,6 +1601,17 @@ nativeDescribe("receiver method call edge language parity", () => {
     };
     const graph = await buildFixture("cg-receiver-c-ops-", files);
     const caller = nodeIn(graph, "ops.c", "go");
+    const root = roots.at(-1)!;
+    const file = path.join(root, "ops.c");
+    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const call = files["ops.c"]!.split("\n")[2]!;
+    const navigation = await goToDefinition(index, { file, line: 3, column: call.indexOf("run") + 1 });
+    expect(navigation.status).toBe("not_found");
+    const references = await findReferences(index, { file, line: 1, column: 6 });
+    expect(references.status).toBe("ok");
+    if (references.status === "ok") {
+      expect(references.references.some((ref) => ref.range.start.line === 3)).toBe(false);
+    }
     const freeRun = nodeIn(graph, "ops.c", "run");
     expect(callsiteTexts(graph, freeRun, caller, files)).toBeNull();
     expect(outgoingCallCount(graph, caller)).toBe(0);
@@ -2519,7 +2559,7 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(memberOfTargets).toEqual([]);
   });
 
-  it("does not attribute instance calls from a local function inside a static C# method", async () => {
+  it("keeps a static C# local function's instance call unresolved across consumers", async () => {
     const files = {
       "StaticLocal.cs": [
         "class StaticLocal {",
@@ -2529,7 +2569,27 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
         "}",
       ].join("\n"),
     };
-    const graph = await buildFixture("cg-receiver-cs-static-local-", files);
+    const root = await mkTmpDir("cg-receiver-cs-static-local-");
+    roots.push(root);
+    const file = path.join(root, "StaticLocal.cs");
+    await fs.writeFile(file, files["StaticLocal.cs"]);
+    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const graph = await buildSymbolGraphDetailed(index);
+    const invalidCall = files["StaticLocal.cs"].split("\n")[3]!;
+    const navigation = await goToDefinition(index, {
+      file,
+      line: 4,
+      column: invalidCall.indexOf("Instance") + 1,
+    });
+    expect(navigation.status).toBe("not_found");
+
+    const references = await findReferences(index, { file, line: 2, column: 8 });
+    expect(references.status).toBe("ok");
+    if (references.status === "ok") {
+      expect(references.references).toHaveLength(1);
+      expect(references.references[0]?.range.start.line).toBe(2);
+    }
+
     const local = nodeIn(graph, "StaticLocal.cs", "Local");
     const run = nodeIn(graph, "StaticLocal.cs", "Run");
     const shared = nodeIn(graph, "StaticLocal.cs", "Shared");
@@ -3047,6 +3107,51 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     };
     const pyGraph = await buildFixture("cg-noncallable-py-attr-", pyFiles);
     expect(outgoingCallCount(pyGraph, nodeIn(pyGraph, "box.py", "caller"))).toBe(0);
+  });
+  it("resolves Python non-callable callees to their bindings without call edges", async () => {
+    const source = [
+      "class Box:",
+      "    count = 1",
+      "",
+      "    @classmethod",
+      "    def make(cls):",
+      "        return cls()",
+      "",
+      "    def caller(self):",
+      "        return Box.count()",
+    ].join("\n");
+    const root = await mkTmpDir("cg-py-noncallable-goto-");
+    roots.push(root);
+    await fs.writeFile(path.join(root, "box.py"), source);
+    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const graph = await buildSymbolGraphDetailed(index);
+    // `cls` is the classmethod parameter and `count` the class attribute: goto resolves each
+    // callee name to its binding, and neither binding is callable, so the graph must not
+    // record a call edge for either site.
+    const clsGoto = await goToDefinition(index, {
+      file: path.join(root, "box.py"),
+      line: 6,
+      column: source.split("\n")[5]!.indexOf("cls") + 1,
+    });
+    expect(clsGoto.status).toBe("ok");
+    if (clsGoto.status === "ok") {
+      expect(clsGoto.definition.localName).toBe("cls");
+      expect(clsGoto.definition.kind).toBe(SymbolKind.Variable);
+      expect(clsGoto.definition.range.start.line).toBe(5);
+    }
+    const countGoto = await goToDefinition(index, {
+      file: path.join(root, "box.py"),
+      line: 9,
+      column: source.split("\n")[8]!.indexOf("count") + 1,
+    });
+    expect(countGoto.status).toBe("ok");
+    if (countGoto.status === "ok") {
+      expect(countGoto.definition.localName).toBe("count");
+      expect(countGoto.definition.kind).toBe(SymbolKind.Variable);
+      expect(countGoto.definition.range.start.line).toBe(2);
+    }
+    expect(outgoingCallCount(graph, nodeIn(graph, "box.py", "make"))).toBe(0);
+    expect(outgoingCallCount(graph, nodeIn(graph, "box.py", "caller"))).toBe(0);
   });
   it("records C# partial and Swift extension receiver calls across shared owners", async () => {
     const csFiles = {

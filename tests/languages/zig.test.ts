@@ -241,6 +241,22 @@ describe("Zig unqualified member lookup", () => {
         column: column + 1,
       });
       expect(result.status).toBe("not_found");
+      const references = await findReferences(index, {
+        file,
+        line: 2,
+        column: source.split("\n")[1]!.indexOf("helper") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.some((reference) => reference.range.start.line === 4)).toBe(false);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges.filter(
+          (edge) =>
+            edge.label === "calls" && edge.site?.file === fileIdentityKey(file) && edge.site.range.start.line === 4,
+        ),
+      ).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

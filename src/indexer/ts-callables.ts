@@ -40,16 +40,25 @@ export function typescriptCallableRoleAt(tree: SyntaxTreeLike, start: number, en
   return typescriptCallableRole(tree.rootNode.descendantForIndex(start, end));
 }
 
+const TYPESCRIPT_MEMBER_CONTAINER_TYPES = new Set([
+  "class_body",
+  "interface_body",
+  "enum_body",
+  "object_type",
+  "object",
+]);
+
 /**
- * Class, interface, enum, and namespace/module bodies each own their callables.
- * "ambient_declaration" is a declaration wrapper, not a callable container: nested
- * "internal_module"/"module" nodes are found first, while standalone ambient signatures
- * remain in the file-level group.
+ * Class, interface, enum, type-literal, object-literal, and namespace/module bodies each own
+ * their callables, so a type literal's `m(): void` signature and an object literal's `m() {}`
+ * are never one overload set. "ambient_declaration" is a declaration wrapper, not a callable
+ * container: nested "internal_module"/"module" nodes are found first, while standalone ambient
+ * signatures remain in the file-level group.
  */
 export function typescriptCallableContainerKey(tree: SyntaxTreeLike, start: number, end: number): string {
   let current: SyntaxNodeLike | null = tree.rootNode.descendantForIndex(start, end);
   while (current) {
-    if (current.type === "class_body" || current.type === "interface_body" || current.type === "enum_body") {
+    if (TYPESCRIPT_MEMBER_CONTAINER_TYPES.has(current.type)) {
       return "type:" + current.startIndex;
     }
     if (current.type === "internal_module" || current.type === "module") {
@@ -58,6 +67,65 @@ export function typescriptCallableContainerKey(tree: SyntaxTreeLike, start: numb
     current = current.parent;
   }
   return "module";
+}
+
+function typescriptNamespaceForDefinition(tree: SyntaxTreeLike, def: SymbolDef): SyntaxNodeLike | null {
+  const start = def.range.start.index;
+  if (start === undefined) return null;
+  let node: SyntaxNodeLike | null = tree.rootNode.descendantForIndex(start, def.range.end.index ?? start);
+  while (node) {
+    if (node.type === "internal_module" || node.type === "module") {
+      return node.childForFieldName("name")?.startIndex === start ? node : null;
+    }
+    node = node.parent;
+  }
+  return null;
+}
+
+/**
+ * The lexical path of the namespaces enclosing a namespace declaration: `A` for `B` in
+ * `namespace A { namespace B {} }`, whichever `namespace A` block it sits in. A non-namespace
+ * container (a function or class body) ends the path at that exact container.
+ */
+function typescriptNamespaceParentPath(namespace: SyntaxNodeLike): string {
+  const names: string[] = [];
+  for (let current = namespace.parent; current; current = current.parent) {
+    if (current.type === "internal_module" || current.type === "module") {
+      names.unshift(current.childForFieldName("name")?.text ?? "");
+      continue;
+    }
+    if (current.type === "program") break;
+    if (
+      current.type === "statement_block" &&
+      (current.parent?.type === "internal_module" || current.parent?.type === "module")
+    ) {
+      continue;
+    }
+    if (TYPESCRIPT_MEMBER_CONTAINER_TYPES.has(current.type) || current.type === "statement_block") {
+      names.unshift("@" + current.startIndex);
+      break;
+    }
+  }
+  return names.join(".");
+}
+
+/** Namespace reopenings with the same name and lexical namespace path share a member set. */
+export function typescriptMergedNamespaceContainers(
+  tree: SyntaxTreeLike,
+  locals: readonly SymbolDef[],
+  receiver: SymbolDef,
+): SyntaxNodeLike[] {
+  const container = typescriptNamespaceForDefinition(tree, receiver);
+  if (!container) return [];
+  const parentKey = typescriptNamespaceParentPath(container);
+  const containers: SyntaxNodeLike[] = [];
+  for (const local of locals) {
+    if (local.kind !== receiver.kind || local.localName !== receiver.localName) continue;
+    const candidate = typescriptNamespaceForDefinition(tree, local);
+    if (!candidate) continue;
+    if (typescriptNamespaceParentPath(candidate) === parentKey) containers.push(candidate);
+  }
+  return containers;
 }
 
 /** Keep only candidates whose declaration belongs to the requested callable container. */

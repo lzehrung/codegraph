@@ -316,6 +316,14 @@ describe("star-import precedence", () => {
     });
     expect(unresolved.status).toBe("not_found");
 
+    // The receiver stays unresolved, so its member cannot resolve through the earlier star
+    // import either: `hit` must not reach published.Thing.hit.
+    const member = await goToDefinition(index, {
+      file: fileIn(root, "main.py"),
+      ...at(main, "Thing().hit()", "hit"),
+    });
+    expect(member.status).toBe("not_found");
+
     const graph = await buildSymbolGraphDetailed(index);
     const run = functionNode(graph, "main.py", "run");
     const hit = functionNode(graph, "published.py", "hit");

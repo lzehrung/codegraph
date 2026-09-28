@@ -1,5 +1,5 @@
 import { declarationMemberArity, isVariadicParameterMarker } from "../graphs/symbol-graph-detailed/ast.js";
-import { callArgumentCount } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { callArgumentCount, cppQualifiedTextSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
@@ -455,6 +455,37 @@ function cppCallArgumentCount(node: SyntaxNodeLike, source: string): number | nu
   return null;
 }
 
+const CPP_OWNER_SCOPE_TYPES = new Set([
+  "namespace_definition",
+  "class_specifier",
+  "struct_specifier",
+  "union_specifier",
+]);
+
+/**
+ * The full owner path of a C++ callable declaration: its enclosing namespaces and classes plus
+ * any qualifier it declares, so `namespace b { namespace C { int f(); } }` and `int b::C::f() {}`
+ * share `b::C` while `int a::C::f() {}` is `a::C`. Declarations with the same parameters but
+ * different owners are different callables.
+ */
+function cppBindingOwnerPath(binding: Binding): string {
+  const node = binding.node;
+  if (!node) return "";
+  let qualified: SyntaxNodeLike | null = null;
+  for (let current = node.parent; current?.type === "qualified_identifier"; current = current.parent) {
+    qualified = current;
+  }
+  const declared = qualified ? cppQualifiedTextSegments(qualified.text) : [];
+  declared.pop();
+  const lexical: string[] = [];
+  for (let current = (qualified ?? node).parent; current; current = current.parent) {
+    if (!CPP_OWNER_SCOPE_TYPES.has(current.type)) continue;
+    const name = current.childForFieldName("name");
+    if (name) lexical.unshift(...cppQualifiedTextSegments(name.text));
+  }
+  return [...lexical, ...declared].join("::");
+}
+
 function cppCallableEntities(
   bindings: readonly Binding[],
   canonicalNames?: ReadonlyMap<Binding, string>,
@@ -465,7 +496,11 @@ function cppCallableEntities(
     if (!shape) return null;
     const canonicalName = canonicalNames?.get(binding);
     if (canonicalNames && canonicalName === undefined) return null;
-    const key = canonicalName === undefined ? shape.signature : `${canonicalName}\0${shape.signature}`;
+    const qualifier = cppBindingOwnerPath(binding);
+    const key =
+      canonicalName === undefined
+        ? `${qualifier}\0${shape.signature}`
+        : `${canonicalName}\0${qualifier}\0${shape.signature}`;
     const existing = entities.get(key);
     if (!existing) {
       entities.set(key, {

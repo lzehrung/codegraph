@@ -579,6 +579,30 @@ function appendKotlinImplicitBinding(
   }
 }
 
+function swiftModuleLocalRange(
+  source: string | undefined,
+  statementStartIndex: number | undefined,
+  statementText: string,
+  name: string,
+): Range | undefined {
+  if (!source || statementStartIndex === undefined || !name) return undefined;
+  const masked = maskImportBindingTrivia(statementText, "swift");
+  let found = -1;
+  let searchFrom = 0;
+  for (;;) {
+    const index = masked.indexOf(name, searchFrom);
+    if (index < 0) break;
+    const before = index === 0 ? "" : masked[index - 1]!;
+    const after = masked[index + name.length] ?? "";
+    const boundary = /[^\p{L}\p{N}_]/u;
+    if ((index === 0 || boundary.test(before)) && (after === "" || boundary.test(after))) found = index;
+    searchFrom = index + name.length;
+  }
+  if (found < 0) return undefined;
+  const startIndex = statementStartIndex + found;
+  return sourceRangeFromOffsets(collectLineStartOffsets(source), startIndex, startIndex + name.length);
+}
+
 function appendSwiftImplicitBinding(
   context: LanguageSpecificImportContext,
   { from, resolved, typeOnly, stmtText, stmtStartIndex, source }: ImplicitImportBindingArgs,
@@ -587,7 +611,17 @@ function appendSwiftImplicitBinding(
   const last = parts[parts.length - 1];
   if (!last) return;
   if (parts.length === 1) {
-    context.pushBinding({ kind: "namespace", localNS: last, from, resolved, typeOnly });
+    // The module name keeps its source range so `import Utils` stays an explicit namespace
+    // binding. The companion star import has no range and remains the expansion source.
+    const localRange = swiftModuleLocalRange(source, stmtStartIndex, stmtText, last);
+    context.pushBinding({
+      kind: "namespace",
+      localNS: last,
+      from,
+      resolved,
+      typeOnly,
+      ...(localRange ? { localRange } : {}),
+    });
     context.pushBinding({ kind: "star", from, resolved, typeOnly });
   } else {
     pushNamedImplicitBinding(
