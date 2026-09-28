@@ -14,7 +14,7 @@ import {
 } from "../php-namespace-symbols.js";
 import { scopeNodesFor } from "../scope-nodes.js";
 import type { SymbolDef } from "../types.js";
-import type { BareNameUse, NameLookupPolicy } from "../name-resolution.js";
+import type { BareNameUse, NameLookupPolicy } from "../name-resolution-types.js";
 
 /** A class-reference form (`new X`, `X::y`, a type) cannot bind a same-named function. */
 const isClassReference = (use: BareNameUse): boolean => inferPhpQualifiedReferenceImportType(use.node) === "class";

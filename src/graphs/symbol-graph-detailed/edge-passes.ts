@@ -1,4 +1,4 @@
-import type { NameResolution } from "../../indexer/name-resolution.js";
+import type { NameResolution } from "../../indexer/name-resolution-types.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../../indexer/types.js";
 
 import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";

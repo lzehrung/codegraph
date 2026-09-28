@@ -9,7 +9,7 @@ import { fileIdentityKey } from "../../util/paths.js";
 import { resolveImported } from "../navigation-resolve.js";
 import { typescriptOverloadImplementationAcceptsCount } from "../ts-callables.js";
 import { type ModuleIndex, type SymbolDef, SymbolKind } from "../types.js";
-import type { NameLookupPolicy } from "../name-resolution.js";
+import type { NameLookupPolicy } from "../name-resolution-types.js";
 import { cLookupPolicy, cppLookupPolicy } from "./c-family.js";
 import { csharpLookupPolicy, swiftLookupPolicy } from "./implicit-self.js";
 import { phpLookupPolicy } from "./php.js";

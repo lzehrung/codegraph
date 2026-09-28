@@ -20,7 +20,7 @@ import { resolveNamedDefinition } from "../navigation-local.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import type { ParsedFileContext } from "../parse-context.js";
 import type { GoToResult } from "../types.js";
-import type { BareNameUse, NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution.js";
+import type { BareNameUse, NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
 
 const loadParsed =
   (use: BareNameUse) =>

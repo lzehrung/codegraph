@@ -6,7 +6,7 @@ import { nodeInStaticMemberContext } from "../../graphs/symbol-graph-detailed/re
 import { csharpAliasQualifiedLookupName } from "../navigation-goto.js";
 import { csharpLookupName } from "../navigation-local.js";
 import { okGoToResult } from "../navigation-provenance.js";
-import type { NameLookupPolicy, NameResolution, NameLookupState } from "../name-resolution.js";
+import type { NameLookupPolicy, NameResolution, NameLookupState } from "../name-resolution-types.js";
 import type { GoToResult } from "../types.js";
 
 const implicitSelf = (state: NameLookupState, fallback: NameResolution | null): NameResolution => ({

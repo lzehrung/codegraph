@@ -68,6 +68,8 @@ The resulting file nodes and typed edges are stored with forward and reverse adj
 
 The semantic index links definitions, scopes, exports, imports, and resolved calls. `goto`, `refs`, workspace symbols, call and type hierarchies, implementations, and impact read that index. Results use one snapshot and project-relative locations.
 
+Go-to-definition, find references, and the detailed call graph resolve a bare name through one lookup order in `src/indexer/name-resolution.ts`: the closest scope binding, then a local declared later in the same scope, then imports, compilation-unit peers, and star imports. Language rules (C++ overloads and out-of-line members, PHP role namespaces, members reached through an implicit `this` or `self`, TypeScript overload arity) are hooks in `src/indexer/name-lookup-policies/`. References verify each candidate through go-to-definition, and the graph calls the same lookup synchronously, so the three consumers give the same answer.
+
 Only proven semantic links are reported. Dynamic dispatch, unresolved symbols, and unsupported language features stay absent or appear as limitations; bounds report exact omissions. See the [language parity matrix](./language-parity.md) for per-language coverage.
 
 `rename_preview` and refactor planning produce review evidence only. They never write files, and stale, conflicting, uncertain, or truncated rename plans are not safe.

@@ -570,28 +570,6 @@ export function closestContainingScope(scopeIndex: ScopeIndex, currentNode: Synt
   return best;
 }
 
-export function fallbackDefinitionVisibleAtUse(
-  scopeIndex: ScopeIndex,
-  row: ScopeNodeRow,
-  defStartIndex: number | undefined,
-  use: SyntaxNodeLike,
-): boolean {
-  if (defStartIndex === undefined) return true;
-  let declared: Scope | undefined;
-  for (const scope of scopeIndex.allScopes) {
-    if (scope.node.startIndex <= defStartIndex && defStartIndex < scope.node.endIndex) {
-      if (!declared || scope.node.startIndex > declared.node.startIndex) declared = scope;
-    }
-  }
-  if (!declared) return true;
-  let current = closestContainingScope(scopeIndex, use);
-  while (current) {
-    if (current === declared) return scopeAllowsUse(row, declared, use);
-    current = current.parent;
-  }
-  return false;
-}
-
 /** Check a same-file definition found outside lexical lookup against file-scope declaration order. */
 export function fileScopeDefinitionCoversUse(
   languageId: string,
