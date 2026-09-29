@@ -2860,4 +2860,58 @@ describe("C# using namespace across files", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("never links a using directive to a workspace package in another language", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-workspace-"));
+    try {
+      await writeFile(path.join(root, "package.json"), '{"name":"root","private":true,"workspaces":["pkgs/*"]}\n');
+      await mkdir(path.join(root, "pkgs", "lib"), { recursive: true });
+      await writeFile(path.join(root, "pkgs", "lib", "package.json"), '{"name":"Lib","main":"index.ts"}\n');
+      await writeFile(path.join(root, "pkgs", "lib", "index.ts"), "export const x = 1;\n");
+      await writeFile(path.join(root, "Use.cs"), "using Lib;\nnamespace Q;\npublic class Use { }\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = normalizePath(path.join(root, "Use.cs"));
+      const targets = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use))
+        .map((edge) => edge.to.type);
+      expect(targets).toEqual(["external"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a type imported by a using namespace as the root of a dotted call", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-type-root-"));
+    try {
+      // Class Imported.P comes from the second file of namespace Imported; namespace P is a decoy.
+      await writeFile(path.join(root, "Aaa.cs"), "namespace Imported;\npublic class Aaa { }\n");
+      await writeFile(
+        path.join(root, "PType.cs"),
+        "namespace Imported;\npublic class P {\n  public class Nested { public static int M() => 1; }\n}\n",
+      );
+      await writeFile(
+        path.join(root, "Decoy.cs"),
+        "namespace P;\npublic class Nested { public static int M() => 2; }\n",
+      );
+      const useLines = [
+        "using Imported;",
+        "namespace Q;",
+        "public class Use {",
+        "  public int A() => P.Nested.M();",
+        "}",
+      ];
+      const use = normalizePath(path.join(root, "Use.cs"));
+      await writeFile(use, `${useLines.join("\n")}\n`);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const result = await goToDefinition(index, { file: use, line: 4, column: useLines[3]!.lastIndexOf("M(") + 1 });
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("PType.cs");
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
+        .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(targets).toEqual(["PType.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

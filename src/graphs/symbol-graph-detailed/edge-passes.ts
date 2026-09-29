@@ -15,6 +15,7 @@ import {
   findTypeScriptNamespaceMemberCandidates,
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
+  memberAcceptsCallAt,
   resolvePhpObjectCreationTarget,
   resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
@@ -24,7 +25,6 @@ import { findClosestScopeBinding } from "../../indexer/navigation-local.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
 import {
   cjsRequireValueBinding,
-  resolveCsharpQualifiedName,
   resolveImportTypeMember,
   resolvePhpExportByImportType,
 } from "../../indexer/navigation-resolve.js";
@@ -67,6 +67,7 @@ import {
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberDeclarationNode,
   cppQualifiedNameSegments,
+  csharpDottedNameRoot,
   declaresMembers,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
@@ -673,15 +674,6 @@ function unwrapGoNamedType(node: SyntaxNodeLike): SyntaxNodeLike | null {
 }
 
 /** Type-like defs only, so a PHP `use function` alias cannot steal `Example::m()`. */
-function csharpRootIsImported(moduleEntry: ModuleIndex, qualifiedName: string): boolean {
-  const root = qualifiedName.split(".")[0];
-  return moduleEntry.imports.some(
-    (imp) =>
-      (imp.kind === "namespace" && imp.localNS === root) ||
-      ((imp.kind === "named" || imp.kind === "default") && imp.local === root),
-  );
-}
-
 function resolveNamedType(
   context: EdgePassContext,
   name: string,
@@ -694,14 +686,6 @@ function resolveNamedType(
   }
   const target = context.resolveIdentifier(name, node);
   if (target && declaresMembers(target)) return target;
-  // A C# namespace-qualified type (`P.Mix`) that the identifier lookup does not bind (a namespace path,
-  // not a nested type) resolves by qualified export lookup, as navigation does.
-  // A root bound by an import or alias (`using P = Other;`) is not a namespace; navigation keeps
-  // that binding, so this fallback does not apply.
-  if (context.sup.id === "csharp" && name.includes(".") && !csharpRootIsImported(context.moduleEntry, name)) {
-    const qualified = resolveCsharpQualifiedName(context.index, context.moduleEntry, name, node.startIndex);
-    if (qualified?.kind === "resolved" && declaresMembers(qualified.def)) return qualified.def;
-  }
   // A parameter/annotation type name is a closer scope binding than the class it names.
   const normalized = context.sup.normalizeIdentifier(name);
   const typed = context.moduleEntry.locals.filter(
@@ -861,6 +845,9 @@ export async function emitFunctionBodyEdges(
     member: SyntaxNodeLike;
     target: SyntaxNodeLike;
   }> = [];
+  // C# calls through a dotted receiver (`P.Mix.M()`, `Imported.Outer.Inner.M()`): navigation's
+  // member-access resolution decides the target after the walk, so both consumers agree.
+  const dottedReceiverCalls: Array<{ fromId: string; access: ReceiverCallAccess }> = [];
   const callNodeTypes = new Set<string>([
     "call_expression",
     "call",
@@ -1170,12 +1157,20 @@ export async function emitFunctionBodyEdges(
           });
           return;
         }
-        if (
-          keywordReceiverKind(context.sup.id, receiverName) ||
-          !tryResolveChain(context, access.accessNode, fromId, "calls")
-        ) {
+        if (keywordReceiverKind(context.sup.id, receiverName)) {
           recordReceiverCall(node, access);
+          return;
         }
+        if (tryResolveChain(context, access.accessNode, fromId, "calls")) return;
+        if (
+          context.sup.id === "csharp" &&
+          access.receiver.type === "member_access_expression" &&
+          csharpDottedNameRoot(access.receiver)
+        ) {
+          dottedReceiverCalls.push({ fromId, access });
+          return;
+        }
+        recordReceiverCall(node, access);
         return;
       }
       if (!callee) return;
@@ -1345,6 +1340,16 @@ export async function emitFunctionBodyEdges(
         // Without an implicit `this` of the owner, `Owner::member()` can only name a static member.
         recordReceiverCall(call.node, call.access, implicitThis ? undefined : "static");
       }
+    }
+  }
+  for (const { fromId, access } of dottedReceiverCalls) {
+    const member = await context.resolveMemberAccessTarget(access.property);
+    // The graph records no edge for a call its target cannot accept, as for other member calls.
+    if (
+      member &&
+      (await memberAcceptsCallAt(context.index, member, access.accessNode, context.source, context.sup.id))
+    ) {
+      recordDefEdge(context, fromId, member, "calls", access.property);
     }
   }
   for (const target of qualifiedConstructionTargets) {

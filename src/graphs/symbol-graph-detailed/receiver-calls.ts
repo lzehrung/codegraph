@@ -1346,14 +1346,6 @@ export function classifyReceiver(
 
   const receiverIsName = isReceiverNameNode(sup, receiver.type);
 
-  // `P.Mix.M()`: a C# dotted receiver whose leftmost name binds nothing names a type by its
-  // namespace path. The qualified name must still resolve to a type before any edge exists.
-  const dottedRoot = sup.id === "csharp" && !receiverIsName ? csharpDottedNameRoot(receiver) : null;
-  if (dottedRoot) {
-    if (hasLexicalBinding(dottedRoot)) return null;
-    return { kind: "named-type", typeName: text.replace(/\s+/gu, ""), typeNode: receiver, memberScope: "static" };
-  }
-
   const cacheKey = `${cacheScope}\u0000${text}`;
   let proof = proofCache.get(cacheKey);
   if (!proof) {

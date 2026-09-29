@@ -183,16 +183,16 @@ export async function resolveModuleSpecifierEdges(
     }
     const { resolvePathLikeModule } = await import("../util/resolution.js");
     const pathLike = await resolvePathLikeModule(context.projectRoot, entry.spec);
+    to = pathLike ? edgeToResolvedFile(pathLike) : await resolveGenericSpecifier(entry, context, resolutionExtensions);
     // A C# directive names a namespace or type, never another language's file (`using System;`
-    // beside a root `system.ts`), so a path-like hit counts only when it is a C# file.
+    // beside a root `system.ts`), whether path-like, hint, workspace, or package resolution found it.
     if (
       context.support.id === "csharp" &&
-      pathLike &&
-      supportForFileWithoutHeaderSample(pathLike, context.languageExtensions)?.id !== "csharp"
+      to.type === "file" &&
+      supportForFileWithoutHeaderSample(to.path, context.languageExtensions)?.id !== "csharp"
     ) {
-      return [withSpecifierMetadata(entry, edgeToExternal(entry.raw ?? entry.spec))];
+      to = edgeToExternal(entry.raw ?? entry.spec);
     }
-    to = pathLike ? edgeToResolvedFile(pathLike) : await resolveGenericSpecifier(entry, context, resolutionExtensions);
   } else {
     to = await resolveGenericSpecifier(entry, context, resolutionExtensions);
   }
