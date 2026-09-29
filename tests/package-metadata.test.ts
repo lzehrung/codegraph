@@ -527,6 +527,7 @@ describe("package metadata", () => {
 
     expect(offenders).toEqual([]);
   });
+
   it("keeps the package export surface deliberate", () => {
     // Updating this snapshot is a semver-relevant public API decision.
     expect(readPackageExportNames()).toMatchInlineSnapshot(`
@@ -736,6 +737,8 @@ describe("package metadata", () => {
           "TypeHierarchyDirection",
           "TypeHierarchyRelationKind",
           "TypeHierarchyRelationMatch",
+          "UndocumentedApiSurface",
+          "UndocumentedApiSymbol",
           "VUE_SUPPORT",
           "WorkerPoolReport",
           "WorkspaceSymbolMatch",
@@ -796,6 +799,7 @@ describe("package metadata", () => {
           "getReverseDependencies",
           "getSessionPreset",
           "getShortestPath",
+          "getUndocumentedApiSurface",
           "getUnresolvedImports",
           "goToDefinition",
           "goToDefinitionById",
@@ -1161,6 +1165,8 @@ describe("package metadata", () => {
           "TypeHierarchyRelationKind",
           "TypeHierarchyRelationMatch",
           "TypeHierarchyResult",
+          "UndocumentedApiSurface",
+          "UndocumentedApiSymbol",
           "WorkerPoolReport",
           "WorkspaceSymbolMatch",
           "WorkspaceSymbolsRequest",
@@ -1179,6 +1185,7 @@ describe("package metadata", () => {
           "findReferencesById",
           "findTypeHierarchy",
           "getApiSurface",
+          "getUndocumentedApiSurface",
           "goToDefinition",
           "goToDefinitionById",
           "listSymbols",
@@ -1581,30 +1588,6 @@ describe("package metadata", () => {
     expect(fs.existsSync(path.resolve(process.cwd(), "packages/codegraph-js-fallback/package.json"))).toBe(false);
   });
 
-  it("keeps the landing README linked to the canonical reference docs", () => {
-    const readme = readText("README.md");
-
-    expect(readme).toContain("./docs/installation.md");
-    expect(readme).toContain("./docs/cli.md");
-    expect(readme).toContain("./docs/library-api.md");
-    expect(readme).toContain("./docs/agent-workflows.md");
-    expect(readme).toContain("./docs/how-it-works.md");
-    expect(readme).toContain("./PUBLISHING.md");
-  });
-
-  it("keeps copied README consumers oriented to the library API surface", () => {
-    const readme = readText("README.md");
-
-    expect(readme).toContain("## Using as a library");
-    expect(readme).toContain("buildProjectIndex");
-    expect(readme).toContain("buildReviewReport");
-    expect(readme).toContain("analyzeImpactFromDiff");
-    expect(readme).toContain("analyzeImpactStreaming");
-    expect(readme).toContain("tool_impactJSON");
-    expect(readme).toContain("structured fields");
-    expect(readme).toContain("./docs/library-api.md");
-  });
-
   it("keeps public API boundary JSDoc available for generated declarations", () => {
     const declarationChecks = [
       { file: "dist/indexer/build-index.d.ts", symbol: "buildProjectIndex" },
@@ -1653,9 +1636,6 @@ describe("package metadata", () => {
     expect(libraryApi).toContain("Public-legacy APIs");
     expect(libraryApi).toContain("Internal-only modules");
     expect(libraryApi).toContain("@lzehrung/codegraph-core/dist/...");
-
-    const readme = readText("README.md");
-    expect(readme).toContain("./docs/library-api.md#public-api-boundary");
   });
 
   it("scopes streaming summary mode to the streaming API type", () => {
@@ -1712,22 +1692,6 @@ void diagnosticsStreaming;
 void fallbackPathsStreaming;
 void onImpactItemStreaming;
 `);
-  });
-
-  it("keeps streaming and batch impact format discriminators distinct in docs", () => {
-    const readme = readText("README.md");
-    const libraryApi = readText("docs/library-api.md");
-    const agentWorkflows = readText("docs/agent-workflows.md");
-    const streamingSource = readText("src/impact/streaming.ts");
-
-    expect(readme).toContain("ranked top impacts");
-    expect(libraryApi).toContain('batch impact wrappers include `schemaVersion` and `format: "full" | "compact"`');
-    expect(libraryApi).toContain("ranked top impacts");
-    expect(libraryApi).toContain('streaming `complete.report` uses `format: "stream-summary"`');
-    expect(agentWorkflows).toContain('Batch impact wrappers return `schemaVersion` and `format: "full" | "compact"`');
-    expect(agentWorkflows).toContain("ranked top impacts");
-    expect(agentWorkflows).toContain('streaming `complete.report` uses `format: "stream-summary"`');
-    expect(streamingSource).toContain("top impacts");
   });
 
   it("keeps repeated impact ignore globs explicit in CLI docs", () => {

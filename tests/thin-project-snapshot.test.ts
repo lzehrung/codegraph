@@ -1,9 +1,14 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { brotliDecompressSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, constants } from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
-import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  getUndocumentedApiSurface,
+  type BuildReport,
+} from "../src/index.js";
 import { PROJECT_SNAPSHOT_VERSION, tryLoadProjectIndexSnapshot } from "../src/indexer/build-cache/project-snapshot.js";
 import { closeDiskCacheDatabase } from "../src/indexer/build-cache/module-cache.js";
 import { loadManifest } from "../src/indexer/build-cache/manifest.js";
@@ -166,6 +171,66 @@ describe("thin project snapshot", () => {
         .get(fileIdentityKey(normalizePath(path.join(root, "alpha.ts"))))
         ?.locals.some((local) => local.localName === "alpha"),
     ).toBe(true);
+  });
+
+  it("rejects a legacy snapshot with a malformed docstring-check marker", async () => {
+    const root = await roots.create("cg-snapshot-docstring-marker-");
+    await fsp.writeFile(path.join(root, "api.ts"), "/** documented */\nexport function documented() {}\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const snapshot = await readSnapshot(root);
+    const modules = new Map<string, { file: string; docstringsChecked?: string }>();
+    for (const module of sqliteModulePayloads(root)) modules.set(module.file, module);
+    for (const module of snapshot.modules) modules.set(module.file, module);
+    const api = modules.get("api.ts");
+    if (!api) throw new Error("Expected api.ts in the module cache.");
+    modules.set("api.ts", { ...api, docstringsChecked: "yes" });
+    const malformed = { ...snapshot, version: 10, modules: [...modules.values()] };
+    await fsp.writeFile(
+      snapshotPath(root),
+      brotliCompressSync(JSON.stringify(malformed), { params: { [constants.BROTLI_PARAM_QUALITY]: 4 } }),
+    );
+    const manifest = await loadManifest(root, { cache: "disk" });
+    if (!manifest) throw new Error("Expected manifest after the disk build.");
+    const loaded = await tryLoadProjectIndexSnapshot(root, { cache: "disk" }, new Map(Object.entries(manifest.files)));
+    expect(loaded).toBeNull();
+  });
+
+  it("rebuilds a malformed SQLite module rather than trusting missing documentation", async () => {
+    const root = await roots.create("cg-module-docstring-marker-");
+    await fsp.writeFile(
+      path.join(root, "api.ts"),
+      "/** documented */\nexport function documented() {}\nexport function undocumented() {}\n",
+      "utf8",
+    );
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const db = new DatabaseSync(sqlitePath(root));
+    try {
+      const row = db.prepare("SELECT payload FROM module_cache WHERE file = ?").get("api.ts") as
+        | { payload: Uint8Array }
+        | undefined;
+      if (!row) throw new Error("Expected cached api.ts module.");
+      const module = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as {
+        docstringsChecked?: unknown;
+        exports: Array<{ type: string; target?: { localName: string; docstring?: string } }>;
+      };
+      module.docstringsChecked = "yes";
+      const documented = module.exports.find(
+        (entry) => entry.type === "local" && entry.target?.localName === "documented",
+      );
+      if (!documented?.target) throw new Error("Expected documented export in cached module.");
+      delete documented.target.docstring;
+      db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+        brotliCompressSync(JSON.stringify(module)),
+        "api.ts",
+      );
+    } finally {
+      db.close();
+    }
+    const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+    expect(getUndocumentedApiSurface(rebuilt)).toMatchObject({
+      symbols: [{ name: "undocumented" }],
+      coverage: { state: "complete" },
+    });
   });
 
   it("rebuilds quietly when SQLite module payloads are unreadable", async () => {

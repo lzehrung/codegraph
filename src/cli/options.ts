@@ -206,10 +206,10 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "apisurface",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--undocumented"], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph apisurface [project-root] [--root <path>] [--json | --pretty]",
+      usage: "Usage: codegraph apisurface [project-root] [--root <path>] [--undocumented] [--json | --pretty]",
     }),
   ],
   [

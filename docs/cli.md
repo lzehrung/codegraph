@@ -600,6 +600,8 @@ codegraph cycles --sort priority
 
 # Public API surface
 codegraph apisurface
+# Exported declarations with no captured docstring
+codegraph apisurface --undocumented --json
 
 # Unresolved imports
 codegraph unresolved
@@ -608,6 +610,16 @@ codegraph unresolved --verbose
 # Hotspots
 codegraph hotspots ./src --limit 20
 ```
+
+`hotspots` ranks files by fan-in and fan-out connectivity. It does not measure code complexity.
+
+`apisurface --undocumented` lists local exports only when indexed docstring capture was available. The pretty output shows file, range, name, kind, and exported name, followed by a coverage warning when any file could not be checked. `--json` returns `{ symbols: [{ file, name, exportedAs, kind, range }], coverage: { state: "complete" | "partial", uncheckedFiles?: string[] } }`. File paths, including `uncheckedFiles`, are project-relative.
+
+Re-exports have no local declaration and are omitted. Unsupported docstring syntax and reduced-mode files are excluded from `symbols` and named in partial coverage; see [language parity](./language-parity.md#symbols-and-exports).
+
+Unused exports have no CLI, MCP, or library report.
+
+Runtime-loaded worker entry points and some same-file references can escape the index. Treat library results as leads, not proof that an export has no consumers.
 
 Cycle detection reports source dependency cycles. Document-only link loops, such as Markdown files linking to each other, remain in the graph for navigation but are not reported as dependency cycles.
 

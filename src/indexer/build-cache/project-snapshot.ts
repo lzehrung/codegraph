@@ -957,6 +957,7 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     exports: [...mod.exports],
     imports: [...mod.imports],
     locals: [...mod.locals],
+    ...(mod.docstringsChecked ? { docstringsChecked: true } : {}),
     ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
   };
 }
@@ -1869,6 +1870,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   const moduleIndex = value as Partial<ModuleIndex>;
   return (
     typeof moduleIndex.file === "string" &&
+    isOptionalBoolean(moduleIndex.docstringsChecked) &&
     Array.isArray(moduleIndex.locals) &&
     moduleIndex.locals.every(isSymbolDef) &&
     Array.isArray(moduleIndex.imports) &&

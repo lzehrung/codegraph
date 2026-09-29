@@ -12,6 +12,8 @@ import type { NativeQueryResults, NativeRuntimeMode } from "./native/tree-sitter
 export { SymbolKind } from "./indexer/types.js";
 export type {
   ApiSurface,
+  UndocumentedApiSymbol,
+  UndocumentedApiSurface,
   BackendReport,
   BuildFileReport,
   BuildOptions,
@@ -87,6 +89,7 @@ export {
   defFromSymbolId,
   findReferencesById,
   getApiSurface,
+  getUndocumentedApiSurface,
   goToDefinitionById,
   listSymbols,
   resolveSymbolId,

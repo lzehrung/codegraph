@@ -403,12 +403,14 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   if (!value || typeof value !== "object") return false;
   const mod = value as {
     file?: unknown;
+    docstringsChecked?: unknown;
     exports?: unknown;
     imports?: unknown;
     locals?: unknown;
   };
   return (
     typeof mod.file === "string" &&
+    (mod.docstringsChecked === undefined || typeof mod.docstringsChecked === "boolean") &&
     Array.isArray(mod.exports) &&
     Array.isArray(mod.imports) &&
     mod.imports.every(hasValidImportBindingRanges) &&

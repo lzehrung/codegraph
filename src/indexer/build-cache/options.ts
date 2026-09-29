@@ -135,8 +135,14 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * to that type's static members, and chooses type-qualified Java/C# overloads by argument count.
  * Epoch 71 binds C# `using N;` to a file that declares `N` even when several do, and never to a
  * path-like file in another language.
+ * Epoch 72 persists per-module docstring-check availability and preserves JSDoc from collapsed
+ * TypeScript overload signatures.
+ * Epoch 73 captures documentation on regex-fallback CommonJS exports and rejects malformed
+ * docstring-check markers in persisted modules.
+ * Epoch 74 binds CommonJS fallback function exports to their assignment, not to a
+ * same-named local, and records synthetic definitions at their export properties.
  */
-export const CORE_ALGORITHM_EPOCH = 71;
+export const CORE_ALGORITHM_EPOCH = 74;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
