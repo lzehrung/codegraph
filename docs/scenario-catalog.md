@@ -5,7 +5,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage. Each entry names 
 ## API quality reports
 
 - `tests/undocumented-api.test.ts`: `apisurface --undocumented` includes undocumented exports and excludes documented exports where comments are captured. Each exporting language has a fixture, including recorded capture limits. Pretty and JSON output include locations.
-- `tests/unused-exports.test.ts`: `findUnusedExports` reports an unreferenced export only with complete indexed reference coverage. It excludes a used export, a re-exported symbol, package entry points, and a dynamically loaded module.
+- `tests/unused-exports.test.ts`: the internal `findUnusedExports` prototype (not exported) reports an unreferenced export only with complete indexed reference coverage. It excludes a used export, a re-exported symbol, package entry points, and a dynamically loaded module.
 
 ## Impact and diff pipeline
 

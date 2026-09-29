@@ -12,7 +12,6 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Added
 
 - `apisurface --undocumented` and `getUndocumentedApiSurface` list exported declarations without a captured docstring, with source locations. Language-specific capture limits are documented.
-- `findUnusedExports` conservatively lists local exports with complete indexed reference coverage and no indexed use. It is available from the library only.
 
 ### Fixed
 

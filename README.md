@@ -75,7 +75,6 @@ Use codegraph alongside text search and compilers: text search finds exact strin
 | Refactor | Where would a rename apply?              | `codegraph rename-preview <symbol-target> <new-name>`    | Read-only edits and conflicts; no code changes         |
 | Quality  | Which files have the most connections?   | `codegraph hotspots ./src --limit 20`                    | Fan-in and fan-out ranking                             |
 | Quality  | Where is code duplicated?                | `codegraph duplicates ./src --min-confidence medium`     | Ranked duplicate groups                                |
-| Quality  | Which exports lack indexed references?   | `findUnusedExports(index)` (library only)                | Candidates with complete coverage; check source use    |
 | Docs     | Which public symbols exist?              | `codegraph apisurface`                                   | Exported API symbols                                   |
 | Docs     | Which exports have no indexed docstring? | `codegraph apisurface --undocumented`                    | File, name, kind, and range; see language limits       |
 | Docs     | Are Markdown links broken?               | `codegraph links --root .`                               | Broken local links with ranges; external URLs skipped  |

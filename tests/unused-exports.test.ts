@@ -2,7 +2,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndexFromFiles, findReferences, findUnusedExports } from "../src/index.js";
+import { buildProjectIndexFromFiles, findReferences } from "../src/index.js";
+import { findUnusedExports } from "../src/indexer/unused-exports.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
 import type { BuildReport } from "../src/indexer.js";

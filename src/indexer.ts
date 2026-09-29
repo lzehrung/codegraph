@@ -97,8 +97,6 @@ export {
 } from "./indexer/symbols.js";
 export type { ResolvedSymbolTarget, SymbolTargetResolution } from "./indexer/symbols.js";
 
-export { findUnusedExports, type UnusedExportCandidate } from "./indexer/unused-exports.js";
-
 export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,
