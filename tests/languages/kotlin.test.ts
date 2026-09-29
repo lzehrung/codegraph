@@ -691,7 +691,7 @@ describe("Kotlin implicit-receiver precedence", () => {
     }
   });
 
-  it("keeps a spread call ambiguous across inherited overloads and prefers a fixed-arity one for a known count", async () => {
+  it("keeps spread and same-count calls ambiguous across a fixed-arity and a vararg inherited overload", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-spread-overloads-"));
     try {
       const lines = [
@@ -718,15 +718,15 @@ describe("Kotlin implicit-receiver precedence", () => {
         const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf("hit") + 1 });
         return result.status === "ok" ? result.definition.range.start.line : null;
       };
-      // A spread's length is unknown, so both inherited overloads remain; two arguments pick the
-      // fixed-arity overload over the vararg one.
+      // A spread's length is unknown, and two arguments fit both hit(Int, Int) and hit(vararg Int):
+      // without argument types neither overload is proven, so neither call has a target.
       expect(await gotoLine(12)).toBeNull();
-      expect(await gotoLine(13)).toBe(8);
+      expect(await gotoLine(13)).toBeNull();
       const graph = await buildSymbolGraphDetailed(index);
       const calls = graph.edges
         .filter((edge) => edge.label === "calls")
         .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.site?.range.start.line}`);
-      expect(calls).toEqual(["two:13"]);
+      expect(calls).toEqual([]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

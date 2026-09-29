@@ -864,4 +864,29 @@ describe("Java implicit-receiver precedence", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps a fixed-arity and a varargs inherited overload of one count ambiguous", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-varargs-ambiguity-"));
+    try {
+      await writeFile(
+        path.join(root, "GrandBase.java"),
+        "package j;\nclass GrandBase { int hit(int... xs) { return 1; } }\n",
+      );
+      await writeFile(
+        path.join(root, "Base.java"),
+        "package j;\nclass Base extends GrandBase { int hit(String s) { return 2; } }\n",
+      );
+      const lines = ["package j;", "class Derived extends Base {", "  int one() { return hit(1); }", "}", ""];
+      const use = normalizePath(path.join(root, "Derived.java"));
+      await writeFile(use, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // hit(1) calls hit(int...) in Java, but only argument types prove it: no confident target.
+      const goto = await goToDefinition(index, { file: use, line: 3, column: lines[2]!.indexOf("hit") + 1 });
+      expect(goto.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(graph.edges.filter((edge) => edge.label === "calls")).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

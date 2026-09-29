@@ -1526,7 +1526,7 @@ async function resolveKeywordReceiverMember(
   // Accepted overloads across levels. A deeper one is overridden only by an accepted method with
   // the same parameter types in a class proven to derive from its owner on the walked path;
   // unrelated owners with one signature (two interfaces) stay separate and ambiguous.
-  const accepted: Array<{ def: SymbolDef; owner: string; variadic: boolean }> = [];
+  const accepted: Array<{ def: SymbolDef; owner: string }> = [];
   const memberKey = (def: SymbolDef): string => `${fileIdentityKey(def.file)}:${def.range.start.index}`;
   const ownerOf = new Map<string, string>();
   const subclassesOf = new Map<string, Set<string>>();
@@ -1628,7 +1628,7 @@ async function resolveKeywordReceiverMember(
             break;
           }
         }
-        if (!overridden) accepted.push({ def: candidate, owner, variadic: await memberIsVariadic(index, candidate) });
+        if (!overridden) accepted.push({ def: candidate, owner });
       }
       // Navigation still names the only incompatible candidate when no ancestor accepts the call.
       if (allowUniqueArityMismatch && !lenient) {
@@ -1662,10 +1662,9 @@ async function resolveKeywordReceiverMember(
     level = next;
   }
   if (!spansHierarchy) return undefined;
-  // Java, Kotlin, and C# prefer a method applicable without variable-arity expansion.
-  const fixedArity = knownArgumentCount === undefined ? [] : accepted.filter((entry) => !entry.variadic);
-  if (fixedArity.length) accepted.splice(0, accepted.length, ...fixedArity);
-  // Without type ranking, two surviving overloads of one arity are ambiguous.
+  // Without type ranking, two surviving overloads are ambiguous, including a fixed-arity and a
+  // variable-arity one: `hit(String)` and `hit(int...)` both take one argument, and only argument
+  // types decide.
   if (accepted.length > 1) {
     if (report) report.ambiguous = true;
     return undefined;
@@ -1687,19 +1686,6 @@ async function memberParameterList(index: ProjectIndex, def: SymbolDef): Promise
     declaration?.childForFieldName("parameters") ??
     declaration?.namedChildren.find((child) => child.type === "function_value_parameters") ??
     null
-  );
-}
-
-/** Whether a method takes a variable argument list (Java `...`, Kotlin `vararg`, C# `params`). */
-async function memberIsVariadic(index: ProjectIndex, def: SymbolDef): Promise<boolean> {
-  const parameters = await memberParameterList(index, def);
-  return (
-    !!parameters &&
-    parameters.namedChildren.some((parameter) => {
-      // Java `int... xs`; C# `params int[] xs`; Kotlin `vararg` sits in a sibling modifier node.
-      const text = parameter.text.trimStart();
-      return text.includes("...") || /^params\s/u.test(text) || /(?:^|\s)vararg(?:\s|$)/u.test(text);
-    })
   );
 }
 

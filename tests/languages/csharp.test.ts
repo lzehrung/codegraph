@@ -2294,3 +2294,37 @@ describe("CSharp bare member overloads", () => {
     }
   });
 });
+
+describe("C# inherited overloads", () => {
+  it("binds to an applicable base overload when the derived type's same-named method does not apply", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-base-overload-"));
+    try {
+      const lines = [
+        "public class Derived : Base {",
+        "  public int Hit(string s) => 0;",
+        "  public int Use() => Hit(1, 2);",
+        "  public int One() => Hit(1);",
+        "}",
+        "",
+      ];
+      await writeFile(path.join(root, "Base.cs"), "public class Base {\n  public int Hit(int a, int b) => a + b;\n}\n");
+      const file = normalizePath(path.join(root, "Derived.cs"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // C# candidates are the applicable methods first (spec, method invocations); only then are
+      // base methods of an applicable derived method removed. Hit(string) cannot take two
+      // arguments, so Hit(1, 2) binds to Base.Hit(int, int).
+      const goto = await goToDefinition(index, { file, line: 3, column: lines[2]!.indexOf("Hit") + 1 });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(path.basename(goto.definition.file)).toBe("Base.cs");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
+        .sort();
+      expect(calls).toEqual(["One->Derived.cs", "Use->Base.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
