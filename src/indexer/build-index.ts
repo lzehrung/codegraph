@@ -1005,7 +1005,9 @@ async function collectStaleCachedModules(args: {
     loadTsconfigResolutionInputsFor(importer, args.projectRoot, args.opts?.logLevel).then((inputs) => inputs?.paths);
   if (manifestFiles) {
     const currentKeys = new Set(args.files.map(fileIdentityKey));
-    const changed = new Set<string>();
+    // A cache-signature mismatch proves a change even when a non-strict manifest signature
+    // (mtime:size) matches, so misses count as changed too.
+    const changed = new Set<string>(args.cacheMisses.changed);
     const added: string[] = [];
     for (const file of args.files) {
       const entry = manifestFiles[file];
@@ -1022,11 +1024,14 @@ async function collectStaleCachedModules(args: {
     for (const file of collectTrackedFileDependents(manifestFiles, changed)) {
       if (resolvesFromDeclarations(file)) stale.add(file);
     }
-    if (added.length) {
+    // A changed file of a declaration language can start declaring a namespace or package that an
+    // unrelated importer names, so its importers are re-resolved as if the file were added.
+    const resolutionInputs = [...added, ...[...changed].filter((file) => resolvesFromDeclarations(file))];
+    if (resolutionInputs.length) {
       const stemsByLanguage = new Map<string, ReadonlySet<string>>();
       const addedStemsForLanguage = (languageId: string): ReadonlySet<string> => {
         let stems = stemsByLanguage.get(languageId);
-        if (!stems) stemsByLanguage.set(languageId, (stems = addedResolutionStems(added, languageId)));
+        if (!stems) stemsByLanguage.set(languageId, (stems = addedResolutionStems(resolutionInputs, languageId)));
         return stems;
       };
       const candidates = [...collectSpecifierEdgeCandidates(manifestFiles, true)].filter(
@@ -1041,7 +1046,7 @@ async function collectStaleCachedModules(args: {
           args.graphOptions,
           args.opts?.languageExtensions,
           args.loadMatchPathForFile,
-          added,
+          resolutionInputs,
           addedStemsForLanguage,
           loadTsconfigPaths,
         ),
@@ -1052,7 +1057,10 @@ async function collectStaleCachedModules(args: {
       for (const importer of collectPythonPackageImporters(manifestFiles, added)) stale.add(importer);
     }
   } else {
-    const { added } = args.cacheMisses;
+    const added = [
+      ...args.cacheMisses.added,
+      ...args.cacheMisses.changed.filter((file) => resolvesFromDeclarations(file)),
+    ];
     if (added.length) {
       const stemsByLanguage = new Map<string, ReadonlySet<string>>();
       for (const [file, { mod }] of cachedModules) {

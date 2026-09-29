@@ -1015,4 +1015,28 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("re-resolves a C# using directive when an existing file starts declaring its namespace (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-new-declaration-");
+    try {
+      const use = path.join(root, "Use.cs");
+      const mix = path.join(root, "b", "Mix.cs");
+      const useLines = ["using N;", "namespace Q;", "public class Use {", "  public object B() => new Mix();", "}", ""];
+      await fsp.mkdir(path.join(root, "a"));
+      await fsp.mkdir(path.dirname(mix));
+      await fsp.writeFile(path.join(root, "a", "First.cs"), "namespace N;\npublic class First { }\n", "utf8");
+      await fsp.writeFile(mix, "namespace Other;\npublic class Mix { }\n", "utf8");
+      await fsp.writeFile(use, useLines.join("\n"), "utf8");
+      const initial = await buildProjectIndex(root, DISK_BUILD);
+      const before = await goToDefinition(initial, { file: use, line: 4, column: columnOf(useLines, 4, "Mix") });
+      expect(before.status).toBe("not_found");
+      // Use.cs does not change; b/Mix.cs now declares namespace N.
+      await fsp.writeFile(mix, "namespace N;\npublic class Mix { }\n", "utf8");
+      const warm = await buildProjectIndex(root, DISK_BUILD);
+      const result = await goToDefinition(warm, { file: use, line: 4, column: columnOf(useLines, 4, "Mix") });
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("Mix.cs");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
