@@ -36,6 +36,20 @@ describe("lightweight CLI entrance", () => {
     }
   });
 
+  it("describes hotspots as connectivity, not complexity, in both help routes", async () => {
+    const advanced = await captureCli(["help", "advanced"]);
+    const command = await captureCli(["hotspots", "--help"]);
+    const catalog = CLI_COMMAND_CATALOG.find((entry) => entry.name === "hotspots");
+    for (const description of [
+      catalog?.summary,
+      advanced.stdout.split("hotspots")[1]?.split("\n")[0],
+      command.stdout.split("\n")[0],
+    ]) {
+      expect(description).toMatch(/fan-in.*fan-out|connect/i);
+      expect(description).not.toMatch(/complex/i);
+    }
+  });
+
   it("supports help as an alias without project discovery", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-help-alias-"));
     await fs.writeFile(path.join(root, "codegraph.config.json"), "{ invalid json", "utf8");

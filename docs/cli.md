@@ -609,6 +609,8 @@ codegraph unresolved --verbose
 codegraph hotspots ./src --limit 20
 ```
 
+`hotspots` ranks files by fan-in and fan-out connectivity. It does not measure code complexity.
+
 Cycle detection reports source dependency cycles. Document-only link loops, such as Markdown files linking to each other, remain in the graph for navigation but are not reported as dependency cycles.
 
 Dependency read commands use the indexed graph path and derived adjacency maps internally when available. This makes repeated `deps`, `rdeps`, and `path` reads cheaper on warm manifest-backed projects.

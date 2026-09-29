@@ -668,7 +668,7 @@ Usage: codegraph cycles [roots...] [--root <path>] [--sort priority|size|fanin] 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
-export const HOTSPOTS_HELP_TEXT = `codegraph hotspots - Find high-complexity files
+export const HOTSPOTS_HELP_TEXT = `codegraph hotspots - Rank files by fan-in and fan-out connectivity
 
 Usage: codegraph hotspots [roots...] [--root <path>] [--limit <n>] [--json | --pretty]
 

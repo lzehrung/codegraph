@@ -48,7 +48,7 @@ export const CLI_COMMAND_CATALOG: readonly CliCommandMetadata[] = [
   { name: "rdeps", summary: "List reverse dependencies", family: "graph" },
   { name: "path", summary: "Find the shortest dependency path between files", family: "graph" },
   { name: "cycles", summary: "Detect dependency cycles", family: "graph" },
-  { name: "hotspots", summary: "Find high-complexity files", family: "graph" },
+  { name: "hotspots", summary: "Rank files by fan-in and fan-out connectivity", family: "graph" },
   { name: "duplicates", summary: "Detect duplicate and near-duplicate code units", family: "review" },
   { name: "unresolved", summary: "List unresolved project imports", family: "graph" },
   { name: "apisurface", summary: "Summarize exported API symbols", family: "graph" },

@@ -97,7 +97,7 @@ Filename results are suggestions only.
 
 ## Other tasks and recovery
 
-- Architecture checks: `codegraph inspect`, `codegraph hotspots`, `codegraph cycles`, `codegraph unresolved`, and `codegraph apisurface`.
+- Architecture checks: `codegraph inspect`, `codegraph hotspots` (fan-in and fan-out connectivity), `codegraph cycles`, `codegraph unresolved`, and `codegraph apisurface`.
 - Duplicate cleanup: `codegraph duplicates --root . ./src --profile cleanup`. It excludes imports from every supported import syntax. Local Markdown links: `codegraph links --json`.
 - Specialized reads: `codegraph grep --query` for syntax trees, `codegraph chunk` for embeddings, and `codegraph dumpmod` for indexed module data.
 - Compare architecture across revisions: `codegraph drift` or `codegraph graph-delta`.
