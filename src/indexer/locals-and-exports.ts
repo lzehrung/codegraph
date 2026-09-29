@@ -36,6 +36,21 @@ import {
   typescriptCallableRoleAt,
 } from "./ts-callables.js";
 
+// Missing captured comments prove missing documentation only for these languages.
+// Python captures # comments but not triple-quoted function/class docstrings.
+const DOCSTRING_CAPTURE_LANGUAGES = new Set([
+  "ts",
+  "tsx",
+  "js",
+  "go",
+  "java",
+  "csharp",
+  "kotlin",
+  "rust",
+  "zig",
+  "scss",
+]);
+
 /**
  * Matches one `exportScopeBlockers` entry against an ancestor node. A plain entry compares the
  * node type; a `parent>node` entry also requires that parent type, which is how Python separates a
@@ -338,6 +353,10 @@ function collapseTypeScriptCallableExports(
     if (group.length < 2) continue;
     const canonical = typescriptCollapsedOverloadTarget(group, tree, (entry) => entry.target);
     if (!canonical) continue;
+    if (!canonical.target.docstring?.trim()) {
+      const documented = group.find((entry) => entry.target.docstring?.trim());
+      if (documented?.target.docstring) canonical.target.docstring = documented.target.docstring;
+    }
     for (const entry of group) {
       if (entry !== canonical) drop.add(entry);
     }
@@ -1602,5 +1621,6 @@ export function collectLocalsAndExportsFromSource(
     exports: dedupeExportEntries(collapseTypeScriptCallableExports(exports, ensureTree(), support.id), support.id),
     imports,
     locals,
+    ...(tree && DOCSTRING_CAPTURE_LANGUAGES.has(support.id) ? { docstringsChecked: true } : {}),
   };
 }

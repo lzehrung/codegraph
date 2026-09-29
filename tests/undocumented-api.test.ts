@@ -129,16 +129,23 @@ describe("undocumented public API", () => {
       expect(!!documented?.target.docstring).toBe(captures);
       expect(undocumented?.target.docstring).toBeUndefined();
       const reported = getUndocumentedApiSurface(index);
-      expect(reported.map((item) => item.name.toLowerCase())).toContain("undocumented");
-      expect(reported.some((item) => item.name.toLowerCase() === "documented")).toBe(!captures);
-      expect(reported.find((item) => item.name.toLowerCase() === "undocumented")).toMatchObject({
-        file: file.replaceAll("\\", "/"),
-        kind: expect.any(String),
-        range: {
-          start: { line: expect.any(Number) },
-          end: { line: expect.any(Number) },
-        },
-      });
+      const checkable = captures && fixture.language !== "python";
+      if (checkable) {
+        expect(reported.coverage).toEqual({ state: "complete" });
+        expect(reported.symbols.map((item) => item.name.toLowerCase())).toContain("undocumented");
+        expect(reported.symbols.map((item) => item.name.toLowerCase())).not.toContain("documented");
+        expect(reported.symbols.find((item) => item.name.toLowerCase() === "undocumented")).toMatchObject({
+          file: file.replaceAll("\\", "/"),
+          kind: expect.any(String),
+          range: {
+            start: { line: expect.any(Number) },
+            end: { line: expect.any(Number) },
+          },
+        });
+      } else {
+        expect(reported.symbols).toEqual([]);
+        expect(reported.coverage).toEqual({ state: "partial", uncheckedFiles: [file.replaceAll("\\", "/")] });
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -159,16 +166,111 @@ describe("undocumented public API", () => {
       expect(pretty.stdout).toContain("undocumented (function, exported as undocumented)");
       expect(pretty.stdout).not.toContain("documented (function, exported as documented)");
       expect(json.exitCode).toBeUndefined();
-      const items: unknown = JSON.parse(json.stdout);
-      expect(items).toEqual([
-        expect.objectContaining({
-          file: "api.ts",
-          name: "undocumented",
-          kind: "function",
-          exportedAs: "undocumented",
-          range: { start: expect.objectContaining({ line: 3 }), end: expect.any(Object) },
-        }),
-      ]);
+      const result: unknown = JSON.parse(json.stdout);
+      expect(result).toEqual({
+        coverage: { state: "complete" },
+        symbols: [
+          expect.objectContaining({
+            file: "api.ts",
+            name: "undocumented",
+            kind: "function",
+            exportedAs: "undocumented",
+            range: { start: expect.objectContaining({ line: 3 }), end: expect.any(Object) },
+          }),
+        ],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes reduced-mode exports whose documentation cannot be checked", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-undocumented-reduced-"));
+    try {
+      const file = path.join(root, "api.ts");
+      await writeFile(
+        file,
+        "/** documented */\nexport function documented() {}\nexport function undocumented() {}\n",
+        "utf8",
+      );
+      const index = await buildProjectIndexFromFiles(root, [file], { native: "off", cache: "off" });
+      expect(getUndocumentedApiSurface(index)).toEqual({
+        symbols: [],
+        coverage: { state: "partial", uncheckedFiles: [file.replaceAll("\\", "/")] },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mislabel Python triple-quoted docstrings", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-undocumented-python-"));
+    try {
+      const file = path.join(root, "api.py");
+      await writeFile(
+        file,
+        'def documented():\n    """A documented function."""\n    pass\n\ndef undocumented():\n    pass\n',
+        "utf8",
+      );
+      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      expect([...index.byFile.values()].flatMap((mod) => mod.exports).length).toBeGreaterThan(0);
+      expect(getUndocumentedApiSurface(index)).toEqual({
+        symbols: [],
+        coverage: { state: "partial", uncheckedFiles: [file.replaceAll("\\", "/")] },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves JSDoc from a collapsed exported overload signature", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-undocumented-overloads-"));
+    try {
+      const file = path.join(root, "api.ts");
+      await writeFile(
+        file,
+        [
+          "/** documented overload */",
+          "export function documented(value: string): string;",
+          "export function documented(value: string | number): string { return String(value); }",
+          "export function undocumented(value: string): string;",
+          "export function undocumented(value: string | number): string { return String(value); }",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const exports = [...index.byFile.values()].flatMap((mod) =>
+        mod.exports.filter((entry) => entry.type === "local"),
+      );
+      expect(exports.filter((entry) => entry.exportedAs === "documented")).toHaveLength(1);
+      const documented = exports.find((entry) => entry.exportedAs === "documented");
+      expect(documented?.target.docstring).toContain("documented overload");
+      expect(getUndocumentedApiSurface(index)).toMatchObject({
+        symbols: [{ name: "undocumented", exportedAs: "undocumented" }],
+        coverage: { state: "complete" },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps verified exports while reporting mixed-language CLI coverage", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-undocumented-mixed-"));
+    try {
+      await writeFile(path.join(root, "api.ts"), "export function missing() {}\n", "utf8");
+      await writeFile(path.join(root, "api.php"), "<?php\n/** has docs */\nfunction documented() {}\n", "utf8");
+      const pretty = await captureCli(["apisurface", "--root", root, "--undocumented", "--pretty"]);
+      const json = await captureCli(["apisurface", "--root", root, "--undocumented", "--json"]);
+      expect(pretty.exitCode).toBeUndefined();
+      expect(pretty.stdout).toContain("api.ts:1:");
+      expect(pretty.stdout).toContain("Coverage partial:");
+      expect(pretty.stdout).toContain("  - api.php");
+      expect(pretty.stdout).not.toContain("documented (function");
+      expect(json.exitCode).toBeUndefined();
+      expect(JSON.parse(json.stdout)).toMatchObject({
+        symbols: [{ file: "api.ts", name: "missing" }],
+        coverage: { state: "partial", uncheckedFiles: ["api.php"] },
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

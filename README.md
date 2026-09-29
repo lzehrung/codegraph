@@ -76,7 +76,7 @@ Use codegraph alongside text search and compilers: text search finds exact strin
 | Quality  | Which files have the most connections?   | `codegraph hotspots ./src --limit 20`                    | Fan-in and fan-out ranking                             |
 | Quality  | Where is code duplicated?                | `codegraph duplicates ./src --min-confidence medium`     | Ranked duplicate groups                                |
 | Docs     | Which public symbols exist?              | `codegraph apisurface`                                   | Exported API symbols                                   |
-| Docs     | Which exports have no indexed docstring? | `codegraph apisurface --undocumented`                    | File, name, kind, and range; see language limits       |
+| Docs     | Which exports have no indexed docstring? | `codegraph apisurface --undocumented`                    | Locations; partial coverage names unchecked files      |
 | Docs     | Are Markdown links broken?               | `codegraph links --root .`                               | Broken local links with ranges; external URLs skipped  |
 
 CLI output is readable by default. Use `--json` for structured fields and omission counts.

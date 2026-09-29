@@ -13,6 +13,7 @@ export { SymbolKind } from "./indexer/types.js";
 export type {
   ApiSurface,
   UndocumentedApiSymbol,
+  UndocumentedApiSurface,
   BackendReport,
   BuildFileReport,
   BuildOptions,

@@ -7,11 +7,14 @@ import type {
   SymbolHandle,
   SymbolListItem,
   UndocumentedApiSymbol,
+  UndocumentedApiSurface,
 } from "./types.js";
 import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
 import { parseSourceLocationInput } from "../util/source-location.js";
 import { importNodeId } from "./import-types.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
+import { isGraphOnlyLanguage } from "../document-links/language-ids.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
   const index = def?.range?.start?.index ?? 0;
@@ -308,10 +311,16 @@ export function getApiSurface(index: ProjectIndex): ApiSurface {
   return out;
 }
 
-/** List local public declarations whose indexed docstring is absent. */
-export function getUndocumentedApiSurface(index: ProjectIndex): UndocumentedApiSymbol[] {
+/** List local exports proven to have no captured docstring, with unchecked-file coverage. */
+export function getUndocumentedApiSurface(index: ProjectIndex): UndocumentedApiSurface {
   const items: UndocumentedApiSymbol[] = [];
+  const uncheckedFiles = new Set<string>();
   for (const mod of index.byFile.values()) {
+    if (!mod.docstringsChecked) {
+      const support = supportForFileWithoutHeaderSample(mod.file, index.languageExtensions);
+      if (support && !isGraphOnlyLanguage(support.id)) uncheckedFiles.add(mod.file);
+      continue;
+    }
     for (const entry of mod.exports) {
       if (entry.type !== "local" || entry.target.docstring?.trim()) continue;
       items.push({
@@ -323,5 +332,8 @@ export function getUndocumentedApiSurface(index: ProjectIndex): UndocumentedApiS
       });
     }
   }
-  return items;
+  if (uncheckedFiles.size) {
+    return { symbols: items, coverage: { state: "partial", uncheckedFiles: [...uncheckedFiles].sort() } };
+  }
+  return { symbols: items, coverage: { state: "complete" } };
 }

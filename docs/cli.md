@@ -613,9 +613,9 @@ codegraph hotspots ./src --limit 20
 
 `hotspots` ranks files by fan-in and fan-out connectivity. It does not measure code complexity.
 
-`apisurface --undocumented` lists local exported declarations with no indexed docstring. The pretty output shows file, range, name, kind, and exported name. With `--json`, it returns an array of `{ file, name, exportedAs, kind, range }` objects. File paths are project-relative.
+`apisurface --undocumented` lists local exports only when indexed docstring capture was available. The pretty output shows file, range, name, kind, and exported name, followed by a coverage warning when any file could not be checked. `--json` returns `{ symbols: [{ file, name, exportedAs, kind, range }], coverage: { state: "complete" | "partial", uncheckedFiles?: string[] } }`. File paths, including `uncheckedFiles`, are project-relative.
 
-Re-exports have no local declaration, so this option omits them. A missing docstring can also mean that the language does not capture that comment; see [language parity](./language-parity.md#symbols-and-exports).
+Re-exports have no local declaration and are omitted. Unsupported docstring syntax and reduced-mode files are excluded from `symbols` and named in partial coverage; see [language parity](./language-parity.md#symbols-and-exports).
 
 Unused exports have no CLI, MCP, or library report.
 

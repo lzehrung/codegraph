@@ -98,7 +98,7 @@ Filename results are suggestions only.
 ## Other tasks and recovery
 
 - Architecture checks: `codegraph inspect`, `codegraph hotspots` (fan-in and fan-out connectivity), `codegraph cycles`, `codegraph unresolved`, and `codegraph apisurface`.
-- API documentation checks: `codegraph apisurface --undocumented` lists exported declarations without a captured docstring. Check language limits before treating a result as missing documentation.
+- API documentation checks: `codegraph apisurface --undocumented` lists checked local exports without a docstring. A partial-coverage note (or `coverage.uncheckedFiles` in `--json`) names files it could not check; do not treat those files as undocumented.
 - Duplicate cleanup: `codegraph duplicates --root . ./src --profile cleanup`. It excludes imports from every supported import syntax. Local Markdown links: `codegraph links --json`.
 - Specialized reads: `codegraph grep --query` for syntax trees, `codegraph chunk` for embeddings, and `codegraph dumpmod` for indexed module data.
 - Compare architecture across revisions: `codegraph drift` or `codegraph graph-delta`.

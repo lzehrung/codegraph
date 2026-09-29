@@ -75,6 +75,8 @@ export type ModuleIndex = {
   exports: ExportEntry[];
   imports: ImportBinding[];
   locals: SymbolDef[];
+  /** Set only when a syntax tree and supported docstring syntax checked this module. */
+  docstringsChecked?: boolean;
   /**
    * Names of containers this file declares for project-wide import resolution (currently the
    * C++20 `export module foo;` names). Cached with the module so an incremental build can
@@ -422,6 +424,12 @@ export type UndocumentedApiSymbol = {
   exportedAs: string;
   kind: SymbolKind;
   range: Range;
+};
+
+/** Only declarations whose documentation could be checked are listed in symbols. */
+export type UndocumentedApiSurface = {
+  symbols: UndocumentedApiSymbol[];
+  coverage: { state: "complete" | "partial"; uncheckedFiles?: FileId[] };
 };
 
 export type GoToRequest = { file: FileId; line: number; column: number };

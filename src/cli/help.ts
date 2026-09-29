@@ -700,7 +700,7 @@ export const APISURFACE_HELP_TEXT = `codegraph apisurface - Summarize exported A
 
 Usage: codegraph apisurface [project-root] [--root <path>] [--undocumented] [--json | --pretty]
 
---undocumented lists local exports with no captured docstring. Re-exports have no local declaration.
+--undocumented lists checkable local exports without a captured docstring; partial coverage names unchecked files. Re-exports are omitted.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;

@@ -299,24 +299,30 @@ async function handleApiSurfaceCommand(context: GraphQueryCommandContext): Promi
   const json = context.hasFlag("--json");
   const index = await context.loadCurrentIndex();
   if (context.hasFlag("--undocumented")) {
-    const items = getUndocumentedApiSurface(index).map((item) => ({
+    const report = getUndocumentedApiSurface(index);
+    const symbols = report.symbols.map((item) => ({
       ...item,
       file: toProjectDisplayPath(context.projectRootFs, item.file),
     }));
+    const uncheckedFiles = report.coverage.uncheckedFiles?.map((file) =>
+      toProjectDisplayPath(context.projectRootFs, file),
+    );
+    const coverage = uncheckedFiles ? { state: "partial", uncheckedFiles } : { state: "complete" };
     if (json) {
-      context.writeJSONLine(items);
+      context.writeJSONLine({ symbols, coverage });
       return;
     }
     context.writeStdoutLine("Undocumented public API exports (indexed docstrings):");
-    if (!items.length) {
-      context.writeStdoutLine("  None found.");
-      return;
-    }
-    for (const item of items) {
+    if (!symbols.length) context.writeStdoutLine("  None found.");
+    for (const item of symbols) {
       const { start, end } = item.range;
       context.writeStdoutLine(
         `  - ${item.file}:${start.line}:${start.column}-${end.line}:${end.column} ${item.name} (${item.kind}, exported as ${item.exportedAs})`,
       );
+    }
+    if (uncheckedFiles?.length) {
+      context.writeStdoutLine("Coverage partial: docstrings could not be checked in these files:");
+      for (const file of uncheckedFiles) context.writeStdoutLine(`  - ${file}`);
     }
     return;
   }

@@ -11,7 +11,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Added
 
-- `apisurface --undocumented` and `getUndocumentedApiSurface` list exported declarations without a captured docstring, with source locations. Language-specific capture limits are documented.
+- `apisurface --undocumented` and `getUndocumentedApiSurface` return checked, undocumented exports with source locations and explicit partial coverage for unsupported or reduced-mode files. A documented TypeScript overload signature now documents its collapsed export.
 
 ### Fixed
 
