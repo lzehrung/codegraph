@@ -163,17 +163,20 @@ const MULTI_PART_RESOLUTION_EXTENSIONS = DEFAULT_RESOLUTION_EXTENSIONS.filter(
 type ExternalSpecifierResolutionRule = {
   separator: RegExp;
   importNamesDirectory?: "parent" | "ancestors";
-  reResolveAnyAddedExtension?: string;
+  // Declaration-based imports name packages, not files, so a filename stem cannot match them,
+  // and an added file with one of these extensions re-resolves every importer of the language.
+  reResolveAnyAddedExtensions?: readonly string[];
   matchesModuleSegments?: boolean;
 };
 
 const DEFAULT_EXTERNAL_SPECIFIER_RULE: ExternalSpecifierResolutionRule = { separator: /[/\\]/u };
 
 const EXTERNAL_SPECIFIER_RESOLUTION_RULES: Readonly<Record<string, ExternalSpecifierResolutionRule>> = {
-  csharp: { separator: /[/\\]/u, reResolveAnyAddedExtension: ".cs" },
+  csharp: { separator: /[/\\]/u, reResolveAnyAddedExtensions: [".cs", ".csx"] },
   go: { separator: /\//u, importNamesDirectory: "parent" },
-  java: { separator: /\./u },
-  kotlin: { separator: /\./u },
+  java: { separator: /\./u, reResolveAnyAddedExtensions: [".java"] },
+  kotlin: { separator: /\./u, reResolveAnyAddedExtensions: [".kt", ".kts", ".ktm"] },
+  php: { separator: /[/\\]/u, reResolveAnyAddedExtensions: [".php", ".phtml", ".php4", ".php8"] },
   python: { separator: /[./\\]/u, importNamesDirectory: "ancestors" },
   rust: { separator: /::/u, matchesModuleSegments: true },
 };
@@ -213,9 +216,9 @@ function externalSpecifierSegments(value: string, rule: ExternalSpecifierResolut
 }
 
 function hasAddedFileMatchingRule(rule: ExternalSpecifierResolutionRule, addedFiles: readonly string[]): boolean {
-  const extension = rule.reResolveAnyAddedExtension;
-  if (!extension) return false;
-  return addedFiles.some((file) => path.extname(file).toLowerCase() === extension);
+  const extensions = rule.reResolveAnyAddedExtensions;
+  if (!extensions || !extensions.length) return false;
+  return addedFiles.some((file) => extensions.includes(path.extname(file).toLowerCase()));
 }
 
 function specifierMatchesAddedStem(

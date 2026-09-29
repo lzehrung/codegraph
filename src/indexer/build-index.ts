@@ -83,7 +83,10 @@ import {
   recordFileFailure,
   sanitizeManifestEntriesForRoot,
   sanitizeManifestTransientFilesForRoot,
+  listDiskCachedModuleFiles,
+  listMemoryCachedModuleFiles,
   loadModuleFromCache,
+  peekCachedModule,
   tryLoadFromCache,
   tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
@@ -330,6 +333,94 @@ async function collectCppMissDeclaredContainers(
     );
   }
   return index;
+}
+
+/**
+ * Declared C++ modules of previous-build rows (changed files whose stale rows the cache probe
+ * kept), as name-to-declaring-files buckets. Only C++ modules populate declaredContainers,
+ * so no language filter is needed.
+ */
+function previousCppDeclaredContainers(previousModules: ReadonlyMap<string, ModuleIndex>): Map<string, Set<string>> {
+  const byName = new Map<string, Set<string>>();
+  for (const [file, mod] of previousModules) mergeDeclaredContainers(byName, file, mod.declaredContainers);
+  return byName;
+}
+
+/** Fold one files declared containers into name-to-declaring-files buckets. */
+function mergeDeclaredContainers(
+  byName: Map<string, Set<string>>,
+  file: string,
+  declared: readonly string[] | undefined,
+): void {
+  if (!declared || !declared.length) return;
+  const normalized = normalizePath(file);
+  for (const name of declared) {
+    let bucket = byName.get(name);
+    if (!bucket) byName.set(name, (bucket = new Set()));
+    bucket.add(normalized);
+  }
+}
+
+/** Sort name-to-declaring-files buckets into the shape declaredContainerNamesChanged compares. */
+function sortedDeclaredContainerIndex(byName: ReadonlyMap<string, ReadonlySet<string>>): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const [name, files] of byName) {
+    index.set(
+      name,
+      [...files].sort((left, right) => left.localeCompare(right)),
+    );
+  }
+  return index;
+}
+
+/** Whether a cached module has an import binding the previous build left unresolved. */
+function cachedModuleHasExternalImport(mod: ModuleIndex): boolean {
+  return mod.imports.some((binding) => binding.resolved !== undefined && typeof binding.resolved !== "string");
+}
+
+/**
+ * Files with surviving module-cache rows that the current build omits, limited to languages
+ * whose imports resolve through declarations. Each is either genuinely deleted or merely out of
+ * the build scope; the existence probe tells them apart. A deleted declarer leaves no cache
+ * miss behind, so without this the importers it used to satisfy (or crowd out) would be reused
+ * forever. The manifest path does not need this: the manifest records the previous file set.
+ */
+async function collectNoManifestDeletedDeclarationFiles(args: {
+  files: readonly string[];
+  projectRoot: string;
+  opts: BuildOptions | undefined;
+  concurrency: number;
+}): Promise<Array<{ file: string; languageId: string; mod: ModuleIndex | null }>> {
+  const live = new Set(args.files.map(fileIdentityKey));
+  const rows = new Map<string, string>();
+  for (const file of listMemoryCachedModuleFiles(args.projectRoot)) rows.set(fileIdentityKey(file), file);
+  if ((args.opts?.cache ?? "off") === "disk") {
+    const diskFiles = listDiskCachedModuleFiles(args.projectRoot, args.opts);
+    if (diskFiles) {
+      for (const relative of diskFiles) {
+        const file = normalizePath(path.resolve(args.projectRoot, relative));
+        if (!rows.has(fileIdentityKey(file))) rows.set(fileIdentityKey(file), file);
+      }
+    }
+  }
+  const candidates: Array<{ file: string; languageId: string }> = [];
+  for (const [key, file] of rows) {
+    if (live.has(key)) continue;
+    const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id;
+    if (languageId && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(languageId)) candidates.push({ file, languageId });
+  }
+  if (!candidates.length) return [];
+  const existence = await probePathExistence(
+    candidates.map((candidate) => candidate.file),
+    args.concurrency,
+  );
+  return candidates
+    .filter((candidate) => !existence.get(candidate.file))
+    .map((candidate) => ({
+      file: candidate.file,
+      languageId: candidate.languageId,
+      mod: peekCachedModule(args.projectRoot, candidate.file, args.opts)?.mod ?? null,
+    }));
 }
 
 async function resolveCrossModuleSymbolExports(
@@ -599,8 +690,9 @@ async function specifierResolutionChanged(
 ): Promise<boolean> {
   const support = supportForFileWithoutHeaderSample(file, languageExtensions);
   if (!support) return false;
+  // No stem-size gate here: declaration languages re-resolve through the extension rule inside
+  // externalSpecifierMatchesAddedStem, which runs before the stem check and needs no stems.
   const addedStems = addedStemsForLanguage(support.id);
-  if (!addedStems.size) return false;
   const specifierEdges = entry.edges;
   if (!specifierEdges.length) return false;
 
@@ -1030,6 +1122,8 @@ async function collectStaleCachedModules(args: {
   cachedModules: ReadonlyMap<string, { sigInfo: FileSignature; mod: ModuleIndex }>;
   /** Cache misses: files the cache held at another signature, and files it has not seen. */
   cacheMisses: { changed: readonly string[]; added: readonly string[] };
+  /** Previous-build modules of changed files, keyed by file, for declaration diffing. */
+  previousModules: ReadonlyMap<string, ModuleIndex>;
   /** Current signature of every file in the build. */
   signatures: ReadonlyMap<string, FileSignature>;
   manifestFiles: Record<string, ManifestFileEntry> | null;
@@ -1165,24 +1259,53 @@ async function collectStaleCachedModules(args: {
         );
         if (addedCanSatisfy) stale.add(file);
       }
-      // C++ named-module specifiers name declarations, not file stems, so the stem check above
-      // misses an added file declaring an already-declared module (ambiguity). Re-check the
-      // cached specifiers against the added files' declarations directly.
-      const cppAdded = added.filter(
-        (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "cpp",
-      );
-      if (cppAdded.length) {
-        const missDeclaredContainers = await collectCppMissDeclaredContainers(cppAdded, args.concurrency, {
+    }
+    // C++ named-module specifiers name declarations, not file stems, so the stem check above
+    // misses an added file declaring an already-declared module (ambiguity), a changed file that
+    // stopped declaring one, and a deleted file that declared one. A deleted file leaves no cache
+    // miss behind at all, so surviving rows of omitted files are scanned separately. Cache hits
+    // cancel out of the previous-vs-next comparison, so only stale rows, deleted files, and the
+    // current misses can move the diff.
+    const cppPrevious = previousCppDeclaredContainers(args.previousModules);
+    const unknownDeclarationLanguages = new Set<string>();
+    for (const deleted of await collectNoManifestDeletedDeclarationFiles({
+      files: args.files,
+      projectRoot: args.projectRoot,
+      opts: args.opts,
+      concurrency: args.concurrency,
+    })) {
+      if (deleted.languageId === "cpp" && deleted.mod && deleted.mod.declaredContainers) {
+        mergeDeclaredContainers(cppPrevious, deleted.file, deleted.mod.declaredContainers);
+      } else {
+        unknownDeclarationLanguages.add(deleted.languageId);
+      }
+    }
+    const cppAdded = added.filter(
+      (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "cpp",
+    );
+    const missDeclaredContainers = cppAdded.length
+      ? await collectCppMissDeclaredContainers(cppAdded, args.concurrency, {
           ...(args.confinedRoot ? { confinedRoot: args.confinedRoot, projectRoot: args.projectRoot } : {}),
           ...(args.trustedSources ? { trustedSources: args.trustedSources } : {}),
-        });
-        if (missDeclaredContainers.size) {
-          for (const [file, { mod }] of cachedModules) {
-            if (stale.has(file)) continue;
-            if (cachedModuleSpecifiers(mod).some((specifier) => missDeclaredContainers.has(specifier))) {
-              stale.add(file);
-            }
-          }
+        })
+      : new Map<string, string[]>();
+    const changedContainers = declaredContainerNamesChanged(
+      sortedDeclaredContainerIndex(cppPrevious),
+      missDeclaredContainers,
+    );
+    if (changedContainers.size || unknownDeclarationLanguages.size) {
+      for (const [file, { mod }] of cachedModules) {
+        if (stale.has(file)) continue;
+        if (
+          changedContainers.size &&
+          cachedModuleSpecifiers(mod).some((specifier) => changedContainers.has(specifier))
+        ) {
+          stale.add(file);
+          continue;
+        }
+        if (unknownDeclarationLanguages.size) {
+          const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "default";
+          if (unknownDeclarationLanguages.has(languageId) && cachedModuleHasExternalImport(mod)) stale.add(file);
         }
       }
     }
@@ -1391,7 +1514,7 @@ async function buildIndexFromFileListShared(
   };
   const jsonDependencies = new Map<string, string>();
   type ModuleCacheProbe =
-    | { sigInfo: FileSignature; mod: ModuleIndex | null; previouslyCached: boolean }
+    | { sigInfo: FileSignature; mod: ModuleIndex | null; previouslyCached: boolean; staleMod: ModuleIndex | null }
     | { error: unknown };
   // Cache lookup determines the work a full build will actually parse. Complete that cheap phase
   // before starting Piscina, so a warm build does not bootstrap workers and partial hits bound
@@ -1425,7 +1548,7 @@ async function buildIndexFromFileListShared(
           cacheEnabled && (!graphOptions.resolveNodeModules || resolverEnvironmentFingerprint !== null);
         const loaded = canReuseModuleCache
           ? loadModuleFromCache(projectRoot, file, cacheSig, opts, report, moduleCacheAvailable)
-          : { mod: null, previouslyCached: false };
+          : { mod: null, previouslyCached: false, staleMod: null };
         return [file, { sigInfo, ...loaded }] as const;
       } catch (error) {
         return [file, { error }] as const;
@@ -1452,16 +1575,23 @@ async function buildIndexFromFileListShared(
   if (cacheEnabled) {
     const cachedModules = new Map<string, { sigInfo: FileSignature; mod: ModuleIndex }>();
     const cacheMissesByState = { changed: [] as string[], added: [] as string[] };
+    // Stale rows of changed files still describe the previous build, which the no-manifest path
+    // needs to notice a removed or rewritten declaration. Deleted files leave no miss at all,
+    // so their surviving rows are found through the cache below.
+    const previousModules = new Map<string, ModuleIndex>();
     for (const [file, probe] of cacheProbes) {
       if ("error" in probe) continue;
       if (probe.mod) cachedModules.set(file, { sigInfo: probe.sigInfo, mod: probe.mod });
-      else if (probe.previouslyCached) cacheMissesByState.changed.push(file);
-      else cacheMissesByState.added.push(file);
+      else if (probe.previouslyCached) {
+        cacheMissesByState.changed.push(file);
+        if (probe.staleMod) previousModules.set(file, probe.staleMod);
+      } else cacheMissesByState.added.push(file);
     }
     const staleCachedModules = await collectStaleCachedModules({
       files: normalizedFiles,
       cachedModules,
       cacheMisses: cacheMissesByState,
+      previousModules,
       signatures: new Map(
         Array.from(cacheProbes, ([file, probe]) => ("error" in probe ? null : ([file, probe.sigInfo] as const))).filter(
           (entry): entry is readonly [string, FileSignature] => entry !== null,

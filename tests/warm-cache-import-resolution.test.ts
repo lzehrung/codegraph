@@ -1088,4 +1088,80 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       }
     });
   }
+
+  // The stem filter sees only the filename (Helpers), while the import names the declaration
+  // (p.Widget), so only the declaration-language extension rule can trigger re-resolution.
+  for (const cache of ["disk", "memory"] as const) {
+    it(`resolves a declaration-named import added under an unrelated filename (${cache} cache)`, async () => {
+      const root = await mkTmpDir(`cg-module-cache-decl-name-${cache}-`);
+      try {
+        const main = path.join(root, "p", "Main.kt");
+        const mainLines = ["package p", "import p.Widget", "fun use(w: Widget): Widget = w", ""];
+        await writeFixtureFile(root, `p/Main.kt`, mainLines.join(`\n`));
+        const unresolved = await buildProjectIndex(root, { cache });
+        expect(bindingTargets(unresolved, main)).toEqual(["external:p.Widget"]);
+
+        await writeFixtureFile(root, "p/Helpers.kt", "package p\nclass Widget\n");
+        const warm = await buildProjectIndex(root, { cache });
+        const targets = await expectWarmMatchesCold(root, main, warm);
+        expect(targets).toEqual(["file:" + normalizePath(path.join(root, "p", "Helpers.kt"))]);
+        expect(bindingTargets(warm, main)).toEqual(["file:" + normalizePath(path.join(root, "p", "Helpers.kt"))]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // Without a manifest there is no previous file set: a deleted duplicate declarer leaves no
+  // cache miss behind, and a rewritten one only proves itself changed, never what it declared.
+  // Surviving rows (deleted files) and stale rows (changed files) close both gaps.
+  it("resolves a C++ module import from the survivor when one duplicate declaration is deleted (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-dupe-memory-");
+    try {
+      await fsp.writeFile(path.join(root, "alpha.cpp"), "export module shared;\n", "utf8");
+      await fsp.writeFile(path.join(root, "beta.cpp"), "export module shared;\n", "utf8");
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      const ambiguous = await buildProjectIndex(root, { cache: "memory" });
+      expect(bindingTargets(ambiguous, main)).toEqual(["external:shared"]);
+
+      await fsp.rm(path.join(root, "beta.cpp"));
+      const warm = await buildProjectIndex(root, { cache: "memory" });
+      const targets = await expectWarmMatchesCold(root, main, warm);
+      expect(targets).toEqual(["file:" + normalizePath(path.join(root, "alpha.cpp"))]);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect(bindingTargets(warm, main).length).toBeGreaterThan(0);
+      for (const target of bindingTargets(warm, main)) {
+        expect(target).toBe("file:" + normalizePath(path.join(root, "alpha.cpp")));
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a C++ module import from the survivor when a duplicate declaration is rewritten (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-rewrite-memory-");
+    try {
+      await fsp.writeFile(path.join(root, "alpha.cpp"), "export module shared;\n", "utf8");
+      await fsp.writeFile(path.join(root, "beta.cpp"), "export module shared;\n", "utf8");
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      const ambiguous = await buildProjectIndex(root, { cache: "memory" });
+      expect(bindingTargets(ambiguous, main)).toEqual(["external:shared"]);
+
+      await fsp.writeFile(path.join(root, "beta.cpp"), "export module other;\n", "utf8");
+      const warm = await buildProjectIndex(root, { cache: "memory" });
+      const targets = await expectWarmMatchesCold(root, main, warm);
+      expect(targets).toEqual(["file:" + normalizePath(path.join(root, "alpha.cpp"))]);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect(bindingTargets(warm, main).length).toBeGreaterThan(0);
+      for (const target of bindingTargets(warm, main)) {
+        expect(target).toBe("file:" + normalizePath(path.join(root, "alpha.cpp")));
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

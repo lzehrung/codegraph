@@ -582,10 +582,25 @@ export function loadAllCachedModules(
   }
 }
 
+/** Best-effort decode of a superseded disk row; null when the payload cannot be read. */
+function rehydrateStaleModuleRow(
+  projectRoot: string,
+  row: { sig: string; version: number; payload: Uint8Array },
+): ModuleIndex | null {
+  try {
+    const parsed: unknown = JSON.parse(brotliDecompressSync(row.payload).toString("utf8"));
+    if (!isModuleIndex(parsed)) return null;
+    return transformModulePaths(projectRoot, parsed, false);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A cached module for `file` at `sig`, and whether the cache held an entry for the file at any
  * signature. A miss with a previous entry is a changed file; a miss without one is a file the cache
- * has not seen, which a warm build treats as added.
+ * has not seen, which a warm build treats as added. staleMod carries the previous entry when
+ * the signature differs, so invalidation can compare previous-build declarations with next ones.
  */
 export function loadModuleFromCache(
   projectRoot: string,
@@ -594,7 +609,7 @@ export function loadModuleFromCache(
   opts?: BuildOptions,
   report?: BuildReport,
   diskCacheAvailable = true,
-): { mod: ModuleIndex | null; previouslyCached: boolean } {
+): { mod: ModuleIndex | null; previouslyCached: boolean; staleMod: ModuleIndex | null } {
   const mode = opts?.cache ?? "off";
   const cacheReport = initCacheReport(report, mode);
   const cacheEnabled = mode !== "off";
@@ -605,25 +620,28 @@ export function loadModuleFromCache(
       if (entry.sig === sig) {
         lruMapGet(memoryCache, key);
         if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-        return { mod: entry.mod, previouslyCached: true };
+        return { mod: entry.mod, previouslyCached: true, staleMod: null };
       }
       memoryCache.delete(key);
+      if (cacheEnabled && cacheReport) cacheReport.misses += 1;
+      return { mod: null, previouslyCached: true, staleMod: entry.mod };
     }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
-    return { mod: null, previouslyCached: !!entry };
+    return { mod: null, previouslyCached: false, staleMod: null };
   }
   if (mode === "disk") {
     if (!diskCacheAvailable) {
       if (cacheEnabled && cacheReport) cacheReport.misses += 1;
-      return { mod: null, previouslyCached: false };
+      return { mod: null, previouslyCached: false, staleMod: null };
     }
     if (!isNodeSqliteUsable()) {
       const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
       reportMissingNodeSqlite(opts?.logLevel, error);
       if (cacheEnabled && cacheReport) cacheReport.misses += 1;
-      return { mod: null, previouslyCached: false };
+      return { mod: null, previouslyCached: false, staleMod: null };
     }
     let previouslyCached = false;
+    let staleMod: ModuleIndex | null = null;
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
       const row = cache.load.get(cacheRelativePath(projectRoot, file)) as
@@ -635,19 +653,64 @@ export function loadModuleFromCache(
         if (isModuleIndex(parsed)) {
           const rehydrated = transformModulePaths(projectRoot, parsed, false);
           if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-          return { mod: rehydrated, previouslyCached: true };
+          return { mod: rehydrated, previouslyCached: true, staleMod: null };
         }
       }
+      if (row) staleMod = rehydrateStaleModuleRow(projectRoot, row);
     } catch (error) {
       if (isNodeSqliteUnavailableError(error)) {
         reportMissingNodeSqlite(opts?.logLevel, error);
-        return { mod: null, previouslyCached };
+        return { mod: null, previouslyCached, staleMod };
       }
     }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
-    return { mod: null, previouslyCached };
+    return { mod: null, previouslyCached, staleMod };
   }
-  return { mod: null, previouslyCached: false };
+  return { mod: null, previouslyCached: false, staleMod: null };
+}
+
+/**
+ * Every file with a row in the memory module cache for the project. Rows survive for files
+ * the current build omits, so a warm build can tell a deleted file from an out-of-scope one
+ * by probing the survivors on disk.
+ */
+export function listMemoryCachedModuleFiles(projectRoot: string): string[] {
+  const prefix = normalizePath(projectRoot) + "::";
+  const files: string[] = [];
+  for (const key of memoryCache.keys()) {
+    if (key.startsWith(prefix)) files.push(key.slice(prefix.length));
+  }
+  return files;
+}
+
+/**
+ * The module row cached for a file at any signature, without consuming it. Unlike
+ * loadModuleFromCache this never deletes a mismatched memory entry and never records a hit
+ * or a miss, so invalidation can read previous-build declarations of a file the current
+ * build changed, deleted, or scoped out.
+ */
+export function peekCachedModule(
+  projectRoot: string,
+  file: string,
+  opts?: BuildOptions,
+): { sig: string; mod: ModuleIndex } | null {
+  const mode = opts?.cache ?? "off";
+  if (mode === "memory") {
+    const entry = memoryCache.get(memoryCacheKey(projectRoot, file));
+    return entry ? { sig: entry.sig, mod: entry.mod } : null;
+  }
+  if (mode !== "disk" || !isNodeSqliteUsable() || !diskModuleCacheExists(projectRoot, opts)) return null;
+  try {
+    const cache = getDiskModuleCache(projectRoot, opts);
+    const row = cache.load.get(cacheRelativePath(projectRoot, file)) as
+      | { sig: string; version: number; payload: Uint8Array }
+      | undefined;
+    if (!row || row.version !== PARSED_CACHE_VERSION) return null;
+    const mod = rehydrateStaleModuleRow(projectRoot, row);
+    return mod ? { sig: row.sig, mod } : null;
+  } catch {
+    return null;
+  }
 }
 
 export function tryLoadFromCache(
