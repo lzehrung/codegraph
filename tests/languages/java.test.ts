@@ -681,4 +681,46 @@ describe("Java implicit-receiver precedence", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("finds an arity-compatible overload in a deeper ancestor before a static import", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-deep-overload-"));
+    try {
+      await writeFile(
+        path.join(root, "GrandBase.java"),
+        "package j;\nclass GrandBase { int hit(int a) { return a; } }\n",
+      );
+      await writeFile(
+        path.join(root, "Base.java"),
+        "package j;\nclass Base extends GrandBase { int hit() { return 0; } }\n",
+      );
+      await writeFile(
+        path.join(root, "Util.java"),
+        "package j;\nclass Util { static int hit(int a) { return -a; } }\n",
+      );
+      const lines = [
+        "package j;",
+        "",
+        "import static j.Util.hit;",
+        "",
+        "class Derived extends Base {",
+        "  int one() { return hit(1); }",
+        "}",
+        "",
+      ];
+      const use = normalizePath(path.join(root, "Use.java"));
+      await writeFile(use, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // Base.hit() cannot take one argument; overloads span the hierarchy, so GrandBase.hit(int) wins.
+      const goto = await goToDefinition(index, { file: use, line: 6, column: lines[5]!.indexOf("hit") + 1 });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(path.basename(goto.definition.file)).toBe("GrandBase.java");
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(targets).toEqual(["GrandBase.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

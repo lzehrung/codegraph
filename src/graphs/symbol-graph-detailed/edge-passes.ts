@@ -825,7 +825,10 @@ function recordSwiftCapitalizedConstruction(context: EdgePassContext, node: Synt
   if (context.sup.id !== "swift") return false;
   const constructed = constructionTypeName(node, context.source, context.sup);
   if (!constructed) return false;
-  const target = context.resolveIdentifier(sliceText(constructed, context.source), constructed);
+  const name = sliceText(constructed, context.source);
+  // An inherited method can share a type's name; a deferred member lookup decides after the walk.
+  if (context.resolveName(name, constructed)?.status === "deferred") return false;
+  const target = context.resolveIdentifier(name, constructed);
   if (!target || !declaresMembers(target)) return false;
   recordDefEdge(context, fromId, target, "instantiates", constructed);
   return true;
@@ -1292,7 +1295,9 @@ export async function emitFunctionBodyEdges(
     walkFunctionBody(fn.node, true);
     for (const call of deferredCalls) {
       const target = await context.settleName(call.name, call.callee, call.resolution);
-      if (target) recordDefEdge(context, fromId, target, "calls", call.callee);
+      // Swift `Foo()` whose deferred lookup settles on a type is construction.
+      const label = context.sup.id === "swift" && target && declaresMembers(target) ? "instantiates" : "calls";
+      if (target) recordDefEdge(context, fromId, target, label, call.callee);
     }
     for (const call of qualifiedCppCalls) {
       const owner = call.ownerPath.length

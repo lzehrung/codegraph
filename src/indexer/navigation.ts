@@ -369,6 +369,8 @@ export async function goToDefinition(
 
 /** Whether a member-access node has no receiver distinct from its member name. */
 function isReceiverlessMemberCall(sup: LanguageSupport, access: SyntaxNodeLike): boolean {
+  // Java `<T>hit()` has no `object` field; the generic parts fall back to the type arguments.
+  if (access.type === "method_invocation") return !access.childForFieldName("object");
   const { object, property } = getMemberAccessParts(sup, access);
   return !!property && (!object || object.startIndex === property.startIndex);
 }

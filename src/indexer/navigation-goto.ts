@@ -1485,6 +1485,8 @@ async function baseRefsFromContainer(
   return refs;
 }
 
+const HIERARCHY_OVERLOAD_LANGUAGES: ReadonlySet<string> = new Set(["java", "kotlin", "csharp"]);
+
 async function resolveKeywordReceiverMember(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -1511,6 +1513,10 @@ async function resolveKeywordReceiverMember(
       )
     : [current];
   if (level.length === 0) return undefined;
+  // Java, Kotlin, and C# overload across the hierarchy: when no member at one level accepts the
+  // call, a base level may. C++ and Swift hide a base name behind any same-named member.
+  const spansHierarchy = knownArgumentCount !== undefined && HIERARCHY_OVERLOAD_LANGUAGES.has(current.context.sup.id);
+  let lenient: SymbolDef | undefined;
   const visited = new Set<string>([
     keywordContainerKey(current.file, current.container),
     ...level.map((candidate) => keywordContainerKey(candidate.file, candidate.container)),
@@ -1570,7 +1576,15 @@ async function resolveKeywordReceiverMember(
     const uniqueMatches = uniqueReceiverMemberCandidates(matches);
     if (uniqueMatches.length) {
       const allowUniqueArityMismatch = !startAtAncestor && depth === 0;
-      return await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, allowUniqueArityMismatch);
+      if (!spansHierarchy) {
+        return await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, allowUniqueArityMismatch);
+      }
+      const accepted = await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, false);
+      if (accepted) return accepted;
+      // Navigation still names the only incompatible candidate when no ancestor accepts the call.
+      if (allowUniqueArityMismatch && !lenient) {
+        lenient = await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, true);
+      }
     }
     const next: KeywordClassRef[] = [];
     for (const candidate of level) {
@@ -1591,7 +1605,7 @@ async function resolveKeywordReceiverMember(
     }
     level = next;
   }
-  return undefined;
+  return lenient;
 }
 /**
  * Validate an unqualified member use against its actual lexical owner, including shared

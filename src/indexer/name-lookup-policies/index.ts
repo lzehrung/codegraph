@@ -73,15 +73,20 @@ const typescriptLookupPolicy: NameLookupPolicy = {
  */
 const jvmLookupPolicy: NameLookupPolicy = {
   // A method bound in the enclosing class body still needs static-scope and overload checks,
-  // which the member lookup applies; a local function or a field keeps its lexical binding.
+  // which the member lookup applies, and an inherited member beats a top-level function; a
+  // method-local function or a field keeps its lexical binding.
   onLocal(state, local) {
     const { use, closestBinding } = state;
     const declaration = closestBinding?.kind === "function" ? closestBinding.node?.parent : undefined;
     if (!declaration || implicitSelfCallee(use.parsed.sup.id, use.node.parent ?? use.node)?.id !== use.node.id) {
       return undefined;
     }
+    // A same-file top-level function competes with inherited members like a same-package one;
+    // a function declared inside a method body stays a local binding.
+    const fileScope = use.scopeIndex.allScopes[0]?.map.get(closestBinding!.canonicalName) === closestBinding;
     const container = nearestMemberContainer(declaration);
-    if (!container || !isDirectKeywordMemberDeclaration(declaration, container)) return undefined;
+    const classMember = !!container && isDirectKeywordMemberDeclaration(declaration, container);
+    if (!fileScope && !classMember) return undefined;
     return {
       status: "deferred",
       request: { kind: "implicit-self-member", lookupName: state.lookupName },

@@ -644,4 +644,50 @@ describe("Kotlin implicit-receiver precedence", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("prefers an inherited member over a same-file top-level function, but not over a method-local one", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-same-file-top-level-"));
+    try {
+      const lines = [
+        "package k",
+        "",
+        "open class Base {",
+        "    fun hit(): Int = 4",
+        "}",
+        "",
+        "fun hit(): Int = 1",
+        "",
+        "class Derived : Base() {",
+        "    fun use(): Int = hit()",
+        "    fun local(): Int {",
+        "        fun hit(): Int = 9",
+        "        return hit()",
+        "    }",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "Use.kt"));
+      await fsp.writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number) => {
+        const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf("hit") + 1 });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      expect(await gotoLine(10)).toBe(4);
+      expect(await gotoLine(13)).toBe(12);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map(
+          (edge) =>
+            `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}@${edge.to.slice(edge.to.lastIndexOf("::") + 2)}`,
+        )
+        .sort();
+      const baseHit = lines.slice(0, 3).join("\n").length + 1 + lines[3]!.indexOf("hit");
+      const localHit = lines.slice(0, 11).join("\n").length + 1 + lines[11]!.indexOf("hit");
+      expect(calls).toEqual([`local->hit@${localHit}`, `use->hit@${baseHit}`]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

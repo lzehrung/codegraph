@@ -634,3 +634,34 @@ describe("Swift same-module and shared-owner visibility", () => {
     }
   });
 });
+
+describe("Swift inherited methods named like types", () => {
+  it("calls an inherited method that shares a module type's name instead of constructing the type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-method-named-like-type-"));
+    try {
+      const lines = [
+        "class Foo {}",
+        "class Base {",
+        "  func Foo() -> Int { return 1 }",
+        "}",
+        "class Derived: Base {",
+        "  func use() -> Int { return Foo() }",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "a.swift"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const goto = await goToDefinition(index, { file, line: 6, column: lines[5]!.indexOf("Foo") + 1 });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
+      const graph = await buildSymbolGraphDetailed(index);
+      const edges = graph.edges
+        .filter((edge) => edge.label === "calls" || edge.label === "instantiates")
+        .map((edge) => `${edge.label} ${graph.nodes.get(edge.to)?.kind}`);
+      expect(edges).toEqual(["calls function"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
