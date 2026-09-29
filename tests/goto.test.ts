@@ -2573,6 +2573,44 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves types through a using namespace declared in several files and by namespace-qualified calls", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-namespace-goto-"));
+      try {
+        const mixFile = path.join(root, "Mix.cs").replace(/\\/g, "/");
+        const otherFile = path.join(root, "more", "Other.cs").replace(/\\/g, "/");
+        await fsp.mkdir(path.join(root, "more"), { recursive: true });
+        const decoyFile = path.join(root, "Decoy.cs").replace(/\\/g, "/");
+        const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+        const useLines = [
+          "using P;",
+          "namespace Q;",
+          "public class Use {",
+          "  public int A() => Mix.M(1);",
+          "  public object B() => new Other();",
+          "  public int C() => R.Mix.M(1);",
+          "}",
+        ];
+        await fsp.writeFile(
+          mixFile,
+          "namespace P;\npublic class Mix {\n  public static int M(int a) => a;\n}\n",
+          "utf8",
+        );
+        await fsp.writeFile(otherFile, "namespace P;\npublic class Other { }\n", "utf8");
+        await fsp.writeFile(
+          decoyFile,
+          "namespace R;\npublic class Mix {\n  public static int M(int a) => 2;\n}\n",
+          "utf8",
+        );
+        await fsp.writeFile(useFile, `${useLines.join("\n")}\n`, "utf8");
+        const index = await createTestIndexFromFiles(root, [mixFile, otherFile, decoyFile, useFile]);
+        await testGoToDefinition(index, useFile, 4, useLines[3]!.lastIndexOf("M(") + 1, mixFile, 3);
+        await testGoToDefinition(index, useFile, 5, useLines[4]!.indexOf("Other") + 1, otherFile, 2);
+        await testGoToDefinition(index, useFile, 6, useLines[5]!.lastIndexOf("M(") + 1, decoyFile, 3);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves receiver method calls through typed locals", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-method-goto-receiver-"));
       try {

@@ -15,6 +15,7 @@ import {
   findTypeScriptNamespaceMemberCandidates,
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
+  memberAcceptsCallAt,
   resolvePhpObjectCreationTarget,
   resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
@@ -66,6 +67,7 @@ import {
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberDeclarationNode,
   cppQualifiedNameSegments,
+  csharpDottedNameRoot,
   declaresMembers,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
@@ -843,6 +845,9 @@ export async function emitFunctionBodyEdges(
     member: SyntaxNodeLike;
     target: SyntaxNodeLike;
   }> = [];
+  // C# calls through a dotted receiver (`P.Mix.M()`, `Imported.Outer.Inner.M()`): navigation's
+  // member-access resolution decides the target after the walk, so both consumers agree.
+  const dottedReceiverCalls: Array<{ fromId: string; access: ReceiverCallAccess }> = [];
   const callNodeTypes = new Set<string>([
     "call_expression",
     "call",
@@ -1152,12 +1157,20 @@ export async function emitFunctionBodyEdges(
           });
           return;
         }
-        if (
-          keywordReceiverKind(context.sup.id, receiverName) ||
-          !tryResolveChain(context, access.accessNode, fromId, "calls")
-        ) {
+        if (keywordReceiverKind(context.sup.id, receiverName)) {
           recordReceiverCall(node, access);
+          return;
         }
+        if (tryResolveChain(context, access.accessNode, fromId, "calls")) return;
+        if (
+          context.sup.id === "csharp" &&
+          access.receiver.type === "member_access_expression" &&
+          csharpDottedNameRoot(access.receiver)
+        ) {
+          dottedReceiverCalls.push({ fromId, access });
+          return;
+        }
+        recordReceiverCall(node, access);
         return;
       }
       if (!callee) return;
@@ -1327,6 +1340,16 @@ export async function emitFunctionBodyEdges(
         // Without an implicit `this` of the owner, `Owner::member()` can only name a static member.
         recordReceiverCall(call.node, call.access, implicitThis ? undefined : "static");
       }
+    }
+  }
+  for (const { fromId, access } of dottedReceiverCalls) {
+    const member = await context.resolveMemberAccessTarget(access.property);
+    // The graph records no edge for a call its target cannot accept, as for other member calls.
+    if (
+      member &&
+      (await memberAcceptsCallAt(context.index, member, access.accessNode, context.source, context.sup.id))
+    ) {
+      recordDefEdge(context, fromId, member, "calls", access.property);
     }
   }
   for (const target of qualifiedConstructionTargets) {

@@ -164,6 +164,7 @@ export async function collectImportsForFile(
     projectRoot,
     source: resolvedSource,
     languageId: resolvedSup.id,
+    ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
     resolveFrom: (from: string, phpImportType?: "class" | "function" | "const", resolverOpts?: ImportResolverOptions) =>
       resolveFrom(from, phpImportType, {
         ...(stylesheetLanguage ? { resolutionKind: "stylesheet" as const } : {}),

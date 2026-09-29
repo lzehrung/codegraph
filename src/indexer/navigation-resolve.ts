@@ -1,3 +1,4 @@
+import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import type { FileId } from "../types.js";
@@ -660,6 +661,118 @@ function csharpNamedImportLookupName(from: string, exportedName: string): string
   return `${normalizedFrom}.${exportedName}`;
 }
 
+/**
+ * The name a C# binding looks up. A named binding qualifies with its alias target. A `using N;`
+ * star binding qualifies with `N`: its resolved file is one of the files that declare `N`, and
+ * the qualified lookup reaches exactly the types of `N` in every declaring file, not types of
+ * other namespaces the bound file also declares.
+ */
+function csharpImportLookupName(imp: ImportBinding, exportedName: string): string {
+  if (imp.kind === "named") return csharpNamedImportLookupName(imp.from, exportedName);
+  if (imp.kind !== "star" || imp.staticMembersOf) return exportedName;
+  if (!exportedName || exportedName.includes(".") || exportedName.startsWith("global::")) return exportedName;
+  const namespaceName = imp.from.trim();
+  return namespaceName ? `${namespaceName}.${exportedName}` : exportedName;
+}
+
+const csharpNamespaceImportDirectoryFiles = new WeakMap<ProjectIndex, Map<ImportBinding, FileId[]>>();
+
+/**
+ * For each C# `using N;` binding, one declaring file per directory. The file graph links each
+ * directive to every file that declares `N` within the importer's own project, so the set is
+ * kept per binding: two importers in different projects never share one. A qualified lookup from
+ * one file reaches the rest of its directory, so one file per directory covers every declaration
+ * of `N`. Built once per index.
+ */
+function csharpNamespaceImportDirectories(index: ProjectIndex): Map<ImportBinding, FileId[]> {
+  const cached = csharpNamespaceImportDirectoryFiles.get(index);
+  if (cached) return cached;
+  const edgesByImporter = new Map<string, Map<string, Map<string, FileId>>>();
+  for (const edge of index.graph.edges) {
+    if (edge.to.type !== "file") continue;
+    if (supportForFileWithoutHeaderSample(edge.to.path, index.languageExtensions)?.id !== "csharp") continue;
+    const importerKey = fileIdentityKey(edge.from);
+    let byRaw = edgesByImporter.get(importerKey);
+    if (!byRaw) edgesByImporter.set(importerKey, (byRaw = new Map()));
+    const raw = normalizeCsharpQualifiedName(edge.raw);
+    let byDirectory = byRaw.get(raw);
+    if (!byDirectory) byRaw.set(raw, (byDirectory = new Map()));
+    const directoryKey = fileIdentityKey(path.posix.dirname(normalizePath(edge.to.path)));
+    if (!byDirectory.has(directoryKey)) byDirectory.set(directoryKey, edge.to.path);
+  }
+  const result = new Map<ImportBinding, FileId[]>();
+  for (const mod of index.byFile.values()) {
+    for (const imp of mod.imports) {
+      if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
+      if (supportForFileWithoutHeaderSample(imp.resolved, index.languageExtensions)?.id !== "csharp") continue;
+      const files = new Map<string, FileId>([
+        [fileIdentityKey(path.posix.dirname(normalizePath(imp.resolved))), imp.resolved],
+      ]);
+      const targets = edgesByImporter.get(fileIdentityKey(mod.file))?.get(normalizeCsharpQualifiedName(imp.from));
+      for (const [directoryKey, file] of targets ?? []) if (!files.has(directoryKey)) files.set(directoryKey, file);
+      result.set(imp, [...files.values()]);
+    }
+  }
+  csharpNamespaceImportDirectoryFiles.set(index, result);
+  return result;
+}
+
+/**
+ * A name imported by C# `using N;`, looked up as `N.Name` from one declaring file per
+ * directory. Distinct declarations (other than parts of one partial type) are ambiguous. Only
+ * exported types count: local fallback would expose an `internal` type the exports omit, for
+ * both the bare name and the qualified `N.Name` form.
+ */
+function resolveCsharpNamespaceImport(
+  index: ProjectIndex,
+  imp: Extract<ImportBinding, { kind: "star" }>,
+  boundFile: string,
+  lookupName: string,
+  opts: ResolveExportOptions | undefined,
+): SymbolDef | { namespace: FileId } | null {
+  // A binding that is not one of the index's own (a copy) falls back to the bound file's directory.
+  const files = csharpNamespaceImportDirectories(index).get(imp) ?? [boundFile];
+  const matches: SymbolDef[] = [];
+  let namespaceHit: FileId | undefined;
+  for (const file of files) {
+    const hit = resolveExport(index, file, lookupName, { ...opts, allowLocalFallback: false });
+    if (hit?.kind === "namespace") namespaceHit ??= hit.file;
+    if (hit?.kind !== "resolved" || matches.some((candidate) => sameSymbolDef(index, candidate, hit.def))) continue;
+    matches.push(hit.def);
+  }
+  const unique = coalesceEquivalentCsharpPartialExports(index, matches);
+  if (unique.length === 1) return unique[0]!;
+  if (unique.length) return null;
+  return namespaceHit ? { namespace: namespaceHit } : null;
+}
+
+/**
+ * A C# namespace-qualified type name (`N.Type`) used in `mod`. Qualified export lookup from the
+ * use file covers its own directory; a `using N;` in the file also reaches every other directory
+ * that declares `N`, as the unqualified name does.
+ */
+export function resolveCsharpQualifiedName(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  qualifiedName: string,
+  referenceIndex: number,
+): ResolvedExport | null {
+  const direct = resolveExport(index, mod.file, qualifiedName, { referenceIndex });
+  if (direct) return direct;
+  const separator = qualifiedName.lastIndexOf(".");
+  if (separator <= 0) return null;
+  const namespaceName = normalizeCsharpQualifiedName(qualifiedName.slice(0, separator)).replace(/^global::/u, "");
+  const typeName = qualifiedName.slice(separator + 1);
+  for (const imp of mod.imports) {
+    if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
+    if (normalizeCsharpQualifiedName(imp.from).replace(/^global::/u, "") !== namespaceName) continue;
+    const hit = resolveImported(index, imp, typeName);
+    if (!hit) return null;
+    return "namespace" in hit ? { kind: "namespace", file: hit.namespace } : { kind: "resolved", def: hit };
+  }
+  return null;
+}
+
 export function resolveImported(
   index: ProjectIndex,
   imp: ImportBinding,
@@ -677,10 +790,13 @@ export function resolveImported(
   // `N.Point` is the only bare-visible match when this file also declares outer `N`.
   // The alias names one namespace, and that qualified name is what every consumer resolves.
   const support = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions);
-  const lookupName =
-    support?.id === "csharp" && imp.kind === "named"
-      ? csharpNamedImportLookupName(imp.from, exportedName)
-      : exportedName;
+  const lookupName = support?.id === "csharp" ? csharpImportLookupName(imp, exportedName) : exportedName;
+  if (support?.id === "csharp" && imp.kind === "star" && !imp.staticMembersOf) {
+    return resolveCsharpNamespaceImport(index, imp, targetFile, lookupName, {
+      ...opts,
+      ...(namespace ? { cNamespace: namespace } : {}),
+    });
+  }
   const hit = phpRole
     ? resolvePhpExportByImportType(index, targetFile, exportedName, phpRole)
     : resolveExport(index, targetFile, lookupName, {

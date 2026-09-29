@@ -7,6 +7,7 @@ import {
   rustImportKeywordOffset,
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
 import { CSHARP_IDENTIFIER_SOURCE, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
@@ -38,6 +39,8 @@ export type LanguageSpecificImportContext = ImportBindingSink & {
   source: string;
   languageId: string;
   resolveFrom: ImportResolver;
+  /** Active extension-to-language mapping, so a resolved file is classified as the language that parses it. */
+  languageExtensions?: LanguageExtensionMap;
   getBindings: () => ImportBinding[];
   replaceBindings: (bindings: ImportBinding[]) => void;
 };
@@ -157,6 +160,18 @@ function csharpUsingAliasLocalRange(
   return sourceRangeFromOffsets(collectLineStartOffsets(source), start, start + alias.length);
 }
 
+/** A path-like hit counts for a C# directive only when it is a C# file. */
+function csharpImportTarget(
+  context: LanguageSpecificImportContext,
+  resolved: ResolvedImportTarget,
+  spec: string,
+): ResolvedImportTarget {
+  if (typeof resolved !== "string") return resolved;
+  return supportForFileWithoutHeaderSample(resolved, context.languageExtensions)?.id === "csharp"
+    ? resolved
+    : { external: spec };
+}
+
 async function applyCsharpStatementOverride(
   context: LanguageSpecificImportContext,
   normalizedStmt: string,
@@ -180,7 +195,12 @@ async function applyCsharpStatementOverride(
   // `global using static` applies to every file of the project, which module-local bindings
   // cannot express, so it is not bound.
   if (parsed.isStatic && !/^global\s/u.test(normalizedStmt.trim())) {
-    const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, parsed.from, context.file);
+    const typeMatch = await resolveCsharpDottedTypeImportPath(
+      context.projectRoot,
+      parsed.from,
+      context.file,
+      context.languageExtensions,
+    );
     const qualifiedType = normalizeCsharpQualifiedName(parsed.from).replace(/^global::/u, "");
     if (typeMatch.status === "found" && qualifiedType.includes(".")) {
       context.pushBinding({
@@ -199,7 +219,12 @@ async function applyCsharpStatementOverride(
   // navigation can reach the declaring file instead of treating the last segment as a type.
   // A namespace split across several files has no single target, so it keeps the local alias
   // as an unresolved namespace rather than claiming one of the declaring files.
-  const namespaceTargets = await resolveCsharpNamespaceImportPaths(context.projectRoot, parsed.from, context.file);
+  const namespaceTargets = await resolveCsharpNamespaceImportPaths(
+    context.projectRoot,
+    parsed.from,
+    context.file,
+    context.languageExtensions,
+  );
   if (parsed.alias && namespaceTargets.length) {
     const localRange = csharpUsingAliasLocalRange(context.source, statementStartIndex, parsed.alias);
     context.pushBinding({
@@ -214,10 +239,15 @@ async function applyCsharpStatementOverride(
   }
 
   let fromValue = parsed.from;
-  let resolved = await context.resolveFrom(fromValue);
-  if (typeof resolved !== "string" && namespaceTargets.length === 1) {
-    resolved = namespaceTargets[0]!.replace(/\\/g, "/");
-  }
+  // `using N;` names a namespace, which ordinary C# declares across many files. Bind it to the
+  // first declaring file: lookups through the binding qualify the name with `N`, and
+  // namespace-qualified export lookup reaches every file that declares `N` through the
+  // compilation-unit relation. Path-like resolution applies only when no file declares `N`, and
+  // only to a C# file.
+  let resolved: ResolvedImportTarget =
+    !parsed.alias && namespaceTargets.length
+      ? namespaceTargets[0]!.replace(/\\/g, "/")
+      : csharpImportTarget(context, await context.resolveFrom(fromValue), fromValue);
   if (parsed.alias) {
     const fromParts = parsed.from.split(".");
     if (fromParts.length > 1) {
@@ -232,9 +262,15 @@ async function applyCsharpStatementOverride(
           context.projectRoot,
           fallbackFrom,
           context.file,
+          context.languageExtensions,
         );
         if (fallbackNamespaceTargets.length > 1) {
-          const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, parsed.from, context.file);
+          const typeMatch = await resolveCsharpDottedTypeImportPath(
+            context.projectRoot,
+            parsed.from,
+            context.file,
+            context.languageExtensions,
+          );
           if (typeMatch.status === "found") {
             fromValue = fallbackFrom;
             resolved = typeMatch.file;
@@ -246,7 +282,7 @@ async function applyCsharpStatementOverride(
           fromValue = fallbackFrom;
           resolved = fallbackNamespaceTargets[0]!.replace(/\\/g, "/");
         } else if (typeof resolved !== "string") {
-          const fallbackResolved = await context.resolveFrom(fallbackFrom);
+          const fallbackResolved = csharpImportTarget(context, await context.resolveFrom(fallbackFrom), fallbackFrom);
           if (typeof fallbackResolved === "string") {
             fromValue = fallbackFrom;
             resolved = fallbackResolved;

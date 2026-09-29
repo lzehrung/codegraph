@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -2680,6 +2680,236 @@ describe("C# type-qualified overloads", () => {
         .map((edge) => graph.nodes.get(edge.from)?.name)
         .sort();
       expect(callers).toEqual(["A", "C", "D"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# using namespace across files", () => {
+  it("binds a namespace declared in several files and never binds a same-named non-C# file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-namespace-"));
+    try {
+      const files: Record<string, string[]> = {
+        "cs/Mix.cs": ["namespace P;", "public class Mix {", "  public static int M(int a) => a;", "}"],
+        // Another directory: `using P;` must reach every directory that declares P.
+        "cs/more/Other.cs": ["namespace P;", "public class Other { }"],
+        "cs/Multi.cs": [
+          "namespace P.Inner { public class Deep { } }",
+          "namespace R {",
+          "  public class Mix { public static int M(int a) => 2; }",
+          "  public class Only { }",
+          "}",
+        ],
+        "cs/Use.cs": [
+          "using P;",
+          "using System;",
+          "namespace Q;",
+          "public class Use {",
+          "  public int A() => Mix.M(1);",
+          "  public object B() => new Other();",
+          "  public object C() => new Deep();",
+          "  public object D() => new Only();",
+          "  public int E() => P.Mix.M(1);",
+          "  public int F() => R.Mix.M(1);",
+          "  public object G() => new P.Other();",
+          "}",
+        ],
+        // Path-like decoys: `using P;` and `using System;` name namespaces, not these files.
+        "p.ts": ["export const x = 1;"],
+        "system.ts": ["export const y = 1;"],
+      };
+      for (const [name, lines] of Object.entries(files)) {
+        await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+        await writeFile(path.join(root, name), `${lines.join("\n")}\n`);
+      }
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = normalizePath(path.join(root, "cs", "Use.cs"));
+      const useLines = files["cs/Use.cs"]!;
+      const gotoTarget = async (line: number, token: string) => {
+        const column = useLines[line - 1]!.lastIndexOf(token) + 1;
+        const result = await goToDefinition(index, { file: use, line, column });
+        if (result.status !== "ok") return null;
+        return `${path.basename(result.definition.file)}:${result.definition.range.start.line}`;
+      };
+      expect(await gotoTarget(5, "Mix")).toBe("Mix.cs:2");
+      expect(await gotoTarget(5, "M(")).toBe("Mix.cs:3");
+      expect(await gotoTarget(6, "Other")).toBe("Other.cs:2");
+      // `using P;` imports the types of P only: not P.Inner, and not R in the same file.
+      expect(await gotoTarget(7, "Deep")).toBeNull();
+      expect(await gotoTarget(8, "Only")).toBeNull();
+      expect(await gotoTarget(9, "Mix")).toBe("Mix.cs:2");
+      expect(await gotoTarget(9, "M(")).toBe("Mix.cs:3");
+      expect(await gotoTarget(10, "M(")).toBe("Multi.cs:3");
+      expect(await gotoTarget(11, "Other")).toBe("Other.cs:2");
+
+      const useModule = index.byFile.get(fileIdentityKey(use));
+      const importTargets = (useModule?.imports ?? []).map((binding) =>
+        typeof binding.resolved === "string" ? path.basename(binding.resolved) : null,
+      );
+      expect(importTargets.some((target) => target?.toLowerCase().endsWith(".ts"))).toBe(false);
+      const fileEdgeTargets = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path).toLowerCase() : ""));
+      expect(fileEdgeTargets.some((target) => target.endsWith(".ts"))).toBe(false);
+
+      const mixFile = normalizePath(path.join(root, "cs", "Mix.cs"));
+      const references = await findReferences(index, { file: mixFile, line: 2, column: 14 });
+      if (references.status !== "ok") throw new Error("Expected references");
+      expect(
+        references.references
+          .filter((reference) => reference.file === use)
+          .map((reference) => reference.range.start.line)
+          .sort((left, right) => left - right),
+      ).toEqual([5, 9]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => (edge.label === "calls" || edge.label === "instantiates") && edge.from.startsWith(use))
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
+        .sort();
+      expect(calls).toEqual(["A->Mix.cs", "B->Other.cs", "E->Mix.cs", "F->Multi.cs", "G->Other.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies path-like targets by the active extension mapping and keeps an alias root's binding", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-mapping-"));
+    try {
+      // `.cs` is remapped to TypeScript, so p.cs is not a C# file even though its suffix is.
+      // It even declares a TypeScript `namespace P`, which the C# namespace scanner must not count.
+      await writeFile(path.join(root, "p.cs"), "export namespace P { export const x = 1; }\n");
+      await writeFile(path.join(root, "Use.csx"), "using P;\nnamespace Q;\npublic class Use { }\n");
+      const mapped = await buildProjectIndex(root, { cache: "off", native: "on", languageExtensions: { ".cs": "ts" } });
+      const useFile = normalizePath(path.join(root, "Use.csx"));
+      const targets = mapped.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(useFile))
+        .map((edge) => edge.to.type);
+      expect(targets).toEqual(["external"]);
+      const binding = mapped.byFile.get(fileIdentityKey(useFile))?.imports[0];
+      expect(typeof binding?.resolved).not.toBe("string");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+
+    const aliasRoot = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-alias-root-"));
+    try {
+      const useLines = [
+        "using P = Other;",
+        "namespace Q;",
+        "public class Use {",
+        "  public int A() => P.Mix.M(1);",
+        "}",
+      ];
+      await writeFile(
+        path.join(aliasRoot, "P.cs"),
+        "namespace P;\npublic class Mix { public static int M(int a) => 1; }\n",
+      );
+      await writeFile(
+        path.join(aliasRoot, "Other.cs"),
+        "namespace Other;\npublic class Mix { public static int M(int a) => 2; }\n",
+      );
+      const use = normalizePath(path.join(aliasRoot, "Use.cs"));
+      await writeFile(use, `${useLines.join("\n")}\n`);
+      const index = await buildProjectIndex(aliasRoot, { cache: "off", native: "on" });
+      // `P` is the alias for `Other`, not namespace P.
+      const result = await goToDefinition(index, { file: use, line: 4, column: useLines[3]!.lastIndexOf("M(") + 1 });
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("Other.cs");
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
+        .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(targets).toEqual(["Other.cs"]);
+    } finally {
+      await rm(aliasRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps internal types hidden through a using namespace in another directory, bare or qualified", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-internal-"));
+    try {
+      await mkdir(path.join(root, "a"), { recursive: true });
+      await mkdir(path.join(root, "b"), { recursive: true });
+      await writeFile(path.join(root, "a", "First.cs"), "namespace N;\npublic class First { }\n");
+      await writeFile(
+        path.join(root, "b", "Hidden.cs"),
+        "namespace N;\ninternal class Hidden { }\npublic class Shown { }\n",
+      );
+      const useLines = [
+        "using N;",
+        "namespace Q;",
+        "public class Use {",
+        "  object A() => new Hidden();",
+        "  object B() => new N.Hidden();",
+        "  object C() => new N.Shown();",
+        "}",
+      ];
+      const use = normalizePath(path.join(root, "Use.cs"));
+      await writeFile(use, `${useLines.join("\n")}\n`);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const target = async (line: number, token: string) => {
+        const column = useLines[line - 1]!.lastIndexOf(token) + 1;
+        const result = await goToDefinition(index, { file: use, line, column });
+        return result.status === "ok" ? path.basename(result.definition.file) : null;
+      };
+      expect(await target(4, "Hidden")).toBeNull();
+      expect(await target(5, "Hidden")).toBeNull();
+      expect(await target(6, "Shown")).toBe("Hidden.cs");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("never links a using directive to a workspace package in another language", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-workspace-"));
+    try {
+      await writeFile(path.join(root, "package.json"), '{"name":"root","private":true,"workspaces":["pkgs/*"]}\n');
+      await mkdir(path.join(root, "pkgs", "lib"), { recursive: true });
+      await writeFile(path.join(root, "pkgs", "lib", "package.json"), '{"name":"Lib","main":"index.ts"}\n');
+      await writeFile(path.join(root, "pkgs", "lib", "index.ts"), "export const x = 1;\n");
+      await writeFile(path.join(root, "Use.cs"), "using Lib;\nnamespace Q;\npublic class Use { }\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = normalizePath(path.join(root, "Use.cs"));
+      const targets = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use))
+        .map((edge) => edge.to.type);
+      expect(targets).toEqual(["external"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a type imported by a using namespace as the root of a dotted call", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-type-root-"));
+    try {
+      // Class Imported.P comes from the second file of namespace Imported; namespace P is a decoy.
+      await writeFile(path.join(root, "Aaa.cs"), "namespace Imported;\npublic class Aaa { }\n");
+      await writeFile(
+        path.join(root, "PType.cs"),
+        "namespace Imported;\npublic class P {\n  public class Nested { public static int M() => 1; }\n}\n",
+      );
+      await writeFile(
+        path.join(root, "Decoy.cs"),
+        "namespace P;\npublic class Nested { public static int M() => 2; }\n",
+      );
+      const useLines = [
+        "using Imported;",
+        "namespace Q;",
+        "public class Use {",
+        "  public int A() => P.Nested.M();",
+        "}",
+      ];
+      const use = normalizePath(path.join(root, "Use.cs"));
+      await writeFile(use, `${useLines.join("\n")}\n`);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const result = await goToDefinition(index, { file: use, line: 4, column: useLines[3]!.lastIndexOf("M(") + 1 });
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("PType.cs");
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
+        .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(targets).toEqual(["PType.cs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

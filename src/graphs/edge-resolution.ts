@@ -1,4 +1,4 @@
-import type { LanguageSupport } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { EdgeTo } from "../types.js";
 import {
   getGraphOnlyResolutionExtensions,
@@ -32,6 +32,8 @@ export type ModuleSpecifierResolutionContext = {
   matchPath: MatchPathFn | undefined;
   resolveNodeModules?: boolean;
   resolutionHints?: string[];
+  /** Active extension-to-language mapping, so a file is classified as the language that parses it. */
+  languageExtensions?: LanguageExtensionMap;
 };
 
 function edgeToResolvedFile(resolved: string): EdgeTo {
@@ -153,7 +155,12 @@ export async function resolveModuleSpecifierEdges(
   } else if (["csharp", "ruby"].includes(context.support.id)) {
     const namespaceTargets =
       context.support.id === "csharp"
-        ? await resolveCsharpNamespaceImportPaths(context.projectRoot, entry.spec, context.file)
+        ? await resolveCsharpNamespaceImportPaths(
+            context.projectRoot,
+            entry.spec,
+            context.file,
+            context.languageExtensions,
+          )
         : [];
     if (namespaceTargets.length) {
       return namespaceTargets.map((targetPath) => withSpecifierMetadata(entry, edgeToResolvedFile(targetPath)));
@@ -161,7 +168,12 @@ export async function resolveModuleSpecifierEdges(
     if (context.support.id === "csharp") {
       // `using PT = N.Point` is not a namespace. The same helper the import binding uses
       // picks the one declaring file, or refuses an ambiguous set instead of a path guess.
-      const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, entry.spec, context.file);
+      const typeMatch = await resolveCsharpDottedTypeImportPath(
+        context.projectRoot,
+        entry.spec,
+        context.file,
+        context.languageExtensions,
+      );
       if (typeMatch.status === "found") {
         return [withSpecifierMetadata(entry, edgeToResolvedFile(typeMatch.file))];
       }
@@ -172,6 +184,15 @@ export async function resolveModuleSpecifierEdges(
     const { resolvePathLikeModule } = await import("../util/resolution.js");
     const pathLike = await resolvePathLikeModule(context.projectRoot, entry.spec);
     to = pathLike ? edgeToResolvedFile(pathLike) : await resolveGenericSpecifier(entry, context, resolutionExtensions);
+    // A C# directive names a namespace or type, never another language's file (`using System;`
+    // beside a root `system.ts`), whether path-like, hint, workspace, or package resolution found it.
+    if (
+      context.support.id === "csharp" &&
+      to.type === "file" &&
+      supportForFileWithoutHeaderSample(to.path, context.languageExtensions)?.id !== "csharp"
+    ) {
+      to = edgeToExternal(entry.raw ?? entry.spec);
+    }
   } else {
     to = await resolveGenericSpecifier(entry, context, resolutionExtensions);
   }

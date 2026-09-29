@@ -1309,6 +1309,19 @@ export function keywordReceiverMemberScope(
 }
 
 /**
+ * The leftmost identifier of a C# chain of plain identifiers joined by `.` (`P` in `P.Inner.Mix`),
+ * or `null` when `node` has a call, index, keyword, or type arguments. When that identifier binds
+ * nothing, the chain is a namespace-qualified type name.
+ */
+export function csharpDottedNameRoot(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (node.type === "identifier") return node;
+  if (node.type !== "member_access_expression") return null;
+  const object = node.childForFieldName("expression");
+  if (!object || node.childForFieldName("name")?.type !== "identifier") return null;
+  return csharpDottedNameRoot(object);
+}
+
+/**
  * Classifies a receiver as the declaring type, a supertype, or a named/constructed type.
  * Returns null when the receiver cannot be proven.
  * Named-local constructor lookup is memoized per enclosing function and receiver text.
