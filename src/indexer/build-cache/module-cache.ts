@@ -61,6 +61,32 @@ type ModuleCacheEntry = {
 
 const MAX_MEMORY_CACHE_ENTRIES = 5000;
 const memoryCache = new Map<string, ModuleCacheEntry>();
+
+/**
+ * Files ever stored in the memory module cache, keyed by normalized project root. Payloads
+ * come and go through LRU eviction, but a warm build without a manifest still needs the
+ * previous file set to tell a deleted declaration file from an out-of-scope one: without
+ * these identities an evicted declarer leaves neither a cache miss nor a surviving row.
+ */
+const knownMemoryCachedFiles = new Map<string, Set<string>>();
+
+function trackKnownMemoryCachedFile(projectRoot: string, file: string): void {
+  const root = normalizePath(projectRoot);
+  let files = knownMemoryCachedFiles.get(root);
+  if (!files) knownMemoryCachedFiles.set(root, (files = new Set()));
+  files.add(file);
+}
+
+/** Every file stored in the memory module cache for the project, including payload-evicted ones. */
+export function listKnownMemoryCachedModuleFiles(projectRoot: string): string[] {
+  return [...(knownMemoryCachedFiles.get(normalizePath(projectRoot)) ?? [])];
+}
+
+function forgetKnownMemoryCachedFiles(projectRoot: string, files: Iterable<string>): void {
+  const known = knownMemoryCachedFiles.get(normalizePath(projectRoot));
+  if (!known) return;
+  for (const file of files) known.delete(file);
+}
 let cachedExecutionFingerprint: string | undefined;
 let cachedExecutionHash: string | undefined;
 
@@ -70,6 +96,7 @@ type DiskModuleCache = {
   loadAll: SqliteStatement;
   listFiles: SqliteStatement;
   write: SqliteStatement;
+  remove: SqliteStatement;
   clearLiveFiles: SqliteStatement;
   insertLiveFile: SqliteStatement;
   pruneStaleFiles: SqliteStatement;
@@ -81,9 +108,11 @@ function memoryCacheKey(projectRoot: string, file: string): string {
 
 export function clearMemoryCache(): void {
   memoryCache.clear();
+  knownMemoryCachedFiles.clear();
 }
 
 function clearMemoryCacheForProject(projectRoot: string): void {
+  knownMemoryCachedFiles.delete(normalizePath(projectRoot));
   const prefix = `${normalizePath(projectRoot)}::`;
   for (const key of memoryCache.keys()) {
     if (key.startsWith(prefix)) {
@@ -224,6 +253,7 @@ export function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): Di
          payload = excluded.payload,
          updated_at = excluded.updated_at`,
       ),
+      remove: db.prepare("DELETE FROM module_cache WHERE file = ?"),
       clearLiveFiles: db.prepare("DELETE FROM live_module_cache_files"),
       insertLiveFile: db.prepare("INSERT OR IGNORE INTO live_module_cache_files(file) VALUES (?)"),
       pruneStaleFiles: db.prepare(
@@ -739,6 +769,7 @@ export function writeModulesToCache(
   const mode = opts?.cache ?? "off";
   if (mode === "memory") {
     for (const write of writes) {
+      trackKnownMemoryCachedFile(projectRoot, write.file);
       lruMapSet(
         memoryCache,
         memoryCacheKey(projectRoot, write.file),
@@ -789,4 +820,39 @@ export function writeToCache(
   opts?: BuildOptions,
 ): void {
   writeModulesToCache(projectRoot, [{ file, sig, mod }], opts);
+}
+
+/**
+ * Drop module-cache rows for files a successful build confirmed deleted. Manifest-less builds
+ * otherwise return the same confirmed-deleted rows forever: the deletion keeps moving the
+ * previous-vs-next declaration comparison, so importers reparse on every unchanged build and
+ * the cache never becomes fully warm. Only files the build probed missing may be retired;
+ * out-of-scope files still exist, so scoped builds never reach this.
+ */
+export function removeModulesFromCache(projectRoot: string, files: readonly string[], opts?: BuildOptions): void {
+  if (!files.length) return;
+  forgetKnownMemoryCachedFiles(projectRoot, files);
+  const mode = opts?.cache ?? "off";
+  if (mode === "memory") {
+    for (const file of files) memoryCache.delete(memoryCacheKey(projectRoot, file));
+  } else if (mode === "disk") {
+    if (!isNodeSqliteUsable()) {
+      const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
+      reportMissingNodeSqlite(opts?.logLevel, error);
+      return;
+    }
+    if (!diskModuleCacheExists(projectRoot, opts)) return;
+    try {
+      const cache = getDiskModuleCache(projectRoot, opts);
+      cache.db.transaction(() => {
+        for (const file of files) cache.remove.run(cacheRelativePath(projectRoot, file));
+      })();
+    } catch (error) {
+      if (isNodeSqliteUnavailableError(error)) {
+        reportMissingNodeSqlite(opts?.logLevel, error);
+        return;
+      }
+      logWithLevel(opts?.logLevel, "warn", "Warning: Failed to remove modules from cache:", error);
+    }
+  }
 }

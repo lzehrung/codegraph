@@ -215,10 +215,20 @@ function externalSpecifierSegments(value: string, rule: ExternalSpecifierResolut
   return value.split(rule.separator).filter((segment) => segment && segment !== "." && segment !== "..");
 }
 
-function hasAddedFileMatchingRule(rule: ExternalSpecifierResolutionRule, addedFiles: readonly string[]): boolean {
+/** Added files satisfying a declaration language's re-resolve rule: by built-in suffix, or by
+ * the file's configured language matching the importer's (a `.jvm` file mapped to Kotlin
+ * declares Kotlin packages just as a `.kt` file does). */
+function hasAddedFileMatchingRule(
+  rule: ExternalSpecifierResolutionRule,
+  languageId: string,
+  addedFiles: readonly string[],
+  addedFileLanguageId?: (file: string) => string | undefined,
+): boolean {
   const extensions = rule.reResolveAnyAddedExtensions;
   if (!extensions || !extensions.length) return false;
-  return addedFiles.some((file) => extensions.includes(path.extname(file).toLowerCase()));
+  return addedFiles.some(
+    (file) => extensions.includes(path.extname(file).toLowerCase()) || addedFileLanguageId?.(file) === languageId,
+  );
 }
 
 function specifierMatchesAddedStem(
@@ -276,10 +286,11 @@ export function externalSpecifierMatchesAddedStem(
   addedStems: ReadonlySet<string>,
   mappedTails: readonly string[] = [],
   addedFiles: readonly string[] = [],
+  addedFileLanguageId?: (file: string) => string | undefined,
 ): boolean {
   if (!specifier) return false;
   const rule = externalSpecifierResolutionRule(languageId);
-  if (hasAddedFileMatchingRule(rule, addedFiles)) return true;
+  if (hasAddedFileMatchingRule(rule, languageId, addedFiles, addedFileLanguageId)) return true;
   if (!addedStems.size) return false;
   if (specifierMatchesAddedStem(specifier, rule, addedStems)) return true;
   return mappedTails.some((tail) => specifierMatchesAddedStem(tail, rule, addedStems));

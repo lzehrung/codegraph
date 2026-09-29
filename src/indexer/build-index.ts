@@ -84,9 +84,11 @@ import {
   sanitizeManifestEntriesForRoot,
   sanitizeManifestTransientFilesForRoot,
   listDiskCachedModuleFiles,
+  listKnownMemoryCachedModuleFiles,
   listMemoryCachedModuleFiles,
   loadModuleFromCache,
   peekCachedModule,
+  removeModulesFromCache,
   tryLoadFromCache,
   tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
@@ -346,7 +348,7 @@ function previousCppDeclaredContainers(previousModules: ReadonlyMap<string, Modu
   return byName;
 }
 
-/** Fold one files declared containers into name-to-declaring-files buckets. */
+/** Fold one file's declared containers into name-to-declaring-files buckets. */
 function mergeDeclaredContainers(
   byName: Map<string, Set<string>>,
   file: string,
@@ -394,6 +396,12 @@ async function collectNoManifestDeletedDeclarationFiles(args: {
   const live = new Set(args.files.map(fileIdentityKey));
   const rows = new Map<string, string>();
   for (const file of listMemoryCachedModuleFiles(args.projectRoot)) rows.set(fileIdentityKey(file), file);
+  // Identities outlive LRU payload eviction, so an evicted declarer still gets an existence
+  // probe below. Its module is gone, so a confirmed deletion falls back to re-resolving the
+  // language's external importers instead of diffing declarations.
+  for (const file of listKnownMemoryCachedModuleFiles(args.projectRoot)) {
+    if (!rows.has(fileIdentityKey(file))) rows.set(fileIdentityKey(file), file);
+  }
   if ((args.opts?.cache ?? "off") === "disk") {
     const diskFiles = listDiskCachedModuleFiles(args.projectRoot, args.opts);
     if (diskFiles) {
@@ -693,6 +701,8 @@ async function specifierResolutionChanged(
   // No stem-size gate here: declaration languages re-resolve through the extension rule inside
   // externalSpecifierMatchesAddedStem, which runs before the stem check and needs no stems.
   const addedStems = addedStemsForLanguage(support.id);
+  const addedFileLanguageId = (file: string): string | undefined =>
+    supportForFileWithoutHeaderSample(file, languageExtensions)?.id;
   const specifierEdges = entry.edges;
   if (!specifierEdges.length) return false;
 
@@ -701,7 +711,7 @@ async function specifierResolutionChanged(
   const needsAlias: Edge[] = [];
   for (const edge of specifierEdges) {
     const specifier = specifierOf(edge);
-    if (externalSpecifierMatchesAddedStem(specifier, support.id, addedStems, [], addedFiles)) {
+    if (externalSpecifierMatchesAddedStem(specifier, support.id, addedStems, [], addedFiles, addedFileLanguageId)) {
       matching.push(edge);
       continue;
     }
@@ -715,7 +725,14 @@ async function specifierResolutionChanged(
         const mapped = tsconfigAliasMappedTails(specifierOf(edge), paths);
         if (
           mapped.length &&
-          externalSpecifierMatchesAddedStem(specifierOf(edge), support.id, addedStems, mapped, addedFiles)
+          externalSpecifierMatchesAddedStem(
+            specifierOf(edge),
+            support.id,
+            addedStems,
+            mapped,
+            addedFiles,
+            addedFileLanguageId,
+          )
         ) {
           matching.push(edge);
         }
@@ -1136,9 +1153,9 @@ async function collectStaleCachedModules(args: {
   concurrency: number;
   confinedRoot?: string | undefined;
   trustedSources?: ReadonlyMap<string, string> | undefined;
-}): Promise<Set<string>> {
+}): Promise<{ stale: Set<string>; deletedDeclarationFiles: string[] }> {
   const { cachedModules, manifestFiles } = args;
-  if (!cachedModules.size) return new Set();
+  if (!cachedModules.size) return { stale: new Set<string>(), deletedDeclarationFiles: [] };
   const stale = await cachedModulesWithMissingTargets(cachedModules, args.concurrency);
   const resolvesFromDeclarations = (file: string): boolean =>
     DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(
@@ -1146,6 +1163,9 @@ async function collectStaleCachedModules(args: {
     );
   const loadTsconfigPaths = (importer: string) =>
     loadTsconfigResolutionInputsFor(importer, args.projectRoot, args.opts?.logLevel).then((inputs) => inputs?.paths);
+  // Confirmed-deleted declaration files, no-manifest path only: the manifest path retires
+  // deletions through its manifest rewrite and prune instead.
+  const deletedDeclarationFiles: string[] = [];
   if (manifestFiles) {
     const currentKeys = new Set(args.files.map(fileIdentityKey));
     // A cache-signature mismatch proves a change even when a non-strict manifest signature
@@ -1255,6 +1275,7 @@ async function collectStaleCachedModules(args: {
             stems,
             tsconfigPaths ? tsconfigAliasMappedTails(specifier, tsconfigPaths) : [],
             added,
+            (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id,
           ),
         );
         if (addedCanSatisfy) stale.add(file);
@@ -1274,6 +1295,7 @@ async function collectStaleCachedModules(args: {
       opts: args.opts,
       concurrency: args.concurrency,
     })) {
+      deletedDeclarationFiles.push(deleted.file);
       if (deleted.languageId === "cpp" && deleted.mod && deleted.mod.declaredContainers) {
         mergeDeclaredContainers(cppPrevious, deleted.file, deleted.mod.declaredContainers);
       } else {
@@ -1331,7 +1353,7 @@ async function collectStaleCachedModules(args: {
       }
     }
   }
-  return stale;
+  return { stale, deletedDeclarationFiles };
 }
 
 /**
@@ -1572,6 +1594,7 @@ async function buildIndexFromFileListShared(
     }
     return matchPath;
   };
+  let retiredDeletionFiles: string[] = [];
   if (cacheEnabled) {
     const cachedModules = new Map<string, { sigInfo: FileSignature; mod: ModuleIndex }>();
     const cacheMissesByState = { changed: [] as string[], added: [] as string[] };
@@ -1587,7 +1610,7 @@ async function buildIndexFromFileListShared(
         if (probe.staleMod) previousModules.set(file, probe.staleMod);
       } else cacheMissesByState.added.push(file);
     }
-    const staleCachedModules = await collectStaleCachedModules({
+    const { stale: staleCachedModules, deletedDeclarationFiles: retiredDeletions } = await collectStaleCachedModules({
       files: normalizedFiles,
       cachedModules,
       cacheMisses: cacheMissesByState,
@@ -1607,6 +1630,7 @@ async function buildIndexFromFileListShared(
       concurrency: conc,
       ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
     });
+    retiredDeletionFiles = retiredDeletions;
     for (const file of staleCachedModules) {
       const probe = cacheProbes.get(file);
       if (probe && !("error" in probe)) cacheProbes.set(file, { ...probe, mod: null });
@@ -1811,6 +1835,12 @@ async function buildIndexFromFileListShared(
       } else {
         writeModulesToCache(projectRoot, pendingCacheWrites, opts);
       }
+    }
+    // Retire confirmed-deleted declaration rows now the rebuild that consumed them succeeded;
+    // otherwise the same deletion moves the declaration comparison on every later build and
+    // the cache never becomes fully warm.
+    if (!manifest && retiredDeletionFiles.length) {
+      removeModulesFromCache(projectRoot, retiredDeletionFiles, opts);
     }
     const workspaceManifestEdges = await timeIndexBuildPhase({
       opts,

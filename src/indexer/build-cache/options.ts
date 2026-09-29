@@ -22,8 +22,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * docstring-check markers in persisted modules.
  * Epoch 74 binds CommonJS fallback function exports to their assignment, not to a
  * same-named local, and records synthetic definitions at their export properties.
+ * Epoch 75 re-resolves warm-cache import bindings when declaration-language files are added,
+ * changed, or deleted: older rows can hold bindings resolved against a file set the current
+ * build no longer has, and nothing else invalidates them.
  */
-export const CORE_ALGORITHM_EPOCH = 74;
+export const CORE_ALGORITHM_EPOCH = 75;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

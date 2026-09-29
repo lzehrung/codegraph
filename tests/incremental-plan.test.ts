@@ -387,4 +387,18 @@ describe("added-file specifier stems", () => {
     expect(externalSpecifierMatchesAddedStem("P", "csharp", csharpStems, [], csharpFiles)).toBe(true);
     expect(externalSpecifierMatchesAddedStem("P", "csharp", csharpStems, [], ["/proj/p/Thing.ts"])).toBe(false);
   });
+
+  it("re-resolves declaration imports for added files under a configured language extension", () => {
+    // `Helpers.jvm` is mapped to Kotlin, so its stem (`Helpers`) never matches `p.Widget`;
+    // only the file's language can trigger re-resolution of the Kotlin importer.
+    const files = ["/proj/p/Helpers.jvm"];
+    const stems = addedResolutionStems(files, "kotlin");
+    const kotlin = (file: string): string | undefined => (file.endsWith(".jvm") ? "kotlin" : undefined);
+    expect(externalSpecifierMatchesAddedStem("p.Widget", "kotlin", stems, [], files, kotlin)).toBe(true);
+    // Another language's importer is unaffected by the Kotlin file.
+    expect(externalSpecifierMatchesAddedStem("p.Widget", "java", stems, [], files, kotlin)).toBe(false);
+    // Without the language mapping the unknown suffix matches nothing.
+    expect(externalSpecifierMatchesAddedStem("p.Widget", "kotlin", stems, [], files)).toBe(false);
+    expect(externalSpecifierMatchesAddedStem("p.Widget", "kotlin", stems, [], files, () => undefined)).toBe(false);
+  });
 });

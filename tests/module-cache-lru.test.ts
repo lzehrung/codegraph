@@ -10,6 +10,8 @@ import {
   clearMemoryCache,
   closeDiskCacheDatabase,
   diskModuleCacheExists,
+  listKnownMemoryCachedModuleFiles,
+  removeModulesFromCache,
   resetDiskModuleCacheSqliteStateForTests,
   transformPersistedExportFromModule,
   tryLoadFromCache,
@@ -233,6 +235,54 @@ describe("module memory cache bounds", () => {
     expect(tryLoadFromCache(root, "/files/stale.ts", "old-sig", { cache: "memory" })).toBeNull();
     expect(tryLoadFromCache(root, "/files/extra.ts", "sig", { cache: "memory" })?.locals[0]?.localName).toBe("extra");
     clearMemoryCache();
+  });
+
+  it("keeps file identities after their payloads are evicted", () => {
+    const root = path.join(os.tmpdir(), "dg-cache-known-identities");
+    clearMemoryCache();
+    try {
+      for (let i = 0; i < 5001; i += 1) {
+        writeToCache(root, `/files/a-${i}.ts`, "sig", moduleFor(`/files/a-${i}.ts`, `a-${i}`), { cache: "memory" });
+      }
+      // The oldest payload is evicted, but its identity survives for previous-file-set scans.
+      expect(tryLoadFromCache(root, "/files/a-0.ts", "sig", { cache: "memory" })).toBeNull();
+      expect(listKnownMemoryCachedModuleFiles(root)).toContain("/files/a-0.ts");
+      expect(listKnownMemoryCachedModuleFiles(root)).toHaveLength(5001);
+    } finally {
+      clearMemoryCache();
+    }
+    expect(listKnownMemoryCachedModuleFiles(root)).toHaveLength(0);
+  });
+
+  it("retires removed rows and their identities", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cache-remove-"));
+    clearMemoryCache();
+    try {
+      const memoryOpts = { cache: "memory" as const };
+      writeToCache(root, "/files/keep.ts", "sig", moduleFor("/files/keep.ts", "keep"), memoryOpts);
+      writeToCache(root, "/files/gone.ts", "sig", moduleFor("/files/gone.ts", "gone"), memoryOpts);
+      removeModulesFromCache(root, ["/files/gone.ts"], memoryOpts);
+      expect(tryLoadFromCache(root, "/files/gone.ts", "sig", memoryOpts)).toBeNull();
+      expect(tryLoadFromCache(root, "/files/keep.ts", "sig", memoryOpts)).not.toBeNull();
+      expect(listKnownMemoryCachedModuleFiles(root)).toEqual(["/files/keep.ts"]);
+
+      const diskOpts = { cache: "disk" as const };
+      const kept = path.join(root, "kept.ts");
+      const gone = path.join(root, "gone.ts");
+      writeToCache(root, kept, "sig", moduleFor(kept, "kept"), diskOpts);
+      writeToCache(root, gone, "sig", moduleFor(gone, "gone"), diskOpts);
+      expect(tryLoadFromCache(root, gone, "sig", diskOpts)).not.toBeNull();
+      removeModulesFromCache(root, [gone], diskOpts);
+      expect(tryLoadFromCache(root, gone, "sig", diskOpts)).toBeNull();
+      expect(tryLoadFromCache(root, kept, "sig", diskOpts)).not.toBeNull();
+      // Removing an absent row is a no-op, and an empty list never touches SQLite.
+      removeModulesFromCache(root, [path.join(root, "never.ts")], diskOpts);
+      removeModulesFromCache(root, [], diskOpts);
+    } finally {
+      clearMemoryCache();
+      closeDiskCacheDatabase(root);
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("clears only the closed project from the memory cache", () => {

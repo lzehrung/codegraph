@@ -1135,6 +1135,13 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       for (const target of bindingTargets(warm, main)) {
         expect(target).toBe("file:" + normalizePath(path.join(root, "alpha.cpp")));
       }
+      // The confirmed deletion is retired by the rebuild above: with nothing changed, the
+      // next warm build reuses every cached module instead of missing the importer again.
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndex(root, { cache: "memory", report });
+      expect(report.files?.cached).toBe(report.files?.total);
+      expect(report.cache).toMatchObject({ mode: "memory", misses: 0 });
+      expect(report.cache?.hits).toBe(report.files?.total);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
