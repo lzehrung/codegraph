@@ -275,4 +275,28 @@ describe("undocumented public API", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("checks JSDoc on CommonJS member-assignment exports", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-undocumented-cjs-"));
+    try {
+      const file = path.join(root, "api.js");
+      await writeFile(
+        file,
+        [
+          "/** documented member */",
+          "exports.documented = function documented() {};",
+          "const unrelated = 1;",
+          "exports.undocumented = function undocumented() {};",
+        ].join("\n"),
+        "utf8",
+      );
+      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      expect(getUndocumentedApiSurface(index)).toMatchObject({
+        symbols: [{ name: "undocumented", exportedAs: "undocumented" }],
+        coverage: { state: "complete" },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

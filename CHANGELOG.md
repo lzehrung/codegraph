@@ -15,6 +15,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
+- CommonJS fallback function exports now preserve leading JSDoc when a parser tree is available. Malformed cached docstring-coverage markers trigger a rebuild rather than reporting unchecked declarations as undocumented.
 - C#: types imported by `using N;` now resolve in go-to-definition, references, and call graphs when namespace `N` is declared in more than one file, which is the usual layout. Before, nothing imported through such a directive resolved. Namespace-qualified calls such as `N.Type.M()` now resolve too. A `using` directive no longer binds a file in another language whose path matches the name, such as a root `p.ts` for `using P;`.
 - C#: a bare name imported by `using static N.T;` now goes to the static member, constant, or nested type of `T` in go-to-definition, references, and call graphs. Before, it was not found. Instance, extension, private, and protected members are not imported, and a name that two sources provide stays unresolved.
 - Java and C#: go-to-definition on a type-qualified call such as `Util.Two(1, 2)` goes to the static overload that accepts the argument count, including one declared in another part of a C# partial type. Before, it went to the first overload, and find references listed the call under that overload. Go-to-definition on an overload's own declaration now opens that overload instead of the last one. A method group such as `Util.Two` names no argument count and stays unresolved.

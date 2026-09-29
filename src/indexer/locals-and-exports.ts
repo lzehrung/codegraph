@@ -399,6 +399,7 @@ function appendJsLikeRegexFallbackExports(
   source: string,
   locals: SymbolDef[],
   exports: ExportEntry[],
+  leadingDocstringAt: (index: number) => string | undefined,
 ): void {
   const maskedSource = maskJsLikeCommentsAndStrings(source);
   JS_FALLBACK_DECLARATION_PATTERN.lastIndex = 0;
@@ -523,9 +524,10 @@ function appendJsLikeRegexFallbackExports(
 
   while ((match = reCjsFn.exec(maskedSource))) {
     const exportedAs = match[1]!;
+    const idx = match.index + match[0].indexOf(exportedAs);
+    const docstring = leadingDocstringAt(idx);
     let local = locals.find((def) => def.localName === exportedAs);
     if (!local) {
-      const idx = match.index + match[0].indexOf(exportedAs);
       const pos = { line: 1, column: 1, index: idx };
       local = {
         file,
@@ -535,6 +537,7 @@ function appendJsLikeRegexFallbackExports(
       };
       locals.push(local);
     }
+    if (docstring && !local.docstring) local.docstring = docstring;
     if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
       exports.push({ type: "local", exportedAs, target: local });
     }
@@ -549,12 +552,14 @@ function appendJsLikeRegexFallbackExports(
     if (name) startIndex = match.index + match[0].lastIndexOf(name);
     const before = source.slice(0, startIndex);
     const pos = { line: before.split("\n").length, column: startIndex - before.lastIndexOf("\n"), index: startIndex };
+    const docstring = leadingDocstringAt(startIndex);
     const target: SymbolDef = {
       file,
       localName: "exports",
       kind: SymbolKind.Function,
       range: { start: pos, end: pos },
     };
+    if (docstring) target.docstring = docstring;
     locals.push(target);
     exports.push({ type: "local", exportedAs: "exports", target, mechanism: "cjs-module-value" });
   }
@@ -602,6 +607,8 @@ function appendJsLikeRegexFallbackExports(
         range: { start, end: { ...start, column: start.column + name.length, index: startIndex + name.length } },
       };
       const namedDeclarations = declarations.get(name) ?? [];
+      const docstring = leadingDocstringAt(startIndex);
+      if (docstring && !local.docstring) local.docstring = docstring;
       namedDeclarations.push(local);
       declarations.set(name, namedDeclarations);
     }
@@ -642,9 +649,10 @@ function appendJsLikeRegexFallbackExports(
   let objectMatch: RegExpExecArray | null;
   while ((objectMatch = reCjsObjFn.exec(objContent))) {
     const exportedAs = objectMatch[1]!;
+    const idx = moduleExportsObjMatch.index + moduleExportsObjMatch[0].indexOf(exportedAs);
+    const docstring = leadingDocstringAt(idx);
     let local = locals.find((def) => def.localName === exportedAs);
     if (!local) {
-      const idx = moduleExportsObjMatch.index + moduleExportsObjMatch[0].indexOf(exportedAs);
       const pos = { line: 1, column: 1, index: idx };
       local = {
         file,
@@ -654,6 +662,7 @@ function appendJsLikeRegexFallbackExports(
       };
       locals.push(local);
     }
+    if (docstring && !local.docstring) local.docstring = docstring;
     if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
       exports.push({ type: "local", exportedAs, target: local });
     }
@@ -806,6 +815,23 @@ export function collectLocalsAndExportsFromSource(
       /* reduced mode: ignore */
     }
     return tree;
+  };
+
+  const leadingDocstringAt = (index: number): string | undefined => {
+    const root = ensureTree()?.rootNode;
+    if (!root || index < 0 || index >= source.length) return undefined;
+    let node: SyntaxNodeLike = root.descendantForIndex(index, index + 1);
+    if (node === root) return undefined;
+    // Comments attach to the assignment statement or object member, not its function expression.
+    while (
+      node.parent &&
+      node.parent.type !== "program" &&
+      node.parent.type !== "statement_block" &&
+      node.parent.type !== "object"
+    ) {
+      node = node.parent;
+    }
+    return extractLeadingDocstring(node);
   };
 
   // Lazily build once: converts every native capture's UTF-8 byte offsets to UTF-16
@@ -1529,7 +1555,7 @@ export function collectLocalsAndExportsFromSource(
   // source-form probes are too error-prone to risk silently dropping exports.
   const isJsLike = support.id === "ts" || support.id === "tsx" || support.id === "js";
   if (isJsLike) {
-    appendJsLikeRegexFallbackExports(file, source, locals, exports);
+    appendJsLikeRegexFallbackExports(file, source, locals, exports, leadingDocstringAt);
   }
 
   if (support.id === "python") {
