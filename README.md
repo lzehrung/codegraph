@@ -17,6 +17,8 @@
 
 codegraph is a local CLI **and TypeScript library** that turns a source tree into a resolved map of files, symbols, references, and dependencies. Ask where an implementation lives, how components connect, what a change can break, or which tests are relevant, then get bounded source evidence and copyable next steps.
 
+codegraph is not an AST, a compiler, or a linter. People can use `codegraph review` and `codegraph deps` to inspect changes and dependencies without an agent.
+
 Without structural context, an agent burns early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships. codegraph does that discovery once so the context window can stay focused on the problem.
 
 With Node.js 22.16 or newer, install from npm:
@@ -62,67 +64,25 @@ Use codegraph alongside text search and compilers: text search finds exact strin
 
 ## What you can do
 
-| Question                                     | Start here                                                       | What comes back                                                                                           |
-| -------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| "Where should I start in this repo?"         | `codegraph orient --root . --budget small`                       | Central modules, a bounded tree, and copyable follow-ups                                                  |
-| "How does this feature work?"                | `codegraph explore "<question>" --root .`                        | Ranked anchors, source packets, dependency paths, blast radius, and likely tests                          |
-| "What could this change break?"              | `codegraph review`                                               | Changed symbols, Markdown link findings, risk signals, candidate tests, duplicate leads, and review tasks |
-| "Which tests should I run?"                  | `codegraph affected --base HEAD --head WORKTREE --quiet`         | Deterministic affected test paths from changed files and reverse dependencies                             |
-| "What depends on this file?"                 | `codegraph rdeps src/file.ts --json`                             | Reverse dependencies from the resolved project graph                                                      |
-| "Where is this symbol defined or used?"      | `codegraph goto <file> <line> <column>` and `codegraph refs ...` | Semantic definitions and references across supported languages                                            |
-| "Which declaration matches this name?"       | `codegraph symbols "CodeReviewSession" --root .`                 | Ranked symbols with portable handles, exact ranges, provenance, and omissions                             |
-| "What evidence do I need before a refactor?" | `codegraph refactor-plan <symbol-target>`                        | References, call and type relationships, candidate tests, omissions, and copyable follow-ups              |
-| "Is the architecture drifting?"              | `codegraph drift ./src --base origin/main --head HEAD`           | New cycles, hotspot changes, unresolved imports, API changes, and graph deltas                            |
-| "Where is code duplicated?"                  | `codegraph duplicates ./src --min-confidence medium`             | Ranked exact and near-duplicate groups with locations and confidence                                      |
-| "Are the Markdown links broken?"             | `node ./dist/cli.js links --root .`                              | Local Markdown link failures with exact ranges, external URLs skipped, JSON for CI                        |
-| "Can another tool consume the graph?"        | `codegraph graph --root . ./src --json --output codegraph.json`  | JSON, Mermaid, DOT, or SQLite output                                                                      |
+| Job | Question | Start here | What comes back |
+| --- | --- | --- | --- |
+| Review | What could this change break? | `codegraph review` | Changed symbols, risks, and candidate tests |
+| Review | Which tests should I run? | `codegraph affected --base HEAD --head WORKTREE --quiet` | Test paths from changed files and reverse dependencies |
+| Review | How does this feature work? | `codegraph explore "<question>" --root .` | Ranked anchors, source evidence, and dependency paths |
+| Refactor | Where is this symbol used? | `codegraph refs src/file.ts:10:5` | Semantic references and coverage |
+| Refactor | What depends on this file? | `codegraph rdeps src/file.ts --json` | Reverse dependencies |
+| Refactor | What evidence supports a change? | `codegraph refactor-plan <symbol-target>` | Read-only evidence; no code changes |
+| Refactor | Where would a rename apply? | `codegraph rename-preview <symbol-target> <new-name>` | Read-only edits and conflicts; no code changes |
+| Quality | Which files have the most connections? | `codegraph hotspots ./src --limit 20` | Fan-in and fan-out ranking |
+| Quality | Where is code duplicated? | `codegraph duplicates ./src --min-confidence medium` | Ranked duplicate groups |
+| Docs | Which public symbols exist? | `codegraph apisurface` | Exported API symbols |
+| Docs | Are Markdown links broken? | `codegraph links --root .` | Broken local links with ranges; external URLs skipped |
 
-Human-readable output is the CLI default, including the compact `review` report; `--pretty` remains an explicit equivalent. Use `--json` for stable fields, ranges, handles, reasons, confidence, and omission counts in automation.
+CLI output is readable by default. Use `--json` for structured fields and omission counts.
 
 ## Try it
 
-**Recommended:** Install from npm when Node.js 22.16 or newer is available. The standalone archive bundles Node.js.
-
-### From npm (recommended)
-
-```bash
-npm install -g @lzehrung/codegraph
-codegraph doctor
-codegraph install --all --dry-run
-codegraph install --all --yes
-```
-
-Published package installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for alternatives and update instructions.
-
-### Standalone archive (no Node.js or npm)
-
-The standalone archive bundles Node.js, the CLI, the matching native runtime, and the codegraph skill.
-
-```powershell
-irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
-```
-
-```bash
-curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
-```
-
-Both commands preview the target and install path before writing. See [Installation](./docs/installation.md#install-the-standalone-preview) for requirements and unattended installs.
-
-### From a source checkout (development)
-
-Use this path to evaluate the current repository or contribute changes:
-
-```bash
-git clone https://github.com/lzehrung/codegraph.git
-cd codegraph
-npm install
-npm run build
-
-node ./dist/cli.js doctor
-node ./dist/cli.js orient --root . --budget small
-```
-
-Continue with `node ./dist/cli.js <command>` from the checkout. To use the bare `codegraph` examples below unchanged, run `npm install -g .` after the build, then `codegraph doctor` and `codegraph install --all --dry-run`.
+See [Installation](./docs/installation.md) for npm, standalone, and source-checkout steps.
 
 ## A useful first five minutes
 
@@ -172,7 +132,7 @@ codegraph duplicates ./src --min-confidence medium --limit 20
 codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals
 
 # Validate local Markdown links offline (exit 1 on broken links)
-node ./dist/cli.js links --root .
+codegraph links --root .
 ```
 
 ### Export the model
@@ -324,88 +284,16 @@ See [Language parity](./docs/language-parity.md) for the capability matrix and [
 
 ## Using as a library
 
-Install the slim library package when you do not need the CLI, MCP server, installer, or viewer:
-
-```bash
-npm install @lzehrung/codegraph-core
-```
-
-It exposes the same core, graph, impact, and agent entrypoints as the product package. Use it when your application needs structured evidence instead of CLI text.
-
-### Review a diff
+Install `@lzehrung/codegraph-core` when you need the library without the CLI, MCP server, installer, or viewer.
 
 ```ts
-import { analyzeImpactFromDiff, buildProjectIndex } from "@lzehrung/codegraph-core";
+import { buildProjectIndex, getHotspots } from "@lzehrung/codegraph-core";
 
-const root = process.cwd();
-const index = await buildProjectIndex(root, { native: "auto" });
-const impact = await analyzeImpactFromDiff(root, index, {
-  provider: "git",
-  base: "HEAD",
-  head: "WORKTREE",
-  detectBreakingChanges: true,
-});
-
-console.log(impact.changedSymbols, impact.impacted);
+const index = await buildProjectIndex(process.cwd());
+console.log(getHotspots(index.graph, { limit: 10 }));
 ```
 
-For review-oriented batch data, use `buildReviewReport()` or `analyzeImpactFromDiff()`. For progressive analysis, `analyzeImpactStreaming()` emits structured fields and a final summary with ranked top impacts; agent-shaped integrations can use `tool_impactJSON()`.
-
-### Trace dependencies, consumers, and a symbol's references
-
-One index supports file traversal and semantic navigation. File identities in graph results use normalized `/` separators.
-
-```ts
-import path from "node:path";
-import {
-  buildProjectIndex,
-  findReferences,
-  getDependencies,
-  getReverseDependencies,
-  goToDefinition,
-} from "@lzehrung/codegraph-core";
-
-const root = process.cwd();
-const file = path.join(root, "src", "auth.ts").replaceAll(path.sep, "/");
-const index = await buildProjectIndex(root);
-
-const dependencies = getDependencies(index.graph, file, { depth: 2, limit: 20 });
-const consumers = getReverseDependencies(index.graph, file, { depth: 2, limit: 20 });
-
-const definition = await goToDefinition(index, { file, line: 42, column: 13 });
-if (definition.status === "ok") {
-  const references = await findReferences(index, {
-    file: definition.definition.file,
-    line: definition.definition.range.start.line,
-    column: definition.definition.range.start.column,
-  });
-  console.log({ dependencies, consumers, references });
-}
-```
-
-### Build a warm in-process explorer
-
-Use the agent subpath for bounded, agent-ready answers. The session reuses a snapshot and refreshes bounded edits automatically.
-
-```ts
-import { createAgentSession, exploreCodegraphWithSession } from "@lzehrung/codegraph-core/agent";
-
-const root = process.cwd();
-const session = createAgentSession({ root, freshness: { policy: "auto" } });
-const answer = await exploreCodegraphWithSession(session, {
-  root,
-  query: "how does auth reach the database?",
-  limit: 5,
-  maxPackets: 3,
-  maxPaths: 3,
-});
-
-console.log(answer.summary, answer.anchors, answer.followUps);
-```
-
-For offline navigation, `buildCodegraphArtifact()` writes graph JSON, SQLite, questions, and a manifest from the same analysis model. See the [Library API reference](./docs/library-api.md) for sessions, streaming impact, artifacts, graph APIs, and review reports.
-
-The product package `@lzehrung/codegraph` keeps the CLI/MCP/viewer surface and re-exports core APIs. Agent helpers live under `/agent`; MCP handlers and the server live under `/mcp`. See the [public API boundary](./docs/library-api.md#public-api-boundary) before choosing an import path.
+See the [Library API reference](./docs/library-api.md) for navigation, review, agent sessions, and artifacts.
 
 ## How it works
 
