@@ -1712,6 +1712,33 @@ function importedTypeSource(module: ModuleIndex, name: string): string {
   return "";
 }
 
+/** Type parameter names declared by a method or any type enclosing it. */
+async function typeParameterNamesAround(index: ProjectIndex, def: SymbolDef): Promise<Set<string>> {
+  const names = new Set<string>();
+  const context = await ensureParsedContext(
+    def.file,
+    index.parsed?.get(fileIdentityKey(def.file)),
+    index.languageExtensions,
+  ).catch(() => null);
+  const start = def.range.start.index;
+  if (!context || start === undefined) return names;
+  let current: SyntaxNodeLike | null = context.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start);
+  for (; current; current = current.parent) {
+    const parameters =
+      current.childForFieldName("type_parameters") ??
+      current.namedChildren.find((child) => child.type === "type_parameters" || child.type === "type_parameter_list");
+    if (!parameters) continue;
+    for (const parameter of parameters.namedChildren) {
+      const name =
+        parameter.childForFieldName("name") ??
+        parameter.namedChildren.find((child) => /identifier/u.test(child.type)) ??
+        (/identifier/u.test(parameter.type) ? parameter : null);
+      if (name) names.add(name.text);
+    }
+  }
+  return names;
+}
+
 /** Built-in parameter types whose spelling names one type in every file. */
 const BUILTIN_PARAMETER_TYPES: Readonly<Record<string, ReadonlySet<string>>> = {
   java: new Set([
@@ -1760,6 +1787,12 @@ const BUILTIN_PARAMETER_TYPES: Readonly<Record<string, ReadonlySet<string>>> = {
  * spelling must resolve to the same declaration from its own file.
  */
 async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, right: SymbolDef): Promise<boolean> {
+  // A type parameter (`T`) names a different type in each declaration after substitution, so
+  // equal spelling proves nothing.
+  const [leftGenerics, rightGenerics] = await Promise.all([
+    typeParameterNamesAround(index, left),
+    typeParameterNamesAround(index, right),
+  ]);
   const [leftTypes, rightTypes] = await Promise.all([
     memberParameterTypes(index, left),
     memberParameterTypes(index, right),
@@ -1769,6 +1802,8 @@ async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, right: S
   for (let at = 0; at < leftTypes.length; at += 1) {
     const text = leftTypes[at]!;
     if (text !== rightTypes[at]) return false;
+    const typeNames = text.match(/[\p{L}_][\p{L}\p{N}_]*/gu) ?? [];
+    if (typeNames.some((typeName) => leftGenerics.has(typeName) || rightGenerics.has(typeName))) return false;
     if (sameFile) continue;
     const base =
       text

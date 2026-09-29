@@ -87,6 +87,12 @@ export const csharpLookupPolicy: NameLookupPolicy = {
  * declaration, or an import.
  */
 export const jvmLookupPolicy: NameLookupPolicy = {
+  // Java methods and variables are separate namespaces: `int hit = 0; hit();` still calls the
+  // method. A Kotlin local holding a function is callable, so Kotlin keeps the binding.
+  ignoresBinding: (use, binding) =>
+    use.parsed.sup.id === "java" &&
+    binding.kind !== "function" &&
+    implicitSelfCallee("java", use.node.parent ?? use.node)?.id === use.node.id,
   onLocal(state, local) {
     if (state.closestBinding?.kind !== "function" || !isImplicitSelfCall(state)) return undefined;
     if (!bindsAtFileScope(state) && !bindsTypeMethod(state)) return undefined;

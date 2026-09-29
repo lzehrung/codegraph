@@ -889,4 +889,47 @@ describe("Java implicit-receiver precedence", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("calls a method past a same-named local variable, and keeps generic parameters from proving an override", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-namespaces-generics-"));
+    try {
+      const cLines = [
+        "package j;",
+        "class C {",
+        "  int hit() { return 1; }",
+        "  int use() { int hit = 0; return hit() + hit; }",
+        "}",
+        "",
+      ];
+      const c = normalizePath(path.join(root, "C.java"));
+      await writeFile(c, cLines.join("\n"));
+      await writeFile(path.join(root, "Base.java"), "package j;\nclass Base<T> { int go(T t) { return 1; } }\n");
+      const dLines = [
+        "package j;",
+        "class Derived<T> extends Base<String> {",
+        "  int go(T t) { return 2; }",
+        "  int use(T t) { return go(t); }",
+        "}",
+        "",
+      ];
+      const derived = normalizePath(path.join(root, "Derived.java"));
+      await writeFile(derived, dLines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // Java methods and variables are separate namespaces.
+      const call = await goToDefinition(index, { file: c, line: 4, column: cLines[3]!.indexOf("hit()") + 1 });
+      expect(call.status === "ok" ? call.definition.range.start.line : null).toBe(3);
+      const variable = await goToDefinition(index, { file: c, line: 4, column: cLines[3]!.lastIndexOf("hit") + 1 });
+      expect(variable.status === "ok" ? variable.definition.range.start.line : null).toBe(4);
+      // Derived.go(T) and Base<String>.go(T) are distinct after substitution: no confident target.
+      const generic = await goToDefinition(index, { file: derived, line: 4, column: dLines[3]!.indexOf("go(") + 1 });
+      expect(generic.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${path.basename(graph.nodes.get(edge.from)?.file ?? "")}:${graph.nodes.get(edge.to)?.name}`);
+      expect(calls).toEqual(["C.java:hit"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

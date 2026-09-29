@@ -132,10 +132,11 @@ export function resolveBareName(use: BareNameUse): NameResolution | null {
   const lookupName = policy.lookupName?.(use) ?? use.name;
   const early = policy.beforeLexical?.(use, lookupName);
   if (early !== undefined) return early;
+  const found = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
   const state: NameLookupState = {
     use,
     lookupName,
-    closestBinding: findClosestScopeBinding(scopeIndex, lookupName, node, sup),
+    closestBinding: found && policy.ignoresBinding?.(use, found) ? null : found,
   };
   const fromBinding = policy.fromClosestBinding?.(state);
   if (fromBinding !== undefined) return fromBinding;

@@ -70,6 +70,11 @@ export type NameLookupPolicy = {
   lookupName?(use: BareNameUse): string;
   /** Before scope lookup: qualified names, role namespaces, unparsed macro input. */
   beforeLexical?(use: BareNameUse, lookupName: string): NameResolution | null | undefined;
+  /**
+   * Whether the closest scope binding is in a different namespace than the use and must be
+   * ignored (a Java variable cannot be called as a method).
+   */
+  ignoresBinding?(use: BareNameUse, binding: Binding): boolean;
   /** From the closest binding before anything else (a C++ `using` declaration). */
   fromClosestBinding?(state: NameLookupState): NameResolution | null | undefined;
   /** Wraps the rest of the lookup, for a deferred step whose fallback is that rest. */
