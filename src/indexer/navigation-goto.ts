@@ -1521,7 +1521,8 @@ async function resolveKeywordReceiverMember(
   // call, a base level may. C++ and Swift hide a base name behind any same-named member.
   // An unknown count (a Kotlin spread) keeps every non-overridden overload as a candidate.
   const spansHierarchy = HIERARCHY_OVERLOAD_LANGUAGES.has(current.context.sup.id);
-  const jvm = current.context.sup.id === "java" || current.context.sup.id === "kotlin";
+  // Java, Kotlin, and C# base members that are private are not accessible from a subclass.
+  const filtersPrivateBases = HIERARCHY_OVERLOAD_LANGUAGES.has(current.context.sup.id);
   let lenient: SymbolDef | undefined;
   // Accepted overloads across levels. A deeper one is overridden only by an accepted method with
   // the same parameter types in a class proven to derive from its owner on the walked path;
@@ -1598,8 +1599,9 @@ async function resolveKeywordReceiverMember(
       recordOwner(before, ownerKey);
     }
     let uniqueMatches = uniqueReceiverMemberCandidates(matches);
-    // A private member of a base class is not inherited: it neither answers nor stops the walk.
-    if (jvm && uniqueMatches.length) {
+    // A private member of a base class is not accessible: it neither answers nor stops the walk.
+    // The first level of a `this` lookup is the class itself, including C# partial parts.
+    if (filtersPrivateBases && (startAtAncestor || depth > 0) && uniqueMatches.length) {
       const inherited: SymbolDef[] = [];
       for (const candidate of uniqueMatches) {
         if (!(await isUninheritedPrivateMember(index, mod, node, candidate))) inherited.push(candidate);
@@ -1799,24 +1801,26 @@ async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, right: S
   ]);
   if (!leftTypes || !rightTypes || leftTypes.length !== rightTypes.length) return false;
   const sameFile = fileIdentityKey(left.file) === fileIdentityKey(right.file);
+  const leftContext = await ensureParsedContext(
+    left.file,
+    index.parsed?.get(fileIdentityKey(left.file)),
+    index.languageExtensions,
+  ).catch(() => null);
+  if (!leftContext) return false;
   for (let at = 0; at < leftTypes.length; at += 1) {
     const text = leftTypes[at]!;
     if (text !== rightTypes[at]) return false;
     const typeNames = text.match(/[\p{L}_][\p{L}\p{N}_]*/gu) ?? [];
     if (typeNames.some((typeName) => leftGenerics.has(typeName) || rightGenerics.has(typeName))) return false;
-    if (sameFile) continue;
+    // One Java or Kotlin file declares one package; a C# file can open several namespaces, so the
+    // same spelling there still needs resolution.
+    if (sameFile && leftContext.sup.id !== "csharp") continue;
     const base =
       text
         .replace(/<.*$/su, "")
         .replace(/[?\[\].]+$/u, "")
         .split(".")
         .pop() ?? text;
-    const leftContext = await ensureParsedContext(
-      left.file,
-      index.parsed?.get(fileIdentityKey(left.file)),
-      index.languageExtensions,
-    ).catch(() => null);
-    if (!leftContext) return false;
     if (BUILTIN_PARAMETER_TYPES[leftContext.sup.id]?.has(base)) continue;
     const rightContext = await ensureParsedContext(
       right.file,
@@ -1826,8 +1830,25 @@ async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, right: S
     const leftModule = index.byFile.get(fileIdentityKey(left.file));
     const rightModule = index.byFile.get(fileIdentityKey(right.file));
     if (!rightContext || !leftModule || !rightModule) return false;
-    const leftType = resolveNamedDefinition(index, leftModule, left.file, leftContext.sup, base);
-    const rightType = resolveNamedDefinition(index, rightModule, right.file, rightContext.sup, base);
+    // Resolve at each declaration so a C# spelling reads its own namespace region.
+    const leftType = resolveNamedDefinition(
+      index,
+      leftModule,
+      left.file,
+      leftContext.sup,
+      base,
+      undefined,
+      left.range.start.index,
+    );
+    const rightType = resolveNamedDefinition(
+      index,
+      rightModule,
+      right.file,
+      rightContext.sup,
+      base,
+      undefined,
+      right.range.start.index,
+    );
     if (leftType?.status !== "ok" && rightType?.status !== "ok") {
       // Neither names a project type: both files must name it through the same import (or none).
       if (importedTypeSource(leftModule, base) !== importedTypeSource(rightModule, base)) return false;
