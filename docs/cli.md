@@ -613,7 +613,13 @@ codegraph hotspots ./src --limit 20
 
 `hotspots` ranks files by fan-in and fan-out connectivity. It does not measure code complexity.
 
-`apisurface --undocumented` lists local exported declarations with no indexed docstring. The pretty output shows file, range, name, kind, and exported name. With `--json`, it returns an array of `{ file, name, exportedAs, kind, range }` objects. File paths are project-relative. Re-exports have no local declaration, so this option omits them. A missing docstring can also mean that the language does not capture that comment; see [language parity](./language-parity.md#symbols-and-exports).
+`apisurface --undocumented` lists local exported declarations with no indexed docstring. The pretty output shows file, range, name, kind, and exported name. With `--json`, it returns an array of `{ file, name, exportedAs, kind, range }` objects. File paths are project-relative.
+
+Re-exports have no local declaration, so this option omits them. A missing docstring can also mean that the language does not capture that comment; see [language parity](./language-parity.md#symbols-and-exports).
+
+Unused exports have no CLI or MCP command. The library-only `findUnusedExports(index)` omits partial reference coverage. It also protects re-exports, package entries, and modules with opaque incoming edges. Its result says "no references found in the indexed project".
+
+Runtime-loaded worker entry points and some same-file references can escape the index. Treat library results as leads, not proof that an export has no consumers.
 
 Cycle detection reports source dependency cycles. Document-only link loops, such as Markdown files linking to each other, remain in the graph for navigation but are not reported as dependency cycles.
 

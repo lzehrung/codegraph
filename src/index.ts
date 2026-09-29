@@ -178,6 +178,8 @@ export {
   type ApiSurface,
   getUndocumentedApiSurface,
   type UndocumentedApiSymbol,
+  findUnusedExports,
+  type UnusedExportCandidate,
 } from "./indexer.js";
 
 /** Diff impact analysis and review-context helper APIs. */

@@ -1,12 +1,11 @@
 # Scenario catalog
 
-Minimal catalog of Tree-sitter scenarios with sample coverage. Each row names the fixture and the behavior that fixture locks. [Language parity](./language-parity.md) is the claim of record for what a capability supports; when the two disagree, fix the parity doc and the row together.
+Minimal catalog of Tree-sitter scenarios with sample coverage. Each entry names the fixture and the behavior that fixture locks. [Language parity](./language-parity.md) records capability limits.
 
-## API documentation reports
+## API quality reports
 
-| Scenario | Sample | Expected behavior | Source | Date added |
-| --- | --- | --- | --- | --- |
-| Exported docstring classification | `tests/undocumented-api.test.ts` | `apisurface --undocumented` includes exported symbols without an indexed docstring and excludes documented exports for each capturing language. Tests record the limits for languages that do not capture leading comments. Pretty and JSON output include source locations. | Native fixtures | 2026-09-29 |
+- `tests/undocumented-api.test.ts`: `apisurface --undocumented` includes undocumented exports and excludes documented exports where comments are captured. Each exporting language has a fixture, including recorded capture limits. Pretty and JSON output include locations.
+- `tests/unused-exports.test.ts`: `findUnusedExports` reports an unreferenced export only with complete indexed reference coverage. It excludes a used export, a re-exported symbol, package entry points, and a dynamically loaded module.
 
 ## Impact and diff pipeline
 

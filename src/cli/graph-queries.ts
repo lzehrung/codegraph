@@ -1,4 +1,9 @@
-import { findLocalSymbolDefinitions, getApiSurface, getUndocumentedApiSurface, parseQualifiedSymbolPath } from "../indexer/symbols.js";
+import {
+  findLocalSymbolDefinitions,
+  getApiSurface,
+  getUndocumentedApiSurface,
+  parseQualifiedSymbolPath,
+} from "../indexer/symbols.js";
 import { parseAgentSymbolHandle } from "../agent/handles.js";
 import type { CurrentProjectIndexLoader } from "../indexer/load-current-index.js";
 import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";

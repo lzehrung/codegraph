@@ -64,20 +64,21 @@ Use codegraph alongside text search and compilers: text search finds exact strin
 
 ## What you can do
 
-| Job | Question | Start here | What comes back |
-| --- | --- | --- | --- |
-| Review | What could this change break? | `codegraph review` | Changed symbols, risks, and candidate tests |
-| Review | Which tests should I run? | `codegraph affected --base HEAD --head WORKTREE --quiet` | Test paths from changed files and reverse dependencies |
-| Review | How does this feature work? | `codegraph explore "<question>" --root .` | Ranked anchors, source evidence, and dependency paths |
-| Refactor | Where is this symbol used? | `codegraph refs src/file.ts:10:5` | Semantic references and coverage |
-| Refactor | What depends on this file? | `codegraph rdeps src/file.ts --json` | Reverse dependencies |
-| Refactor | What evidence supports a change? | `codegraph refactor-plan <symbol-target>` | Read-only evidence; no code changes |
-| Refactor | Where would a rename apply? | `codegraph rename-preview <symbol-target> <new-name>` | Read-only edits and conflicts; no code changes |
-| Quality | Which files have the most connections? | `codegraph hotspots ./src --limit 20` | Fan-in and fan-out ranking |
-| Quality | Where is code duplicated? | `codegraph duplicates ./src --min-confidence medium` | Ranked duplicate groups |
-| Docs | Which public symbols exist? | `codegraph apisurface` | Exported API symbols |
-| Docs | Which exports have no indexed docstring? | `codegraph apisurface --undocumented` | File, name, kind, and range; see language limits |
-| Docs | Are Markdown links broken? | `codegraph links --root .` | Broken local links with ranges; external URLs skipped |
+| Job      | Question                                 | Start here                                               | What comes back                                        |
+| -------- | ---------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------ |
+| Review   | What could this change break?            | `codegraph review`                                       | Changed symbols, risks, and candidate tests            |
+| Review   | Which tests should I run?                | `codegraph affected --base HEAD --head WORKTREE --quiet` | Test paths from changed files and reverse dependencies |
+| Review   | How does this feature work?              | `codegraph explore "<question>" --root .`                | Ranked anchors, source evidence, and dependency paths  |
+| Refactor | Where is this symbol used?               | `codegraph refs src/file.ts:10:5`                        | Semantic references and coverage                       |
+| Refactor | What depends on this file?               | `codegraph rdeps src/file.ts --json`                     | Reverse dependencies                                   |
+| Refactor | What evidence supports a change?         | `codegraph refactor-plan <symbol-target>`                | Read-only evidence; no code changes                    |
+| Refactor | Where would a rename apply?              | `codegraph rename-preview <symbol-target> <new-name>`    | Read-only edits and conflicts; no code changes         |
+| Quality  | Which files have the most connections?   | `codegraph hotspots ./src --limit 20`                    | Fan-in and fan-out ranking                             |
+| Quality  | Where is code duplicated?                | `codegraph duplicates ./src --min-confidence medium`     | Ranked duplicate groups                                |
+| Quality  | Which exports lack indexed references?   | `findUnusedExports(index)` (library only)                | Candidates with complete coverage; check source use    |
+| Docs     | Which public symbols exist?              | `codegraph apisurface`                                   | Exported API symbols                                   |
+| Docs     | Which exports have no indexed docstring? | `codegraph apisurface --undocumented`                    | File, name, kind, and range; see language limits       |
+| Docs     | Are Markdown links broken?               | `codegraph links --root .`                               | Broken local links with ranges; external URLs skipped  |
 
 CLI output is readable by default. Use `--json` for structured fields and omission counts.
 

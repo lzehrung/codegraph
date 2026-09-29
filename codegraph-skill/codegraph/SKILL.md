@@ -99,6 +99,7 @@ Filename results are suggestions only.
 
 - Architecture checks: `codegraph inspect`, `codegraph hotspots` (fan-in and fan-out connectivity), `codegraph cycles`, `codegraph unresolved`, and `codegraph apisurface`.
 - API documentation checks: `codegraph apisurface --undocumented` lists exported declarations without a captured docstring. Check language limits before treating a result as missing documentation.
+- Unused-export candidates use `findUnusedExports(index)` in the library only. It needs complete indexed reference coverage and does not claim dead code. No CLI or MCP report is available.
 - Duplicate cleanup: `codegraph duplicates --root . ./src --profile cleanup`. It excludes imports from every supported import syntax. Local Markdown links: `codegraph links --json`.
 - Specialized reads: `codegraph grep --query` for syntax trees, `codegraph chunk` for embeddings, and `codegraph dumpmod` for indexed module data.
 - Compare architecture across revisions: `codegraph drift` or `codegraph graph-delta`.

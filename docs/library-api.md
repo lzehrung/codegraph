@@ -79,6 +79,7 @@ Public-stable APIs (documented integration surface):
   `buildProjectIndexFromFiles`, `goToDefinition`, `findReferences`, symbol handles,
   graph builders and renderers.
 - API documentation: `getUndocumentedApiSurface(index)` lists local exports with no captured docstring. Items have `file`, `name`, `exportedAs`, `kind`, and `range`. It does not infer documentation on re-exports. See [language parity](./language-parity.md#symbols-and-exports) for capture limits.
+- Export usage: `findUnusedExports(index)` returns only local exports with complete `findReferences` coverage and no indexed use. The result includes file, name, exported name, kind, range, and reason "no references found in the indexed project". Re-exports, package entry points, and opaque imports present in the graph are treated as used. Partial coverage is omitted. This is a library-only API; no CLI or MCP unused-export command exists.
 - Symbol targets: `resolveSymbolTarget` returns deterministic exact, ambiguous,
   and not-found outcomes for reusable handles, qualified paths, source
   locations, and exact names.
