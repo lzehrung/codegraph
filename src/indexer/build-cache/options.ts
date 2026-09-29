@@ -132,7 +132,7 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 69 moves bare-name lookup into one shared core used by navigation and the detailed graph,
  * and makes Java and Kotlin bare calls prefer inherited members over package peers and imports.
  * Epoch 70 binds C# `using static` directives to the declaring type's file, so bare names resolve
- * to that type's static members.
+ * to that type's static members, and chooses type-qualified Java/C# overloads by argument count.
  */
 export const CORE_ALGORITHM_EPOCH = 70;
 /**

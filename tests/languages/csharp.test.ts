@@ -2513,3 +2513,60 @@ describe("C# using static", () => {
     }
   });
 });
+
+describe("C# type-qualified overloads", () => {
+  it("resolves Type.Method(args) and each overload's own declaration to that overload", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-overload-"));
+    try {
+      const utilLines = [
+        "namespace P;",
+        "public static class Util {",
+        "  public static int Two(int a) => a;",
+        "  public static int Two(int a, int b) => a + b;",
+        "}",
+        "",
+      ];
+      const useLines = [
+        "using P;",
+        "using System;",
+        "namespace Q;",
+        "public class Use {",
+        "  public int B() => Util.Two(1);",
+        "  public int C() => Util.Two(1, 2);",
+        "  public Func<int, int> G() => Util.Two;",
+        "}",
+        "",
+      ];
+      const util = normalizePath(path.join(root, "Util.cs"));
+      const use = normalizePath(path.join(root, "Use.cs"));
+      await writeFile(util, utilLines.join("\n"));
+      await writeFile(use, useLines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (file: string, lines: string[], line: number) => {
+        const column = lines[line - 1]!.indexOf("Two") + 1;
+        const result = await goToDefinition(index, { file, line, column });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      expect(await gotoLine(use, useLines, 5)).toBe(3);
+      expect(await gotoLine(use, useLines, 6)).toBe(4);
+      // A method group names no argument count, so the overload is ambiguous.
+      expect(await gotoLine(use, useLines, 7)).toBeNull();
+      expect(await gotoLine(util, utilLines, 3)).toBe(3);
+      expect(await gotoLine(util, utilLines, 4)).toBe(4);
+
+      const referenceLines = async (line: number) => {
+        const result = await findReferences(index, {
+          file: util,
+          line,
+          column: utilLines[line - 1]!.indexOf("Two") + 1,
+        });
+        if (result.status !== "ok") throw new Error("Expected references");
+        return result.references.map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`);
+      };
+      expect((await referenceLines(3)).sort()).toEqual(["Use.cs:5", "Util.cs:3"]);
+      expect((await referenceLines(4)).sort()).toEqual(["Use.cs:6", "Util.cs:4"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
