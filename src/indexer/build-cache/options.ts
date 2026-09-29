@@ -133,8 +133,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * and makes Java and Kotlin bare calls prefer inherited members over package peers and imports.
  * Epoch 70 binds C# `using static` directives to the declaring type's file, so bare names resolve
  * to that type's static members, and chooses type-qualified Java/C# overloads by argument count.
+ * Epoch 71 binds C# `using N;` to a file that declares `N` even when several do, and never to a
+ * path-like file in another language.
  */
-export const CORE_ALGORITHM_EPOCH = 70;
+export const CORE_ALGORITHM_EPOCH = 71;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

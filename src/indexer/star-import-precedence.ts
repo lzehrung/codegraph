@@ -162,9 +162,10 @@ export function resolveStarImportedDefinition(
   if (imp.kind !== "star" || imp.staticMembersOf) return null;
   const result = resolveImported(index, imp, name, {
     ...(cNamespace ? { cNamespace } : {}),
-    // Ruby star expansion already publishes exported constants. Local fallback would
-    // resurrect a nested class as a bare name the exports query omitted.
-    ...(languageId === "ruby" ? { allowLocalFallback: false } : {}),
+    // Ruby star expansion already publishes exported constants, and a C# `using N;` imports only
+    // the exported types of `N`. Local fallback would resurrect a nested Ruby class or a C#
+    // `internal` type as a bare name the exports omitted.
+    ...(languageId === "ruby" || languageId === "csharp" ? { allowLocalFallback: false } : {}),
   });
   if (!result || "namespace" in result) return null;
   return result;

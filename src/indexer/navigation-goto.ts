@@ -46,6 +46,7 @@ import {
   isUnprovenHeritageExpression,
   keywordReceiverMemberScope,
   kotlinExtensionReceiverTypeNode,
+  csharpDottedNameRoot,
   nodeInStaticMemberContext,
   importTypeQuerySpecifier,
   receiverConstructorExpression,
@@ -690,6 +691,15 @@ export async function resolveMemberAccessDefinition(params: {
       if (subObj && subProp) {
         const base = await resolveExpression(subObj);
         const memberName = sliceText(subProp, source);
+        // `P.Mix` in `P.Mix.M()`: when the leftmost name binds nothing, a C# dotted name is a
+        // namespace-qualified type, which qualified export lookup resolves across every file that
+        // declares the namespace.
+        const dottedRoot = !base && sup.id === "csharp" ? csharpDottedNameRoot(expr) : null;
+        if (dottedRoot && !resolveLexicalBinding?.(dottedRoot)) {
+          return resolveExport(index, mod.file, sliceText(expr, source).replace(/\s+/gu, ""), {
+            referenceIndex: expr.startIndex,
+          });
+        }
         if (base?.kind === "namespace") {
           if (!isGoExportedMemberName(sup.id, memberName)) return null;
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });

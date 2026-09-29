@@ -7,6 +7,7 @@ import {
   rustImportKeywordOffset,
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
+import { supportForFileWithoutHeaderSample } from "../../languages.js";
 import { CSHARP_IDENTIFIER_SOURCE, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
@@ -157,6 +158,12 @@ function csharpUsingAliasLocalRange(
   return sourceRangeFromOffsets(collectLineStartOffsets(source), start, start + alias.length);
 }
 
+/** A path-like hit counts for a C# directive only when it is a C# file. */
+function csharpImportTarget(resolved: ResolvedImportTarget, spec: string): ResolvedImportTarget {
+  if (typeof resolved !== "string") return resolved;
+  return supportForFileWithoutHeaderSample(resolved)?.id === "csharp" ? resolved : { external: spec };
+}
+
 async function applyCsharpStatementOverride(
   context: LanguageSpecificImportContext,
   normalizedStmt: string,
@@ -214,10 +221,15 @@ async function applyCsharpStatementOverride(
   }
 
   let fromValue = parsed.from;
-  let resolved = await context.resolveFrom(fromValue);
-  if (typeof resolved !== "string" && namespaceTargets.length === 1) {
-    resolved = namespaceTargets[0]!.replace(/\\/g, "/");
-  }
+  // `using N;` names a namespace, which ordinary C# declares across many files. Bind it to the
+  // first declaring file: lookups through the binding qualify the name with `N`, and
+  // namespace-qualified export lookup reaches every file that declares `N` through the
+  // compilation-unit relation. Path-like resolution applies only when no file declares `N`, and
+  // only to a C# file.
+  let resolved: ResolvedImportTarget =
+    !parsed.alias && namespaceTargets.length
+      ? namespaceTargets[0]!.replace(/\\/g, "/")
+      : csharpImportTarget(await context.resolveFrom(fromValue), fromValue);
   if (parsed.alias) {
     const fromParts = parsed.from.split(".");
     if (fromParts.length > 1) {
@@ -246,7 +258,7 @@ async function applyCsharpStatementOverride(
           fromValue = fallbackFrom;
           resolved = fallbackNamespaceTargets[0]!.replace(/\\/g, "/");
         } else if (typeof resolved !== "string") {
-          const fallbackResolved = await context.resolveFrom(fallbackFrom);
+          const fallbackResolved = csharpImportTarget(await context.resolveFrom(fallbackFrom), fallbackFrom);
           if (typeof fallbackResolved === "string") {
             fromValue = fallbackFrom;
             resolved = fallbackResolved;

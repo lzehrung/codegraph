@@ -6265,6 +6265,42 @@ describe("Find References: implicit compilation-unit peers", () => {
     }
   });
 
+  it("includes uses through a C# using namespace declared in several files and excludes a same-named type in another namespace", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-namespace-refs-"));
+    try {
+      const mixFile = path.join(root, "Mix.cs").replace(/\\/g, "/");
+      const otherFile = path.join(root, "Other.cs").replace(/\\/g, "/");
+      const decoyFile = path.join(root, "Decoy.cs").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+      const mixLines = ["namespace P;", "public class Mix {", "  public static int M(int a) => a;", "}"];
+      const useLines = [
+        "using P;",
+        "namespace Q;",
+        "public class Use {",
+        "  public int A() => Mix.M(1);",
+        "  public int B() => P.Mix.M(2);",
+        "  public int C() => R.Mix.M(3);",
+        "}",
+      ];
+      await fsp.writeFile(mixFile, `${mixLines.join("\n")}\n`, "utf8");
+      await fsp.writeFile(otherFile, "namespace P;\npublic class Other { }\n", "utf8");
+      await fsp.writeFile(
+        decoyFile,
+        "namespace R;\npublic class Mix {\n  public static int M(int a) => 2;\n}\n",
+        "utf8",
+      );
+      await fsp.writeFile(useFile, `${useLines.join("\n")}\n`, "utf8");
+      const index = await createTestIndexFromFiles(root, [mixFile, otherFile, decoyFile, useFile]);
+      await testFindReferences(index, mixFile, 3, tokenColumn(mixLines[2]!, "M"), [
+        { file: mixFile, line: 3, column: tokenColumn(mixLines[2]!, "M") },
+        { file: useFile, line: 4, column: useLines[3]!.lastIndexOf("M(") + 1 },
+        { file: useFile, line: 5, column: useLines[4]!.lastIndexOf("M(") + 1 },
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps same-file C# namespace regions separate when one file declares several namespaces", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-multispace-refs-"));
     try {

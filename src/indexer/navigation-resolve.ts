@@ -660,6 +660,20 @@ function csharpNamedImportLookupName(from: string, exportedName: string): string
   return `${normalizedFrom}.${exportedName}`;
 }
 
+/**
+ * The name a C# binding looks up. A named binding qualifies with its alias target. A `using N;`
+ * star binding qualifies with `N`: its resolved file is one of the files that declare `N`, and
+ * the qualified lookup reaches exactly the types of `N` in every declaring file, not types of
+ * other namespaces the bound file also declares.
+ */
+function csharpImportLookupName(imp: ImportBinding, exportedName: string): string {
+  if (imp.kind === "named") return csharpNamedImportLookupName(imp.from, exportedName);
+  if (imp.kind !== "star" || imp.staticMembersOf) return exportedName;
+  if (!exportedName || exportedName.includes(".") || exportedName.startsWith("global::")) return exportedName;
+  const namespaceName = imp.from.trim();
+  return namespaceName ? `${namespaceName}.${exportedName}` : exportedName;
+}
+
 export function resolveImported(
   index: ProjectIndex,
   imp: ImportBinding,
@@ -677,10 +691,7 @@ export function resolveImported(
   // `N.Point` is the only bare-visible match when this file also declares outer `N`.
   // The alias names one namespace, and that qualified name is what every consumer resolves.
   const support = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions);
-  const lookupName =
-    support?.id === "csharp" && imp.kind === "named"
-      ? csharpNamedImportLookupName(imp.from, exportedName)
-      : exportedName;
+  const lookupName = support?.id === "csharp" ? csharpImportLookupName(imp, exportedName) : exportedName;
   const hit = phpRole
     ? resolvePhpExportByImportType(index, targetFile, exportedName, phpRole)
     : resolveExport(index, targetFile, lookupName, {

@@ -2203,6 +2203,41 @@ nativeDescribe("native semantic coverage", () => {
         edge: { caller: "Call", callerFile: "csstatic/Use.cs", expectedTarget: "csstatic/Util.cs::Go" },
       },
       {
+        name: "C# using namespace declared in several files",
+        files: {
+          "csnsfiles/Mix.cs": [
+            "namespace SplitNs;",
+            "public class Mix {",
+            "  public static int M(int a) { return a; }",
+            "}",
+          ],
+          "csnsfiles/Other.cs": ["namespace SplitNs;", "public class Other { }"],
+          "csnsfiles/Decoy.cs": [
+            "namespace SplitDecoy;",
+            "public class Mix {",
+            "  public static int M(int a) { return 2; }",
+            "  public static int UseDecoy() { return Mix.M(1); }",
+            "}",
+          ],
+          "csnsfiles/Use.cs": [
+            "using SplitNs;",
+            "namespace SplitUse;",
+            "public class Use {",
+            "  public int Call() { return Mix.M(1); }",
+            "}",
+          ],
+        },
+        goto: { file: "csnsfiles/Use.cs", line: 4, token: "M(", expectedFile: "csnsfiles/Mix.cs", expectedLine: 3 },
+        references: {
+          file: "csnsfiles/Mix.cs",
+          line: 3,
+          token: "M",
+          expectedSites: ["csnsfiles/Mix.cs:3", "csnsfiles/Use.cs:4"],
+          decoyFile: "csnsfiles/Decoy.cs",
+        },
+        edge: { caller: "Call", callerFile: "csnsfiles/Use.cs", expectedTarget: "csnsfiles/Mix.cs::M" },
+      },
+      {
         name: "Zig imported function through @import",
         files: {
           "zig/api.zig": ["pub fn target(value: i32) i32 {", "    return value;", "}"],

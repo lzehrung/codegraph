@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -2680,6 +2680,92 @@ describe("C# type-qualified overloads", () => {
         .map((edge) => graph.nodes.get(edge.from)?.name)
         .sort();
       expect(callers).toEqual(["A", "C", "D"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# using namespace across files", () => {
+  it("binds a namespace declared in several files and never binds a same-named non-C# file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-namespace-"));
+    try {
+      const files: Record<string, string[]> = {
+        "cs/Mix.cs": ["namespace P;", "public class Mix {", "  public static int M(int a) => a;", "}"],
+        "cs/Other.cs": ["namespace P;", "public class Other { }"],
+        "cs/Multi.cs": [
+          "namespace P.Inner { public class Deep { } }",
+          "namespace R {",
+          "  public class Mix { public static int M(int a) => 2; }",
+          "  public class Only { }",
+          "}",
+        ],
+        "cs/Use.cs": [
+          "using P;",
+          "using System;",
+          "namespace Q;",
+          "public class Use {",
+          "  public int A() => Mix.M(1);",
+          "  public object B() => new Other();",
+          "  public object C() => new Deep();",
+          "  public object D() => new Only();",
+          "  public int E() => P.Mix.M(1);",
+          "  public int F() => R.Mix.M(1);",
+          "}",
+        ],
+        // Path-like decoys: `using P;` and `using System;` name namespaces, not these files.
+        "p.ts": ["export const x = 1;"],
+        "system.ts": ["export const y = 1;"],
+      };
+      for (const [name, lines] of Object.entries(files)) {
+        await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+        await writeFile(path.join(root, name), `${lines.join("\n")}\n`);
+      }
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = normalizePath(path.join(root, "cs", "Use.cs"));
+      const useLines = files["cs/Use.cs"]!;
+      const gotoTarget = async (line: number, token: string) => {
+        const column = useLines[line - 1]!.lastIndexOf(token) + 1;
+        const result = await goToDefinition(index, { file: use, line, column });
+        if (result.status !== "ok") return null;
+        return `${path.basename(result.definition.file)}:${result.definition.range.start.line}`;
+      };
+      expect(await gotoTarget(5, "Mix")).toBe("Mix.cs:2");
+      expect(await gotoTarget(5, "M(")).toBe("Mix.cs:3");
+      expect(await gotoTarget(6, "Other")).toBe("Other.cs:2");
+      // `using P;` imports the types of P only: not P.Inner, and not R in the same file.
+      expect(await gotoTarget(7, "Deep")).toBeNull();
+      expect(await gotoTarget(8, "Only")).toBeNull();
+      expect(await gotoTarget(9, "Mix")).toBe("Mix.cs:2");
+      expect(await gotoTarget(9, "M(")).toBe("Mix.cs:3");
+      expect(await gotoTarget(10, "M(")).toBe("Multi.cs:3");
+
+      const useModule = index.byFile.get(fileIdentityKey(use));
+      const importTargets = (useModule?.imports ?? []).map((binding) =>
+        typeof binding.resolved === "string" ? path.basename(binding.resolved) : null,
+      );
+      expect(importTargets.some((target) => target?.toLowerCase().endsWith(".ts"))).toBe(false);
+      const fileEdgeTargets = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path).toLowerCase() : ""));
+      expect(fileEdgeTargets.some((target) => target.endsWith(".ts"))).toBe(false);
+
+      const mixFile = normalizePath(path.join(root, "cs", "Mix.cs"));
+      const references = await findReferences(index, { file: mixFile, line: 2, column: 14 });
+      if (references.status !== "ok") throw new Error("Expected references");
+      expect(
+        references.references
+          .filter((reference) => reference.file === use)
+          .map((reference) => reference.range.start.line)
+          .sort((left, right) => left - right),
+      ).toEqual([5, 9]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => (edge.label === "calls" || edge.label === "instantiates") && edge.from.startsWith(use))
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
+        .sort();
+      expect(calls).toEqual(["A->Mix.cs", "B->Other.cs", "E->Mix.cs", "F->Multi.cs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

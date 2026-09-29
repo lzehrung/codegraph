@@ -24,6 +24,7 @@ import { findClosestScopeBinding } from "../../indexer/navigation-local.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
 import {
   cjsRequireValueBinding,
+  resolveExport,
   resolveImportTypeMember,
   resolvePhpExportByImportType,
 } from "../../indexer/navigation-resolve.js";
@@ -684,6 +685,12 @@ function resolveNamedType(
   }
   const target = context.resolveIdentifier(name, node);
   if (target && declaresMembers(target)) return target;
+  // A C# namespace-qualified type (`P.Mix`) that the identifier lookup does not bind (a namespace path,
+  // not a nested type) resolves by qualified export lookup, as navigation does.
+  if (context.sup.id === "csharp" && name.includes(".")) {
+    const qualified = resolveExport(context.index, context.moduleEntry.file, name, { referenceIndex: node.startIndex });
+    if (qualified?.kind === "resolved" && declaresMembers(qualified.def)) return qualified.def;
+  }
   // A parameter/annotation type name is a closer scope binding than the class it names.
   const normalized = context.sup.normalizeIdentifier(name);
   const typed = context.moduleEntry.locals.filter(
