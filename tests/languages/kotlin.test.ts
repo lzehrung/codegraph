@@ -690,4 +690,45 @@ describe("Kotlin implicit-receiver precedence", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps a spread call ambiguous across inherited overloads and prefers a fixed-arity one for a known count", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-spread-overloads-"));
+    try {
+      const lines = [
+        "package k",
+        "",
+        "open class GrandBase {",
+        "    fun hit(vararg xs: Int): Int = 1",
+        "}",
+        "",
+        "open class Base : GrandBase() {",
+        "    fun hit(a: Int, b: Int): Int = 2",
+        "}",
+        "",
+        "class Derived : Base() {",
+        "    fun spread(values: IntArray): Int = hit(*values)",
+        "    fun two(): Int = hit(1, 2)",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "Use.kt"));
+      await fsp.writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number) => {
+        const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf("hit") + 1 });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      // A spread's length is unknown, so both inherited overloads remain; two arguments pick the
+      // fixed-arity overload over the vararg one.
+      expect(await gotoLine(12)).toBeNull();
+      expect(await gotoLine(13)).toBe(8);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.site?.range.start.line}`);
+      expect(calls).toEqual(["two:13"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

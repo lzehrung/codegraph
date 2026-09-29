@@ -1519,13 +1519,14 @@ async function resolveKeywordReceiverMember(
   if (level.length === 0) return undefined;
   // Java, Kotlin, and C# overload across the hierarchy: when no member at one level accepts the
   // call, a base level may. C++ and Swift hide a base name behind any same-named member.
-  const spansHierarchy = knownArgumentCount !== undefined && HIERARCHY_OVERLOAD_LANGUAGES.has(current.context.sup.id);
+  // An unknown count (a Kotlin spread) keeps every non-overridden overload as a candidate.
+  const spansHierarchy = HIERARCHY_OVERLOAD_LANGUAGES.has(current.context.sup.id);
   const jvm = current.context.sup.id === "java" || current.context.sup.id === "kotlin";
   let lenient: SymbolDef | undefined;
   // Accepted overloads across levels. A deeper one is overridden only by an accepted method with
   // the same parameter types in a class proven to derive from its owner on the walked path;
   // unrelated owners with one signature (two interfaces) stay separate and ambiguous.
-  const accepted: Array<{ def: SymbolDef; signature: string | null; owner: string }> = [];
+  const accepted: Array<{ def: SymbolDef; signature: string | null; owner: string; variadic: boolean }> = [];
   const memberKey = (def: SymbolDef): string => `${fileIdentityKey(def.file)}:${def.range.start.index}`;
   const ownerOf = new Map<string, string>();
   const subclassesOf = new Map<string, Set<string>>();
@@ -1612,14 +1613,21 @@ async function resolveKeywordReceiverMember(
         return await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, allowUniqueArityMismatch);
       }
       for (const candidate of uniqueMatches) {
-        if ((await receiverMemberAcceptsArgumentCount(index, candidate, knownArgumentCount!)) === false) continue;
+        if (
+          knownArgumentCount !== undefined &&
+          (await receiverMemberAcceptsArgumentCount(index, candidate, knownArgumentCount)) === false
+        ) {
+          continue;
+        }
         const signature = await memberParameterTypesKey(index, candidate);
         const owner = ownerOf.get(memberKey(candidate)) ?? "";
         const subclasses = subclassesOf.get(owner);
         const overridden =
           signature !== null &&
           accepted.some((entry) => entry.signature === signature && !!subclasses?.has(entry.owner));
-        if (!overridden) accepted.push({ def: candidate, signature, owner });
+        if (!overridden) {
+          accepted.push({ def: candidate, signature, owner, variadic: await memberIsVariadic(index, candidate) });
+        }
       }
       // Navigation still names the only incompatible candidate when no ancestor accepts the call.
       if (allowUniqueArityMismatch && !lenient) {
@@ -1653,6 +1661,9 @@ async function resolveKeywordReceiverMember(
     level = next;
   }
   if (!spansHierarchy) return undefined;
+  // Java, Kotlin, and C# prefer a method applicable without variable-arity expansion.
+  const fixedArity = knownArgumentCount === undefined ? [] : accepted.filter((entry) => !entry.variadic);
+  if (fixedArity.length) accepted.splice(0, accepted.length, ...fixedArity);
   // Without type ranking, two surviving overloads of one arity are ambiguous.
   if (accepted.length > 1) {
     if (report) report.ambiguous = true;
@@ -1661,8 +1672,8 @@ async function resolveKeywordReceiverMember(
   return accepted[0]?.def ?? lenient;
 }
 
-/** Parameter type text of a Java, Kotlin, or C# method, for override matching; null when unknown. */
-async function memberParameterTypesKey(index: ProjectIndex, def: SymbolDef): Promise<string | null> {
+/** The parameter list of a Java, Kotlin, or C# method declaration. */
+async function memberParameterList(index: ProjectIndex, def: SymbolDef): Promise<SyntaxNodeLike | null> {
   const context = await ensureParsedContext(
     def.file,
     index.parsed?.get(fileIdentityKey(def.file)),
@@ -1671,9 +1682,29 @@ async function memberParameterTypesKey(index: ProjectIndex, def: SymbolDef): Pro
   const start = def.range.start.index;
   if (!context || start === undefined) return null;
   const declaration = context.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start).parent;
-  const parameters =
+  return (
     declaration?.childForFieldName("parameters") ??
-    declaration?.namedChildren.find((child) => child.type === "function_value_parameters");
+    declaration?.namedChildren.find((child) => child.type === "function_value_parameters") ??
+    null
+  );
+}
+
+/** Whether a method takes a variable argument list (Java `...`, Kotlin `vararg`, C# `params`). */
+async function memberIsVariadic(index: ProjectIndex, def: SymbolDef): Promise<boolean> {
+  const parameters = await memberParameterList(index, def);
+  return (
+    !!parameters &&
+    parameters.namedChildren.some((parameter) => {
+      // Java `int... xs`; C# `params int[] xs`; Kotlin `vararg` sits in a sibling modifier node.
+      const text = parameter.text.trimStart();
+      return text.includes("...") || /^params\s/u.test(text) || /(?:^|\s)vararg(?:\s|$)/u.test(text);
+    })
+  );
+}
+
+/** Parameter type text of a Java, Kotlin, or C# method, for override matching; null when unknown. */
+async function memberParameterTypesKey(index: ProjectIndex, def: SymbolDef): Promise<string | null> {
+  const parameters = await memberParameterList(index, def);
   if (!parameters) return null;
   const types: string[] = [];
   for (const parameter of parameters.namedChildren) {
