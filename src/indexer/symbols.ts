@@ -15,6 +15,7 @@ import { parseSourceLocationInput } from "../util/source-location.js";
 import { importNodeId } from "./import-types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isGraphOnlyLanguage } from "../document-links/language-ids.js";
+import { DOCSTRING_CAPTURE_LANGUAGES } from "./locals-and-exports.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
   const index = def?.range?.start?.index ?? 0;
@@ -318,7 +319,17 @@ export function getUndocumentedApiSurface(index: ProjectIndex): UndocumentedApiS
   for (const mod of index.byFile.values()) {
     if (!mod.docstringsChecked) {
       const support = supportForFileWithoutHeaderSample(mod.file, index.languageExtensions);
-      if (support && !isGraphOnlyLanguage(support.id)) uncheckedFiles.add(mod.file);
+      if (!support || isGraphOnlyLanguage(support.id)) continue;
+      // Languages without docstring capture contribute nothing checkable when
+      // they export nothing local (e.g. an export-less .php file alongside a
+      // fully documented .ts API), so they must not force partial coverage on
+      // their own. Re-exports are excluded too: they have no local declaration
+      // to check. Languages WITH capture always count as unchecked — without
+      // a parse we cannot know whether exports exist (reduced mode).
+      if (!DOCSTRING_CAPTURE_LANGUAGES.has(support.id) && !mod.exports.some((entry) => entry.type === "local")) {
+        continue;
+      }
+      uncheckedFiles.add(mod.file);
       continue;
     }
     for (const entry of mod.exports) {

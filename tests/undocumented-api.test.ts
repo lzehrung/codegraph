@@ -417,4 +417,19 @@ describe("undocumented public API", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("ignores unchecked files with no local exports", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-undocumented-exportless-"));
+    try {
+      await writeFile(path.join(root, "api.ts"), "/** documented */\nexport function documented() {}\n", "utf8");
+      await writeFile(path.join(root, "empty.php"), "<?php\n// nothing here\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [path.join(root, "api.ts"), path.join(root, "empty.php")], {
+        native: "on",
+        cache: "off",
+      });
+      expect(getUndocumentedApiSurface(index)).toEqual({ symbols: [], coverage: { state: "complete" } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

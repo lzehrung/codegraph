@@ -38,7 +38,8 @@ import {
 
 // Missing captured comments prove missing documentation only for these languages.
 // Python captures # comments but not triple-quoted function/class docstrings.
-const DOCSTRING_CAPTURE_LANGUAGES = new Set([
+/** Languages whose parsers capture docstrings onto local definitions. */
+export const DOCSTRING_CAPTURE_LANGUAGES: ReadonlySet<string> = new Set([
   "ts",
   "tsx",
   "js",
