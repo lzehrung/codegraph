@@ -2259,3 +2259,38 @@ describe("C# bare member calls", () => {
     }
   });
 });
+
+describe("CSharp bare member overloads", () => {
+  it("chooses the overload a receiverless call's argument count accepts in goto and the graph", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-bare-overload-"));
+    try {
+      const lines = [
+        "class C {",
+        "  int Pick(int x) => x;",
+        "  int Pick(int x, int y) => x + y;",
+        "  int Use() => Pick(1);",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "a.cs"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const callLine = lines.findIndex((line) => line.includes("(1)")) + 1;
+      const goto = await goToDefinition(index, {
+        file,
+        line: callLine,
+        column: lines[callLine - 1]!.lastIndexOf("(1)") - 3,
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(2);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => edge.to.slice(edge.to.lastIndexOf("::") + 2));
+      const expectedStart = lines.slice(0, 2 - 1).join("\n").length + 1 + lines[2 - 1]!.search(/(pick|Pick)\(/);
+      expect(targets).toEqual([String(expectedStart)]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

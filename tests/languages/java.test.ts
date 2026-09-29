@@ -831,4 +831,37 @@ describe("Java implicit-receiver precedence", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("does not treat same-spelled parameter types from different imports as an override", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-override-identity-"));
+    try {
+      await mkdir(path.join(root, "a"), { recursive: true });
+      await mkdir(path.join(root, "b"), { recursive: true });
+      await writeFile(path.join(root, "a", "Foo.java"), "package j.a;\npublic class Foo {}\n");
+      await writeFile(path.join(root, "b", "Foo.java"), "package j.b;\npublic class Foo {}\n");
+      await writeFile(
+        path.join(root, "Base.java"),
+        "package j;\nimport j.a.Foo;\nclass Base { int hit(Foo f) { return 1; } }\n",
+      );
+      const lines = [
+        "package j;",
+        "import j.b.Foo;",
+        "class Derived extends Base {",
+        "  int hit(Foo f) { return 2; }",
+        "  int use(Foo f) { return hit(f); }",
+        "}",
+        "",
+      ];
+      const derived = normalizePath(path.join(root, "Derived.java"));
+      await writeFile(derived, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // Base.hit(j.a.Foo) and Derived.hit(j.b.Foo) are distinct overloads of one arity.
+      const goto = await goToDefinition(index, { file: derived, line: 5, column: lines[4]!.lastIndexOf("hit") + 1 });
+      expect(goto.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(graph.edges.filter((edge) => edge.label === "calls")).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

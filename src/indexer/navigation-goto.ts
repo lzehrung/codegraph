@@ -1526,7 +1526,7 @@ async function resolveKeywordReceiverMember(
   // Accepted overloads across levels. A deeper one is overridden only by an accepted method with
   // the same parameter types in a class proven to derive from its owner on the walked path;
   // unrelated owners with one signature (two interfaces) stay separate and ambiguous.
-  const accepted: Array<{ def: SymbolDef; signature: string | null; owner: string; variadic: boolean }> = [];
+  const accepted: Array<{ def: SymbolDef; owner: string; variadic: boolean }> = [];
   const memberKey = (def: SymbolDef): string => `${fileIdentityKey(def.file)}:${def.range.start.index}`;
   const ownerOf = new Map<string, string>();
   const subclassesOf = new Map<string, Set<string>>();
@@ -1619,15 +1619,16 @@ async function resolveKeywordReceiverMember(
         ) {
           continue;
         }
-        const signature = await memberParameterTypesKey(index, candidate);
         const owner = ownerOf.get(memberKey(candidate)) ?? "";
         const subclasses = subclassesOf.get(owner);
-        const overridden =
-          signature !== null &&
-          accepted.some((entry) => entry.signature === signature && !!subclasses?.has(entry.owner));
-        if (!overridden) {
-          accepted.push({ def: candidate, signature, owner, variadic: await memberIsVariadic(index, candidate) });
+        let overridden = false;
+        for (const entry of accepted) {
+          if (subclasses?.has(entry.owner) && (await sameParameterTypes(index, entry.def, candidate))) {
+            overridden = true;
+            break;
+          }
         }
+        if (!overridden) accepted.push({ def: candidate, owner, variadic: await memberIsVariadic(index, candidate) });
       }
       // Navigation still names the only incompatible candidate when no ancestor accepts the call.
       if (allowUniqueArityMismatch && !lenient) {
@@ -1702,8 +1703,8 @@ async function memberIsVariadic(index: ProjectIndex, def: SymbolDef): Promise<bo
   );
 }
 
-/** Parameter type text of a Java, Kotlin, or C# method, for override matching; null when unknown. */
-async function memberParameterTypesKey(index: ProjectIndex, def: SymbolDef): Promise<string | null> {
+/** Parameter type texts of a Java, Kotlin, or C# method; null when a type cannot be read. */
+async function memberParameterTypes(index: ProjectIndex, def: SymbolDef): Promise<string[] | null> {
   const parameters = await memberParameterList(index, def);
   if (!parameters) return null;
   const types: string[] = [];
@@ -1712,7 +1713,114 @@ async function memberParameterTypesKey(index: ProjectIndex, def: SymbolDef): Pro
     if (!type) return null;
     types.push(type.text.replace(/\s+/g, ""));
   }
-  return types.join(",");
+  return types;
+}
+
+/** The import that binds a type name in a module, as text; empty when no import binds it. */
+function importedTypeSource(module: ModuleIndex, name: string): string {
+  for (const imp of module.imports) {
+    if (imp.kind !== "named" || imp.local !== name) continue;
+    const target = typeof imp.resolved === "string" ? imp.resolved : (imp.resolved?.external ?? "");
+    return `${target}:${imp.imported}`;
+  }
+  return "";
+}
+
+/** Built-in parameter types whose spelling names one type in every file. */
+const BUILTIN_PARAMETER_TYPES: Readonly<Record<string, ReadonlySet<string>>> = {
+  java: new Set([
+    "int",
+    "long",
+    "short",
+    "byte",
+    "char",
+    "boolean",
+    "float",
+    "double",
+    "String",
+    "Object",
+    "Integer",
+    "Long",
+    "Boolean",
+    "Double",
+    "Float",
+    "Short",
+    "Byte",
+    "Character",
+  ]),
+  kotlin: new Set(["Int", "Long", "Short", "Byte", "Char", "Boolean", "Float", "Double", "String", "Any", "Unit"]),
+  csharp: new Set([
+    "int",
+    "long",
+    "short",
+    "byte",
+    "char",
+    "bool",
+    "float",
+    "double",
+    "decimal",
+    "string",
+    "object",
+    "uint",
+    "ulong",
+    "ushort",
+    "sbyte",
+  ]),
+};
+
+/**
+ * Whether two methods take the same parameter types, so the one in a derived class overrides the
+ * other. Equal spelling is proof only within one file or for built-in types; elsewhere each
+ * spelling must resolve to the same declaration from its own file.
+ */
+async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, right: SymbolDef): Promise<boolean> {
+  const [leftTypes, rightTypes] = await Promise.all([
+    memberParameterTypes(index, left),
+    memberParameterTypes(index, right),
+  ]);
+  if (!leftTypes || !rightTypes || leftTypes.length !== rightTypes.length) return false;
+  const sameFile = fileIdentityKey(left.file) === fileIdentityKey(right.file);
+  for (let at = 0; at < leftTypes.length; at += 1) {
+    const text = leftTypes[at]!;
+    if (text !== rightTypes[at]) return false;
+    if (sameFile) continue;
+    const base =
+      text
+        .replace(/<.*$/su, "")
+        .replace(/[?\[\].]+$/u, "")
+        .split(".")
+        .pop() ?? text;
+    const leftContext = await ensureParsedContext(
+      left.file,
+      index.parsed?.get(fileIdentityKey(left.file)),
+      index.languageExtensions,
+    ).catch(() => null);
+    if (!leftContext) return false;
+    if (BUILTIN_PARAMETER_TYPES[leftContext.sup.id]?.has(base)) continue;
+    const rightContext = await ensureParsedContext(
+      right.file,
+      index.parsed?.get(fileIdentityKey(right.file)),
+      index.languageExtensions,
+    ).catch(() => null);
+    const leftModule = index.byFile.get(fileIdentityKey(left.file));
+    const rightModule = index.byFile.get(fileIdentityKey(right.file));
+    if (!rightContext || !leftModule || !rightModule) return false;
+    const leftType = resolveNamedDefinition(index, leftModule, left.file, leftContext.sup, base);
+    const rightType = resolveNamedDefinition(index, rightModule, right.file, rightContext.sup, base);
+    if (leftType?.status !== "ok" && rightType?.status !== "ok") {
+      // Neither names a project type: both files must name it through the same import (or none).
+      if (importedTypeSource(leftModule, base) !== importedTypeSource(rightModule, base)) return false;
+      continue;
+    }
+    if (leftType?.status !== "ok" || rightType?.status !== "ok") return false;
+    if (
+      fileIdentityKey(leftType.definition.file) !== fileIdentityKey(rightType.definition.file) ||
+      leftType.definition.range.start.index !== rightType.definition.range.start.index
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 /**
  * Validate an unqualified member use against its actual lexical owner, including shared
