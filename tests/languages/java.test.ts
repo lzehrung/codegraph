@@ -998,4 +998,46 @@ describe("Java type-qualified overloads", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("chooses among static overloads only", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-qualified-static-"));
+    try {
+      const utilLines = [
+        "package p;",
+        "public class Mix {",
+        "  public static int m(int a) { return a; }",
+        "  public int m(int a, int b) { return a + b; }",
+        "}",
+      ];
+      const useLines = [
+        "package p;",
+        "class Use {",
+        "  int a() { return Mix.m(1); }",
+        "  int b() { return Mix.m(1, 2); }",
+        "}",
+      ];
+      await mkdir(path.join(root, "p"), { recursive: true });
+      await writeFile(path.join(root, "p", "Mix.java"), utilLines.join("\n"));
+      const use = normalizePath(path.join(root, "p", "Use.java"));
+      await writeFile(use, useLines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number) => {
+        const column = useLines[line - 1]!.lastIndexOf("m(") + 1;
+        const result = await goToDefinition(index, { file: use, line, column });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      expect(await gotoLine(3)).toBe(3);
+      // The two-argument overload is an instance method, which a type name cannot call, so the
+      // static overload is the only candidate. Go-to-definition keeps a sole candidate whose
+      // parameters do not fit, as for other calls; the graph records no edge for it.
+      expect(await gotoLine(4)).toBe(3);
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
+        .map((edge) => graph.nodes.get(edge.from)?.name);
+      expect(callers).toEqual(["a"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

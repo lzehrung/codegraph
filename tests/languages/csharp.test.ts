@@ -2434,6 +2434,10 @@ describe("C# using static", () => {
         "  public class Plain {",
         "    public int Inst() => 1;",
         "    public static int PlainStatic() => 1;",
+        "    protected static int Prot() => 1;",
+        "    private protected static int PrivProt() => 1;",
+        "    internal static int Inter() => 1;",
+        "    protected internal static int ProtInter() => 1;",
         "  }",
         "  public static class Ext {",
         "    public static int Extend(this string s) => 1;",
@@ -2466,6 +2470,10 @@ describe("C# using static", () => {
         "  public int J() => Other();",
         "  public int L() => Same();",
         "  public int M() => Local();",
+        "  public int N() => Prot();",
+        "  public int O() => PrivProt();",
+        "  public int P() => Inter();",
+        "  public int R() => ProtInter();",
         "}",
         "",
       ];
@@ -2510,6 +2518,11 @@ describe("C# using static", () => {
       expect(await gotoTarget(use, useLines, "J() =>", "Other")).toBeNull();
       expect(await gotoTarget(use, useLines, "L() =>", "Same")).toBeNull();
       expect(await gotoTarget(use, useLines, "M() =>", "Local")).toBe(at(use, useLines, "int Local()"));
+      // Protected members are not accessible from an unrelated type; internal ones are.
+      expect(await gotoTarget(use, useLines, "N() =>", "Prot")).toBeNull();
+      expect(await gotoTarget(use, useLines, "O() =>", "PrivProt")).toBeNull();
+      expect(await gotoTarget(use, useLines, "P() =>", "Inter")).toBe(at(util, utilLines, "int Inter()"));
+      expect(await gotoTarget(use, useLines, "R() =>", "ProtInter")).toBe(at(util, utilLines, "int ProtInter()"));
       expect(await gotoTarget(useGlobal, globalLines, "A() =>", "Go")).toBeNull();
 
       const pickLine = lineOf(utilLines, "Pick(int a)");
@@ -2531,7 +2544,16 @@ describe("C# using static", () => {
         .filter((edge) => (edge.label === "calls" || edge.label === "instantiates") && edge.from.startsWith(use))
         .map((edge) => `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`)
         .sort();
-      expect(targets).toEqual(["A->Go", "B->Pick", "C->Pick", "E->Nested", "F->PlainStatic", "M->Local"]);
+      expect(targets).toEqual([
+        "A->Go",
+        "B->Pick",
+        "C->Pick",
+        "E->Nested",
+        "F->PlainStatic",
+        "M->Local",
+        "P->Inter",
+        "R->ProtInter",
+      ]);
       // Each call reaches the overload its argument count accepts, across both directives.
       const utilSource = utilLines.join("\n");
       const pickTargets = graph.edges
@@ -2598,6 +2620,66 @@ describe("C# type-qualified overloads", () => {
       };
       expect((await referenceLines(3)).sort()).toEqual(["Use.cs:5", "Util.cs:3"]);
       expect((await referenceLines(4)).sort()).toEqual(["Use.cs:6", "Util.cs:4"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("chooses among static overloads only and merges partial parts", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-static-partial-"));
+    try {
+      const files: Record<string, string[]> = {
+        "Mix.cs": [
+          "namespace P;",
+          "public class Mix {",
+          "  public static int M(int a) => a;",
+          "  public int M(int a, int b) => a + b;",
+          "}",
+        ],
+        "PartA.cs": [
+          "namespace P;",
+          "public static partial class Parts {",
+          "  public static int Two(int a) => a;",
+          "}",
+        ],
+        "PartB.cs": [
+          "namespace P;",
+          "public static partial class Parts {",
+          "  public static int Two(int a, int b) => a + b;",
+          "}",
+        ],
+        "Use.cs": [
+          "namespace P;",
+          "public class Use {",
+          "  public int A() => Mix.M(1);",
+          "  public int B() => Mix.M(1, 2);",
+          "  public int C() => Parts.Two(1);",
+          "  public int D() => Parts.Two(1, 2);",
+          "}",
+        ],
+      };
+      for (const [name, lines] of Object.entries(files)) await writeFile(path.join(root, name), lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = normalizePath(path.join(root, "Use.cs"));
+      const gotoTarget = async (line: number, name: string) => {
+        const column = files["Use.cs"]![line - 1]!.lastIndexOf(name) + 1;
+        const result = await goToDefinition(index, { file: use, line, column });
+        if (result.status !== "ok") return null;
+        return `${path.basename(result.definition.file)}:${result.definition.range.start.line}`;
+      };
+      expect(await gotoTarget(3, "M")).toBe("Mix.cs:3");
+      // The two-argument overload is an instance method, which a type name cannot call, so the
+      // static overload is the only candidate. Go-to-definition keeps a sole candidate whose
+      // parameters do not fit, as for other calls; the graph records no edge for it.
+      expect(await gotoTarget(4, "M")).toBe("Mix.cs:3");
+      expect(await gotoTarget(5, "Two")).toBe("PartA.cs:3");
+      expect(await gotoTarget(6, "Two")).toBe("PartB.cs:3");
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
+        .map((edge) => graph.nodes.get(edge.from)?.name)
+        .sort();
+      expect(callers).toEqual(["A", "C", "D"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

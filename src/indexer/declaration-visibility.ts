@@ -270,10 +270,6 @@ export function isExportedDeclaration(languageId: string, node: SyntaxNodeLike):
   return isExportedByRow(declaration, row);
 }
 
-/**
- * Whether `node`'s declaration is `private` (and not C# `private protected`). A private member is
- * not accessible to a subclass, so it cannot be reached through the implicit `this` there.
- */
 const CSHARP_ACCESS_MODIFIERS = new Set(["public", "protected", "internal", "private"]);
 const CSHARP_MEMBER_CONTAINERS = new Set([
   "class_declaration",
@@ -283,6 +279,10 @@ const CSHARP_MEMBER_CONTAINERS = new Set([
 ]);
 const CSHARP_PRIVATE_BY_DEFAULT_CONTAINERS = new Set(["class_declaration", "struct_declaration", "record_declaration"]);
 
+/**
+ * Whether `node`'s declaration is `private` (and not C# `private protected`). A private member is
+ * not accessible to a subclass, so it cannot be reached through the implicit `this` there.
+ */
 export function isPrivateDeclaration(languageId: string, node: SyntaxNodeLike): boolean {
   const row = VISIBILITY_BY_LANGUAGE[languageId];
   const declaration = row ? findVisibilityDeclaration(node, row) : null;
@@ -296,6 +296,24 @@ export function isPrivateDeclaration(languageId: string, node: SyntaxNodeLike): 
     languageId === "csharp" &&
     !tokens.some((token) => CSHARP_ACCESS_MODIFIERS.has(token)) &&
     CSHARP_PRIVATE_BY_DEFAULT_CONTAINERS.has(enclosingAncestor(declaration, CSHARP_MEMBER_CONTAINERS)?.type ?? "")
+  );
+}
+
+/**
+ * Whether a C# member is accessible from an unrelated type in the same assembly: `public`,
+ * `internal`, or `protected internal`. `private`, `protected`, `private protected`, and a class,
+ * struct, or record member without an access modifier are not.
+ */
+export function isCsharpAccessibleOutsideType(node: SyntaxNodeLike): boolean {
+  const row = VISIBILITY_BY_LANGUAGE.csharp;
+  const declaration = row ? findVisibilityDeclaration(node, row) : null;
+  if (!row || !declaration) return true;
+  const tokens = modifierTokens(collectModifierTexts(declaration, row));
+  if (tokens.includes("private")) return false;
+  if (tokens.includes("protected")) return tokens.includes("internal");
+  if (tokens.some((token) => CSHARP_ACCESS_MODIFIERS.has(token))) return true;
+  return !CSHARP_PRIVATE_BY_DEFAULT_CONTAINERS.has(
+    enclosingAncestor(declaration, CSHARP_MEMBER_CONTAINERS)?.type ?? "",
   );
 }
 

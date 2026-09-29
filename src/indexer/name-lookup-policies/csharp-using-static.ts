@@ -14,7 +14,7 @@ import { getCallableArity } from "../../languages/callable-arity.js";
 import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { csharpNamespaceAt } from "../compilation-units.js";
-import { isPrivateDeclaration } from "../declaration-visibility.js";
+import { isCsharpAccessibleOutsideType } from "../declaration-visibility.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import type { BareNameUse, NameResolution } from "../name-resolution-types.js";
 import type { ParsedFileContext } from "../parse-context.js";
@@ -81,7 +81,7 @@ function importsMember(
   const ownerName = container.childForFieldName("name")?.text;
   if (!ownerName || normalizeCsharpIdentifier(ownerName) !== imp.typeName) return false;
   if (csharpNamespaceAt(use.index, imp.file, container.startIndex) !== imp.namespace) return false;
-  if (isPrivateDeclaration("csharp", declaration)) return false;
+  if (!isCsharpAccessibleOutsideType(declaration)) return false;
   if (NESTED_TYPE_DECLARATIONS.has(declaration.type) || container.type === "enum_declaration") return true;
   if (isExtensionMethod(declaration)) return false;
   return (

@@ -2248,10 +2248,26 @@ async function resolveReceiverDefinition(
   return null;
 }
 
+/** Whether a type-qualified access (`Util.M`) can name `def`: a nested type or a static member. */
+async function reachableThroughTypeName(index: ProjectIndex, def: SymbolDef): Promise<boolean> {
+  if (declaresMembers(def)) return true;
+  const context = await ensureParsedContext(
+    def.file,
+    index.parsed?.get(fileIdentityKey(def.file)),
+    index.languageExtensions,
+  );
+  const nameNode = nameNodeForDef(context, def);
+  if (!nameNode) return false;
+  return hasStaticModifier(def, context, nearestMemberContainer(nameNode) ?? context.tree.rootNode);
+}
+
 /**
- * A member declared directly in the type `baseDef` names (`Util.Two`), or inherited through it.
- * Same-named direct overloads are chosen by the call's argument count; without a count, or
- * when several accept it, the lookup is ambiguous.
+ * A member declared directly in the type `baseDef` names (`Util.Two`), including the other parts
+ * of a C# partial type, or inherited through it. Same-named overloads are narrowed to members a
+ * type name reaches (static members and nested types) when the base is a type, then chosen by
+ * the call's argument count; without a count, or when several accept it, the lookup is
+ * ambiguous. A sole reachable candidate is kept even when the count does not fit, as for other
+ * calls; the graph records no edge for it. Ruby reopens a method by redefining it, so it keeps the first match.
  */
 async function resolveMemberDefinitionForBase(
   index: ProjectIndex,
@@ -2270,20 +2286,37 @@ async function resolveMemberDefinitionForBase(
   if (!container) return undefined;
   const targetModule = index.byFile.get(fileIdentityKey(baseDef.file));
   if (!targetModule) return undefined;
+  const languageId = targetContext.sup.id;
   const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
-  const directHits = findDirectLocalsWithinNode(
+  const candidates = findDirectLocalsWithinNode(
     targetModule.locals,
     member,
     container,
     targetContext,
     normalizeIdentifier,
   );
-  // Ruby reopens a method by redefining it; the other languages here overload by signature.
-  if (directHits.length > 1 && targetContext.sup.id !== "ruby") {
-    return await selectReceiverMemberCandidates(index, directHits, knownArgumentCount, false);
+  if (languageId === "csharp") {
+    const partialParts = await findSharedOwnerMemberDefinitions({
+      index,
+      ownerFile: baseDef.file,
+      ownerContainer: container,
+      ownerSource: targetContext.source,
+      languageId,
+      member,
+    });
+    for (const hit of partialParts) {
+      if (!candidates.includes(hit)) candidates.push(hit);
+    }
   }
-  if (directHits[0]) return directHits[0];
-  if (targetContext.sup.id === "java") return undefined;
+  if (candidates.length > 1 && languageId !== "ruby") {
+    const reachable: SymbolDef[] = [];
+    for (const candidate of candidates) {
+      if (!declaresMembers(baseDef) || (await reachableThroughTypeName(index, candidate))) reachable.push(candidate);
+    }
+    return await selectReceiverMemberCandidates(index, reachable, knownArgumentCount);
+  }
+  if (candidates[0]) return candidates[0];
+  if (languageId === "java") return undefined;
   return await findReceiverMemberDefinition(
     index,
     targetModule.locals,
