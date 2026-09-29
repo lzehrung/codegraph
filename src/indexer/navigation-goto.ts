@@ -1732,8 +1732,20 @@ export async function resolveImplicitSelfMember(
   if (memberScope !== "static" || !jvm) return undefined;
   // In a static context an inherited instance method still shadows a static import or package
   // function; the call is invalid, so it has no target.
-  const instance = await resolveKeywordReceiverMember(index, mod, node, name, "any", false, argumentCount);
-  return instance ? null : undefined;
+  const instanceReport = { named: false, ambiguous: false };
+  const instance = await resolveKeywordReceiverMember(
+    index,
+    mod,
+    node,
+    name,
+    "any",
+    false,
+    argumentCount,
+    undefined,
+    instanceReport,
+  );
+  // Any inherited instance method of that name hides the import, even when none applies.
+  return instance || instanceReport.named ? null : undefined;
 }
 
 /** Whether a Java or Kotlin member is `private` and declared outside the class enclosing the use. */

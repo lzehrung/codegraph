@@ -798,4 +798,37 @@ describe("Java implicit-receiver precedence", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps a static import hidden in a static method when inherited instance overloads are ambiguous or inapplicable", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-static-hidden-"));
+    try {
+      const files: Record<string, string> = {
+        "Base.java":
+          "package j;\nclass Base { int hit(int a) { return a; } int hit(String s) { return 0; } int go(int a, int b) { return a; } }\n",
+        "Util.java":
+          "package j;\nclass Util { static int hit(int a) { return -a; } static int go(int a) { return a; } }\n",
+        "Use.java":
+          "package j;\n\nimport static j.Util.hit;\nimport static j.Util.go;\n\nclass Derived extends Base {\n  static int s1() { return hit(1); }\n  static int s2() { return go(1); }\n}\n",
+      };
+      for (const [relative, text] of Object.entries(files)) await writeFile(path.join(root, relative), text);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = normalizePath(path.join(root, "Use.java"));
+      const useLines = files["Use.java"]!.split("\n");
+      for (const [line, name] of [
+        [7, "hit"],
+        [8, "go"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: use,
+          line,
+          column: useLines[line - 1]!.lastIndexOf(name) + 1,
+        });
+        expect(result.status).toBe("not_found");
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(graph.edges.filter((edge) => edge.label === "calls")).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
