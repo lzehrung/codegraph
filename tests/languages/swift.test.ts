@@ -700,3 +700,41 @@ describe("Swift bare member overloads", () => {
     }
   });
 });
+
+describe("Swift overload declarations", () => {
+  it("resolves each overload's own declaration to itself, and calls by argument count", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-own-overload-"));
+    try {
+      const lines = [
+        "struct Box {",
+        "  func pick(_ a: Int) -> Int { return a }",
+        "  func pick(_ a: Int, _ b: Int) -> Int { return a + b }",
+        "  func one() -> Int { return pick(1) }",
+        "  func two() -> Int { return pick(1, 2) }",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "Box.swift"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number) => {
+        const column = lines[line - 1]!.indexOf("pick") + 1;
+        const result = await goToDefinition(index, { file, line, column });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      expect(await gotoLine(2)).toBe(2);
+      expect(await gotoLine(3)).toBe(3);
+      expect(await gotoLine(4)).toBe(2);
+      expect(await gotoLine(5)).toBe(3);
+      const referenceLines = async (line: number) => {
+        const result = await findReferences(index, { file, line, column: lines[line - 1]!.indexOf("pick") + 1 });
+        if (result.status !== "ok") throw new Error("Expected references");
+        return result.references.map((reference) => reference.range.start.line).sort((left, right) => left - right);
+      };
+      expect(await referenceLines(2)).toEqual([2, 4]);
+      expect(await referenceLines(3)).toEqual([3, 5]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

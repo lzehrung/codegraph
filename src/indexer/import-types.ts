@@ -77,6 +77,12 @@ export type ImportBinding =
       confidence?: number;
       /** Present for a C/C++ include. Older cached bindings omit it. */
       includeForm?: CFamilyIncludeForm;
+      /**
+       * C# `using static N.T;`: the normalized qualified type name `N.T`. Only static members and
+       * nested types of that type in the resolved file are imported, so generic star lookup and
+       * expansion skip this binding.
+       */
+      staticMembersOf?: string;
     };
 
 /**

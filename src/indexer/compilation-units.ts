@@ -364,6 +364,12 @@ function csharpNamespacesComparable(
   return false;
 }
 
+/** The normalized C# namespace enclosing `position` in a file (`""` for global), or `null` when unreadable. */
+export function csharpNamespaceAt(index: ProjectIndex, filePath: string, position: number): string | null {
+  const regions = getCsharpNamespaceRegions(index, filePath);
+  return regions ? csharpNamespaceAtIndex(regions, position) : null;
+}
+
 function csharpNamespaceAtIndex(regions: readonly CsharpNamespaceRegion[], position: number | undefined): string {
   if (position === undefined) return "";
   let innermost: CsharpNamespaceRegion | undefined;

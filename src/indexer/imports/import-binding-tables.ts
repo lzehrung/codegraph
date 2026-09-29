@@ -7,7 +7,7 @@ import {
   rustImportKeywordOffset,
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
-import { CSHARP_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { CSHARP_IDENTIFIER_SOURCE, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/resolution/rust.js";
@@ -174,6 +174,25 @@ async function applyCsharpStatementOverride(
 
   const parsed = parseCsharpUsingDirective(normalizedStmt);
   if (!parsed) return false;
+
+  // `using static N.T;` imports the static members and nested types of one type. Bind it to the
+  // file that declares `T` only when exactly one file does; otherwise it stays external. A
+  // `global using static` applies to every file of the project, which module-local bindings
+  // cannot express, so it is not bound.
+  if (parsed.isStatic && !/^global\s/u.test(normalizedStmt.trim())) {
+    const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, parsed.from, context.file);
+    const qualifiedType = normalizeCsharpQualifiedName(parsed.from).replace(/^global::/u, "");
+    if (typeMatch.status === "found" && qualifiedType.includes(".")) {
+      context.pushBinding({
+        kind: "star",
+        from: parsed.from,
+        resolved: typeMatch.file.replace(/\\/g, "/"),
+        typeOnly,
+        staticMembersOf: qualifiedType,
+      });
+      return true;
+    }
+  }
 
   // A target that is itself a declared namespace is a namespace alias, even when the alias is
   // written in alias form. Resolving it here keeps the local name a namespace so member

@@ -75,7 +75,8 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
       if (key) expandedImportKeys.add(key);
     }
     for (const imp of [...mod.imports]) {
-      if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
+      // A C# `using static` imports one type's static members, not the file's exports.
+      if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
       const target = modules.get(fileIdentityKey(imp.resolved));
       if (!target) continue;
       // Only stylesheet and Ruby membership is asked below, and C and C++ answer both the same,

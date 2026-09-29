@@ -2509,6 +2509,70 @@ describe("Go to Definition", () => {
       await testGoToDefinition(index, mainFile, 10, 5, utilsFile, 2);
     });
 
+    it("resolves using static members by owner namespace and argument count, and ignores global using static", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-static-goto-"));
+      try {
+        const utilFile = path.join(root, "Util.cs").replace(/\\/g, "/");
+        const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+        const decoyUseFile = path.join(root, "DecoyUse.cs").replace(/\\/g, "/");
+        const globalFile = path.join(root, "Global.cs").replace(/\\/g, "/");
+        const utilLines = [
+          "namespace P {",
+          "  public static class Util {",
+          "    public static int Go() => 1;",
+          "    public static int Two(int a) => a;",
+          "    public static int Two(int a, int b) => a + b;",
+          "  }",
+          "}",
+          "namespace R {",
+          "  public static class Util {",
+          "    public static int Go() => 2;",
+          "  }",
+          "}",
+        ];
+        const useLines = [
+          "using static P.Util;",
+          "namespace Q;",
+          "public class Use {",
+          "  public int A() => Go();",
+          "  public int B() => Two(1);",
+          "  public int C() => Two(1, 2);",
+          "}",
+        ];
+        const decoyUseLines = [
+          "using static R.Util;",
+          "namespace S;",
+          "public class DecoyUse {",
+          "  public int A() => Go();",
+          "}",
+        ];
+        const globalLines = [
+          "global using static P.Util;",
+          "namespace T;",
+          "public class G {",
+          "  public int A() => Go();",
+          "}",
+        ];
+        await fsp.writeFile(utilFile, `${utilLines.join("\n")}\n`, "utf8");
+        await fsp.writeFile(useFile, `${useLines.join("\n")}\n`, "utf8");
+        await fsp.writeFile(decoyUseFile, `${decoyUseLines.join("\n")}\n`, "utf8");
+        await fsp.writeFile(globalFile, `${globalLines.join("\n")}\n`, "utf8");
+        const index = await createTestIndexFromFiles(root, [utilFile, useFile, decoyUseFile, globalFile]);
+        await testGoToDefinition(index, useFile, 4, useLines[3]!.indexOf("Go") + 1, utilFile, 3);
+        await testGoToDefinition(index, useFile, 5, useLines[4]!.indexOf("Two") + 1, utilFile, 4);
+        await testGoToDefinition(index, useFile, 6, useLines[5]!.indexOf("Two") + 1, utilFile, 5);
+        await testGoToDefinition(index, decoyUseFile, 4, decoyUseLines[3]!.indexOf("Go") + 1, utilFile, 10);
+        const globalGoto = await goToDefinition(index, {
+          file: globalFile,
+          line: 4,
+          column: globalLines[3]!.indexOf("Go") + 1,
+        });
+        expect(globalGoto.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves receiver method calls through typed locals", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-method-goto-receiver-"));
       try {

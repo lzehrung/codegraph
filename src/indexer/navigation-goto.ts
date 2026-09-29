@@ -542,6 +542,12 @@ export async function resolveMemberAccessDefinition(params: {
   const { object: obj, property: prop } = getMemberAccessParts(sup, memberNode);
   const optionalMemberTypes = memberAccessTraversalTypes(sup);
 
+  // Only the outermost access is the callee; an inner hop (`A.B` in `A.B.C()`) is not called.
+  const callArgumentCountFor = (expr: SyntaxNodeLike): number | undefined =>
+    expr.id === memberNode.id
+      ? (getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined)
+      : undefined;
+
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
     const exprIsId = isReceiverNameNode(sup, expr.type) && !isMemberAccessNode(sup, expr);
     if (exprIsId) {
@@ -690,7 +696,12 @@ export async function resolveMemberAccessDefinition(params: {
         }
         if (base?.kind === "resolved") {
           if (sup.id === "java" || sup.id === "csharp") {
-            const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
+            const memberDef = await resolveMemberDefinitionForBase(
+              index,
+              base.def,
+              memberName,
+              callArgumentCountFor(expr),
+            );
             return memberDef ? { kind: "resolved", def: memberDef } : null;
           }
           if (sup.id === "ruby" && declaresMembers(base.def)) {
@@ -714,7 +725,12 @@ export async function resolveMemberAccessDefinition(params: {
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
-          const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
+          const memberDef = await resolveMemberDefinitionForBase(
+            index,
+            base.def,
+            memberName,
+            callArgumentCountFor(expr),
+          );
           return memberDef ? { kind: "resolved", def: memberDef } : null;
         }
       }
@@ -2232,10 +2248,32 @@ async function resolveReceiverDefinition(
   return null;
 }
 
+/** Whether a type-qualified access (`Util.M`) can name `def`: a nested type or a static member. */
+async function reachableThroughTypeName(index: ProjectIndex, def: SymbolDef): Promise<boolean> {
+  if (declaresMembers(def)) return true;
+  const context = await ensureParsedContext(
+    def.file,
+    index.parsed?.get(fileIdentityKey(def.file)),
+    index.languageExtensions,
+  );
+  const nameNode = nameNodeForDef(context, def);
+  if (!nameNode) return false;
+  return hasStaticModifier(def, context, nearestMemberContainer(nameNode) ?? context.tree.rootNode);
+}
+
+/**
+ * A member declared directly in the type `baseDef` names (`Util.Two`), including the other parts
+ * of a C# partial type, or inherited through it. Same-named overloads are narrowed to members a
+ * type name reaches (static members and nested types) when the base is a type, then chosen by
+ * the call's argument count; without a count, or when several accept it, the lookup is
+ * ambiguous. A sole reachable candidate is kept even when the count does not fit, as for other
+ * calls; the graph records no edge for it. Ruby reopens a method by redefining it, so it keeps the first match.
+ */
 async function resolveMemberDefinitionForBase(
   index: ProjectIndex,
   baseDef: SymbolDef,
   member: string,
+  knownArgumentCount?: number,
 ): Promise<SymbolDef | undefined> {
   const targetContext = await ensureParsedContext(baseDef.file, undefined, index.languageExtensions);
   const start = baseDef.range.start;
@@ -2248,16 +2286,37 @@ async function resolveMemberDefinitionForBase(
   if (!container) return undefined;
   const targetModule = index.byFile.get(fileIdentityKey(baseDef.file));
   if (!targetModule) return undefined;
+  const languageId = targetContext.sup.id;
   const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
-  const directHit = findDirectLocalWithinNode(
+  const candidates = findDirectLocalsWithinNode(
     targetModule.locals,
     member,
     container,
     targetContext,
     normalizeIdentifier,
   );
-  if (directHit) return directHit;
-  if (targetContext.sup.id === "java") return undefined;
+  if (languageId === "csharp") {
+    const partialParts = await findSharedOwnerMemberDefinitions({
+      index,
+      ownerFile: baseDef.file,
+      ownerContainer: container,
+      ownerSource: targetContext.source,
+      languageId,
+      member,
+    });
+    for (const hit of partialParts) {
+      if (!candidates.includes(hit)) candidates.push(hit);
+    }
+  }
+  if (candidates.length > 1 && languageId !== "ruby") {
+    const reachable: SymbolDef[] = [];
+    for (const candidate of candidates) {
+      if (!declaresMembers(baseDef) || (await reachableThroughTypeName(index, candidate))) reachable.push(candidate);
+    }
+    return await selectReceiverMemberCandidates(index, reachable, knownArgumentCount);
+  }
+  if (candidates[0]) return candidates[0];
+  if (languageId === "java") return undefined;
   return await findReceiverMemberDefinition(
     index,
     targetModule.locals,

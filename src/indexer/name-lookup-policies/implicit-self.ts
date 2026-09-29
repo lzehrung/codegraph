@@ -13,7 +13,8 @@ import {
   implicitSelfCallee,
   isDirectKeywordMemberDeclaration,
 } from "../navigation-goto.js";
-import { csharpLookupName } from "../navigation-local.js";
+import { csharpLookupName, definitionForBinding } from "../navigation-local.js";
+import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import type { NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
 import type { GoToResult, SymbolDef } from "../types.js";
@@ -42,11 +43,27 @@ function bindsTypeMethod({ closestBinding }: NameLookupState): boolean {
   return !!declaration && !!container && isDirectKeywordMemberDeclaration(declaration, container);
 }
 
+/**
+ * The use is the name of a same-scope overload that a later declaration replaced in the scope map
+ * (`int Two(int a)` before `int Two(int a, int b)`). A declaration's own name resolves to that
+ * declaration, not to the last overload.
+ */
+function ownOverloadDeclaration({ use, closestBinding }: NameLookupState): GoToResult | undefined {
+  const { node, file, parsed } = use;
+  for (let binding = closestBinding?.earlierSameScope; binding; binding = binding.earlierSameScope) {
+    if (binding.node?.startIndex !== node.startIndex || binding.node.endIndex !== node.endIndex) continue;
+    const own = definitionForBinding(binding, file, node, parsed.sup, parsed.source, parsed.tree);
+    return own ? okGoToResult(use.index, own, { resolution: "exact", confidence: "high" }) : undefined;
+  }
+  return undefined;
+}
+
 /** The use is the callee of a receiverless call (`f()`). */
 const isImplicitSelfCall = ({ use }: NameLookupState): boolean =>
   implicitSelfCallee(use.parsed.sup.id, use.node.parent ?? use.node)?.id === use.node.id;
 
 export const swiftLookupPolicy: NameLookupPolicy = {
+  fromClosestBinding: ownOverloadDeclaration,
   // Swift checks every bare name through `self`; method-local bindings still win.
   onLocal(state, local) {
     if (!bindsAtFileScope(state) && !bindsTypeMethod(state)) return undefined;
@@ -64,6 +81,7 @@ export const swiftLookupPolicy: NameLookupPolicy = {
 
 export const csharpLookupPolicy: NameLookupPolicy = {
   lookupName: (use) => csharpLookupName(use.node, use.parsed.source, use.name),
+  fromClosestBinding: ownOverloadDeclaration,
   crossModuleName: ({ use, lookupName }) =>
     csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports),
   // A static member function reaches only static members of its type.
@@ -78,7 +96,10 @@ export const csharpLookupPolicy: NameLookupPolicy = {
     );
   },
   // Partial members declared in another file reach this path only as invocation callees.
-  afterCrossModule: (state, resolved) => implicitSelf(state, resolved),
+  // Without a member, `using static` members join the namespace-level answer.
+  afterCrossModule: (state, resolved) =>
+    implicitSelf(state, withCsharpUsingStatic(state.use, state.lookupName, resolved)),
+  preloadFiles: (_index, mod) => csharpUsingStaticFiles(mod),
 };
 
 /**
@@ -93,6 +114,7 @@ export const jvmLookupPolicy: NameLookupPolicy = {
     use.parsed.sup.id === "java" &&
     binding.kind !== "function" &&
     implicitSelfCallee("java", use.node.parent ?? use.node)?.id === use.node.id,
+  fromClosestBinding: ownOverloadDeclaration,
   onLocal(state, local) {
     if (state.closestBinding?.kind !== "function" || !isImplicitSelfCall(state)) return undefined;
     if (!bindsAtFileScope(state) && !bindsTypeMethod(state)) return undefined;

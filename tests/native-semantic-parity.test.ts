@@ -2169,6 +2169,40 @@ nativeDescribe("native semantic coverage", () => {
         edge: { caller: "ViaBase", callerFile: "csinherit/Use.cs", expectedTarget: "csinherit/Base.cs::Hit" },
       },
       {
+        name: "C# using static member over a same-named type in another namespace",
+        files: {
+          "csstatic/Util.cs": [
+            "namespace StaticTarget;",
+            "public static class Util {",
+            "  public static int Go() { return 1; }",
+            "}",
+          ],
+          "csstatic/Decoy.cs": [
+            "namespace StaticDecoy;",
+            "public static class Util {",
+            "  public static int Go() { return 2; }",
+            "  public static int UseDecoy() { return Go(); }",
+            "}",
+          ],
+          "csstatic/Use.cs": [
+            "using static StaticTarget.Util;",
+            "namespace StaticUse;",
+            "public class Use {",
+            "  public int Call() { return Go(); }",
+            "}",
+          ],
+        },
+        goto: { file: "csstatic/Use.cs", line: 4, token: "Go()", expectedFile: "csstatic/Util.cs", expectedLine: 3 },
+        references: {
+          file: "csstatic/Util.cs",
+          line: 3,
+          token: "Go",
+          expectedSites: ["csstatic/Util.cs:3", "csstatic/Use.cs:4"],
+          decoyFile: "csstatic/Decoy.cs",
+        },
+        edge: { caller: "Call", callerFile: "csstatic/Use.cs", expectedTarget: "csstatic/Util.cs::Go" },
+      },
+      {
         name: "Zig imported function through @import",
         files: {
           "zig/api.zig": ["pub fn target(value: i32) i32 {", "    return value;", "}"],

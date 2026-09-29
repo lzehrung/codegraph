@@ -1929,7 +1929,9 @@ function isImportBinding(value: unknown): value is ImportBinding {
   if (binding.kind === "namespace") {
     return typeof binding.localNS === "string" && isOptionalRange(binding.localRange);
   }
-  return binding.kind === "star";
+  return (
+    binding.kind === "star" && (binding.staticMembersOf === undefined || typeof binding.staticMembersOf === "string")
+  );
 }
 
 function isExportEntry(value: unknown): value is ExportEntry {

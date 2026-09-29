@@ -6204,6 +6204,67 @@ describe("Find References: implicit compilation-unit peers", () => {
     }
   });
 
+  it("includes C# using static call sites for the imported owner's overload and excludes a same-named owner in another namespace", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-static-refs-"));
+    try {
+      const utilFile = path.join(root, "Util.cs").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+      const decoyUseFile = path.join(root, "DecoyUse.cs").replace(/\\/g, "/");
+      const utilLines = [
+        "namespace P {",
+        "  public static class Util {",
+        "    public static int Go() => 1;",
+        "    public static int Two(int a) => a;",
+        "    public static int Two(int a, int b) => a + b;",
+        "  }",
+        "}",
+        "namespace R {",
+        "  public static class Util {",
+        "    public static int Go() => 2;",
+        "  }",
+        "}",
+      ];
+      const useLines = [
+        "using static P.Util;",
+        "namespace Q;",
+        "public class Use {",
+        "  public int A() => Go();",
+        "  public int B() => Two(1);",
+        "  public int C() => Two(1, 2);",
+        "}",
+      ];
+      const decoyUseLines = [
+        "using static R.Util;",
+        "namespace S;",
+        "public class DecoyUse {",
+        "  public int A() => Go();",
+        "}",
+      ];
+      await fsp.writeFile(utilFile, `${utilLines.join("\n")}\n`, "utf8");
+      await fsp.writeFile(useFile, `${useLines.join("\n")}\n`, "utf8");
+      await fsp.writeFile(decoyUseFile, `${decoyUseLines.join("\n")}\n`, "utf8");
+      const index = await createTestIndexFromFiles(root, [utilFile, useFile, decoyUseFile]);
+      await testFindReferences(index, utilFile, 3, tokenColumn(utilLines[2]!, "Go"), [
+        { file: utilFile, line: 3, column: tokenColumn(utilLines[2]!, "Go") },
+        { file: useFile, line: 4, column: tokenColumn(useLines[3]!, "Go") },
+      ]);
+      await testFindReferences(index, utilFile, 4, tokenColumn(utilLines[3]!, "Two"), [
+        { file: utilFile, line: 4, column: tokenColumn(utilLines[3]!, "Two") },
+        { file: useFile, line: 5, column: tokenColumn(useLines[4]!, "Two") },
+      ]);
+      await testFindReferences(index, utilFile, 5, tokenColumn(utilLines[4]!, "Two"), [
+        { file: utilFile, line: 5, column: tokenColumn(utilLines[4]!, "Two") },
+        { file: useFile, line: 6, column: tokenColumn(useLines[5]!, "Two") },
+      ]);
+      await testFindReferences(index, utilFile, 10, tokenColumn(utilLines[9]!, "Go"), [
+        { file: utilFile, line: 10, column: tokenColumn(utilLines[9]!, "Go") },
+        { file: decoyUseFile, line: 4, column: tokenColumn(decoyUseLines[3]!, "Go") },
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps same-file C# namespace regions separate when one file declares several namespaces", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-multispace-refs-"));
     try {

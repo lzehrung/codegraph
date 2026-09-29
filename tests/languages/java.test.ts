@@ -933,3 +933,111 @@ describe("Java implicit-receiver precedence", () => {
     }
   });
 });
+
+describe("Java type-qualified overloads", () => {
+  it("resolves Type.method(args) and each overload's own declaration to that overload", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-qualified-overload-"));
+    try {
+      const utilLines = [
+        "package p;",
+        "public class Util {",
+        "  public static int two(int a) { return a; }",
+        "  public static int two(int a, int b) { return a + b; }",
+        "}",
+        "",
+      ];
+      const useLines = [
+        "package q;",
+        "import p.Util;",
+        "class Use {",
+        "  int b() { return Util.two(1); }",
+        "  int c() { return Util.two(1, 2); }",
+        "}",
+        "",
+      ];
+      await mkdir(path.join(root, "p"), { recursive: true });
+      await mkdir(path.join(root, "q"), { recursive: true });
+      const util = normalizePath(path.join(root, "p", "Util.java"));
+      const use = normalizePath(path.join(root, "q", "Use.java"));
+      await writeFile(util, utilLines.join("\n"));
+      await writeFile(use, useLines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (file: string, lines: string[], line: number) => {
+        const column = lines[line - 1]!.indexOf("two") + 1;
+        const result = await goToDefinition(index, { file, line, column });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      expect(await gotoLine(use, useLines, 4)).toBe(3);
+      expect(await gotoLine(use, useLines, 5)).toBe(4);
+      expect(await gotoLine(util, utilLines, 3)).toBe(3);
+      expect(await gotoLine(util, utilLines, 4)).toBe(4);
+
+      const referenceLines = async (line: number) => {
+        const result = await findReferences(index, {
+          file: util,
+          line,
+          column: utilLines[line - 1]!.indexOf("two") + 1,
+        });
+        if (result.status !== "ok") throw new Error("Expected references");
+        return result.references.map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`);
+      };
+      expect((await referenceLines(3)).sort()).toEqual(["Use.java:4", "Util.java:3"]);
+      expect((await referenceLines(4)).sort()).toEqual(["Use.java:5", "Util.java:4"]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const utilSource = utilLines.join("\n");
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${Number(edge.to.slice(edge.to.lastIndexOf("::") + 2))}`)
+        .sort();
+      expect(targets).toEqual([
+        `b->${utilSource.indexOf("two(int a)")}`,
+        `c->${utilSource.indexOf("two(int a, int b)")}`,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("chooses among static overloads only", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-qualified-static-"));
+    try {
+      const utilLines = [
+        "package p;",
+        "public class Mix {",
+        "  public static int m(int a) { return a; }",
+        "  public int m(int a, int b) { return a + b; }",
+        "}",
+      ];
+      const useLines = [
+        "package p;",
+        "class Use {",
+        "  int a() { return Mix.m(1); }",
+        "  int b() { return Mix.m(1, 2); }",
+        "}",
+      ];
+      await mkdir(path.join(root, "p"), { recursive: true });
+      await writeFile(path.join(root, "p", "Mix.java"), utilLines.join("\n"));
+      const use = normalizePath(path.join(root, "p", "Use.java"));
+      await writeFile(use, useLines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number) => {
+        const column = useLines[line - 1]!.lastIndexOf("m(") + 1;
+        const result = await goToDefinition(index, { file: use, line, column });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      expect(await gotoLine(3)).toBe(3);
+      // The two-argument overload is an instance method, which a type name cannot call, so the
+      // static overload is the only candidate. Go-to-definition keeps a sole candidate whose
+      // parameters do not fit, as for other calls; the graph records no edge for it.
+      expect(await gotoLine(4)).toBe(3);
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
+        .map((edge) => graph.nodes.get(edge.from)?.name);
+      expect(callers).toEqual(["a"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
