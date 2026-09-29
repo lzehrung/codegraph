@@ -762,4 +762,40 @@ describe("Java implicit-receiver precedence", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps same-signature defaults from unrelated interfaces ambiguous but collapses a proven override", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-interface-ambiguity-"));
+    try {
+      const files: Record<string, string> = {
+        "Left.java": "package j;\ninterface Left { default int hit(int a) { return 1; } }\n",
+        "Right.java": "package j;\ninterface Right { default int hit(int a) { return 2; } }\n",
+        "Base.java": "package j;\nclass Base { int go(int a) { return 1; } }\n",
+        "Mid.java": "package j;\nclass Mid extends Base { int go(int a) { return 2; } }\n",
+        "Use.java":
+          "package j;\nclass Both implements Left, Right {\n  int use() { return hit(1); }\n}\nclass Leaf extends Mid {\n  int use() { return go(1); }\n}\n",
+      };
+      for (const [relative, text] of Object.entries(files)) await writeFile(path.join(root, relative), text);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = normalizePath(path.join(root, "Use.java"));
+      const useLines = files["Use.java"]!.split("\n");
+      const gotoAt = async (line: number, name: string) => {
+        const result = await goToDefinition(index, {
+          file: use,
+          line,
+          column: useLines[line - 1]!.lastIndexOf(name) + 1,
+        });
+        return result.status === "ok" ? path.basename(result.definition.file) : null;
+      };
+      // Left.hit and Right.hit are unrelated; Mid.go overrides Base.go on the walked path.
+      expect(await gotoAt(3, "hit")).toBeNull();
+      expect(await gotoAt(6, "go")).toBe("Mid.java");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(calls).toEqual(["Mid.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

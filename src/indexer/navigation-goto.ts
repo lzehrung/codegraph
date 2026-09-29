@@ -1522,17 +1522,26 @@ async function resolveKeywordReceiverMember(
   const spansHierarchy = knownArgumentCount !== undefined && HIERARCHY_OVERLOAD_LANGUAGES.has(current.context.sup.id);
   const jvm = current.context.sup.id === "java" || current.context.sup.id === "kotlin";
   let lenient: SymbolDef | undefined;
-  // Accepted overloads across levels; a deeper one with a shallower one's parameter types is
-  // overridden by it.
-  const accepted: SymbolDef[] = [];
-  const acceptedSignatures = new Set<string>();
+  // Accepted overloads across levels. A deeper one is overridden only by an accepted method with
+  // the same parameter types in a class proven to derive from its owner on the walked path;
+  // unrelated owners with one signature (two interfaces) stay separate and ambiguous.
+  const accepted: Array<{ def: SymbolDef; signature: string | null; owner: string }> = [];
+  const memberKey = (def: SymbolDef): string => `${fileIdentityKey(def.file)}:${def.range.start.index}`;
+  const ownerOf = new Map<string, string>();
+  const subclassesOf = new Map<string, Set<string>>();
+  const recordOwner = (from: number, owner: string): void => {
+    for (let at = from; at < matches.length; at += 1) ownerOf.set(memberKey(matches[at]!), owner);
+  };
+  let matches: SymbolDef[] = [];
   const visited = new Set<string>([
     keywordContainerKey(current.file, current.container),
     ...level.map((candidate) => keywordContainerKey(candidate.file, candidate.container)),
   ]);
   for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
-    const matches: SymbolDef[] = [];
+    matches = [];
     for (const candidate of level) {
+      const ownerKey = keywordContainerKey(candidate.file, candidate.container);
+      const before = matches.length;
       const memberPredicate =
         memberScope === "any"
           ? undefined
@@ -1547,9 +1556,12 @@ async function resolveKeywordReceiverMember(
         memberPredicate,
         matches,
       );
+      recordOwner(before, ownerKey);
     }
     for (const candidate of level) {
       if (candidate.context.sup.id !== "csharp" && candidate.context.sup.id !== "swift") continue;
+      const ownerKey = keywordContainerKey(candidate.file, candidate.container);
+      const before = matches.length;
       const sharedContainers = await resolveSharedOwnerContainers({
         index,
         ownerFile: candidate.file,
@@ -1581,6 +1593,8 @@ async function resolveKeywordReceiverMember(
           matches,
         );
       }
+      // Partial parts of one type share its identity.
+      recordOwner(before, ownerKey);
     }
     let uniqueMatches = uniqueReceiverMemberCandidates(matches);
     // A private member of a base class is not inherited: it neither answers nor stops the walk.
@@ -1600,9 +1614,12 @@ async function resolveKeywordReceiverMember(
       for (const candidate of uniqueMatches) {
         if ((await receiverMemberAcceptsArgumentCount(index, candidate, knownArgumentCount!)) === false) continue;
         const signature = await memberParameterTypesKey(index, candidate);
-        if (signature !== null && acceptedSignatures.has(signature)) continue;
-        if (signature !== null) acceptedSignatures.add(signature);
-        accepted.push(candidate);
+        const owner = ownerOf.get(memberKey(candidate)) ?? "";
+        const subclasses = subclassesOf.get(owner);
+        const overridden =
+          signature !== null &&
+          accepted.some((entry) => entry.signature === signature && !!subclasses?.has(entry.owner));
+        if (!overridden) accepted.push({ def: candidate, signature, owner });
       }
       // Navigation still names the only incompatible candidate when no ancestor accepts the call.
       if (allowUniqueArityMismatch && !lenient) {
@@ -1611,6 +1628,8 @@ async function resolveKeywordReceiverMember(
     }
     const next: KeywordClassRef[] = [];
     for (const candidate of level) {
+      const childKey = keywordContainerKey(candidate.file, candidate.container);
+      const childSubclasses = subclassesOf.get(childKey);
       for (const parent of await baseRefsFromContainer(
         index,
         candidate.module,
@@ -1621,6 +1640,11 @@ async function resolveKeywordReceiverMember(
         candidate.context.tree,
       )) {
         const key = keywordContainerKey(parent.file, parent.container);
+        // Every class on a path to this ancestor derives from it, including through a diamond.
+        const subclasses = subclassesOf.get(key) ?? new Set<string>();
+        subclasses.add(childKey);
+        for (const subclass of childSubclasses ?? []) subclasses.add(subclass);
+        subclassesOf.set(key, subclasses);
         if (visited.has(key)) continue;
         visited.add(key);
         next.push(parent);
@@ -1634,7 +1658,7 @@ async function resolveKeywordReceiverMember(
     if (report) report.ambiguous = true;
     return undefined;
   }
-  return accepted[0] ?? lenient;
+  return accepted[0]?.def ?? lenient;
 }
 
 /** Parameter type text of a Java, Kotlin, or C# method, for override matching; null when unknown. */

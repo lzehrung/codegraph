@@ -2230,3 +2230,32 @@ describe("C# partial class members across files", () => {
     }
   });
 });
+
+describe("C# bare member calls", () => {
+  it("records no call edge for a bare member call its only candidate cannot accept", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-bare-member-arity-"));
+    try {
+      const lines = [
+        "class C {",
+        "  int Pick(int x) => x;",
+        "  int Use() => Pick();",
+        "  int Ok() => Pick(1);",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "C.cs"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // Navigation keeps the only candidate so callers of a changed signature stay visible.
+      const goto = await goToDefinition(index, { file, line: 3, column: lines[2]!.indexOf("Pick") + 1 });
+      expect(goto.status).toBe("ok");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`);
+      expect(calls).toEqual(["Ok->Pick"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

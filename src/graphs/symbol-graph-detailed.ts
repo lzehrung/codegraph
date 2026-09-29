@@ -173,14 +173,19 @@ function recordTypeScriptCallableAliases(
   }
 }
 
-/** Whether a definition is one of its file's indexed symbols (not a parameter or block local). */
-function isIndexedSymbol(index: ProjectIndex, def: SymbolDef): boolean {
+/**
+ * The indexed symbol a definition names (with its member metadata), or null for a parameter or
+ * block local, which has no graph node.
+ */
+function indexedSymbolFor(index: ProjectIndex, def: SymbolDef): SymbolDef | null {
   const module = index.byFile.get(fileIdentityKey(def.file));
-  return !!module?.locals.some(
-    (local) =>
-      local.localName === def.localName &&
-      local.range.start.index === def.range.start.index &&
-      local.range.end.index === def.range.end.index,
+  return (
+    module?.locals.find(
+      (local) =>
+        local.localName === def.localName &&
+        local.range.start.index === def.range.start.index &&
+        local.range.end.index === def.range.end.index,
+    ) ?? null
   );
 }
 
@@ -493,7 +498,7 @@ export async function buildSymbolGraphDetailed(
       // The graph has nodes only for indexed symbols; a parameter or function-local binding
       // that navigation resolves has no node, so it gets no edge.
       const indexedOrNull = (definition: SymbolDef | null): SymbolDef | null =>
-        definition && isIndexedSymbol(index, definition) ? definition : null;
+        definition ? indexedSymbolFor(index, definition) : null;
       const resolveName = (name: string, node: SyntaxNodeLike): NameResolution | null =>
         resolveBareName(bareNameUse(name, node));
       const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null =>
