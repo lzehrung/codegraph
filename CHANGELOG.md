@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Added
+
+- `apisurface --undocumented` and `getUndocumentedApiSurface` list exported declarations without a captured docstring, with source locations. Language-specific capture limits are documented.
+
 ### Fixed
 
 - C#: types imported by `using N;` now resolve in go-to-definition, references, and call graphs when namespace `N` is declared in more than one file, which is the usual layout. Before, nothing imported through such a directive resolved. Namespace-qualified calls such as `N.Type.M()` now resolve too. A `using` directive no longer binds a file in another language whose path matches the name, such as a root `p.ts` for `using P;`.

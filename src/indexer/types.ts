@@ -415,6 +415,15 @@ export type ApiSurface = Array<{
   }>;
 }>;
 
+/** Local exports with no captured declaration docstring. Re-exports have no local declaration. */
+export type UndocumentedApiSymbol = {
+  file: FileId;
+  name: string;
+  exportedAs: string;
+  kind: SymbolKind;
+  range: Range;
+};
+
 export type GoToRequest = { file: FileId; line: number; column: number };
 
 export type ResolutionProvenance = {

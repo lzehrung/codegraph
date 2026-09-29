@@ -2,6 +2,12 @@
 
 Minimal catalog of Tree-sitter scenarios with sample coverage. Each row names the fixture and the behavior that fixture locks. [Language parity](./language-parity.md) is the claim of record for what a capability supports; when the two disagree, fix the parity doc and the row together.
 
+## API documentation reports
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Exported docstring classification | `tests/undocumented-api.test.ts` | `apisurface --undocumented` includes exported symbols without an indexed docstring and excludes documented exports for each capturing language. Tests record the limits for languages that do not capture leading comments. Pretty and JSON output include source locations. | Native fixtures | 2026-09-29 |
+
 ## Impact and diff pipeline
 
 | Scenario                                | Sample                                                                                                                                                           | Expected behavior                                                                                                                                                                                                                                                                                                                                                                                                                                         | Source                   | Date added |

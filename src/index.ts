@@ -176,6 +176,8 @@ export {
   listSymbols,
   getApiSurface,
   type ApiSurface,
+  getUndocumentedApiSurface,
+  type UndocumentedApiSymbol,
 } from "./indexer.js";
 
 /** Diff impact analysis and review-context helper APIs. */

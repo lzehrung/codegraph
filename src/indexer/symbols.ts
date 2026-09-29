@@ -6,6 +6,7 @@ import type {
   SymbolDef,
   SymbolHandle,
   SymbolListItem,
+  UndocumentedApiSymbol,
 } from "./types.js";
 import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
@@ -305,4 +306,22 @@ export function getApiSurface(index: ProjectIndex): ApiSurface {
     }
   }
   return out;
+}
+
+/** List local public declarations whose indexed docstring is absent. */
+export function getUndocumentedApiSurface(index: ProjectIndex): UndocumentedApiSymbol[] {
+  const items: UndocumentedApiSymbol[] = [];
+  for (const mod of index.byFile.values()) {
+    for (const entry of mod.exports) {
+      if (entry.type !== "local" || entry.target.docstring?.trim()) continue;
+      items.push({
+        file: entry.target.file,
+        name: entry.target.localName,
+        exportedAs: entry.exportedAs,
+        kind: entry.target.kind,
+        range: entry.target.range,
+      });
+    }
+  }
+  return items;
 }

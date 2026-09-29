@@ -698,7 +698,9 @@ Config discovery.ignoreGlobs / discovery.includeGlobs from codegraph.config.json
 
 export const APISURFACE_HELP_TEXT = `codegraph apisurface - Summarize exported API symbols
 
-Usage: codegraph apisurface [project-root] [--root <path>] [--json | --pretty]
+Usage: codegraph apisurface [project-root] [--root <path>] [--undocumented] [--json | --pretty]
+
+--undocumented lists local exports with no captured docstring. Re-exports have no local declaration.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;

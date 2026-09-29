@@ -78,6 +78,7 @@ Public-stable APIs (documented integration surface):
 - Indexing and navigation: `buildProjectIndex`, `buildProjectIndexIncremental`,
   `buildProjectIndexFromFiles`, `goToDefinition`, `findReferences`, symbol handles,
   graph builders and renderers.
+- API documentation: `getUndocumentedApiSurface(index)` lists local exports with no captured docstring. Items have `file`, `name`, `exportedAs`, `kind`, and `range`. It does not infer documentation on re-exports. See [language parity](./language-parity.md#symbols-and-exports) for capture limits.
 - Symbol targets: `resolveSymbolTarget` returns deterministic exact, ambiguous,
   and not-found outcomes for reusable handles, qualified paths, source
   locations, and exact names.

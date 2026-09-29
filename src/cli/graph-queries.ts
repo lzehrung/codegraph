@@ -1,4 +1,4 @@
-import { findLocalSymbolDefinitions, getApiSurface, parseQualifiedSymbolPath } from "../indexer/symbols.js";
+import { findLocalSymbolDefinitions, getApiSurface, getUndocumentedApiSurface, parseQualifiedSymbolPath } from "../indexer/symbols.js";
 import { parseAgentSymbolHandle } from "../agent/handles.js";
 import type { CurrentProjectIndexLoader } from "../indexer/load-current-index.js";
 import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";
@@ -293,6 +293,28 @@ async function handleUnresolvedCommand(context: GraphQueryCommandContext): Promi
 async function handleApiSurfaceCommand(context: GraphQueryCommandContext): Promise<void> {
   const json = context.hasFlag("--json");
   const index = await context.loadCurrentIndex();
+  if (context.hasFlag("--undocumented")) {
+    const items = getUndocumentedApiSurface(index).map((item) => ({
+      ...item,
+      file: toProjectDisplayPath(context.projectRootFs, item.file),
+    }));
+    if (json) {
+      context.writeJSONLine(items);
+      return;
+    }
+    context.writeStdoutLine("Undocumented public API exports (indexed docstrings):");
+    if (!items.length) {
+      context.writeStdoutLine("  None found.");
+      return;
+    }
+    for (const item of items) {
+      const { start, end } = item.range;
+      context.writeStdoutLine(
+        `  - ${item.file}:${start.line}:${start.column}-${end.line}:${end.column} ${item.name} (${item.kind}, exported as ${item.exportedAs})`,
+      );
+    }
+    return;
+  }
   const apiSurface = getApiSurface(index);
 
   if (json) {

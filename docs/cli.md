@@ -600,6 +600,8 @@ codegraph cycles --sort priority
 
 # Public API surface
 codegraph apisurface
+# Exported declarations with no captured docstring
+codegraph apisurface --undocumented --json
 
 # Unresolved imports
 codegraph unresolved
@@ -610,6 +612,8 @@ codegraph hotspots ./src --limit 20
 ```
 
 `hotspots` ranks files by fan-in and fan-out connectivity. It does not measure code complexity.
+
+`apisurface --undocumented` lists local exported declarations with no indexed docstring. The pretty output shows file, range, name, kind, and exported name. With `--json`, it returns an array of `{ file, name, exportedAs, kind, range }` objects. File paths are project-relative. Re-exports have no local declaration, so this option omits them. A missing docstring can also mean that the language does not capture that comment; see [language parity](./language-parity.md#symbols-and-exports).
 
 Cycle detection reports source dependency cycles. Document-only link loops, such as Markdown files linking to each other, remain in the graph for navigation but are not reported as dependency cycles.
 
