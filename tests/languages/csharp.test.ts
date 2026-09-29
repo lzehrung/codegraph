@@ -2773,4 +2773,53 @@ describe("C# using namespace across files", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("classifies path-like targets by the active extension mapping and keeps an alias root's binding", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-mapping-"));
+    try {
+      // `.cs` is remapped to TypeScript, so p.cs is not a C# file even though its suffix is.
+      await writeFile(path.join(root, "p.cs"), "export const x = 1;\n");
+      await writeFile(path.join(root, "Use.csx"), "using P;\nnamespace Q;\npublic class Use { }\n");
+      const mapped = await buildProjectIndex(root, { cache: "off", native: "on", languageExtensions: { ".cs": "ts" } });
+      const useFile = normalizePath(path.join(root, "Use.csx"));
+      const targets = mapped.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(useFile))
+        .map((edge) => edge.to.type);
+      expect(targets).toEqual(["external"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+
+    const aliasRoot = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-alias-root-"));
+    try {
+      const useLines = [
+        "using P = Other;",
+        "namespace Q;",
+        "public class Use {",
+        "  public int A() => P.Mix.M(1);",
+        "}",
+      ];
+      await writeFile(
+        path.join(aliasRoot, "P.cs"),
+        "namespace P;\npublic class Mix { public static int M(int a) => 1; }\n",
+      );
+      await writeFile(
+        path.join(aliasRoot, "Other.cs"),
+        "namespace Other;\npublic class Mix { public static int M(int a) => 2; }\n",
+      );
+      const use = normalizePath(path.join(aliasRoot, "Use.cs"));
+      await writeFile(use, `${useLines.join("\n")}\n`);
+      const index = await buildProjectIndex(aliasRoot, { cache: "off", native: "on" });
+      // `P` is the alias for `Other`, not namespace P.
+      const result = await goToDefinition(index, { file: use, line: 4, column: useLines[3]!.lastIndexOf("M(") + 1 });
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("Other.cs");
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
+        .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(targets).toEqual(["Other.cs"]);
+    } finally {
+      await rm(aliasRoot, { recursive: true, force: true });
+    }
+  });
 });

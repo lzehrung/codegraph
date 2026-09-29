@@ -673,6 +673,15 @@ function unwrapGoNamedType(node: SyntaxNodeLike): SyntaxNodeLike | null {
 }
 
 /** Type-like defs only, so a PHP `use function` alias cannot steal `Example::m()`. */
+function csharpRootIsImported(moduleEntry: ModuleIndex, qualifiedName: string): boolean {
+  const root = qualifiedName.split(".")[0];
+  return moduleEntry.imports.some(
+    (imp) =>
+      (imp.kind === "namespace" && imp.localNS === root) ||
+      ((imp.kind === "named" || imp.kind === "default") && imp.local === root),
+  );
+}
+
 function resolveNamedType(
   context: EdgePassContext,
   name: string,
@@ -687,7 +696,9 @@ function resolveNamedType(
   if (target && declaresMembers(target)) return target;
   // A C# namespace-qualified type (`P.Mix`) that the identifier lookup does not bind (a namespace path,
   // not a nested type) resolves by qualified export lookup, as navigation does.
-  if (context.sup.id === "csharp" && name.includes(".")) {
+  // A root bound by an import or alias (`using P = Other;`) is not a namespace; navigation keeps
+  // that binding, so this fallback does not apply.
+  if (context.sup.id === "csharp" && name.includes(".") && !csharpRootIsImported(context.moduleEntry, name)) {
     const qualified = resolveCsharpQualifiedName(context.index, context.moduleEntry, name, node.startIndex);
     if (qualified?.kind === "resolved" && declaresMembers(qualified.def)) return qualified.def;
   }

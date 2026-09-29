@@ -7,7 +7,7 @@ import {
   rustImportKeywordOffset,
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
-import { supportForFileWithoutHeaderSample } from "../../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
 import { CSHARP_IDENTIFIER_SOURCE, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
@@ -39,6 +39,8 @@ export type LanguageSpecificImportContext = ImportBindingSink & {
   source: string;
   languageId: string;
   resolveFrom: ImportResolver;
+  /** Active extension-to-language mapping, so a resolved file is classified as the language that parses it. */
+  languageExtensions?: LanguageExtensionMap;
   getBindings: () => ImportBinding[];
   replaceBindings: (bindings: ImportBinding[]) => void;
 };
@@ -159,9 +161,15 @@ function csharpUsingAliasLocalRange(
 }
 
 /** A path-like hit counts for a C# directive only when it is a C# file. */
-function csharpImportTarget(resolved: ResolvedImportTarget, spec: string): ResolvedImportTarget {
+function csharpImportTarget(
+  context: LanguageSpecificImportContext,
+  resolved: ResolvedImportTarget,
+  spec: string,
+): ResolvedImportTarget {
   if (typeof resolved !== "string") return resolved;
-  return supportForFileWithoutHeaderSample(resolved)?.id === "csharp" ? resolved : { external: spec };
+  return supportForFileWithoutHeaderSample(resolved, context.languageExtensions)?.id === "csharp"
+    ? resolved
+    : { external: spec };
 }
 
 async function applyCsharpStatementOverride(
@@ -229,7 +237,7 @@ async function applyCsharpStatementOverride(
   let resolved: ResolvedImportTarget =
     !parsed.alias && namespaceTargets.length
       ? namespaceTargets[0]!.replace(/\\/g, "/")
-      : csharpImportTarget(await context.resolveFrom(fromValue), fromValue);
+      : csharpImportTarget(context, await context.resolveFrom(fromValue), fromValue);
   if (parsed.alias) {
     const fromParts = parsed.from.split(".");
     if (fromParts.length > 1) {
@@ -258,7 +266,7 @@ async function applyCsharpStatementOverride(
           fromValue = fallbackFrom;
           resolved = fallbackNamespaceTargets[0]!.replace(/\\/g, "/");
         } else if (typeof resolved !== "string") {
-          const fallbackResolved = csharpImportTarget(await context.resolveFrom(fallbackFrom), fallbackFrom);
+          const fallbackResolved = csharpImportTarget(context, await context.resolveFrom(fallbackFrom), fallbackFrom);
           if (typeof fallbackResolved === "string") {
             fromValue = fallbackFrom;
             resolved = fallbackResolved;

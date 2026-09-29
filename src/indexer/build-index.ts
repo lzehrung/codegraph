@@ -618,6 +618,7 @@ async function specifierResolutionChanged(
         matchPath,
         resolveNodeModules: !!graphOptions.resolveNodeModules,
         ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+        ...(languageExtensions ? { languageExtensions } : {}),
       },
     );
     const resolvedKeys = (resolved ?? []).map((item) => externalEdgeTargetKey(item.to)).sort();

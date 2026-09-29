@@ -1,4 +1,4 @@
-import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import type { EdgeTo } from "../types.js";
 import {
   getGraphOnlyResolutionExtensions,
@@ -32,6 +32,8 @@ export type ModuleSpecifierResolutionContext = {
   matchPath: MatchPathFn | undefined;
   resolveNodeModules?: boolean;
   resolutionHints?: string[];
+  /** Active extension-to-language mapping, so a file is classified as the language that parses it. */
+  languageExtensions?: LanguageExtensionMap;
 };
 
 function edgeToResolvedFile(resolved: string): EdgeTo {
@@ -173,7 +175,11 @@ export async function resolveModuleSpecifierEdges(
     const pathLike = await resolvePathLikeModule(context.projectRoot, entry.spec);
     // A C# directive names a namespace or type, never another language's file (`using System;`
     // beside a root `system.ts`), so a path-like hit counts only when it is a C# file.
-    if (context.support.id === "csharp" && pathLike && supportForFileWithoutHeaderSample(pathLike)?.id !== "csharp") {
+    if (
+      context.support.id === "csharp" &&
+      pathLike &&
+      supportForFileWithoutHeaderSample(pathLike, context.languageExtensions)?.id !== "csharp"
+    ) {
       return [withSpecifierMetadata(entry, edgeToExternal(entry.raw ?? entry.spec))];
     }
     to = pathLike ? edgeToResolvedFile(pathLike) : await resolveGenericSpecifier(entry, context, resolutionExtensions);
