@@ -675,19 +675,16 @@ function csharpImportLookupName(imp: ImportBinding, exportedName: string): strin
   return namespaceName ? `${namespaceName}.${exportedName}` : exportedName;
 }
 
-const csharpNamespaceImportDirectoryFiles = new WeakMap<ProjectIndex, Map<string, FileId[]>>();
-
-function csharpNamespaceImportKey(namespaceName: string, boundFile: string): string {
-  return `${normalizeCsharpQualifiedName(namespaceName)}\u0000${fileIdentityKey(boundFile)}`;
-}
+const csharpNamespaceImportDirectoryFiles = new WeakMap<ProjectIndex, Map<ImportBinding, FileId[]>>();
 
 /**
- * For each C# `using N;` binding (namespace and bound file), one declaring file per directory.
- * The file graph links the directive to every file that declares `N` within the importer's
- * project, and a qualified lookup from one file reaches the rest of its directory, so one file
- * per directory covers every declaration of `N`. Built once per index.
+ * For each C# `using N;` binding, one declaring file per directory. The file graph links each
+ * directive to every file that declares `N` within the importer's own project, so the set is
+ * kept per binding: two importers in different projects never share one. A qualified lookup from
+ * one file reaches the rest of its directory, so one file per directory covers every declaration
+ * of `N`. Built once per index.
  */
-function csharpNamespaceImportDirectories(index: ProjectIndex): Map<string, FileId[]> {
+function csharpNamespaceImportDirectories(index: ProjectIndex): Map<ImportBinding, FileId[]> {
   const cached = csharpNamespaceImportDirectoryFiles.get(index);
   if (cached) return cached;
   const edgesByImporter = new Map<string, Map<string, Map<string, FileId>>>();
@@ -703,22 +700,19 @@ function csharpNamespaceImportDirectories(index: ProjectIndex): Map<string, File
     const directoryKey = fileIdentityKey(path.posix.dirname(normalizePath(edge.to.path)));
     if (!byDirectory.has(directoryKey)) byDirectory.set(directoryKey, edge.to.path);
   }
-  const directories = new Map<string, Map<string, FileId>>();
+  const result = new Map<ImportBinding, FileId[]>();
   for (const mod of index.byFile.values()) {
     for (const imp of mod.imports) {
       if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
       if (supportForFileWithoutHeaderSample(imp.resolved, index.languageExtensions)?.id !== "csharp") continue;
-      const key = csharpNamespaceImportKey(imp.from, imp.resolved);
-      let files = directories.get(key);
-      if (!files) directories.set(key, (files = new Map()));
-      const boundDirectory = fileIdentityKey(path.posix.dirname(normalizePath(imp.resolved)));
-      if (!files.has(boundDirectory)) files.set(boundDirectory, imp.resolved);
+      const files = new Map<string, FileId>([
+        [fileIdentityKey(path.posix.dirname(normalizePath(imp.resolved))), imp.resolved],
+      ]);
       const targets = edgesByImporter.get(fileIdentityKey(mod.file))?.get(normalizeCsharpQualifiedName(imp.from));
       for (const [directoryKey, file] of targets ?? []) if (!files.has(directoryKey)) files.set(directoryKey, file);
+      result.set(imp, [...files.values()]);
     }
   }
-  const result = new Map<string, FileId[]>();
-  for (const [key, files] of directories) result.set(key, [...files.values()]);
   csharpNamespaceImportDirectoryFiles.set(index, result);
   return result;
 }
@@ -734,9 +728,8 @@ function resolveCsharpNamespaceImport(
   lookupName: string,
   opts: ResolveExportOptions | undefined,
 ): SymbolDef | { namespace: FileId } | null {
-  const files = csharpNamespaceImportDirectories(index).get(csharpNamespaceImportKey(imp.from, boundFile)) ?? [
-    boundFile,
-  ];
+  // A binding that is not one of the index's own (a copy) falls back to the bound file's directory.
+  const files = csharpNamespaceImportDirectories(index).get(imp) ?? [boundFile];
   const matches: SymbolDef[] = [];
   let namespaceHit: FileId | undefined;
   for (const file of files) {

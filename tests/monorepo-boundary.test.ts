@@ -13,6 +13,7 @@ import {
 import { resolveJavaImportPath, resolveKotlinImportPath } from "../src/util/resolution/jvm.js";
 import { resolvePhpImportPath } from "../src/util/resolution/php.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
+import { buildProjectIndex, goToDefinition } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -93,6 +94,43 @@ describe("monorepo resolution boundaries", () => {
 
     const fromB = await resolveCsharpNamespaceImportPaths(root, "Shared", libB);
     expect(fromB.map(posix)).toEqual([posix(libB)]);
+  });
+
+  it("keeps each importer's using namespace within its nearest csproj when importers share a bound file", async () => {
+    const root = await mkTmpDir("dg-mono-csharp-nested-");
+    try {
+      // The outer project contains the nested one, so both importers bind `using N;` to the same
+      // first declaring file (inner/x/Aaa.cs). Only the outer importer may see z/OuterOnly.cs.
+      await writeFile(path.join(root, "Outer.csproj"), '<Project Sdk="Microsoft.NET.Sdk"></Project>\n');
+      await writeFile(path.join(root, "inner", "Inner.csproj"), '<Project Sdk="Microsoft.NET.Sdk"></Project>\n');
+      await writeFile(path.join(root, "inner", "x", "Aaa.cs"), "namespace N;\npublic class Aaa { }\n");
+      await writeFile(path.join(root, "inner", "y", "InnerType.cs"), "namespace N;\npublic class InnerType { }\n");
+      await writeFile(path.join(root, "z", "OuterOnly.cs"), "namespace N;\npublic class OuterOnly { }\n");
+      const useLines = [
+        "using N;",
+        "namespace Q;",
+        "public class Use {",
+        "  object A() => new OuterOnly();",
+        "  object B() => new InnerType();",
+        "}",
+      ];
+      const innerUse = posix(path.join(root, "inner", "UseInner.cs"));
+      const outerUse = posix(path.join(root, "u", "UseOuter.cs"));
+      await writeFile(innerUse, `${useLines.join("\n")}\n`);
+      await writeFile(outerUse, `${useLines.join("\n")}\n`);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const target = async (file: string, line: number, token: string) => {
+        const column = useLines[line - 1]!.lastIndexOf(token) + 1;
+        const result = await goToDefinition(index, { file, line, column });
+        return result.status === "ok" ? path.basename(result.definition.file) : null;
+      };
+      expect(await target(innerUse, 4, "OuterOnly")).toBeNull();
+      expect(await target(innerUse, 5, "InnerType")).toBe("InnerType.cs");
+      expect(await target(outerUse, 4, "OuterOnly")).toBe("OuterOnly.cs");
+      expect(await target(outerUse, 5, "InnerType")).toBe("InnerType.cs");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("skips a directory named like a csproj and still binds to a real sibling csproj", async () => {
