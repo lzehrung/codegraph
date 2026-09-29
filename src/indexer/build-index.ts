@@ -297,14 +297,24 @@ function manifestDeclaredContainerIndex(manifest: IndexManifest | null): Map<str
 async function collectCppMissDeclaredContainers(
   files: readonly string[],
   concurrency: number,
+  confined?: {
+    confinedRoot?: string;
+    projectRoot?: string;
+    trustedSources?: ReadonlyMap<string, string>;
+  },
 ): Promise<Map<string, string[]>> {
   const byName = new Map<string, Set<string>>();
   await mapLimit([...files], concurrency, async (file) => {
-    let source: string;
-    try {
-      source = await fsp.readFile(file, "utf8");
-    } catch {
-      return;
+    let source: string | undefined = confined?.trustedSources?.get(file);
+    if (source === undefined) {
+      try {
+        source =
+          confined?.confinedRoot && confined?.projectRoot
+            ? await readConfinedUtf8File(confined.confinedRoot, confined.projectRoot, file)
+            : await fsp.readFile(file, "utf8");
+      } catch {
+        return;
+      }
     }
     for (const name of collectCppDeclaredModules(source)) {
       let bucket = byName.get(name);
@@ -1030,6 +1040,8 @@ async function collectStaleCachedModules(args: {
   opts: BuildOptions | undefined;
   loadMatchPathForFile: (file: string) => Promise<MatchPathFn | undefined>;
   concurrency: number;
+  confinedRoot?: string | undefined;
+  trustedSources?: ReadonlyMap<string, string> | undefined;
 }): Promise<Set<string>> {
   const { cachedModules, manifestFiles } = args;
   if (!cachedModules.size) return new Set();
@@ -1068,7 +1080,10 @@ async function collectStaleCachedModules(args: {
       (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "cpp",
     );
     if (cppMisses.length) {
-      const missDeclaredContainers = await collectCppMissDeclaredContainers(cppMisses, args.concurrency);
+      const missDeclaredContainers = await collectCppMissDeclaredContainers(cppMisses, args.concurrency, {
+        ...(args.confinedRoot ? { confinedRoot: args.confinedRoot, projectRoot: args.projectRoot } : {}),
+        ...(args.trustedSources ? { trustedSources: args.trustedSources } : {}),
+      });
       for (const [name, declaringFiles] of missDeclaredContainers) {
         const merged = new Set([...(nextDeclaredContainers.get(name) ?? []), ...declaringFiles]);
         nextDeclaredContainers.set(
@@ -1157,7 +1172,10 @@ async function collectStaleCachedModules(args: {
         (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "cpp",
       );
       if (cppAdded.length) {
-        const missDeclaredContainers = await collectCppMissDeclaredContainers(cppAdded, args.concurrency);
+        const missDeclaredContainers = await collectCppMissDeclaredContainers(cppAdded, args.concurrency, {
+          ...(args.confinedRoot ? { confinedRoot: args.confinedRoot, projectRoot: args.projectRoot } : {}),
+          ...(args.trustedSources ? { trustedSources: args.trustedSources } : {}),
+        });
         if (missDeclaredContainers.size) {
           for (const [file, { mod }] of cachedModules) {
             if (stale.has(file)) continue;
@@ -1457,6 +1475,7 @@ async function buildIndexFromFileListShared(
       opts,
       loadMatchPathForFile,
       concurrency: conc,
+      ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
     });
     for (const file of staleCachedModules) {
       const probe = cacheProbes.get(file);
