@@ -1599,7 +1599,7 @@ async function resolveKeywordReceiverMember(
  * Kotlin check only bare call callees. A static context reaches only static members.
  */
 /** The callee of a receiverless call (`f()`), which may name a member through the implicit `this`. */
-function implicitSelfCallee(languageId: string, call: SyntaxNodeLike): SyntaxNodeLike | null {
+export function implicitSelfCallee(languageId: string, call: SyntaxNodeLike): SyntaxNodeLike | null {
   if (languageId === "csharp") return call.type === "invocation_expression" ? call.childForFieldName("function") : null;
   if (languageId === "java") {
     if (call.type !== "method_invocation" || call.childForFieldName("object")) return null;
@@ -2189,6 +2189,22 @@ async function getCallableArityForDef(index: ProjectIndex, def: SymbolDef): Prom
     current = current.parent;
   }
   return undefined;
+}
+
+/**
+ * Whether a member found for a receiverless call can accept that call's argument count. Unknown
+ * counts and unknown arities accept.
+ */
+export async function memberAcceptsCallAt(
+  index: ProjectIndex,
+  member: SymbolDef,
+  callee: SyntaxNodeLike,
+  source: string,
+  languageId: string,
+): Promise<boolean> {
+  const argumentCount = getCallArgumentCount({ languageId, source, call: callee.parent ?? callee });
+  if (argumentCount === null) return true;
+  return (await receiverMemberAcceptsArgumentCount(index, member, argumentCount)) !== false;
 }
 
 async function receiverMemberAcceptsArgumentCount(

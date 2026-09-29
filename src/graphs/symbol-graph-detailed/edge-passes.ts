@@ -1158,6 +1158,16 @@ export async function emitFunctionBodyEdges(
         return;
       }
       if (!callee) return;
+      // A name whose lookup waits on an async member step (implicit `this`/`self`, C++ out-of-line
+      // owners, included C/C++ declarations) settles after the walk exactly as navigation does.
+      if (isIdentifierType(context.sup, callee.type)) {
+        const name = sliceText(callee, context.source);
+        const resolution = context.resolveName(name, callee);
+        if (resolution?.status === "deferred") {
+          deferredCalls.push({ callee, name, resolution });
+          return;
+        }
+      }
       const implicitOwnerLanguage = context.sup.id === "swift" || context.sup.id === "csharp";
       if (implicitOwnerLanguage && isIdentifierType(context.sup, callee.type) && nearestMemberContainer(fn.node)) {
         const name = sliceText(callee, context.source);
@@ -1170,14 +1180,6 @@ export async function emitFunctionBodyEdges(
           // A method's local binding wins. Type members require receiver ownership
           // and static-scope proof; only a free function can be a fallback.
           recordImplicitSelfMemberCall(node, callee, lexical?.isMember ? null : lexical);
-          return;
-        }
-      }
-      if (isIdentifierType(context.sup, callee.type) && !implicitOwnerLanguage) {
-        const name = sliceText(callee, context.source);
-        const resolution = context.resolveName(name, callee);
-        if (resolution?.status === "deferred") {
-          deferredCalls.push({ callee, name, resolution });
           return;
         }
       }

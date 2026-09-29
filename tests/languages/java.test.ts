@@ -642,4 +642,43 @@ describe("Java implicit-receiver precedence", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("applies static scope and overload arity to receiverless calls of the class's own methods", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-own-member-"));
+    try {
+      const lines = [
+        "package j;",
+        "",
+        "class C {",
+        "  void hit() {}",
+        "  int pick(int a) { return a; }",
+        "  int pick(int a, int b) { return a + b; }",
+        "  static void run() { hit(); }",
+        "  int two() { return pick(1, 2); }",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "C.java"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number, name: string) => {
+        const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      // An instance method is not callable without `this` from a static method; overloads are
+      // chosen by argument count.
+      expect(await gotoLine(7, "hit")).toBeNull();
+      expect(await gotoLine(8, "pick")).toBe(6);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map(
+          (edge) =>
+            `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}:${edge.site?.range.start.line}`,
+        );
+      expect(calls).toEqual(["two->pick:8"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

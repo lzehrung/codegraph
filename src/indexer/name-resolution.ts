@@ -12,7 +12,11 @@ import type { FileId } from "../types.js";
 
 import { fileIdentityKey } from "../util/paths.js";
 
-import { resolveCppOutOfLineImplicitMember, resolveImplicitSelfMember } from "./navigation-goto.js";
+import {
+  memberAcceptsCallAt,
+  resolveCppOutOfLineImplicitMember,
+  resolveImplicitSelfMember,
+} from "./navigation-goto.js";
 import {
   definitionForBinding,
   findClosestScopeBinding,
@@ -170,7 +174,7 @@ export function resolveBareName(use: BareNameUse): NameResolution | null {
 
 /** How a consumer settles deferred steps. */
 export type SettleNameOptions = {
-  /** The graph records no edge when the hiding member cannot accept the call's argument count. */
+  /** The graph records no edge when the member a call names cannot accept its argument count. */
   requireAcceptedArity?: boolean;
   /** Resolves included C/C++ star candidates; navigation owns this recovery. */
   recoverIncludedStar?: (lookupName: string, cNamespace: "tag" | "ordinary" | undefined) => Promise<GoToResult | null>;
@@ -207,6 +211,14 @@ export async function settleNameResolution(
         parsed.source,
         parsed.sup.id,
       );
+      // The graph records no edge for a call its target cannot accept, and does not fall back.
+      if (
+        member &&
+        options.requireAcceptedArity &&
+        !(await memberAcceptsCallAt(index, member, node, parsed.source, parsed.sup.id))
+      ) {
+        return null;
+      }
       if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
       if (member === null) return { status: "not_found", reason: "No matching static member definition" };
     } else {

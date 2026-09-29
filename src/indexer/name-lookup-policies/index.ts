@@ -8,6 +8,9 @@ import { rustTokenTreeNameFollowsSeparator } from "../../util/member-access.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { resolveImported } from "../navigation-resolve.js";
 import { typescriptOverloadImplementationAcceptsCount } from "../ts-callables.js";
+import { implicitSelfCallee, isDirectKeywordMemberDeclaration } from "../navigation-goto.js";
+import { okGoToResult } from "../navigation-provenance.js";
+import { nearestMemberContainer } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import { type ModuleIndex, type SymbolDef, SymbolKind } from "../types.js";
 import type { NameLookupPolicy } from "../name-resolution-types.js";
 import { cLookupPolicy, cppLookupPolicy } from "./c-family.js";
@@ -69,6 +72,22 @@ const typescriptLookupPolicy: NameLookupPolicy = {
  * this step finds inherited ones.
  */
 const jvmLookupPolicy: NameLookupPolicy = {
+  // A method bound in the enclosing class body still needs static-scope and overload checks,
+  // which the member lookup applies; a local function or a field keeps its lexical binding.
+  onLocal(state, local) {
+    const { use, closestBinding } = state;
+    const declaration = closestBinding?.kind === "function" ? closestBinding.node?.parent : undefined;
+    if (!declaration || implicitSelfCallee(use.parsed.sup.id, use.node.parent ?? use.node)?.id !== use.node.id) {
+      return undefined;
+    }
+    const container = nearestMemberContainer(declaration);
+    if (!container || !isDirectKeywordMemberDeclaration(declaration, container)) return undefined;
+    return {
+      status: "deferred",
+      request: { kind: "implicit-self-member", lookupName: state.lookupName },
+      fallback: okGoToResult(use.index, local, { resolution: "exact", confidence: "high" }),
+    };
+  },
   afterCrossModule: (state, resolved) => ({
     status: "deferred",
     request: { kind: "implicit-self-member", lookupName: state.lookupName },

@@ -2141,6 +2141,34 @@ nativeDescribe("native semantic coverage", () => {
         edge: { caller: "viaBase", callerFile: "kinherit/p/Use.kt", expectedTarget: "kinherit/p/Base.kt::hit" },
       },
       {
+        name: "C# inherited method over a using static import",
+        files: {
+          "csinherit/Base.cs": ["namespace P;", "public class Base {", "  public int Hit() { return 4; }", "}"],
+          "csinherit/Util.cs": [
+            "namespace P;",
+            "public static class Util {",
+            "  public static int Hit() { return 1; }",
+            "}",
+          ],
+          "csinherit/Use.cs": [
+            "using static P.Util;",
+            "namespace P;",
+            "public class Derived : Base {",
+            "  public int ViaBase() { return Hit(); }",
+            "}",
+          ],
+        },
+        goto: { file: "csinherit/Use.cs", line: 4, token: "Hit()", expectedFile: "csinherit/Base.cs", expectedLine: 3 },
+        references: {
+          file: "csinherit/Base.cs",
+          line: 3,
+          token: "Hit",
+          expectedSites: ["csinherit/Base.cs:3", "csinherit/Use.cs:4"],
+          decoyFile: "csinherit/Util.cs",
+        },
+        edge: { caller: "ViaBase", callerFile: "csinherit/Use.cs", expectedTarget: "csinherit/Base.cs::Hit" },
+      },
+      {
         name: "Zig imported function through @import",
         files: {
           "zig/api.zig": ["pub fn target(value: i32) i32 {", "    return value;", "}"],
