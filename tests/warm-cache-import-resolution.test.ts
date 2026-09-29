@@ -1056,4 +1056,36 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  // The added file's stem (`beta`) never matches the imported module name (`shared`), so the
+  // stem check cannot see the new declaration; the declared-container comparison has to. Disk
+  // exercises the manifest path, memory the no-manifest path.
+  for (const cache of ["disk", "memory"] as const) {
+    it(`returns a C++ module import to unresolved when a second declaration makes it ambiguous (${cache} cache)`, async () => {
+      const root = await mkTmpDir(`cg-module-cache-cpp-ambiguous-${cache}-`);
+      try {
+        const main = path.join(root, "main.cpp");
+        await fsp.writeFile(path.join(root, "alpha.cpp"), "export module shared;\n", "utf8");
+        await fsp.writeFile(main, "import shared;\n", "utf8");
+        const resolved = await buildProjectIndex(root, { cache });
+        expect(edgeTargets(resolved, main).some((target) => target.endsWith("/alpha.cpp"))).toBe(true);
+
+        await fsp.writeFile(path.join(root, "beta.cpp"), "export module shared;\n", "utf8");
+        const warm = await buildProjectIndex(root, { cache });
+        const targets = await expectWarmMatchesCold(root, main, warm);
+        expect(targets).toEqual(["external:shared"]);
+        // The cached module's own bindings must agree with the graph, not just its edges.
+        const cold = await buildProjectIndex(root, { cache: "off" });
+        expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+        expect(bindingTargets(warm, main)).toEqual(["external:shared"]);
+
+        // With nothing changed, the next warm build reuses every cached module.
+        const report: BuildReport = { timings: {} };
+        await buildProjectIndex(root, { cache, report });
+        expect(report.files?.cached).toBe(report.files?.total);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
 });

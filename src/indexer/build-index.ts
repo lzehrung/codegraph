@@ -286,6 +286,42 @@ function manifestDeclaredContainerIndex(manifest: IndexManifest | null): Map<str
   return new Map(Object.entries(entries));
 }
 
+/**
+ * Declared C++ modules of files the module cache could not supply (added or changed). The
+ * declared-container index rebuilt from cache hits alone cannot see them: an added file
+ * declaring an already-declared module name makes the import ambiguous, but the file-stem
+ * check (`beta` vs `shared`) misses it and the previous-vs-next comparison sees no change, so
+ * the existing importer stays resolved to the old file. Reading just the declarations (a regex
+ * over source, no parse) closes that gap.
+ */
+async function collectCppMissDeclaredContainers(
+  files: readonly string[],
+  concurrency: number,
+): Promise<Map<string, string[]>> {
+  const byName = new Map<string, Set<string>>();
+  await mapLimit([...files], concurrency, async (file) => {
+    let source: string;
+    try {
+      source = await fsp.readFile(file, "utf8");
+    } catch {
+      return;
+    }
+    for (const name of collectCppDeclaredModules(source)) {
+      let bucket = byName.get(name);
+      if (!bucket) byName.set(name, (bucket = new Set()));
+      bucket.add(normalizePath(file));
+    }
+  });
+  const index = new Map<string, string[]>();
+  for (const [name, declaringFiles] of byName) {
+    index.set(
+      name,
+      [...declaringFiles].sort((left, right) => left.localeCompare(right)),
+    );
+  }
+  return index;
+}
+
 async function resolveCrossModuleSymbolExports(
   file: string,
   mod: ModuleIndex,
@@ -1005,16 +1041,6 @@ async function collectStaleCachedModules(args: {
   const loadTsconfigPaths = (importer: string) =>
     loadTsconfigResolutionInputsFor(importer, args.projectRoot, args.opts?.logLevel).then((inputs) => inputs?.paths);
   if (manifestFiles) {
-    // A deleted declaration can resolve an importer that was external before (two C++ modules
-    // named `shared`, one deleted), so declared-container sets are compared with the manifest, as
-    // the incremental builder does.
-    const declaredContainerConsumers = collectDeclaredContainerConsumers(
-      manifestFiles,
-      declaredContainerNamesChanged(
-        manifestDeclaredContainerIndex(args.manifest),
-        declaredContainerIndexFromModules([...cachedModules.values()].map((cached) => cached.mod)),
-      ),
-    );
     const currentKeys = new Set(args.files.map(fileIdentityKey));
     // A cache-signature mismatch proves a change even when a non-strict manifest signature
     // (mtime:size) matches, so misses count as changed too.
@@ -1028,6 +1054,33 @@ async function collectStaleCachedModules(args: {
       const matchesGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
       if (!entry || !(matchesGitSig || entry.sig === sigInfo.sig)) changed.add(file);
     }
+    // The next declared-container index is rebuilt from cache hits, which cannot see the
+    // declarations of added or changed files. An added file declaring an already-declared C++
+    // module name (two files declaring `shared`) leaves the previous-vs-next comparison
+    // unchanged, so the existing importer would stay resolved to the old file. Fold the
+    // misses' declarations in before diffing, as the incremental builder does after parsing
+    // them; a deleted declaration is already absent from the hits, so that direction keeps
+    // working (an importer that was external can resolve to the survivor).
+    const nextDeclaredContainers = declaredContainerIndexFromModules(
+      [...cachedModules.values()].map((cached) => cached.mod),
+    );
+    const cppMisses = [...new Set([...added, ...changed])].filter(
+      (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "cpp",
+    );
+    if (cppMisses.length) {
+      const missDeclaredContainers = await collectCppMissDeclaredContainers(cppMisses, args.concurrency);
+      for (const [name, declaringFiles] of missDeclaredContainers) {
+        const merged = new Set([...(nextDeclaredContainers.get(name) ?? []), ...declaringFiles]);
+        nextDeclaredContainers.set(
+          name,
+          [...merged].sort((left, right) => left.localeCompare(right)),
+        );
+      }
+    }
+    const declaredContainerConsumers = collectDeclaredContainerConsumers(
+      manifestFiles,
+      declaredContainerNamesChanged(manifestDeclaredContainerIndex(args.manifest), nextDeclaredContainers),
+    );
     const missingFromBuild = Object.keys(manifestFiles).filter((file) => !currentKeys.has(fileIdentityKey(file)));
     const existence = await probePathExistence(missingFromBuild, args.concurrency);
     const deleted = new Set(missingFromBuild.filter((file) => !existence.get(file)));
@@ -1096,6 +1149,23 @@ async function collectStaleCachedModules(args: {
           ),
         );
         if (addedCanSatisfy) stale.add(file);
+      }
+      // C++ named-module specifiers name declarations, not file stems, so the stem check above
+      // misses an added file declaring an already-declared module (ambiguity). Re-check the
+      // cached specifiers against the added files' declarations directly.
+      const cppAdded = added.filter(
+        (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "cpp",
+      );
+      if (cppAdded.length) {
+        const missDeclaredContainers = await collectCppMissDeclaredContainers(cppAdded, args.concurrency);
+        if (missDeclaredContainers.size) {
+          for (const [file, { mod }] of cachedModules) {
+            if (stale.has(file)) continue;
+            if (cachedModuleSpecifiers(mod).some((specifier) => missDeclaredContainers.has(specifier))) {
+              stale.add(file);
+            }
+          }
+        }
       }
     }
     // The cached modules' own targets are the reverse dependencies.
