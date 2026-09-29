@@ -88,6 +88,8 @@ Disk loads reuse unchanged files and update changed ones. Codegraph validates fi
 
 Module and graph cache identities also include effective TypeScript `baseUrl`/`paths` (including `extends`) and workspace package names, locations, `main`, and `exports`. These inputs are checked even when `resolveNodeModules` is disabled, so configuration-only changes cannot leave cached import targets on the old files. Unchanged resolution inputs still permit reuse.
 
+A cached module is keyed by its own content, but its import targets depend on other files. A warm build extracts a module again when it changed, when a file it imports was deleted or any of its resolved import or re-export targets no longer exists, when an added file can satisfy one of its specifiers, or, for C#, Java, Kotlin, PHP, and C++ modules (whose imports resolve through other files' namespace or package declarations), when a file it depends on changed. With an index manifest, added files are checked by re-resolving the affected specifiers; without one (a `memory` cache, or a disk cache that no manifest-writing build has seen), the cached modules' own import bindings stand in for the edges, and any module with a specifier an added file could satisfy is extracted again.
+
 Existing `.codegraph-cache/` directories migrate automatically to `.codegraph/cache/` on the next run.
 
 Disk search can also store normalized source and chunk text in SQLite. Treat that cache as sensitive derived source data; use `--cache off` to avoid it and stop codegraph before deletion.

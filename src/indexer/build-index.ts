@@ -83,6 +83,7 @@ import {
   recordFileFailure,
   sanitizeManifestEntriesForRoot,
   sanitizeManifestTransientFilesForRoot,
+  loadModuleFromCache,
   tryLoadFromCache,
   tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
@@ -964,6 +965,183 @@ async function buildProjectIndexFromExport(
   return buildProjectIndexWithManifestOptions(projectRoot, opts, helperOpts);
 }
 
+/**
+ * Cached modules that must be extracted again because something they depend on changed. A module
+ * cache entry is keyed by the file's own content, but its import bindings (and anything derived
+ * from other files) were resolved against the project as it was then. A module is extracted again
+ * when it changed, when an import or re-export target no longer exists (or a manifest edge points
+ * at a deleted file), when an added file can satisfy one of its specifiers, or, for languages that
+ * resolve imports from other files' namespace or package declarations, when a file it depends on
+ * (transitively) changed.
+ *
+ * With a manifest, its entries give the previous file set and edges, and added files are checked
+ * by re-resolving the importers' edges. Without one (a memory cache, or a disk cache no
+ * manifest-writing build has seen), the cached modules' own bindings stand in for the edges, and
+ * any cached module with a specifier an added file could satisfy is extracted again.
+ */
+async function collectStaleCachedModules(args: {
+  files: readonly string[];
+  cachedModules: ReadonlyMap<string, { sigInfo: FileSignature; mod: ModuleIndex }>;
+  /** Cache misses: files the cache held at another signature, and files it has not seen. */
+  cacheMisses: { changed: readonly string[]; added: readonly string[] };
+  /** Current signature of every file in the build. */
+  signatures: ReadonlyMap<string, FileSignature>;
+  manifestFiles: Record<string, ManifestFileEntry> | null;
+  projectRoot: string;
+  workspaceConfig: WorkspaceConfig | undefined;
+  graphOptions: GraphBuildOptions;
+  opts: BuildOptions | undefined;
+  loadMatchPathForFile: (file: string) => Promise<MatchPathFn | undefined>;
+  concurrency: number;
+}): Promise<Set<string>> {
+  const { cachedModules, manifestFiles } = args;
+  if (!cachedModules.size) return new Set();
+  const stale = await cachedModulesWithMissingTargets(cachedModules, args.concurrency);
+  const resolvesFromDeclarations = (file: string): boolean =>
+    DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(
+      supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "",
+    );
+  const loadTsconfigPaths = (importer: string) =>
+    loadTsconfigResolutionInputsFor(importer, args.projectRoot, args.opts?.logLevel).then((inputs) => inputs?.paths);
+  if (manifestFiles) {
+    const currentKeys = new Set(args.files.map(fileIdentityKey));
+    const changed = new Set<string>();
+    const added: string[] = [];
+    for (const file of args.files) {
+      const entry = manifestFiles[file];
+      if (!entry) added.push(file);
+      const sigInfo = args.signatures.get(file);
+      if (!sigInfo) continue;
+      const matchesGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
+      if (!entry || !(matchesGitSig || entry.sig === sigInfo.sig)) changed.add(file);
+    }
+    const missingFromBuild = Object.keys(manifestFiles).filter((file) => !currentKeys.has(fileIdentityKey(file)));
+    const existence = await probePathExistence(missingFromBuild, args.concurrency);
+    const deleted = new Set(missingFromBuild.filter((file) => !existence.get(file)));
+    for (const file of [...changed, ...collectDeletedTrackedFileDependents(manifestFiles, deleted)]) stale.add(file);
+    for (const file of collectTrackedFileDependents(manifestFiles, changed)) {
+      if (resolvesFromDeclarations(file)) stale.add(file);
+    }
+    if (added.length) {
+      const stemsByLanguage = new Map<string, ReadonlySet<string>>();
+      const addedStemsForLanguage = (languageId: string): ReadonlySet<string> => {
+        let stems = stemsByLanguage.get(languageId);
+        if (!stems) stemsByLanguage.set(languageId, (stems = addedResolutionStems(added, languageId)));
+        return stems;
+      };
+      const candidates = [...collectSpecifierEdgeCandidates(manifestFiles, true)].filter(
+        (file) => cachedModules.has(file) && !stale.has(file),
+      );
+      const changedResolution = await mapLimit(candidates, args.concurrency, async (candidate) =>
+        specifierResolutionChanged(
+          candidate,
+          manifestFiles[candidate]!,
+          args.projectRoot,
+          args.workspaceConfig,
+          args.graphOptions,
+          args.opts?.languageExtensions,
+          args.loadMatchPathForFile,
+          added,
+          addedStemsForLanguage,
+          loadTsconfigPaths,
+        ),
+      );
+      candidates.forEach((candidate, index) => {
+        if (changedResolution[index]) stale.add(candidate);
+      });
+      for (const importer of collectPythonPackageImporters(manifestFiles, added)) stale.add(importer);
+    }
+  } else {
+    const { added } = args.cacheMisses;
+    if (added.length) {
+      const stemsByLanguage = new Map<string, ReadonlySet<string>>();
+      for (const [file, { mod }] of cachedModules) {
+        if (stale.has(file)) continue;
+        const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "default";
+        let stems = stemsByLanguage.get(languageId);
+        if (!stems) stemsByLanguage.set(languageId, (stems = addedResolutionStems(added, languageId)));
+        const tsconfigPaths = languageId === "ts" || languageId === "tsx" ? await loadTsconfigPaths(file) : undefined;
+        const addedCanSatisfy = cachedModuleSpecifiers(mod).some((specifier) =>
+          externalSpecifierMatchesAddedStem(
+            specifier,
+            languageId,
+            stems,
+            tsconfigPaths ? tsconfigAliasMappedTails(specifier, tsconfigPaths) : [],
+            added,
+          ),
+        );
+        if (addedCanSatisfy) stale.add(file);
+      }
+    }
+    // The cached modules' own targets are the reverse dependencies.
+    const reverseDependencies = new Map<string, Set<string>>();
+    for (const [file, { mod }] of cachedModules) {
+      for (const target of cachedModuleTargets(mod)) {
+        const key = fileIdentityKey(target);
+        let dependents = reverseDependencies.get(key);
+        if (!dependents) reverseDependencies.set(key, (dependents = new Set()));
+        dependents.add(file);
+      }
+    }
+    const queue = args.cacheMisses.changed.map(fileIdentityKey);
+    const enqueued = new Set(queue);
+    for (let head = 0; head < queue.length; head += 1) {
+      for (const dependent of reverseDependencies.get(queue[head]!) ?? []) {
+        if (resolvesFromDeclarations(dependent)) stale.add(dependent);
+        const key = fileIdentityKey(dependent);
+        if (enqueued.has(key)) continue;
+        enqueued.add(key);
+        queue.push(key);
+      }
+    }
+  }
+  return stale;
+}
+
+/**
+ * Languages whose import targets depend on other files' declarations (C# namespaces, JVM
+ * packages, PHP namespaces, C++ named modules), not only on paths, so a content change in a
+ * dependency can move the target.
+ */
+const DECLARATION_RESOLVED_IMPORT_LANGUAGES: ReadonlySet<string> = new Set(["cpp", "csharp", "java", "kotlin", "php"]);
+
+/** Files a cached module resolved: import targets and re-export sources. */
+function cachedModuleTargets(mod: ModuleIndex): string[] {
+  const targets = mod.imports.flatMap((binding) => (typeof binding.resolved === "string" ? [binding.resolved] : []));
+  for (const entry of mod.exports) {
+    if (entry.type === "local" || !entry.moduleSpecifier || entry.fromModule === entry.moduleSpecifier) continue;
+    targets.push(entry.fromModule);
+  }
+  return targets;
+}
+
+/** Specifiers a cached module wrote: import sources and re-export sources. */
+function cachedModuleSpecifiers(mod: ModuleIndex): string[] {
+  const specifiers = mod.imports.map((binding) => binding.from);
+  for (const entry of mod.exports) {
+    if (entry.type !== "local") specifiers.push(entry.moduleSpecifier ?? entry.fromModule);
+  }
+  return specifiers;
+}
+
+/** Cached modules with a resolved import or re-export target that no longer exists. */
+async function cachedModulesWithMissingTargets(
+  cachedModules: ReadonlyMap<string, { mod: ModuleIndex }>,
+  concurrency: number,
+): Promise<Set<string>> {
+  const targetsByFile = new Map<string, string[]>();
+  for (const [file, { mod }] of cachedModules) {
+    const targets = cachedModuleTargets(mod);
+    if (targets.length) targetsByFile.set(file, targets);
+  }
+  const targetExistence = await probePathExistence([...new Set([...targetsByFile.values()].flat())], concurrency);
+  const missing = new Set<string>();
+  for (const [file, targets] of targetsByFile) {
+    if (targets.some((target) => !targetExistence.get(target))) missing.add(file);
+  }
+  return missing;
+}
+
 async function buildIndexFromFileListShared(
   projectRoot: string,
   rawFiles: readonly string[],
@@ -1099,7 +1277,9 @@ async function buildIndexFromFileListShared(
     return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);
   };
   const jsonDependencies = new Map<string, string>();
-  type ModuleCacheProbe = { sigInfo: FileSignature; mod: ModuleIndex | null } | { error: unknown };
+  type ModuleCacheProbe =
+    | { sigInfo: FileSignature; mod: ModuleIndex | null; previouslyCached: boolean }
+    | { error: unknown };
   // Cache lookup determines the work a full build will actually parse. Complete that cheap phase
   // before starting Piscina, so a warm build does not bootstrap workers and partial hits bound
   // the pool to real parse misses rather than the input file list.
@@ -1130,10 +1310,10 @@ async function buildIndexFromFileListShared(
           : sigInfo.cacheSig;
         const canReuseModuleCache =
           cacheEnabled && (!graphOptions.resolveNodeModules || resolverEnvironmentFingerprint !== null);
-        const mod = canReuseModuleCache
-          ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report, moduleCacheAvailable)
-          : null;
-        return [file, { sigInfo, mod }] as const;
+        const loaded = canReuseModuleCache
+          ? loadModuleFromCache(projectRoot, file, cacheSig, opts, report, moduleCacheAvailable)
+          : { mod: null, previouslyCached: false };
+        return [file, { sigInfo, ...loaded }] as const;
       } catch (error) {
         return [file, { error }] as const;
       } finally {
@@ -1145,6 +1325,48 @@ async function buildIndexFromFileListShared(
     const cacheProbeMs = Math.round(performance.now() - cacheProbeStart);
     timings.cacheProbeMs = cacheProbeMs;
     recordBuildTimingStep(timings, { name: "cache-probe", ms: cacheProbeMs });
+  }
+  const tsconfigMatchPathByDirectory = new Map<string, Promise<MatchPathFn | undefined>>();
+  const loadMatchPathForFile = (file: string): Promise<MatchPathFn | undefined> => {
+    const directory = path.dirname(file);
+    let matchPath = tsconfigMatchPathByDirectory.get(directory);
+    if (!matchPath) {
+      matchPath = loadNearestTsconfigFor(file, projectRoot, opts?.logLevel).then((tsconfig) => tsconfig.matchPath);
+      tsconfigMatchPathByDirectory.set(directory, matchPath);
+    }
+    return matchPath;
+  };
+  if (cacheEnabled) {
+    const cachedModules = new Map<string, { sigInfo: FileSignature; mod: ModuleIndex }>();
+    const cacheMissesByState = { changed: [] as string[], added: [] as string[] };
+    for (const [file, probe] of cacheProbes) {
+      if ("error" in probe) continue;
+      if (probe.mod) cachedModules.set(file, { sigInfo: probe.sigInfo, mod: probe.mod });
+      else if (probe.previouslyCached) cacheMissesByState.changed.push(file);
+      else cacheMissesByState.added.push(file);
+    }
+    const staleCachedModules = await collectStaleCachedModules({
+      files: normalizedFiles,
+      cachedModules,
+      cacheMisses: cacheMissesByState,
+      signatures: new Map(
+        Array.from(cacheProbes, ([file, probe]) => ("error" in probe ? null : ([file, probe.sigInfo] as const))).filter(
+          (entry): entry is readonly [string, FileSignature] => entry !== null,
+        ),
+      ),
+      manifestFiles: manifest ? manifestFiles : null,
+      projectRoot,
+      workspaceConfig,
+      graphOptions,
+      opts,
+      loadMatchPathForFile,
+      concurrency: conc,
+    });
+    for (const file of staleCachedModules) {
+      const probe = cacheProbes.get(file);
+      if (probe && !("error" in probe)) cacheProbes.set(file, { ...probe, mod: null });
+      cachedGraphEntries?.delete(file);
+    }
   }
   const cacheMisses = Array.from(cacheProbes, ([file, probe]) =>
     !("error" in probe) && !probe.mod ? file : null,
@@ -1162,16 +1384,6 @@ async function buildIndexFromFileListShared(
       ? await tryLoadPersistedBloomFilters(projectRoot, opts, report)
       : null;
     const parsedMap = new Map<string, ParsedFileContext>();
-    const tsconfigMatchPathByDirectory = new Map<string, Promise<MatchPathFn | undefined>>();
-    const loadMatchPathForFile = (file: string): Promise<MatchPathFn | undefined> => {
-      const directory = path.dirname(file);
-      let matchPath = tsconfigMatchPathByDirectory.get(directory);
-      if (!matchPath) {
-        matchPath = loadNearestTsconfigFor(file, projectRoot, opts?.logLevel).then((tsconfig) => tsconfig.matchPath);
-        tsconfigMatchPathByDirectory.set(directory, matchPath);
-      }
-      return matchPath;
-    };
     const parseStart = performance.now();
     const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
     const onFileEdges = manifestEntries

@@ -582,14 +582,19 @@ export function loadAllCachedModules(
   }
 }
 
-export function tryLoadFromCache(
+/**
+ * A cached module for `file` at `sig`, and whether the cache held an entry for the file at any
+ * signature. A miss with a previous entry is a changed file; a miss without one is a file the cache
+ * has not seen, which a warm build treats as added.
+ */
+export function loadModuleFromCache(
   projectRoot: string,
   file: string,
   sig: string,
   opts?: BuildOptions,
   report?: BuildReport,
   diskCacheAvailable = true,
-): ModuleIndex | null {
+): { mod: ModuleIndex | null; previouslyCached: boolean } {
   const mode = opts?.cache ?? "off";
   const cacheReport = initCacheReport(report, mode);
   const cacheEnabled = mode !== "off";
@@ -600,46 +605,60 @@ export function tryLoadFromCache(
       if (entry.sig === sig) {
         lruMapGet(memoryCache, key);
         if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-        return entry.mod;
+        return { mod: entry.mod, previouslyCached: true };
       }
       memoryCache.delete(key);
     }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
-    return null;
+    return { mod: null, previouslyCached: !!entry };
   }
   if (mode === "disk") {
     if (!diskCacheAvailable) {
       if (cacheEnabled && cacheReport) cacheReport.misses += 1;
-      return null;
+      return { mod: null, previouslyCached: false };
     }
     if (!isNodeSqliteUsable()) {
       const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
       reportMissingNodeSqlite(opts?.logLevel, error);
       if (cacheEnabled && cacheReport) cacheReport.misses += 1;
-      return null;
+      return { mod: null, previouslyCached: false };
     }
+    let previouslyCached = false;
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
       const row = cache.load.get(cacheRelativePath(projectRoot, file)) as
         | { sig: string; version: number; payload: Uint8Array }
         | undefined;
+      previouslyCached = !!row;
       if (row && row.sig === sig && row.version === PARSED_CACHE_VERSION) {
         const parsed: unknown = JSON.parse(brotliDecompressSync(row.payload).toString("utf8"));
         if (isModuleIndex(parsed)) {
           const rehydrated = transformModulePaths(projectRoot, parsed, false);
           if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-          return rehydrated;
+          return { mod: rehydrated, previouslyCached: true };
         }
       }
     } catch (error) {
       if (isNodeSqliteUnavailableError(error)) {
         reportMissingNodeSqlite(opts?.logLevel, error);
-        return null;
+        return { mod: null, previouslyCached };
       }
     }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
+    return { mod: null, previouslyCached };
   }
-  return null;
+  return { mod: null, previouslyCached: false };
+}
+
+export function tryLoadFromCache(
+  projectRoot: string,
+  file: string,
+  sig: string,
+  opts?: BuildOptions,
+  report?: BuildReport,
+  diskCacheAvailable = true,
+): ModuleIndex | null {
+  return loadModuleFromCache(projectRoot, file, sig, opts, report, diskCacheAvailable).mod;
 }
 
 export type PendingModuleCacheWrite = {

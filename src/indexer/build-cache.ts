@@ -21,6 +21,7 @@ export {
   diskModuleCacheExists,
   fileSignature,
   fileSignatureFromSource,
+  loadModuleFromCache,
   pruneDiskModuleCache,
   tryLoadFromCache,
   writeModulesToCache,

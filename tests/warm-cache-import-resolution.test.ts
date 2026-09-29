@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildProjectIndex,
+  buildProjectIndexFromFiles,
   buildProjectIndexIncremental,
   buildSymbolGraphDetailed,
   findReferences,
@@ -872,6 +873,144 @@ describe("warm disk-cache build reacts when a file starts or stops resolving an 
 
       expectNoReprocessedFiles(report, 1);
       expect(edgeTargets(warm, main)).toEqual(edgeTargets(initial, main));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("warm module-cache builds never reuse import bindings resolved against an older file set", () => {
+  /** Import binding targets of a module as comparable strings. */
+  function bindingTargets(index: ProjectIndex, file: string): string[] {
+    const mod = index.byFile.get(fileIdentityKey(file));
+    return (mod?.imports ?? [])
+      .map((binding) =>
+        typeof binding.resolved === "string"
+          ? `file:${normalizePath(binding.resolved)}`
+          : `external:${binding.resolved?.external ?? ""}`,
+      )
+      .sort();
+  }
+
+  for (const cache of ["disk", "memory"] as const) {
+    it(`follows a moved and an added import target like a cold build (${cache} cache)`, async () => {
+      const root = await mkTmpDir(`cg-module-cache-move-${cache}-`);
+      try {
+        const use = path.join(root, "use.ts");
+        const useLines = ['import { x } from "./a";', 'import { z } from "./b";', "export const y = x() + z();", ""];
+        await fsp.writeFile(path.join(root, "a.ts"), "export function x() { return 1; }\n", "utf8");
+        await fsp.writeFile(use, useLines.join("\n"), "utf8");
+        const initial = await buildProjectIndex(root, { cache });
+        expect(bindingTargets(initial, use)).toEqual([
+          "external:./b",
+          `file:${normalizePath(path.join(root, "a.ts"))}`,
+        ]);
+
+        // Move a.ts to a/index.ts and add b.ts; use.ts itself does not change.
+        await fsp.mkdir(path.join(root, "a"));
+        await fsp.rename(path.join(root, "a.ts"), path.join(root, "a", "index.ts"));
+        await fsp.writeFile(path.join(root, "b.ts"), "export function z() { return 3; }\n", "utf8");
+        const warm = await buildProjectIndex(root, { cache });
+        const cold = await buildProjectIndex(root, { cache: "off" });
+        expect(bindingTargets(warm, use)).toEqual(bindingTargets(cold, use));
+        expect(edgeTargets(warm, use)).toEqual(edgeTargets(cold, use));
+        expect(bindingTargets(warm, use)).toEqual([
+          `file:${normalizePath(path.join(root, "a", "index.ts"))}`,
+          `file:${normalizePath(path.join(root, "b.ts"))}`,
+        ]);
+        const gotoWarm = await goToDefinition(warm, { file: use, line: 3, column: columnOf(useLines, 3, "x(") });
+        expect(gotoWarm.status === "ok" ? normalizePath(gotoWarm.definition.file) : null).toBe(
+          normalizePath(path.join(root, "a", "index.ts")),
+        );
+
+        // With nothing changed, the next warm build reuses every cached module.
+        const report: BuildReport = { timings: {} };
+        await buildProjectIndex(root, { cache, report });
+        expect(report.files?.cached).toBe(report.files?.total);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("follows a moved and an added import target with an explicit file list and no manifest (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-move-files-");
+    const cacheDir = await mkTmpDir("cg-module-cache-move-files-cache-");
+    try {
+      const use = path.join(root, "use.ts");
+      const useLines = ['import { x } from "./a";', 'import { z } from "./b";', "export const y = x() + z();", ""];
+      await fsp.writeFile(path.join(root, "a.ts"), "export function x() { return 1; }\n", "utf8");
+      await fsp.writeFile(use, useLines.join("\n"), "utf8");
+      await buildProjectIndexFromFiles(root, [use, path.join(root, "a.ts")], { cache: "disk", cacheDir });
+
+      await fsp.mkdir(path.join(root, "a"));
+      await fsp.rename(path.join(root, "a.ts"), path.join(root, "a", "index.ts"));
+      await fsp.writeFile(path.join(root, "b.ts"), "export function z() { return 3; }\n", "utf8");
+      const files = [use, path.join(root, "a", "index.ts"), path.join(root, "b.ts")];
+      const warm = await buildProjectIndexFromFiles(root, files, { cache: "disk", cacheDir });
+      const cold = await buildProjectIndexFromFiles(root, files, { cache: "off" });
+      expect(bindingTargets(warm, use)).toEqual(bindingTargets(cold, use));
+      expect(bindingTargets(warm, use)).toEqual([
+        `file:${normalizePath(path.join(root, "a", "index.ts"))}`,
+        `file:${normalizePath(path.join(root, "b.ts"))}`,
+      ]);
+
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, files, { cache: "disk", cacheDir, report });
+      expect(report.files?.cached).toBe(report.files?.total);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rebinds a C# using directive when the only declaring file is renamed (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-csharp-rename-");
+    try {
+      const use = path.join(root, "Use.cs");
+      const useLines = [
+        "using P;",
+        "namespace Q;",
+        "public class Use {",
+        "  public object B() => new Other();",
+        "}",
+        "",
+      ];
+      await fsp.writeFile(path.join(root, "Other.cs"), "namespace P;\npublic class Other { }\n", "utf8");
+      await fsp.writeFile(use, useLines.join("\n"), "utf8");
+      await buildProjectIndex(root, DISK_BUILD);
+      await fsp.rename(path.join(root, "Other.cs"), path.join(root, "Moved.cs"));
+      const warm = await buildProjectIndex(root, DISK_BUILD);
+      const result = await goToDefinition(warm, { file: use, line: 4, column: columnOf(useLines, 4, "Other") });
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("Moved.cs");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rebinds a C# using directive when another file's namespace declaration changes (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-csharp-namespace-");
+    try {
+      const use = path.join(root, "Use.cs");
+      const useLines = [
+        "using P;",
+        "namespace Q;",
+        "public class Use {",
+        "  public object B() => new Other();",
+        "}",
+        "",
+      ];
+      await fsp.writeFile(path.join(root, "Aaa.cs"), "namespace P;\npublic class Other { }\n", "utf8");
+      await fsp.mkdir(path.join(root, "sub"));
+      await fsp.writeFile(path.join(root, "sub", "Bbb.cs"), "namespace Z;\npublic class Other { }\n", "utf8");
+      await fsp.writeFile(use, useLines.join("\n"), "utf8");
+      await buildProjectIndex(root, DISK_BUILD);
+      // Use.cs does not change; namespace P moves from Aaa.cs to sub/Bbb.cs in another directory.
+      await fsp.writeFile(path.join(root, "Aaa.cs"), "namespace R;\npublic class Other { }\n", "utf8");
+      await fsp.writeFile(path.join(root, "sub", "Bbb.cs"), "namespace P;\npublic class Other { }\n", "utf8");
+      const warm = await buildProjectIndex(root, DISK_BUILD);
+      const result = await goToDefinition(warm, { file: use, line: 4, column: columnOf(useLines, 4, "Other") });
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("Bbb.cs");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
