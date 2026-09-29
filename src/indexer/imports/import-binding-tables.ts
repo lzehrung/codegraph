@@ -175,6 +175,23 @@ async function applyCsharpStatementOverride(
   const parsed = parseCsharpUsingDirective(normalizedStmt);
   if (!parsed) return false;
 
+  // `using static N.T;` imports the static members and nested types of one type. Bind it to the
+  // file that declares `T` only when exactly one file does; otherwise it stays external.
+  if (parsed.isStatic) {
+    const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, parsed.from, context.file);
+    const typeName = parsed.from.split(".").at(-1)?.trim();
+    if (typeMatch.status === "found" && typeName) {
+      context.pushBinding({
+        kind: "star",
+        from: parsed.from,
+        resolved: typeMatch.file.replace(/\\/g, "/"),
+        typeOnly,
+        staticMembersOf: typeName,
+      });
+      return true;
+    }
+  }
+
   // A target that is itself a declared namespace is a namespace alias, even when the alias is
   // written in alias form. Resolving it here keeps the local name a namespace so member
   // navigation can reach the declaring file instead of treating the last segment as a type.

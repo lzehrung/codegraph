@@ -2412,3 +2412,104 @@ describe("C# inherited member accessibility", () => {
     }
   });
 });
+
+describe("C# using static", () => {
+  it("resolves bare names to the imported type's static members in goto, references, and the graph", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-static-"));
+    try {
+      const utilLines = [
+        "namespace P;",
+        "public static class Util {",
+        "  public static int Go() => 5;",
+        "  public static int Pick(int a) => a;",
+        "  public int Inst() => 1;",
+        "  private static int Hidden() => 0;",
+        "  public static int Ext(this string s) => 1;",
+        "  public const int K = 3;",
+        "  public class Nested { }",
+        "  public static int Same() => 1;",
+        "}",
+        "public static class Util2 {",
+        "  public static int Pick(int a, int b) => a;",
+        "  public static int Same() => 2;",
+        "}",
+        "public static class Other { public static int Go2() => 2; }",
+        "",
+      ];
+      const useLines = [
+        "using static P.Util;",
+        "using static P.Util2;",
+        "namespace Q;",
+        "public class Use {",
+        "  public int Local() => 0;",
+        "  public int A() => Go();",
+        "  public int B() => Pick(1);",
+        "  public int C() => Pick(1, 2);",
+        "  public int D() => K;",
+        "  public object E() => new Nested();",
+        "  public int F() => Inst();",
+        "  public int G() => Hidden();",
+        '  public int H() => Ext("x");',
+        "  public int I() => Go2();",
+        "  public int J() => Same();",
+        "  public int L() => Local();",
+        "}",
+        "",
+      ];
+      const util = normalizePath(path.join(root, "Util.cs"));
+      const use = normalizePath(path.join(root, "Use.cs"));
+      await writeFile(util, utilLines.join("\n"));
+      await writeFile(use, useLines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number, name: string) => {
+        const column = useLines[line - 1]!.lastIndexOf(name) + 1;
+        const result = await goToDefinition(index, { file: use, line, column });
+        if (result.status !== "ok") return null;
+        return `${path.basename(result.definition.file)}:${result.definition.range.start.line}`;
+      };
+      expect(await gotoLine(6, "Go")).toBe("Util.cs:3");
+      expect(await gotoLine(7, "Pick")).toBe("Util.cs:4");
+      expect(await gotoLine(8, "Pick")).toBe("Util.cs:13");
+      expect(await gotoLine(9, "K")).toBe("Util.cs:8");
+      expect(await gotoLine(10, "Nested")).toBe("Util.cs:9");
+      // Instance, private, and extension members are not imported; another type's statics are
+      // not either; two directives that both import Same() are ambiguous; own members win.
+      expect(await gotoLine(11, "Inst")).toBeNull();
+      expect(await gotoLine(12, "Hidden")).toBeNull();
+      expect(await gotoLine(13, "Ext")).toBeNull();
+      expect(await gotoLine(14, "Go2")).toBeNull();
+      expect(await gotoLine(15, "Same")).toBeNull();
+      expect(await gotoLine(16, "Local")).toBe("Use.cs:5");
+
+      const references = await findReferences(index, {
+        file: util,
+        line: 4,
+        column: utilLines[3]!.indexOf("Pick") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected references");
+      expect(
+        references.references
+          .filter((reference) => reference.file === use)
+          .map((reference) => reference.range.start.line),
+      ).toEqual([7]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => (edge.label === "calls" || edge.label === "instantiates") && edge.from.startsWith(use))
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`)
+        .sort();
+      expect(targets).toEqual(["A->Go", "B->Pick", "C->Pick", "E->Nested", "L->Local"]);
+      // Each call reaches the overload its argument count accepts, across both directives.
+      const utilSource = utilLines.join("\n");
+      const pickTargets = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
+        .filter((edge) => graph.nodes.get(edge.to)?.name === "Pick")
+        .map((edge) => Number(edge.to.slice(edge.to.lastIndexOf("::") + 2)))
+        .sort((left, right) => left - right);
+      expect(pickTargets).toEqual([utilSource.indexOf("Pick(int a)"), utilSource.indexOf("Pick(int a, int b)")]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

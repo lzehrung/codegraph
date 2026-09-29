@@ -159,7 +159,7 @@ export function resolveStarImportedDefinition(
   languageId: string,
   cNamespace?: "tag" | "ordinary",
 ): SymbolDef | null {
-  if (imp.kind !== "star") return null;
+  if (imp.kind !== "star" || imp.staticMembersOf) return null;
   const result = resolveImported(index, imp, name, {
     ...(cNamespace ? { cNamespace } : {}),
     // Ruby star expansion already publishes exported constants. Local fallback would
@@ -260,7 +260,7 @@ function rubyLoadOrderDeclaration(
     const mod = index.byFile.get(key);
     if (!mod) return null;
     for (const imp of mod.imports) {
-      if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
+      if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
       const found = walk(imp.resolved);
       if (found) return found;
     }
@@ -427,7 +427,7 @@ export function resolveStarImportedNamespace(
 ): StarImportNamespaceDecision {
   const candidates: StarImportNamespaceCandidate[] = [];
   for (const imp of mod.imports) {
-    if (imp.kind !== "star") continue;
+    if (imp.kind !== "star" || imp.staticMembersOf) continue;
     const result = resolveImported(index, imp, name);
     if (!result || !("namespace" in result)) continue;
     candidates.push({ imp, namespace: result.namespace });

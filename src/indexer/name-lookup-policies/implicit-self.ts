@@ -14,6 +14,7 @@ import {
   isDirectKeywordMemberDeclaration,
 } from "../navigation-goto.js";
 import { csharpLookupName } from "../navigation-local.js";
+import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import type { NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
 import type { GoToResult, SymbolDef } from "../types.js";
@@ -78,7 +79,10 @@ export const csharpLookupPolicy: NameLookupPolicy = {
     );
   },
   // Partial members declared in another file reach this path only as invocation callees.
-  afterCrossModule: (state, resolved) => implicitSelf(state, resolved),
+  // Without a member, `using static` members join the namespace-level answer.
+  afterCrossModule: (state, resolved) =>
+    implicitSelf(state, withCsharpUsingStatic(state.use, state.lookupName, resolved)),
+  preloadFiles: (_index, mod) => csharpUsingStaticFiles(mod),
 };
 
 /**
