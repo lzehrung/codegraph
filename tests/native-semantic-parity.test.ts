@@ -2205,7 +2205,7 @@ nativeDescribe("native semantic coverage", () => {
       {
         name: "C# using namespace declared in several files",
         files: {
-          "csnsfiles/Mix.cs": [
+          "csnsfiles/lib/Mix.cs": [
             "namespace SplitNs;",
             "public class Mix {",
             "  public static int M(int a) { return a; }",
@@ -2227,15 +2227,15 @@ nativeDescribe("native semantic coverage", () => {
             "}",
           ],
         },
-        goto: { file: "csnsfiles/Use.cs", line: 4, token: "M(", expectedFile: "csnsfiles/Mix.cs", expectedLine: 3 },
+        goto: { file: "csnsfiles/Use.cs", line: 4, token: "M(", expectedFile: "csnsfiles/lib/Mix.cs", expectedLine: 3 },
         references: {
-          file: "csnsfiles/Mix.cs",
+          file: "csnsfiles/lib/Mix.cs",
           line: 3,
           token: "M",
-          expectedSites: ["csnsfiles/Mix.cs:3", "csnsfiles/Use.cs:4"],
+          expectedSites: ["csnsfiles/lib/Mix.cs:3", "csnsfiles/Use.cs:4"],
           decoyFile: "csnsfiles/Decoy.cs",
         },
-        edge: { caller: "Call", callerFile: "csnsfiles/Use.cs", expectedTarget: "csnsfiles/Mix.cs::M" },
+        edge: { caller: "Call", callerFile: "csnsfiles/Use.cs", expectedTarget: "csnsfiles/lib/Mix.cs::M" },
       },
       {
         name: "Zig imported function through @import",

@@ -2577,7 +2577,8 @@ describe("Go to Definition", () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-namespace-goto-"));
       try {
         const mixFile = path.join(root, "Mix.cs").replace(/\\/g, "/");
-        const otherFile = path.join(root, "Other.cs").replace(/\\/g, "/");
+        const otherFile = path.join(root, "more", "Other.cs").replace(/\\/g, "/");
+        await fsp.mkdir(path.join(root, "more"), { recursive: true });
         const decoyFile = path.join(root, "Decoy.cs").replace(/\\/g, "/");
         const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
         const useLines = [

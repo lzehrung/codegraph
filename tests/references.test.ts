@@ -6268,7 +6268,8 @@ describe("Find References: implicit compilation-unit peers", () => {
   it("includes uses through a C# using namespace declared in several files and excludes a same-named type in another namespace", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-namespace-refs-"));
     try {
-      const mixFile = path.join(root, "Mix.cs").replace(/\\/g, "/");
+      const mixFile = path.join(root, "lib", "Mix.cs").replace(/\\/g, "/");
+      await fsp.mkdir(path.join(root, "lib"), { recursive: true });
       const otherFile = path.join(root, "Other.cs").replace(/\\/g, "/");
       const decoyFile = path.join(root, "Decoy.cs").replace(/\\/g, "/");
       const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");

@@ -2692,7 +2692,8 @@ describe("C# using namespace across files", () => {
     try {
       const files: Record<string, string[]> = {
         "cs/Mix.cs": ["namespace P;", "public class Mix {", "  public static int M(int a) => a;", "}"],
-        "cs/Other.cs": ["namespace P;", "public class Other { }"],
+        // Another directory: `using P;` must reach every directory that declares P.
+        "cs/more/Other.cs": ["namespace P;", "public class Other { }"],
         "cs/Multi.cs": [
           "namespace P.Inner { public class Deep { } }",
           "namespace R {",
@@ -2711,6 +2712,7 @@ describe("C# using namespace across files", () => {
           "  public object D() => new Only();",
           "  public int E() => P.Mix.M(1);",
           "  public int F() => R.Mix.M(1);",
+          "  public object G() => new P.Other();",
           "}",
         ],
         // Path-like decoys: `using P;` and `using System;` name namespaces, not these files.
@@ -2739,6 +2741,7 @@ describe("C# using namespace across files", () => {
       expect(await gotoTarget(9, "Mix")).toBe("Mix.cs:2");
       expect(await gotoTarget(9, "M(")).toBe("Mix.cs:3");
       expect(await gotoTarget(10, "M(")).toBe("Multi.cs:3");
+      expect(await gotoTarget(11, "Other")).toBe("Other.cs:2");
 
       const useModule = index.byFile.get(fileIdentityKey(use));
       const importTargets = (useModule?.imports ?? []).map((binding) =>
@@ -2765,7 +2768,7 @@ describe("C# using namespace across files", () => {
         .filter((edge) => (edge.label === "calls" || edge.label === "instantiates") && edge.from.startsWith(use))
         .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
         .sort();
-      expect(calls).toEqual(["A->Mix.cs", "B->Other.cs", "E->Mix.cs", "F->Multi.cs"]);
+      expect(calls).toEqual(["A->Mix.cs", "B->Other.cs", "E->Mix.cs", "F->Multi.cs", "G->Other.cs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

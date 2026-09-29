@@ -16,6 +16,7 @@ import {
 import { csharpLookupName, definitionForBinding } from "../navigation-local.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { okGoToResult } from "../navigation-provenance.js";
+import { resolveCsharpQualifiedName } from "../navigation-resolve.js";
 import type { NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
 import type { GoToResult, SymbolDef } from "../types.js";
 
@@ -79,6 +80,18 @@ export const swiftLookupPolicy: NameLookupPolicy = {
   },
 };
 
+/**
+ * A qualified C# type name (`P.Mix`) the directory-scoped lookup missed, resolved through the
+ * file's `using P;` across every directory that declares `P`.
+ */
+function csharpQualifiedThroughUsing({ use, lookupName }: NameLookupState): GoToResult | null {
+  if (!lookupName.includes(".")) return null;
+  const hit = resolveCsharpQualifiedName(use.index, use.mod, lookupName, use.node.startIndex);
+  return hit?.kind === "resolved"
+    ? okGoToResult(use.index, hit.def, { resolution: "import", confidence: "high" })
+    : null;
+}
+
 export const csharpLookupPolicy: NameLookupPolicy = {
   lookupName: (use) => csharpLookupName(use.node, use.parsed.source, use.name),
   fromClosestBinding: ownOverloadDeclaration,
@@ -98,7 +111,10 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   // Partial members declared in another file reach this path only as invocation callees.
   // Without a member, `using static` members join the namespace-level answer.
   afterCrossModule: (state, resolved) =>
-    implicitSelf(state, withCsharpUsingStatic(state.use, state.lookupName, resolved)),
+    implicitSelf(
+      state,
+      withCsharpUsingStatic(state.use, state.lookupName, resolved ?? csharpQualifiedThroughUsing(state)),
+    ),
   preloadFiles: (_index, mod) => csharpUsingStaticFiles(mod),
 };
 

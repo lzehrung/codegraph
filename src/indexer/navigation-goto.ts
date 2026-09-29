@@ -86,6 +86,7 @@ import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./ph
 import {
   cjsRequireValueBinding,
   memberContainerForDefinition,
+  resolveCsharpQualifiedName,
   resolveExport,
   resolveImported,
   resolvePhpExportByImportType,
@@ -696,9 +697,7 @@ export async function resolveMemberAccessDefinition(params: {
         // declares the namespace.
         const dottedRoot = !base && sup.id === "csharp" ? csharpDottedNameRoot(expr) : null;
         if (dottedRoot && !resolveLexicalBinding?.(dottedRoot)) {
-          return resolveExport(index, mod.file, sliceText(expr, source).replace(/\s+/gu, ""), {
-            referenceIndex: expr.startIndex,
-          });
+          return resolveCsharpQualifiedName(index, mod, sliceText(expr, source).replace(/\s+/gu, ""), expr.startIndex);
         }
         if (base?.kind === "namespace") {
           if (!isGoExportedMemberName(sup.id, memberName)) return null;
