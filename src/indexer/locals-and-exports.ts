@@ -400,6 +400,7 @@ function appendJsLikeRegexFallbackExports(
   locals: SymbolDef[],
   exports: ExportEntry[],
   leadingDocstringAt: (index: number) => string | undefined,
+  tree: SyntaxTreeLike | null,
 ): void {
   const maskedSource = maskJsLikeCommentsAndStrings(source);
   JS_FALLBACK_DECLARATION_PATTERN.lastIndex = 0;
@@ -423,6 +424,56 @@ function appendJsLikeRegexFallbackExports(
   const reTopLevelLocal = JS_FALLBACK_TOP_LEVEL_LOCAL_PATTERN;
   const reCjsObjFn = JS_FALLBACK_CJS_OBJECT_FUNCTION_PATTERN;
   const moduleExportsObject = /module\.exports\s*=\s*\{([^}]*)\}/su;
+
+  const capturedCommonJsFunctionAt = (exportedAs: string, propertyIndex: number) => {
+    const root = tree?.rootNode;
+    if (!root || propertyIndex < 0 || propertyIndex >= source.length) return undefined;
+    let node: SyntaxNodeLike | null = root.descendantForIndex(propertyIndex, propertyIndex + 1);
+    while (node && node !== root && node.type !== "assignment_expression" && node.type !== "pair") {
+      node = node.parent;
+    }
+    if (!node || node === root) return undefined;
+    const value = node.childForFieldName(node.type === "pair" ? "value" : "right");
+    if (!value) return undefined;
+    const headerEnd = value.childForFieldName("body")?.startIndex ?? value.endIndex;
+    // A native function export points into this RHS header, not at an earlier same-named local.
+    return exports.find((entry): entry is Extract<ExportEntry, { type: "local" }> => {
+      if (entry.type !== "local" || entry.exportedAs !== exportedAs || entry.target.file !== file) return false;
+      if (entry.target.kind !== SymbolKind.Function) return false;
+      const start = entry.target.range.start.index;
+      return start !== undefined && start >= value.startIndex && start < headerEnd;
+    });
+  };
+
+  const appendCommonJsFunction = (exportedAs: string, propertyIndex: number, moduleValue = false): void => {
+    const docstring = leadingDocstringAt(propertyIndex);
+    const existing = capturedCommonJsFunctionAt(exportedAs, propertyIndex);
+    if (existing) {
+      if (docstring && !existing.target.docstring) existing.target.docstring = docstring;
+      return;
+    }
+    if (moduleValue && exports.some((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value")) {
+      return;
+    }
+    let line = 1;
+    let lineStart = 0;
+    for (let offset = 0; offset < propertyIndex; offset++) {
+      if (source.charCodeAt(offset) === 10) {
+        line++;
+        lineStart = offset + 1;
+      }
+    }
+    const start = { line, column: propertyIndex - lineStart + 1, index: propertyIndex };
+    const end = { ...start, column: start.column + exportedAs.length, index: propertyIndex + exportedAs.length };
+    const target: SymbolDef = { file, localName: exportedAs, kind: SymbolKind.Function, range: { start, end } };
+    if (docstring) target.docstring = docstring;
+    locals.push(target);
+    if (moduleValue) {
+      exports.push({ type: "local", exportedAs, target, mechanism: "cjs-module-value" });
+    } else {
+      exports.push({ type: "local", exportedAs, target });
+    }
+  };
   let match: RegExpExecArray | null;
 
   while ((match = reDecl.exec(maskedSource))) {
@@ -524,44 +575,13 @@ function appendJsLikeRegexFallbackExports(
 
   while ((match = reCjsFn.exec(maskedSource))) {
     const exportedAs = match[1]!;
-    const idx = match.index + match[0].indexOf(exportedAs);
-    const docstring = leadingDocstringAt(idx);
-    let local = locals.find((def) => def.localName === exportedAs);
-    if (!local) {
-      const pos = { line: 1, column: 1, index: idx };
-      local = {
-        file,
-        localName: exportedAs,
-        kind: SymbolKind.Function,
-        range: { start: pos, end: pos },
-      };
-      locals.push(local);
-    }
-    if (docstring && !local.docstring) local.docstring = docstring;
-    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
-      exports.push({ type: "local", exportedAs, target: local });
-    }
+    const propertyIndex = match.index + match[0].indexOf(exportedAs);
+    appendCommonJsFunction(exportedAs, propertyIndex);
   }
 
   while ((match = reCjsModuleFn.exec(maskedSource))) {
-    if (exports.some((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value")) continue;
-    const name = match[1];
-    const rhsStart = match[0].indexOf("=", match[0].indexOf("exports")) + 1;
-    let startIndex = match.index + rhsStart;
-    while (/\s/u.test(maskedSource[startIndex] ?? "")) startIndex++;
-    if (name) startIndex = match.index + match[0].lastIndexOf(name);
-    const before = source.slice(0, startIndex);
-    const pos = { line: before.split("\n").length, column: startIndex - before.lastIndexOf("\n"), index: startIndex };
-    const docstring = leadingDocstringAt(startIndex);
-    const target: SymbolDef = {
-      file,
-      localName: "exports",
-      kind: SymbolKind.Function,
-      range: { start: pos, end: pos },
-    };
-    if (docstring) target.docstring = docstring;
-    locals.push(target);
-    exports.push({ type: "local", exportedAs: "exports", target, mechanism: "cjs-module-value" });
+    const propertyIndex = match.index + match[0].indexOf("exports");
+    appendCommonJsFunction("exports", propertyIndex, true);
   }
 
   let identifierMatch = reCjsModuleIdentifier.exec(maskedSource);
@@ -646,26 +666,12 @@ function appendJsLikeRegexFallbackExports(
   }
 
   const objContent = moduleExportsObjMatch[1]!;
+  const objectStart = moduleExportsObjMatch.index + moduleExportsObjMatch[0].indexOf("{") + 1;
   let objectMatch: RegExpExecArray | null;
   while ((objectMatch = reCjsObjFn.exec(objContent))) {
     const exportedAs = objectMatch[1]!;
-    const idx = moduleExportsObjMatch.index + moduleExportsObjMatch[0].indexOf(exportedAs);
-    const docstring = leadingDocstringAt(idx);
-    let local = locals.find((def) => def.localName === exportedAs);
-    if (!local) {
-      const pos = { line: 1, column: 1, index: idx };
-      local = {
-        file,
-        localName: exportedAs,
-        kind: SymbolKind.Function,
-        range: { start: pos, end: pos },
-      };
-      locals.push(local);
-    }
-    if (docstring && !local.docstring) local.docstring = docstring;
-    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
-      exports.push({ type: "local", exportedAs, target: local });
-    }
+    const propertyIndex = objectStart + objectMatch.index + objectMatch[0].indexOf(exportedAs);
+    appendCommonJsFunction(exportedAs, propertyIndex);
   }
 }
 
@@ -1555,7 +1561,7 @@ export function collectLocalsAndExportsFromSource(
   // source-form probes are too error-prone to risk silently dropping exports.
   const isJsLike = support.id === "ts" || support.id === "tsx" || support.id === "js";
   if (isJsLike) {
-    appendJsLikeRegexFallbackExports(file, source, locals, exports, leadingDocstringAt);
+    appendJsLikeRegexFallbackExports(file, source, locals, exports, leadingDocstringAt, ensureTree());
   }
 
   if (support.id === "python") {

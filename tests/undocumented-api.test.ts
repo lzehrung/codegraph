@@ -299,4 +299,122 @@ describe("undocumented public API", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps a CommonJS member's JSDoc off a same-named constant", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cjs-member-target-"));
+    try {
+      const file = path.join(root, "api.js");
+      const source = [
+        "const annotated = 1;",
+        "/** export docs */",
+        "exports.annotated = () => 2;",
+        "exports.missing = () => 3;",
+      ].join("\n");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const mod = [...index.byFile.values()][0]!;
+      const constant = mod.locals.find((def) => def.localName === "annotated" && def.kind === "variable");
+      const localExports = mod.exports.filter((entry) => entry.type === "local");
+      const exported = localExports.find((entry) => entry.exportedAs === "annotated");
+      expect(constant?.docstring).toBeUndefined();
+      expect(exported?.target.kind).toBe("function");
+      expect(exported?.target.range.start.index).toBeGreaterThan(source.indexOf("exports.annotated"));
+      expect(exported?.target.docstring).toContain("export docs");
+      expect(getUndocumentedApiSurface(index)).toMatchObject({
+        symbols: [{ name: "missing", exportedAs: "missing", kind: "function" }],
+        coverage: { state: "complete" },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves TypeScript CommonJS fallback targets by property", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-cjs-target-"));
+    try {
+      const file = path.join(root, "api.ts");
+      const source = [
+        "const annotated = 1;",
+        "/** export docs */",
+        "exports.annotated = () => 2;",
+        "const missing = 1;",
+        "exports.missing = () => 3;",
+      ].join("\n");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const mod = [...index.byFile.values()][0]!;
+      const constant = mod.locals.find((def) => def.localName === "annotated" && def.kind === "variable");
+      const localExports = mod.exports.filter((entry) => entry.type === "local");
+      const annotated = localExports.find((entry) => entry.exportedAs === "annotated");
+      const missing = localExports.find((entry) => entry.exportedAs === "missing");
+      expect(constant?.docstring).toBeUndefined();
+      expect(annotated?.target.kind).toBe("function");
+      expect(annotated?.target.range.start.index).toBe(source.indexOf("exports.annotated") + "exports.".length);
+      expect(annotated?.target.docstring).toContain("export docs");
+      expect(missing?.target.kind).toBe("function");
+      expect(missing?.target.range.start.index).toBe(source.indexOf("exports.missing") + "exports.".length);
+      expect(getUndocumentedApiSurface(index)).toMatchObject({
+        symbols: [{ name: "missing", exportedAs: "missing", kind: "function" }],
+        coverage: { state: "complete" },
+      });
+      const reduced = await buildProjectIndexFromFiles(root, [file], { native: "off", cache: "off" });
+      expect(getUndocumentedApiSurface(reduced)).toEqual({
+        symbols: [],
+        coverage: { state: "partial", uncheckedFiles: [file.replaceAll("\\", "/")] },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps CommonJS object-member JSDoc on its export", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cjs-object-target-"));
+    try {
+      const file = path.join(root, "api.js");
+      const source = [
+        "const helper = 1;",
+        "module.exports = {",
+        "  /** object docs */",
+        "  helper: function helper() { return 2; },",
+        "};",
+      ].join("\n");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const mod = [...index.byFile.values()][0]!;
+      const constant = mod.locals.find((def) => def.localName === "helper" && def.kind === "variable");
+      const localExports = mod.exports.filter((entry) => entry.type === "local");
+      const exported = localExports.find((entry) => entry.exportedAs === "helper");
+      expect(constant?.docstring).toBeUndefined();
+      expect(exported?.target.kind).toBe("function");
+      expect(exported?.target.range.start.index).toBeGreaterThanOrEqual(source.indexOf("helper: function"));
+      expect(exported?.target.docstring).toContain("object docs");
+      expect(getUndocumentedApiSurface(index)).toEqual({ symbols: [], coverage: { state: "complete" } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves JSDoc on a direct CommonJS module function", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-cjs-module-target-"));
+    try {
+      const file = path.join(root, "api.js");
+      const source = [
+        "const exports = 1;",
+        "/** module docs */",
+        "module.exports = function named() { return 2; };",
+      ].join("\n");
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const mod = [...index.byFile.values()][0]!;
+      const constant = mod.locals.find((def) => def.localName === "exports" && def.kind === "variable");
+      const localExports = mod.exports.filter((entry) => entry.type === "local");
+      const exported = localExports.find((entry) => entry.exportedAs === "exports");
+      expect(constant?.docstring).toBeUndefined();
+      expect(exported?.target.kind).toBe("function");
+      expect(exported?.target.docstring).toContain("module docs");
+      expect(getUndocumentedApiSurface(index)).toEqual({ symbols: [], coverage: { state: "complete" } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

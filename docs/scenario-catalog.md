@@ -5,6 +5,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage. Each entry names 
 ## API quality reports
 
 - `tests/undocumented-api.test.ts`: `apisurface --undocumented` includes verified undocumented exports, excludes documented exports and unchecked files, and reports partial coverage for unsupported languages and reduced mode. Fixtures cover each exporting language, Python triple-quoted docstrings, and JSDoc on a collapsed TypeScript overload. Pretty and JSON output include locations and coverage.
+  CommonJS cases distinguish export targets from same-named locals in JavaScript and TypeScript.
 - `tests/unused-exports.test.ts`: the internal `findUnusedExports` prototype (not exported) reports an unreferenced export only with complete indexed reference coverage. It excludes a used export, a re-exported symbol, package entry points, and a dynamically loaded module.
 
 ## Impact and diff pipeline

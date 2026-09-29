@@ -139,8 +139,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * TypeScript overload signatures.
  * Epoch 73 captures documentation on regex-fallback CommonJS exports and rejects malformed
  * docstring-check markers in persisted modules.
+ * Epoch 74 binds CommonJS fallback function exports to their assignment, not to a
+ * same-named local, and records synthetic definitions at their export properties.
  */
-export const CORE_ALGORITHM_EPOCH = 73;
+export const CORE_ALGORITHM_EPOCH = 74;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
