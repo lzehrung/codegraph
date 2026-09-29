@@ -1039,4 +1039,21 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves a C++ module import from the survivor when one duplicate declaration is deleted (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-dupe-");
+    try {
+      await fsp.writeFile(path.join(root, "alpha.cpp"), "export module shared;\n", "utf8");
+      await fsp.writeFile(path.join(root, "beta.cpp"), "export module shared;\n", "utf8");
+      await fsp.writeFile(path.join(root, "main.cpp"), "import shared;\n", "utf8");
+      await buildProjectIndex(root, DISK_BUILD);
+      await fsp.rm(path.join(root, "beta.cpp"));
+      const warm = await buildProjectIndex(root, DISK_BUILD);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(edgeTargets(warm, path.join(root, "main.cpp"))).toEqual(edgeTargets(cold, path.join(root, "main.cpp")));
+      expect(edgeTargets(warm, path.join(root, "main.cpp")).some((target) => target.endsWith("/alpha.cpp"))).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

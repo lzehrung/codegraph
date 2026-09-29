@@ -987,6 +987,7 @@ async function collectStaleCachedModules(args: {
   /** Current signature of every file in the build. */
   signatures: ReadonlyMap<string, FileSignature>;
   manifestFiles: Record<string, ManifestFileEntry> | null;
+  manifest: IndexManifest | null;
   projectRoot: string;
   workspaceConfig: WorkspaceConfig | undefined;
   graphOptions: GraphBuildOptions;
@@ -1004,6 +1005,16 @@ async function collectStaleCachedModules(args: {
   const loadTsconfigPaths = (importer: string) =>
     loadTsconfigResolutionInputsFor(importer, args.projectRoot, args.opts?.logLevel).then((inputs) => inputs?.paths);
   if (manifestFiles) {
+    // A deleted declaration can resolve an importer that was external before (two C++ modules
+    // named `shared`, one deleted), so declared-container sets are compared with the manifest, as
+    // the incremental builder does.
+    const declaredContainerConsumers = collectDeclaredContainerConsumers(
+      manifestFiles,
+      declaredContainerNamesChanged(
+        manifestDeclaredContainerIndex(args.manifest),
+        declaredContainerIndexFromModules([...cachedModules.values()].map((cached) => cached.mod)),
+      ),
+    );
     const currentKeys = new Set(args.files.map(fileIdentityKey));
     // A cache-signature mismatch proves a change even when a non-strict manifest signature
     // (mtime:size) matches, so misses count as changed too.
@@ -1020,7 +1031,13 @@ async function collectStaleCachedModules(args: {
     const missingFromBuild = Object.keys(manifestFiles).filter((file) => !currentKeys.has(fileIdentityKey(file)));
     const existence = await probePathExistence(missingFromBuild, args.concurrency);
     const deleted = new Set(missingFromBuild.filter((file) => !existence.get(file)));
-    for (const file of [...changed, ...collectDeletedTrackedFileDependents(manifestFiles, deleted)]) stale.add(file);
+    for (const file of [
+      ...changed,
+      ...collectDeletedTrackedFileDependents(manifestFiles, deleted),
+      ...declaredContainerConsumers,
+    ]) {
+      stale.add(file);
+    }
     for (const file of collectTrackedFileDependents(manifestFiles, changed)) {
       if (resolvesFromDeclarations(file)) stale.add(file);
     }
@@ -1363,6 +1380,7 @@ async function buildIndexFromFileListShared(
         ),
       ),
       manifestFiles: manifest ? manifestFiles : null,
+      manifest,
       projectRoot,
       workspaceConfig,
       graphOptions,
