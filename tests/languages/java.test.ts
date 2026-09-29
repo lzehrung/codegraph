@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -719,6 +719,45 @@ describe("Java implicit-receiver precedence", () => {
         .filter((edge) => edge.label === "calls")
         .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
       expect(targets).toEqual(["GrandBase.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats same-arity inherited overloads as ambiguous and skips a private middle declaration", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-overload-ambiguity-"));
+    try {
+      await mkdir(path.join(root, "a"), { recursive: true });
+      await mkdir(path.join(root, "b"), { recursive: true });
+      const files: Record<string, string> = {
+        "a/GrandBase.java": "package a;\nclass GrandBase { int hit(int a) { return a; } }\n",
+        "a/Base.java": "package a;\nclass Base extends GrandBase { int hit(String s) { return 0; } }\n",
+        "a/Util.java": "package a;\nclass Util { static int hit(int a) { return -a; } }\n",
+        "a/Use.java":
+          "package a;\n\nimport static a.Util.hit;\n\nclass Derived extends Base {\n  int one() { return hit(1); }\n}\n",
+        "b/GrandBase.java": "package b;\nclass GrandBase { int go() { return 1; } }\n",
+        "b/Base.java": "package b;\nclass Base extends GrandBase { private int go() { return 2; } }\n",
+        "b/Util.java": "package b;\nclass Util { static int go() { return 3; } }\n",
+        "b/Use.java":
+          "package b;\n\nimport static b.Util.go;\n\nclass Derived extends Base {\n  int use() { return go(); }\n}\n",
+      };
+      for (const [relative, text] of Object.entries(files)) await writeFile(path.join(root, relative), text);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoAt = async (relative: string, name: string) => {
+        const file = normalizePath(path.join(root, relative));
+        const line = files[relative]!.split("\n")[5]!;
+        const result = await goToDefinition(index, { file, line: 6, column: line.lastIndexOf(name) + 1 });
+        return result.status === "ok" ? relative.split("/")[0] + "/" + path.basename(result.definition.file) : null;
+      };
+      // hit(String) and hit(int) both take one argument: no type ranking, so no target and no
+      // fallback to the static import. A private Base.go() is not inherited, so GrandBase.go() wins.
+      expect(await gotoAt("a/Use.java", "hit")).toBeNull();
+      expect(await gotoAt("b/Use.java", "go")).toBe("b/GrandBase.java");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`);
+      expect(calls).toEqual(["use->GrandBase.java"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

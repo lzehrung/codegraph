@@ -1487,6 +1487,9 @@ async function baseRefsFromContainer(
 
 const HIERARCHY_OVERLOAD_LANGUAGES: ReadonlySet<string> = new Set(["java", "kotlin", "csharp"]);
 
+/** What a hierarchy member walk saw, for callers that must not fall back past it. */
+type KeywordMemberReport = { named: boolean; ambiguous: boolean };
+
 async function resolveKeywordReceiverMember(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -1496,6 +1499,7 @@ async function resolveKeywordReceiverMember(
   startAtAncestor: boolean,
   knownArgumentCount?: number,
   explicitClassDef?: SymbolDef,
+  report?: KeywordMemberReport,
 ): Promise<SymbolDef | undefined> {
   const current = explicitClassDef
     ? await keywordClassRefFromDef(index, explicitClassDef)
@@ -1516,7 +1520,12 @@ async function resolveKeywordReceiverMember(
   // Java, Kotlin, and C# overload across the hierarchy: when no member at one level accepts the
   // call, a base level may. C++ and Swift hide a base name behind any same-named member.
   const spansHierarchy = knownArgumentCount !== undefined && HIERARCHY_OVERLOAD_LANGUAGES.has(current.context.sup.id);
+  const jvm = current.context.sup.id === "java" || current.context.sup.id === "kotlin";
   let lenient: SymbolDef | undefined;
+  // Accepted overloads across levels; a deeper one with a shallower one's parameter types is
+  // overridden by it.
+  const accepted: SymbolDef[] = [];
+  const acceptedSignatures = new Set<string>();
   const visited = new Set<string>([
     keywordContainerKey(current.file, current.container),
     ...level.map((candidate) => keywordContainerKey(candidate.file, candidate.container)),
@@ -1573,14 +1582,28 @@ async function resolveKeywordReceiverMember(
         );
       }
     }
-    const uniqueMatches = uniqueReceiverMemberCandidates(matches);
+    let uniqueMatches = uniqueReceiverMemberCandidates(matches);
+    // A private member of a base class is not inherited: it neither answers nor stops the walk.
+    if (jvm && uniqueMatches.length) {
+      const inherited: SymbolDef[] = [];
+      for (const candidate of uniqueMatches) {
+        if (!(await isUninheritedPrivateMember(index, mod, node, candidate))) inherited.push(candidate);
+      }
+      uniqueMatches = inherited;
+    }
+    if (uniqueMatches.length && report) report.named = true;
     if (uniqueMatches.length) {
       const allowUniqueArityMismatch = !startAtAncestor && depth === 0;
       if (!spansHierarchy) {
         return await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, allowUniqueArityMismatch);
       }
-      const accepted = await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, false);
-      if (accepted) return accepted;
+      for (const candidate of uniqueMatches) {
+        if ((await receiverMemberAcceptsArgumentCount(index, candidate, knownArgumentCount!)) === false) continue;
+        const signature = await memberParameterTypesKey(index, candidate);
+        if (signature !== null && acceptedSignatures.has(signature)) continue;
+        if (signature !== null) acceptedSignatures.add(signature);
+        accepted.push(candidate);
+      }
       // Navigation still names the only incompatible candidate when no ancestor accepts the call.
       if (allowUniqueArityMismatch && !lenient) {
         lenient = await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, true);
@@ -1605,7 +1628,36 @@ async function resolveKeywordReceiverMember(
     }
     level = next;
   }
-  return lenient;
+  if (!spansHierarchy) return undefined;
+  // Without type ranking, two surviving overloads of one arity are ambiguous.
+  if (accepted.length > 1) {
+    if (report) report.ambiguous = true;
+    return undefined;
+  }
+  return accepted[0] ?? lenient;
+}
+
+/** Parameter type text of a Java, Kotlin, or C# method, for override matching; null when unknown. */
+async function memberParameterTypesKey(index: ProjectIndex, def: SymbolDef): Promise<string | null> {
+  const context = await ensureParsedContext(
+    def.file,
+    index.parsed?.get(fileIdentityKey(def.file)),
+    index.languageExtensions,
+  ).catch(() => null);
+  const start = def.range.start.index;
+  if (!context || start === undefined) return null;
+  const declaration = context.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start).parent;
+  const parameters =
+    declaration?.childForFieldName("parameters") ??
+    declaration?.namedChildren.find((child) => child.type === "function_value_parameters");
+  if (!parameters) return null;
+  const types: string[] = [];
+  for (const parameter of parameters.namedChildren) {
+    const type = parameter.childForFieldName("type") ?? parameter.namedChildren.at(-1);
+    if (!type) return null;
+    types.push(type.text.replace(/\s+/g, ""));
+  }
+  return types.join(",");
 }
 /**
  * Validate an unqualified member use against its actual lexical owner, including shared
@@ -1637,16 +1689,27 @@ export async function resolveImplicitSelfMember(
   const staticScoped = languageId === "csharp" || jvm;
   const memberScope: ReceiverMemberScope = staticScoped && nodeInStaticMemberContext(node, source) ? "static" : "any";
   const argumentCount = getCallArgumentCount({ languageId, source, call }) ?? undefined;
-  const lookup = async (scope: ReceiverMemberScope): Promise<SymbolDef | undefined> => {
-    const member = await resolveKeywordReceiverMember(index, mod, node, name, scope, false, argumentCount);
-    // A private member of a base class is not inherited, so it cannot shadow anything.
-    return member && jvm && (await isUninheritedPrivateMember(index, mod, node, member)) ? undefined : member;
-  };
-  const member = await lookup(memberScope);
-  if (member || memberScope !== "static" || !jvm) return member;
+  const report = { named: false, ambiguous: false };
+  const member = await resolveKeywordReceiverMember(
+    index,
+    mod,
+    node,
+    name,
+    memberScope,
+    false,
+    argumentCount,
+    undefined,
+    report,
+  );
+  if (member) return member;
+  // Two inherited overloads of one arity are ambiguous without type ranking; in Java and C# any
+  // inherited method of that name hides imports even when none accepts the call.
+  if (report.ambiguous || (report.named && (languageId === "java" || languageId === "csharp"))) return null;
+  if (memberScope !== "static" || !jvm) return undefined;
   // In a static context an inherited instance method still shadows a static import or package
   // function; the call is invalid, so it has no target.
-  return (await lookup("any")) ? null : undefined;
+  const instance = await resolveKeywordReceiverMember(index, mod, node, name, "any", false, argumentCount);
+  return instance ? null : undefined;
 }
 
 /** Whether a Java or Kotlin member is `private` and declared outside the class enclosing the use. */

@@ -220,7 +220,8 @@ export async function settleNameResolution(
         return null;
       }
       if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
-      if (member === null) return { status: "not_found", reason: "No matching static member definition" };
+      // A member hides the name but none is a unique, reachable target (static context, ambiguity).
+      if (member === null) return { status: "not_found", reason: "No unique member through the implicit receiver" };
     } else {
       const recovered = await options.recoverIncludedStar?.(request.lookupName, request.cNamespace);
       if (recovered) return recovered;
