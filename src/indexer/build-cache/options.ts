@@ -129,8 +129,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * namespace-member rules, Rust standard expression-macro arguments and named JavaScript function
  * expressions produce call edges, TypeScript annotated, optional, and union-typed receivers
  * resolve, and C++ out-of-line member bodies let owner members hide file-scope names.
+ * Epoch 69 moves bare-name lookup into one shared core used by navigation and the detailed graph,
+ * and makes Java and Kotlin bare calls prefer inherited members over package peers and imports.
  */
-export const CORE_ALGORITHM_EPOCH = 68;
+export const CORE_ALGORITHM_EPOCH = 69;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

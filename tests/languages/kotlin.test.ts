@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
+import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { finalizeLanguageSpecificImports } from "../../src/indexer/imports/language-specific.js";
 import { parseKotlinImportStatement } from "../../src/languages/import-statement-parsers.js";
 import type { ImportBinding } from "../../src/indexer/types.js";
@@ -580,6 +581,152 @@ describe("Kotlin same-package sibling classes", () => {
       expect(decoyReferences.status).toBe("ok");
       if (decoyReferences.status !== "ok") throw new Error("Expected decoy package references");
       expect(decoyReferences.references.some((reference) => normalizePath(reference.file) === usePath)).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin implicit-receiver precedence", () => {
+  it("lets inherited, non-private members beat same-package and wildcard-imported functions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-inherited-member-"));
+    try {
+      await fsp.mkdir(path.join(root, "p"), { recursive: true });
+      await fsp.mkdir(path.join(root, "q"), { recursive: true });
+      const peer = normalizePath(path.join(root, "p", "Peer.kt"));
+      await fsp.writeFile(peer, "package p\n\nfun hit(): Int = 1\n\nfun hidden(): Int = 3\n");
+      await fsp.writeFile(path.join(root, "q", "Other.kt"), "package q\n\nfun hit(): Int = 2\n");
+      await fsp.writeFile(
+        path.join(root, "p", "Base.kt"),
+        "package p\n\nopen class Base {\n    fun hit(): Int = 4\n    private fun hidden(): Int = 5\n}\n",
+      );
+      const lines = [
+        "package p",
+        "",
+        "import q.*",
+        "",
+        "class Derived : Base() {",
+        "    fun viaBase(): Int = hit()",
+        "    fun privateBase(): Int = hidden()",
+        "}",
+        "",
+        "fun run(): Int = hit()",
+        "",
+      ];
+      const use = normalizePath(path.join(root, "p", "Use.kt"));
+      await fsp.writeFile(use, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number, name: string) => {
+        const result = await goToDefinition(index, { file: use, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
+        return result.status === "ok"
+          ? `${path.basename(result.definition.file)}:${result.definition.range.start.line}`
+          : null;
+      };
+      // Inside Derived the inherited member wins; a private base member is not inherited; at top
+      // level the package function beats `q.*`.
+      expect(await gotoLine(6, "hit")).toBe("Base.kt:4");
+      expect(await gotoLine(7, "hidden")).toBe("Peer.kt:5");
+      expect(await gotoLine(10, "hit")).toBe("Peer.kt:3");
+      const peerRefs = await findReferences(index, { file: peer, line: 3, column: 5 });
+      if (peerRefs.status !== "ok") throw new Error("Expected package-function references");
+      expect(
+        peerRefs.references
+          .filter((reference) => normalizePath(reference.file) === use)
+          .map((reference) => reference.range.start.line),
+      ).toEqual([10]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
+        .sort();
+      expect(calls).toEqual(["privateBase->Peer.kt", "run->Peer.kt", "viaBase->Base.kt"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers an inherited member over a same-file top-level function, but not over a method-local one", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-same-file-top-level-"));
+    try {
+      const lines = [
+        "package k",
+        "",
+        "open class Base {",
+        "    fun hit(): Int = 4",
+        "}",
+        "",
+        "fun hit(): Int = 1",
+        "",
+        "class Derived : Base() {",
+        "    fun use(): Int = hit()",
+        "    fun local(): Int {",
+        "        fun hit(): Int = 9",
+        "        return hit()",
+        "    }",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "Use.kt"));
+      await fsp.writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number) => {
+        const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf("hit") + 1 });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      expect(await gotoLine(10)).toBe(4);
+      expect(await gotoLine(13)).toBe(12);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map(
+          (edge) =>
+            `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}@${edge.to.slice(edge.to.lastIndexOf("::") + 2)}`,
+        )
+        .sort();
+      const baseHit = lines.slice(0, 3).join("\n").length + 1 + lines[3]!.indexOf("hit");
+      const localHit = lines.slice(0, 11).join("\n").length + 1 + lines[11]!.indexOf("hit");
+      expect(calls).toEqual([`local->hit@${localHit}`, `use->hit@${baseHit}`]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps spread and same-count calls ambiguous across a fixed-arity and a vararg inherited overload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-spread-overloads-"));
+    try {
+      const lines = [
+        "package k",
+        "",
+        "open class GrandBase {",
+        "    fun hit(vararg xs: Int): Int = 1",
+        "}",
+        "",
+        "open class Base : GrandBase() {",
+        "    fun hit(a: Int, b: Int): Int = 2",
+        "}",
+        "",
+        "class Derived : Base() {",
+        "    fun spread(values: IntArray): Int = hit(*values)",
+        "    fun two(): Int = hit(1, 2)",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "Use.kt"));
+      await fsp.writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number) => {
+        const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf("hit") + 1 });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      // A spread's length is unknown, and two arguments fit both hit(Int, Int) and hit(vararg Int):
+      // without argument types neither overload is proven, so neither call has a target.
+      expect(await gotoLine(12)).toBeNull();
+      expect(await gotoLine(13)).toBeNull();
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.site?.range.start.line}`);
+      expect(calls).toEqual([]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

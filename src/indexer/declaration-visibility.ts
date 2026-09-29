@@ -271,6 +271,35 @@ export function isExportedDeclaration(languageId: string, node: SyntaxNodeLike):
 }
 
 /**
+ * Whether `node`'s declaration is `private` (and not C# `private protected`). A private member is
+ * not accessible to a subclass, so it cannot be reached through the implicit `this` there.
+ */
+const CSHARP_ACCESS_MODIFIERS = new Set(["public", "protected", "internal", "private"]);
+const CSHARP_MEMBER_CONTAINERS = new Set([
+  "class_declaration",
+  "struct_declaration",
+  "record_declaration",
+  "interface_declaration",
+]);
+const CSHARP_PRIVATE_BY_DEFAULT_CONTAINERS = new Set(["class_declaration", "struct_declaration", "record_declaration"]);
+
+export function isPrivateDeclaration(languageId: string, node: SyntaxNodeLike): boolean {
+  const row = VISIBILITY_BY_LANGUAGE[languageId];
+  const declaration = row ? findVisibilityDeclaration(node, row) : null;
+  if (!row || !declaration) return false;
+  const tokens = modifierTokens(collectModifierTexts(declaration, row));
+  // C# `private protected` stays accessible to derived classes in the same assembly.
+  if (tokens.includes("private")) return !tokens.includes("protected");
+  // A C# class, struct, or record member without an access modifier is private; interface
+  // members are public.
+  return (
+    languageId === "csharp" &&
+    !tokens.some((token) => CSHARP_ACCESS_MODIFIERS.has(token)) &&
+    CSHARP_PRIVATE_BY_DEFAULT_CONTAINERS.has(enclosingAncestor(declaration, CSHARP_MEMBER_CONTAINERS)?.type ?? "")
+  );
+}
+
+/**
  * Go export visibility is spelled in the identifier itself (Go spec, "Exported identifiers"):
  * a name is visible outside its declaring package only when its first Unicode letter is
  * upper case. Unlike every `DeclarationVisibilityRow` above, this must never filter a Go

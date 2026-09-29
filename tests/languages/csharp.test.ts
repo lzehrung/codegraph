@@ -2230,3 +2230,185 @@ describe("C# partial class members across files", () => {
     }
   });
 });
+
+describe("C# bare member calls", () => {
+  it("records no call edge for a bare member call its only candidate cannot accept", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-bare-member-arity-"));
+    try {
+      const lines = [
+        "class C {",
+        "  int Pick(int x) => x;",
+        "  int Use() => Pick();",
+        "  int Ok() => Pick(1);",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "C.cs"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // Navigation keeps the only candidate so callers of a changed signature stay visible.
+      const goto = await goToDefinition(index, { file, line: 3, column: lines[2]!.indexOf("Pick") + 1 });
+      expect(goto.status).toBe("ok");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`);
+      expect(calls).toEqual(["Ok->Pick"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("CSharp bare member overloads", () => {
+  it("chooses the overload a receiverless call's argument count accepts in goto and the graph", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-bare-overload-"));
+    try {
+      const lines = [
+        "class C {",
+        "  int Pick(int x) => x;",
+        "  int Pick(int x, int y) => x + y;",
+        "  int Use() => Pick(1);",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "a.cs"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const callLine = lines.findIndex((line) => line.includes("(1)")) + 1;
+      const goto = await goToDefinition(index, {
+        file,
+        line: callLine,
+        column: lines[callLine - 1]!.lastIndexOf("(1)") - 3,
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(2);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => edge.to.slice(edge.to.lastIndexOf("::") + 2));
+      const expectedStart = lines.slice(0, 2 - 1).join("\n").length + 1 + lines[2 - 1]!.search(/(pick|Pick)\(/);
+      expect(targets).toEqual([String(expectedStart)]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# inherited overloads", () => {
+  it("binds to an applicable base overload when the derived type's same-named method does not apply", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-base-overload-"));
+    try {
+      const lines = [
+        "public class Derived : Base {",
+        "  public int Hit(string s) => 0;",
+        "  public int Use() => Hit(1, 2);",
+        "  public int One() => Hit(1);",
+        "}",
+        "",
+      ];
+      await writeFile(path.join(root, "Base.cs"), "public class Base {\n  public int Hit(int a, int b) => a + b;\n}\n");
+      const file = normalizePath(path.join(root, "Derived.cs"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // C# candidates are the applicable methods first (spec, method invocations); only then are
+      // base methods of an applicable derived method removed. Hit(string) cannot take two
+      // arguments, so Hit(1, 2) binds to Base.Hit(int, int).
+      const goto = await goToDefinition(index, { file, line: 3, column: lines[2]!.indexOf("Hit") + 1 });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(path.basename(goto.definition.file)).toBe("Base.cs");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
+        .sort();
+      expect(calls).toEqual(["One->Derived.cs", "Use->Base.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# inherited member accessibility", () => {
+  it("skips private base methods, including ones without an access modifier, but keeps private protected", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-private-base-"));
+    try {
+      const lines = [
+        "namespace P;",
+        "public class GrandBase {",
+        "  public int Hit() => 3;",
+        "  public int Go() => 4;",
+        "}",
+        "public class Base : GrandBase {",
+        "  private int Hit() => 1;",
+        "  int Go() => 2;",
+        "  private protected int Pp() => 5;",
+        "}",
+        "public class Derived : Base {",
+        "  public int A() => Hit();",
+        "  public int B() => Go();",
+        "  public int C() => Pp();",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "a.cs"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number, name: string) => {
+        const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      // Base.Hit and Base.Go are private (Go by default), so the walk continues to GrandBase.
+      expect(await gotoLine(12, "Hit")).toBe(3);
+      expect(await gotoLine(13, "Go")).toBe(4);
+      expect(await gotoLine(14, "Pp")).toBe(9);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map(
+          (edge) =>
+            `${graph.nodes.get(edge.from)?.name}->${
+              lines
+                .slice(0, 20)
+                .join("\n")
+                .slice(0, Number(edge.to.slice(edge.to.lastIndexOf("::") + 2)))
+                .split("\n").length
+            }`,
+        )
+        .sort();
+      expect(calls).toEqual(["A->3", "B->4", "C->9"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat same-spelled types from two namespaces in one file as an override", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-override-"));
+    try {
+      const lines = [
+        "namespace A {",
+        "  public class Foo {}",
+        "  public class Base { public int Hit(Foo f) => 1; }",
+        "}",
+        "namespace B {",
+        "  public class Foo {}",
+        "  public class Derived : A.Base {",
+        "    public int Hit(Foo f) => 2;",
+        "    public int Use(Foo f) => Hit(f);",
+        "  }",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "a.cs"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // Base.Hit(A.Foo) and Derived.Hit(B.Foo) are distinct overloads of one arity.
+      const goto = await goToDefinition(index, { file, line: 9, column: lines[8]!.lastIndexOf("Hit") + 1 });
+      expect(goto.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(graph.edges.filter((edge) => edge.label === "calls")).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
+import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { normalizePath } from "../../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
@@ -569,6 +570,364 @@ describe("Java constructor and spread-parameter declaration names", () => {
       // The `variable_declarator` under `spread_parameter` (`int... rest`) is a declared
       // name, so impact classification treats edits to it as a definition change.
       expect(parsed.sup.isDeclarationName(declarator!)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Java implicit-receiver precedence", () => {
+  it("lets inherited, non-private methods shadow a static import across goto, references, and calls", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-inherited-member-"));
+    try {
+      const lines = [
+        "package j;",
+        "",
+        "import static j.Util.hit;",
+        "import static j.Util.hidden;",
+        "",
+        "class Derived extends Base {",
+        "  int viaBase() { return hit(); }",
+        "  static int fromStatic() { return hit(); }",
+        "  int privateBase() { return hidden(); }",
+        "}",
+        "",
+        "class Plain {",
+        "  int imported() { return hit(); }",
+        "}",
+        "",
+      ];
+      const use = normalizePath(path.join(root, "Use.java"));
+      const base = normalizePath(path.join(root, "Base.java"));
+      const util = normalizePath(path.join(root, "Util.java"));
+      await writeFile(use, lines.join("\n"));
+      await writeFile(
+        base,
+        "package j;\n\nclass Base {\n  int hit() { return 4; }\n  private int hidden() { return 5; }\n}\n",
+      );
+      await writeFile(
+        util,
+        "package j;\n\nclass Util {\n  static int hit() { return 1; }\n  static int hidden() { return 2; }\n}\n",
+      );
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number, name: string) => {
+        const result = await goToDefinition(index, { file: use, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
+        return result.status === "ok"
+          ? `${path.basename(result.definition.file)}:${result.definition.range.start.line}`
+          : null;
+      };
+      // The inherited method shadows the static import inside the subclass, even in a static
+      // method, where the call is then invalid. A private base method is not inherited.
+      expect(await gotoLine(7, "hit")).toBe("Base.java:4");
+      expect(await gotoLine(8, "hit")).toBeNull();
+      expect(await gotoLine(9, "hidden")).toBe("Util.java:5");
+      expect(await gotoLine(13, "hit")).toBe("Util.java:4");
+      const lineOf = async (file: string, line: number, column: number) => {
+        const result = await findReferences(index, { file, line, column });
+        if (result.status !== "ok") throw new Error("Expected references");
+        return result.references
+          .filter((reference) => normalizePath(reference.file) === use)
+          .map((reference) => reference.range.start.line)
+          .sort((a, b) => a - b);
+      };
+      expect(await lineOf(base, 4, "  int hit".length - 2)).toEqual([7]);
+      expect(await lineOf(util, 4, "  static int hit".length - 2)).toEqual([3, 13]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
+        .sort();
+      expect(calls).toEqual(["imported->Util.java", "privateBase->Util.java", "viaBase->Base.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("applies static scope and overload arity to receiverless calls of the class's own methods", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-own-member-"));
+    try {
+      const lines = [
+        "package j;",
+        "",
+        "class C {",
+        "  void hit() {}",
+        "  int pick(int a) { return a; }",
+        "  int pick(int a, int b) { return a + b; }",
+        "  static void run() { hit(); }",
+        "  int two() { return pick(1, 2); }",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "C.java"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoLine = async (line: number, name: string) => {
+        const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
+        return result.status === "ok" ? result.definition.range.start.line : null;
+      };
+      // An instance method is not callable without `this` from a static method; overloads are
+      // chosen by argument count.
+      expect(await gotoLine(7, "hit")).toBeNull();
+      expect(await gotoLine(8, "pick")).toBe(6);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map(
+          (edge) =>
+            `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}:${edge.site?.range.start.line}`,
+        );
+      expect(calls).toEqual(["two->pick:8"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds an arity-compatible overload in a deeper ancestor before a static import", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-deep-overload-"));
+    try {
+      await writeFile(
+        path.join(root, "GrandBase.java"),
+        "package j;\nclass GrandBase { int hit(int a) { return a; } }\n",
+      );
+      await writeFile(
+        path.join(root, "Base.java"),
+        "package j;\nclass Base extends GrandBase { int hit() { return 0; } }\n",
+      );
+      await writeFile(
+        path.join(root, "Util.java"),
+        "package j;\nclass Util { static int hit(int a) { return -a; } }\n",
+      );
+      const lines = [
+        "package j;",
+        "",
+        "import static j.Util.hit;",
+        "",
+        "class Derived extends Base {",
+        "  int one() { return hit(1); }",
+        "}",
+        "",
+      ];
+      const use = normalizePath(path.join(root, "Use.java"));
+      await writeFile(use, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // Base.hit() cannot take one argument; overloads span the hierarchy, so GrandBase.hit(int) wins.
+      const goto = await goToDefinition(index, { file: use, line: 6, column: lines[5]!.indexOf("hit") + 1 });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(path.basename(goto.definition.file)).toBe("GrandBase.java");
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(targets).toEqual(["GrandBase.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats same-arity inherited overloads as ambiguous and skips a private middle declaration", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-overload-ambiguity-"));
+    try {
+      await mkdir(path.join(root, "a"), { recursive: true });
+      await mkdir(path.join(root, "b"), { recursive: true });
+      const files: Record<string, string> = {
+        "a/GrandBase.java": "package a;\nclass GrandBase { int hit(int a) { return a; } }\n",
+        "a/Base.java": "package a;\nclass Base extends GrandBase { int hit(String s) { return 0; } }\n",
+        "a/Util.java": "package a;\nclass Util { static int hit(int a) { return -a; } }\n",
+        "a/Use.java":
+          "package a;\n\nimport static a.Util.hit;\n\nclass Derived extends Base {\n  int one() { return hit(1); }\n}\n",
+        "b/GrandBase.java": "package b;\nclass GrandBase { int go() { return 1; } }\n",
+        "b/Base.java": "package b;\nclass Base extends GrandBase { private int go() { return 2; } }\n",
+        "b/Util.java": "package b;\nclass Util { static int go() { return 3; } }\n",
+        "b/Use.java":
+          "package b;\n\nimport static b.Util.go;\n\nclass Derived extends Base {\n  int use() { return go(); }\n}\n",
+      };
+      for (const [relative, text] of Object.entries(files)) await writeFile(path.join(root, relative), text);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const gotoAt = async (relative: string, name: string) => {
+        const file = normalizePath(path.join(root, relative));
+        const line = files[relative]!.split("\n")[5]!;
+        const result = await goToDefinition(index, { file, line: 6, column: line.lastIndexOf(name) + 1 });
+        return result.status === "ok" ? relative.split("/")[0] + "/" + path.basename(result.definition.file) : null;
+      };
+      // hit(String) and hit(int) both take one argument: no type ranking, so no target and no
+      // fallback to the static import. A private Base.go() is not inherited, so GrandBase.go() wins.
+      expect(await gotoAt("a/Use.java", "hit")).toBeNull();
+      expect(await gotoAt("b/Use.java", "go")).toBe("b/GrandBase.java");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`);
+      expect(calls).toEqual(["use->GrandBase.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps same-signature defaults from unrelated interfaces ambiguous but collapses a proven override", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-interface-ambiguity-"));
+    try {
+      const files: Record<string, string> = {
+        "Left.java": "package j;\ninterface Left { default int hit(int a) { return 1; } }\n",
+        "Right.java": "package j;\ninterface Right { default int hit(int a) { return 2; } }\n",
+        "Base.java": "package j;\nclass Base { int go(int a) { return 1; } }\n",
+        "Mid.java": "package j;\nclass Mid extends Base { int go(int a) { return 2; } }\n",
+        "Use.java":
+          "package j;\nclass Both implements Left, Right {\n  int use() { return hit(1); }\n}\nclass Leaf extends Mid {\n  int use() { return go(1); }\n}\n",
+      };
+      for (const [relative, text] of Object.entries(files)) await writeFile(path.join(root, relative), text);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = normalizePath(path.join(root, "Use.java"));
+      const useLines = files["Use.java"]!.split("\n");
+      const gotoAt = async (line: number, name: string) => {
+        const result = await goToDefinition(index, {
+          file: use,
+          line,
+          column: useLines[line - 1]!.lastIndexOf(name) + 1,
+        });
+        return result.status === "ok" ? path.basename(result.definition.file) : null;
+      };
+      // Left.hit and Right.hit are unrelated; Mid.go overrides Base.go on the walked path.
+      expect(await gotoAt(3, "hit")).toBeNull();
+      expect(await gotoAt(6, "go")).toBe("Mid.java");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(calls).toEqual(["Mid.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a static import hidden in a static method when inherited instance overloads are ambiguous or inapplicable", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-static-hidden-"));
+    try {
+      const files: Record<string, string> = {
+        "Base.java":
+          "package j;\nclass Base { int hit(int a) { return a; } int hit(String s) { return 0; } int go(int a, int b) { return a; } }\n",
+        "Util.java":
+          "package j;\nclass Util { static int hit(int a) { return -a; } static int go(int a) { return a; } }\n",
+        "Use.java":
+          "package j;\n\nimport static j.Util.hit;\nimport static j.Util.go;\n\nclass Derived extends Base {\n  static int s1() { return hit(1); }\n  static int s2() { return go(1); }\n}\n",
+      };
+      for (const [relative, text] of Object.entries(files)) await writeFile(path.join(root, relative), text);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = normalizePath(path.join(root, "Use.java"));
+      const useLines = files["Use.java"]!.split("\n");
+      for (const [line, name] of [
+        [7, "hit"],
+        [8, "go"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: use,
+          line,
+          column: useLines[line - 1]!.lastIndexOf(name) + 1,
+        });
+        expect(result.status).toBe("not_found");
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(graph.edges.filter((edge) => edge.label === "calls")).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat same-spelled parameter types from different imports as an override", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-override-identity-"));
+    try {
+      await mkdir(path.join(root, "a"), { recursive: true });
+      await mkdir(path.join(root, "b"), { recursive: true });
+      await writeFile(path.join(root, "a", "Foo.java"), "package j.a;\npublic class Foo {}\n");
+      await writeFile(path.join(root, "b", "Foo.java"), "package j.b;\npublic class Foo {}\n");
+      await writeFile(
+        path.join(root, "Base.java"),
+        "package j;\nimport j.a.Foo;\nclass Base { int hit(Foo f) { return 1; } }\n",
+      );
+      const lines = [
+        "package j;",
+        "import j.b.Foo;",
+        "class Derived extends Base {",
+        "  int hit(Foo f) { return 2; }",
+        "  int use(Foo f) { return hit(f); }",
+        "}",
+        "",
+      ];
+      const derived = normalizePath(path.join(root, "Derived.java"));
+      await writeFile(derived, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // Base.hit(j.a.Foo) and Derived.hit(j.b.Foo) are distinct overloads of one arity.
+      const goto = await goToDefinition(index, { file: derived, line: 5, column: lines[4]!.lastIndexOf("hit") + 1 });
+      expect(goto.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(graph.edges.filter((edge) => edge.label === "calls")).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a fixed-arity and a varargs inherited overload of one count ambiguous", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-varargs-ambiguity-"));
+    try {
+      await writeFile(
+        path.join(root, "GrandBase.java"),
+        "package j;\nclass GrandBase { int hit(int... xs) { return 1; } }\n",
+      );
+      await writeFile(
+        path.join(root, "Base.java"),
+        "package j;\nclass Base extends GrandBase { int hit(String s) { return 2; } }\n",
+      );
+      const lines = ["package j;", "class Derived extends Base {", "  int one() { return hit(1); }", "}", ""];
+      const use = normalizePath(path.join(root, "Derived.java"));
+      await writeFile(use, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // hit(1) calls hit(int...) in Java, but only argument types prove it: no confident target.
+      const goto = await goToDefinition(index, { file: use, line: 3, column: lines[2]!.indexOf("hit") + 1 });
+      expect(goto.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(graph.edges.filter((edge) => edge.label === "calls")).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("calls a method past a same-named local variable, and keeps generic parameters from proving an override", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-namespaces-generics-"));
+    try {
+      const cLines = [
+        "package j;",
+        "class C {",
+        "  int hit() { return 1; }",
+        "  int use() { int hit = 0; return hit() + hit; }",
+        "}",
+        "",
+      ];
+      const c = normalizePath(path.join(root, "C.java"));
+      await writeFile(c, cLines.join("\n"));
+      await writeFile(path.join(root, "Base.java"), "package j;\nclass Base<T> { int go(T t) { return 1; } }\n");
+      const dLines = [
+        "package j;",
+        "class Derived<T> extends Base<String> {",
+        "  int go(T t) { return 2; }",
+        "  int use(T t) { return go(t); }",
+        "}",
+        "",
+      ];
+      const derived = normalizePath(path.join(root, "Derived.java"));
+      await writeFile(derived, dLines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      // Java methods and variables are separate namespaces.
+      const call = await goToDefinition(index, { file: c, line: 4, column: cLines[3]!.indexOf("hit()") + 1 });
+      expect(call.status === "ok" ? call.definition.range.start.line : null).toBe(3);
+      const variable = await goToDefinition(index, { file: c, line: 4, column: cLines[3]!.lastIndexOf("hit") + 1 });
+      expect(variable.status === "ok" ? variable.definition.range.start.line : null).toBe(4);
+      // Derived.go(T) and Base<String>.go(T) are distinct after substitution: no confident target.
+      const generic = await goToDefinition(index, { file: derived, line: 4, column: dLines[3]!.indexOf("go(") + 1 });
+      expect(generic.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${path.basename(graph.nodes.get(edge.from)?.file ?? "")}:${graph.nodes.get(edge.to)?.name}`);
+      expect(calls).toEqual(["C.java:hit"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

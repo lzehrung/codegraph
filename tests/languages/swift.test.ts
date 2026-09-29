@@ -634,3 +634,69 @@ describe("Swift same-module and shared-owner visibility", () => {
     }
   });
 });
+
+describe("Swift inherited methods named like types", () => {
+  it("calls an inherited method that shares a module type's name instead of constructing the type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-method-named-like-type-"));
+    try {
+      const lines = [
+        "class Foo {}",
+        "class Base {",
+        "  func Foo() -> Int { return 1 }",
+        "}",
+        "class Derived: Base {",
+        "  func use() -> Int { return Foo() }",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "a.swift"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const goto = await goToDefinition(index, { file, line: 6, column: lines[5]!.indexOf("Foo") + 1 });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
+      const graph = await buildSymbolGraphDetailed(index);
+      const edges = graph.edges
+        .filter((edge) => edge.label === "calls" || edge.label === "instantiates")
+        .map((edge) => `${edge.label} ${graph.nodes.get(edge.to)?.kind}`);
+      expect(edges).toEqual(["calls function"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift bare member overloads", () => {
+  it("chooses the overload a receiverless call's argument count accepts in goto and the graph", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-bare-overload-"));
+    try {
+      const lines = [
+        "class Box {",
+        "  func pick(_ a: Int) -> Int { return a }",
+        "  func pick(_ a: Int, _ b: Int) -> Int { return a + b }",
+        "  func use() -> Int { return pick(1) }",
+        "}",
+        "",
+      ];
+      const file = normalizePath(path.join(root, "a.swift"));
+      await writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const callLine = lines.findIndex((line) => line.includes("(1)")) + 1;
+      const goto = await goToDefinition(index, {
+        file,
+        line: callLine,
+        column: lines[callLine - 1]!.lastIndexOf("(1)") - 3,
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(2);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => edge.to.slice(edge.to.lastIndexOf("::") + 2));
+      const expectedStart = lines.slice(0, 2 - 1).join("\n").length + 1 + lines[2 - 1]!.search(/(pick|Pick)\(/);
+      expect(targets).toEqual([String(expectedStart)]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

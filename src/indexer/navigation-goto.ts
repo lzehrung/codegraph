@@ -66,6 +66,7 @@ import {
 import { getCompilationUnitPeers } from "./compilation-units.js";
 import {
   isExportedDeclaration,
+  isPrivateDeclaration,
   isGoExportedMemberName,
   isSwiftCrossFileHiddenSharedOwnerMember,
 } from "./declaration-visibility.js";
@@ -1484,6 +1485,11 @@ async function baseRefsFromContainer(
   return refs;
 }
 
+const HIERARCHY_OVERLOAD_LANGUAGES: ReadonlySet<string> = new Set(["java", "kotlin", "csharp"]);
+
+/** What a hierarchy member walk saw, for callers that must not fall back past it. */
+type KeywordMemberReport = { named: boolean; ambiguous: boolean };
+
 async function resolveKeywordReceiverMember(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -1493,6 +1499,7 @@ async function resolveKeywordReceiverMember(
   startAtAncestor: boolean,
   knownArgumentCount?: number,
   explicitClassDef?: SymbolDef,
+  report?: KeywordMemberReport,
 ): Promise<SymbolDef | undefined> {
   const current = explicitClassDef
     ? await keywordClassRefFromDef(index, explicitClassDef)
@@ -1510,13 +1517,33 @@ async function resolveKeywordReceiverMember(
       )
     : [current];
   if (level.length === 0) return undefined;
+  // Java, Kotlin, and C# overload across the hierarchy: when no member at one level accepts the
+  // call, a base level may. C++ and Swift hide a base name behind any same-named member.
+  // An unknown count (a Kotlin spread) keeps every non-overridden overload as a candidate.
+  const spansHierarchy = HIERARCHY_OVERLOAD_LANGUAGES.has(current.context.sup.id);
+  // Java, Kotlin, and C# base members that are private are not accessible from a subclass.
+  const filtersPrivateBases = HIERARCHY_OVERLOAD_LANGUAGES.has(current.context.sup.id);
+  let lenient: SymbolDef | undefined;
+  // Accepted overloads across levels. A deeper one is overridden only by an accepted method with
+  // the same parameter types in a class proven to derive from its owner on the walked path;
+  // unrelated owners with one signature (two interfaces) stay separate and ambiguous.
+  const accepted: Array<{ def: SymbolDef; owner: string }> = [];
+  const memberKey = (def: SymbolDef): string => `${fileIdentityKey(def.file)}:${def.range.start.index}`;
+  const ownerOf = new Map<string, string>();
+  const subclassesOf = new Map<string, Set<string>>();
+  const recordOwner = (from: number, owner: string): void => {
+    for (let at = from; at < matches.length; at += 1) ownerOf.set(memberKey(matches[at]!), owner);
+  };
+  let matches: SymbolDef[] = [];
   const visited = new Set<string>([
     keywordContainerKey(current.file, current.container),
     ...level.map((candidate) => keywordContainerKey(candidate.file, candidate.container)),
   ]);
   for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
-    const matches: SymbolDef[] = [];
+    matches = [];
     for (const candidate of level) {
+      const ownerKey = keywordContainerKey(candidate.file, candidate.container);
+      const before = matches.length;
       const memberPredicate =
         memberScope === "any"
           ? undefined
@@ -1531,9 +1558,12 @@ async function resolveKeywordReceiverMember(
         memberPredicate,
         matches,
       );
+      recordOwner(before, ownerKey);
     }
     for (const candidate of level) {
       if (candidate.context.sup.id !== "csharp" && candidate.context.sup.id !== "swift") continue;
+      const ownerKey = keywordContainerKey(candidate.file, candidate.container);
+      const before = matches.length;
       const sharedContainers = await resolveSharedOwnerContainers({
         index,
         ownerFile: candidate.file,
@@ -1565,14 +1595,52 @@ async function resolveKeywordReceiverMember(
           matches,
         );
       }
+      // Partial parts of one type share its identity.
+      recordOwner(before, ownerKey);
     }
-    const uniqueMatches = uniqueReceiverMemberCandidates(matches);
+    let uniqueMatches = uniqueReceiverMemberCandidates(matches);
+    // A private member of a base class is not accessible: it neither answers nor stops the walk.
+    // The first level of a `this` lookup is the class itself, including C# partial parts.
+    if (filtersPrivateBases && (startAtAncestor || depth > 0) && uniqueMatches.length) {
+      const inherited: SymbolDef[] = [];
+      for (const candidate of uniqueMatches) {
+        if (!(await isUninheritedPrivateMember(index, mod, node, candidate))) inherited.push(candidate);
+      }
+      uniqueMatches = inherited;
+    }
+    if (uniqueMatches.length && report) report.named = true;
     if (uniqueMatches.length) {
       const allowUniqueArityMismatch = !startAtAncestor && depth === 0;
-      return await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, allowUniqueArityMismatch);
+      if (!spansHierarchy) {
+        return await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, allowUniqueArityMismatch);
+      }
+      for (const candidate of uniqueMatches) {
+        if (
+          knownArgumentCount !== undefined &&
+          (await receiverMemberAcceptsArgumentCount(index, candidate, knownArgumentCount)) === false
+        ) {
+          continue;
+        }
+        const owner = ownerOf.get(memberKey(candidate)) ?? "";
+        const subclasses = subclassesOf.get(owner);
+        let overridden = false;
+        for (const entry of accepted) {
+          if (subclasses?.has(entry.owner) && (await sameParameterTypes(index, entry.def, candidate))) {
+            overridden = true;
+            break;
+          }
+        }
+        if (!overridden) accepted.push({ def: candidate, owner });
+      }
+      // Navigation still names the only incompatible candidate when no ancestor accepts the call.
+      if (allowUniqueArityMismatch && !lenient) {
+        lenient = await selectReceiverMemberCandidates(index, uniqueMatches, knownArgumentCount, true);
+      }
     }
     const next: KeywordClassRef[] = [];
     for (const candidate of level) {
+      const childKey = keywordContainerKey(candidate.file, candidate.container);
+      const childSubclasses = subclassesOf.get(childKey);
       for (const parent of await baseRefsFromContainer(
         index,
         candidate.module,
@@ -1583,6 +1651,11 @@ async function resolveKeywordReceiverMember(
         candidate.context.tree,
       )) {
         const key = keywordContainerKey(parent.file, parent.container);
+        // Every class on a path to this ancestor derives from it, including through a diamond.
+        const subclasses = subclassesOf.get(key) ?? new Set<string>();
+        subclasses.add(childKey);
+        for (const subclass of childSubclasses ?? []) subclasses.add(subclass);
+        subclassesOf.set(key, subclasses);
         if (visited.has(key)) continue;
         visited.add(key);
         next.push(parent);
@@ -1590,14 +1663,223 @@ async function resolveKeywordReceiverMember(
     }
     level = next;
   }
-  return undefined;
+  if (!spansHierarchy) return undefined;
+  // Without type ranking, two surviving overloads are ambiguous, including a fixed-arity and a
+  // variable-arity one: `hit(String)` and `hit(int...)` both take one argument, and only argument
+  // types decide.
+  if (accepted.length > 1) {
+    if (report) report.ambiguous = true;
+    return undefined;
+  }
+  return accepted[0]?.def ?? lenient;
+}
+
+/** The parameter list of a Java, Kotlin, or C# method declaration. */
+async function memberParameterList(index: ProjectIndex, def: SymbolDef): Promise<SyntaxNodeLike | null> {
+  const context = await ensureParsedContext(
+    def.file,
+    index.parsed?.get(fileIdentityKey(def.file)),
+    index.languageExtensions,
+  ).catch(() => null);
+  const start = def.range.start.index;
+  if (!context || start === undefined) return null;
+  const declaration = context.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start).parent;
+  return (
+    declaration?.childForFieldName("parameters") ??
+    declaration?.namedChildren.find((child) => child.type === "function_value_parameters") ??
+    null
+  );
+}
+
+/** Parameter type texts of a Java, Kotlin, or C# method; null when a type cannot be read. */
+async function memberParameterTypes(index: ProjectIndex, def: SymbolDef): Promise<string[] | null> {
+  const parameters = await memberParameterList(index, def);
+  if (!parameters) return null;
+  const types: string[] = [];
+  for (const parameter of parameters.namedChildren) {
+    const type = parameter.childForFieldName("type") ?? parameter.namedChildren.at(-1);
+    if (!type) return null;
+    types.push(type.text.replace(/\s+/g, ""));
+  }
+  return types;
+}
+
+/** The import that binds a type name in a module, as text; empty when no import binds it. */
+function importedTypeSource(module: ModuleIndex, name: string): string {
+  for (const imp of module.imports) {
+    if (imp.kind !== "named" || imp.local !== name) continue;
+    const target = typeof imp.resolved === "string" ? imp.resolved : (imp.resolved?.external ?? "");
+    return `${target}:${imp.imported}`;
+  }
+  return "";
+}
+
+/** Type parameter names declared by a method or any type enclosing it. */
+async function typeParameterNamesAround(index: ProjectIndex, def: SymbolDef): Promise<Set<string>> {
+  const names = new Set<string>();
+  const context = await ensureParsedContext(
+    def.file,
+    index.parsed?.get(fileIdentityKey(def.file)),
+    index.languageExtensions,
+  ).catch(() => null);
+  const start = def.range.start.index;
+  if (!context || start === undefined) return names;
+  let current: SyntaxNodeLike | null = context.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start);
+  for (; current; current = current.parent) {
+    const parameters =
+      current.childForFieldName("type_parameters") ??
+      current.namedChildren.find((child) => child.type === "type_parameters" || child.type === "type_parameter_list");
+    if (!parameters) continue;
+    for (const parameter of parameters.namedChildren) {
+      const name =
+        parameter.childForFieldName("name") ??
+        parameter.namedChildren.find((child) => /identifier/u.test(child.type)) ??
+        (/identifier/u.test(parameter.type) ? parameter : null);
+      if (name) names.add(name.text);
+    }
+  }
+  return names;
+}
+
+/** Built-in parameter types whose spelling names one type in every file. */
+const BUILTIN_PARAMETER_TYPES: Readonly<Record<string, ReadonlySet<string>>> = {
+  java: new Set([
+    "int",
+    "long",
+    "short",
+    "byte",
+    "char",
+    "boolean",
+    "float",
+    "double",
+    "String",
+    "Object",
+    "Integer",
+    "Long",
+    "Boolean",
+    "Double",
+    "Float",
+    "Short",
+    "Byte",
+    "Character",
+  ]),
+  kotlin: new Set(["Int", "Long", "Short", "Byte", "Char", "Boolean", "Float", "Double", "String", "Any", "Unit"]),
+  csharp: new Set([
+    "int",
+    "long",
+    "short",
+    "byte",
+    "char",
+    "bool",
+    "float",
+    "double",
+    "decimal",
+    "string",
+    "object",
+    "uint",
+    "ulong",
+    "ushort",
+    "sbyte",
+  ]),
+};
+
+/**
+ * Whether two methods take the same parameter types, so the one in a derived class overrides the
+ * other. Equal spelling is proof only within one file or for built-in types; elsewhere each
+ * spelling must resolve to the same declaration from its own file.
+ */
+async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, right: SymbolDef): Promise<boolean> {
+  // A type parameter (`T`) names a different type in each declaration after substitution, so
+  // equal spelling proves nothing.
+  const [leftGenerics, rightGenerics] = await Promise.all([
+    typeParameterNamesAround(index, left),
+    typeParameterNamesAround(index, right),
+  ]);
+  const [leftTypes, rightTypes] = await Promise.all([
+    memberParameterTypes(index, left),
+    memberParameterTypes(index, right),
+  ]);
+  if (!leftTypes || !rightTypes || leftTypes.length !== rightTypes.length) return false;
+  const sameFile = fileIdentityKey(left.file) === fileIdentityKey(right.file);
+  const leftContext = await ensureParsedContext(
+    left.file,
+    index.parsed?.get(fileIdentityKey(left.file)),
+    index.languageExtensions,
+  ).catch(() => null);
+  if (!leftContext) return false;
+  for (let at = 0; at < leftTypes.length; at += 1) {
+    const text = leftTypes[at]!;
+    if (text !== rightTypes[at]) return false;
+    const typeNames = text.match(/[\p{L}_][\p{L}\p{N}_]*/gu) ?? [];
+    if (typeNames.some((typeName) => leftGenerics.has(typeName) || rightGenerics.has(typeName))) return false;
+    // One Java or Kotlin file declares one package; a C# file can open several namespaces, so the
+    // same spelling there still needs resolution.
+    if (sameFile && leftContext.sup.id !== "csharp") continue;
+    const base =
+      text
+        .replace(/<.*$/su, "")
+        .replace(/[?\[\].]+$/u, "")
+        .split(".")
+        .pop() ?? text;
+    if (BUILTIN_PARAMETER_TYPES[leftContext.sup.id]?.has(base)) continue;
+    const rightContext = await ensureParsedContext(
+      right.file,
+      index.parsed?.get(fileIdentityKey(right.file)),
+      index.languageExtensions,
+    ).catch(() => null);
+    const leftModule = index.byFile.get(fileIdentityKey(left.file));
+    const rightModule = index.byFile.get(fileIdentityKey(right.file));
+    if (!rightContext || !leftModule || !rightModule) return false;
+    // Resolve at each declaration so a C# spelling reads its own namespace region.
+    const leftType = resolveNamedDefinition(
+      index,
+      leftModule,
+      left.file,
+      leftContext.sup,
+      base,
+      undefined,
+      left.range.start.index,
+    );
+    const rightType = resolveNamedDefinition(
+      index,
+      rightModule,
+      right.file,
+      rightContext.sup,
+      base,
+      undefined,
+      right.range.start.index,
+    );
+    if (leftType?.status !== "ok" && rightType?.status !== "ok") {
+      // Neither names a project type: both files must name it through the same import (or none).
+      if (importedTypeSource(leftModule, base) !== importedTypeSource(rightModule, base)) return false;
+      continue;
+    }
+    if (leftType?.status !== "ok" || rightType?.status !== "ok") return false;
+    if (
+      fileIdentityKey(leftType.definition.file) !== fileIdentityKey(rightType.definition.file) ||
+      leftType.definition.range.start.index !== rightType.definition.range.start.index
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 /**
  * Validate an unqualified member use against its actual lexical owner, including shared
- * owner parts in other files. Swift checks every bare name; C# checks only invocation
- * callees, matching the detailed graph's implicit-self call candidates. A C# static
- * context reaches only static members.
+ * owner parts in other files and inherited members. Swift checks every bare name; C#, Java, and
+ * Kotlin check only bare call callees. A static context reaches only static members.
  */
+/** The callee of a receiverless call (`f()`), which may name a member through the implicit `this`. */
+export function implicitSelfCallee(languageId: string, call: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (languageId === "csharp") return call.type === "invocation_expression" ? call.childForFieldName("function") : null;
+  if (languageId === "java") {
+    if (call.type !== "method_invocation" || call.childForFieldName("object")) return null;
+    return call.childForFieldName("name");
+  }
+  if (languageId === "kotlin") return call.type === "call_expression" ? (call.namedChildren[0] ?? null) : null;
+  return null;
+}
+
 export async function resolveImplicitSelfMember(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -1605,25 +1887,70 @@ export async function resolveImplicitSelfMember(
   name: string,
   source: string,
   languageId: string,
-): Promise<SymbolDef | undefined> {
+): Promise<SymbolDef | null | undefined> {
   const call = node.parent ?? node;
-  if (languageId === "csharp") {
-    const callee = call.type === "invocation_expression" ? call.childForFieldName("function") : null;
-    if (!callee || callee.startIndex !== node.startIndex || callee.endIndex !== node.endIndex) return undefined;
-  } else if (languageId !== "swift") {
-    return undefined;
-  }
-  const memberScope: ReceiverMemberScope =
-    languageId === "csharp" && nodeInStaticMemberContext(node, source) ? "static" : "any";
-  return resolveKeywordReceiverMember(
+  if (languageId !== "swift" && implicitSelfCallee(languageId, call)?.id !== node.id) return undefined;
+  const jvm = languageId === "java" || languageId === "kotlin";
+  const staticScoped = languageId === "csharp" || jvm;
+  const memberScope: ReceiverMemberScope = staticScoped && nodeInStaticMemberContext(node, source) ? "static" : "any";
+  const argumentCount = getCallArgumentCount({ languageId, source, call }) ?? undefined;
+  const report = { named: false, ambiguous: false };
+  const member = await resolveKeywordReceiverMember(
     index,
     mod,
     node,
     name,
     memberScope,
     false,
-    getCallArgumentCount({ languageId, source, call }) ?? undefined,
+    argumentCount,
+    undefined,
+    report,
   );
+  if (member) return member;
+  // Two inherited overloads of one arity are ambiguous without type ranking; in Java and C# any
+  // inherited method of that name hides imports even when none accepts the call.
+  if (report.ambiguous || (report.named && (languageId === "java" || languageId === "csharp"))) return null;
+  if (memberScope !== "static" || !jvm) return undefined;
+  // In a static context an inherited instance method still shadows a static import or package
+  // function; the call is invalid, so it has no target.
+  const instanceReport = { named: false, ambiguous: false };
+  const instance = await resolveKeywordReceiverMember(
+    index,
+    mod,
+    node,
+    name,
+    "any",
+    false,
+    argumentCount,
+    undefined,
+    instanceReport,
+  );
+  // Any inherited instance method of that name hides the import, even when none applies.
+  return instance || instanceReport.named ? null : undefined;
+}
+
+/** Whether a Java or Kotlin member is `private` and declared outside the class enclosing the use. */
+async function isUninheritedPrivateMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  use: SyntaxNodeLike,
+  member: SymbolDef,
+): Promise<boolean> {
+  const container = findEnclosingClassContainer(use);
+  const start = member.range.start.index ?? -1;
+  const ownMember =
+    !!container &&
+    fileIdentityKey(member.file) === fileIdentityKey(mod.file) &&
+    start >= container.startIndex &&
+    start < container.endIndex;
+  if (ownMember) return false;
+  const parsed = await ensureParsedContext(
+    member.file,
+    index.parsed?.get(fileIdentityKey(member.file)),
+    index.languageExtensions,
+  ).catch(() => null);
+  const nameNode = parsed?.tree.rootNode.descendantForIndex(start, member.range.end.index ?? start);
+  return !!parsed && !!nameNode && isPrivateDeclaration(parsed.sup.id, nameNode);
 }
 
 /**
@@ -2156,6 +2483,22 @@ async function getCallableArityForDef(index: ProjectIndex, def: SymbolDef): Prom
     current = current.parent;
   }
   return undefined;
+}
+
+/**
+ * Whether a member found for a receiverless call can accept that call's argument count. Unknown
+ * counts and unknown arities accept.
+ */
+export async function memberAcceptsCallAt(
+  index: ProjectIndex,
+  member: SymbolDef,
+  callee: SyntaxNodeLike,
+  source: string,
+  languageId: string,
+): Promise<boolean> {
+  const argumentCount = getCallArgumentCount({ languageId, source, call: callee.parent ?? callee });
+  if (argumentCount === null) return true;
+  return (await receiverMemberAcceptsArgumentCount(index, member, argumentCount)) !== false;
 }
 
 async function receiverMemberAcceptsArgumentCount(

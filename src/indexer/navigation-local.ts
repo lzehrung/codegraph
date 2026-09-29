@@ -356,8 +356,21 @@ export function findClosestBinding(
   source?: string,
   tree?: SyntaxTreeLike,
 ): SymbolDef | null {
-  let binding = findClosestScopeBinding(scopeIndex, bindingName, currentNode, support);
-  if (!binding?.def) return null;
+  const binding = findClosestScopeBinding(scopeIndex, bindingName, currentNode, support);
+  return binding ? definitionForBinding(binding, file, currentNode, support, source, tree) : null;
+}
+
+/** The definition a scope binding names at a use, choosing C++ and TypeScript overloads by arity. */
+export function definitionForBinding(
+  closest: Binding,
+  file: FileId,
+  currentNode: SyntaxNodeLike,
+  support: LanguageSupport,
+  source?: string,
+  tree?: SyntaxTreeLike,
+): SymbolDef | null {
+  let binding = closest;
+  if (!binding.def) return null;
   if (support.id === "cpp" && binding.kind === "function" && source) {
     const collisions = binding.sameScopeFunctionBindings ?? [binding];
     if (collisions.length > 1 || cppBindingCallableShape(binding)) {

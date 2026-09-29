@@ -62,6 +62,11 @@
 codegraph is not a compiler. Every supported language must give correct results for ordinary code,
 using syntax and facts proven from source. It must not emulate the full language specification.
 
+- Bare-name lookup order lives in one place: the skeleton in `src/indexer/name-resolution.ts` and
+  per-language hooks in `src/indexer/name-lookup-policies/`. Never add a lookup rule to one consumer
+  (go-to-definition, references, or the detailed graph); add it to the language policy so every
+  consumer gives the same answer.
+
 - Required in every language that claims a capability:
   - Resolve common forms: imports and aliases; same-package, module, or namespace peers; members
     through proven receivers (`this`/`self`/`super`, a named type, a constructed local); and

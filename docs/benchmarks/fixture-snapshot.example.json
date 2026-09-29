@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-28T19:06:44.848Z",
+  "generatedAt": "2026-09-29T04:11:19.129Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 556,
+  "numTotalTests": 575,
   "numFailedTests": 0,
   "languages": [
     {
@@ -44,8 +44,8 @@
       "files": [
         "tests/languages/csharp.test.ts"
       ],
-      "tests": 52,
-      "passed": 52,
+      "tests": 57,
+      "passed": 57,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -110,8 +110,8 @@
       "files": [
         "tests/languages/java.test.ts"
       ],
-      "tests": 25,
-      "passed": 25,
+      "tests": 34,
+      "passed": 34,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -132,8 +132,8 @@
       "files": [
         "tests/languages/kotlin.test.ts"
       ],
-      "tests": 20,
-      "passed": 20,
+      "tests": 23,
+      "passed": 23,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -264,8 +264,8 @@
       "files": [
         "tests/languages/swift.test.ts"
       ],
-      "tests": 13,
-      "passed": 13,
+      "tests": 15,
+      "passed": 15,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

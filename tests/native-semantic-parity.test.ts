@@ -2087,6 +2087,88 @@ nativeDescribe("native semantic coverage", () => {
         edge: { caller: "use", callerFile: "swift/B.swift", expectedTarget: "swift/A.swift::helper" },
       },
       {
+        name: "Java inherited method over a single static import",
+        files: {
+          "jinherit/j/Base.java": ["package j;", "", "class Base {", "  int hit() { return 4; }", "}"],
+          "jinherit/j/Use.java": [
+            "package j;",
+            "",
+            "import static j.Util.hit;",
+            "",
+            "class Derived extends Base {",
+            "  int viaBase() { return hit(); }",
+            "}",
+          ],
+          "jinherit/j/Util.java": ["package j;", "", "class Util {", "  static int hit() { return 1; }", "}"],
+        },
+        goto: {
+          file: "jinherit/j/Use.java",
+          line: 6,
+          token: "hit()",
+          expectedFile: "jinherit/j/Base.java",
+          expectedLine: 4,
+        },
+        references: {
+          file: "jinherit/j/Base.java",
+          line: 4,
+          token: "hit",
+          expectedSites: ["jinherit/j/Base.java:4", "jinherit/j/Use.java:6"],
+          decoyFile: "jinherit/j/Util.java",
+        },
+        edge: { caller: "viaBase", callerFile: "jinherit/j/Use.java", expectedTarget: "jinherit/j/Base.java::hit" },
+      },
+      {
+        name: "Kotlin inherited member over a same-package function",
+        files: {
+          "kinherit/p/Base.kt": ["package p", "", "open class Base {", "    fun hit(): Int = 4", "}"],
+          "kinherit/p/Use.kt": ["package p", "", "class Derived : Base() {", "    fun viaBase(): Int = hit()", "}"],
+          "kinherit/p/Peer.kt": ["package p", "", "fun hit(): Int = 1"],
+        },
+        goto: {
+          file: "kinherit/p/Use.kt",
+          line: 4,
+          token: "hit()",
+          expectedFile: "kinherit/p/Base.kt",
+          expectedLine: 4,
+        },
+        references: {
+          file: "kinherit/p/Base.kt",
+          line: 4,
+          token: "hit",
+          expectedSites: ["kinherit/p/Base.kt:4", "kinherit/p/Use.kt:4"],
+          decoyFile: "kinherit/p/Peer.kt",
+        },
+        edge: { caller: "viaBase", callerFile: "kinherit/p/Use.kt", expectedTarget: "kinherit/p/Base.kt::hit" },
+      },
+      {
+        name: "C# inherited method over a using static import",
+        files: {
+          "csinherit/Base.cs": ["namespace P;", "public class Base {", "  public int Hit() { return 4; }", "}"],
+          "csinherit/Util.cs": [
+            "namespace P;",
+            "public static class Util {",
+            "  public static int Hit() { return 1; }",
+            "}",
+          ],
+          "csinherit/Use.cs": [
+            "using static P.Util;",
+            "namespace P;",
+            "public class Derived : Base {",
+            "  public int ViaBase() { return Hit(); }",
+            "}",
+          ],
+        },
+        goto: { file: "csinherit/Use.cs", line: 4, token: "Hit()", expectedFile: "csinherit/Base.cs", expectedLine: 3 },
+        references: {
+          file: "csinherit/Base.cs",
+          line: 3,
+          token: "Hit",
+          expectedSites: ["csinherit/Base.cs:3", "csinherit/Use.cs:4"],
+          decoyFile: "csinherit/Util.cs",
+        },
+        edge: { caller: "ViaBase", callerFile: "csinherit/Use.cs", expectedTarget: "csinherit/Base.cs::Hit" },
+      },
+      {
         name: "Zig imported function through @import",
         files: {
           "zig/api.zig": ["pub fn target(value: i32) i32 {", "    return value;", "}"],
