@@ -377,7 +377,7 @@ function sortedDeclaredContainerIndex(byName: ReadonlyMap<string, ReadonlySet<st
 
 /** Whether a cached module has an import binding the previous build left unresolved. */
 function cachedModuleHasExternalImport(mod: ModuleIndex): boolean {
-  return mod.imports.some((binding) => binding.resolved !== undefined && typeof binding.resolved !== "string");
+  return mod.imports.some((binding) => typeof binding.resolved !== "string");
 }
 
 /**

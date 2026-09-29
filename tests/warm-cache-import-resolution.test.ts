@@ -1171,4 +1171,27 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  // `using X = P;` over two files declaring `P` leaves the alias binding without a target
+  // (`resolved` absent), so only the every-non-string check sees the importer as external.
+  // Without a manifest the deleted declarer leaves no cache miss behind either.
+  it("binds a C# namespace alias to the survivor when a duplicate declaration is deleted (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-csharp-alias-memory-");
+    try {
+      await fsp.writeFile(path.join(root, "Aaa.cs"), "namespace P;\npublic class Aaa {}\n", "utf8");
+      await fsp.writeFile(path.join(root, "Bbb.cs"), "namespace P;\npublic class Bbb {}\n", "utf8");
+      const main = path.join(root, "Use.cs");
+      await fsp.writeFile(main, "using X = P;\nclass Use {\n  X.Aaa Make() => new X.Aaa();\n}\n", "utf8");
+      const ambiguous = await buildProjectIndex(root, { cache: "memory" });
+      expect(bindingTargets(ambiguous, main)).toEqual(["external:"]);
+
+      await fsp.rm(path.join(root, "Bbb.cs"));
+      const warm = await buildProjectIndex(root, { cache: "memory" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect(bindingTargets(warm, main)).toEqual(["file:" + normalizePath(path.join(root, "Aaa.cs"))]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
