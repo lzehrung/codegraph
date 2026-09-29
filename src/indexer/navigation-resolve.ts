@@ -719,7 +719,9 @@ function csharpNamespaceImportDirectories(index: ProjectIndex): Map<ImportBindin
 
 /**
  * A name imported by C# `using N;`, looked up as `N.Name` from one declaring file per
- * directory. Distinct declarations (other than parts of one partial type) are ambiguous.
+ * directory. Distinct declarations (other than parts of one partial type) are ambiguous. Only
+ * exported types count: local fallback would expose an `internal` type the exports omit, for
+ * both the bare name and the qualified `N.Name` form.
  */
 function resolveCsharpNamespaceImport(
   index: ProjectIndex,
@@ -733,7 +735,7 @@ function resolveCsharpNamespaceImport(
   const matches: SymbolDef[] = [];
   let namespaceHit: FileId | undefined;
   for (const file of files) {
-    const hit = resolveExport(index, file, lookupName, opts);
+    const hit = resolveExport(index, file, lookupName, { ...opts, allowLocalFallback: false });
     if (hit?.kind === "namespace") namespaceHit ??= hit.file;
     if (hit?.kind !== "resolved" || matches.some((candidate) => sameSymbolDef(index, candidate, hit.def))) continue;
     matches.push(hit.def);

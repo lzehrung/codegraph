@@ -155,7 +155,12 @@ export async function resolveModuleSpecifierEdges(
   } else if (["csharp", "ruby"].includes(context.support.id)) {
     const namespaceTargets =
       context.support.id === "csharp"
-        ? await resolveCsharpNamespaceImportPaths(context.projectRoot, entry.spec, context.file)
+        ? await resolveCsharpNamespaceImportPaths(
+            context.projectRoot,
+            entry.spec,
+            context.file,
+            context.languageExtensions,
+          )
         : [];
     if (namespaceTargets.length) {
       return namespaceTargets.map((targetPath) => withSpecifierMetadata(entry, edgeToResolvedFile(targetPath)));
@@ -163,7 +168,12 @@ export async function resolveModuleSpecifierEdges(
     if (context.support.id === "csharp") {
       // `using PT = N.Point` is not a namespace. The same helper the import binding uses
       // picks the one declaring file, or refuses an ambiguous set instead of a path guess.
-      const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, entry.spec, context.file);
+      const typeMatch = await resolveCsharpDottedTypeImportPath(
+        context.projectRoot,
+        entry.spec,
+        context.file,
+        context.languageExtensions,
+      );
       if (typeMatch.status === "found") {
         return [withSpecifierMetadata(entry, edgeToResolvedFile(typeMatch.file))];
       }

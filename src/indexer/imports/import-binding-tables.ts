@@ -195,7 +195,12 @@ async function applyCsharpStatementOverride(
   // `global using static` applies to every file of the project, which module-local bindings
   // cannot express, so it is not bound.
   if (parsed.isStatic && !/^global\s/u.test(normalizedStmt.trim())) {
-    const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, parsed.from, context.file);
+    const typeMatch = await resolveCsharpDottedTypeImportPath(
+      context.projectRoot,
+      parsed.from,
+      context.file,
+      context.languageExtensions,
+    );
     const qualifiedType = normalizeCsharpQualifiedName(parsed.from).replace(/^global::/u, "");
     if (typeMatch.status === "found" && qualifiedType.includes(".")) {
       context.pushBinding({
@@ -214,7 +219,12 @@ async function applyCsharpStatementOverride(
   // navigation can reach the declaring file instead of treating the last segment as a type.
   // A namespace split across several files has no single target, so it keeps the local alias
   // as an unresolved namespace rather than claiming one of the declaring files.
-  const namespaceTargets = await resolveCsharpNamespaceImportPaths(context.projectRoot, parsed.from, context.file);
+  const namespaceTargets = await resolveCsharpNamespaceImportPaths(
+    context.projectRoot,
+    parsed.from,
+    context.file,
+    context.languageExtensions,
+  );
   if (parsed.alias && namespaceTargets.length) {
     const localRange = csharpUsingAliasLocalRange(context.source, statementStartIndex, parsed.alias);
     context.pushBinding({
@@ -252,9 +262,15 @@ async function applyCsharpStatementOverride(
           context.projectRoot,
           fallbackFrom,
           context.file,
+          context.languageExtensions,
         );
         if (fallbackNamespaceTargets.length > 1) {
-          const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, parsed.from, context.file);
+          const typeMatch = await resolveCsharpDottedTypeImportPath(
+            context.projectRoot,
+            parsed.from,
+            context.file,
+            context.languageExtensions,
+          );
           if (typeMatch.status === "found") {
             fromValue = fallbackFrom;
             resolved = typeMatch.file;

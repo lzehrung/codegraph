@@ -2778,7 +2778,8 @@ describe("C# using namespace across files", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-mapping-"));
     try {
       // `.cs` is remapped to TypeScript, so p.cs is not a C# file even though its suffix is.
-      await writeFile(path.join(root, "p.cs"), "export const x = 1;\n");
+      // It even declares a TypeScript `namespace P`, which the C# namespace scanner must not count.
+      await writeFile(path.join(root, "p.cs"), "export namespace P { export const x = 1; }\n");
       await writeFile(path.join(root, "Use.csx"), "using P;\nnamespace Q;\npublic class Use { }\n");
       const mapped = await buildProjectIndex(root, { cache: "off", native: "on", languageExtensions: { ".cs": "ts" } });
       const useFile = normalizePath(path.join(root, "Use.csx"));
@@ -2786,6 +2787,8 @@ describe("C# using namespace across files", () => {
         .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(useFile))
         .map((edge) => edge.to.type);
       expect(targets).toEqual(["external"]);
+      const binding = mapped.byFile.get(fileIdentityKey(useFile))?.imports[0];
+      expect(typeof binding?.resolved).not.toBe("string");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2820,6 +2823,41 @@ describe("C# using namespace across files", () => {
       expect(targets).toEqual(["Other.cs"]);
     } finally {
       await rm(aliasRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps internal types hidden through a using namespace in another directory, bare or qualified", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-internal-"));
+    try {
+      await mkdir(path.join(root, "a"), { recursive: true });
+      await mkdir(path.join(root, "b"), { recursive: true });
+      await writeFile(path.join(root, "a", "First.cs"), "namespace N;\npublic class First { }\n");
+      await writeFile(
+        path.join(root, "b", "Hidden.cs"),
+        "namespace N;\ninternal class Hidden { }\npublic class Shown { }\n",
+      );
+      const useLines = [
+        "using N;",
+        "namespace Q;",
+        "public class Use {",
+        "  object A() => new Hidden();",
+        "  object B() => new N.Hidden();",
+        "  object C() => new N.Shown();",
+        "}",
+      ];
+      const use = normalizePath(path.join(root, "Use.cs"));
+      await writeFile(use, `${useLines.join("\n")}\n`);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const target = async (line: number, token: string) => {
+        const column = useLines[line - 1]!.lastIndexOf(token) + 1;
+        const result = await goToDefinition(index, { file: use, line, column });
+        return result.status === "ok" ? path.basename(result.definition.file) : null;
+      };
+      expect(await target(4, "Hidden")).toBeNull();
+      expect(await target(5, "Hidden")).toBeNull();
+      expect(await target(6, "Shown")).toBe("Hidden.cs");
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

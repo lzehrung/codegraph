@@ -1,3 +1,4 @@
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
 import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../paths.js";
 import { CSHARP_IDENTIFIER_SOURCE, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../identifiers.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
@@ -177,6 +178,7 @@ export async function resolveCsharpNamespaceImportPaths(
   projectRoot: string,
   spec: string,
   fromFile: string,
+  languageExtensions?: LanguageExtensionMap,
 ): Promise<string[]> {
   const indexRoot = await resolveNearestManifestRoot(projectRoot, fromFile, CSHARP_PACKAGE_MANIFEST_NAMES);
   const projectIndex = await getCsharpProjectNamespaceIndex(indexRoot);
@@ -187,7 +189,7 @@ export async function resolveCsharpNamespaceImportPaths(
   const confined: string[] = [];
   for (const candidate of packageCandidates) {
     const hit = await confineResolvedPath(projectRoot, candidate);
-    if (hit) confined.push(hit);
+    if (hit && isActiveCsharpFile(hit, languageExtensions)) confined.push(hit);
   }
   return confined;
 }
@@ -196,12 +198,24 @@ function slashPath(filePath: string): string {
   return filePath.replace(/\\/g, "/");
 }
 
-async function confineCsharpTypeFiles(projectRoot: string, files: readonly string[]): Promise<string[]> {
+/**
+ * The scanner finds candidates by C# filename globs; an active extension mapping can assign one of
+ * those suffixes to another language, and such a file is never a C# namespace or type target.
+ */
+function isActiveCsharpFile(file: string, languageExtensions: LanguageExtensionMap | undefined): boolean {
+  return !languageExtensions || supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "csharp";
+}
+
+async function confineCsharpTypeFiles(
+  projectRoot: string,
+  files: readonly string[],
+  languageExtensions: LanguageExtensionMap | undefined,
+): Promise<string[]> {
   const confined: string[] = [];
   const seen = new Set<string>();
   for (const candidate of files) {
     const hit = await confineResolvedPath(projectRoot, candidate);
-    if (!hit) continue;
+    if (!hit || !isActiveCsharpFile(hit, languageExtensions)) continue;
     const normalized = slashPath(hit);
     const key = fileIdentityKey(normalized);
     if (seen.has(key)) continue;
@@ -222,6 +236,7 @@ export async function resolveCsharpNamespaceTypePath(
   namespaceName: string,
   typeName: string,
   fromFile: string,
+  languageExtensions?: LanguageExtensionMap,
 ): Promise<CsharpNamespaceTypeResolution> {
   const normalizedNamespace = normalizeCsharpQualifiedName(namespaceName);
   const namespaceLookup = normalizedNamespace.startsWith("global::")
@@ -233,7 +248,7 @@ export async function resolveCsharpNamespaceTypePath(
   const indexRoot = await resolveNearestManifestRoot(projectRoot, fromFile, CSHARP_PACKAGE_MANIFEST_NAMES);
   const projectIndex = await getCsharpProjectNamespaceIndex(indexRoot);
   const files = projectIndex.filesByPackageSymbol.get(namespaceLookup)?.get(normalizedType) ?? [];
-  const confined = await confineCsharpTypeFiles(projectRoot, files);
+  const confined = await confineCsharpTypeFiles(projectRoot, files, languageExtensions);
   if (confined.length === 0) return { status: "not_found" };
   if (confined.length === 1) return { status: "found", file: confined[0]! };
   return selectUniqueCsharpNamespaceTypeFile(confined, namespaceLookup, normalizedType);
@@ -249,6 +264,7 @@ export async function resolveCsharpDottedTypeImportPath(
   projectRoot: string,
   spec: string,
   fromFile: string,
+  languageExtensions?: LanguageExtensionMap,
 ): Promise<CsharpNamespaceTypeResolution> {
   const normalized = normalizeCsharpQualifiedName(spec);
   const body = normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
@@ -256,7 +272,7 @@ export async function resolveCsharpDottedTypeImportPath(
   if (parts.length < 2) return { status: "not_found" };
   const typeName = parts[parts.length - 1]!;
   const namespaceName = parts.slice(0, -1).join(".");
-  return await resolveCsharpNamespaceTypePath(projectRoot, namespaceName, typeName, fromFile);
+  return await resolveCsharpNamespaceTypePath(projectRoot, namespaceName, typeName, fromFile, languageExtensions);
 }
 
 export function clearCsharpResolutionCaches(): void {
