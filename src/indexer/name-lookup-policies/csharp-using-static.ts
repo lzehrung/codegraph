@@ -11,7 +11,9 @@ import {
 } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { getCallableArity } from "../../languages/callable-arity.js";
+import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
+import { csharpNamespaceAt } from "../compilation-units.js";
 import { isPrivateDeclaration } from "../declaration-visibility.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import type { BareNameUse, NameResolution } from "../name-resolution-types.js";
@@ -19,13 +21,19 @@ import type { ParsedFileContext } from "../parse-context.js";
 import type { FileId } from "../../types.js";
 import type { GoToResult, ModuleIndex, SymbolDef } from "../types.js";
 
-type UsingStaticImport = { file: FileId; typeName: string };
+/** A `using static` target: the declaring file and the owner's namespace and simple name. */
+type UsingStaticImport = { file: FileId; namespace: string; typeName: string };
 
 function usingStaticImports(mod: ModuleIndex): UsingStaticImport[] {
   const imports: UsingStaticImport[] = [];
   for (const imp of mod.imports) {
     if (imp.kind !== "star" || !imp.staticMembersOf || typeof imp.resolved !== "string") continue;
-    imports.push({ file: imp.resolved, typeName: imp.staticMembersOf });
+    const separator = imp.staticMembersOf.lastIndexOf(".");
+    imports.push({
+      file: imp.resolved,
+      namespace: imp.staticMembersOf.slice(0, separator),
+      typeName: imp.staticMembersOf.slice(separator + 1),
+    });
   }
   return imports;
 }
@@ -58,11 +66,21 @@ function isExtensionMethod(declaration: SyntaxNodeLike): boolean {
   return !!first?.namedChildren.some((child) => child.type === "modifier" && child.text === "this");
 }
 
-/** Whether `declaration` is a member `using static` imports from the top-level type `typeName`. */
-function importsMember(parsed: ParsedFileContext, declaration: SyntaxNodeLike, typeName: string): boolean {
+/**
+ * Whether `declaration` is a member `using static` imports from the top-level type the directive
+ * names. One file can declare `P.Util` and `Q.Util`, so the owner's namespace must match too.
+ */
+function importsMember(
+  use: BareNameUse,
+  parsed: ParsedFileContext,
+  declaration: SyntaxNodeLike,
+  imp: UsingStaticImport,
+): boolean {
   const container = nearestMemberContainer(declaration);
   if (!container || nearestMemberContainer(container)) return false;
-  if (container.childForFieldName("name")?.text !== typeName) return false;
+  const ownerName = container.childForFieldName("name")?.text;
+  if (!ownerName || normalizeCsharpIdentifier(ownerName) !== imp.typeName) return false;
+  if (csharpNamespaceAt(use.index, imp.file, container.startIndex) !== imp.namespace) return false;
   if (isPrivateDeclaration("csharp", declaration)) return false;
   if (NESTED_TYPE_DECLARATIONS.has(declaration.type) || container.type === "enum_declaration") return true;
   if (isExtensionMethod(declaration)) return false;
@@ -92,7 +110,7 @@ function usingStaticCandidates(use: BareNameUse, name: string): Candidate[] | nu
     }
     for (const def of matches) {
       const declaration = declarationOf(parsed, def);
-      if (declaration && importsMember(parsed, declaration, imp.typeName)) {
+      if (declaration && importsMember(use, parsed, declaration, imp)) {
         candidates.push({ def, declaration, source: parsed.source });
       }
     }

@@ -2418,27 +2418,39 @@ describe("C# using static", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-static-"));
     try {
       const utilLines = [
-        "namespace P;",
-        "public static class Util {",
-        "  public static int Go() => 5;",
-        "  public static int Pick(int a) => a;",
-        "  public int Inst() => 1;",
-        "  private static int Hidden() => 0;",
-        "  public static int Ext(this string s) => 1;",
-        "  public const int K = 3;",
-        "  public class Nested { }",
-        "  public static int Same() => 1;",
+        "namespace P {",
+        "  public static class Util {",
+        "    public static int Go() => 5;",
+        "    public static int Pick(int a) => a;",
+        "    private static int Hidden() => 0;",
+        "    public const int K = 3;",
+        "    public class Nested { }",
+        "    public static int Same() => 1;",
+        "  }",
+        "  public static class Util2 {",
+        "    public static int Pick(int a, int b) => a;",
+        "    public static int Same() => 2;",
+        "  }",
+        "  public class Plain {",
+        "    public int Inst() => 1;",
+        "    public static int PlainStatic() => 1;",
+        "  }",
+        "  public static class Ext {",
+        "    public static int Extend(this string s) => 1;",
+        "  }",
         "}",
-        "public static class Util2 {",
-        "  public static int Pick(int a, int b) => a;",
-        "  public static int Same() => 2;",
+        "namespace R {",
+        "  public static class Util {",
+        "    public static int Other() => 1;",
+        "  }",
         "}",
-        "public static class Other { public static int Go2() => 2; }",
         "",
       ];
       const useLines = [
         "using static P.Util;",
         "using static P.Util2;",
+        "using static P.Plain;",
+        "using static P.Ext;",
         "namespace Q;",
         "public class Use {",
         "  public int Local() => 0;",
@@ -2447,44 +2459,64 @@ describe("C# using static", () => {
         "  public int C() => Pick(1, 2);",
         "  public int D() => K;",
         "  public object E() => new Nested();",
-        "  public int F() => Inst();",
-        "  public int G() => Hidden();",
-        '  public int H() => Ext("x");',
-        "  public int I() => Go2();",
-        "  public int J() => Same();",
-        "  public int L() => Local();",
+        "  public int F() => PlainStatic();",
+        "  public int G() => Inst();",
+        "  public int H() => Hidden();",
+        '  public int I() => Extend("x");',
+        "  public int J() => Other();",
+        "  public int L() => Same();",
+        "  public int M() => Local();",
+        "}",
+        "",
+      ];
+      // A global directive applies to the whole project; module-local bindings cannot express it.
+      const globalLines = [
+        "global using static P.Util;",
+        "namespace Q;",
+        "public class UseGlobal {",
+        "  public int A() => Go();",
         "}",
         "",
       ];
       const util = normalizePath(path.join(root, "Util.cs"));
       const use = normalizePath(path.join(root, "Use.cs"));
+      const useGlobal = normalizePath(path.join(root, "UseGlobal.cs"));
       await writeFile(util, utilLines.join("\n"));
       await writeFile(use, useLines.join("\n"));
+      await writeFile(useGlobal, globalLines.join("\n"));
       const index = await buildProjectIndex(root, { cache: "off", native: "on" });
-      const gotoLine = async (line: number, name: string) => {
-        const column = useLines[line - 1]!.lastIndexOf(name) + 1;
-        const result = await goToDefinition(index, { file: use, line, column });
+      const lineOf = (lines: readonly string[], text: string) => lines.findIndex((line) => line.includes(text)) + 1;
+      const gotoTarget = async (file: string, lines: readonly string[], text: string, name: string) => {
+        const line = lineOf(lines, text);
+        const column = lines[line - 1]!.lastIndexOf(name) + 1;
+        const result = await goToDefinition(index, { file, line, column });
         if (result.status !== "ok") return null;
         return `${path.basename(result.definition.file)}:${result.definition.range.start.line}`;
       };
-      expect(await gotoLine(6, "Go")).toBe("Util.cs:3");
-      expect(await gotoLine(7, "Pick")).toBe("Util.cs:4");
-      expect(await gotoLine(8, "Pick")).toBe("Util.cs:13");
-      expect(await gotoLine(9, "K")).toBe("Util.cs:8");
-      expect(await gotoLine(10, "Nested")).toBe("Util.cs:9");
-      // Instance, private, and extension members are not imported; another type's statics are
-      // not either; two directives that both import Same() are ambiguous; own members win.
-      expect(await gotoLine(11, "Inst")).toBeNull();
-      expect(await gotoLine(12, "Hidden")).toBeNull();
-      expect(await gotoLine(13, "Ext")).toBeNull();
-      expect(await gotoLine(14, "Go2")).toBeNull();
-      expect(await gotoLine(15, "Same")).toBeNull();
-      expect(await gotoLine(16, "Local")).toBe("Use.cs:5");
+      const at = (file: string, lines: readonly string[], text: string) =>
+        `${path.basename(file)}:${lineOf(lines, text)}`;
+      expect(await gotoTarget(use, useLines, "A() =>", "Go")).toBe(at(util, utilLines, "int Go()"));
+      expect(await gotoTarget(use, useLines, "B() =>", "Pick")).toBe(at(util, utilLines, "Pick(int a)"));
+      expect(await gotoTarget(use, useLines, "C() =>", "Pick")).toBe(at(util, utilLines, "Pick(int a, int b)"));
+      expect(await gotoTarget(use, useLines, "D() =>", "K")).toBe(at(util, utilLines, "const int K"));
+      expect(await gotoTarget(use, useLines, "E() =>", "Nested")).toBe(at(util, utilLines, "class Nested"));
+      expect(await gotoTarget(use, useLines, "F() =>", "PlainStatic")).toBe(at(util, utilLines, "int PlainStatic"));
+      // Instance, private, and extension members are not imported; a same-named type in another
+      // namespace of the same file is not the imported type; two directives that both import
+      // Same() are ambiguous; the enclosing type's own members win.
+      expect(await gotoTarget(use, useLines, "G() =>", "Inst")).toBeNull();
+      expect(await gotoTarget(use, useLines, "H() =>", "Hidden")).toBeNull();
+      expect(await gotoTarget(use, useLines, "I() =>", "Extend")).toBeNull();
+      expect(await gotoTarget(use, useLines, "J() =>", "Other")).toBeNull();
+      expect(await gotoTarget(use, useLines, "L() =>", "Same")).toBeNull();
+      expect(await gotoTarget(use, useLines, "M() =>", "Local")).toBe(at(use, useLines, "int Local()"));
+      expect(await gotoTarget(useGlobal, globalLines, "A() =>", "Go")).toBeNull();
 
+      const pickLine = lineOf(utilLines, "Pick(int a)");
       const references = await findReferences(index, {
         file: util,
-        line: 4,
-        column: utilLines[3]!.indexOf("Pick") + 1,
+        line: pickLine,
+        column: utilLines[pickLine - 1]!.indexOf("Pick") + 1,
       });
       expect(references.status).toBe("ok");
       if (references.status !== "ok") throw new Error("Expected references");
@@ -2492,14 +2524,14 @@ describe("C# using static", () => {
         references.references
           .filter((reference) => reference.file === use)
           .map((reference) => reference.range.start.line),
-      ).toEqual([7]);
+      ).toEqual([lineOf(useLines, "B() =>")]);
 
       const graph = await buildSymbolGraphDetailed(index);
       const targets = graph.edges
         .filter((edge) => (edge.label === "calls" || edge.label === "instantiates") && edge.from.startsWith(use))
         .map((edge) => `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`)
         .sort();
-      expect(targets).toEqual(["A->Go", "B->Pick", "C->Pick", "E->Nested", "L->Local"]);
+      expect(targets).toEqual(["A->Go", "B->Pick", "C->Pick", "E->Nested", "F->PlainStatic", "M->Local"]);
       // Each call reaches the overload its argument count accepts, across both directives.
       const utilSource = utilLines.join("\n");
       const pickTargets = graph.edges
@@ -2508,6 +2540,7 @@ describe("C# using static", () => {
         .map((edge) => Number(edge.to.slice(edge.to.lastIndexOf("::") + 2)))
         .sort((left, right) => left - right);
       expect(pickTargets).toEqual([utilSource.indexOf("Pick(int a)"), utilSource.indexOf("Pick(int a, int b)")]);
+      expect(graph.edges.some((edge) => edge.label === "calls" && edge.from.startsWith(useGlobal))).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -7,7 +7,7 @@ import {
   rustImportKeywordOffset,
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
-import { CSHARP_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { CSHARP_IDENTIFIER_SOURCE, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/resolution/rust.js";
@@ -176,17 +176,19 @@ async function applyCsharpStatementOverride(
   if (!parsed) return false;
 
   // `using static N.T;` imports the static members and nested types of one type. Bind it to the
-  // file that declares `T` only when exactly one file does; otherwise it stays external.
-  if (parsed.isStatic) {
+  // file that declares `T` only when exactly one file does; otherwise it stays external. A
+  // `global using static` applies to every file of the project, which module-local bindings
+  // cannot express, so it is not bound.
+  if (parsed.isStatic && !/^global\s/u.test(normalizedStmt.trim())) {
     const typeMatch = await resolveCsharpDottedTypeImportPath(context.projectRoot, parsed.from, context.file);
-    const typeName = parsed.from.split(".").at(-1)?.trim();
-    if (typeMatch.status === "found" && typeName) {
+    const qualifiedType = normalizeCsharpQualifiedName(parsed.from).replace(/^global::/u, "");
+    if (typeMatch.status === "found" && qualifiedType.includes(".")) {
       context.pushBinding({
         kind: "star",
         from: parsed.from,
         resolved: typeMatch.file.replace(/\\/g, "/"),
         typeOnly,
-        staticMembersOf: typeName,
+        staticMembersOf: qualifiedType,
       });
       return true;
     }
