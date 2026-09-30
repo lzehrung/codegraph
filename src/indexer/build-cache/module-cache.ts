@@ -57,10 +57,43 @@ type ModuleCacheEntry = {
   version: number;
   sig: string;
   mod: ModuleIndex;
+  /** Normalized project root the entry belongs to. */
+  root: string;
 };
 
 const MAX_MEMORY_CACHE_ENTRIES = 5000;
 const memoryCache = new Map<string, ModuleCacheEntry>();
+
+/**
+ * Projects that lost a module payload to LRU eviction, with the count of the latest eviction.
+ * A build without a manifest finds deleted or rewritten files through the cached rows.
+ * An evicted row hides them, so the build re-resolves the project's declaration-language importers.
+ * Each project has one entry. A complete build removes it.
+ */
+const rootsWithEvictedPayloads = new Map<string, number>();
+/** Counts payload evictions. A build compares it to detect an eviction during the build. */
+let memoryEvictionSerial = 0;
+
+/** True when the memory cache evicted a payload of the project. */
+export function memoryCacheLostPayloads(projectRoot: string): boolean {
+  return rootsWithEvictedPayloads.has(normalizePath(projectRoot));
+}
+
+/** The current eviction count. Pass it to `settleMemoryCacheEvictions` when a build ends. */
+export function memoryCacheEvictionSerial(): number {
+  return memoryEvictionSerial;
+}
+
+/**
+ * Clear the eviction state of the project after a complete build restored its rows.
+ * Keep the state if the project lost another payload after `sinceSerial`.
+ */
+export function settleMemoryCacheEvictions(projectRoot: string, sinceSerial: number): void {
+  const root = normalizePath(projectRoot);
+  const lastEviction = rootsWithEvictedPayloads.get(root);
+  if (lastEviction !== undefined && lastEviction <= sinceSerial) rootsWithEvictedPayloads.delete(root);
+}
+
 let cachedExecutionFingerprint: string | undefined;
 let cachedExecutionHash: string | undefined;
 
@@ -70,6 +103,7 @@ type DiskModuleCache = {
   loadAll: SqliteStatement;
   listFiles: SqliteStatement;
   write: SqliteStatement;
+  remove: SqliteStatement;
   clearLiveFiles: SqliteStatement;
   insertLiveFile: SqliteStatement;
   pruneStaleFiles: SqliteStatement;
@@ -81,9 +115,11 @@ function memoryCacheKey(projectRoot: string, file: string): string {
 
 export function clearMemoryCache(): void {
   memoryCache.clear();
+  rootsWithEvictedPayloads.clear();
 }
 
 function clearMemoryCacheForProject(projectRoot: string): void {
+  rootsWithEvictedPayloads.delete(normalizePath(projectRoot));
   const prefix = `${normalizePath(projectRoot)}::`;
   for (const key of memoryCache.keys()) {
     if (key.startsWith(prefix)) {
@@ -224,6 +260,7 @@ export function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): Di
          payload = excluded.payload,
          updated_at = excluded.updated_at`,
       ),
+      remove: db.prepare("DELETE FROM module_cache WHERE file = ?"),
       clearLiveFiles: db.prepare("DELETE FROM live_module_cache_files"),
       insertLiveFile: db.prepare("INSERT OR IGNORE INTO live_module_cache_files(file) VALUES (?)"),
       pruneStaleFiles: db.prepare(
@@ -582,14 +619,33 @@ export function loadAllCachedModules(
   }
 }
 
-export function tryLoadFromCache(
+/** Best-effort decode of a superseded disk row; null when the payload cannot be read. */
+function rehydrateStaleModuleRow(
+  projectRoot: string,
+  row: { sig: string; version: number; payload: Uint8Array },
+): ModuleIndex | null {
+  try {
+    const parsed: unknown = JSON.parse(brotliDecompressSync(row.payload).toString("utf8"));
+    if (!isModuleIndex(parsed)) return null;
+    return transformModulePaths(projectRoot, parsed, false);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load the cached module for `file` at `sig`.
+ * `previouslyCached` is true when the cache held any entry for the file. A miss then means the file changed.
+ * `staleMod` is that older entry, when it can be decoded.
+ */
+export function loadModuleFromCache(
   projectRoot: string,
   file: string,
   sig: string,
   opts?: BuildOptions,
   report?: BuildReport,
   diskCacheAvailable = true,
-): ModuleIndex | null {
+): { mod: ModuleIndex | null; previouslyCached: boolean; staleMod: ModuleIndex | null } {
   const mode = opts?.cache ?? "off";
   const cacheReport = initCacheReport(report, mode);
   const cacheEnabled = mode !== "off";
@@ -600,46 +656,102 @@ export function tryLoadFromCache(
       if (entry.sig === sig) {
         lruMapGet(memoryCache, key);
         if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-        return entry.mod;
+        return { mod: entry.mod, previouslyCached: true, staleMod: null };
       }
       memoryCache.delete(key);
+      if (cacheEnabled && cacheReport) cacheReport.misses += 1;
+      return { mod: null, previouslyCached: true, staleMod: entry.mod };
     }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
-    return null;
+    return { mod: null, previouslyCached: false, staleMod: null };
   }
   if (mode === "disk") {
     if (!diskCacheAvailable) {
       if (cacheEnabled && cacheReport) cacheReport.misses += 1;
-      return null;
+      return { mod: null, previouslyCached: false, staleMod: null };
     }
     if (!isNodeSqliteUsable()) {
       const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
       reportMissingNodeSqlite(opts?.logLevel, error);
       if (cacheEnabled && cacheReport) cacheReport.misses += 1;
-      return null;
+      return { mod: null, previouslyCached: false, staleMod: null };
     }
+    let previouslyCached = false;
+    let staleMod: ModuleIndex | null = null;
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
       const row = cache.load.get(cacheRelativePath(projectRoot, file)) as
         | { sig: string; version: number; payload: Uint8Array }
         | undefined;
+      previouslyCached = !!row;
       if (row && row.sig === sig && row.version === PARSED_CACHE_VERSION) {
         const parsed: unknown = JSON.parse(brotliDecompressSync(row.payload).toString("utf8"));
         if (isModuleIndex(parsed)) {
           const rehydrated = transformModulePaths(projectRoot, parsed, false);
           if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-          return rehydrated;
+          return { mod: rehydrated, previouslyCached: true, staleMod: null };
         }
       }
+      if (row) staleMod = rehydrateStaleModuleRow(projectRoot, row);
     } catch (error) {
       if (isNodeSqliteUnavailableError(error)) {
         reportMissingNodeSqlite(opts?.logLevel, error);
-        return null;
+        return { mod: null, previouslyCached, staleMod };
       }
     }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
+    return { mod: null, previouslyCached, staleMod };
   }
-  return null;
+  return { mod: null, previouslyCached: false, staleMod: null };
+}
+
+/** Files with a row in the memory module cache, including files that the current build omits. */
+export function listMemoryCachedModuleFiles(projectRoot: string): string[] {
+  const prefix = normalizePath(projectRoot) + "::";
+  const files: string[] = [];
+  for (const key of memoryCache.keys()) {
+    if (key.startsWith(prefix)) files.push(key.slice(prefix.length));
+  }
+  return files;
+}
+
+/**
+ * The cached row for `file` at any signature.
+ * Unlike `loadModuleFromCache`, it does not delete the row and does not count a hit or miss.
+ */
+export function peekCachedModule(
+  projectRoot: string,
+  file: string,
+  opts?: BuildOptions,
+): { sig: string; mod: ModuleIndex } | null {
+  const mode = opts?.cache ?? "off";
+  if (mode === "memory") {
+    const entry = memoryCache.get(memoryCacheKey(projectRoot, file));
+    return entry ? { sig: entry.sig, mod: entry.mod } : null;
+  }
+  if (mode !== "disk" || !isNodeSqliteUsable() || !diskModuleCacheExists(projectRoot, opts)) return null;
+  try {
+    const cache = getDiskModuleCache(projectRoot, opts);
+    const row = cache.load.get(cacheRelativePath(projectRoot, file)) as
+      | { sig: string; version: number; payload: Uint8Array }
+      | undefined;
+    if (!row || row.version !== PARSED_CACHE_VERSION) return null;
+    const mod = rehydrateStaleModuleRow(projectRoot, row);
+    return mod ? { sig: row.sig, mod } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function tryLoadFromCache(
+  projectRoot: string,
+  file: string,
+  sig: string,
+  opts?: BuildOptions,
+  report?: BuildReport,
+  diskCacheAvailable = true,
+): ModuleIndex | null {
+  return loadModuleFromCache(projectRoot, file, sig, opts, report, diskCacheAvailable).mod;
 }
 
 export type PendingModuleCacheWrite = {
@@ -656,11 +768,17 @@ export function writeModulesToCache(
   if (!writes.length) return;
   const mode = opts?.cache ?? "off";
   if (mode === "memory") {
+    const root = normalizePath(projectRoot);
     for (const write of writes) {
+      const key = memoryCacheKey(projectRoot, write.file);
+      if (!memoryCache.has(key) && memoryCache.size >= MAX_MEMORY_CACHE_ENTRIES) {
+        const oldest = memoryCache.values().next();
+        if (!oldest.done) rootsWithEvictedPayloads.set(oldest.value.root, ++memoryEvictionSerial);
+      }
       lruMapSet(
         memoryCache,
-        memoryCacheKey(projectRoot, write.file),
-        { version: PARSED_CACHE_VERSION, sig: write.sig, mod: write.mod },
+        key,
+        { version: PARSED_CACHE_VERSION, sig: write.sig, mod: write.mod, root },
         MAX_MEMORY_CACHE_ENTRIES,
       );
     }
@@ -707,4 +825,40 @@ export function writeToCache(
   opts?: BuildOptions,
 ): void {
   writeModulesToCache(projectRoot, [{ file, sig, mod }], opts);
+}
+
+/**
+ * Delete cache rows. A build uses this in two cases:
+ * - Stale importers: delete the rows before the rebuild. A failed rebuild or cache write then cannot leave a row that a later build reuses.
+ * - Deleted files: delete the rows after a successful full build. The next unchanged build is then fully warm.
+ *
+ * Returns false when a disk row could not be deleted. The caller must then keep its previous state.
+ */
+export function removeModulesFromCache(projectRoot: string, files: readonly string[], opts?: BuildOptions): boolean {
+  if (!files.length) return true;
+  const mode = opts?.cache ?? "off";
+  if (mode === "memory") {
+    for (const file of files) memoryCache.delete(memoryCacheKey(projectRoot, file));
+  } else if (mode === "disk") {
+    if (!isNodeSqliteUsable()) {
+      const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
+      reportMissingNodeSqlite(opts?.logLevel, error);
+      return false;
+    }
+    if (!diskModuleCacheExists(projectRoot, opts)) return true;
+    try {
+      const cache = getDiskModuleCache(projectRoot, opts);
+      cache.db.transaction(() => {
+        for (const file of files) cache.remove.run(cacheRelativePath(projectRoot, file));
+      })();
+    } catch (error) {
+      if (isNodeSqliteUnavailableError(error)) {
+        reportMissingNodeSqlite(opts?.logLevel, error);
+        return false;
+      }
+      logWithLevel(opts?.logLevel, "warn", "Warning: Failed to remove modules from cache:", error);
+      return false;
+    }
+  }
+  return true;
 }

@@ -130,6 +130,23 @@ export function collectPythonPackageImporters(
   trackedEntries: Record<string, ManifestFileEntry>,
   addedFiles: readonly string[],
 ): Set<string> {
+  return pythonImportersOfPackageInits(
+    Object.entries(trackedEntries).map(([file, entry]) => [
+      file,
+      entry.edges.flatMap((edge) => (edge.to.type === "file" ? [edge.to.path] : [])),
+    ]),
+    addedFiles,
+  );
+}
+
+/**
+ * Same as `collectPythonPackageImporters`, for builds without a manifest.
+ * Takes the resolved import targets of each importer.
+ */
+export function pythonImportersOfPackageInits(
+  importerTargets: Iterable<readonly [file: string, targets: readonly string[]]>,
+  addedFiles: readonly string[],
+): Set<string> {
   const packageInits = new Set<string>();
   for (const file of addedFiles) {
     if (!PYTHON_SOURCE_PATTERN.test(file)) continue;
@@ -145,11 +162,9 @@ export function collectPythonPackageImporters(
   }
   const importers = new Set<string>();
   if (!packageInits.size) return importers;
-  for (const [file, entry] of Object.entries(trackedEntries)) {
+  for (const [file, targets] of importerTargets) {
     if (!PYTHON_SOURCE_PATTERN.test(file)) continue;
-    if (entry.edges.some((edge) => edge.to.type === "file" && packageInits.has(fileIdentityKey(edge.to.path)))) {
-      importers.add(file);
-    }
+    if (targets.some((target) => packageInits.has(fileIdentityKey(target)))) importers.add(file);
   }
   return importers;
 }
@@ -163,17 +178,20 @@ const MULTI_PART_RESOLUTION_EXTENSIONS = DEFAULT_RESOLUTION_EXTENSIONS.filter(
 type ExternalSpecifierResolutionRule = {
   separator: RegExp;
   importNamesDirectory?: "parent" | "ancestors";
-  reResolveAnyAddedExtension?: string;
+  // Declaration imports name packages, not files, so a filename stem cannot match.
+  // Any added file of the language re-resolves its importers.
+  reResolveAnyAddedExtensions?: readonly string[];
   matchesModuleSegments?: boolean;
 };
 
 const DEFAULT_EXTERNAL_SPECIFIER_RULE: ExternalSpecifierResolutionRule = { separator: /[/\\]/u };
 
 const EXTERNAL_SPECIFIER_RESOLUTION_RULES: Readonly<Record<string, ExternalSpecifierResolutionRule>> = {
-  csharp: { separator: /[/\\]/u, reResolveAnyAddedExtension: ".cs" },
+  csharp: { separator: /[/\\]/u, reResolveAnyAddedExtensions: [".cs", ".csx"] },
   go: { separator: /\//u, importNamesDirectory: "parent" },
-  java: { separator: /\./u },
-  kotlin: { separator: /\./u },
+  java: { separator: /\./u, reResolveAnyAddedExtensions: [".java"] },
+  kotlin: { separator: /\./u, reResolveAnyAddedExtensions: [".kt", ".kts", ".ktm"] },
+  php: { separator: /[/\\]/u, reResolveAnyAddedExtensions: [".php", ".phtml", ".php4", ".php8"] },
   python: { separator: /[./\\]/u, importNamesDirectory: "ancestors" },
   rust: { separator: /::/u, matchesModuleSegments: true },
 };
@@ -212,10 +230,22 @@ function externalSpecifierSegments(value: string, rule: ExternalSpecifierResolut
   return value.split(rule.separator).filter((segment) => segment && segment !== "." && segment !== "..");
 }
 
-function hasAddedFileMatchingRule(rule: ExternalSpecifierResolutionRule, addedFiles: readonly string[]): boolean {
-  const extension = rule.reResolveAnyAddedExtension;
-  if (!extension) return false;
-  return addedFiles.some((file) => path.extname(file).toLowerCase() === extension);
+/**
+ * True when an added file can satisfy a declaration import.
+ * The file has a built-in suffix, or its configured language is the importer's language
+ * (for example, a `.jvm` file mapped to Kotlin).
+ */
+function hasAddedFileMatchingRule(
+  rule: ExternalSpecifierResolutionRule,
+  languageId: string,
+  addedFiles: readonly string[],
+  addedFileLanguageId?: (file: string) => string | undefined,
+): boolean {
+  const extensions = rule.reResolveAnyAddedExtensions;
+  if (!extensions || !extensions.length) return false;
+  return addedFiles.some(
+    (file) => extensions.includes(path.extname(file).toLowerCase()) || addedFileLanguageId?.(file) === languageId,
+  );
 }
 
 function specifierMatchesAddedStem(
@@ -273,10 +303,11 @@ export function externalSpecifierMatchesAddedStem(
   addedStems: ReadonlySet<string>,
   mappedTails: readonly string[] = [],
   addedFiles: readonly string[] = [],
+  addedFileLanguageId?: (file: string) => string | undefined,
 ): boolean {
   if (!specifier) return false;
   const rule = externalSpecifierResolutionRule(languageId);
-  if (hasAddedFileMatchingRule(rule, addedFiles)) return true;
+  if (hasAddedFileMatchingRule(rule, languageId, addedFiles, addedFileLanguageId)) return true;
   if (!addedStems.size) return false;
   if (specifierMatchesAddedStem(specifier, rule, addedStems)) return true;
   return mappedTails.some((tail) => specifierMatchesAddedStem(tail, rule, addedStems));

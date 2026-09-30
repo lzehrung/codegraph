@@ -1,8 +1,10 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
   buildProjectIndex,
+  buildProjectIndexFromFiles,
   buildProjectIndexIncremental,
   buildSymbolGraphDetailed,
   findReferences,
@@ -11,6 +13,15 @@ import {
   type BuildReport,
 } from "../src/index.js";
 import { createAgentSession } from "../src/agent/session.js";
+import {
+  cacheDatabasePath,
+  cacheRelativePath,
+  closeDiskCacheDatabase,
+  memoryCacheLostPayloads,
+  peekCachedModule,
+  tryLoadFromCache,
+  writeToCache,
+} from "../src/indexer/build-cache/module-cache.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf } from "./languages/callable-consumer-fixtures.js";
@@ -874,6 +885,624 @@ describe("warm disk-cache build reacts when a file starts or stops resolving an 
       expect(edgeTargets(warm, main)).toEqual(edgeTargets(initial, main));
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("warm module-cache builds never reuse import bindings resolved against an older file set", () => {
+  /** Import binding targets of a module as comparable strings. */
+  function bindingTargets(index: ProjectIndex, file: string): string[] {
+    const mod = index.byFile.get(fileIdentityKey(file));
+    return (mod?.imports ?? [])
+      .map((binding) =>
+        typeof binding.resolved === "string"
+          ? `file:${normalizePath(binding.resolved)}`
+          : `external:${binding.resolved?.external ?? ""}`,
+      )
+      .sort();
+  }
+
+  for (const cache of ["disk", "memory"] as const) {
+    it(`follows a moved and an added import target like a cold build (${cache} cache)`, async () => {
+      const root = await mkTmpDir(`cg-module-cache-move-${cache}-`);
+      try {
+        const use = path.join(root, "use.ts");
+        const useLines = ['import { x } from "./a";', 'import { z } from "./b";', "export const y = x() + z();", ""];
+        await fsp.writeFile(path.join(root, "a.ts"), "export function x() { return 1; }\n", "utf8");
+        await fsp.writeFile(use, useLines.join("\n"), "utf8");
+        const initial = await buildProjectIndex(root, { cache });
+        expect(bindingTargets(initial, use)).toEqual([
+          "external:./b",
+          `file:${normalizePath(path.join(root, "a.ts"))}`,
+        ]);
+
+        // Move a.ts to a/index.ts and add b.ts; use.ts itself does not change.
+        await fsp.mkdir(path.join(root, "a"));
+        await fsp.rename(path.join(root, "a.ts"), path.join(root, "a", "index.ts"));
+        await fsp.writeFile(path.join(root, "b.ts"), "export function z() { return 3; }\n", "utf8");
+        const warm = await buildProjectIndex(root, { cache });
+        const cold = await buildProjectIndex(root, { cache: "off" });
+        expect(bindingTargets(warm, use)).toEqual(bindingTargets(cold, use));
+        expect(edgeTargets(warm, use)).toEqual(edgeTargets(cold, use));
+        expect(bindingTargets(warm, use)).toEqual([
+          `file:${normalizePath(path.join(root, "a", "index.ts"))}`,
+          `file:${normalizePath(path.join(root, "b.ts"))}`,
+        ]);
+        const gotoWarm = await goToDefinition(warm, { file: use, line: 3, column: columnOf(useLines, 3, "x(") });
+        expect(gotoWarm.status === "ok" ? normalizePath(gotoWarm.definition.file) : null).toBe(
+          normalizePath(path.join(root, "a", "index.ts")),
+        );
+
+        // With nothing changed, the next warm build reuses every cached module.
+        const report: BuildReport = { timings: {} };
+        await buildProjectIndex(root, { cache, report });
+        expect(report.files?.cached).toBe(report.files?.total);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("follows a moved and an added import target with an explicit file list and no manifest (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-move-files-");
+    const cacheDir = await mkTmpDir("cg-module-cache-move-files-cache-");
+    try {
+      const use = path.join(root, "use.ts");
+      const useLines = ['import { x } from "./a";', 'import { z } from "./b";', "export const y = x() + z();", ""];
+      await fsp.writeFile(path.join(root, "a.ts"), "export function x() { return 1; }\n", "utf8");
+      await fsp.writeFile(use, useLines.join("\n"), "utf8");
+      await buildProjectIndexFromFiles(root, [use, path.join(root, "a.ts")], { cache: "disk", cacheDir });
+
+      await fsp.mkdir(path.join(root, "a"));
+      await fsp.rename(path.join(root, "a.ts"), path.join(root, "a", "index.ts"));
+      await fsp.writeFile(path.join(root, "b.ts"), "export function z() { return 3; }\n", "utf8");
+      const files = [use, path.join(root, "a", "index.ts"), path.join(root, "b.ts")];
+      const warm = await buildProjectIndexFromFiles(root, files, { cache: "disk", cacheDir });
+      const cold = await buildProjectIndexFromFiles(root, files, { cache: "off" });
+      expect(bindingTargets(warm, use)).toEqual(bindingTargets(cold, use));
+      expect(bindingTargets(warm, use)).toEqual([
+        `file:${normalizePath(path.join(root, "a", "index.ts"))}`,
+        `file:${normalizePath(path.join(root, "b.ts"))}`,
+      ]);
+
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, files, { cache: "disk", cacheDir, report });
+      expect(report.files?.cached).toBe(report.files?.total);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rebinds a C# using directive when the only declaring file is renamed (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-csharp-rename-");
+    try {
+      const use = path.join(root, "Use.cs");
+      const useLines = [
+        "using P;",
+        "namespace Q;",
+        "public class Use {",
+        "  public object B() => new Other();",
+        "}",
+        "",
+      ];
+      await fsp.writeFile(path.join(root, "Other.cs"), "namespace P;\npublic class Other { }\n", "utf8");
+      await fsp.writeFile(use, useLines.join("\n"), "utf8");
+      await buildProjectIndex(root, DISK_BUILD);
+      await fsp.rename(path.join(root, "Other.cs"), path.join(root, "Moved.cs"));
+      const warm = await buildProjectIndex(root, DISK_BUILD);
+      const result = await goToDefinition(warm, { file: use, line: 4, column: columnOf(useLines, 4, "Other") });
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("Moved.cs");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rebinds a C# using directive when another file's namespace declaration changes (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-csharp-namespace-");
+    try {
+      const use = path.join(root, "Use.cs");
+      const useLines = [
+        "using P;",
+        "namespace Q;",
+        "public class Use {",
+        "  public object B() => new Other();",
+        "}",
+        "",
+      ];
+      await fsp.writeFile(path.join(root, "Aaa.cs"), "namespace P;\npublic class Other { }\n", "utf8");
+      await fsp.mkdir(path.join(root, "sub"));
+      await fsp.writeFile(path.join(root, "sub", "Bbb.cs"), "namespace Z;\npublic class Other { }\n", "utf8");
+      await fsp.writeFile(use, useLines.join("\n"), "utf8");
+      await buildProjectIndex(root, DISK_BUILD);
+      // Use.cs does not change; namespace P moves from Aaa.cs to sub/Bbb.cs in another directory.
+      await fsp.writeFile(path.join(root, "Aaa.cs"), "namespace R;\npublic class Other { }\n", "utf8");
+      await fsp.writeFile(path.join(root, "sub", "Bbb.cs"), "namespace P;\npublic class Other { }\n", "utf8");
+      const warm = await buildProjectIndex(root, DISK_BUILD);
+      const result = await goToDefinition(warm, { file: use, line: 4, column: columnOf(useLines, 4, "Other") });
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("Bbb.cs");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-resolves a C# using directive when an existing file starts declaring its namespace (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-new-declaration-");
+    try {
+      const use = path.join(root, "Use.cs");
+      const mix = path.join(root, "b", "Mix.cs");
+      const useLines = ["using N;", "namespace Q;", "public class Use {", "  public object B() => new Mix();", "}", ""];
+      await fsp.mkdir(path.join(root, "a"));
+      await fsp.mkdir(path.dirname(mix));
+      await fsp.writeFile(path.join(root, "a", "First.cs"), "namespace N;\npublic class First { }\n", "utf8");
+      await fsp.writeFile(mix, "namespace Other;\npublic class Mix { }\n", "utf8");
+      await fsp.writeFile(use, useLines.join("\n"), "utf8");
+      const initial = await buildProjectIndex(root, DISK_BUILD);
+      const before = await goToDefinition(initial, { file: use, line: 4, column: columnOf(useLines, 4, "Mix") });
+      expect(before.status).toBe("not_found");
+      // Use.cs does not change; b/Mix.cs now declares namespace N.
+      await fsp.writeFile(mix, "namespace N;\npublic class Mix { }\n", "utf8");
+      const warm = await buildProjectIndex(root, DISK_BUILD);
+      const result = await goToDefinition(warm, { file: use, line: 4, column: columnOf(useLines, 4, "Mix") });
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("Mix.cs");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a C++ module import from the survivor when one duplicate declaration is deleted (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-dupe-");
+    try {
+      await fsp.writeFile(path.join(root, "alpha.cpp"), "export module shared;\n", "utf8");
+      await fsp.writeFile(path.join(root, "beta.cpp"), "export module shared;\n", "utf8");
+      await fsp.writeFile(path.join(root, "main.cpp"), "import shared;\n", "utf8");
+      await buildProjectIndex(root, DISK_BUILD);
+      await fsp.rm(path.join(root, "beta.cpp"));
+      const warm = await buildProjectIndex(root, DISK_BUILD);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(edgeTargets(warm, path.join(root, "main.cpp"))).toEqual(edgeTargets(cold, path.join(root, "main.cpp")));
+      expect(edgeTargets(warm, path.join(root, "main.cpp")).some((target) => target.endsWith("/alpha.cpp"))).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // The stem of the added file (`beta`) never matches the module name (`shared`).
+  // Only the declared-container comparison sees the new declaration.
+  // Disk covers the manifest path. Memory covers the no-manifest path.
+  for (const cache of ["disk", "memory"] as const) {
+    it(`returns a C++ module import to unresolved when a second declaration makes it ambiguous (${cache} cache)`, async () => {
+      const root = await mkTmpDir(`cg-module-cache-cpp-ambiguous-${cache}-`);
+      try {
+        const main = path.join(root, "main.cpp");
+        await fsp.writeFile(path.join(root, "alpha.cpp"), "export module shared;\n", "utf8");
+        await fsp.writeFile(main, "import shared;\n", "utf8");
+        const resolved = await buildProjectIndex(root, { cache });
+        expect(edgeTargets(resolved, main).some((target) => target.endsWith("/alpha.cpp"))).toBe(true);
+
+        await fsp.writeFile(path.join(root, "beta.cpp"), "export module shared;\n", "utf8");
+        const warm = await buildProjectIndex(root, { cache });
+        const targets = await expectWarmMatchesCold(root, main, warm);
+        expect(targets).toEqual(["external:shared"]);
+        // The cached module's own bindings must agree with the graph, not just its edges.
+        const cold = await buildProjectIndex(root, { cache: "off" });
+        expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+        expect(bindingTargets(warm, main)).toEqual(["external:shared"]);
+
+        // With nothing changed, the next warm build reuses every cached module.
+        const report: BuildReport = { timings: {} };
+        await buildProjectIndex(root, { cache, report });
+        expect(report.files?.cached).toBe(report.files?.total);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // The import names the declaration (`p.Widget`), not the filename (`Helpers`).
+  // Only the extension rule for declaration languages triggers re-resolution.
+  for (const cache of ["disk", "memory"] as const) {
+    it(`resolves a declaration-named import added under an unrelated filename (${cache} cache)`, async () => {
+      const root = await mkTmpDir(`cg-module-cache-decl-name-${cache}-`);
+      try {
+        const main = path.join(root, "p", "Main.kt");
+        const mainLines = ["package p", "import p.Widget", "fun use(w: Widget): Widget = w", ""];
+        await writeFixtureFile(root, `p/Main.kt`, mainLines.join(`\n`));
+        const unresolved = await buildProjectIndex(root, { cache });
+        expect(bindingTargets(unresolved, main)).toEqual(["external:p.Widget"]);
+
+        await writeFixtureFile(root, "p/Helpers.kt", "package p\nclass Widget\n");
+        const warm = await buildProjectIndex(root, { cache });
+        const targets = await expectWarmMatchesCold(root, main, warm);
+        expect(targets).toEqual(["file:" + normalizePath(path.join(root, "p", "Helpers.kt"))]);
+        expect(bindingTargets(warm, main)).toEqual(["file:" + normalizePath(path.join(root, "p", "Helpers.kt"))]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // Without a manifest, a deleted declarer leaves no cache miss.
+  // A rewritten declarer does not show what it declared.
+  // Surviving rows and stale rows supply both.
+  it("resolves a C++ module import from the survivor when one duplicate declaration is deleted (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-dupe-memory-");
+    try {
+      await fsp.writeFile(path.join(root, "alpha.cpp"), "export module shared;\n", "utf8");
+      await fsp.writeFile(path.join(root, "beta.cpp"), "export module shared;\n", "utf8");
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      const ambiguous = await buildProjectIndex(root, { cache: "memory" });
+      expect(bindingTargets(ambiguous, main)).toEqual(["external:shared"]);
+
+      await fsp.rm(path.join(root, "beta.cpp"));
+      const warm = await buildProjectIndex(root, { cache: "memory" });
+      const targets = await expectWarmMatchesCold(root, main, warm);
+      expect(targets).toEqual(["file:" + normalizePath(path.join(root, "alpha.cpp"))]);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect(bindingTargets(warm, main).length).toBeGreaterThan(0);
+      for (const target of bindingTargets(warm, main)) {
+        expect(target).toBe("file:" + normalizePath(path.join(root, "alpha.cpp")));
+      }
+      // The rebuild retired the deletion, so the next build reuses every module.
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndex(root, { cache: "memory", report });
+      expect(report.files?.cached).toBe(report.files?.total);
+      expect(report.cache).toMatchObject({ mode: "memory", misses: 0 });
+      expect(report.cache?.hits).toBe(report.files?.total);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a C++ module import from the survivor when a duplicate declaration is rewritten (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-rewrite-memory-");
+    try {
+      await fsp.writeFile(path.join(root, "alpha.cpp"), "export module shared;\n", "utf8");
+      await fsp.writeFile(path.join(root, "beta.cpp"), "export module shared;\n", "utf8");
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      const ambiguous = await buildProjectIndex(root, { cache: "memory" });
+      expect(bindingTargets(ambiguous, main)).toEqual(["external:shared"]);
+
+      await fsp.writeFile(path.join(root, "beta.cpp"), "export module other;\n", "utf8");
+      const warm = await buildProjectIndex(root, { cache: "memory" });
+      const targets = await expectWarmMatchesCold(root, main, warm);
+      expect(targets).toEqual(["file:" + normalizePath(path.join(root, "alpha.cpp"))]);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect(bindingTargets(warm, main).length).toBeGreaterThan(0);
+      for (const target of bindingTargets(warm, main)) {
+        expect(target).toBe("file:" + normalizePath(path.join(root, "alpha.cpp")));
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Two files declare `P`, so the alias binding has no `resolved` target.
+  // The importer must still count as unresolved.
+  it("binds a C# namespace alias to the survivor when a duplicate declaration is deleted (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-csharp-alias-memory-");
+    try {
+      await fsp.writeFile(path.join(root, "Aaa.cs"), "namespace P;\npublic class Aaa {}\n", "utf8");
+      await fsp.writeFile(path.join(root, "Bbb.cs"), "namespace P;\npublic class Bbb {}\n", "utf8");
+      const main = path.join(root, "Use.cs");
+      await fsp.writeFile(main, "using X = P;\nclass Use {\n  X.Aaa Make() => new X.Aaa();\n}\n", "utf8");
+      const ambiguous = await buildProjectIndex(root, { cache: "memory" });
+      expect(bindingTargets(ambiguous, main)).toEqual(["external:"]);
+
+      await fsp.rm(path.join(root, "Bbb.cs"));
+      const warm = await buildProjectIndex(root, { cache: "memory" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect(bindingTargets(warm, main)).toEqual(["file:" + normalizePath(path.join(root, "Aaa.cs"))]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // The memory cache holds 5,000 payloads. After the payload of `alpha.cpp` is evicted,
+  // its rewrite is not a cache hit and not a stale row, so its old declaration is unknown.
+  // The importer must re-resolve.
+  it("re-resolves a C++ importer when the declarer's evicted payload was rewritten (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-evicted-");
+    try {
+      const alpha = path.join(root, "alpha.cpp");
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(alpha, "export module shared;\n", "utf8");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      const first = await buildProjectIndex(root, { cache: "memory" });
+      expect([...new Set(bindingTargets(first, main))]).toEqual(["file:" + normalizePath(alpha)]);
+
+      // Touch main so it is the newest row, then fill the cache so exactly alpha is evicted.
+      const cacheKeyOf = (file: string): string => normalizePath(file);
+      const mainRow = peekCachedModule(root, cacheKeyOf(main), { cache: "memory" });
+      expect(mainRow).not.toBeNull();
+      expect(tryLoadFromCache(root, cacheKeyOf(main), mainRow!.sig, { cache: "memory" })).not.toBeNull();
+      for (let i = 0; i < 4999; i += 1) {
+        const filler = "/filler/f-" + i + ".ts";
+        writeToCache(root, filler, "sig", { file: filler, exports: [], imports: [], locals: [] }, { cache: "memory" });
+      }
+      expect(peekCachedModule(root, cacheKeyOf(alpha), { cache: "memory" })).toBeNull();
+      expect(peekCachedModule(root, cacheKeyOf(main), { cache: "memory" })).not.toBeNull();
+
+      await fsp.writeFile(alpha, "export module other;\n", "utf8");
+      const warm = await buildProjectIndex(root, { cache: "memory" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect([...new Set(bindingTargets(warm, main))]).toEqual(["external:shared"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // The old row of a changed file cannot be decoded, so its previous declaration is unknown.
+  // Without a manifest, nothing else invalidates the importer.
+  it("re-resolves a C++ importer when a rewritten declarer's old row is undecodable (disk cache, no manifest)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-corrupt-");
+    const cacheDir = await mkTmpDir("cg-module-cache-cpp-corrupt-cache-");
+    const opts = { cache: "disk" as const, cacheDir };
+    try {
+      const alpha = path.join(root, "alpha.cpp");
+      const beta = path.join(root, "beta.cpp");
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(alpha, "export module shared;\n", "utf8");
+      await fsp.writeFile(beta, "export module shared;\n", "utf8");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      const files = [alpha, beta, main];
+      const ambiguous = await buildProjectIndexFromFiles(root, files, opts);
+      expect(bindingTargets(ambiguous, main)).toEqual(["external:shared"]);
+
+      closeDiskCacheDatabase(root, opts);
+      const db = new DatabaseSync(cacheDatabasePath(root, opts, "index-cache.sqlite"));
+      try {
+        const updated = db
+          .prepare("UPDATE module_cache SET payload = ? WHERE file = ?")
+          .run(Buffer.from("not a module payload"), cacheRelativePath(root, beta));
+        expect(Number(updated.changes)).toBe(1);
+      } finally {
+        db.close();
+      }
+
+      await fsp.writeFile(beta, "export module other;\n", "utf8");
+      const warm = await buildProjectIndexFromFiles(root, files, opts);
+      const cold = await buildProjectIndexFromFiles(root, files, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect([...new Set(bindingTargets(warm, main))]).toEqual(["file:" + normalizePath(alpha)]);
+    } finally {
+      closeDiskCacheDatabase(root, opts);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  // The LRU is shared by all projects, so another project can evict these rows.
+  // After a complete build restores them, unchanged builds must reuse every module.
+  it("reuses every module again after a complete build restores rows another project evicted (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-restored-");
+    const other = await mkTmpDir("cg-module-cache-cpp-restored-other-");
+    try {
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(path.join(root, "alpha.cpp"), "export module shared;\n", "utf8");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      await buildProjectIndex(root, { cache: "memory" });
+      for (let i = 0; i < 5000; i += 1) {
+        const filler = "/filler/f-" + i + ".ts";
+        writeToCache(other, filler, "sig", { file: filler, exports: [], imports: [], locals: [] }, { cache: "memory" });
+      }
+      expect(memoryCacheLostPayloads(root)).toBe(true);
+
+      const rebuilt = await buildProjectIndex(root, { cache: "memory" });
+      expect([...new Set(bindingTargets(rebuilt, main))]).toEqual([
+        "file:" + normalizePath(path.join(root, "alpha.cpp")),
+      ]);
+      expect(memoryCacheLostPayloads(root)).toBe(false);
+
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndex(root, { cache: "memory", report });
+      expect(report.files?.cached).toBe(report.files?.total);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(other, { recursive: true, force: true });
+    }
+  });
+
+  // `from . import mod` already targets `__init__.py`.
+  // Without a manifest, only the cached bindings identify the importer.
+  it("re-resolves a relative Python from-import once the submodule is added (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-py-relative-memory-");
+    try {
+      const user = path.join(root, "pkg", "user.py");
+      await fsp.mkdir(path.join(root, "pkg"), { recursive: true });
+      await fsp.writeFile(path.join(root, "pkg", "__init__.py"), "", "utf8");
+      await fsp.writeFile(user, "from . import mod\n\ndef use():\n    return mod.value()\n", "utf8");
+      const before = await buildProjectIndex(root, { cache: "memory" });
+      const initInitial = normalizePath(path.join(root, "pkg", "__init__.py"));
+      expect(bindingTargets(before, user)).toEqual(["file:" + initInitial]);
+
+      const submodule = path.join(root, "pkg", "mod.py");
+      await fsp.writeFile(submodule, "def value():\n    return 1\n", "utf8");
+      const warm = await buildProjectIndex(root, { cache: "memory" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, user)).toEqual(bindingTargets(cold, user));
+      expect(bindingTargets(warm, user)).toEqual(["file:" + normalizePath(submodule)]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A build over a file list omits `main.cpp`, so it must not consume the deletion of `beta.cpp`.
+  // The later build that includes `main.cpp` still needs it.
+  it("keeps a deleted declarer's evidence when a scoped build omits its importers (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-scoped-retire-");
+    try {
+      const alpha = path.join(root, "alpha.cpp");
+      const beta = path.join(root, "beta.cpp");
+      const main = path.join(root, "main.cpp");
+      const unrelated = path.join(root, "unrelated.ts");
+      await fsp.writeFile(alpha, "export module shared;\n", "utf8");
+      await fsp.writeFile(beta, "export module shared;\n", "utf8");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      await fsp.writeFile(unrelated, "export const value = 1;\n", "utf8");
+      const memory = { cache: "memory" as const };
+      const initial = await buildProjectIndexFromFiles(root, [alpha, beta, main, unrelated], memory);
+      expect(bindingTargets(initial, main)).toEqual(["external:shared"]);
+
+      await fsp.rm(beta);
+      await buildProjectIndexFromFiles(root, [unrelated], memory);
+      const scoped = [alpha, main];
+      const warm = await buildProjectIndexFromFiles(root, scoped, memory);
+      const cold = await buildProjectIndexFromFiles(root, scoped, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect([...new Set(bindingTargets(warm, main))]).toEqual(["file:" + normalizePath(alpha)]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // An unmapped `.h` file is C or C++ by its content. A header that imports a C++ module
+  // must re-resolve like a `.cpp` importer.
+  it("re-resolves a C++ header importer when a rewritten declarer's old row is undecodable (disk cache, no manifest)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-header-");
+    const cacheDir = await mkTmpDir("cg-module-cache-cpp-header-cache-");
+    const opts = { cache: "disk" as const, cacheDir };
+    try {
+      const alpha = path.join(root, "alpha.cpp");
+      const beta = path.join(root, "beta.cpp");
+      const header = path.join(root, "user.h");
+      await fsp.writeFile(alpha, "export module shared;\n", "utf8");
+      await fsp.writeFile(beta, "export module shared;\n", "utf8");
+      await fsp.writeFile(header, "import shared;\n", "utf8");
+      const files = [alpha, beta, header];
+      const ambiguous = await buildProjectIndexFromFiles(root, files, opts);
+      expect(bindingTargets(ambiguous, header)).toEqual(["external:shared"]);
+
+      closeDiskCacheDatabase(root, opts);
+      const db = new DatabaseSync(cacheDatabasePath(root, opts, "index-cache.sqlite"));
+      try {
+        db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+          Buffer.from("not a module payload"),
+          cacheRelativePath(root, beta),
+        );
+      } finally {
+        db.close();
+      }
+
+      await fsp.writeFile(beta, "export module other;\n", "utf8");
+      const warm = await buildProjectIndexFromFiles(root, files, opts);
+      const cold = await buildProjectIndexFromFiles(root, files, { cache: "off" });
+      expect(bindingTargets(warm, header)).toEqual(bindingTargets(cold, header));
+      expect([...new Set(bindingTargets(warm, header))]).toEqual(["file:" + normalizePath(alpha)]);
+    } finally {
+      closeDiskCacheDatabase(root, opts);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  // Two files declare `N.Point`, so the alias stays external. Deleting one leaves no edge to it
+  // and no declared-container entry (only C++ records those), so only the deletion itself can
+  // trigger re-resolution.
+  it("resolves an ambiguous C# alias from the survivor when one declarer is deleted (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-csharp-alias-delete-");
+    try {
+      const first = path.join(root, "a", "First.cs");
+      const second = path.join(root, "b", "Second.cs");
+      const use = path.join(root, "Use.cs");
+      await fsp.mkdir(path.dirname(first));
+      await fsp.mkdir(path.dirname(second));
+      await fsp.writeFile(first, "namespace N;\npublic class Point { public static int Left() => 1; }\n", "utf8");
+      await fsp.writeFile(second, "namespace N;\npublic class Point { public static int Left() => 2; }\n", "utf8");
+      await fsp.writeFile(use, "using PT = N.Point;\nclass Use {\n  int M() => PT.Left();\n}\n", "utf8");
+      const ambiguous = await buildProjectIndex(root, DISK_BUILD);
+      expect(bindingTargets(ambiguous, use).every((target) => target.startsWith("external:"))).toBe(true);
+
+      await fsp.rm(second);
+      const warm = await buildProjectIndex(root, DISK_BUILD);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, use)).toEqual(bindingTargets(cold, use));
+      expect(bindingTargets(warm, use)).toEqual(["file:" + normalizePath(first)]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A cache row is persisted data. A row that names a path outside the project must not be
+  // probed as a deleted declaration file, which would re-resolve every C# importer.
+  it("ignores a cache row that names a path outside the project (disk cache, no manifest)", async () => {
+    const root = await mkTmpDir("cg-module-cache-outside-row-");
+    const cacheDir = await mkTmpDir("cg-module-cache-outside-row-cache-");
+    const opts = { cache: "disk" as const, cacheDir };
+    try {
+      const use = path.join(root, "Use.cs");
+      await fsp.writeFile(use, "using Missing.Namespace;\nclass Use {}\n", "utf8");
+      const first = await buildProjectIndexFromFiles(root, [use], opts);
+      expect(bindingTargets(first, use).every((target) => target.startsWith("external:"))).toBe(true);
+
+      closeDiskCacheDatabase(root, opts);
+      const db = new DatabaseSync(cacheDatabasePath(root, opts, "index-cache.sqlite"));
+      try {
+        const current = db.prepare("SELECT version FROM module_cache LIMIT 1").get() as { version: number };
+        db.prepare("INSERT INTO module_cache(file, sig, version, payload, updated_at) VALUES (?, ?, ?, ?, ?)").run(
+          "../outside/Gone.cs",
+          "sig",
+          current.version,
+          Buffer.from("payload"),
+          Date.now(),
+        );
+      } finally {
+        db.close();
+      }
+
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, [use], { ...opts, report });
+      expect(report.files?.cached).toBe(report.files?.total);
+    } finally {
+      closeDiskCacheDatabase(root, opts);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  // The deleted declarer's row is undecodable, so its declarations are unknown. A header that
+  // imports the module is C++ by its content and must still re-resolve.
+  it("re-resolves a C++ header importer when a deleted declarer's row is undecodable (disk cache, no manifest)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-header-deleted-");
+    const cacheDir = await mkTmpDir("cg-module-cache-cpp-header-deleted-cache-");
+    const opts = { cache: "disk" as const, cacheDir };
+    try {
+      const alpha = path.join(root, "alpha.cpp");
+      const beta = path.join(root, "beta.cpp");
+      const header = path.join(root, "user.h");
+      await fsp.writeFile(alpha, "export module shared;\n", "utf8");
+      await fsp.writeFile(beta, "export module shared;\n", "utf8");
+      await fsp.writeFile(header, "import shared;\n", "utf8");
+      const ambiguous = await buildProjectIndexFromFiles(root, [alpha, beta, header], opts);
+      expect(bindingTargets(ambiguous, header)).toEqual(["external:shared"]);
+
+      closeDiskCacheDatabase(root, opts);
+      const db = new DatabaseSync(cacheDatabasePath(root, opts, "index-cache.sqlite"));
+      try {
+        db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+          Buffer.from("not a module payload"),
+          cacheRelativePath(root, beta),
+        );
+      } finally {
+        db.close();
+      }
+
+      await fsp.rm(beta);
+      const files = [alpha, header];
+      const warm = await buildProjectIndexFromFiles(root, files, opts);
+      const cold = await buildProjectIndexFromFiles(root, files, { cache: "off" });
+      expect(bindingTargets(warm, header)).toEqual(bindingTargets(cold, header));
+      expect([...new Set(bindingTargets(warm, header))]).toEqual(["file:" + normalizePath(alpha)]);
+    } finally {
+      closeDiskCacheDatabase(root, opts);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
     }
   });
 });

@@ -88,6 +88,23 @@ Disk loads reuse unchanged files and update changed ones. Codegraph validates fi
 
 Module and graph cache identities also include effective TypeScript `baseUrl`/`paths` (including `extends`) and workspace package names, locations, `main`, and `exports`. These inputs are checked even when `resolveNodeModules` is disabled, so configuration-only changes cannot leave cached import targets on the old files. Unchanged resolution inputs still permit reuse.
 
+A cached module is keyed by its own content, but its import targets depend on other files. A warm build extracts a module again when:
+
+- the module changed;
+- a file it imports was deleted, or a resolved import or re-export target no longer exists;
+- an added file can satisfy one of its specifiers;
+- it is a C#, Java, Kotlin, PHP, or C++ module, and a file it depends on changed. These imports resolve through the namespace or package declarations of other files.
+
+With an index manifest, the build re-resolves the affected specifiers of added files. Without one (a `memory` cache, or a `disk` cache that no manifest-writing build has seen), the cached import bindings replace the manifest edges.
+
+Declaration-based imports name a package, namespace, or module, not a file:
+
+- Any added, changed, or deleted file of the language re-resolves that language's importers. The file suffix or the configured language selects the file.
+- Without a manifest, the rows of the previous build show removed or rewritten declarations.
+- A build deletes the cache row of each stale importer before it extracts the importer again. A failed extraction or cache write then cannot leave a row that a later build reuses. If a disk row cannot be deleted, the build keeps the previous manifest, so the next build finds the same stale importer.
+- A manifest-less full-discovery build also deletes the rows of confirmed-deleted files, so the next unchanged build is fully warm. A build over an explicit file list keeps them, because an importer outside the list still needs them.
+- A `memory` cache evicts payloads past 5,000 entries. The old declarations are also unknown when the previous row of a changed file cannot be decoded. The affected importers then re-resolve until a complete build restores the rows.
+
 Existing `.codegraph-cache/` directories migrate automatically to `.codegraph/cache/` on the next run.
 
 Disk search can also store normalized source and chunk text in SQLite. Treat that cache as sensitive derived source data; use `--cache off` to avoid it and stop codegraph before deletion.

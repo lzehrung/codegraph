@@ -10,6 +10,10 @@ import {
   clearMemoryCache,
   closeDiskCacheDatabase,
   diskModuleCacheExists,
+  memoryCacheEvictionSerial,
+  memoryCacheLostPayloads,
+  settleMemoryCacheEvictions,
+  removeModulesFromCache,
   resetDiskModuleCacheSqliteStateForTests,
   transformPersistedExportFromModule,
   tryLoadFromCache,
@@ -233,6 +237,91 @@ describe("module memory cache bounds", () => {
     expect(tryLoadFromCache(root, "/files/stale.ts", "old-sig", { cache: "memory" })).toBeNull();
     expect(tryLoadFromCache(root, "/files/extra.ts", "sig", { cache: "memory" })?.locals[0]?.localName).toBe("extra");
     clearMemoryCache();
+  });
+
+  it("flags only the project whose payloads were evicted, and only once one is", () => {
+    const root = path.join(os.tmpdir(), "dg-cache-evicted-root");
+    const other = path.join(os.tmpdir(), "dg-cache-evicted-other");
+    clearMemoryCache();
+    try {
+      writeToCache(other, "/files/o.ts", "sig", moduleFor("/files/o.ts", "o"), { cache: "memory" });
+      for (let i = 0; i < 4999; i += 1) {
+        writeToCache(root, `/files/a-${i}.ts`, "sig", moduleFor(`/files/a-${i}.ts`, `a-${i}`), { cache: "memory" });
+      }
+      // The cache holds exactly its capacity: nothing has been evicted yet.
+      expect(memoryCacheLostPayloads(root)).toBe(false);
+      // Rewriting a cached file replaces its row and evicts nothing.
+      writeToCache(root, "/files/a-1.ts", "sig-2", moduleFor("/files/a-1.ts", "a-1"), { cache: "memory" });
+      expect(memoryCacheLostPayloads(root)).toBe(false);
+      writeToCache(root, "/files/extra.ts", "sig", moduleFor("/files/extra.ts", "extra"), { cache: "memory" });
+      // The oldest payload belongs to `other`, so `other` lost a payload and `root` did not.
+      expect(tryLoadFromCache(other, "/files/o.ts", "sig", { cache: "memory" })).toBeNull();
+      expect(memoryCacheLostPayloads(other)).toBe(true);
+      expect(memoryCacheLostPayloads(root)).toBe(false);
+      writeToCache(root, "/files/extra-2.ts", "sig", moduleFor("/files/extra-2.ts", "extra-2"), { cache: "memory" });
+      expect(memoryCacheLostPayloads(root)).toBe(true);
+    } finally {
+      clearMemoryCache();
+    }
+    expect(memoryCacheLostPayloads(root)).toBe(false);
+    expect(memoryCacheLostPayloads(other)).toBe(false);
+  });
+
+  it("forgets lost payloads only when no eviction happened since the build started", () => {
+    const root = path.join(os.tmpdir(), "dg-cache-settle-root");
+    clearMemoryCache();
+    try {
+      const memory = { cache: "memory" as const };
+      const fill = (label: string, count: number): void => {
+        for (let i = 0; i < count; i += 1) {
+          writeToCache(root, `/files/${label}-${i}.ts`, "sig", moduleFor(`/files/${label}-${i}.ts`, label), memory);
+        }
+      };
+      fill("a", 5001);
+      expect(memoryCacheLostPayloads(root)).toBe(true);
+
+      // A build that started before another eviction cannot vouch for the missing row.
+      const startedEarly = memoryCacheEvictionSerial();
+      fill("b", 1);
+      settleMemoryCacheEvictions(root, startedEarly);
+      expect(memoryCacheLostPayloads(root)).toBe(true);
+
+      // A build that started after the last eviction restored what it needs.
+      settleMemoryCacheEvictions(root, memoryCacheEvictionSerial());
+      expect(memoryCacheLostPayloads(root)).toBe(false);
+    } finally {
+      clearMemoryCache();
+    }
+  });
+
+  it("retires removed rows", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cache-remove-"));
+    clearMemoryCache();
+    try {
+      const memoryOpts = { cache: "memory" as const };
+      writeToCache(root, "/files/keep.ts", "sig", moduleFor("/files/keep.ts", "keep"), memoryOpts);
+      writeToCache(root, "/files/gone.ts", "sig", moduleFor("/files/gone.ts", "gone"), memoryOpts);
+      removeModulesFromCache(root, ["/files/gone.ts"], memoryOpts);
+      expect(tryLoadFromCache(root, "/files/gone.ts", "sig", memoryOpts)).toBeNull();
+      expect(tryLoadFromCache(root, "/files/keep.ts", "sig", memoryOpts)).not.toBeNull();
+
+      const diskOpts = { cache: "disk" as const };
+      const kept = path.join(root, "kept.ts");
+      const gone = path.join(root, "gone.ts");
+      writeToCache(root, kept, "sig", moduleFor(kept, "kept"), diskOpts);
+      writeToCache(root, gone, "sig", moduleFor(gone, "gone"), diskOpts);
+      expect(tryLoadFromCache(root, gone, "sig", diskOpts)).not.toBeNull();
+      removeModulesFromCache(root, [gone], diskOpts);
+      expect(tryLoadFromCache(root, gone, "sig", diskOpts)).toBeNull();
+      expect(tryLoadFromCache(root, kept, "sig", diskOpts)).not.toBeNull();
+      // Removing an absent row is a no-op, and an empty list never touches SQLite.
+      removeModulesFromCache(root, [path.join(root, "never.ts")], diskOpts);
+      removeModulesFromCache(root, [], diskOpts);
+    } finally {
+      clearMemoryCache();
+      closeDiskCacheDatabase(root);
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("clears only the closed project from the memory cache", () => {
