@@ -1343,7 +1343,7 @@ async function collectStaleCachedModules(args: {
           continue;
         }
         if (unknownDeclarationLanguages.size) {
-          const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "default";
+          const languageId = supportForFile(file, args.opts?.languageExtensions)?.id ?? "default";
           if (unknownDeclarationLanguages.has(languageId) && cachedModuleHasExternalImport(mod)) stale.add(file);
         }
       }
