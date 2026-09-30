@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
   buildProjectIndex,
@@ -12,7 +13,15 @@ import {
   type BuildReport,
 } from "../src/index.js";
 import { createAgentSession } from "../src/agent/session.js";
-import { peekCachedModule, tryLoadFromCache, writeToCache } from "../src/indexer/build-cache/module-cache.js";
+import {
+  cacheDatabasePath,
+  cacheRelativePath,
+  closeDiskCacheDatabase,
+  memoryCacheLostPayloads,
+  peekCachedModule,
+  tryLoadFromCache,
+  writeToCache,
+} from "../src/indexer/build-cache/module-cache.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf } from "./languages/callable-consumer-fixtures.js";
@@ -1228,6 +1237,77 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       expect([...new Set(bindingTargets(warm, main))]).toEqual(["external:shared"]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A signature miss whose old row cannot be decoded leaves no previous declaration to diff.
+  // Without a manifest the importer is neither missing a target nor a dependent of a changed file.
+  it("re-resolves a C++ importer when a rewritten declarer's old row is undecodable (disk cache, no manifest)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-corrupt-");
+    const cacheDir = await mkTmpDir("cg-module-cache-cpp-corrupt-cache-");
+    const opts = { cache: "disk" as const, cacheDir };
+    try {
+      const alpha = path.join(root, "alpha.cpp");
+      const beta = path.join(root, "beta.cpp");
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(alpha, "export module shared;\n", "utf8");
+      await fsp.writeFile(beta, "export module shared;\n", "utf8");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      const files = [alpha, beta, main];
+      const ambiguous = await buildProjectIndexFromFiles(root, files, opts);
+      expect(bindingTargets(ambiguous, main)).toEqual(["external:shared"]);
+
+      closeDiskCacheDatabase(root, opts);
+      const db = new DatabaseSync(cacheDatabasePath(root, opts, "index-cache.sqlite"));
+      try {
+        const updated = db
+          .prepare("UPDATE module_cache SET payload = ? WHERE file = ?")
+          .run(Buffer.from("not a module payload"), cacheRelativePath(root, beta));
+        expect(Number(updated.changes)).toBe(1);
+      } finally {
+        db.close();
+      }
+
+      await fsp.writeFile(beta, "export module other;\n", "utf8");
+      const warm = await buildProjectIndexFromFiles(root, files, opts);
+      const cold = await buildProjectIndexFromFiles(root, files, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect([...new Set(bindingTargets(warm, main))]).toEqual(["file:" + normalizePath(alpha)]);
+    } finally {
+      closeDiskCacheDatabase(root, opts);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  // The LRU is global: another project can evict this project's rows. Once a complete build
+  // restores them, later unchanged builds must reuse every module again.
+  it("reuses every module again after a complete build restores rows another project evicted (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-restored-");
+    const other = await mkTmpDir("cg-module-cache-cpp-restored-other-");
+    try {
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(path.join(root, "alpha.cpp"), "export module shared;\n", "utf8");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      await buildProjectIndex(root, { cache: "memory" });
+      for (let i = 0; i < 5000; i += 1) {
+        const filler = "/filler/f-" + i + ".ts";
+        writeToCache(other, filler, "sig", { file: filler, exports: [], imports: [], locals: [] }, { cache: "memory" });
+      }
+      expect(memoryCacheLostPayloads(root)).toBe(true);
+
+      const rebuilt = await buildProjectIndex(root, { cache: "memory" });
+      expect([...new Set(bindingTargets(rebuilt, main))]).toEqual([
+        "file:" + normalizePath(path.join(root, "alpha.cpp")),
+      ]);
+      expect(memoryCacheLostPayloads(root)).toBe(false);
+
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndex(root, { cache: "memory", report });
+      expect(report.files?.cached).toBe(report.files?.total);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(other, { recursive: true, force: true });
     }
   });
 });

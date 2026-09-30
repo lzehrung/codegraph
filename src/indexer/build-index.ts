@@ -86,9 +86,11 @@ import {
   listDiskCachedModuleFiles,
   listMemoryCachedModuleFiles,
   loadModuleFromCache,
+  memoryCacheEvictionSerial,
   memoryCacheLostPayloads,
   peekCachedModule,
   removeModulesFromCache,
+  settleMemoryCacheEvictions,
   tryLoadFromCache,
   tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
@@ -1135,6 +1137,8 @@ async function collectStaleCachedModules(args: {
   cacheMisses: { changed: readonly string[]; added: readonly string[] };
   /** Previous-build modules of changed files, keyed by file, for declaration diffing. */
   previousModules: ReadonlyMap<string, ModuleIndex>;
+  /** Changed files whose previous row could not be decoded, so their old declarations are unknown. */
+  previousUnavailable: readonly string[];
   /** Current signature of every file in the build. */
   signatures: ReadonlyMap<string, FileSignature>;
   manifestFiles: Record<string, ManifestFileEntry> | null;
@@ -1297,12 +1301,25 @@ async function collectStaleCachedModules(args: {
       }
     }
     // An evicted payload hides a declarer that was rewritten or deleted: it is neither a cache
-    // hit, a stale row, nor a surviving row. The previous declarations are unknown, so every
-    // cached declaration-language importer re-resolves. LRU eviction only starts past the cache
+    // hit, a stale row, nor a surviving row. A changed file whose old row cannot be decoded hides
+    // its previous declarations the same way. Those declarations are unknown, so every cached
+    // importer of the affected languages re-resolves. Eviction only starts past the cache
     // capacity, where a sequential build already misses the cache, so this costs little.
+    const unknownDeclarationHistory = new Set<string>();
     if ((args.opts?.cache ?? "off") === "memory" && memoryCacheLostPayloads(args.projectRoot)) {
+      for (const languageId of DECLARATION_RESOLVED_IMPORT_LANGUAGES) unknownDeclarationHistory.add(languageId);
+    }
+    for (const file of args.previousUnavailable) {
+      const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id;
+      if (languageId && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(languageId)) {
+        unknownDeclarationHistory.add(languageId);
+      }
+    }
+    if (unknownDeclarationHistory.size) {
       for (const [file, { mod }] of cachedModules) {
-        if (!stale.has(file) && mod.imports.length && resolvesFromDeclarations(file)) stale.add(file);
+        if (stale.has(file) || !mod.imports.length) continue;
+        const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "";
+        if (unknownDeclarationHistory.has(languageId)) stale.add(file);
       }
     }
     const cppAdded = added.filter(
@@ -1494,6 +1511,7 @@ async function buildIndexFromFileListShared(
     ? createCountedCheckProgress(opts, "Checking file cache", normalizedFiles.length)
     : () => undefined;
   const cacheProbeStart = performance.now();
+  const evictionSerialAtStart = memoryCacheEvictionSerial();
   const gitAvailable = await isGitRepo(projectRoot, helperOpts?.discoveryContext?.git);
   const needsPersistentSignatures = cacheEnabled || useManifest;
   const useGitSignatures = gitAvailable && needsPersistentSignatures;
@@ -1605,12 +1623,14 @@ async function buildIndexFromFileListShared(
     // needs to notice a removed or rewritten declaration. Deleted files leave no miss at all,
     // so their surviving rows are found through the cache below.
     const previousModules = new Map<string, ModuleIndex>();
+    const previousUnavailable: string[] = [];
     for (const [file, probe] of cacheProbes) {
       if ("error" in probe) continue;
       if (probe.mod) cachedModules.set(file, { sigInfo: probe.sigInfo, mod: probe.mod });
       else if (probe.previouslyCached) {
         cacheMissesByState.changed.push(file);
         if (probe.staleMod) previousModules.set(file, probe.staleMod);
+        else previousUnavailable.push(file);
       } else cacheMissesByState.added.push(file);
     }
     const { stale: staleCachedModules, deletedDeclarationFiles: retiredDeletions } = await collectStaleCachedModules({
@@ -1618,6 +1638,7 @@ async function buildIndexFromFileListShared(
       cachedModules,
       cacheMisses: cacheMissesByState,
       previousModules,
+      previousUnavailable,
       signatures: new Map(
         Array.from(cacheProbes, ([file, probe]) => ("error" in probe ? null : ([file, probe.sigInfo] as const))).filter(
           (entry): entry is readonly [string, FileSignature] => entry !== null,
@@ -1846,6 +1867,12 @@ async function buildIndexFromFileListShared(
       } else {
         writeModulesToCache(projectRoot, pendingCacheWrites, opts);
       }
+    }
+    // A full-discovery build re-resolved every cached importer against the current file set and
+    // wrote its modules back, so the rows an earlier eviction dropped are restored. Keep the flag
+    // when another payload was evicted since this build started.
+    if (opts?.cache === "memory" && projectFiles !== undefined) {
+      settleMemoryCacheEvictions(projectRoot, evictionSerialAtStart);
     }
     // Retire confirmed-deleted declaration rows now the rebuild that consumed them succeeded;
     // otherwise the same deletion moves the declaration comparison on every later build and

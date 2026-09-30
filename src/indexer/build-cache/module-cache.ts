@@ -65,17 +65,36 @@ const MAX_MEMORY_CACHE_ENTRIES = 5000;
 const memoryCache = new Map<string, ModuleCacheEntry>();
 
 /**
- * Normalized project roots that lost at least one module payload to LRU eviction. A manifest-less
- * warm build reads the previous file set from surviving rows, so an evicted row leaves neither a
- * cache hit nor a stale row for a file that was rewritten or deleted. The build cannot trust the
- * previous declarations of such a root and re-resolves its declaration-language importers. This
- * holds one entry per root, not one per file, so it cannot grow with project churn.
+ * Projects that lost a module payload to LRU eviction, keyed by normalized root, with the serial
+ * of the latest eviction. A manifest-less warm build reads the previous file set from surviving
+ * rows, so an evicted row leaves neither a cache hit nor a stale row for a file that was rewritten
+ * or deleted. The build cannot trust the previous declarations of such a root and re-resolves its
+ * declaration-language importers. This holds one entry per affected root, not one per file, and a
+ * complete build that saw no further eviction removes the entry again.
  */
-const rootsWithEvictedPayloads = new Set<string>();
+const rootsWithEvictedPayloads = new Map<string, number>();
+/** Increases with every payload eviction, so a build can tell whether one happened while it ran. */
+let memoryEvictionSerial = 0;
 
 /** Whether the memory cache dropped a payload for the project, so its previous file set is incomplete. */
 export function memoryCacheLostPayloads(projectRoot: string): boolean {
   return rootsWithEvictedPayloads.has(normalizePath(projectRoot));
+}
+
+/** The eviction serial now. Pass it to `settleMemoryCacheEvictions` once a build completes. */
+export function memoryCacheEvictionSerial(): number {
+  return memoryEvictionSerial;
+}
+
+/**
+ * Forget the project's lost payloads after a complete build restored every row it needs: the
+ * build re-resolved all importers against the current file set and wrote its modules back. Skipped
+ * when the project lost another payload after `sinceSerial`, because that row is missing again.
+ */
+export function settleMemoryCacheEvictions(projectRoot: string, sinceSerial: number): void {
+  const root = normalizePath(projectRoot);
+  const lastEviction = rootsWithEvictedPayloads.get(root);
+  if (lastEviction !== undefined && lastEviction <= sinceSerial) rootsWithEvictedPayloads.delete(root);
 }
 
 let cachedExecutionFingerprint: string | undefined;
@@ -764,7 +783,7 @@ export function writeModulesToCache(
       const key = memoryCacheKey(projectRoot, write.file);
       if (!memoryCache.has(key) && memoryCache.size >= MAX_MEMORY_CACHE_ENTRIES) {
         const oldest = memoryCache.values().next();
-        if (!oldest.done) rootsWithEvictedPayloads.add(oldest.value.root);
+        if (!oldest.done) rootsWithEvictedPayloads.set(oldest.value.root, ++memoryEvictionSerial);
       }
       lruMapSet(
         memoryCache,

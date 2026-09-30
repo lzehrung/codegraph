@@ -92,7 +92,7 @@ A cached module is keyed by its own content, but its import targets depend on ot
 
 An added file qualifies by its configured language as well as its suffix. A build drops each stale importer's cache row before extracting it again, so a failed extraction or cache write cannot leave a row that a later build reuses.
 
-A manifest-less build drops a confirmed-deleted file's rows after the rebuild that consumed them, so later unchanged builds stay fully warm. A `memory` cache that evicted any payload past its 5,000-entry limit cannot tell which declarations changed, so it re-resolves that project's declaration-language importers.
+A manifest-less build drops a confirmed-deleted file's rows after the rebuild that consumed them, so later unchanged builds stay fully warm. A `memory` cache that evicted a payload past its 5,000-entry limit, or a changed file whose previous row cannot be decoded, hides the old declarations, so the affected importers re-resolve. A complete build that sees no further eviction restores the rows and ends that state.
 
 Existing `.codegraph-cache/` directories migrate automatically to `.codegraph/cache/` on the next run.
 

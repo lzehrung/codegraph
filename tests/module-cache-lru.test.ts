@@ -10,7 +10,9 @@ import {
   clearMemoryCache,
   closeDiskCacheDatabase,
   diskModuleCacheExists,
+  memoryCacheEvictionSerial,
   memoryCacheLostPayloads,
+  settleMemoryCacheEvictions,
   removeModulesFromCache,
   resetDiskModuleCacheSqliteStateForTests,
   transformPersistedExportFromModule,
@@ -263,6 +265,33 @@ describe("module memory cache bounds", () => {
     }
     expect(memoryCacheLostPayloads(root)).toBe(false);
     expect(memoryCacheLostPayloads(other)).toBe(false);
+  });
+
+  it("forgets lost payloads only when no eviction happened since the build started", () => {
+    const root = path.join(os.tmpdir(), "dg-cache-settle-root");
+    clearMemoryCache();
+    try {
+      const memory = { cache: "memory" as const };
+      const fill = (label: string, count: number): void => {
+        for (let i = 0; i < count; i += 1) {
+          writeToCache(root, `/files/${label}-${i}.ts`, "sig", moduleFor(`/files/${label}-${i}.ts`, label), memory);
+        }
+      };
+      fill("a", 5001);
+      expect(memoryCacheLostPayloads(root)).toBe(true);
+
+      // A build that started before another eviction cannot vouch for the missing row.
+      const startedEarly = memoryCacheEvictionSerial();
+      fill("b", 1);
+      settleMemoryCacheEvictions(root, startedEarly);
+      expect(memoryCacheLostPayloads(root)).toBe(true);
+
+      // A build that started after the last eviction restored what it needs.
+      settleMemoryCacheEvictions(root, memoryCacheEvictionSerial());
+      expect(memoryCacheLostPayloads(root)).toBe(false);
+    } finally {
+      clearMemoryCache();
+    }
   });
 
   it("retires removed rows", async () => {
