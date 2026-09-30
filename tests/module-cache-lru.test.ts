@@ -10,7 +10,7 @@ import {
   clearMemoryCache,
   closeDiskCacheDatabase,
   diskModuleCacheExists,
-  listKnownMemoryCachedModuleFiles,
+  memoryCacheLostPayloads,
   removeModulesFromCache,
   resetDiskModuleCacheSqliteStateForTests,
   transformPersistedExportFromModule,
@@ -237,24 +237,35 @@ describe("module memory cache bounds", () => {
     clearMemoryCache();
   });
 
-  it("keeps file identities after their payloads are evicted", () => {
-    const root = path.join(os.tmpdir(), "dg-cache-known-identities");
+  it("flags only the project whose payloads were evicted, and only once one is", () => {
+    const root = path.join(os.tmpdir(), "dg-cache-evicted-root");
+    const other = path.join(os.tmpdir(), "dg-cache-evicted-other");
     clearMemoryCache();
     try {
-      for (let i = 0; i < 5001; i += 1) {
+      writeToCache(other, "/files/o.ts", "sig", moduleFor("/files/o.ts", "o"), { cache: "memory" });
+      for (let i = 0; i < 4999; i += 1) {
         writeToCache(root, `/files/a-${i}.ts`, "sig", moduleFor(`/files/a-${i}.ts`, `a-${i}`), { cache: "memory" });
       }
-      // The oldest payload is evicted, but its identity survives for previous-file-set scans.
-      expect(tryLoadFromCache(root, "/files/a-0.ts", "sig", { cache: "memory" })).toBeNull();
-      expect(listKnownMemoryCachedModuleFiles(root)).toContain("/files/a-0.ts");
-      expect(listKnownMemoryCachedModuleFiles(root)).toHaveLength(5001);
+      // The cache holds exactly its capacity: nothing has been evicted yet.
+      expect(memoryCacheLostPayloads(root)).toBe(false);
+      // Rewriting a cached file replaces its row and evicts nothing.
+      writeToCache(root, "/files/a-1.ts", "sig-2", moduleFor("/files/a-1.ts", "a-1"), { cache: "memory" });
+      expect(memoryCacheLostPayloads(root)).toBe(false);
+      writeToCache(root, "/files/extra.ts", "sig", moduleFor("/files/extra.ts", "extra"), { cache: "memory" });
+      // The oldest payload belongs to `other`, so `other` lost a payload and `root` did not.
+      expect(tryLoadFromCache(other, "/files/o.ts", "sig", { cache: "memory" })).toBeNull();
+      expect(memoryCacheLostPayloads(other)).toBe(true);
+      expect(memoryCacheLostPayloads(root)).toBe(false);
+      writeToCache(root, "/files/extra-2.ts", "sig", moduleFor("/files/extra-2.ts", "extra-2"), { cache: "memory" });
+      expect(memoryCacheLostPayloads(root)).toBe(true);
     } finally {
       clearMemoryCache();
     }
-    expect(listKnownMemoryCachedModuleFiles(root)).toHaveLength(0);
+    expect(memoryCacheLostPayloads(root)).toBe(false);
+    expect(memoryCacheLostPayloads(other)).toBe(false);
   });
 
-  it("retires removed rows and their identities", async () => {
+  it("retires removed rows", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cache-remove-"));
     clearMemoryCache();
     try {
@@ -264,7 +275,6 @@ describe("module memory cache bounds", () => {
       removeModulesFromCache(root, ["/files/gone.ts"], memoryOpts);
       expect(tryLoadFromCache(root, "/files/gone.ts", "sig", memoryOpts)).toBeNull();
       expect(tryLoadFromCache(root, "/files/keep.ts", "sig", memoryOpts)).not.toBeNull();
-      expect(listKnownMemoryCachedModuleFiles(root)).toEqual(["/files/keep.ts"]);
 
       const diskOpts = { cache: "disk" as const };
       const kept = path.join(root, "kept.ts");

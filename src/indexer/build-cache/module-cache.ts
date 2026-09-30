@@ -57,36 +57,27 @@ type ModuleCacheEntry = {
   version: number;
   sig: string;
   mod: ModuleIndex;
+  /** Normalized project root the entry belongs to. */
+  root: string;
 };
 
 const MAX_MEMORY_CACHE_ENTRIES = 5000;
 const memoryCache = new Map<string, ModuleCacheEntry>();
 
 /**
- * Files ever stored in the memory module cache, keyed by normalized project root. Payloads
- * come and go through LRU eviction, but a warm build without a manifest still needs the
- * previous file set to tell a deleted declaration file from an out-of-scope one: without
- * these identities an evicted declarer leaves neither a cache miss nor a surviving row.
+ * Normalized project roots that lost at least one module payload to LRU eviction. A manifest-less
+ * warm build reads the previous file set from surviving rows, so an evicted row leaves neither a
+ * cache hit nor a stale row for a file that was rewritten or deleted. The build cannot trust the
+ * previous declarations of such a root and re-resolves its declaration-language importers. This
+ * holds one entry per root, not one per file, so it cannot grow with project churn.
  */
-const knownMemoryCachedFiles = new Map<string, Set<string>>();
+const rootsWithEvictedPayloads = new Set<string>();
 
-function trackKnownMemoryCachedFile(projectRoot: string, file: string): void {
-  const root = normalizePath(projectRoot);
-  let files = knownMemoryCachedFiles.get(root);
-  if (!files) knownMemoryCachedFiles.set(root, (files = new Set()));
-  files.add(file);
+/** Whether the memory cache dropped a payload for the project, so its previous file set is incomplete. */
+export function memoryCacheLostPayloads(projectRoot: string): boolean {
+  return rootsWithEvictedPayloads.has(normalizePath(projectRoot));
 }
 
-/** Every file stored in the memory module cache for the project, including payload-evicted ones. */
-export function listKnownMemoryCachedModuleFiles(projectRoot: string): string[] {
-  return [...(knownMemoryCachedFiles.get(normalizePath(projectRoot)) ?? [])];
-}
-
-function forgetKnownMemoryCachedFiles(projectRoot: string, files: Iterable<string>): void {
-  const known = knownMemoryCachedFiles.get(normalizePath(projectRoot));
-  if (!known) return;
-  for (const file of files) known.delete(file);
-}
 let cachedExecutionFingerprint: string | undefined;
 let cachedExecutionHash: string | undefined;
 
@@ -108,11 +99,11 @@ function memoryCacheKey(projectRoot: string, file: string): string {
 
 export function clearMemoryCache(): void {
   memoryCache.clear();
-  knownMemoryCachedFiles.clear();
+  rootsWithEvictedPayloads.clear();
 }
 
 function clearMemoryCacheForProject(projectRoot: string): void {
-  knownMemoryCachedFiles.delete(normalizePath(projectRoot));
+  rootsWithEvictedPayloads.delete(normalizePath(projectRoot));
   const prefix = `${normalizePath(projectRoot)}::`;
   for (const key of memoryCache.keys()) {
     if (key.startsWith(prefix)) {
@@ -768,12 +759,17 @@ export function writeModulesToCache(
   if (!writes.length) return;
   const mode = opts?.cache ?? "off";
   if (mode === "memory") {
+    const root = normalizePath(projectRoot);
     for (const write of writes) {
-      trackKnownMemoryCachedFile(projectRoot, write.file);
+      const key = memoryCacheKey(projectRoot, write.file);
+      if (!memoryCache.has(key) && memoryCache.size >= MAX_MEMORY_CACHE_ENTRIES) {
+        const oldest = memoryCache.values().next();
+        if (!oldest.done) rootsWithEvictedPayloads.add(oldest.value.root);
+      }
       lruMapSet(
         memoryCache,
-        memoryCacheKey(projectRoot, write.file),
-        { version: PARSED_CACHE_VERSION, sig: write.sig, mod: write.mod },
+        key,
+        { version: PARSED_CACHE_VERSION, sig: write.sig, mod: write.mod, root },
         MAX_MEMORY_CACHE_ENTRIES,
       );
     }
@@ -823,15 +819,16 @@ export function writeToCache(
 }
 
 /**
- * Drop module-cache rows for files a successful build confirmed deleted. Manifest-less builds
- * otherwise return the same confirmed-deleted rows forever: the deletion keeps moving the
- * previous-vs-next declaration comparison, so importers reparse on every unchanged build and
- * the cache never becomes fully warm. Only files the build probed missing may be retired;
- * out-of-scope files still exist, so scoped builds never reach this.
+ * Drop module-cache rows. Two callers need it. A build removes the rows of cached importers it
+ * proved stale before reparsing them, so a failed reparse or cache write cannot leave a row that
+ * still matches the source signature and would be reused with its stale bindings. A successful
+ * manifest-less build also retires the rows of files it confirmed deleted: otherwise the deletion
+ * keeps moving the previous-vs-next declaration comparison, importers reparse on every unchanged
+ * build, and the cache never becomes fully warm. Only files the build probed missing may be
+ * retired; out-of-scope files still exist, so scoped builds never reach that path.
  */
 export function removeModulesFromCache(projectRoot: string, files: readonly string[], opts?: BuildOptions): void {
   if (!files.length) return;
-  forgetKnownMemoryCachedFiles(projectRoot, files);
   const mode = opts?.cache ?? "off";
   if (mode === "memory") {
     for (const file of files) memoryCache.delete(memoryCacheKey(projectRoot, file));

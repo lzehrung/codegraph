@@ -84,9 +84,9 @@ import {
   sanitizeManifestEntriesForRoot,
   sanitizeManifestTransientFilesForRoot,
   listDiskCachedModuleFiles,
-  listKnownMemoryCachedModuleFiles,
   listMemoryCachedModuleFiles,
   loadModuleFromCache,
+  memoryCacheLostPayloads,
   peekCachedModule,
   removeModulesFromCache,
   tryLoadFromCache,
@@ -396,12 +396,6 @@ async function collectNoManifestDeletedDeclarationFiles(args: {
   const live = new Set(args.files.map(fileIdentityKey));
   const rows = new Map<string, string>();
   for (const file of listMemoryCachedModuleFiles(args.projectRoot)) rows.set(fileIdentityKey(file), file);
-  // Identities outlive LRU payload eviction, so an evicted declarer still gets an existence
-  // probe below. Its module is gone, so a confirmed deletion falls back to re-resolving the
-  // language's external importers instead of diffing declarations.
-  for (const file of listKnownMemoryCachedModuleFiles(args.projectRoot)) {
-    if (!rows.has(fileIdentityKey(file))) rows.set(fileIdentityKey(file), file);
-  }
   if ((args.opts?.cache ?? "off") === "disk") {
     const diskFiles = listDiskCachedModuleFiles(args.projectRoot, args.opts);
     if (diskFiles) {
@@ -1302,6 +1296,15 @@ async function collectStaleCachedModules(args: {
         unknownDeclarationLanguages.add(deleted.languageId);
       }
     }
+    // An evicted payload hides a declarer that was rewritten or deleted: it is neither a cache
+    // hit, a stale row, nor a surviving row. The previous declarations are unknown, so every
+    // cached declaration-language importer re-resolves. LRU eviction only starts past the cache
+    // capacity, where a sequential build already misses the cache, so this costs little.
+    if ((args.opts?.cache ?? "off") === "memory" && memoryCacheLostPayloads(args.projectRoot)) {
+      for (const [file, { mod }] of cachedModules) {
+        if (!stale.has(file) && mod.imports.length && resolvesFromDeclarations(file)) stale.add(file);
+      }
+    }
     const cppAdded = added.filter(
       (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "cpp",
     );
@@ -1631,6 +1634,14 @@ async function buildIndexFromFileListShared(
       ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
     });
     retiredDeletionFiles = retiredDeletions;
+    // A stale importer's row still matches its own source signature. If the reparse or the cache
+    // write fails, the next build would reuse that row and its stale bindings, with the file-set
+    // change already consumed. Drop the rows now; a failed rebuild then just misses again.
+    removeModulesFromCache(
+      projectRoot,
+      [...staleCachedModules].filter((file) => cachedModules.has(file)),
+      opts,
+    );
     for (const file of staleCachedModules) {
       const probe = cacheProbes.get(file);
       if (probe && !("error" in probe)) cacheProbes.set(file, { ...probe, mod: null });

@@ -12,6 +12,7 @@ import {
   type BuildReport,
 } from "../src/index.js";
 import { createAgentSession } from "../src/agent/session.js";
+import { peekCachedModule, tryLoadFromCache, writeToCache } from "../src/indexer/build-cache/module-cache.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf } from "./languages/callable-consumer-fixtures.js";
@@ -1190,6 +1191,41 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       const cold = await buildProjectIndex(root, { cache: "off" });
       expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
       expect(bindingTargets(warm, main)).toEqual(["file:" + normalizePath(path.join(root, "Aaa.cs"))]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // The memory cache holds 5,000 payloads. Once alpha.cpp's payload is evicted, its rewrite is
+  // neither a cache hit nor a stale row, so the previous declaration `shared` is unknown and the
+  // importer that still names an existing target must re-resolve.
+  it("re-resolves a C++ importer when the declarer's evicted payload was rewritten (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-evicted-");
+    try {
+      const alpha = path.join(root, "alpha.cpp");
+      const main = path.join(root, "main.cpp");
+      await fsp.writeFile(alpha, "export module shared;\n", "utf8");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      const first = await buildProjectIndex(root, { cache: "memory" });
+      expect([...new Set(bindingTargets(first, main))]).toEqual(["file:" + normalizePath(alpha)]);
+
+      // Touch main so it is the newest row, then fill the cache so exactly alpha is evicted.
+      const cacheKeyOf = (file: string): string => normalizePath(file);
+      const mainRow = peekCachedModule(root, cacheKeyOf(main), { cache: "memory" });
+      expect(mainRow).not.toBeNull();
+      expect(tryLoadFromCache(root, cacheKeyOf(main), mainRow!.sig, { cache: "memory" })).not.toBeNull();
+      for (let i = 0; i < 4999; i += 1) {
+        const filler = "/filler/f-" + i + ".ts";
+        writeToCache(root, filler, "sig", { file: filler, exports: [], imports: [], locals: [] }, { cache: "memory" });
+      }
+      expect(peekCachedModule(root, cacheKeyOf(alpha), { cache: "memory" })).toBeNull();
+      expect(peekCachedModule(root, cacheKeyOf(main), { cache: "memory" })).not.toBeNull();
+
+      await fsp.writeFile(alpha, "export module other;\n", "utf8");
+      const warm = await buildProjectIndex(root, { cache: "memory" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect([...new Set(bindingTargets(warm, main))]).toEqual(["external:shared"]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

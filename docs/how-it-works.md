@@ -90,7 +90,9 @@ Module and graph cache identities also include effective TypeScript `baseUrl`/`p
 
 A cached module is keyed by its own content, but its import targets depend on other files. A warm build extracts a module again when it changed, when a file it imports was deleted or any of its resolved import or re-export targets no longer exists, when an added file can satisfy one of its specifiers, or, for C#, Java, Kotlin, PHP, and C++ modules (whose imports resolve through other files' namespace or package declarations), when a file it depends on changed. With an index manifest, added files are checked by re-resolving the affected specifiers; without one (a `memory` cache, or a disk cache that no manifest-writing build has seen), the cached modules' own import bindings stand in for the edges, and any module with a specifier an added file could satisfy is extracted again. Declaration-based imports name packages, namespaces, or modules rather than files, so any added or changed file of those languages re-resolves that language's importers instead of relying on filename stems; without a manifest, removed declarations are found through the previous build surviving cache rows.
 
-An added file qualifies by its configured language as well as its suffix; file identities are tracked independently of LRU payload eviction; and a manifest-less build drops a confirmed-deleted file's rows after the rebuild that consumed them so later unchanged builds stay fully warm.
+An added file qualifies by its configured language as well as its suffix. A build drops each stale importer's cache row before extracting it again, so a failed extraction or cache write cannot leave a row that a later build reuses.
+
+A manifest-less build drops a confirmed-deleted file's rows after the rebuild that consumed them, so later unchanged builds stay fully warm. A `memory` cache that evicted any payload past its 5,000-entry limit cannot tell which declarations changed, so it re-resolves that project's declaration-language importers.
 
 Existing `.codegraph-cache/` directories migrate automatically to `.codegraph/cache/` on the next run.
 
