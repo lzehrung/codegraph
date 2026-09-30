@@ -130,6 +130,23 @@ export function collectPythonPackageImporters(
   trackedEntries: Record<string, ManifestFileEntry>,
   addedFiles: readonly string[],
 ): Set<string> {
+  return pythonImportersOfPackageInits(
+    Object.entries(trackedEntries).map(([file, entry]) => [
+      file,
+      entry.edges.flatMap((edge) => (edge.to.type === "file" ? [edge.to.path] : [])),
+    ]),
+    addedFiles,
+  );
+}
+
+/**
+ * The same walk over any source of resolved import targets, for builds without a manifest whose
+ * only record of an importer's targets is its cached module.
+ */
+export function pythonImportersOfPackageInits(
+  importerTargets: Iterable<readonly [file: string, targets: readonly string[]]>,
+  addedFiles: readonly string[],
+): Set<string> {
   const packageInits = new Set<string>();
   for (const file of addedFiles) {
     if (!PYTHON_SOURCE_PATTERN.test(file)) continue;
@@ -145,11 +162,9 @@ export function collectPythonPackageImporters(
   }
   const importers = new Set<string>();
   if (!packageInits.size) return importers;
-  for (const [file, entry] of Object.entries(trackedEntries)) {
+  for (const [file, targets] of importerTargets) {
     if (!PYTHON_SOURCE_PATTERN.test(file)) continue;
-    if (entry.edges.some((edge) => edge.to.type === "file" && packageInits.has(fileIdentityKey(edge.to.path)))) {
-      importers.add(file);
-    }
+    if (targets.some((target) => packageInits.has(fileIdentityKey(target)))) importers.add(file);
   }
   return importers;
 }

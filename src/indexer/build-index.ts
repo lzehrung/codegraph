@@ -142,6 +142,7 @@ import {
   collectTrackedFileDependents,
   collectSpecifierEdgeCandidates,
   collectPythonPackageImporters,
+  pythonImportersOfPackageInits,
   externalSpecifierMatchesAddedStem,
   tsconfigAliasMappedTails,
   isMissingGitRevisionError,
@@ -1278,6 +1279,13 @@ async function collectStaleCachedModules(args: {
         );
         if (addedCanSatisfy) stale.add(file);
       }
+      // `from . import mod` already targets `__init__.py`, so no external specifier names an
+      // added `mod.py`; the cached targets identify the importers of the added file's packages.
+      const packageImporters = pythonImportersOfPackageInits(
+        Array.from(cachedModules, ([file, { mod }]) => [file, cachedModuleTargets(mod)] as const),
+        added,
+      );
+      for (const file of packageImporters) stale.add(file);
     }
     // C++ named-module specifiers name declarations, not file stems, so the stem check above
     // misses an added file declaring an already-declared module (ambiguity), a changed file that
@@ -1877,7 +1885,10 @@ async function buildIndexFromFileListShared(
     // Retire confirmed-deleted declaration rows now the rebuild that consumed them succeeded;
     // otherwise the same deletion moves the declaration comparison on every later build and
     // the cache never becomes fully warm.
-    if (!manifest && retiredDeletionFiles.length) {
+    // Only a full-discovery build holds every cached importer, so only it consumed the deletion
+    // for all of them. A scoped build leaves the row: an omitted importer still needs the
+    // deletion evidence for the build that does contain it.
+    if (!manifest && projectFiles !== undefined && retiredDeletionFiles.length) {
       removeModulesFromCache(projectRoot, retiredDeletionFiles, opts);
     }
     const workspaceManifestEdges = await timeIndexBuildPhase({

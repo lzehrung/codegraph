@@ -1310,4 +1310,57 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       await fsp.rm(other, { recursive: true, force: true });
     }
   });
+
+  // `from . import mod` already targets `__init__.py`, so no external specifier names the added
+  // `mod.py`. Without a manifest only the cached bindings identify the importer.
+  it("re-resolves a relative Python from-import once the submodule is added (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-py-relative-memory-");
+    try {
+      const user = path.join(root, "pkg", "user.py");
+      await fsp.mkdir(path.join(root, "pkg"), { recursive: true });
+      await fsp.writeFile(path.join(root, "pkg", "__init__.py"), "", "utf8");
+      await fsp.writeFile(user, "from . import mod\n\ndef use():\n    return mod.value()\n", "utf8");
+      const before = await buildProjectIndex(root, { cache: "memory" });
+      const initInitial = normalizePath(path.join(root, "pkg", "__init__.py"));
+      expect(bindingTargets(before, user)).toEqual(["file:" + initInitial]);
+
+      const submodule = path.join(root, "pkg", "mod.py");
+      await fsp.writeFile(submodule, "def value():\n    return 1\n", "utf8");
+      const warm = await buildProjectIndex(root, { cache: "memory" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, user)).toEqual(bindingTargets(cold, user));
+      expect(bindingTargets(warm, user)).toEqual(["file:" + normalizePath(submodule)]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A scoped build does not hold every cached importer, so it must not consume the deletion:
+  // the build that does contain `main.cpp` still needs the evidence that `beta.cpp` is gone.
+  it("keeps a deleted declarer's evidence when a scoped build omits its importers (memory cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-scoped-retire-");
+    try {
+      const alpha = path.join(root, "alpha.cpp");
+      const beta = path.join(root, "beta.cpp");
+      const main = path.join(root, "main.cpp");
+      const unrelated = path.join(root, "unrelated.ts");
+      await fsp.writeFile(alpha, "export module shared;\n", "utf8");
+      await fsp.writeFile(beta, "export module shared;\n", "utf8");
+      await fsp.writeFile(main, "import shared;\n", "utf8");
+      await fsp.writeFile(unrelated, "export const value = 1;\n", "utf8");
+      const memory = { cache: "memory" as const };
+      const initial = await buildProjectIndexFromFiles(root, [alpha, beta, main, unrelated], memory);
+      expect(bindingTargets(initial, main)).toEqual(["external:shared"]);
+
+      await fsp.rm(beta);
+      await buildProjectIndexFromFiles(root, [unrelated], memory);
+      const scoped = [alpha, main];
+      const warm = await buildProjectIndexFromFiles(root, scoped, memory);
+      const cold = await buildProjectIndexFromFiles(root, scoped, { cache: "off" });
+      expect(bindingTargets(warm, main)).toEqual(bindingTargets(cold, main));
+      expect([...new Set(bindingTargets(warm, main))]).toEqual(["file:" + normalizePath(alpha)]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
