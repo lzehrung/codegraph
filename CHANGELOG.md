@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-09-30
+
 ### Added
 
 - `apisurface --undocumented` and `getUndocumentedApiSurface` return checked, undocumented exports with source locations and explicit partial coverage for unsupported or reduced-mode files. A documented TypeScript overload signature now documents its collapsed export.
@@ -627,7 +629,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.31...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.4.0
 [2.3.31]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.31
 [2.3.30]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.30
 [2.3.29]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.29
