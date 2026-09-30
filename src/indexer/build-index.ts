@@ -1210,9 +1210,10 @@ async function collectStaleCachedModules(args: {
     for (const file of collectTrackedFileDependents(manifestFiles, changed)) {
       if (resolvesFromDeclarations(file)) stale.add(file);
     }
-    // A changed declaration-language file can start to declare a namespace or package that an importer names.
-    // Treat it like an added file.
-    const resolutionInputs = [...added, ...[...changed].filter((file) => resolvesFromDeclarations(file))];
+    // A changed or deleted declaration-language file can change which files declare a namespace
+    // or package that an importer names. A deleted duplicate can resolve an ambiguous import.
+    // Treat these files like added files.
+    const resolutionInputs = [...added, ...[...changed, ...deleted].filter((file) => resolvesFromDeclarations(file))];
     if (resolutionInputs.length) {
       const stemsByLanguage = new Map<string, ReadonlySet<string>>();
       const addedStemsForLanguage = (languageId: string): ReadonlySet<string> => {

@@ -99,7 +99,7 @@ With an index manifest, the build re-resolves the affected specifiers of added f
 
 Declaration-based imports name a package, namespace, or module, not a file:
 
-- Any added or changed file of the language re-resolves that language's importers. The file suffix or the configured language selects the file.
+- Any added, changed, or deleted file of the language re-resolves that language's importers. The file suffix or the configured language selects the file.
 - Without a manifest, the rows of the previous build show removed or rewritten declarations.
 - A build deletes the cache row of each stale importer before it extracts the importer again. A failed extraction or cache write then cannot leave a row that a later build reuses.
 - A manifest-less full-discovery build also deletes the rows of confirmed-deleted files, so the next unchanged build is fully warm. A build over an explicit file list keeps them, because an importer outside the list still needs them.

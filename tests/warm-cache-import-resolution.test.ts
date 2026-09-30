@@ -1401,4 +1401,31 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       await fsp.rm(cacheDir, { recursive: true, force: true });
     }
   });
+
+  // Two files declare `N.Point`, so the alias stays external. Deleting one leaves no edge to it
+  // and no declared-container entry (only C++ records those), so only the deletion itself can
+  // trigger re-resolution.
+  it("resolves an ambiguous C# alias from the survivor when one declarer is deleted (disk cache)", async () => {
+    const root = await mkTmpDir("cg-module-cache-csharp-alias-delete-");
+    try {
+      const first = path.join(root, "a", "First.cs");
+      const second = path.join(root, "b", "Second.cs");
+      const use = path.join(root, "Use.cs");
+      await fsp.mkdir(path.dirname(first));
+      await fsp.mkdir(path.dirname(second));
+      await fsp.writeFile(first, "namespace N;\npublic class Point { public static int Left() => 1; }\n", "utf8");
+      await fsp.writeFile(second, "namespace N;\npublic class Point { public static int Left() => 2; }\n", "utf8");
+      await fsp.writeFile(use, "using PT = N.Point;\nclass Use {\n  int M() => PT.Left();\n}\n", "utf8");
+      const ambiguous = await buildProjectIndex(root, DISK_BUILD);
+      expect(bindingTargets(ambiguous, use).every((target) => target.startsWith("external:"))).toBe(true);
+
+      await fsp.rm(second);
+      const warm = await buildProjectIndex(root, DISK_BUILD);
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(bindingTargets(warm, use)).toEqual(bindingTargets(cold, use));
+      expect(bindingTargets(warm, use)).toEqual(["file:" + normalizePath(first)]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
