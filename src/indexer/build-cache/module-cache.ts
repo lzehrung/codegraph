@@ -831,9 +831,11 @@ export function writeToCache(
  * Delete cache rows. A build uses this in two cases:
  * - Stale importers: delete the rows before the rebuild. A failed rebuild or cache write then cannot leave a row that a later build reuses.
  * - Deleted files: delete the rows after a successful full build. The next unchanged build is then fully warm.
+ *
+ * Returns false when a disk row could not be deleted. The caller must then keep its previous state.
  */
-export function removeModulesFromCache(projectRoot: string, files: readonly string[], opts?: BuildOptions): void {
-  if (!files.length) return;
+export function removeModulesFromCache(projectRoot: string, files: readonly string[], opts?: BuildOptions): boolean {
+  if (!files.length) return true;
   const mode = opts?.cache ?? "off";
   if (mode === "memory") {
     for (const file of files) memoryCache.delete(memoryCacheKey(projectRoot, file));
@@ -841,9 +843,9 @@ export function removeModulesFromCache(projectRoot: string, files: readonly stri
     if (!isNodeSqliteUsable()) {
       const error = nodeSqliteUnavailableError() ?? new Error("node:sqlite is unavailable");
       reportMissingNodeSqlite(opts?.logLevel, error);
-      return;
+      return false;
     }
-    if (!diskModuleCacheExists(projectRoot, opts)) return;
+    if (!diskModuleCacheExists(projectRoot, opts)) return true;
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
       cache.db.transaction(() => {
@@ -852,9 +854,11 @@ export function removeModulesFromCache(projectRoot: string, files: readonly stri
     } catch (error) {
       if (isNodeSqliteUnavailableError(error)) {
         reportMissingNodeSqlite(opts?.logLevel, error);
-        return;
+        return false;
       }
       logWithLevel(opts?.logLevel, "warn", "Warning: Failed to remove modules from cache:", error);
+      return false;
     }
   }
+  return true;
 }

@@ -397,6 +397,8 @@ async function collectNoManifestDeletedDeclarationFiles(args: {
     if (diskFiles) {
       for (const relative of diskFiles) {
         const file = normalizePath(path.resolve(args.projectRoot, relative));
+        // A cache row is persisted data. Ignore a row that names a path outside the project.
+        if (!isFilePathWithinRoot(args.projectRoot, file)) continue;
         if (!rows.has(fileIdentityKey(file))) rows.set(fileIdentityKey(file), file);
       }
     }
@@ -1611,6 +1613,9 @@ async function buildIndexFromFileListShared(
     return matchPath;
   };
   let retiredDeletionFiles: string[] = [];
+  // Set when a stale importer row could not be deleted. The build then keeps its previous disk
+  // state (manifest, snapshot, deletion evidence), so the next build finds the same staleness.
+  let staleRowRemovalFailed = false;
   if (cacheEnabled) {
     const cachedModules = new Map<string, { sigInfo: FileSignature; mod: ModuleIndex }>();
     const cacheMissesByState = { changed: [] as string[], added: [] as string[] };
@@ -1651,7 +1656,7 @@ async function buildIndexFromFileListShared(
     retiredDeletionFiles = retiredDeletions;
     // A stale importer's row still matches its source signature.
     // If the rebuild or the cache write fails, a later build would reuse the row. Delete it now.
-    removeModulesFromCache(
+    staleRowRemovalFailed = !removeModulesFromCache(
       projectRoot,
       [...staleCachedModules].filter((file) => cachedModules.has(file)),
       opts,
@@ -1868,7 +1873,7 @@ async function buildIndexFromFileListShared(
     }
     // Delete the rows of confirmed-deleted declaration files, so the next unchanged build is fully warm.
     // Only a full-discovery build does this. A build over a file list can omit importers that still need the deletion.
-    if (!manifest && projectFiles !== undefined && retiredDeletionFiles.length) {
+    if (!manifest && projectFiles !== undefined && retiredDeletionFiles.length && !staleRowRemovalFailed) {
       removeModulesFromCache(projectRoot, retiredDeletionFiles, opts);
     }
     const workspaceManifestEdges = await timeIndexBuildPhase({
@@ -1903,7 +1908,7 @@ async function buildIndexFromFileListShared(
         });
       }
     }
-    if (manifestEntries) {
+    if (manifestEntries && !staleRowRemovalFailed) {
       await timeIndexBuildPhase({
         opts,
         timings,
@@ -1965,7 +1970,7 @@ async function buildIndexFromFileListShared(
       const finalizeMs = discoveredInsideFinalize ? Math.max(0, elapsed - discoveryMs) : elapsed;
       recordBuildTimingStep(timings, { name: "finalize", ms: finalizeMs });
     }
-    if (manifestEntries) {
+    if (manifestEntries && !staleRowRemovalFailed) {
       await timeIndexBuildPhase({
         opts,
         timings,

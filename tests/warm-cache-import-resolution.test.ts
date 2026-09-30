@@ -1428,4 +1428,41 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  // A cache row is persisted data. A row that names a path outside the project must not be
+  // probed as a deleted declaration file, which would re-resolve every C# importer.
+  it("ignores a cache row that names a path outside the project (disk cache, no manifest)", async () => {
+    const root = await mkTmpDir("cg-module-cache-outside-row-");
+    const cacheDir = await mkTmpDir("cg-module-cache-outside-row-cache-");
+    const opts = { cache: "disk" as const, cacheDir };
+    try {
+      const use = path.join(root, "Use.cs");
+      await fsp.writeFile(use, "using Missing.Namespace;\nclass Use {}\n", "utf8");
+      const first = await buildProjectIndexFromFiles(root, [use], opts);
+      expect(bindingTargets(first, use).every((target) => target.startsWith("external:"))).toBe(true);
+
+      closeDiskCacheDatabase(root, opts);
+      const db = new DatabaseSync(cacheDatabasePath(root, opts, "index-cache.sqlite"));
+      try {
+        const current = db.prepare("SELECT version FROM module_cache LIMIT 1").get() as { version: number };
+        db.prepare("INSERT INTO module_cache(file, sig, version, payload, updated_at) VALUES (?, ?, ?, ?, ?)").run(
+          "../outside/Gone.cs",
+          "sig",
+          current.version,
+          Buffer.from("payload"),
+          Date.now(),
+        );
+      } finally {
+        db.close();
+      }
+
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, [use], { ...opts, report });
+      expect(report.files?.cached).toBe(report.files?.total);
+    } finally {
+      closeDiskCacheDatabase(root, opts);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  });
 });
