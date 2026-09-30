@@ -1302,8 +1302,9 @@ async function collectStaleCachedModules(args: {
     if ((args.opts?.cache ?? "off") === "memory" && memoryCacheLostPayloads(args.projectRoot)) {
       for (const languageId of DECLARATION_RESOLVED_IMPORT_LANGUAGES) unknownDeclarationHistory.add(languageId);
     }
+    // An unmapped `.h` file is C or C++ by its content, so classify with `supportForFile`.
     for (const file of args.previousUnavailable) {
-      const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id;
+      const languageId = supportForFile(file, args.opts?.languageExtensions)?.id;
       if (languageId && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(languageId)) {
         unknownDeclarationHistory.add(languageId);
       }
@@ -1311,7 +1312,7 @@ async function collectStaleCachedModules(args: {
     if (unknownDeclarationHistory.size) {
       for (const [file, { mod }] of cachedModules) {
         if (stale.has(file) || !mod.imports.length) continue;
-        const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "";
+        const languageId = supportForFile(file, args.opts?.languageExtensions)?.id ?? "";
         if (unknownDeclarationHistory.has(languageId)) stale.add(file);
       }
     }

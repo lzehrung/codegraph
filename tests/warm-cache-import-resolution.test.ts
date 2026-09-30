@@ -1361,4 +1361,44 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  // An unmapped `.h` file is C or C++ by its content. A header that imports a C++ module
+  // must re-resolve like a `.cpp` importer.
+  it("re-resolves a C++ header importer when a rewritten declarer's old row is undecodable (disk cache, no manifest)", async () => {
+    const root = await mkTmpDir("cg-module-cache-cpp-header-");
+    const cacheDir = await mkTmpDir("cg-module-cache-cpp-header-cache-");
+    const opts = { cache: "disk" as const, cacheDir };
+    try {
+      const alpha = path.join(root, "alpha.cpp");
+      const beta = path.join(root, "beta.cpp");
+      const header = path.join(root, "user.h");
+      await fsp.writeFile(alpha, "export module shared;\n", "utf8");
+      await fsp.writeFile(beta, "export module shared;\n", "utf8");
+      await fsp.writeFile(header, "import shared;\n", "utf8");
+      const files = [alpha, beta, header];
+      const ambiguous = await buildProjectIndexFromFiles(root, files, opts);
+      expect(bindingTargets(ambiguous, header)).toEqual(["external:shared"]);
+
+      closeDiskCacheDatabase(root, opts);
+      const db = new DatabaseSync(cacheDatabasePath(root, opts, "index-cache.sqlite"));
+      try {
+        db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+          Buffer.from("not a module payload"),
+          cacheRelativePath(root, beta),
+        );
+      } finally {
+        db.close();
+      }
+
+      await fsp.writeFile(beta, "export module other;\n", "utf8");
+      const warm = await buildProjectIndexFromFiles(root, files, opts);
+      const cold = await buildProjectIndexFromFiles(root, files, { cache: "off" });
+      expect(bindingTargets(warm, header)).toEqual(bindingTargets(cold, header));
+      expect([...new Set(bindingTargets(warm, header))]).toEqual(["file:" + normalizePath(alpha)]);
+    } finally {
+      closeDiskCacheDatabase(root, opts);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  });
 });
