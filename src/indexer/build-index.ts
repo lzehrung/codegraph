@@ -295,12 +295,10 @@ function manifestDeclaredContainerIndex(manifest: IndexManifest | null): Map<str
 }
 
 /**
- * Declared C++ modules of files the module cache could not supply (added or changed). The
- * declared-container index rebuilt from cache hits alone cannot see them: an added file
- * declaring an already-declared module name makes the import ambiguous, but the file-stem
- * check (`beta` vs `shared`) misses it and the previous-vs-next comparison sees no change, so
- * the existing importer stays resolved to the old file. Reading just the declarations (a regex
- * over source, no parse) closes that gap.
+ * Declared C++ modules of added or changed files. The cache cannot supply them.
+ * A regex over the source finds them without a parse.
+ * Without them, a second file that declares an existing module name goes unnoticed,
+ * and the importer keeps its old target.
  */
 async function collectCppMissDeclaredContainers(
   files: readonly string[],
@@ -340,11 +338,7 @@ async function collectCppMissDeclaredContainers(
   return index;
 }
 
-/**
- * Declared C++ modules of previous-build rows (changed files whose stale rows the cache probe
- * kept), as name-to-declaring-files buckets. Only C++ modules populate declaredContainers,
- * so no language filter is needed.
- */
+/** Declared C++ modules in the previous rows of changed files, as module name to declaring files. */
 function previousCppDeclaredContainers(previousModules: ReadonlyMap<string, ModuleIndex>): Map<string, Set<string>> {
   const byName = new Map<string, Set<string>>();
   for (const [file, mod] of previousModules) mergeDeclaredContainers(byName, file, mod.declaredContainers);
@@ -384,11 +378,10 @@ function cachedModuleHasExternalImport(mod: ModuleIndex): boolean {
 }
 
 /**
- * Files with surviving module-cache rows that the current build omits, limited to languages
- * whose imports resolve through declarations. Each is either genuinely deleted or merely out of
- * the build scope; the existence probe tells them apart. A deleted declarer leaves no cache
- * miss behind, so without this the importers it used to satisfy (or crowd out) would be reused
- * forever. The manifest path does not need this: the manifest records the previous file set.
+ * Declaration-language files that have a cached row, are not in the build, and no longer exist.
+ * A deleted file leaves no cache miss, so importers that it satisfied would stay stale.
+ * The existence probe separates deleted files from files outside the build scope.
+ * The manifest path does not need this: the manifest lists the previous files.
  */
 async function collectNoManifestDeletedDeclarationFiles(args: {
   files: readonly string[];
@@ -695,8 +688,8 @@ async function specifierResolutionChanged(
 ): Promise<boolean> {
   const support = supportForFileWithoutHeaderSample(file, languageExtensions);
   if (!support) return false;
-  // No stem-size gate here: declaration languages re-resolve through the extension rule inside
-  // externalSpecifierMatchesAddedStem, which runs before the stem check and needs no stems.
+  // Declaration languages re-resolve through the extension rule in externalSpecifierMatchesAddedStem,
+  // so no filename stems are needed here.
   const addedStems = addedStemsForLanguage(support.id);
   const addedFileLanguageId = (file: string): string | undefined =>
     supportForFileWithoutHeaderSample(file, languageExtensions)?.id;
@@ -1118,18 +1111,17 @@ async function buildProjectIndexFromExport(
 }
 
 /**
- * Cached modules that must be extracted again because something they depend on changed. A module
- * cache entry is keyed by the file's own content, but its import bindings (and anything derived
- * from other files) were resolved against the project as it was then. A module is extracted again
- * when it changed, when an import or re-export target no longer exists (or a manifest edge points
- * at a deleted file), when an added file can satisfy one of its specifiers, or, for languages that
- * resolve imports from other files' namespace or package declarations, when a file it depends on
- * (transitively) changed.
+ * Cached modules to extract again because something they depend on changed.
+ * A cached module is keyed by its own content, but its import bindings depend on other files.
+ * A module is stale when:
+ * - it changed;
+ * - an import or re-export target no longer exists;
+ * - an added file can satisfy one of its specifiers;
+ * - it resolves imports through namespace or package declarations, and a file it depends on changed.
  *
- * With a manifest, its entries give the previous file set and edges, and added files are checked
- * by re-resolving the importers' edges. Without one (a memory cache, or a disk cache no
- * manifest-writing build has seen), the cached modules' own bindings stand in for the edges, and
- * any cached module with a specifier an added file could satisfy is extracted again.
+ * With a manifest, the manifest gives the previous files and edges.
+ * Without one (a memory cache, or a disk cache that no manifest-writing build has seen),
+ * the cached import bindings replace the edges.
  */
 async function collectStaleCachedModules(args: {
   files: readonly string[];
@@ -1162,13 +1154,12 @@ async function collectStaleCachedModules(args: {
     );
   const loadTsconfigPaths = (importer: string) =>
     loadTsconfigResolutionInputsFor(importer, args.projectRoot, args.opts?.logLevel).then((inputs) => inputs?.paths);
-  // Confirmed-deleted declaration files, no-manifest path only: the manifest path retires
-  // deletions through its manifest rewrite and prune instead.
+  // Deleted declaration files. Only the no-manifest path fills this list.
+  // The manifest path retires deletions when it rewrites the manifest.
   const deletedDeclarationFiles: string[] = [];
   if (manifestFiles) {
     const currentKeys = new Set(args.files.map(fileIdentityKey));
-    // A cache-signature mismatch proves a change even when a non-strict manifest signature
-    // (mtime:size) matches, so misses count as changed too.
+    // A cache miss proves a change, even when a non-strict manifest signature (mtime:size) matches.
     const changed = new Set<string>(args.cacheMisses.changed);
     const added: string[] = [];
     for (const file of args.files) {
@@ -1179,13 +1170,10 @@ async function collectStaleCachedModules(args: {
       const matchesGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
       if (!entry || !(matchesGitSig || entry.sig === sigInfo.sig)) changed.add(file);
     }
-    // The next declared-container index is rebuilt from cache hits, which cannot see the
-    // declarations of added or changed files. An added file declaring an already-declared C++
-    // module name (two files declaring `shared`) leaves the previous-vs-next comparison
-    // unchanged, so the existing importer would stay resolved to the old file. Fold the
-    // misses' declarations in before diffing, as the incremental builder does after parsing
-    // them; a deleted declaration is already absent from the hits, so that direction keeps
-    // working (an importer that was external can resolve to the survivor).
+    // Cache hits do not hold the declarations of added or changed files.
+    // Add the C++ module declarations of those files before the comparison.
+    // Otherwise a second file that declares an existing module name changes nothing,
+    // and the importer keeps its old target.
     const nextDeclaredContainers = declaredContainerIndexFromModules(
       [...cachedModules.values()].map((cached) => cached.mod),
     );
@@ -1222,8 +1210,8 @@ async function collectStaleCachedModules(args: {
     for (const file of collectTrackedFileDependents(manifestFiles, changed)) {
       if (resolvesFromDeclarations(file)) stale.add(file);
     }
-    // A changed file of a declaration language can start declaring a namespace or package that an
-    // unrelated importer names, so its importers are re-resolved as if the file were added.
+    // A changed declaration-language file can start to declare a namespace or package that an importer names.
+    // Treat it like an added file.
     const resolutionInputs = [...added, ...[...changed].filter((file) => resolvesFromDeclarations(file))];
     if (resolutionInputs.length) {
       const stemsByLanguage = new Map<string, ReadonlySet<string>>();
@@ -1279,20 +1267,18 @@ async function collectStaleCachedModules(args: {
         );
         if (addedCanSatisfy) stale.add(file);
       }
-      // `from . import mod` already targets `__init__.py`, so no external specifier names an
-      // added `mod.py`; the cached targets identify the importers of the added file's packages.
+      // `from . import mod` targets `__init__.py`, so no specifier names an added `mod.py`.
+      // Find these importers through their cached targets.
       const packageImporters = pythonImportersOfPackageInits(
         Array.from(cachedModules, ([file, { mod }]) => [file, cachedModuleTargets(mod)] as const),
         added,
       );
       for (const file of packageImporters) stale.add(file);
     }
-    // C++ named-module specifiers name declarations, not file stems, so the stem check above
-    // misses an added file declaring an already-declared module (ambiguity), a changed file that
-    // stopped declaring one, and a deleted file that declared one. A deleted file leaves no cache
-    // miss behind at all, so surviving rows of omitted files are scanned separately. Cache hits
-    // cancel out of the previous-vs-next comparison, so only stale rows, deleted files, and the
-    // current misses can move the diff.
+    // C++ module specifiers name declarations, not file stems. The stem check cannot see
+    // a second declarer, a file that stopped declaring a module, or a deleted declarer.
+    // A deleted file leaves no cache miss, so the rows of omitted files are scanned separately.
+    // Cache hits cancel out of the comparison. Only stale rows, deleted files, and misses change it.
     const cppPrevious = previousCppDeclaredContainers(args.previousModules);
     const unknownDeclarationLanguages = new Set<string>();
     for (const deleted of await collectNoManifestDeletedDeclarationFiles({
@@ -1308,11 +1294,10 @@ async function collectStaleCachedModules(args: {
         unknownDeclarationLanguages.add(deleted.languageId);
       }
     }
-    // An evicted payload hides a declarer that was rewritten or deleted: it is neither a cache
-    // hit, a stale row, nor a surviving row. A changed file whose old row cannot be decoded hides
-    // its previous declarations the same way. Those declarations are unknown, so every cached
-    // importer of the affected languages re-resolves. Eviction only starts past the cache
-    // capacity, where a sequential build already misses the cache, so this costs little.
+    // Some previous declarations are unknown when a payload was evicted,
+    // or when the old row of a changed file cannot be decoded.
+    // Re-resolve every cached importer of the affected languages.
+    // This is rare: eviction starts past the cache limit, where builds miss the cache anyway.
     const unknownDeclarationHistory = new Set<string>();
     if ((args.opts?.cache ?? "off") === "memory" && memoryCacheLostPayloads(args.projectRoot)) {
       for (const languageId of DECLARATION_RESOLVED_IMPORT_LANGUAGES) unknownDeclarationHistory.add(languageId);
@@ -1385,9 +1370,9 @@ async function collectStaleCachedModules(args: {
 }
 
 /**
- * Languages whose import targets depend on other files' declarations (C# namespaces, JVM
- * packages, PHP namespaces, C++ named modules), not only on paths, so a content change in a
- * dependency can move the target.
+ * Languages that resolve imports through the declarations of other files
+ * (C# namespaces, JVM packages, PHP namespaces, C++ named modules).
+ * A content change in a dependency can move the target.
  */
 const DECLARATION_RESOLVED_IMPORT_LANGUAGES: ReadonlySet<string> = new Set(["cpp", "csharp", "java", "kotlin", "php"]);
 
@@ -1627,9 +1612,8 @@ async function buildIndexFromFileListShared(
   if (cacheEnabled) {
     const cachedModules = new Map<string, { sigInfo: FileSignature; mod: ModuleIndex }>();
     const cacheMissesByState = { changed: [] as string[], added: [] as string[] };
-    // Stale rows of changed files still describe the previous build, which the no-manifest path
-    // needs to notice a removed or rewritten declaration. Deleted files leave no miss at all,
-    // so their surviving rows are found through the cache below.
+    // The stale rows of changed files hold the previous declarations.
+    // Deleted files leave no miss. The build finds their rows separately.
     const previousModules = new Map<string, ModuleIndex>();
     const previousUnavailable: string[] = [];
     for (const [file, probe] of cacheProbes) {
@@ -1663,9 +1647,8 @@ async function buildIndexFromFileListShared(
       ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
     });
     retiredDeletionFiles = retiredDeletions;
-    // A stale importer's row still matches its own source signature. If the reparse or the cache
-    // write fails, the next build would reuse that row and its stale bindings, with the file-set
-    // change already consumed. Drop the rows now; a failed rebuild then just misses again.
+    // A stale importer's row still matches its source signature.
+    // If the rebuild or the cache write fails, a later build would reuse the row. Delete it now.
     removeModulesFromCache(
       projectRoot,
       [...staleCachedModules].filter((file) => cachedModules.has(file)),
@@ -1876,18 +1859,13 @@ async function buildIndexFromFileListShared(
         writeModulesToCache(projectRoot, pendingCacheWrites, opts);
       }
     }
-    // A full-discovery build re-resolved every cached importer against the current file set and
-    // wrote its modules back, so the rows an earlier eviction dropped are restored. Keep the flag
-    // when another payload was evicted since this build started.
+    // A full-discovery build re-resolved every importer and wrote its modules back.
+    // Clear the eviction state, unless another payload was evicted during the build.
     if (opts?.cache === "memory" && projectFiles !== undefined) {
       settleMemoryCacheEvictions(projectRoot, evictionSerialAtStart);
     }
-    // Retire confirmed-deleted declaration rows now the rebuild that consumed them succeeded;
-    // otherwise the same deletion moves the declaration comparison on every later build and
-    // the cache never becomes fully warm.
-    // Only a full-discovery build holds every cached importer, so only it consumed the deletion
-    // for all of them. A scoped build leaves the row: an omitted importer still needs the
-    // deletion evidence for the build that does contain it.
+    // Delete the rows of confirmed-deleted declaration files, so the next unchanged build is fully warm.
+    // Only a full-discovery build does this. A build over a file list can omit importers that still need the deletion.
     if (!manifest && projectFiles !== undefined && retiredDeletionFiles.length) {
       removeModulesFromCache(projectRoot, retiredDeletionFiles, opts);
     }

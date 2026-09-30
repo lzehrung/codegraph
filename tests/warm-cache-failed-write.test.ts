@@ -8,7 +8,7 @@ import { mkTmpDir } from "./helpers/filesystem.js";
 
 const control = vi.hoisted(() => ({ dropWrites: false }));
 
-// A cache write that fails is logged and skipped, so the build still succeeds.
+// A failed cache write is logged and skipped. The build still succeeds.
 vi.mock("../src/indexer/build-cache/module-cache.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/indexer/build-cache/module-cache.js")>();
   return {
@@ -34,9 +34,8 @@ function bindingTargets(index: ProjectIndex, file: string): string[] {
 }
 
 describe("warm module-cache builds when the replacement cache write fails", () => {
-  // The stale importer row still matches its own source signature. Without dropping it before the
-  // rebuild, the failed write leaves it behind, the deletion is already consumed, and the next
-  // build reuses the stale external binding for good.
+  // The stale importer row still matches its source signature.
+  // If a failed write keeps it, the next build reuses the stale binding.
   it("does not reuse a stale importer row after a failed write (memory cache)", async () => {
     const root = await mkTmpDir("cg-module-cache-failed-write-");
     try {

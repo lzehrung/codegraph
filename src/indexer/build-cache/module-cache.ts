@@ -65,31 +65,28 @@ const MAX_MEMORY_CACHE_ENTRIES = 5000;
 const memoryCache = new Map<string, ModuleCacheEntry>();
 
 /**
- * Projects that lost a module payload to LRU eviction, keyed by normalized root, with the serial
- * of the latest eviction. A manifest-less warm build reads the previous file set from surviving
- * rows, so an evicted row leaves neither a cache hit nor a stale row for a file that was rewritten
- * or deleted. The build cannot trust the previous declarations of such a root and re-resolves its
- * declaration-language importers. This holds one entry per affected root, not one per file, and a
- * complete build that saw no further eviction removes the entry again.
+ * Projects that lost a module payload to LRU eviction, with the count of the latest eviction.
+ * A build without a manifest finds deleted or rewritten files through the cached rows.
+ * An evicted row hides them, so the build re-resolves the project's declaration-language importers.
+ * Each project has one entry. A complete build removes it.
  */
 const rootsWithEvictedPayloads = new Map<string, number>();
-/** Increases with every payload eviction, so a build can tell whether one happened while it ran. */
+/** Counts payload evictions. A build compares it to detect an eviction during the build. */
 let memoryEvictionSerial = 0;
 
-/** Whether the memory cache dropped a payload for the project, so its previous file set is incomplete. */
+/** True when the memory cache evicted a payload of the project. */
 export function memoryCacheLostPayloads(projectRoot: string): boolean {
   return rootsWithEvictedPayloads.has(normalizePath(projectRoot));
 }
 
-/** The eviction serial now. Pass it to `settleMemoryCacheEvictions` once a build completes. */
+/** The current eviction count. Pass it to `settleMemoryCacheEvictions` when a build ends. */
 export function memoryCacheEvictionSerial(): number {
   return memoryEvictionSerial;
 }
 
 /**
- * Forget the project's lost payloads after a complete build restored every row it needs: the
- * build re-resolved all importers against the current file set and wrote its modules back. Skipped
- * when the project lost another payload after `sinceSerial`, because that row is missing again.
+ * Clear the eviction state of the project after a complete build restored its rows.
+ * Keep the state if the project lost another payload after `sinceSerial`.
  */
 export function settleMemoryCacheEvictions(projectRoot: string, sinceSerial: number): void {
   const root = normalizePath(projectRoot);
@@ -637,10 +634,9 @@ function rehydrateStaleModuleRow(
 }
 
 /**
- * A cached module for `file` at `sig`, and whether the cache held an entry for the file at any
- * signature. A miss with a previous entry is a changed file; a miss without one is a file the cache
- * has not seen, which a warm build treats as added. staleMod carries the previous entry when
- * the signature differs, so invalidation can compare previous-build declarations with next ones.
+ * Load the cached module for `file` at `sig`.
+ * `previouslyCached` is true when the cache held any entry for the file. A miss then means the file changed.
+ * `staleMod` is that older entry, when it can be decoded.
  */
 export function loadModuleFromCache(
   projectRoot: string,
@@ -709,11 +705,7 @@ export function loadModuleFromCache(
   return { mod: null, previouslyCached: false, staleMod: null };
 }
 
-/**
- * Every file with a row in the memory module cache for the project. Rows survive for files
- * the current build omits, so a warm build can tell a deleted file from an out-of-scope one
- * by probing the survivors on disk.
- */
+/** Files with a row in the memory module cache, including files that the current build omits. */
 export function listMemoryCachedModuleFiles(projectRoot: string): string[] {
   const prefix = normalizePath(projectRoot) + "::";
   const files: string[] = [];
@@ -724,10 +716,8 @@ export function listMemoryCachedModuleFiles(projectRoot: string): string[] {
 }
 
 /**
- * The module row cached for a file at any signature, without consuming it. Unlike
- * loadModuleFromCache this never deletes a mismatched memory entry and never records a hit
- * or a miss, so invalidation can read previous-build declarations of a file the current
- * build changed, deleted, or scoped out.
+ * The cached row for `file` at any signature.
+ * Unlike `loadModuleFromCache`, it does not delete the row and does not count a hit or miss.
  */
 export function peekCachedModule(
   projectRoot: string,
@@ -838,13 +828,9 @@ export function writeToCache(
 }
 
 /**
- * Drop module-cache rows. Two callers need it. A build removes the rows of cached importers it
- * proved stale before reparsing them, so a failed reparse or cache write cannot leave a row that
- * still matches the source signature and would be reused with its stale bindings. A successful
- * manifest-less build also retires the rows of files it confirmed deleted: otherwise the deletion
- * keeps moving the previous-vs-next declaration comparison, importers reparse on every unchanged
- * build, and the cache never becomes fully warm. Only files the build probed missing may be
- * retired; out-of-scope files still exist, so scoped builds never reach that path.
+ * Delete cache rows. A build uses this in two cases:
+ * - Stale importers: delete the rows before the rebuild. A failed rebuild or cache write then cannot leave a row that a later build reuses.
+ * - Deleted files: delete the rows after a successful full build. The next unchanged build is then fully warm.
  */
 export function removeModulesFromCache(projectRoot: string, files: readonly string[], opts?: BuildOptions): void {
   if (!files.length) return;

@@ -140,8 +140,8 @@ export function collectPythonPackageImporters(
 }
 
 /**
- * The same walk over any source of resolved import targets, for builds without a manifest whose
- * only record of an importer's targets is its cached module.
+ * Same as `collectPythonPackageImporters`, for builds without a manifest.
+ * Takes the resolved import targets of each importer.
  */
 export function pythonImportersOfPackageInits(
   importerTargets: Iterable<readonly [file: string, targets: readonly string[]]>,
@@ -178,8 +178,8 @@ const MULTI_PART_RESOLUTION_EXTENSIONS = DEFAULT_RESOLUTION_EXTENSIONS.filter(
 type ExternalSpecifierResolutionRule = {
   separator: RegExp;
   importNamesDirectory?: "parent" | "ancestors";
-  // Declaration-based imports name packages, not files, so a filename stem cannot match them,
-  // and an added file with one of these extensions re-resolves every importer of the language.
+  // Declaration imports name packages, not files, so a filename stem cannot match.
+  // Any added file of the language re-resolves its importers.
   reResolveAnyAddedExtensions?: readonly string[];
   matchesModuleSegments?: boolean;
 };
@@ -230,9 +230,11 @@ function externalSpecifierSegments(value: string, rule: ExternalSpecifierResolut
   return value.split(rule.separator).filter((segment) => segment && segment !== "." && segment !== "..");
 }
 
-/** Added files satisfying a declaration language's re-resolve rule: by built-in suffix, or by
- * the file's configured language matching the importer's (a `.jvm` file mapped to Kotlin
- * declares Kotlin packages just as a `.kt` file does). */
+/**
+ * True when an added file can satisfy a declaration import.
+ * The file has a built-in suffix, or its configured language is the importer's language
+ * (for example, a `.jvm` file mapped to Kotlin).
+ */
 function hasAddedFileMatchingRule(
   rule: ExternalSpecifierResolutionRule,
   languageId: string,

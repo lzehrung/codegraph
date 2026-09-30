@@ -88,11 +88,22 @@ Disk loads reuse unchanged files and update changed ones. Codegraph validates fi
 
 Module and graph cache identities also include effective TypeScript `baseUrl`/`paths` (including `extends`) and workspace package names, locations, `main`, and `exports`. These inputs are checked even when `resolveNodeModules` is disabled, so configuration-only changes cannot leave cached import targets on the old files. Unchanged resolution inputs still permit reuse.
 
-A cached module is keyed by its own content, but its import targets depend on other files. A warm build extracts a module again when it changed, when a file it imports was deleted or any of its resolved import or re-export targets no longer exists, when an added file can satisfy one of its specifiers, or, for C#, Java, Kotlin, PHP, and C++ modules (whose imports resolve through other files' namespace or package declarations), when a file it depends on changed. With an index manifest, added files are checked by re-resolving the affected specifiers; without one (a `memory` cache, or a disk cache that no manifest-writing build has seen), the cached modules' own import bindings stand in for the edges, and any module with a specifier an added file could satisfy is extracted again. Declaration-based imports name packages, namespaces, or modules rather than files, so any added or changed file of those languages re-resolves that language's importers instead of relying on filename stems; without a manifest, removed declarations are found through the previous build surviving cache rows.
+A cached module is keyed by its own content, but its import targets depend on other files. A warm build extracts a module again when:
 
-An added file qualifies by its configured language as well as its suffix. A build drops each stale importer's cache row before extracting it again, so a failed extraction or cache write cannot leave a row that a later build reuses.
+- the module changed;
+- a file it imports was deleted, or a resolved import or re-export target no longer exists;
+- an added file can satisfy one of its specifiers;
+- it is a C#, Java, Kotlin, PHP, or C++ module, and a file it depends on changed. These imports resolve through the namespace or package declarations of other files.
 
-A manifest-less full-discovery build drops a confirmed-deleted file's rows after the rebuild that consumed them, so later unchanged builds stay fully warm. A build over an explicit file list keeps them, because an importer outside the list still needs the deletion evidence. A `memory` cache that evicted a payload past its 5,000-entry limit, or a changed file whose previous row cannot be decoded, hides the old declarations, so the affected importers re-resolve. A complete build that sees no further eviction restores the rows and ends that state.
+With an index manifest, the build re-resolves the affected specifiers of added files. Without one (a `memory` cache, or a `disk` cache that no manifest-writing build has seen), the cached import bindings replace the manifest edges.
+
+Declaration-based imports name a package, namespace, or module, not a file:
+
+- Any added or changed file of the language re-resolves that language's importers. The file suffix or the configured language selects the file.
+- Without a manifest, the rows of the previous build show removed or rewritten declarations.
+- A build deletes the cache row of each stale importer before it extracts the importer again. A failed extraction or cache write then cannot leave a row that a later build reuses.
+- A manifest-less full-discovery build also deletes the rows of confirmed-deleted files, so the next unchanged build is fully warm. A build over an explicit file list keeps them, because an importer outside the list still needs them.
+- A `memory` cache evicts payloads past 5,000 entries. The old declarations are also unknown when the previous row of a changed file cannot be decoded. The affected importers then re-resolve until a complete build restores the rows.
 
 Existing `.codegraph-cache/` directories migrate automatically to `.codegraph/cache/` on the next run.
 

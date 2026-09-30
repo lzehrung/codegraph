@@ -1067,9 +1067,9 @@ describe("warm module-cache builds never reuse import bindings resolved against 
     }
   });
 
-  // The added file's stem (`beta`) never matches the imported module name (`shared`), so the
-  // stem check cannot see the new declaration; the declared-container comparison has to. Disk
-  // exercises the manifest path, memory the no-manifest path.
+  // The stem of the added file (`beta`) never matches the module name (`shared`).
+  // Only the declared-container comparison sees the new declaration.
+  // Disk covers the manifest path. Memory covers the no-manifest path.
   for (const cache of ["disk", "memory"] as const) {
     it(`returns a C++ module import to unresolved when a second declaration makes it ambiguous (${cache} cache)`, async () => {
       const root = await mkTmpDir(`cg-module-cache-cpp-ambiguous-${cache}-`);
@@ -1099,8 +1099,8 @@ describe("warm module-cache builds never reuse import bindings resolved against 
     });
   }
 
-  // The stem filter sees only the filename (Helpers), while the import names the declaration
-  // (p.Widget), so only the declaration-language extension rule can trigger re-resolution.
+  // The import names the declaration (`p.Widget`), not the filename (`Helpers`).
+  // Only the extension rule for declaration languages triggers re-resolution.
   for (const cache of ["disk", "memory"] as const) {
     it(`resolves a declaration-named import added under an unrelated filename (${cache} cache)`, async () => {
       const root = await mkTmpDir(`cg-module-cache-decl-name-${cache}-`);
@@ -1122,9 +1122,9 @@ describe("warm module-cache builds never reuse import bindings resolved against 
     });
   }
 
-  // Without a manifest there is no previous file set: a deleted duplicate declarer leaves no
-  // cache miss behind, and a rewritten one only proves itself changed, never what it declared.
-  // Surviving rows (deleted files) and stale rows (changed files) close both gaps.
+  // Without a manifest, a deleted declarer leaves no cache miss.
+  // A rewritten declarer does not show what it declared.
+  // Surviving rows and stale rows supply both.
   it("resolves a C++ module import from the survivor when one duplicate declaration is deleted (memory cache)", async () => {
     const root = await mkTmpDir("cg-module-cache-cpp-dupe-memory-");
     try {
@@ -1145,8 +1145,7 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       for (const target of bindingTargets(warm, main)) {
         expect(target).toBe("file:" + normalizePath(path.join(root, "alpha.cpp")));
       }
-      // The confirmed deletion is retired by the rebuild above: with nothing changed, the
-      // next warm build reuses every cached module instead of missing the importer again.
+      // The rebuild retired the deletion, so the next build reuses every module.
       const report: BuildReport = { timings: {} };
       await buildProjectIndex(root, { cache: "memory", report });
       expect(report.files?.cached).toBe(report.files?.total);
@@ -1182,9 +1181,8 @@ describe("warm module-cache builds never reuse import bindings resolved against 
     }
   });
 
-  // `using X = P;` over two files declaring `P` leaves the alias binding without a target
-  // (`resolved` absent), so only the every-non-string check sees the importer as external.
-  // Without a manifest the deleted declarer leaves no cache miss behind either.
+  // Two files declare `P`, so the alias binding has no `resolved` target.
+  // The importer must still count as unresolved.
   it("binds a C# namespace alias to the survivor when a duplicate declaration is deleted (memory cache)", async () => {
     const root = await mkTmpDir("cg-module-cache-csharp-alias-memory-");
     try {
@@ -1205,9 +1203,9 @@ describe("warm module-cache builds never reuse import bindings resolved against 
     }
   });
 
-  // The memory cache holds 5,000 payloads. Once alpha.cpp's payload is evicted, its rewrite is
-  // neither a cache hit nor a stale row, so the previous declaration `shared` is unknown and the
-  // importer that still names an existing target must re-resolve.
+  // The memory cache holds 5,000 payloads. After the payload of `alpha.cpp` is evicted,
+  // its rewrite is not a cache hit and not a stale row, so its old declaration is unknown.
+  // The importer must re-resolve.
   it("re-resolves a C++ importer when the declarer's evicted payload was rewritten (memory cache)", async () => {
     const root = await mkTmpDir("cg-module-cache-cpp-evicted-");
     try {
@@ -1240,8 +1238,8 @@ describe("warm module-cache builds never reuse import bindings resolved against 
     }
   });
 
-  // A signature miss whose old row cannot be decoded leaves no previous declaration to diff.
-  // Without a manifest the importer is neither missing a target nor a dependent of a changed file.
+  // The old row of a changed file cannot be decoded, so its previous declaration is unknown.
+  // Without a manifest, nothing else invalidates the importer.
   it("re-resolves a C++ importer when a rewritten declarer's old row is undecodable (disk cache, no manifest)", async () => {
     const root = await mkTmpDir("cg-module-cache-cpp-corrupt-");
     const cacheDir = await mkTmpDir("cg-module-cache-cpp-corrupt-cache-");
@@ -1280,8 +1278,8 @@ describe("warm module-cache builds never reuse import bindings resolved against 
     }
   });
 
-  // The LRU is global: another project can evict this project's rows. Once a complete build
-  // restores them, later unchanged builds must reuse every module again.
+  // The LRU is shared by all projects, so another project can evict these rows.
+  // After a complete build restores them, unchanged builds must reuse every module.
   it("reuses every module again after a complete build restores rows another project evicted (memory cache)", async () => {
     const root = await mkTmpDir("cg-module-cache-cpp-restored-");
     const other = await mkTmpDir("cg-module-cache-cpp-restored-other-");
@@ -1311,8 +1309,8 @@ describe("warm module-cache builds never reuse import bindings resolved against 
     }
   });
 
-  // `from . import mod` already targets `__init__.py`, so no external specifier names the added
-  // `mod.py`. Without a manifest only the cached bindings identify the importer.
+  // `from . import mod` already targets `__init__.py`.
+  // Without a manifest, only the cached bindings identify the importer.
   it("re-resolves a relative Python from-import once the submodule is added (memory cache)", async () => {
     const root = await mkTmpDir("cg-module-cache-py-relative-memory-");
     try {
@@ -1335,8 +1333,8 @@ describe("warm module-cache builds never reuse import bindings resolved against 
     }
   });
 
-  // A scoped build does not hold every cached importer, so it must not consume the deletion:
-  // the build that does contain `main.cpp` still needs the evidence that `beta.cpp` is gone.
+  // A build over a file list omits `main.cpp`, so it must not consume the deletion of `beta.cpp`.
+  // The later build that includes `main.cpp` still needs it.
   it("keeps a deleted declarer's evidence when a scoped build omits its importers (memory cache)", async () => {
     const root = await mkTmpDir("cg-module-cache-cpp-scoped-retire-");
     try {
