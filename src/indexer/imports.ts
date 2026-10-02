@@ -206,7 +206,8 @@ export async function collectImportsForFile(
     for (const binding of imports) {
       if (binding.kind !== "star" || typeof binding.resolved !== "string") continue;
       const files = jvmPackageFiles.get(binding.from);
-      if (files) binding.jvmPackageFiles = files;
+      // A static class wildcard can spell the same name as a package wildcard.
+      if (files?.includes(binding.resolved)) binding.jvmPackageFiles = files;
     }
   };
 

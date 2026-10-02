@@ -764,6 +764,16 @@ C symbol lookup keeps tag and ordinary identifier namespaces separate:
 - `SymbolDef.cTag` records `"declaration"`, `"forward"`, or `"reference"` for C tags. A bodyless tag use can introduce an incomplete tag when no visible tag exists. A file-scope forward declaration reuses an included tag; a block-scope forward declaration can hide an outer tag.
 - Expanded named C imports retain `ImportBinding.cNamespace`. Symbol lists and compact and detailed symbol graphs keep separate import identities for tag and ordinary namespaces.
 
+Function symbols carry `SymbolDef.callable`, computed when the file is indexed:
+
+- `key`: declarations with the same key are one callable. A C or C++ prototype and its definition share a key, and so do TypeScript overload signatures and their implementation. Other declarations have their own key.
+- `owner`: the enclosing type or namespace path, or `""`.
+- `kind`: `"function"`, `"instance-method"`, `"class-method"`, or `"static-method"`.
+- `arity`: the accepted explicit-argument range `{ minArgs, maxArgs }` (`maxArgs: null` means variadic), or `null` when it is unknown. `unboundArity` is the range when the receiver is passed as the first argument.
+- `signature` (C and C++), `role` (TypeScript: `"signature"`, `"implementation"`, or `"other"`), and `definition` (C and C++) are present only for those languages.
+
+Treat `callable` as read-only facts for grouping and arity checks. Keys are stable within one index, but their text is not a public format.
+
 ## Incremental indexing
 
 ```ts

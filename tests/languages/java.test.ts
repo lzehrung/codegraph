@@ -493,6 +493,74 @@ describe("Java imports with a same-named package", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("keeps colliding package and static wildcard imports distinct", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-dual-star-"));
+    try {
+      const classLines = ["package p;", "public class C { public static int util() { return 1; } }"];
+      const packageLines = ["package p.C;", "public class Pkg {}"];
+      const decoyLines = ["package p.C;", "public class Decoy { public static int util() { return -1; } }"];
+      const useLines = [
+        "package client;",
+        "import p.C.*;",
+        "import static p.C.*;",
+        "class Use {",
+        "  Pkg value;",
+        "  int run() { return util(); }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "p/C.java": classLines.join("\n"),
+        "p/C/Pkg.java": packageLines.join("\n"),
+        "p/C/Decoy.java": decoyLines.join("\n"),
+        "client/Use.java": useLines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = paths["client/Use.java"]!;
+      const target = paths["p/C.java"]!;
+      const pkg = paths["p/C/Pkg.java"]!;
+      const decoy = paths["p/C/Decoy.java"]!;
+      const utilGoto = await goToDefinition(index, { file: use, line: 6, column: columnOf(useLines, 6, "util") });
+      const pkgGoto = await goToDefinition(index, { file: use, line: 5, column: columnOf(useLines, 5, "Pkg") });
+      expect(utilGoto.status).toBe("ok");
+      expect(pkgGoto.status).toBe("ok");
+      if (utilGoto.status === "ok") expect(normalizePath(utilGoto.definition.file)).toBe(target);
+      if (pkgGoto.status === "ok") expect(normalizePath(pkgGoto.definition.file)).toBe(pkg);
+
+      const utilRefs = await findReferences(index, { file: target, line: 2, column: columnOf(classLines, 2, "util") });
+      const pkgRefs = await findReferences(index, { file: pkg, line: 2, column: columnOf(packageLines, 2, "Pkg") });
+      const decoyRefs = await findReferences(index, { file: decoy, line: 2, column: columnOf(decoyLines, 2, "util") });
+      expect(utilRefs.status).toBe("ok");
+      expect(pkgRefs.status).toBe("ok");
+      expect(decoyRefs.status).toBe("ok");
+      if (utilRefs.status === "ok") {
+        const lines = utilRefs.references.filter((reference) => normalizePath(reference.file) === use);
+        expect(lines.map((reference) => reference.range.start.line)).toContain(6);
+      }
+      if (pkgRefs.status === "ok") {
+        const lines = pkgRefs.references.filter((reference) => normalizePath(reference.file) === use);
+        expect(lines.map((reference) => reference.range.start.line)).toContain(5);
+      }
+      if (decoyRefs.status === "ok") {
+        expect(decoyRefs.references.some((reference) => normalizePath(reference.file) === use)).toBe(false);
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(calls).toContain(target);
+      expect(calls).not.toContain(decoy);
+      const pkgImport = [...graph.nodes.values()].find(
+        (node) => node.file === use && node.name === "Pkg" && node.kind === "import",
+      );
+      const pkgDef = [...graph.nodes.values()].find((node) => node.file === pkg && node.name === "Pkg");
+      expect(pkgImport).toBeDefined();
+      expect(pkgDef).toBeDefined();
+      expect(graph.edges.some((edge) => edge.from === pkgImport?.id && edge.to === pkgDef?.id)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Java lowercase class import bindings", () => {
