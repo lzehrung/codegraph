@@ -119,6 +119,8 @@ export type MovedVariant = {
   files: Readonly<Record<string, string>>;
   /** Where the declaration lives after the move. */
   expected: TokenAddress;
+  /** Where the decoy lives after the move, when the move shifts it. Defaults to the cell's decoy. */
+  decoy?: TokenAddress;
 };
 
 export type MatrixEdge = {

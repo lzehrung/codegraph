@@ -49,8 +49,7 @@ export function renderCallFormReport(cells: readonly MatrixCell[]): string {
       "excluded, and three metamorphic checks hold: an unrelated same-named file elsewhere changes nothing, a " +
       "warm disk-cache build matches a cold build after each of a sequence of file mutations, and, where the " +
       "cell gives one, moving the declaration moves the answer with it. A language/call-form pair can carry " +
-      "more than one cell; the table below shows the worst status among them, and every cell is still listed " +
-      'individually under "Cell counts" and "Known gaps". ' +
+      "more than one cell; the table below shows the worst status among them. " +
       "`docs/plans/2026-09-28-unified-name-resolution.md` Step 1 is the design source.",
   );
   lines.push("");

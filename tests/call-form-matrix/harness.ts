@@ -235,14 +235,17 @@ async function snapshotAnswer(args: {
     line: args.declaration.line,
     column: args.declaration.column,
   });
+  // Every reference keeps its column and its duplicates, so two uses on one line stay two entries.
   const referenceSites =
     refs.status === "ok"
-      ? [
-          ...new Set(refs.references.map((reference) => `${relative(reference.file)}:${reference.range.start.line}`)),
-        ].sort()
+      ? refs.references
+          .map(
+            (reference) => `${relative(reference.file)}:${reference.range.start.line}:${reference.range.start.column}`,
+          )
+          .sort()
       : [];
-  const decoyKey = `${relative(args.decoySite.file)}:${args.decoySite.line}`;
-  const decoyInReferences = referenceSites.includes(decoyKey);
+  const decoyLine = `${relative(args.decoySite.file)}:${args.decoySite.line}:`;
+  const decoyInReferences = referenceSites.some((site) => site.startsWith(decoyLine));
 
   let callerEdges: readonly string[] | null = null;
   const caller = args.caller;
@@ -260,7 +263,10 @@ async function snapshotAnswer(args: {
       .filter((edge) => edge.from === fromNode.id && (edge.label === "calls" || edge.label === "instantiates"))
       .map((edge) => {
         const toNode = args.graph.nodes.get(edge.to);
-        return `${edge.label}->${toNode ? `${relative(toNode.file)}#${toNode.name}` : edge.to}`;
+        // The node id ends with the declaration's start index, which separates a target from a
+        // same-named decoy in the same file.
+        const start = edge.to.slice(edge.to.lastIndexOf("::") + 2);
+        return `${edge.label}->${toNode ? `${relative(toNode.file)}#${toNode.name}@${start}` : edge.to}`;
       })
       .sort();
   }
@@ -455,6 +461,22 @@ export async function runMovedVariant(cell: MatrixCell, moved: MovedVariant): Pr
         : {}),
     };
     await assertConsumerAgreement(fixture, site);
+    const decoy = moved.decoy ?? cell.decoy;
+    columnAt(
+      requireFile(moved.files, decoy.file, `${cell.id} moved decoy`),
+      decoy.line,
+      decoy.token,
+      decoy.occurrence ?? 1,
+      `${cell.id} moved decoy`,
+    );
+    await assertConsumerAgreement(fixture, {
+      ...addressSite(cell.use),
+      mustNotMatch: decoy,
+      ...(cell.decoyAmbiguous ? {} : { provablyNotAReference: true }),
+      ...(cell.edge
+        ? { absentEdge: { label: cell.edge.label, from: { file: cell.edge.fromFile, name: cell.edge.fromName } } }
+        : {}),
+    });
   } finally {
     await disposeConsumerAgreementFixture(fixture);
   }

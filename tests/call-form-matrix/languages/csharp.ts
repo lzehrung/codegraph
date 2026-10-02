@@ -91,6 +91,7 @@ export const csharpCells: MatrixCell[] = [
         ].join("\n"),
       },
       expected: { file: "util-moved.cs", line: 3, token: "Add" },
+      decoy: { file: "util.cs", line: 3, token: "Add" },
     },
   },
   {
