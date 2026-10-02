@@ -38,6 +38,11 @@ export type ResolveExportOptions = {
   cNamespace?: "tag" | "ordinary";
   /** Source position for implicit C# namespace lookup in the initial file. */
   referenceIndex?: number;
+  /**
+   * Explicit argument count at a call. Java and Kotlin overload sets (several functions
+   * exported under one name) are chosen by indexed `callable.arity`; other languages ignore it.
+   */
+  argumentCount?: number;
 };
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
@@ -230,6 +235,43 @@ function declaresMemberKind(def: SymbolDef): boolean {
 }
 
 /**
+ * One function from an overload set, or null when the count is not accepted by exactly one.
+ * Only indexed `callable.arity` is consulted: a missing arity does not accept, and a count
+ * two overloads both accept stays unresolved.
+ */
+function selectFunctionOverloadByArity(candidates: readonly SymbolDef[], argumentCount: number): SymbolDef | null {
+  if (candidates.length < 2 || candidates.some((candidate) => candidate.kind !== SymbolKind.Function)) return null;
+  const accepting = candidates.filter((candidate) => {
+    const arity = candidate.callable?.arity;
+    return !!arity && argumentCount >= arity.minArgs && (arity.maxArgs === null || argumentCount <= arity.maxArgs);
+  });
+  return accepting.length === 1 ? (accepting[0] ?? null) : null;
+}
+
+/**
+ * `def` is one function of a Java or Kotlin overload set exported as `exportedName`.
+ * A call chooses among them by argument count; the import itself names the whole set, so
+ * reference search must still treat the import as able to reach each overload.
+ */
+export function javaKotlinFunctionOverloadIncludes(
+  index: ProjectIndex,
+  file: FileId,
+  exportedName: string,
+  def: SymbolDef,
+): boolean {
+  if (def.kind !== SymbolKind.Function) return false;
+  const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
+  if (languageId !== "java" && languageId !== "kotlin") return false;
+  const moduleEntry = moduleFor(index, file);
+  if (!moduleEntry) return false;
+  const names = moduleNameLookup(index, moduleEntry.file);
+  if (!names) return false;
+  const exported = names.localExports.get(names.normalizeIdentifier(exportedName)) ?? [];
+  if (exported.length < 2 || exported.some((candidate) => candidate.kind !== SymbolKind.Function)) return false;
+  return exported.some((candidate) => sameSymbolDef(index, candidate, def));
+}
+
+/**
  * A default-export wrapper keeps `SymbolKind.Default` so the export name stays `default`.
  * Member lookup needs the class, interface, or type alias that wrapper was copied from.
  */
@@ -330,7 +372,8 @@ export function resolveExport(
     if (!names) return null;
     const normalizedFile = normalizePath(moduleEntry.file);
     const referenceIndex = fileIdentityKey(fileInner) === fileIdentityKey(file) ? opts?.referenceIndex : undefined;
-    const csharpFile = supportForFileWithoutHeaderSample(normalizedFile, index.languageExtensions)?.id === "csharp";
+    const languageId = supportForFileWithoutHeaderSample(normalizedFile, index.languageExtensions)?.id;
+    const csharpFile = languageId === "csharp";
     // A dotted name is a namespace path even when the caller has no source position
     // (`using PT = N.Inner.Point` resolves through the bound file, not a use site).
     // A bare name still needs a source position before namespace visibility applies.
@@ -348,7 +391,8 @@ export function resolveExport(
       unqualifiedName = name.slice("global::".length);
     }
     const canonicalName = names.normalizeIdentifier(unqualifiedName);
-    const key = `${cacheKey(normalizedFile, names.normalizeIdentifier(name))}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}::${referenceIndex ?? ""}`;
+    const argumentCountKey = opts?.argumentCount === undefined ? "" : String(opts.argumentCount);
+    const key = `${cacheKey(normalizedFile, names.normalizeIdentifier(name))}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}::${referenceIndex ?? ""}::${argumentCountKey}`;
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
     const cycleKey = `${cacheKey(normalizedFile, canonicalName)}::${namespace ?? ""}`;
@@ -420,6 +464,17 @@ export function resolveExport(
       return result;
     }
     if (localCandidates.length) {
+      // Several same-named functions are an overload set, not a failed lookup. Java static
+      // imports and Kotlin package imports both land here; arity picks the unique acceptor.
+      const selected =
+        opts?.argumentCount !== undefined && (languageId === "java" || languageId === "kotlin")
+          ? selectFunctionOverloadByArity(localCandidates, opts.argumentCount)
+          : null;
+      if (selected) {
+        const result: ResolvedExport = { kind: "resolved", def: selected };
+        index.exportCache.set(key, result);
+        return result;
+      }
       index.exportCache.set(key, null);
       return null;
     }

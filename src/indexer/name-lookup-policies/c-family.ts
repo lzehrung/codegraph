@@ -8,6 +8,7 @@ import {
 } from "../ambiguous-resolution.js";
 import { cppOutOfLineOwnerPath } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
+  cppQualifiedNameThroughNamespaceAlias,
   cppStarImportClosure,
   cppUsingDeclarationTarget,
   resolveCppCallableBindings,
@@ -48,22 +49,51 @@ export const cLookupPolicy: NameLookupPolicy = {
   afterCrossModule: (state, resolved) => deferIncludedStarRecovery(state, resolved, cNamespaceOf(state.use.node)),
 };
 
+const AMBIGUOUS_CPP_NAMESPACE_ALIAS_REASON = "Ambiguous C++ namespace alias";
+
 /** A qualified name (`ns::f`, `Box::make`) names a namespace or static member directly. */
-export function resolveCppQualifiedName(use: BareNameUse): GoToResult | undefined {
-  const { index, mod, file, node, name, scopeIndex, parsed } = use;
-  if (!name.includes("::")) return undefined;
-  const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(name);
+function lookupCppQualifiedName(use: BareNameUse, qualifiedName: string): GoToResult | undefined {
+  const { index, mod, file, node, scopeIndex, parsed } = use;
+  const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(qualifiedName);
   if (qualifiedBindings) {
     const selected = resolveCppCallableBindings(file, qualifiedBindings, node, parsed.source);
     if (!selected) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
     return okGoToResult(index, selected, { resolution: "exact", confidence: "high" });
   }
-  const visible = resolveVisibleCppCallableName(index, mod, name, node, parsed.source, loadParsed(use));
+  const visible = resolveVisibleCppCallableName(index, mod, qualifiedName, node, parsed.source, loadParsed(use));
   if (visible !== undefined) {
     if (!visible) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
     return okGoToResult(index, visible, { resolution: "exact", confidence: "high" });
   }
-  return resolveNamedDefinition(index, mod, file, parsed.sup, name) ?? undefined;
+  return resolveNamedDefinition(index, mod, file, parsed.sup, qualifiedName) ?? undefined;
+}
+
+/**
+ * A qualified name (`ns::f`, `Box::make`) names a namespace or static member directly.
+ * `namespace dm = detailed_math; dm::f` is the same name after the alias is followed.
+ */
+export function resolveCppQualifiedName(use: BareNameUse): GoToResult | undefined {
+  const { name } = use;
+  if (!name.includes("::")) return undefined;
+  const direct = lookupCppQualifiedName(use, name);
+  if (direct) return direct;
+  const rewritten = cppQualifiedNameThroughNamespaceAlias(
+    use.index,
+    use.mod,
+    name,
+    use.node,
+    use.parsed.source,
+    use.parsed.tree,
+    loadParsed(use),
+  );
+  if (rewritten === null) return { status: "not_found", reason: AMBIGUOUS_CPP_NAMESPACE_ALIAS_REASON };
+  if (!rewritten || rewritten === name) return undefined;
+  return (
+    lookupCppQualifiedName(use, rewritten) ?? {
+      status: "not_found",
+      reason: "No matching C++ declaration through a namespace alias",
+    }
+  );
 }
 
 export const cppLookupPolicy: NameLookupPolicy = {

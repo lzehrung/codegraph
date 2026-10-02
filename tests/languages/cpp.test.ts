@@ -1984,3 +1984,177 @@ describe("C++ implicit this in qualified and bare member calls", () => {
     }
   });
 });
+
+describe("C++ namespace aliases", () => {
+  it("follows a namespace alias in goto, references, and calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-alias-"));
+    const header = path.join(root, "math.hpp");
+    const file = path.join(root, "use.cpp");
+    const headerLines = [
+      "namespace detailed_math {",
+      "  int add(int a, int b) { return a + b; }",
+      "}",
+      "namespace a {",
+      "  namespace b {",
+      "    int add(int a, int b) { return a + b; }",
+      "  }",
+      "}",
+      "namespace decoy_ns {",
+      "  int add(int a, int b) { return -1; }",
+      "}",
+    ];
+    const lines = [
+      '#include "math.hpp"',
+      "namespace dm = decoy_ns;",
+      "namespace nested = a::b;",
+      "namespace outer {",
+      "  namespace dm = detailed_math;",
+      "  int inside() { return dm::add(1, 2); }",
+      "}",
+      "int nestedSum() { return nested::add(1, 2); }",
+      "int fileScope() { return dm::add(1, 2); }",
+      "int qualifiedAlias() { return outer::dm::add(1, 2); }",
+    ];
+    const columnOf = (sourceLines: string[], line: number): number => sourceLines[line - 1]!.lastIndexOf("add") + 1;
+    try {
+      await fs.writeFile(header, headerLines.join("\n") + "\n");
+      await fs.writeFile(file, lines.join("\n") + "\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const at = async (target: string, sourceLines: string[], line: number) =>
+        goToDefinition(index, { file: target, line, column: columnOf(sourceLines, line) });
+      const inside = await at(file, lines, 6);
+      const nestedSum = await at(file, lines, 8);
+      const fileScope = await at(file, lines, 9);
+      const qualifiedAlias = await at(file, lines, 10);
+      const decoy = await at(header, headerLines, 10);
+      for (const result of [inside, nestedSum, fileScope, qualifiedAlias, decoy]) {
+        expect(result.status).toBe("ok");
+      }
+      if (
+        inside.status !== "ok" ||
+        nestedSum.status !== "ok" ||
+        fileScope.status !== "ok" ||
+        qualifiedAlias.status !== "ok" ||
+        decoy.status !== "ok"
+      ) {
+        throw new Error("expected namespace alias targets");
+      }
+      expect(normalizePath(inside.definition.file)).toBe(normalizePath(header));
+      expect(inside.definition.range.start.line).toBe(2);
+      expect(nestedSum.definition.range.start.line).toBe(6);
+      expect(qualifiedAlias.definition.range.start.line).toBe(2);
+      expect(fileScope.definition.range.start.line).toBe(10);
+      expect(inside.definition.range.start.line).not.toBe(decoy.definition.range.start.line);
+      expect(nestedSum.definition.range.start.line).not.toBe(decoy.definition.range.start.line);
+
+      const useLines = async (target: string, sourceLines: string[], line: number) => {
+        const refs = await findReferences(index, { file: target, line, column: columnOf(sourceLines, line) });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("expected references");
+        return refs.references
+          .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(file))
+          .map((ref) => ref.range.start.line);
+      };
+      const detailedRefs = await useLines(header, headerLines, 2);
+      const nestedRefs = await useLines(header, headerLines, 6);
+      const decoyRefs = await useLines(header, headerLines, 10);
+      expect(detailedRefs).toEqual(expect.arrayContaining([6, 10]));
+      expect(detailedRefs).not.toContain(8);
+      expect(detailedRefs).not.toContain(9);
+      expect(nestedRefs).toContain(8);
+      expect(nestedRefs).not.toContain(6);
+      expect(decoyRefs).toContain(9);
+      expect(decoyRefs).not.toContain(6);
+      expect(decoyRefs).not.toContain(8);
+      expect(decoyRefs).not.toContain(10);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callsFrom = (name: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === name)
+          .map((edge) => edge.to);
+      expect(callsFrom("inside")).toEqual([defNodeId(inside.definition)]);
+      expect(callsFrom("nestedSum")).toEqual([defNodeId(nestedSum.definition)]);
+      expect(callsFrom("qualifiedAlias")).toEqual([defNodeId(qualifiedAlias.definition)]);
+      expect(callsFrom("fileScope")).toEqual([defNodeId(fileScope.definition)]);
+      expect(callsFrom("inside")).not.toContain(defNodeId(decoy.definition));
+      expect(callsFrom("nestedSum")).not.toContain(defNodeId(decoy.definition));
+      expect(callsFrom("qualifiedAlias")).not.toContain(defNodeId(decoy.definition));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C++ qualified base calls", () => {
+  it("resolves Base::run inside an overriding run to the base and not Decoy", async () => {
+    // The temp fixture sits outside the indexed root; only shapes.hpp is a source.
+    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-base-call-"));
+    const root = path.join(fixture, "indexed");
+    const file = normalizePath(path.join(root, "shapes.hpp"));
+    const lines = [
+      "class Base {",
+      "public:",
+      "  virtual int run() { return 1; }",
+      "};",
+      "class Decoy {",
+      "public:",
+      "  int run() { return -1; }",
+      "};",
+      "class Derived : public Base {",
+      "public:",
+      "  int run() override { return Base::run() + 1; }",
+      "};",
+      "",
+    ];
+    const callLine = 11;
+    const baseLine = 3;
+    const decoyLine = 7;
+    try {
+      await fs.mkdir(root);
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const callColumn = lines[callLine - 1]!.indexOf("Base::run") + "Base::".length + 1;
+      const baseColumn = lines[baseLine - 1]!.indexOf("run") + 1;
+      const decoyColumn = lines[decoyLine - 1]!.indexOf("run") + 1;
+      const derivedColumn = lines[callLine - 1]!.indexOf("run") + 1;
+
+      const use = await goToDefinition(index, { file, line: callLine, column: callColumn });
+      expect(use.status).toBe("ok");
+      if (use.status !== "ok") throw new Error("Expected Base::run");
+      expect(normalizePath(use.definition.file)).toBe(file);
+      expect(use.definition.range.start.line).toBe(baseLine);
+
+      const baseRefs = await findReferences(index, { file, line: baseLine, column: baseColumn });
+      expect(baseRefs.status).toBe("ok");
+      if (baseRefs.status !== "ok") throw new Error("Expected Base::run references");
+      const baseRefLines = baseRefs.references.map((ref) => ref.range.start.line);
+      expect(baseRefLines).toContain(callLine);
+      expect(baseRefLines).not.toContain(decoyLine);
+
+      const decoyRefs = await findReferences(index, { file, line: decoyLine, column: decoyColumn });
+      expect(decoyRefs.status).toBe("ok");
+      if (decoyRefs.status !== "ok") throw new Error("Expected Decoy::run references");
+      expect(decoyRefs.references.map((ref) => ref.range.start.line)).not.toContain(callLine);
+
+      const derived = await goToDefinition(index, { file, line: callLine, column: derivedColumn });
+      expect(derived.status).toBe("ok");
+      if (derived.status !== "ok") throw new Error("Expected Derived::run");
+      expect(derived.definition.range.start.line).toBe(callLine);
+      const decoy = await goToDefinition(index, { file, line: decoyLine, column: decoyColumn });
+      expect(decoy.status).toBe("ok");
+      if (decoy.status !== "ok") throw new Error("Expected Decoy::run");
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const baseId = defNodeId(use.definition);
+      const decoyId = defNodeId(decoy.definition);
+      const callsFromDerived = graph.edges.filter(
+        (edge) => edge.label === "calls" && edge.from === defNodeId(derived.definition),
+      );
+      expect(callsFromDerived.map((edge) => edge.to)).toEqual([baseId]);
+      expect(graph.edges.some((edge) => edge.label === "calls" && edge.to === decoyId)).toBe(false);
+    } finally {
+      await fs.rm(fixture, { recursive: true, force: true });
+    }
+  });
+});

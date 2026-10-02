@@ -1378,13 +1378,14 @@ async function findReferencesInternal(
       }
     }
 
-    // A unit peer names the definition directly (Go and JVM package siblings, C# namespace
-    // peers, Swift module siblings), with no import binding to attribute. The single bare-name
-    // scan keeps reference sites in agreement with what bare-name resolution can prove.
+    // Compilation-unit peers and qualified JVM package paths can name a declaration without
+    // imports. The latter are narrowed to package-spelling candidates before this scan.
     if (
       !definition.isMember &&
       fileIdentityKey(fileId) !== fileIdentityKey(definitionFile) &&
-      unitPeerKeys.has(fileIdentityKey(fileId)) &&
+      (unitPeerKeys.has(fileIdentityKey(fileId)) ||
+        parsedContext.sup.id === "java" ||
+        parsedContext.sup.id === "kotlin") &&
       !hasReachedCollectionLimit()
     ) {
       const ranges = await collectVerifiedNamedNodeReferences(

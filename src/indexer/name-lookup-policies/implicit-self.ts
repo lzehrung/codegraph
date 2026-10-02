@@ -5,9 +5,11 @@
  * a same-named module-level name or import.
  */
 import {
+  declaresMembers,
   nearestMemberContainer,
   nodeInStaticMemberContext,
 } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
+import { sliceText } from "../../util/ast.js";
 import {
   csharpAliasQualifiedLookupName,
   implicitSelfCallee,
@@ -44,14 +46,10 @@ function bindsTypeMethod({ closestBinding }: NameLookupState): boolean {
   return !!declaration && !!container && isDirectKeywordMemberDeclaration(declaration, container);
 }
 
-/**
- * The use is the name of a same-scope overload that a later declaration replaced in the scope map
- * (`int Two(int a)` before `int Two(int a, int b)`). A declaration's own name resolves to that
- * declaration, not to the last overload.
- */
+/** An overload name at its declaration resolves to itself, not a later same-scope declaration. */
 function ownOverloadDeclaration({ use, closestBinding }: NameLookupState): GoToResult | undefined {
   const { node, file, parsed } = use;
-  for (let binding = closestBinding?.earlierSameScope; binding; binding = binding.earlierSameScope) {
+  for (let binding = closestBinding; binding; binding = binding.earlierSameScope ?? null) {
     if (binding.node?.startIndex !== node.startIndex || binding.node.endIndex !== node.endIndex) continue;
     const own = definitionForBinding(binding, file, node, parsed.sup, parsed.source, parsed.tree);
     return own ? okGoToResult(use.index, own, { resolution: "exact", confidence: "high" }) : undefined;
@@ -63,14 +61,23 @@ function ownOverloadDeclaration({ use, closestBinding }: NameLookupState): GoToR
 const isImplicitSelfCall = ({ use }: NameLookupState): boolean =>
   implicitSelfCallee(use.parsed.sup.id, use.node.parent ?? use.node)?.id === use.node.id;
 
+/** A nominal type is not a member of its own declaration or extension. */
+function namesEnclosingSwiftType(state: NameLookupState, def: SymbolDef): boolean {
+  if (!declaresMembers(def)) return false;
+  const owner = nearestMemberContainer(state.use.node);
+  return sliceText(owner?.childForFieldName("name"), state.use.parsed.source) === state.lookupName;
+}
+
 export const swiftLookupPolicy: NameLookupPolicy = {
   fromClosestBinding: ownOverloadDeclaration,
   // Swift checks every bare name through `self`; method-local bindings still win.
   onLocal(state, local) {
-    if (!bindsAtFileScope(state) && !bindsTypeMethod(state)) return undefined;
+    if (namesEnclosingSwiftType(state, local) || (!bindsAtFileScope(state) && !bindsTypeMethod(state)))
+      return undefined;
     return implicitSelf(state, lexical(state, local));
   },
   afterCrossModule(state, resolved: GoToResult | null) {
+    if (resolved?.status === "ok" && namesEnclosingSwiftType(state, resolved.definition)) return resolved;
     // A member reached only by name, not through `self`, is not a module-level target.
     const memberOnly = resolved?.status === "ok" && !!resolved.definition.isMember;
     return implicitSelf(

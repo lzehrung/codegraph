@@ -185,6 +185,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   hbs: { omittedReason: "Handlebars document format; embedded scripts parse as their own language." },
   html: { omittedReason: "Document format; embedded scripts parse as their own language." },
   java: {
+    extraTraversalTypes: ["field_access"],
     memberAccessShapes: [
       {
         nodeTypes: ["method_invocation"],

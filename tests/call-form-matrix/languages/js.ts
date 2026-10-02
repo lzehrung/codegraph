@@ -1,0 +1,234 @@
+/**
+ * JavaScript call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
+ * "overload-arity" is omitted: JavaScript has no declared-signature overloading, so a second
+ * same-name function declaration simply replaces the first rather than adding an arity variant.
+ */
+import type { MatrixCell } from "../types.js";
+
+export const jsCells: MatrixCell[] = [
+  {
+    id: "js/bare-call",
+    language: "js",
+    callForm: "bare-call",
+    files: {
+      "calc.js": ["export function add(a, b) {", "  return a + b;", "}", ""].join("\n"),
+      "decoy.js": ["export function add(a, b) {", "  return -1;", "}", ""].join("\n"),
+      "use.js": [
+        'import { add } from "./calc.js";',
+        "export function sumPair() {",
+        "  return add(1, 2);",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.js", line: 3, token: "add" },
+    expected: { file: "calc.js", line: 1, token: "add" },
+    decoy: { file: "decoy.js", line: 1, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.js", fromName: "sumPair" },
+  },
+  {
+    id: "js/qualified-call",
+    language: "js",
+    callForm: "qualified-call",
+    files: {
+      "calc.js": ["export function add(a, b) {", "  return a + b;", "}", ""].join("\n"),
+      "decoy.js": ["export function add(a, b) {", "  return -1;", "}", ""].join("\n"),
+      "use.js": [
+        'import * as calc from "./calc.js";',
+        "export function sumPair() {",
+        "  return calc.add(1, 2);",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.js", line: 3, token: "add" },
+    expected: { file: "calc.js", line: 1, token: "add" },
+    decoy: { file: "decoy.js", line: 1, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.js", fromName: "sumPair" },
+  },
+  {
+    id: "js/self-member-call",
+    language: "js",
+    callForm: "self-member-call",
+    files: {
+      "widget.js": [
+        "export class Widget {",
+        "  run() {",
+        "    return this.helper();",
+        "  }",
+        "  helper() {",
+        "    return 1;",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+      "decoy.js": ["export class Other {", "  helper() {", "    return -1;", "  }", "}", ""].join("\n"),
+    },
+    use: { file: "widget.js", line: 3, token: "helper" },
+    expected: { file: "widget.js", line: 5, token: "helper" },
+    decoy: { file: "decoy.js", line: 2, token: "helper" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "widget.js", fromName: "run" },
+  },
+  {
+    id: "js/typed-local-receiver",
+    language: "js",
+    callForm: "typed-local-receiver",
+    files: {
+      "box.js": ["export class Box {", "  run() {", "    return 1;", "  }", "}", ""].join("\n"),
+      "widget2.js": ["export class Widget2 {", "  run() {", "    return -1;", "  }", "}", ""].join("\n"),
+      "use.js": [
+        'import { Box } from "./box.js";',
+        "export function callWithLocal() {",
+        "  const b = new Box();",
+        "  return b.run();",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.js", line: 4, token: "run" },
+    expected: { file: "box.js", line: 2, token: "run" },
+    decoy: { file: "widget2.js", line: 2, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.js", fromName: "callWithLocal" },
+  },
+  {
+    id: "js/static-receiver",
+    language: "js",
+    callForm: "static-receiver",
+    files: {
+      "counter.js": ["export class Counter {", "  static zero() {", "    return 0;", "  }", "}", ""].join("\n"),
+      "gauge.js": ["export class Gauge {", "  static zero() {", "    return -1;", "  }", "}", ""].join("\n"),
+      "use.js": [
+        'import { Counter } from "./counter.js";',
+        "export function makeCounter() {",
+        "  return Counter.zero();",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.js", line: 3, token: "zero" },
+    expected: { file: "counter.js", line: 2, token: "zero" },
+    decoy: { file: "gauge.js", line: 2, token: "zero" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.js", fromName: "makeCounter" },
+  },
+  {
+    id: "js/construction",
+    language: "js",
+    callForm: "construction",
+    files: {
+      "widget3.js": ["export class Widget3 {}", ""].join("\n"),
+      "decoy3.js": ["export class Decoy3 {}", ""].join("\n"),
+      "use.js": [
+        'import { Widget3 } from "./widget3.js";',
+        "export function makeWidget() {",
+        "  return new Widget3();",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.js", line: 3, token: "Widget3" },
+    expected: { file: "widget3.js", line: 1, token: "Widget3" },
+    decoy: { file: "decoy3.js", line: 1, token: "Decoy3" },
+    decoyKind: "type",
+    edge: { label: "instantiates", fromFile: "use.js", fromName: "makeWidget" },
+  },
+  {
+    id: "js/imported-alias",
+    language: "js",
+    callForm: "imported-alias",
+    files: {
+      "shapes.js": ["export function area(radius) {", "  return radius * radius;", "}", ""].join("\n"),
+      "decoy.js": ["export function area(radius) {", "  return -1;", "}", ""].join("\n"),
+      "use.js": [
+        'import { area as circleArea } from "./shapes.js";',
+        "export function computeArea() {",
+        "  return circleArea(2);",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.js", line: 3, token: "circleArea" },
+    expected: { file: "shapes.js", line: 1, token: "area" },
+    decoy: { file: "decoy.js", line: 1, token: "area" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.js", fromName: "computeArea" },
+  },
+  {
+    id: "js/inherited-member",
+    language: "js",
+    callForm: "inherited-member",
+    files: {
+      "shapes.js": [
+        "export class Base {",
+        "  run() {",
+        "    return 1;",
+        "  }",
+        "}",
+        "",
+        "export class Derived extends Base {}",
+        "",
+      ].join("\n"),
+      "decoy.js": ["export class Decoy {", "  run() {", "    return -1;", "  }", "}", ""].join("\n"),
+      "use.js": [
+        'import { Derived } from "./shapes.js";',
+        "export function callDerived() {",
+        "  const d = new Derived();",
+        "  return d.run();",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.js", line: 4, token: "run" },
+    expected: { file: "shapes.js", line: 2, token: "run" },
+    decoy: { file: "decoy.js", line: 2, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.js", fromName: "callDerived" },
+    knownGap: {
+      reason:
+        "a typed-local receiver of a derived class that adds no members of its own does not find a member " +
+        "declared only on the base class (the same cross-language gap as TypeScript, C++, PHP, C#, Kotlin, " +
+        "Java, Swift, and Ruby)",
+      classification: "common-code-miss",
+      repro:
+        "shapes.js: `export class Base { run() { return 1; } }` and `export class Derived extends Base {}`; " +
+        "use.js calls `const d = new Derived(); d.run();`. Current: goToDefinition on `run` returns not_found. " +
+        "Expected: resolves to Base.run. The detailed graph's own receiver-call resolver already records a " +
+        "`calls` edge from callDerived to Base.run for this exact site, so the graph itself is ahead of " +
+        "go-to-definition here.",
+    },
+  },
+  {
+    id: "js/super-call",
+    language: "js",
+    callForm: "super-call",
+    files: {
+      "shapes2.js": [
+        "export class Base2 {",
+        "  run() {",
+        "    return 1;",
+        "  }",
+        "}",
+        "export class Decoy2 {",
+        "  run() {",
+        "    return -1;",
+        "  }",
+        "}",
+        "export class Derived2 extends Base2 {",
+        "  callBase() {",
+        "    return super.run() + 1;",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "shapes2.js", line: 13, token: "run" },
+    expected: { file: "shapes2.js", line: 2, token: "run" },
+    decoy: { file: "shapes2.js", line: 7, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "shapes2.js", fromName: "callBase" },
+  },
+];

@@ -1,6 +1,7 @@
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { cppOutOfLineOwnerPath, cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { sliceText } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import { ensureParsedContext } from "./parse-context.js";
@@ -497,6 +498,220 @@ function cppIncludeEntryOffsets(
   };
   visit(root);
   return offsets;
+}
+
+type CppNamespaceAlias = {
+  startIndex: number;
+  name: string;
+  target: readonly string[];
+  enclosing: readonly string[];
+  /** False inside a function or class: those aliases are block-scope, not namespace members. */
+  namespaceScope: boolean;
+};
+
+type CachedCppNamespaceAliases = { fileKey: string; aliases: readonly CppNamespaceAlias[] };
+
+const cppNamespaceAliasesByTree = new WeakMap<SyntaxTreeLike, CachedCppNamespaceAliases>();
+
+function cppNamespaceAliasTargetSegments(node: SyntaxNodeLike, source: string): string[] | null {
+  const name = node.childForFieldName("name");
+  for (const child of node.namedChildren) {
+    if (name && child.startIndex === name.startIndex && child.endIndex === name.endIndex) continue;
+    if (
+      child.type !== "namespace_identifier" &&
+      child.type !== "nested_namespace_specifier" &&
+      child.type !== "splice_specifier"
+    ) {
+      continue;
+    }
+    const segments = cppQualifiedNameSegments(child, source);
+    if (segments.length) return segments;
+  }
+  return null;
+}
+
+function collectCppNamespaceAliases(root: SyntaxNodeLike, source: string, fileKey: string): CppNamespaceAlias[] {
+  const aliases: CppNamespaceAlias[] = [];
+  const visit = (node: SyntaxNodeLike): void => {
+    if (node.type === "namespace_alias_definition") {
+      const nameNode = node.childForFieldName("name");
+      const name = nameNode ? sliceText(nameNode, source) : "";
+      const target = cppNamespaceAliasTargetSegments(node, source);
+      if (name && target) {
+        aliases.push({
+          startIndex: node.startIndex,
+          name,
+          target,
+          enclosing: cppEnclosingNamespace(node, source, fileKey),
+          namespaceScope: cppUsingDirectiveIsFileOrNamespaceScope(node),
+        });
+      }
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(root);
+  return aliases;
+}
+
+function cppNamespaceAliasesForTree(
+  tree: SyntaxTreeLike,
+  source: string,
+  fileKey: string,
+): readonly CppNamespaceAlias[] {
+  const cached = cppNamespaceAliasesByTree.get(tree);
+  if (cached?.fileKey === fileKey) return cached.aliases;
+  const aliases = collectCppNamespaceAliases(tree.rootNode, source, fileKey);
+  cppNamespaceAliasesByTree.set(tree, { fileKey, aliases });
+  return aliases;
+}
+
+function sameNamespacePath(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index]);
+}
+
+/** A block-scope alias hides namespace aliases. The innermost preceding alias wins. */
+function cppBlockNamespaceAliasTarget(
+  node: SyntaxNodeLike,
+  source: string,
+  name: string,
+  useStart: number,
+): readonly string[] | undefined {
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type !== "compound_statement") continue;
+    let found: readonly string[] | undefined;
+    for (const child of current.namedChildren) {
+      if (child.type !== "namespace_alias_definition" || child.startIndex >= useStart) continue;
+      const nameNode = child.childForFieldName("name");
+      if (!nameNode || sliceText(nameNode, source) !== name) continue;
+      const target = cppNamespaceAliasTargetSegments(child, source);
+      if (target) found = target;
+    }
+    if (found) return found;
+  }
+  return undefined;
+}
+
+type CppAliasFile = {
+  aliases: readonly CppNamespaceAlias[];
+  /** Position in the use file, or undefined when the alias is not yet visible. */
+  positionOf: (alias: CppNamespaceAlias) => number | undefined;
+};
+
+/**
+ * Latest visible namespace-scope alias of `name` in `enclosing`. A later declaration in the
+ * translation unit wins; two aliases at the same position with different targets are ambiguous.
+ */
+function cppNamespaceScopeAliasTarget(
+  files: readonly CppAliasFile[],
+  enclosing: readonly string[],
+  name: string,
+): readonly string[] | null | undefined {
+  let best: { position: number; tie: number; target: readonly string[] } | undefined;
+  let ambiguous = false;
+  for (const file of files) {
+    for (const alias of file.aliases) {
+      if (!alias.namespaceScope || alias.name !== name || !sameNamespacePath(alias.enclosing, enclosing)) continue;
+      const position = file.positionOf(alias);
+      if (position === undefined) continue;
+      if (!best || position > best.position || (position === best.position && alias.startIndex > best.tie)) {
+        best = { position, tie: alias.startIndex, target: alias.target };
+        ambiguous = false;
+      } else if (
+        position === best.position &&
+        alias.startIndex === best.tie &&
+        alias.target.join("::") !== best.target.join("::")
+      ) {
+        ambiguous = true;
+      }
+    }
+  }
+  if (ambiguous) return null;
+  return best?.target;
+}
+
+/**
+ * Qualified name after namespace aliases visible at `node` (`dm::add` → `detailed_math::add`,
+ * `namespace dm = a::b` → `a::b::add`). Undefined when no alias applies. Null when the alias
+ * chain is cyclic or two aliases at one position disagree.
+ */
+export function cppQualifiedNameThroughNamespaceAlias(
+  index: ProjectIndex,
+  sourceModule: ModuleIndex,
+  name: string,
+  node: SyntaxNodeLike,
+  source: string,
+  tree: SyntaxTreeLike,
+  loadParsedFile: (file: string) => CppParsedFile | null,
+): string | null | undefined {
+  if (!name.includes("::")) return undefined;
+  const absolute = name.startsWith("::");
+  const segments = name.split("::").filter((segment) => segment.length > 0);
+  if (segments.length < 2) return undefined;
+
+  const useFileKey = fileIdentityKey(sourceModule.file);
+  const useStart = node.startIndex;
+  const useNamespace = cppEnclosingNamespace(node, source, useFileKey);
+  const files: CppAliasFile[] = [
+    {
+      aliases: cppNamespaceAliasesForTree(tree, source, useFileKey),
+      positionOf: (alias) => (alias.startIndex < useStart ? alias.startIndex : undefined),
+    },
+  ];
+  let entryOffsets: ReadonlyMap<string, number> | undefined;
+  for (const moduleEntry of cppStarImportClosure(index, sourceModule)) {
+    const fileKey = fileIdentityKey(moduleEntry.file);
+    if (fileKey === useFileKey) continue;
+    const parsed = loadParsedFile(moduleEntry.file);
+    if (!parsed?.tree) continue;
+    entryOffsets ??= cppIncludeEntryOffsets(index, sourceModule, node);
+    const entry = entryOffsets.get(fileKey);
+    files.push({
+      aliases: cppNamespaceAliasesForTree(parsed.tree, parsed.source, fileKey),
+      positionOf: () => (entry !== undefined && entry < useStart ? entry : undefined),
+    });
+  }
+
+  const lookupAlias = (enclosing: readonly string[], aliasName: string): readonly string[] | null | undefined => {
+    // A qualified prefix already names the namespace to search. An empty prefix is unqualified
+    // lookup: a block alias, then the innermost enclosing namespace, then each outer one.
+    if (enclosing.length > 0) return cppNamespaceScopeAliasTarget(files, enclosing, aliasName);
+    if (!absolute) {
+      const block = cppBlockNamespaceAliasTarget(node, source, aliasName, useStart);
+      if (block) return block;
+    }
+    for (let length = useNamespace.length; length >= 0; length -= 1) {
+      const found = cppNamespaceScopeAliasTarget(files, useNamespace.slice(0, length), aliasName);
+      if (found === null) return null;
+      if (found) return found;
+    }
+    return undefined;
+  };
+
+  const expandPrefix = (prefix: readonly string[], seen: Set<string>): readonly string[] | null | undefined => {
+    let resolved: string[] = [];
+    let changed = false;
+    for (const segment of prefix) {
+      const alias = lookupAlias(resolved, segment);
+      if (alias === null) return null;
+      if (!alias) {
+        resolved.push(segment);
+        continue;
+      }
+      const key = `${resolved.join("::")}\0${segment}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      changed = true;
+      const nested = expandPrefix(alias, seen);
+      if (nested === null) return null;
+      resolved = [...(nested ?? alias)];
+    }
+    return changed ? resolved : undefined;
+  };
+
+  const expanded = expandPrefix(segments.slice(0, -1), new Set());
+  if (expanded === null) return null;
+  if (!expanded) return undefined;
+  return [...expanded, segments[segments.length - 1]!].join("::");
 }
 
 /**

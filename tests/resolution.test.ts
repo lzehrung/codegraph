@@ -22,6 +22,7 @@ import {
   resolveWorkspacePackage,
 } from "../src/util.js";
 import { loadPhpComposerConfig } from "../src/util/resolution/php-composer.js";
+import { defNodeId } from "../src/graphs/symbol-graph.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { resolveExport, resolveModuleExports } from "../src/indexer/navigation-resolve.js";
 import { getCompilationUnitPeers } from "../src/indexer/compilation-units.js";
@@ -2913,6 +2914,126 @@ describe("Implicit compilation-unit peers", () => {
         expect(peerKeys(peers)).toEqual(new Set([fileIdentityKey(file)]));
         expect(peers.complete).toBe(true);
       }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a static import of an overloaded method by argument count", async () => {
+    const root = await mkTmpDir("dg-java-static-overload-");
+    const calc = [
+      "package calc;",
+      "",
+      "public class Calc {",
+      "    public static int add(int a, int b) { return a + b; }",
+      "    public static int add(int a, int b, int c) { return a + b + c; }",
+      "}",
+      "",
+    ].join("\n");
+    const amb = [
+      "package amb;",
+      "",
+      "public class Amb {",
+      "    public static int hit(int a, int b) { return 1; }",
+      "    public static int hit(int a, int b, int... rest) { return 2; }",
+      "}",
+      "",
+    ].join("\n");
+    const decoy = [
+      "package other;",
+      "",
+      "public class Other {",
+      "    public static int add(int a, int b, int c) { return -1; }",
+      "    public static int hit(int a, int b, int c) { return -1; }",
+      "}",
+      "",
+    ].join("\n");
+    const use = [
+      "package app;",
+      "",
+      "import static calc.Calc.add;",
+      "import static amb.Amb.hit;",
+      "",
+      "public class App {",
+      "    public int two() { return add(1, 2); }",
+      "    public int three() { return add(1, 2, 3); }",
+      "    public int both() { return hit(1, 2); }",
+      "    public int rest() { return hit(1, 2, 3); }",
+      "}",
+      "",
+    ].join("\n");
+    const calcFile = path.join(root, "calc", "Calc.java");
+    const ambFile = path.join(root, "amb", "Amb.java");
+    const decoyFile = path.join(root, "other", "Other.java");
+    const useFile = path.join(root, "app", "App.java");
+    const columnOf = (source: string, line: number, token: string): number => {
+      const index = source.split("\n")[line - 1]?.lastIndexOf(token) ?? -1;
+      if (index < 0) throw new Error(`missing ${token} on line ${line}`);
+      return index + 1;
+    };
+    try {
+      await fsp.mkdir(path.dirname(calcFile), { recursive: true });
+      await fsp.mkdir(path.dirname(ambFile), { recursive: true });
+      await fsp.mkdir(path.dirname(decoyFile), { recursive: true });
+      await fsp.mkdir(path.dirname(useFile), { recursive: true });
+      await fsp.writeFile(calcFile, calc);
+      await fsp.writeFile(ambFile, amb);
+      await fsp.writeFile(decoyFile, decoy);
+      await fsp.writeFile(useFile, use);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const at = async (file: string, source: string, line: number, token: string) =>
+        goToDefinition(index, { file, line, column: columnOf(source, line, token) });
+      const two = await at(useFile, use, 7, "add");
+      const three = await at(useFile, use, 8, "add");
+      const both = await at(useFile, use, 9, "hit");
+      const rest = await at(useFile, use, 10, "hit");
+      const decoyAdd = await at(decoyFile, decoy, 4, "add");
+      expect(two.status).toBe("ok");
+      expect(three.status).toBe("ok");
+      expect(rest.status).toBe("ok");
+      expect(both.status).toBe("not_found");
+      expect(decoyAdd.status).toBe("ok");
+      if (two.status !== "ok" || three.status !== "ok" || rest.status !== "ok" || decoyAdd.status !== "ok") {
+        throw new Error("expected static overload targets");
+      }
+      expect(fileIdentityKey(two.definition.file)).toBe(fileIdentityKey(calcFile));
+      expect(two.definition.range.start.line).toBe(4);
+      expect(three.definition.range.start.line).toBe(5);
+      expect(fileIdentityKey(rest.definition.file)).toBe(fileIdentityKey(ambFile));
+      expect(rest.definition.range.start.line).toBe(5);
+      expect(fileIdentityKey(two.definition.file)).not.toBe(fileIdentityKey(decoyFile));
+      expect(fileIdentityKey(three.definition.file)).not.toBe(fileIdentityKey(decoyFile));
+
+      const useLines = async (file: string, source: string, line: number, token: string) => {
+        const refs = await findReferences(index, { file, line, column: columnOf(source, line, token) });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("expected references");
+        return refs.references
+          .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(useFile))
+          .map((ref) => ref.range.start.line);
+      };
+      const twoRefs = await useLines(calcFile, calc, 4, "add");
+      const threeRefs = await useLines(calcFile, calc, 5, "add");
+      const decoyRefs = await useLines(decoyFile, decoy, 4, "add");
+      expect(twoRefs).toContain(7);
+      expect(twoRefs).not.toContain(8);
+      expect(threeRefs).toContain(8);
+      expect(threeRefs).not.toContain(7);
+      expect(decoyRefs).not.toContain(7);
+      expect(decoyRefs).not.toContain(8);
+      expect(decoyRefs).not.toContain(9);
+      expect(decoyRefs).not.toContain(10);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callsFrom = (name: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === name)
+          .map((edge) => edge.to);
+      expect(callsFrom("two")).toEqual([defNodeId(two.definition)]);
+      expect(callsFrom("three")).toEqual([defNodeId(three.definition)]);
+      expect(callsFrom("rest")).toEqual([defNodeId(rest.definition)]);
+      expect(callsFrom("both")).toEqual([]);
+      expect(callsFrom("three")).not.toContain(defNodeId(decoyAdd.definition));
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

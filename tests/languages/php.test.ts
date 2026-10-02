@@ -8,8 +8,9 @@ import { buildProjectIndex, findReferences, goToDefinition } from "../../src/ind
 import { findCallHierarchy } from "../../src/indexer/call-hierarchy.js";
 import { findReferencesById, goToDefinitionById, listSymbols } from "../../src/indexer/symbols.js";
 import { findImplementations } from "../../src/indexer/type-hierarchy.js";
-import { fileIdentityKey } from "../../src/util/paths.js";
+import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
+import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -1150,6 +1151,78 @@ describe("PHP parent:: member navigation", () => {
       expect(result.definition.range.start.line).toBe(3);
       expect(result.definition.range.start.line).not.toBe(6);
       expect(result.provenance?.resolution).toBe("member-access");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("PHP fully qualified function calls", () => {
+  it("records the namespaced call edge without taking a same-named function elsewhere", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-qualified-call-"));
+    try {
+      const useLines = ["<?php", "namespace Client;", "function call() { return \\App\\Math\\sum(1, 2); }"];
+      const paths = await writeFixtureFiles(root, {
+        "app.php": "<?php namespace App\\Math; function sum(int $a, int $b): int { return $a + $b; }",
+        "decoy.php": "<?php namespace Other; function sum(int $a, int $b): int { return -1; }",
+        "use.php": useLines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["use.php"]!,
+        line: 3,
+        column: columnOf(useLines, 3, "sum"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected fully qualified PHP function");
+      expect(normalizePath(result.definition.file)).toBe(paths["app.php"]);
+      const references = await findReferences(index, {
+        file: result.definition.file,
+        line: result.definition.range.start.line,
+        column: result.definition.range.start.column,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected qualified function references");
+      expect(new Set(references.references.map((ref) => normalizePath(ref.file)))).toEqual(
+        new Set([paths["app.php"], paths["use.php"]]),
+      );
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["app.php"]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("PHP inherited member lookup", () => {
+  it("reaches a grandparent method through memberless subclasses without taking a decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-grandparent-"));
+    try {
+      const lines = ["<?php", "namespace App;", "function call() { $object = new Derived(); return $object->run(); }"];
+      const paths = await writeFixtureFiles(root, {
+        "Grand.php": "<?php namespace App; class Grand { public function run(): int { return 1; } }",
+        "Base.php": "<?php namespace App; class Base extends Grand {}",
+        "Derived.php": "<?php namespace App; class Derived extends Base {}",
+        "Decoy.php": "<?php namespace App; class Decoy { public function run(): int { return -1; } }",
+        "Use.php": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["Use.php"]!,
+        line: 3,
+        column: columnOf(lines, 3, "run"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected inherited PHP method");
+      expect(normalizePath(result.definition.file)).toBe(paths["Grand.php"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["Grand.php"]]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

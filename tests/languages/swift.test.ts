@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -733,6 +733,130 @@ describe("Swift overload declarations", () => {
       };
       expect(await referenceLines(2)).toEqual([2, 4]);
       expect(await referenceLines(3)).toEqual([3, 5]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift typealias member receivers", () => {
+  it("follows a locally declared typealias chain to a sibling nominal type, not a same-named decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-typealias-chain-"));
+    try {
+      const useLines = [
+        "typealias Fast = Calculator",
+        "typealias Faster = Fast",
+        "func call() -> Int { return Faster.sum(a: 1, b: 2) }",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "Calculator.swift": "enum Calculator { static func sum(a: Int, b: Int) -> Int { a + b } }",
+        "Other.swift": "enum Other { static func sum(a: Int, b: Int) -> Int { -1 } }",
+        "Use.swift": useLines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["Use.swift"]!,
+        line: 3,
+        column: columnOf(useLines, 3, "sum"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected aliased nominal member");
+      expect(normalizePath(result.definition.file)).toBe(paths["Calculator.swift"]);
+      const references = await findReferences(index, {
+        file: result.definition.file,
+        line: result.definition.range.start.line,
+        column: result.definition.range.start.column,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected aliased member references");
+      expect(new Set(references.references.map((ref) => normalizePath(ref.file)))).toEqual(
+        new Set([paths["Calculator.swift"], paths["Use.swift"]]),
+      );
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["Calculator.swift"]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift inherited member lookup", () => {
+  it("reaches a grandparent through empty subclasses without binding to a decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-grandparent-"));
+    try {
+      const lines = ["func call() -> Int { return Derived().run() }"];
+      const paths = await writeFixtureFiles(root, {
+        "Grand.swift": "class Grand { func run() -> Int { 1 } }",
+        "Base.swift": "class Base: Grand {}",
+        "Derived.swift": "class Derived: Base {}",
+        "Decoy.swift": "class Decoy { func run() -> Int { -1 } }",
+        "Use.swift": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["Use.swift"]!,
+        line: 1,
+        column: columnOf(lines, 1, "run"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected inherited Swift member");
+      expect(normalizePath(result.definition.file)).toBe(paths["Grand.swift"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["Grand.swift"]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift construction inside extensions", () => {
+  it("constructs the nominal type inside its extension, not an identically named type elsewhere", async () => {
+    const sample = path.resolve("tests/samples/graph-navigation-parity/swift-constructor-call");
+    const useSource = await readFile(path.join(sample, "Use.swift"), "utf8");
+    const useLines = useSource.split("\n");
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-construction-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Use.swift": useSource,
+        "Types.swift": await readFile(path.join(sample, "Types.swift"), "utf8"),
+        "other/Worker.swift": "struct Worker { init(name: String) {} }",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const direct = await goToDefinition(index, {
+        file: paths["Use.swift"]!,
+        line: 11,
+        column: columnOf(useLines, 11, "Worker(name:"),
+      });
+      const extension = await goToDefinition(index, {
+        file: paths["Use.swift"]!,
+        line: 21,
+        column: columnOf(useLines, 21, "Worker(name:"),
+      });
+      expect(direct.status).toBe("ok");
+      expect(extension.status).toBe("ok");
+      if (direct.status !== "ok" || extension.status !== "ok") throw new Error("Expected nominal type construction");
+      expect(normalizePath(extension.definition.file)).toBe(normalizePath(direct.definition.file));
+      expect(extension.definition.range.start).toEqual(direct.definition.range.start);
+      expect(normalizePath(extension.definition.file)).toBe(paths["Use.swift"]);
+      expect(extension.definition.range.start.line).toBe(19);
+      expect(normalizePath(extension.definition.file)).not.toBe(paths["other/Worker.swift"]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const factory = [...graph.nodes.values()].find(
+        (node) => node.name === "makeDefault" && normalizePath(node.file) === paths["Use.swift"],
+      );
+      expect(factory).toBeDefined();
+      const constructions = graph.edges
+        .filter((edge) => edge.from === factory?.id && edge.label === "instantiates")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(constructions).toEqual([paths["Use.swift"]]);
+      expect(constructions).not.toContain(paths["other/Worker.swift"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

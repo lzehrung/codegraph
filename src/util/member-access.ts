@@ -191,7 +191,7 @@ export function collectMemberAccessChain(args: {
     const keyName = sliceText(nameNode, args.source);
     const value = args.constStringOf?.get(keyName);
     if (typeof value === "string") names.push(value);
-    else if (args.sup.id === "csharp") names.push(keyName);
+    else if (args.sup.id === "csharp" || args.sup.id === "java") names.push(keyName);
   };
 
   while (current && traversalTypes.has(current.type)) {

@@ -3039,3 +3039,35 @@ describe("C# plain dotted using targets", () => {
     }
   });
 });
+
+describe("C# inherited member lookup", () => {
+  it("reaches a grandparent method through two empty derived classes but not an unrelated owner", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-grandparent-"));
+    try {
+      const lines = ["namespace P;", "public class Use {", "  public int Call() { return new Derived().Run(); }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "Grand.cs": "namespace P; public class Grand { public int Run() => 1; }",
+        "Base.cs": "namespace P; public class Base : Grand {}",
+        "Derived.cs": "namespace P; public class Derived : Base {}",
+        "Decoy.cs": "namespace P; public class Decoy { public int Run() => -1; }",
+        "Use.cs": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line: 3,
+        column: columnOf(lines, 3, "Run"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected inherited C# method");
+      expect(normalizePath(result.definition.file)).toBe(paths["Grand.cs"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "Call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["Grand.cs"]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

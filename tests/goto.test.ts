@@ -1124,6 +1124,43 @@ describe("Go to Definition", () => {
       await testGoToDefinition(index, propertiesFile, 11, 53, propertiesFile, 7);
     });
 
+    it("keeps PHP property spelling exact while resolving instance declarations", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-property-case-goto-"));
+      try {
+        const file = path.join(root, "Box.php").replace(/\\/g, "/");
+        const lines = [
+          "<?php",
+          "class Box {",
+          "  public int $field = 1;",
+          "  public int $Field = 2;",
+          "  function run() { return $this->field + $this->Field + $this->FIELD; }",
+          "}",
+          "class Other { public int $field = 3; }",
+          "function runWith(Box $box, Other $other) { return $box->field + $other->field + $box->FIELD; }",
+        ];
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        await testGoToDefinition(index, file, 5, lines[4]!.indexOf("->field") + 3, file, 3);
+        await testGoToDefinition(index, file, 5, lines[4]!.indexOf("->Field") + 3, file, 4);
+        const wrongCase = await goToDefinition(index, {
+          file,
+          line: 5,
+          column: lines[4]!.indexOf("->FIELD") + 3,
+        });
+        expect(wrongCase.status).toBe("not_found");
+        const typedUse = lines[7]!;
+        await testGoToDefinition(index, file, 8, typedUse.indexOf("$box->field") + "$box->".length + 1, file, 3);
+        await testGoToDefinition(index, file, 8, typedUse.indexOf("$other->field") + "$other->".length + 1, file, 7);
+        const typedWrongCase = await goToDefinition(index, {
+          file,
+          line: 8,
+          column: typedUse.indexOf("$box->FIELD") + "$box->".length + 1,
+        });
+        expect(typedWrongCase.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
     it("should find definition of grouped use aliases", async () => {
       const index = await createTestIndex("php");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");

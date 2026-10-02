@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
@@ -25,13 +26,13 @@ import {
   selectFirstExistingPhpCanonicalName,
 } from "./navigation-php.js";
 import { isKeywordReceiver, memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
-import { getCompilationUnitPeers } from "./compilation-units.js";
+import { getCompilationUnitPeers, getPackageDeclarationName } from "./compilation-units.js";
 import { findClosestScopeBinding } from "./navigation-local.js";
 import { scopeNodesFor } from "./scope-nodes.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
-import { resolveExport, resolveImported } from "./navigation-resolve.js";
+import { javaKotlinFunctionOverloadIncludes, resolveExport, resolveImported } from "./navigation-resolve.js";
 import { isAmbiguousResolutionReason } from "./ambiguous-resolution.js";
 import {
   ensurePhpNamespaceSymbolIndex,
@@ -861,6 +862,7 @@ function importCanReferenceDefinition(
     if (hit?.kind === "resolved") {
       return sameDef(hit.def, def, index.languageExtensions);
     }
+    if (javaKotlinFunctionOverloadIncludes(index, targetFile, exportedName, def)) return true;
     if (cppCanonicalStructuralExport(index, targetFile, exportedName, def, languageId)) {
       return true;
     }
@@ -1072,6 +1074,31 @@ export function getCachedReferenceCandidateFiles(
     }
   }
 
+  // A fully package-qualified use needs no import, even from another compilation unit.
+  // Search files whose source can spell the package root; navigation checks the full path.
+  if (languageId === "java" || languageId === "kotlin") {
+    const packageName = getPackageDeclarationName(index, def.file, languageId);
+    const rootName = packageName?.split(".")[0];
+    if (rootName) {
+      for (const moduleIndex of index.byFile.values()) {
+        if (supportForFileWithoutHeaderSample(moduleIndex.file, index.languageExtensions)?.id !== languageId) continue;
+        const fileKey = fileIdentityKey(moduleIndex.file);
+        if (candidates.has(fileKey)) continue;
+        let source = index.parsed?.get(fileKey)?.source;
+        if (source === undefined) {
+          try {
+            source = readFileSync(moduleIndex.file, "utf8");
+          } catch {
+            candidates.set(fileKey, moduleIndex.file);
+            continue;
+          }
+        }
+        if (source.includes(rootName) || (languageId === "java" && source.includes("\\u"))) {
+          candidates.set(fileKey, moduleIndex.file);
+        }
+      }
+    }
+  }
   // A plain package import does not prove its child's attribute, but a same-name use
   // through that package must be checked before coverage can claim completeness.
   if (languageId === "python" && !def.isMember) {

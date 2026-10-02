@@ -1,0 +1,273 @@
+/**
+ * Rust call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
+ * "overload-arity" is omitted: Rust rejects two functions, inherent methods, or trait
+ * implementations with the same name in one scope, so argument-count overloading is not
+ * expressible.
+ * "super-call" is omitted: a Rust trait has no mechanism for an overriding impl to call the
+ * trait's own default implementation of the same method; there is no super/base keyword or
+ * equivalent.
+ */
+import type { MatrixCell } from "../types.js";
+
+export const rustCells: MatrixCell[] = [
+  {
+    id: "rust/bare-call",
+    language: "rust",
+    callForm: "bare-call",
+    files: {
+      "Cargo.toml": ["[package]", 'name = "probe"', 'version = "0.1.0"', ""].join("\n"),
+      "src/main.rs": ["fn main() {}", ""].join("\n"),
+      "src/lib.rs": ["pub mod calc;", "pub mod decoy;", "pub mod consumer;", ""].join("\n"),
+      "src/calc.rs": ["pub fn add(a: i32, b: i32) -> i32 {", "    a + b", "}", ""].join("\n"),
+      "src/decoy.rs": ["pub fn add(a: i32, b: i32) -> i32 {", "    -1", "}", ""].join("\n"),
+      "src/consumer.rs": ["use crate::calc::add;", "", "pub fn sum_pair() -> i32 {", "    add(1, 2)", "}", ""].join(
+        "\n",
+      ),
+    },
+    use: { file: "src/consumer.rs", line: 4, token: "add" },
+    expected: { file: "src/calc.rs", line: 1, token: "add" },
+    decoy: { file: "src/decoy.rs", line: 1, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "src/consumer.rs", fromName: "sum_pair" },
+  },
+  {
+    id: "rust/self-member-call",
+    language: "rust",
+    callForm: "self-member-call",
+    files: {
+      "Cargo.toml": ["[package]", 'name = "probe"', 'version = "0.1.0"', ""].join("\n"),
+      "src/main.rs": [
+        "struct Widget;",
+        "",
+        "impl Widget {",
+        "    fn run(&self) -> i32 {",
+        "        self.helper()",
+        "    }",
+        "    fn helper(&self) -> i32 {",
+        "        1",
+        "    }",
+        "}",
+        "",
+        "struct Other;",
+        "impl Other {",
+        "    fn helper(&self) -> i32 {",
+        "        -1",
+        "    }",
+        "}",
+        "",
+        "fn main() {}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "src/main.rs", line: 5, token: "helper" },
+    expected: { file: "src/main.rs", line: 7, token: "helper" },
+    decoy: { file: "src/main.rs", line: 14, token: "helper" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "src/main.rs", fromName: "run" },
+  },
+  {
+    id: "rust/typed-local-receiver",
+    language: "rust",
+    callForm: "typed-local-receiver",
+    files: {
+      "Cargo.toml": ["[package]", 'name = "probe"', 'version = "0.1.0"', ""].join("\n"),
+      "src/main.rs": [
+        "struct Box {}",
+        "impl Box {",
+        "    fn run(&self) -> i32 {",
+        "        1",
+        "    }",
+        "}",
+        "struct Widget2 {}",
+        "impl Widget2 {",
+        "    fn run(&self) -> i32 {",
+        "        -1",
+        "    }",
+        "}",
+        "",
+        "fn call_with_local() -> i32 {",
+        "    let b: Box = Box {};",
+        "    b.run()",
+        "}",
+        "",
+        "fn main() {}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "src/main.rs", line: 16, token: "run" },
+    expected: { file: "src/main.rs", line: 3, token: "run" },
+    decoy: { file: "src/main.rs", line: 9, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "src/main.rs", fromName: "call_with_local" },
+  },
+  {
+    id: "rust/static-receiver",
+    language: "rust",
+    callForm: "static-receiver",
+    files: {
+      "Cargo.toml": ["[package]", 'name = "probe"', 'version = "0.1.0"', ""].join("\n"),
+      "src/main.rs": [
+        "struct Counter;",
+        "impl Counter {",
+        "    fn zero() -> i32 {",
+        "        0",
+        "    }",
+        "}",
+        "struct Gauge;",
+        "impl Gauge {",
+        "    fn zero() -> i32 {",
+        "        -1",
+        "    }",
+        "}",
+        "",
+        "fn make_counter() -> i32 {",
+        "    Counter::zero()",
+        "}",
+        "",
+        "fn main() {}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "src/main.rs", line: 15, token: "zero" },
+    expected: { file: "src/main.rs", line: 3, token: "zero" },
+    decoy: { file: "src/main.rs", line: 9, token: "zero" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "src/main.rs", fromName: "make_counter" },
+  },
+  {
+    id: "rust/construction",
+    language: "rust",
+    callForm: "construction",
+    files: {
+      "Cargo.toml": ["[package]", 'name = "probe"', 'version = "0.1.0"', ""].join("\n"),
+      "src/main.rs": [
+        "struct Widget {}",
+        "struct Decoy {}",
+        "",
+        "fn make_widget() -> Widget {",
+        "    Widget {}",
+        "}",
+        "",
+        "fn main() {}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "src/main.rs", line: 5, token: "Widget" },
+    expected: { file: "src/main.rs", line: 1, token: "Widget" },
+    decoy: { file: "src/main.rs", line: 2, token: "Decoy" },
+    decoyKind: "type",
+    edge: { label: "instantiates", fromFile: "src/main.rs", fromName: "make_widget" },
+  },
+  {
+    id: "rust/imported-alias",
+    language: "rust",
+    callForm: "imported-alias",
+    files: {
+      "Cargo.toml": ["[package]", 'name = "probe"', 'version = "0.1.0"', ""].join("\n"),
+      "src/main.rs": ["fn main() {}", ""].join("\n"),
+      "src/lib.rs": ["pub mod shapes;", "pub mod decoy;", "pub mod consumer;", ""].join("\n"),
+      "src/shapes.rs": ["pub fn area(radius: f64) -> f64 {", "    radius * radius", "}", ""].join("\n"),
+      "src/decoy.rs": ["pub fn area(radius: f64) -> f64 {", "    -1.0", "}", ""].join("\n"),
+      "src/consumer.rs": [
+        "use crate::shapes::area as circle_area;",
+        "",
+        "pub fn compute_area() -> f64 {",
+        "    circle_area(2.0)",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "src/consumer.rs", line: 4, token: "circle_area" },
+    expected: { file: "src/shapes.rs", line: 1, token: "area" },
+    decoy: { file: "src/decoy.rs", line: 1, token: "area" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "src/consumer.rs", fromName: "compute_area" },
+  },
+  {
+    id: "rust/qualified-call",
+    language: "rust",
+    callForm: "qualified-call",
+    files: {
+      "Cargo.toml": ["[package]", 'name = "probe"', 'version = "0.1.0"', ""].join("\n"),
+      "src/main.rs": ["fn main() {}", ""].join("\n"),
+      "src/lib.rs": ["pub mod calc;", "pub mod decoy_mod;", "pub mod consumer;", ""].join("\n"),
+      "src/calc.rs": ["pub fn add(a: i32, b: i32) -> i32 {", "    a + b", "}", ""].join("\n"),
+      "src/decoy_mod.rs": ["pub fn add(a: i32, b: i32) -> i32 {", "    -1", "}", ""].join("\n"),
+      "src/consumer.rs": ["use crate::calc;", "", "pub fn sum_pair() -> i32 {", "    calc::add(1, 2)", "}", ""].join(
+        "\n",
+      ),
+    },
+    use: { file: "src/consumer.rs", line: 4, token: "add" },
+    expected: { file: "src/calc.rs", line: 1, token: "add" },
+    decoy: { file: "src/decoy_mod.rs", line: 1, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "src/consumer.rs", fromName: "sum_pair" },
+    knownGap: {
+      reason:
+        "a module-path call used directly as a call's callee (`calc::add(1, 2)`), without first bringing the " +
+        "name into scope through a `use` import, is not resolved at all: goToDefinition returns not_found " +
+        "and the detailed graph records no edge for the call site, not even a generic one",
+      classification: "common-code-miss",
+      repro:
+        "src/calc.rs: `pub fn add(a: i32, b: i32) -> i32 { a + b }`; src/consumer.rs has `use crate::calc;` " +
+        "then calls `calc::add(1, 2)` directly. Current: goToDefinition on `add` returns not_found; " +
+        "buildSymbolGraphDetailed reports zero edges from sum_pair. The identical function reached through " +
+        "`use crate::calc::add;` and a bare `add(1, 2)` call resolves correctly (rust/bare-call), and " +
+        "`Counter::zero()` through a type path also resolves correctly (rust/static-receiver), so the gap is " +
+        "specific to a module path used directly as a call's callee. Expected: resolves to calc::add, with a " +
+        "`calls` edge from sum_pair.",
+    },
+  },
+  {
+    id: "rust/inherited-member",
+    language: "rust",
+    callForm: "inherited-member",
+    files: {
+      "Cargo.toml": ["[package]", 'name = "probe"', 'version = "0.1.0"', ""].join("\n"),
+      "src/main.rs": [
+        "trait Greet {",
+        "    fn run(&self) -> i32 {",
+        "        1",
+        "    }",
+        "}",
+        "",
+        "struct Decoy;",
+        "impl Decoy {",
+        "    fn run(&self) -> i32 {",
+        "        -1",
+        "    }",
+        "}",
+        "",
+        "struct Derived;",
+        "impl Greet for Derived {}",
+        "",
+        "fn call_derived() -> i32 {",
+        "    let d = Derived;",
+        "    d.run()",
+        "}",
+        "",
+        "fn main() {}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "src/main.rs", line: 19, token: "run" },
+    expected: { file: "src/main.rs", line: 2, token: "run" },
+    decoy: { file: "src/main.rs", line: 9, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "src/main.rs", fromName: "call_derived" },
+    knownGap: {
+      reason:
+        "a type that implements a trait but adds no members of its own does not find the trait's default " +
+        "method implementation (the same cross-language gap as C++, PHP, C#, Kotlin, Java, Swift, " +
+        "TypeScript, JavaScript, and Ruby, reproduced here through Rust's own inheritance-like mechanism: a " +
+        "trait default method)",
+      classification: "common-code-miss",
+      repro:
+        "`trait Greet { fn run(&self) -> i32 { 1 } }`; `struct Derived; impl Greet for Derived {}` (empty " +
+        "impl, relies on the default); `fn call_derived() -> i32 { let d = Derived; d.run() }`. Current: " +
+        "goToDefinition on `run` returns not_found. As with Ruby, the detailed graph's own receiver-call " +
+        "resolver already finds the right target (a `calls` edge from call_derived to Greet's default run " +
+        "exists), so the graph is ahead of go-to-definition. Expected: resolves to the trait's default run.",
+    },
+  },
+];

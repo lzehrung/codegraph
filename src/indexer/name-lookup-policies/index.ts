@@ -81,6 +81,11 @@ const rustLookupPolicy: NameLookupPolicy = {
   },
 };
 
+/** Go package aliases yield to closer local bindings. */
+const goLookupPolicy: NameLookupPolicy = {
+  moduleAliasIsUnshadowed: ({ use, closestBinding }) =>
+    !closestBinding || use.scopeIndex.allScopes[0]?.map.get(closestBinding.canonicalName) === closestBinding,
+};
 const NO_POLICY: NameLookupPolicy = {};
 
 const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
@@ -88,6 +93,7 @@ const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
   cpp: cppLookupPolicy,
   csharp: csharpLookupPolicy,
   java: jvmLookupPolicy,
+  go: goLookupPolicy,
   kotlin: jvmLookupPolicy,
   php: phpLookupPolicy,
   python: pythonLookupPolicy,

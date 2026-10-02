@@ -158,10 +158,12 @@ export function resolveStarImportedDefinition(
   name: string,
   languageId: string,
   cNamespace?: "tag" | "ordinary",
+  argumentCount?: number,
 ): SymbolDef | null {
   if (imp.kind !== "star" || imp.staticMembersOf) return null;
   const result = resolveImported(index, imp, name, {
     ...(cNamespace ? { cNamespace } : {}),
+    ...(argumentCount !== undefined ? { argumentCount } : {}),
     // Ruby star expansion already publishes exported constants. Local fallback would
     // resurrect a nested class as a bare name the exports query omitted.
     ...(languageId === "ruby" ? { allowLocalFallback: false } : {}),

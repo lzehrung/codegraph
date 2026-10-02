@@ -117,6 +117,13 @@ export async function withParsedFiles<T>(files: LoadingParsedFileProvider, step:
   return result;
 }
 
+/** File import aliases are text-indexed; the language policy checks closer bindings. */
+export function moduleAliasIsUnshadowed(use: BareNameUse): boolean {
+  const policy = nameLookupPolicyFor(use.parsed.sup.id);
+  if (!policy.moduleAliasIsUnshadowed) return true;
+  const closestBinding = findClosestScopeBinding(use.scopeIndex, use.name, use.node, use.parsed.sup);
+  return policy.moduleAliasIsUnshadowed({ use, lookupName: use.name, closestBinding });
+}
 /**
  * Resolves a bare (unqualified or C++-qualified) name at a use site. Returns `null` when no
  * lookup step answers; go-to-definition then tries a declaration at the position.
@@ -166,6 +173,7 @@ export function resolveBareName(use: BareNameUse): NameResolution | null {
       policy.crossModuleName?.(state) ?? lookupName,
       policy.cNamespace?.(node),
       node.startIndex,
+      { node, source },
     );
     const adjusted = policy.afterCrossModule?.(state, resolved);
     return adjusted !== undefined ? adjusted : resolved;

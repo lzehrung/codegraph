@@ -1,5 +1,6 @@
 import {
   definitionWithoutDeferredSteps,
+  moduleAliasIsUnshadowed,
   nameResolutionPreloadFiles,
   phpImportTypeAtPosition,
   resolveBareName,
@@ -7,6 +8,7 @@ import {
   type BareNameUse,
   type NameResolution,
 } from "../indexer/name-resolution.js";
+import { nameLookupPolicyFor } from "../indexer/name-lookup-policies/index.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
 import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
@@ -35,6 +37,7 @@ import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.
 import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 
+import type { CallableIdentity } from "../languages/callable-arity.js";
 import {
   SymbolKind,
   type ModuleIndex,
@@ -525,10 +528,9 @@ export async function buildSymbolGraphDetailed(
         resolveIdentifier,
         resolveName,
         settleName,
-        hasNonModuleBinding: (name: string, node: SyntaxNodeLike): boolean => {
-          const binding = findClosestScopeBinding(scopeIndex, name, node, sup);
-          return !!binding && scopeIndex.allScopes[0]?.map.get(binding.canonicalName) !== binding;
-        },
+        moduleAliasIsUnshadowed: nameLookupPolicyFor(sup.id).moduleAliasIsUnshadowed
+          ? (name: string, node: SyntaxNodeLike): boolean => moduleAliasIsUnshadowed(bareNameUse(name, node))
+          : (): boolean => true,
         resolveExportFrom,
         resolveMemberChainTarget,
         cppDeclaresClass: (def: SymbolDef): boolean => {
@@ -623,6 +625,15 @@ export async function buildSymbolGraphDetailed(
     }
   }
 
+  const memberIdentities = new Map<string, CallableIdentity>();
+  if (callableReceiverCalls.length) {
+    const names = new Set(callableReceiverCalls.map((candidate) => candidate.memberName));
+    for (const mod of index.byFile.values()) {
+      for (const def of mod.locals) {
+        if (def.callable && names.has(def.localName)) memberIdentities.set(defNodeId(def), def.callable);
+      }
+    }
+  }
   const removedReceiverEdges = emitReceiverCallEdges(
     { nodes, edges },
     callableReceiverCalls,
@@ -646,6 +657,7 @@ export async function buildSymbolGraphDetailed(
         argumentCount: candidate.argumentCount,
       });
     },
+    memberIdentities,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

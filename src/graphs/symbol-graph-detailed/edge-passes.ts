@@ -105,8 +105,8 @@ type EdgePassContext = {
   resolveName: (name: string, node: SyntaxNodeLike) => NameResolution | null;
   /** Runs deferred steps with the graph's rules; returns an indexed target or null. */
   settleName: (name: string, node: SyntaxNodeLike, resolution: NameResolution | null) => Promise<SymbolDef | null>;
-  /** A name bound inside a Swift type/method rather than at module scope. */
-  hasNonModuleBinding: (name: string, node: SyntaxNodeLike) => boolean;
+  /** Whether a text-indexed import alias remains visible after lexical scope lookup. */
+  moduleAliasIsUnshadowed: (name: string, node: SyntaxNodeLike) => boolean;
   resolveExportFrom: (file: string, exportedName: string) => SymbolDef | null;
   resolveMemberChainTarget: (chainNode: SyntaxNodeLike) => SymbolDef | null;
   resolveMemberAccessTarget: (node: SyntaxNodeLike) => Promise<SymbolDef | null>;
@@ -247,6 +247,7 @@ function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: 
     isIdentifierType(context.sup, node.type) ||
     node.type === "type_identifier" ||
     (context.sup.id === "csharp" && (node.type === "qualified_name" || node.type === "alias_qualified_name")) ||
+    (context.sup.id === "php" && (node.type === "qualified_name" || node.type === "relative_name")) ||
     (context.sup.id === "cpp" && (node.type === "operator_name" || node.type === "destructor_name"))
   ) {
     const name = sliceText(node, context.source);
@@ -918,14 +919,8 @@ export async function emitFunctionBodyEdges(
       if (seenAliases.has(name)) return;
       let target: SymbolDef | null = context.aliasToTargetDef.get(name) ?? null;
       if (!target) {
-        // A local variable can shadow a Go package alias (`u := LocalU{}` alongside
-        // `import u "pkg"`); aliasToTargetModule is a blind per-file text map, so refuse it
-        // here too whenever a closer, non-namespace scope binding owns the name.
-        const modFile =
-          context.sup.id === "go" && context.hasNonModuleBinding(name, node)
-            ? undefined
-            : context.aliasToTargetModule.get(name);
-        if (modFile) {
+        const modFile = context.aliasToTargetModule.get(name);
+        if (modFile && context.moduleAliasIsUnshadowed(name, node)) {
           let exportedName: string | null = null;
           const parent = node.parent;
           if (
@@ -1137,11 +1132,29 @@ export async function emitFunctionBodyEdges(
           recordReceiverCall(node, access);
           return;
         }
+        if (
+          context.sup.id === "swift" &&
+          isIdentifierType(context.sup, access.receiver.type) &&
+          context.resolveIdentifier(sliceText(access.receiver, context.source), access.receiver)?.kind ===
+            SymbolKind.TypeAlias
+        ) {
+          dottedReceiverCalls.push({ fromId, access });
+          return;
+        }
         if (tryResolveChain(context, access.accessNode, fromId, "calls")) return;
         if (
-          context.sup.id === "csharp" &&
-          access.receiver.type === "member_access_expression" &&
-          csharpDottedNameRoot(access.receiver)
+          (context.sup.id === "csharp" &&
+            access.receiver.type === "member_access_expression" &&
+            csharpDottedNameRoot(access.receiver)) ||
+          (context.sup.id === "java" && access.receiver.type === "field_access")
+        ) {
+          dottedReceiverCalls.push({ fromId, access });
+          return;
+        }
+        if (
+          context.sup.id === "kotlin" &&
+          (isIdentifierType(context.sup, access.receiver.type) || access.receiver.type === "navigation_expression") &&
+          !context.resolveIdentifier(sliceText(access.receiver, context.source), access.receiver)
         ) {
           dottedReceiverCalls.push({ fromId, access });
           return;
@@ -1157,21 +1170,6 @@ export async function emitFunctionBodyEdges(
         const resolution = context.resolveName(name, callee);
         if (resolution?.status === "deferred") {
           deferredCalls.push({ callee, name, resolution });
-          return;
-        }
-      }
-      const implicitOwnerLanguage = context.sup.id === "swift" || context.sup.id === "csharp";
-      if (implicitOwnerLanguage && isIdentifierType(context.sup, callee.type) && nearestMemberContainer(fn.node)) {
-        const name = sliceText(callee, context.source);
-        const lexical = context.resolveIdentifier(name, callee);
-        const importedCsharpMember =
-          context.sup.id === "csharp" &&
-          !!lexical?.isMember &&
-          fileIdentityKey(lexical.file) !== fileIdentityKey(context.moduleEntry.file);
-        if (!importedCsharpMember && (!lexical || lexical.isMember || !context.hasNonModuleBinding(name, callee))) {
-          // A method's local binding wins. Type members require receiver ownership
-          // and static-scope proof; only a free function can be a fallback.
-          recordImplicitSelfMemberCall(node, callee, lexical?.isMember ? null : lexical);
           return;
         }
       }
@@ -1314,7 +1312,7 @@ export async function emitFunctionBodyEdges(
         recordDefEdge(context, fromId, call.target, "calls", call.access.property);
       } else {
         // Without an implicit `this` of the owner, `Owner::member()` can only name a static member.
-        recordReceiverCall(call.node, call.access, implicitThis ? undefined : "static");
+        recordReceiverCall(call.node, call.access, implicitThis ? "any" : "static");
       }
     }
   }

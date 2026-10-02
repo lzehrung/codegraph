@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
 import { isGoExportedMemberName } from "../../indexer/declaration-visibility.js";
+import { selectMember, type MemberModel } from "../../indexer/member-selection.js";
 import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
@@ -351,9 +352,6 @@ const LANGUAGE_CONSTRUCTION_FORMS: Record<
   tsx: { newExpression: true },
   zig: { compositeLiteral: true },
 };
-
-/** Guards against a cyclic or pathological declared hierarchy. */
-const MAX_SUPERTYPE_DEPTH = 16;
 
 export type ReceiverCallAccess = {
   /** Member-access node carrying the receiver, used for import-chain resolution. */
@@ -1327,7 +1325,7 @@ export function classifyReceiver(
   sup: LanguageSupport,
   receiver: SyntaxNodeLike,
   source: string,
-  proofCache: Map<string, ReceiverProof>,
+  proofCache: Map<string, ReceiverProof> | null,
   cacheScope: number,
   accessNode: SyntaxNodeLike,
   hasLexicalBinding: (callee: SyntaxNodeLike) => boolean,
@@ -1343,15 +1341,15 @@ export function classifyReceiver(
 
   const receiverIsName = isReceiverNameNode(sup, receiver.type);
 
-  const cacheKey = `${cacheScope}\u0000${text}`;
-  let proof = proofCache.get(cacheKey);
+  const cacheKey = proofCache ? cacheScope + "\u0000" + text : "";
+  let proof = proofCache?.get(cacheKey);
   if (!proof) {
     const constructed = receiverConstructorExpression(receiver, source, sup);
     proof = {
       constructed,
       locallyBound: !constructed && receiverIsName && bindsLocalValue(receiver, text, source, sup),
     };
-    proofCache.set(cacheKey, proof);
+    proofCache?.set(cacheKey, proof);
   }
   if (proof.constructed) {
     return {
@@ -1679,6 +1677,7 @@ export function emitReceiverCallEdges(
   accessibleMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   fileHiddenMemberIds: ReadonlySet<string> = new Set(),
   acceptsCallTarget?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
+  callableIdentities: ReadonlyMap<string, import("../../languages/callable-arity.js").CallableIdentity> = new Map(),
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1707,9 +1706,48 @@ export function emitReceiverCallEdges(
     for (const memberId of memberIds) pushUnique(membersByOwner, ownerId, memberId);
   }
 
-  const nextOwners = (ownerId: string, viaSupertypes: boolean): string[] => {
-    if (!viaSupertypes) return supertypesByOwner.get(ownerId) ?? [];
-    return (classAncestorsByOwner.get(ownerId) ?? []).filter((id) => graph.nodes.get(id)?.kind === "class");
+  let activeCandidate: ReceiverCallCandidate;
+  const facts = new Map<string, import("../../languages/callable-arity.js").CallableIdentity>();
+  for (const [ownerId, ids] of membersByOwner) {
+    for (const id of ids) {
+      const canonicalId = canonicalMemberId(id, nodeAliases);
+      const indexed = callableIdentities.get(id) ?? callableIdentities.get(canonicalId);
+      const bounds = memberArities.get(id) ?? memberArities.get(canonicalId);
+      facts.set(id, {
+        key: indexed?.key ?? canonicalId,
+        owner: indexed?.owner ?? ownerId,
+        kind: indexed?.kind ?? "function",
+        arity: bounds ? { minArgs: bounds.min, maxArgs: bounds.max } : null,
+        ...(indexed?.role ? { role: indexed.role } : {}),
+      });
+    }
+  }
+  const model: MemberModel<string, string> = {
+    ownerKey: (id) => id,
+    members: (id) => membersByOwner.get(id) ?? [],
+    supertypes: (id, classOnly) => {
+      if (!classOnly) return supertypesByOwner.get(id) ?? [];
+      return (classAncestorsByOwner.get(id) ?? []).filter((base) => graph.nodes.get(base)?.kind === "class");
+    },
+    name: (id) => graph.nodes.get(id)?.name ?? graph.nodes.get(canonicalMemberId(id, nodeAliases))?.name ?? "",
+    key: (id) => facts.get(id)?.key ?? canonicalMemberId(id, nodeAliases),
+    callable: (id) => facts.get(id),
+    scope: (id) => memberScopes.get(id) ?? memberScopes.get(canonicalMemberId(id, nodeAliases)) ?? "any",
+    visible: (id, useFile) => {
+      const canonicalId = canonicalMemberId(id, nodeAliases);
+      const node = graph.nodes.get(id) ?? graph.nodes.get(canonicalId);
+      if (!node || (node.kind !== "function" && !node.callable)) return false;
+      if (
+        (fileHiddenMemberIds.has(id) || fileHiddenMemberIds.has(canonicalId)) &&
+        fileIdentityKey(node.file) !== fileIdentityKey(useFile)
+      )
+        return false;
+      return (
+        !activeCandidate.goPackagePeerFiles ||
+        isGoExportedMemberName("go", node.name) ||
+        activeCandidate.goPackagePeerFiles.has(node.file)
+      );
+    },
   };
 
   const callTargetsBySite = new Map<string, Set<string>>();
@@ -1736,55 +1774,35 @@ export function emitReceiverCallEdges(
     // coalesced type identity so lookup starts on the whole member set.
     const owner = ownerAnchors.get(rawOwner) ?? rawOwner;
     const memberScope = candidate.memberScope ?? inferCallMemberScope(candidate.site, sourceCache);
-    let level = candidate.viaSupertypes ? nextOwners(owner, true) : [owner];
-    const visited = new Set<string>(level);
-    let receiverDisposition: "none" | "resolved" | "ambiguous" = "none";
-    for (let depth = 0; depth < MAX_SUPERTYPE_DEPTH && level.length; depth += 1) {
-      const lookup = provenMemberTarget(
-        graph,
-        membersByOwner,
-        level,
-        candidate,
-        memberScope,
-        memberScopes,
-        nodeAliases,
-        memberArities,
-        fileHiddenMemberIds,
-        candidate.site.file,
-      );
-      if (lookup.status === "unique") {
-        if (acceptsCallTarget && !acceptsCallTarget(lookup.memberId, candidate)) {
-          receiverDisposition = "ambiguous";
-          if (existingTargets.size) rejectedCallSites.add(siteKey);
-          break;
-        }
-        receiverDisposition = "resolved";
-        const combinedTargets = new Set(existingTargets);
-        combinedTargets.add(lookup.memberId);
-        if (combinedTargets.size === 1) {
-          if (existingTargets.size === 0 && recordEdge(candidate.callerId, lookup.memberId, "calls", candidate.site)) {
-            existingTargets.add(lookup.memberId);
-            callTargetsBySite.set(siteKey, existingTargets);
-          }
-        } else {
-          rejectedCallSites.add(siteKey);
-        }
-        break;
-      }
-      if (lookup.status === "ambiguous") {
+    activeCandidate = candidate;
+    const lookup = selectMember([owner], model, {
+      name: candidate.memberName,
+      argumentCount: candidate.argumentCount,
+      scope: memberScope,
+      useFile: candidate.site.file,
+      phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
+      startAtAncestor: candidate.viaSupertypes,
+    });
+    let receiverDisposition: "none" | "resolved" | "ambiguous" =
+      lookup.status === "unique" ? "resolved" : lookup.status;
+    if (lookup.status === "unique") {
+      const memberId = canonicalMemberId(lookup.member, nodeAliases);
+      if (acceptsCallTarget && !acceptsCallTarget(memberId, candidate)) {
         receiverDisposition = "ambiguous";
         if (existingTargets.size) rejectedCallSites.add(siteKey);
-        break;
+      } else {
+        receiverDisposition = "resolved";
+        const combinedTargets = new Set(existingTargets);
+        combinedTargets.add(memberId);
+        if (combinedTargets.size === 1) {
+          if (!existingTargets.size && recordEdge(candidate.callerId, memberId, "calls", candidate.site)) {
+            existingTargets.add(memberId);
+            callTargetsBySite.set(siteKey, existingTargets);
+          }
+        } else rejectedCallSites.add(siteKey);
       }
-      const next: string[] = [];
-      for (const ownerId of level) {
-        for (const supertype of nextOwners(ownerId, candidate.viaSupertypes)) {
-          if (visited.has(supertype)) continue;
-          visited.add(supertype);
-          next.push(supertype);
-        }
-      }
-      level = next;
+    } else if (lookup.status === "ambiguous" && existingTargets.size) {
+      rejectedCallSites.add(siteKey);
     }
     if (receiverDisposition === "none") {
       if (candidate.fallbackTargetId && !existingTargets.size) {
@@ -1810,8 +1828,6 @@ export function emitReceiverCallEdges(
   return removed;
 }
 
-type MemberTargetLookup = { status: "none" } | { status: "unique"; memberId: string } | { status: "ambiguous" };
-
 function canonicalMemberId(id: string, aliases: ReadonlyMap<string, string>): string {
   let current = id;
   const seen = new Set<string>();
@@ -1820,78 +1836,4 @@ function canonicalMemberId(id: string, aliases: ReadonlyMap<string, string>): st
     current = aliases.get(current)!;
   }
   return current;
-}
-
-function memberArityMatches(
-  memberId: string,
-  argumentCount: number | null,
-  memberArities: ReadonlyMap<string, MemberArityRange>,
-): boolean {
-  if (argumentCount === null) return true;
-  const range = memberArities.get(memberId);
-  // Declaration parameter counts do not prove required/default/variadic call bounds.
-  // An unknown range cannot reject a unique target or eliminate an overload.
-  return !range || (argumentCount >= range.min && (range.max === null || argumentCount <= range.max));
-}
-
-/**
- * The single callable member named by `candidate` across `owners`.
- * `none` means this depth has no name match and the walk may continue.
- * `ambiguous` means this depth matched the name but could not prove one member,
- * including arity ambiguity, and the walk must stop.
- */
-function provenMemberTarget(
-  graph: SymbolGraph,
-  membersByOwner: ReadonlyMap<string, readonly string[]>,
-  owners: readonly string[],
-  candidate: ReceiverCallCandidate,
-  memberScope: ReceiverMemberScope,
-  memberScopes: ReadonlyMap<string, ReceiverMemberScope>,
-  nodeAliases: ReadonlyMap<string, string>,
-  memberArities: ReadonlyMap<string, MemberArityRange>,
-  fileHiddenMemberIds: ReadonlySet<string>,
-  useFile: string,
-): MemberTargetLookup {
-  const matches = new Set<string>();
-  for (const ownerId of owners) {
-    for (const memberId of membersByOwner.get(ownerId) ?? []) {
-      const canonicalId = canonicalMemberId(memberId, nodeAliases);
-      const node = graph.nodes.get(memberId) ?? graph.nodes.get(canonicalId);
-      if (!node || (node.kind !== "function" && !node.callable)) continue;
-      if (
-        (fileHiddenMemberIds.has(memberId) || fileHiddenMemberIds.has(canonicalId)) &&
-        fileIdentityKey(node.file) !== fileIdentityKey(useFile)
-      ) {
-        continue;
-      }
-      const nameMatches = candidate.caseInsensitiveMemberName
-        ? foldPhpIdentifierCase(node.name) === foldPhpIdentifierCase(candidate.memberName)
-        : node.name === candidate.memberName;
-      if (!nameMatches) continue;
-      if (
-        candidate.goPackagePeerFiles &&
-        !isGoExportedMemberName("go", node.name) &&
-        !candidate.goPackagePeerFiles.has(node.file)
-      ) {
-        continue;
-      }
-      const scope = memberScopes.get(memberId) ?? memberScopes.get(canonicalId);
-      if (memberScope !== "any" && scope !== memberScope) continue;
-      matches.add(canonicalId);
-    }
-  }
-  if (!matches.size) return { status: "none" };
-  if (matches.size === 1) {
-    const [memberId] = matches;
-    if (memberArityMatches(memberId!, candidate.argumentCount, memberArities)) {
-      return { status: "unique", memberId: memberId! };
-    }
-    return { status: "ambiguous" };
-  }
-  const byArity =
-    candidate.argumentCount === null
-      ? []
-      : [...matches].filter((memberId) => memberArityMatches(memberId, candidate.argumentCount, memberArities));
-  if (byArity.length === 1) return { status: "unique", memberId: byArity[0]! };
-  return { status: "ambiguous" };
 }

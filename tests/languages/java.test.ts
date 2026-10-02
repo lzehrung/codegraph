@@ -1041,3 +1041,82 @@ describe("Java type-qualified overloads", () => {
     }
   });
 });
+
+describe("Java package-qualified method calls", () => {
+  it("selects the declared package type without an import or same-name decoys", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-qualified-member-"));
+    try {
+      const useLines = [
+        "package client;",
+        "public class Use {",
+        "  public int call() { return org.math.Util.sum(1, 2); }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "org/math/Util.java":
+          "package org.math; public class Util { public static int sum(int a, int b) { return a + b; } }",
+        "org/other/Util.java":
+          "package org.other; public class Util { public static int sum(int a, int b) { return -1; } }",
+        "client/Use.java": useLines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["client/Use.java"]!,
+        line: 3,
+        column: columnOf(useLines, 3, "sum"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected package-qualified method");
+      expect(normalizePath(result.definition.file)).toBe(paths["org/math/Util.java"]);
+      const references = await findReferences(index, {
+        file: result.definition.file,
+        line: result.definition.range.start.line,
+        column: result.definition.range.start.column,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected method references");
+      expect(new Set(references.references.map((ref) => normalizePath(ref.file)))).toEqual(
+        new Set([paths["org/math/Util.java"], paths["client/Use.java"]]),
+      );
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["org/math/Util.java"]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Java inherited member lookup", () => {
+  it("reaches a grandparent through two empty derived classes without selecting an unrelated owner", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-grandparent-"));
+    try {
+      const lines = ["package p;", "public class Use {", "  public int call() { return new Derived().run(); }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "p/Grand.java": "package p; public class Grand { public int run() { return 1; } }",
+        "p/Base.java": "package p; public class Base extends Grand {}",
+        "p/Derived.java": "package p; public class Derived extends Base {}",
+        "p/Decoy.java": "package p; public class Decoy { public int run() { return -1; } }",
+        "p/Use.java": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["p/Use.java"]!,
+        line: 3,
+        column: columnOf(lines, 3, "run"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected inherited Java method");
+      expect(normalizePath(result.definition.file)).toBe(paths["p/Grand.java"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["p/Grand.java"]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
