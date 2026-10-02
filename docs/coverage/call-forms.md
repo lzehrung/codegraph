@@ -12,75 +12,44 @@ Status key:
 
 | Language   | Bare call | Qualified/namespace call | This/self member call | Typed-local receiver | Static/type receiver | Construction | Imported/aliased name | Overload by argument count | Inherited member | Super/base call |
 | ---------- | --------- | ------------------------ | --------------------- | -------------------- | -------------------- | ------------ | --------------------- | -------------------------- | ---------------- | --------------- |
-| TypeScript | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Covered                    | Known gap        | Covered         |
-| TSX        | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Covered                    | Known gap        | Covered         |
-| JavaScript | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Omitted                    | Known gap        | Covered         |
+| TypeScript | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Covered                    | Covered          | Covered         |
+| TSX        | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Covered                    | Covered          | Covered         |
+| JavaScript | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Omitted                    | Covered          | Covered         |
 | Python     | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Omitted                    | Covered          | Covered         |
 | PHP        | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Omitted                    | Covered          | Covered         |
-| Go         | Covered   | Covered                  | Omitted               | Known gap            | Omitted              | Covered      | Covered               | Omitted                    | Known gap        | Known gap       |
+| Go         | Covered   | Covered                  | Omitted               | Covered              | Omitted              | Covered      | Covered               | Omitted                    | Covered          | Covered         |
 | Java       | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Omitted               | Covered                    | Covered          | Covered         |
 | C          | Covered   | Omitted                  | Omitted               | Omitted              | Omitted              | Omitted      | Omitted               | Omitted                    | Omitted          | Omitted         |
 | C++        | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Covered                    | Covered          | Covered         |
 | C#         | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Covered                    | Covered          | Covered         |
 | Kotlin     | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Covered                    | Covered          | Covered         |
-| Ruby       | Covered   | Known gap                | Covered               | Covered              | Known gap            | Covered      | Omitted               | Omitted                    | Known gap        | Known gap       |
-| Rust       | Covered   | Known gap                | Covered               | Covered              | Covered              | Covered      | Covered               | Omitted                    | Known gap        | Omitted         |
+| Ruby       | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Omitted               | Omitted                    | Covered          | Covered         |
+| Rust       | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Omitted                    | Covered          | Omitted         |
 | Swift      | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Covered                    | Covered          | Covered         |
-| Zig        | Covered   | Covered                  | Covered               | Known gap            | Known gap            | Known gap    | Known gap             | Omitted                    | Omitted          | Omitted         |
+| Zig        | Covered   | Covered                  | Covered               | Covered              | Covered              | Covered      | Covered               | Omitted                    | Omitted          | Omitted         |
 
 ## Cell counts
 
 | Language   | Cells | Known gaps |
 | ---------- | ----- | ---------- |
-| TypeScript | 10    | 1          |
-| TSX        | 10    | 1          |
-| JavaScript | 9     | 1          |
+| TypeScript | 10    | 0          |
+| TSX        | 10    | 0          |
+| JavaScript | 9     | 0          |
 | Python     | 9     | 0          |
 | PHP        | 9     | 0          |
-| Go         | 7     | 3          |
+| Go         | 7     | 0          |
 | Java       | 9     | 0          |
 | C          | 1     | 0          |
 | C++        | 10    | 0          |
 | C#         | 10    | 0          |
 | Kotlin     | 10    | 0          |
-| Ruby       | 8     | 4          |
-| Rust       | 8     | 2          |
+| Ruby       | 8     | 0          |
+| Rust       | 8     | 0          |
 | Swift      | 10    | 0          |
-| Zig        | 7     | 4          |
+| Zig        | 7     | 0          |
 
-Total: 127 cells across 15 languages, 16 known gaps.
+Total: 127 cells across 15 languages, 0 known gaps.
 
 ## Known gaps
 
-- `ts/inherited-member` (common-code miss): a typed-local receiver of a derived class that adds no members of its own does not find a member declared only on the base class (the same cross-language gap as C++, PHP, C#, Kotlin, Java, Swift, Ruby, and JavaScript)
-  Repro: shapes.ts: `export class Base { run(): number { return 1; } }` and `export class Derived extends Base {}`; use.ts calls `const d = new Derived(); d.run();`. Current: goToDefinition on `run` returns not_found. Expected: resolves to Base.run. The detailed graph's own receiver-call resolver already records a `calls` edge from callDerived to Base.run for this exact site, so the graph itself is ahead of go-to-definition here.
-- `tsx/inherited-member` (common-code miss): a typed-local receiver of a derived class that adds no members of its own does not find a member declared only on the base class (the same cross-language gap as TypeScript, C++, PHP, C#, Kotlin, Java, Swift, Ruby, and JavaScript)
-  Repro: shapes.tsx: `export class Base { run(): number { return 1; } }` and `export class Derived extends Base {}`; use.tsx calls `const d = new Derived(); d.run();`. Current: goToDefinition on `run` returns not_found. Expected: resolves to Base.run.
-- `js/inherited-member` (common-code miss): a typed-local receiver of a derived class that adds no members of its own does not find a member declared only on the base class (the same cross-language gap as TypeScript, C++, PHP, C#, Kotlin, Java, Swift, and Ruby)
-  Repro: shapes.js: `export class Base { run() { return 1; } }` and `export class Derived extends Base {}`; use.js calls `const d = new Derived(); d.run();`. Current: goToDefinition on `run` returns not_found. Expected: resolves to Base.run. The detailed graph's own receiver-call resolver already records a `calls` edge from callDerived to Base.run for this exact site, so the graph itself is ahead of go-to-definition here.
-- `go/typed-local-receiver` (common-code miss): a cross-file method declaration is not found by a receiver call: box.go declares Box.Run, and a local `Box{}` receiver constructed in a different file (use.go) cannot resolve `.Run()`, even though the identical call resolves when declaration and use share one file
-  Repro: box.go: `type Box struct{}` with `func (b Box) Run() int { return 1 }`; use.go (same package, different file): `func callWithLocal() int { b := Box{}; return b.Run() }`. Current: goToDefinition on `Run` returns not_found. The detailed graph's own receiver-call resolver still finds the right target (a `calls` edge from callWithLocal to Box.Run exists), so this is a navigation-only miss. Expected: resolves to Box.Run. Moving the whole example into one file resolves correctly, isolating the gap to cross-file receiver lookup.
-- `go/inherited-member` (common-code miss): a promoted method declared through struct embedding is not found across files: shapes.go embeds Base in Derived, and a local `Derived{}` constructed in a different file (use.go) cannot resolve the promoted `.Run()`, though the identical promoted-method call already has permanent passing coverage when declaration and use share one file (tests/samples/go/embedding.go)
-  Repro: shapes.go: `type Base struct{}` with `func (Base) Run() int { return 1 }`, and `type Derived struct { Base }`; use.go (same package, different file) calls `d := Derived{}; d.Run()`. Current: goToDefinition on `Run` returns not_found; the detailed graph again finds the right target on its own (a `calls` edge from callDerived to Base.Run exists). Expected: resolves to Base.Run. This is the same cross-file receiver-lookup gap as go/typed-local-receiver, now shown through struct embedding.
-- `go/super-call` (common-code miss): an explicit base-qualified call through an embedded field (`d.Base.Run()`) -- Go's way to reach a promoted method that a derived type's own same-named method would otherwise shadow -- is not resolved at all
-  Repro: shapes.go: `type Base struct{}` with `func (Base) Run() int { return 1 }`, `type Derived struct { Base }`, and `func (d Derived) CallBase() int { return d.Base.Run() + 1 }`. Current: goToDefinition on the `Run` in `d.Base.Run()` returns not_found, and the detailed graph records no edge at all from CallBase (only its own `member_of` edge to Derived). Expected: resolves to Base.Run, with a `calls` edge from CallBase.
-- `ruby/qualified-call` (common-code miss): a module-qualified call to a `self.`-defined singleton method through a bare module-name receiver (`Calc.add(1, 2)`) resolves correctly via goToDefinition, but the detailed graph's receiver-call classifier never treats a plain Ruby constant as a named-type receiver (only `Constant.new` construction is a proven Ruby receiver), so it records no `calls` edge at all for the site
-  Repro: calc.rb: `module Calc; def self.add(a, b); a + b; end; end`; use.rb (after `require_relative`) calls `Calc.add(1, 2)`. Current: goToDefinition resolves to Calc.add (correct), but buildSymbolGraphDetailed reports zero `calls` edges from sum_pair (only generic `uses` edges to Calc and to add). Expected: a `calls` edge from sum_pair to Calc.add.
-- `ruby/static-receiver` (common-code miss): the same gap as ruby/qualified-call: a class-method call through a bare class-name receiver (`Counter.zero`) resolves correctly via goToDefinition but produces no `calls` edge
-  Repro: counter.rb: `class Counter; def self.zero; 0; end; end`; use.rb (after `require_relative`) calls `Counter.zero`. Current: goToDefinition resolves to Counter.zero (correct), but buildSymbolGraphDetailed reports zero `calls` edges from make_counter (only generic `uses` edges). Expected: a `calls` edge from make_counter to Counter.zero.
-- `ruby/inherited-member` (common-code miss): a typed-local receiver of a derived class that adds no members of its own does not find a member declared only on the base class (the same cross-language gap as C++, PHP, C#, Kotlin, Java, Swift, TypeScript, and JavaScript)
-  Repro: shapes.rb: `class Base; def run; 1; end; end` and `class Derived < Base; end`; use.rb calls `d = Derived.new; d.run`. Current: goToDefinition on `run` returns not_found. Unlike the other languages sharing this gap, the detailed graph's own receiver-call resolver already finds the right target here (a `calls` edge from call_derived to Base.run exists), so the graph is ahead of go-to-definition for Ruby specifically. Expected: resolves to Base.run.
-- `ruby/super-call` (common-code miss): Ruby's bare `super` -- forwarding the enclosing method's own arguments to the same-named method on the superclass, with no explicit method name to navigate -- is not resolved at all
-  Repro: shapes.rb: `class Base; def run; 1; end; end` and `class Derived < Base; def call_base; super + 1; end; end`. Current: goToDefinition on the `super` keyword in `super + 1` returns not_found, and the detailed graph records no edge from call_base. Expected: resolves to Base.run, with a `calls` edge from call_base.
-- `rust/qualified-call` (common-code miss): a module-path call used directly as a call's callee (`calc::add(1, 2)`), without first bringing the name into scope through a `use` import, is not resolved at all: goToDefinition returns not_found and the detailed graph records no edge for the call site, not even a generic one
-  Repro: src/calc.rs: `pub fn add(a: i32, b: i32) -> i32 { a + b }`; src/consumer.rs has `use crate::calc;` then calls `calc::add(1, 2)` directly. Current: goToDefinition on `add` returns not_found; buildSymbolGraphDetailed reports zero edges from sum_pair. The identical function reached through `use crate::calc::add;` and a bare `add(1, 2)` call resolves correctly (rust/bare-call), and `Counter::zero()` through a type path also resolves correctly (rust/static-receiver), so the gap is specific to a module path used directly as a call's callee. Expected: resolves to calc::add, with a `calls` edge from sum_pair.
-- `rust/inherited-member` (common-code miss): a type that implements a trait but adds no members of its own does not find the trait's default method implementation (the same cross-language gap as C++, PHP, C#, Kotlin, Java, Swift, TypeScript, JavaScript, and Ruby, reproduced here through Rust's own inheritance-like mechanism: a trait default method)
-  Repro: `trait Greet { fn run(&self) -> i32 { 1 } }`; `struct Derived; impl Greet for Derived {}` (empty impl, relies on the default); `fn call_derived() -> i32 { let d = Derived; d.run() }`. Current: goToDefinition on `run` returns not_found. As with Ruby, the detailed graph's own receiver-call resolver already finds the right target (a `calls` edge from call_derived to Greet's default run exists), so the graph is ahead of go-to-definition. Expected: resolves to the trait's default run.
-- `zig/typed-local-receiver` (common-code miss): a receiver whose type is a qualified cross-file reference (`const box = @import("box.zig"); const b: box.Box = box.Box{};`) resolves correctly via goToDefinition, but the detailed graph records no `calls` edge for the member call -- the same-file form of this call (zig/self-member-call) already has edge coverage, so the gap is specific to the cross-file qualified form
-  Repro: box.zig: `pub const Box = struct { pub fn run(self: Box) i32 { return 1; } };`; use.zig: `const box = @import("box.zig"); ... const b: box.Box = box.Box{}; return b.run();`. Current: goToDefinition on `run` resolves correctly to box.zig's run, but buildSymbolGraphDetailed reports zero edges from callWithLocal for the `.run()` call (only a generic `uses` edge to Box). Expected: a `calls` edge from callWithLocal to Box.run.
-- `zig/static-receiver` (common-code miss): the same gap as zig/typed-local-receiver: a type-scoped call reached through a qualified cross-file namespace (`counter.Counter.zero()`) resolves correctly via goToDefinition but produces no `calls` edge
-  Repro: counter.zig: `pub const Counter = struct { pub fn zero() i32 { return 0; } };`; use.zig: `const counter = @import("counter.zig"); ... return counter.Counter.zero();`. Current: goToDefinition resolves correctly to Counter.zero, but buildSymbolGraphDetailed reports zero `calls` edges from makeCounter (only a generic `uses` edge to Counter). Expected: a `calls` edge from makeCounter to Counter.zero.
-- `zig/construction` (common-code miss): the same gap as zig/typed-local-receiver and zig/static-receiver: constructing a type reached through a qualified cross-file namespace (`widget3.Widget3{}`) resolves correctly via goToDefinition but produces no `instantiates` edge
-  Repro: widget3.zig: `pub const Widget3 = struct { value: i32 = 0 };`; use.zig: `const widget3 = @import("widget3.zig"); ... return widget3.Widget3{};`. Current: goToDefinition resolves correctly to Widget3's declaration, but buildSymbolGraphDetailed reports zero edges from makeWidget for the construction (only a generic `uses` edge). Expected: an `instantiates` edge from makeWidget to Widget3.
-- `zig/imported-alias` (confident wrong answer): a specific-symbol import written as `const circleArea = @import("shapes.zig").area;` resolves to the local alias statement itself rather than continuing to the original declaration -- unlike C#, Kotlin, Python, TypeScript, and JavaScript, which all chase an aliased import through to its source
-  Repro: shapes.zig: `pub fn area(radius: f64) f64 { return radius * radius; }`; use.zig: `const circleArea = @import("shapes.zig").area; ... return circleArea(2.0);`. Current: goToDefinition on `circleArea` resolves to use.zig's own alias line (status ok, wrong target), not shapes.zig's area; the detailed graph's `calls` edge from computeArea follows the same wrong target. Expected: resolves to shapes.zig's area.
+No known gaps.

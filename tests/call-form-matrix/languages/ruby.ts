@@ -94,19 +94,6 @@ export const rubyCells: MatrixCell[] = [
     decoy: { file: "decoy.rb", line: 2, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.rb", fromName: "sum_pair" },
-    knownGap: {
-      reason:
-        "a module-qualified call to a `self.`-defined singleton method through a bare module-name receiver " +
-        "(`Calc.add(1, 2)`) resolves correctly via goToDefinition, but the detailed graph's receiver-call " +
-        "classifier never treats a plain Ruby constant as a named-type receiver (only `Constant.new` " +
-        "construction is a proven Ruby receiver), so it records no `calls` edge at all for the site",
-      classification: "common-code-miss",
-      repro:
-        "calc.rb: `module Calc; def self.add(a, b); a + b; end; end`; use.rb (after `require_relative`) " +
-        "calls `Calc.add(1, 2)`. Current: goToDefinition resolves to Calc.add (correct), but " +
-        "buildSymbolGraphDetailed reports zero `calls` edges from sum_pair (only generic `uses` edges to " +
-        "Calc and to add). Expected: a `calls` edge from sum_pair to Calc.add.",
-    },
   },
   {
     id: "ruby/static-receiver",
@@ -122,17 +109,6 @@ export const rubyCells: MatrixCell[] = [
     decoy: { file: "gauge.rb", line: 2, token: "zero" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.rb", fromName: "make_counter" },
-    knownGap: {
-      reason:
-        "the same gap as ruby/qualified-call: a class-method call through a bare class-name receiver " +
-        "(`Counter.zero`) resolves correctly via goToDefinition but produces no `calls` edge",
-      classification: "common-code-miss",
-      repro:
-        "counter.rb: `class Counter; def self.zero; 0; end; end`; use.rb (after `require_relative`) calls " +
-        "`Counter.zero`. Current: goToDefinition resolves to Counter.zero (correct), but " +
-        "buildSymbolGraphDetailed reports zero `calls` edges from make_counter (only generic `uses` edges). " +
-        "Expected: a `calls` edge from make_counter to Counter.zero.",
-    },
   },
   {
     id: "ruby/inherited-member",
@@ -152,19 +128,6 @@ export const rubyCells: MatrixCell[] = [
     decoy: { file: "decoy.rb", line: 2, token: "run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.rb", fromName: "call_derived" },
-    knownGap: {
-      reason:
-        "a typed-local receiver of a derived class that adds no members of its own does not find a member " +
-        "declared only on the base class (the same cross-language gap as C++, PHP, C#, Kotlin, Java, Swift, " +
-        "TypeScript, and JavaScript)",
-      classification: "common-code-miss",
-      repro:
-        "shapes.rb: `class Base; def run; 1; end; end` and `class Derived < Base; end`; use.rb calls `d = " +
-        "Derived.new; d.run`. Current: goToDefinition on `run` returns not_found. Unlike the other languages " +
-        "sharing this gap, the detailed graph's own receiver-call resolver already finds the right target " +
-        "here (a `calls` edge from call_derived to Base.run exists), so the graph is ahead of " +
-        "go-to-definition for Ruby specifically. Expected: resolves to Base.run.",
-    },
   },
   {
     id: "ruby/super-call",
@@ -184,29 +147,23 @@ export const rubyCells: MatrixCell[] = [
         "  end",
         "end",
         "",
+      ].join("\n"),
+      "derived.rb": [
+        'require_relative "shapes"',
+        "",
         "class Derived < Base",
-        "  def call_base",
+        "  def run",
         "    super + 1",
         "  end",
         "end",
         "",
       ].join("\n"),
     },
-    use: { file: "shapes.rb", line: 15, token: "super" },
+    use: { file: "derived.rb", line: 5, token: "super" },
+    keywordUse: true,
     expected: { file: "shapes.rb", line: 2, token: "run" },
     decoy: { file: "shapes.rb", line: 8, token: "run" },
     decoyKind: "callable",
-    edge: { label: "calls", fromFile: "shapes.rb", fromName: "call_base" },
-    knownGap: {
-      reason:
-        "Ruby's bare `super` -- forwarding the enclosing method's own arguments to the same-named method on " +
-        "the superclass, with no explicit method name to navigate -- is not resolved at all",
-      classification: "common-code-miss",
-      repro:
-        "shapes.rb: `class Base; def run; 1; end; end` and `class Derived < Base; def call_base; super + 1; " +
-        "end; end`. Current: goToDefinition on the `super` keyword in `super + 1` returns not_found, and the " +
-        "detailed graph records no edge from call_base. Expected: resolves to Base.run, with a `calls` edge " +
-        "from call_base.",
-    },
+    edge: { label: "calls", fromFile: "derived.rb", fromName: "run" },
   },
 ];

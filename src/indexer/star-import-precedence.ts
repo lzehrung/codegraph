@@ -3,7 +3,7 @@ import { fileIdentityKey } from "../util/paths.js";
 import type { ImportBinding } from "./import-types.js";
 import { resolveImported } from "./navigation-resolve.js";
 import { sameDef } from "./reference-context.js";
-import type { ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
+import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 
 /**
  * What a language does when more than one star import can see the same simple name.
@@ -168,7 +168,7 @@ export function resolveStarImportedDefinition(
     // resurrect a nested class as a bare name the exports query omitted.
     ...(languageId === "ruby" ? { allowLocalFallback: false } : {}),
   });
-  if (!result || "namespace" in result) return null;
+  if (!result || "namespace" in result || (languageId === "ruby" && result.isMember)) return null;
   return result;
 }
 
@@ -288,7 +288,7 @@ function rubyLoadOrderDeclaration(
  * includes every part in that load component.
  */
 function sameReopenedRubyConstant(index: ProjectIndex, left: SymbolDef, right: SymbolDef): boolean {
-  if (left.kind !== right.kind) return false;
+  if (left.kind !== SymbolKind.Class || right.kind !== SymbolKind.Class) return false;
   const leftName = exportedNameForDef(index, left);
   const rightName = exportedNameForDef(index, right);
   return !!leftName && leftName === rightName;
@@ -460,7 +460,7 @@ export type RubyReopenedConstant = {
 export function findRubyReopenedConstantParts(index: ProjectIndex, def: SymbolDef): RubyReopenedConstant {
   const empty: RubyReopenedConstant = { parts: [], incomplete: false };
   const languageId = supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.id;
-  if (languageId !== "ruby") return empty;
+  if (languageId !== "ruby" || def.kind !== SymbolKind.Class) return empty;
   const exported = exportedNameForDef(index, def);
   if (!exported) return empty;
   const component = rubyLoadComponent(index, def.file);

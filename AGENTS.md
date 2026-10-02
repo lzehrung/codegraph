@@ -62,10 +62,19 @@
 codegraph is not a compiler. Every supported language must give correct results for ordinary code,
 using syntax and facts proven from source. It must not emulate the full language specification.
 
-- Bare-name lookup order lives in one place: the skeleton in `src/indexer/name-resolution.ts` and
-  per-language hooks in `src/indexer/name-lookup-policies/`. Never add a lookup rule to one consumer
-  (go-to-definition, references, or the detailed graph); add it to the language policy so every
-  consumer gives the same answer.
+- Each resolution decision lives in one place that go-to-definition, references, and the detailed
+  graph share:
+  - bare-name lookup: `src/indexer/name-resolution.ts` and the hooks in
+    `src/indexer/name-lookup-policies/`;
+  - member selection: `src/indexer/member-selection.ts`;
+  - callable identity and accepted argument counts: `src/indexer/callable-identity.ts`, stored as
+    `SymbolDef.callable`;
+  - import specifier targets: `src/util/resolution/specifier-targets.ts`.
+- Never add a resolution rule to one consumer. Add it to the shared module or the language policy, so
+  every consumer gives the same answer.
+- A fix for a call form adds or updates its cell in `tests/call-form-matrix/`, with the expected
+  declaration and a same-named decoy. Regenerate `docs/coverage/call-forms.md` with
+  `UPDATE_CALL_FORM_REPORT=1 npx vitest run tests/call-form-matrix.report.test.ts`.
 
 - Required in every language that claims a capability:
   - Resolve common forms: imports and aliases; same-package, module, or namespace peers; members

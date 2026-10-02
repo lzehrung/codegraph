@@ -32,6 +32,8 @@ export type MemberSelectionOptions = {
   startAtAncestor?: boolean;
   keepUniqueArityMismatch?: boolean;
   inheritOverloads?: boolean;
+  /** Ruby reopening uses the first indexed declaration for a method name. */
+  firstDeclarationWins?: boolean;
 };
 
 const MAX_DEPTH = 16;
@@ -131,9 +133,11 @@ export function selectMember<Owner, Member>(
       for (const member of model.members(owner)) {
         if (!memberNameMatches(member, model, options, queryName) || !model.visible(member, options.useFile)) continue;
         named = true;
-        if (options.scope !== "any" && model.scope(member) !== options.scope) continue;
-        candidates.push(member);
-        owners?.set(member, ownerKey);
+        if (options.scope === "any" || model.scope(member) === options.scope) {
+          candidates.push(member);
+          owners?.set(member, ownerKey);
+        }
+        if (options.firstDeclarationWins) break;
       }
     }
     const unique = distinctCandidates(candidates, model, options.argumentCount);

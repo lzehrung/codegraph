@@ -129,20 +129,6 @@ export const goCells: MatrixCell[] = [
     decoy: { file: "widget2.go", line: 5, token: "Run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.go", fromName: "callWithLocal" },
-    knownGap: {
-      reason:
-        "a cross-file method declaration is not found by a receiver call: box.go declares Box.Run, and a " +
-        "local `Box{}` receiver constructed in a different file (use.go) cannot resolve `.Run()`, even though " +
-        "the identical call resolves when declaration and use share one file",
-      classification: "common-code-miss",
-      repro:
-        "box.go: `type Box struct{}` with `func (b Box) Run() int { return 1 }`; use.go (same package, " +
-        "different file): `func callWithLocal() int { b := Box{}; return b.Run() }`. Current: goToDefinition " +
-        "on `Run` returns not_found. The detailed graph's own receiver-call resolver still finds the right " +
-        "target (a `calls` edge from callWithLocal to Box.Run exists), so this is a navigation-only miss. " +
-        "Expected: resolves to Box.Run. Moving the whole example into one file resolves correctly, isolating " +
-        "the gap to cross-file receiver lookup.",
-    },
   },
   {
     id: "go/inherited-member",
@@ -178,21 +164,6 @@ export const goCells: MatrixCell[] = [
     decoy: { file: "shapes.go", line: 11, token: "Run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.go", fromName: "callDerived" },
-    knownGap: {
-      reason:
-        "a promoted method declared through struct embedding is not found across files: shapes.go embeds " +
-        "Base in Derived, and a local `Derived{}` constructed in a different file (use.go) cannot resolve " +
-        "the promoted `.Run()`, though the identical promoted-method call already has permanent passing " +
-        "coverage when declaration and use share one file (tests/samples/go/embedding.go)",
-      classification: "common-code-miss",
-      repro:
-        "shapes.go: `type Base struct{}` with `func (Base) Run() int { return 1 }`, and `type Derived struct " +
-        "{ Base }`; use.go (same package, different file) calls `d := Derived{}; d.Run()`. Current: " +
-        "goToDefinition on `Run` returns not_found; the detailed graph again finds the right target on its " +
-        "own (a `calls` edge from callDerived to Base.Run exists). Expected: resolves to Base.Run. This is " +
-        "the same cross-file receiver-lookup gap as go/typed-local-receiver, now shown through struct " +
-        "embedding.",
-    },
   },
   {
     id: "go/super-call",
@@ -229,18 +200,5 @@ export const goCells: MatrixCell[] = [
     decoy: { file: "shapes.go", line: 11, token: "Run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "shapes.go", fromName: "CallBase" },
-    knownGap: {
-      reason:
-        "an explicit base-qualified call through an embedded field (`d.Base.Run()`) -- Go's way to reach a " +
-        "promoted method that a derived type's own same-named method would otherwise shadow -- is not " +
-        "resolved at all",
-      classification: "common-code-miss",
-      repro:
-        "shapes.go: `type Base struct{}` with `func (Base) Run() int { return 1 }`, `type Derived struct { " +
-        "Base }`, and `func (d Derived) CallBase() int { return d.Base.Run() + 1 }`. Current: goToDefinition " +
-        "on the `Run` in `d.Base.Run()` returns not_found, and the detailed graph records no edge at all from " +
-        "CallBase (only its own `member_of` edge to Derived). Expected: resolves to Base.Run, with a `calls` " +
-        "edge from CallBase.",
-    },
   },
 ];

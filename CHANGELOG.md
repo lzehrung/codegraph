@@ -11,9 +11,22 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
+- Members inherited through a type that declares none of its own now resolve in go-to-definition, references, and call graphs: `Derived d; d.run();` finds `Base.run` in C++, C#, Java, Kotlin, PHP, Swift, TypeScript, JavaScript, and Ruby. Rust finds a trait's default method through a type that implements the trait, and Go finds a promoted method through an embedded struct, including when the method, the type, and the call are in different files of the package.
+- Go: a method declared in another file of the package resolves on a local of that type, and `d.Base.Run()` through an embedded field resolves.
+- Fully qualified calls resolve without an import: `com.example.Util.add(1, 2)` in Java, `calc.add(1, 2)` in Kotlin, `calc::add(1, 2)` in Rust, and `\App\add()` in PHP, which before had no call-graph edge.
+- C++: a namespace alias such as `namespace dm = a::b;` is followed, and `Base::run()` called from an override now has a call-graph edge.
+- Kotlin and Java: an imported function or static method with several overloads goes to the overload that accepts the call's argument count. Before, none of the calls resolved. A count that two overloads accept stays unresolved.
+- Swift: a call through a `typealias` of a type, such as `Fast.add()`, resolves.
+- Ruby: `Calc.add` and `Counter.zero` calls through a module or class name have call-graph edges. `require_relative` no longer makes instance methods importable names, so references of a method no longer list same-named methods of unrelated classes.
+- Zig: `const area = @import("shapes.zig").area;` goes to `area` in `shapes.zig`. Calls and construction through a type in another file (`box.Box{}`, `counter.Counter.zero()`) have call-graph edges, and struct literals record `instantiates` edges. A bare `@import("api.zig")` is now a file-graph dependency on `api.zig` instead of an external name.
 - C# `using N.T` binds the file that declares type `T` when `N.T` is not a namespace. An ambiguous or unreadable match stays unresolved instead of a same-shaped path. A bare C# `using` or Ruby `require` prefers a same-named project file over an npm workspace package, and a C# import no longer binds a file of another language.
 - A failed Python relative import such as `from .missing import x` is reported as `.missing`, including by `getUnresolvedImports`.
 - An SCSS partial resolves for a source specifier. A `url()` document specifier still does not.
+
+### Changed
+
+- Detailed call graphs build faster: callable facts (identity and accepted argument counts) are computed once when a file is indexed and stored in the cache, instead of being parsed again for each call.
+- Existing caches are rebuilt on the first run after upgrading, so that run takes longer than usual.
 
 ### Security
 

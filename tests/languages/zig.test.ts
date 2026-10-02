@@ -14,6 +14,7 @@ import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
+import type { DetailedSymbolGraph } from "../../src/graphs/symbol-graph-detailed.js";
 
 function findFirstNode(root: SyntaxNodeLike, type: string, text: string): SyntaxNodeLike | null {
   if (root.type === type && root.text === text) return root;
@@ -263,6 +264,58 @@ describe("Zig unqualified member lookup", () => {
   });
 });
 
+describe("Zig symbol import aliases", () => {
+  it("follows a member imported from @import through navigation, references, and calls", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-zig-import-member-"));
+    const shapesLines = ["pub fn area(radius: f64) f64 { return radius * radius; }"];
+    const useLines = [
+      'const circleArea = @import("shapes.zig").area;',
+      "pub fn computeArea() f64 { return circleArea(2.0); }",
+    ];
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "shapes.zig": shapesLines.join("\n") + "\n",
+        "use.zig": useLines.join("\n") + "\n",
+        "decoy.zig": "pub fn area(radius: f64) f64 { return -1; }\n",
+      });
+      const source = paths["shapes.zig"]!;
+      const use = paths["use.zig"]!;
+      const decoy = paths["decoy.zig"]!;
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const resolved = await goToDefinition(index, { file: use, line: 2, column: columnOf(useLines, 2, "circleArea") });
+      expect(resolved.status).toBe("ok");
+      if (resolved.status === "ok") {
+        expect(normalizePath(resolved.definition.file)).toBe(source);
+        expect(resolved.definition.range.start.line).toBe(1);
+        expect(normalizePath(resolved.definition.file)).not.toBe(decoy);
+      }
+      const references = await findReferences(index, {
+        file: source,
+        line: 1,
+        column: columnOf(shapesLines, 1, "area"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references.some((site) => normalizePath(site.file) === use && site.range.start.line === 2),
+        ).toBe(true);
+        expect(references.references.some((site) => normalizePath(site.file) === decoy)).toBe(false);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const caller = [...graph.nodes.values()].find(
+        (node) => node.name === "computeArea" && normalizePath(node.file) === use,
+      );
+      const targets = graph.edges
+        .filter((edge) => edge.from === caller?.id && edge.label === "calls")
+        .map((edge) => graph.nodes.get(edge.to));
+      expect(targets.some((target) => target?.name === "area" && normalizePath(target.file) === source)).toBe(true);
+      expect(targets.some((target) => target && normalizePath(target.file) === decoy)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Zig @import peer visibility", () => {
   // #378: a function reached through `@import` must resolve, be referenced, and produce a call
   // edge for both the one-argument case and the zero-argument control, while a same-named
@@ -363,6 +416,187 @@ describe("Zig @import peer visibility", () => {
         expect(callTargets).toContain(`${apiPath}::${target}`);
         expect(callTargets.some((candidate) => candidate.startsWith(`${decoyPath}::`))).toBe(false);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records a file-graph dependency on the imported sibling file and keeps packages external", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-zig-import-edge-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "api.zig": `${apiLines.join("\n")}\n`,
+        "use.zig": `const std = @import("std");\n${useLines.join("\n")}\n`,
+        "decoy.zig": `${decoyLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const targets = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths["use.zig"]!))
+        .map((edge) => (edge.to.type === "file" ? `file:${normalizePath(edge.to.path)}` : `external:${edge.to.name}`))
+        .sort();
+      expect(targets).toEqual(["external:std", `file:${normalizePath(paths["api.zig"]!)}`]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Zig qualified cross-file receiver and construction calls", () => {
+  // Call-form matrix gaps (docs/plans/2026-09-28-unified-name-resolution.md): a receiver or
+  // constructed type reached through a qualified cross-file namespace (`module.Type`,
+  // `module.Type.member`) already resolves via goToDefinition; the detailed graph must record
+  // the matching `calls`/`instantiates` edge too, and never to a same-named decoy elsewhere.
+  function edgeTargetsFrom(
+    graph: DetailedSymbolGraph,
+    label: string,
+    callerName: string,
+    callerFile: string,
+  ): string[] {
+    const callerNode = [...graph.nodes.values()].find(
+      (node) => node.name === callerName && normalizePath(node.file) === callerFile,
+    );
+    expect(callerNode, `${callerName} must be indexed`).toBeDefined();
+    const targets: string[] = [];
+    for (const edge of graph.edges) {
+      if (edge.label !== label || edge.from !== callerNode!.id) continue;
+      const node = graph.nodes.get(edge.to);
+      if (node) targets.push(`${normalizePath(node.file)}::${node.name}`);
+    }
+    return targets;
+  }
+
+  it("records a calls edge for a typed-local receiver declared with a qualified cross-file type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-zig-typed-local-"));
+    const boxLines = [
+      "pub const Box = struct {",
+      "    pub fn run(self: Box) i32 {",
+      "        return 1;",
+      "    }",
+      "};",
+      "",
+    ];
+    const decoyLines = [
+      "pub const Widget2 = struct {",
+      "    pub fn run(self: Widget2) i32 {",
+      "        return -1;",
+      "    }",
+      "};",
+      "",
+    ];
+    const useLines = [
+      'const box = @import("box.zig");',
+      "",
+      "pub fn callWithLocal() i32 {",
+      "    const b: box.Box = box.Box{};",
+      "    return b.run();",
+      "}",
+      "",
+    ];
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "box.zig": `${boxLines.join("\n")}\n`,
+        "widget2.zig": `${decoyLines.join("\n")}\n`,
+        "use.zig": `${useLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const boxPath = paths["box.zig"]!;
+      const decoyPath = paths["widget2.zig"]!;
+      const usePath = paths["use.zig"]!;
+
+      const goto = await goToDefinition(index, { file: usePath, line: 5, column: columnOf(useLines, 5, "run") });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(normalizePath(goto.definition.file)).toBe(boxPath);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callTargets = edgeTargetsFrom(graph, "calls", "callWithLocal", usePath);
+      expect(callTargets).toContain(`${boxPath}::run`);
+      expect(callTargets.some((candidate) => candidate.startsWith(`${decoyPath}::`))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records a calls edge for a static-style call through a type reached via another file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-zig-static-receiver-"));
+    const counterLines = [
+      "pub const Counter = struct {",
+      "    pub fn zero() i32 {",
+      "        return 0;",
+      "    }",
+      "};",
+      "",
+    ];
+    const decoyLines = [
+      "pub const Gauge = struct {",
+      "    pub fn zero() i32 {",
+      "        return -1;",
+      "    }",
+      "};",
+      "",
+    ];
+    const useLines = [
+      'const counter = @import("counter.zig");',
+      "",
+      "pub fn makeCounter() i32 {",
+      "    return counter.Counter.zero();",
+      "}",
+      "",
+    ];
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "counter.zig": `${counterLines.join("\n")}\n`,
+        "gauge.zig": `${decoyLines.join("\n")}\n`,
+        "use.zig": `${useLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const counterPath = paths["counter.zig"]!;
+      const decoyPath = paths["gauge.zig"]!;
+      const usePath = paths["use.zig"]!;
+
+      const goto = await goToDefinition(index, { file: usePath, line: 4, column: columnOf(useLines, 4, "zero") });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(normalizePath(goto.definition.file)).toBe(counterPath);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callTargets = edgeTargetsFrom(graph, "calls", "makeCounter", usePath);
+      expect(callTargets).toContain(`${counterPath}::zero`);
+      expect(callTargets.some((candidate) => candidate.startsWith(`${decoyPath}::`))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records an instantiates edge for construction through a qualified cross-file type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-zig-construction-"));
+    const widgetLines = ["pub const Widget3 = struct {", "    value: i32 = 0,", "};", ""];
+    const decoyLines = ["pub const Decoy3 = struct {", "    value: i32 = 0,", "};", ""];
+    const useLines = [
+      'const widget3 = @import("widget3.zig");',
+      "",
+      "pub fn makeWidget() widget3.Widget3 {",
+      "    return widget3.Widget3{};",
+      "}",
+      "",
+    ];
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "widget3.zig": `${widgetLines.join("\n")}\n`,
+        "decoy3.zig": `${decoyLines.join("\n")}\n`,
+        "use.zig": `${useLines.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const widgetPath = paths["widget3.zig"]!;
+      const decoyPath = paths["decoy3.zig"]!;
+      const usePath = paths["use.zig"]!;
+
+      const goto = await goToDefinition(index, { file: usePath, line: 4, column: columnOf(useLines, 4, "Widget3") });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(normalizePath(goto.definition.file)).toBe(widgetPath);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const instantiateTargets = edgeTargetsFrom(graph, "instantiates", "makeWidget", usePath);
+      expect(instantiateTargets).toContain(`${widgetPath}::Widget3`);
+      expect(instantiateTargets.some((candidate) => candidate.startsWith(`${decoyPath}::`))).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

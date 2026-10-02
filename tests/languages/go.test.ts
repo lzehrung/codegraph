@@ -316,6 +316,58 @@ describe("Go Unicode symbol ranges (C11)", () => {
 });
 
 describe("Go same-package peer visibility", () => {
+  it("resolves cross-file methods and promoted embedded methods only within the Go package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-go-embedded-peers-"));
+    const shapesLines = [
+      "package p",
+      "type Base struct{}",
+      "func (Base) Run() int { return 1 }",
+      "type Derived struct { Base }",
+      "func (d Derived) CallBase() int { return d.Base.Run() }",
+    ];
+    const useLines = [
+      "package p",
+      "func CallLocal() int { b := Base{}; return b.Run() }",
+      "func CallDerived() int { d := Derived{}; return d.Run() }",
+    ];
+    const decoyLines = ["package q", "type Base struct{}", "func (Base) Run() int { return -1 }"];
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "shapes.go": shapesLines.join("\n") + "\n",
+        "use.go": useLines.join("\n") + "\n",
+        "decoy/decoy.go": decoyLines.join("\n") + "\n",
+      });
+      const shapes = paths["shapes.go"]!;
+      const use = paths["use.go"]!;
+      const decoy = paths["decoy/decoy.go"]!;
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const [file, line, column] of [
+        [use, 2, columnOf(useLines, 2, "Run")],
+        [use, 3, columnOf(useLines, 3, "Run")],
+        [shapes, 5, columnOf(shapesLines, 5, "Run")],
+      ] as const) {
+        const resolved = await goToDefinition(index, { file, line, column });
+        expect(resolved.status, file + ":" + line).toBe("ok");
+        if (resolved.status === "ok") {
+          expect(normalizePath(resolved.definition.file)).toBe(shapes);
+          expect(resolved.definition.range.start.line).toBe(3);
+          expect(normalizePath(resolved.definition.file)).not.toBe(decoy);
+        }
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const owner = [...graph.nodes.values()].find(
+        (node) => node.name === "CallBase" && normalizePath(node.file) === shapes,
+      );
+      const targets = graph.edges
+        .filter((edge) => edge.from === owner?.id && edge.label === "calls")
+        .map((edge) => graph.nodes.get(edge.to));
+      expect(targets.some((node) => node?.name === "Run" && normalizePath(node.file) === shapes)).toBe(true);
+      expect(targets.some((node) => node && normalizePath(node.file) === decoy)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   // #378: a call to a sibling declared in the same Go package, with no import at all, must be
   // found through the package compilation unit and must not leak into a same-named declaration
   // in another package.

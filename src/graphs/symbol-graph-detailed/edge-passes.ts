@@ -27,8 +27,8 @@ import {
   resolveImportTypeMember,
   resolvePhpExportByImportType,
 } from "../../indexer/navigation-resolve.js";
+import { selectMember } from "../../indexer/member-selection.js";
 import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
-import { typescriptSelectOverloadCandidate } from "../../indexer/ts-callables.js";
 import {
   isSwiftConstrainedExtension,
   isSwiftExtensionContainer,
@@ -48,7 +48,6 @@ import {
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
 import {
   MEMBER_ACCESS_ROWS,
-  keywordReceiverKind,
   type ReceiverAncestorClause,
   type ReceiverAncestorEmbed,
   type ReceiverAncestryRelation,
@@ -78,12 +77,12 @@ import {
   rustImplSelfTypeNode,
   supportsImplicitSelfMemberCalls,
   supportsReceiverMemberOverloads,
+  type ReceiverBinding,
   type ReceiverCallAccess,
   type ReceiverCallCandidate,
   type ReceiverMemberScope,
   type MemberArityRange,
   type ReceiverProof,
-  receiverConstructorExpression,
   importTypeQuerySpecifier,
 } from "./receiver-calls.js";
 
@@ -664,7 +663,10 @@ function resolveNamedType(
   node: SyntaxNodeLike,
   rubyConstructed = false,
 ): SymbolDef | null {
-  if (context.sup.id === "go" && context.optionalMemberTypes.has(node.type)) {
+  // A Go composite literal or Zig struct initializer can name a qualified cross-file type
+  // (`pkg.Type{}` / `ns.Type{}`); the receiver's typeName is then dotted text, not one
+  // identifier, so resolve the chain directly instead of treating it as a plain name.
+  if ((context.sup.id === "go" || context.sup.id === "zig") && context.optionalMemberTypes.has(node.type)) {
     const qualified = context.resolveMemberChainTarget(node);
     return qualified && declaresMembers(qualified) ? qualified : null;
   }
@@ -678,11 +680,113 @@ function resolveNamedType(
   if (typed.length === 1) return typed[0]!;
   const imported = context.aliasToTargetDef.get(name);
   if (imported && declaresMembers(imported)) return imported;
-  // Only a constructed `Klass.new` type uses Ruby's bare-constant visibility, and
-  // only when this file does not already have several classes of that name.
-  // Inheritance names stay on resolveIdentifier so an unproven superclass is not invented.
-  if (!rubyConstructed || typed.length > 1) return null;
+  // A constructed `Klass.new` type, or (Ruby only) a bare capitalized constant receiver
+  // (`Calc.add(1, 2)`), uses Ruby's bare-constant visibility, and only when this file does not
+  // already have several classes of that name. Inheritance names stay on resolveIdentifier so
+  // an unproven superclass is not invented.
+  const triesRubyVisibleConstant = rubyConstructed || context.sup.id === "ruby";
+  if (!triesRubyVisibleConstant || typed.length > 1) return null;
   return resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
+}
+
+/**
+ * Zig's static-receiver call form (`module.Type.member()`): the receiver is itself a qualified
+ * member-access node naming a type through another file's export (`counter.Counter` in
+ * `counter.Counter.zero()`). `classifyReceiver` only proves an identifier or keyword receiver,
+ * so this resolves the receiver's own chain directly and defers the member lookup through the
+ * same cross-file receiver-call pipeline every other member call uses.
+ */
+function recordZigQualifiedTypeReceiverCall(
+  context: EdgePassContext,
+  node: SyntaxNodeLike,
+  access: ReceiverCallAccess,
+  fromId: string,
+): boolean {
+  const typeDef = context.resolveMemberChainTarget(access.receiver);
+  if (!typeDef || !declaresMembers(typeDef)) return false;
+  const memberName = sliceText(access.property, context.source);
+  if (!memberName) return false;
+  const argumentCount = supportsReceiverMemberOverloads(context.sup.id)
+    ? getCallArgumentCount({ languageId: context.sup.id, source: context.source, call: node })
+    : null;
+  context.receiverCalls.push({
+    callerId: fromId,
+    ownerId: ensureNode(context, typeDef),
+    viaSupertypes: false,
+    memberName,
+    argumentCount,
+    site: { file: context.moduleEntry.file, range: toRange(access.property) },
+    memberScope: "any",
+  });
+  return true;
+}
+
+/**
+ * Go's `d.Base.Run()`: `d.Base` explicitly names an embedded field to reach a promoted method
+ * that a derived type's own same-named method would otherwise shadow, Go's equivalent of
+ * `super`/`base`. `classifyReceiver` only proves an identifier or keyword receiver, so a
+ * dotted `d.Base` receiver is never classified. This resolves `d`'s own type, confirms `Base`
+ * is really a nameless embedded field declared on it (not an unrelated named field that merely
+ * shares the name), then defers the member lookup through the same cross-file receiver-call
+ * pipeline every other member call uses. Limited to a same-file owner declaration: the AST
+ * needed to read the field list is only synchronously available there.
+ */
+function recordGoEmbeddedFieldReceiverCall(
+  context: EdgePassContext,
+  access: ReceiverCallAccess,
+  fromId: string,
+  hasLexicalBinding: (callee: SyntaxNodeLike) => boolean,
+): boolean {
+  const parts = getMemberAccessParts(context.sup, access.receiver);
+  const objectNode = parts.object;
+  const fieldNode = parts.property;
+  if (!objectNode || !fieldNode || !isIdentifierType(context.sup, fieldNode.type)) return false;
+  const ownerBinding = classifyReceiver(
+    context.sup,
+    objectNode,
+    context.source,
+    null,
+    0,
+    access.receiver,
+    hasLexicalBinding,
+  );
+  if (ownerBinding?.kind !== "named-type") return false;
+  const ownerDef = resolveNamedType(context, ownerBinding.typeName, ownerBinding.typeNode, ownerBinding.constructed);
+  if (!ownerDef || fileIdentityKey(ownerDef.file) !== fileIdentityKey(context.moduleEntry.file)) return false;
+  const embeds = MEMBER_ACCESS_ROWS.go?.receiverAncestry?.embeds;
+  if (!embeds) return false;
+  const start = ownerDef.range.start.index ?? 0;
+  const nameNode = context.tree.rootNode.descendantForIndex(start, ownerDef.range.end.index ?? start);
+  const declaration = nameNode.parent;
+  const declaredType = declaration?.childForFieldName("type");
+  if (!declaration || !declaredType) return false;
+  const fieldName = sliceText(fieldNode, context.source);
+  for (const rule of embeds) {
+    if (declaredType.type !== rule.body) continue;
+    const list = rule.memberList ? findFirstNodeByType(declaredType, rule.memberList) : declaredType;
+    if (!list) continue;
+    for (const member of list.namedChildren ?? []) {
+      if (member.type !== rule.member) continue;
+      if (rule.nameless && member.childForFieldName("name")) continue;
+      const specifier = rule.typeField ? member.childForFieldName(rule.typeField) : member;
+      if (!specifier || sliceText(specifier, context.source) !== fieldName) continue;
+      const embeddedDef = context.resolveIdentifier(fieldName, specifier);
+      if (!embeddedDef || !declaresMembers(embeddedDef)) return false;
+      const memberName = sliceText(access.property, context.source);
+      if (!memberName) return false;
+      context.receiverCalls.push({
+        callerId: fromId,
+        ownerId: ensureNode(context, embeddedDef),
+        viaSupertypes: false,
+        memberName,
+        argumentCount: null,
+        site: { file: context.moduleEntry.file, range: toRange(access.property) },
+        memberScope: "any",
+      });
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -752,11 +856,26 @@ function resolveTypeScriptNamespaceMember(
   const member = sliceText(property, context.source);
   const candidates = findTypeScriptNamespaceMemberCandidates(context.moduleEntry.locals, member, receiver, context);
   if (!candidates.length) return undefined;
-  return typescriptSelectOverloadCandidate({
-    group: candidates,
-    identityOf: (candidate) => candidate.callable,
-    argumentCount: getCallArgumentCount({ languageId: context.sup.id, source: context.source, call }),
-  });
+  const selected = selectMember(
+    [receiver],
+    {
+      ownerKey: (def) => def.callable?.owner ?? fileIdentityKey(def.file),
+      members: () => candidates,
+      supertypes: () => [],
+      name: (def) => def.localName,
+      key: (def) => def.callable?.key ?? `${fileIdentityKey(def.file)}:${def.range.start.index}`,
+      callable: (def) => def.callable,
+      scope: () => "any",
+      visible: () => true,
+    },
+    {
+      name: member,
+      argumentCount: getCallArgumentCount({ languageId: context.sup.id, source: context.source, call }),
+      scope: "any",
+      useFile: context.moduleEntry.file,
+    },
+  );
+  return selected.status === "unique" ? selected.member : null;
 }
 
 function recordTypeScriptNamespaceCall(
@@ -788,9 +907,14 @@ function recordTypeScriptNamespaceConstruction(
 }
 
 /** A member call on a `typeof import("spec")` binding names that module's export. */
-function recordImportTypeCall(context: EdgePassContext, access: ReceiverCallAccess, fromId: string): boolean {
+function recordImportTypeCall(
+  context: EdgePassContext,
+  access: ReceiverCallAccess,
+  fromId: string,
+  proof: ReceiverBinding,
+): boolean {
   if (!isJsTsLanguage(context.sup.id)) return false;
-  const importType = receiverConstructorExpression(access.receiver, context.source, context.sup);
+  const importType = proof.kind === "named-type" ? proof.typeNode : null;
   const specifier = importType?.type === "type_query" ? importTypeQuerySpecifier(importType) : null;
   if (!specifier) return false;
   const member = sliceText(access.property, context.source);
@@ -836,12 +960,14 @@ export async function emitFunctionBodyEdges(
     "nullsafe_member_call_expression",
     "scoped_call_expression",
   ]);
-  const newNodeTypes = new Set<string>([
-    "new_expression",
-    "object_creation_expression",
-    "struct_expression",
-    "composite_literal",
-  ]);
+  const newNodeTypes: Record<string, true> = {
+    new_expression: true,
+    object_creation_expression: true,
+    struct_expression: true,
+    composite_literal: true,
+    // tree-sitter-zig's own struct-literal node, e.g. `Widget{}` or a qualified `ns.Widget{}`.
+    struct_initializer: true,
+  };
   // Receiver typing and lexical member lookup are initialized only for receiver calls.
   const receiverProofs = new Map<string, ReceiverProof>();
   const hasLexicalBinding = (callee: SyntaxNodeLike): boolean => {
@@ -954,6 +1080,30 @@ export async function emitFunctionBodyEdges(
       }
     };
 
+    const classifyImport = (name: string, node: SyntaxNodeLike): "module-import" | "static-type" | null => {
+      if (isJsTsLanguage(context.sup.id) && isIdentifierType(context.sup, node.type)) {
+        const imported =
+          effectiveExplicitBinding(
+            context.moduleEntry.imports,
+            context.sup.id,
+            (candidate) => candidate.kind === "namespace" && candidate.localNS === name,
+            node.startIndex,
+          ) ?? innermostNamespaceImport(context.moduleEntry.imports, name, node);
+        if (imported?.mechanism === "cjs" && typeof imported.resolved === "string") {
+          const value = cjsRequireValueBinding(context.index, imported.resolved);
+          const lexical = value ? context.resolveIdentifier(name, node) : null;
+          if (value && declaresMembers(value) && lexical && defNodeId(value) === defNodeId(lexical)) {
+            return "static-type";
+          }
+          return "module-import";
+        }
+      }
+      if (context.aliasToTargetModule.has(name) && context.moduleAliasIsUnshadowed(name, node)) {
+        return "module-import";
+      }
+      return null;
+    };
+
     /**
      * Resolves a receiver method call against the receiver's type. Members declared
      * alongside the caller resolve here; anything needing another module's members
@@ -963,35 +1113,23 @@ export async function emitFunctionBodyEdges(
       node: SyntaxNodeLike,
       access: ReceiverCallAccess,
       forcedMemberScope?: ReceiverMemberScope,
+      proof?: ReceiverBinding,
     ): void => {
       const memberName = sliceText(access.property, context.source);
       if (!memberName) return;
-      let binding = classifyReceiver(
-        context.sup,
-        access.receiver,
-        context.source,
-        receiverProofs,
-        fn.node.startIndex,
-        access.accessNode,
-        hasLexicalBinding,
-      );
-      if (isJsTsLanguage(context.sup.id) && isIdentifierType(context.sup, access.receiver.type)) {
-        const receiverName = sliceText(access.receiver, context.source);
-        const imported =
-          effectiveExplicitBinding(
-            context.moduleEntry.imports,
-            context.sup.id,
-            (candidate) => candidate.kind === "namespace" && candidate.localNS === receiverName,
-            access.receiver.startIndex,
-          ) ?? innermostNamespaceImport(context.moduleEntry.imports, receiverName, access.receiver);
-        if (imported?.mechanism === "cjs" && typeof imported.resolved === "string") {
-          const value = cjsRequireValueBinding(context.index, imported.resolved);
-          const lexical = value ? context.resolveIdentifier(receiverName, access.receiver) : null;
-          if (!value || !declaresMembers(value) || !lexical || defNodeId(value) !== defNodeId(lexical)) return;
-          binding = { kind: "named-type", typeName: receiverName, typeNode: access.receiver, memberScope: "static" };
-        }
-      }
-      if (!binding) return;
+      const binding =
+        proof ??
+        classifyReceiver(
+          context.sup,
+          access.receiver,
+          context.source,
+          receiverProofs,
+          fn.node.startIndex,
+          access.accessNode,
+          hasLexicalBinding,
+          classifyImport,
+        );
+      if (binding.kind === "module-import" || binding.kind === "unknown") return;
 
       const site = { file: context.moduleEntry.file, range: toRange(access.property) };
       // Shared call-count facts treat unproven spread expansions as unknown (null),
@@ -1110,8 +1248,6 @@ export async function emitFunctionBodyEdges(
       const access = receiverCallAccess(context.sup, node, callee);
       if (access) {
         if (recordTypeScriptNamespaceCall(context, node, access, fromId)) return;
-        if (recordImportTypeCall(context, access, fromId)) return;
-        const receiverName = sliceText(access.receiver, context.source);
         const typeScopedCppCall =
           context.sup.id === "cpp" &&
           context.source.slice(access.receiver.endIndex, access.property.startIndex).includes("::");
@@ -1128,8 +1264,19 @@ export async function emitFunctionBodyEdges(
           });
           return;
         }
-        if (keywordReceiverKind(context.sup.id, receiverName)) {
-          recordReceiverCall(node, access);
+        const receiverProof = classifyReceiver(
+          context.sup,
+          access.receiver,
+          context.source,
+          receiverProofs,
+          fn.node.startIndex,
+          access.accessNode,
+          hasLexicalBinding,
+          classifyImport,
+        );
+        if (recordImportTypeCall(context, access, fromId, receiverProof)) return;
+        if (receiverProof.kind === "own-type" || receiverProof.kind === "supertype") {
+          recordReceiverCall(node, access, undefined, receiverProof);
           return;
         }
         if (
@@ -1142,6 +1289,20 @@ export async function emitFunctionBodyEdges(
           return;
         }
         if (tryResolveChain(context, access.accessNode, fromId, "calls")) return;
+        if (
+          context.sup.id === "zig" &&
+          context.optionalMemberTypes.has(access.receiver.type) &&
+          recordZigQualifiedTypeReceiverCall(context, node, access, fromId)
+        ) {
+          return;
+        }
+        if (
+          context.sup.id === "go" &&
+          context.optionalMemberTypes.has(access.receiver.type) &&
+          recordGoEmbeddedFieldReceiverCall(context, access, fromId, hasLexicalBinding)
+        ) {
+          return;
+        }
         if (
           (context.sup.id === "csharp" &&
             access.receiver.type === "member_access_expression" &&
@@ -1159,7 +1320,7 @@ export async function emitFunctionBodyEdges(
           dottedReceiverCalls.push({ fromId, access });
           return;
         }
-        recordReceiverCall(node, access);
+        recordReceiverCall(node, access, undefined, receiverProof);
         return;
       }
       if (!callee) return;
@@ -1242,7 +1403,7 @@ export async function emitFunctionBodyEdges(
         if (recordSwiftCapitalizedConstruction(context, node, fromId)) return true;
         resolveCallTarget(node, getCallTarget(node));
       }
-      if (newNodeTypes.has(node.type)) {
+      if (newNodeTypes[node.type]) {
         const keyword = phpObjectCreationKeyword(node, context.source, context.sup);
         if (keyword) {
           const created = resolvePhpObjectCreationTarget(

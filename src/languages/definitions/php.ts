@@ -19,11 +19,6 @@ const PHP_IMPORT_QUERY = `
 export const PHP_DEF: LanguageDefinition = {
   id: "php",
   extensions: [".php", ".phtml", ".php4", ".php8"],
-  resolvesImportsFromDeclarations: true,
-  externalSpecifierResolution: {
-    separator: "path",
-    reResolveAnyAddedExtensions: [".php", ".phtml", ".php4", ".php8"],
-  },
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

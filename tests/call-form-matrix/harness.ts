@@ -18,7 +18,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, buildProjectIndexIncremental, goToDefinition, type ProjectIndex } from "../../src/index.js";
-import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "../../src/indexer/declaration-languages.js";
+import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "../../src/indexer/import-resolution-tables.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../../src/graphs/symbol-graph-detailed.js";
 import { normalizePath } from "../../src/util/paths.js";
@@ -152,6 +152,7 @@ export async function runCellCore(cell: MatrixCell): Promise<void> {
       ...site,
       expected: { file: cell.expected.file, line: cell.expected.line },
       requireCompleteCoverage: true,
+      ...(cell.keywordUse ? { keywordReceiver: true } : {}),
       ...(cell.edge
         ? { edges: [{ label: cell.edge.label, from: { file: cell.edge.fromFile, name: cell.edge.fromName } }] }
         : {}),

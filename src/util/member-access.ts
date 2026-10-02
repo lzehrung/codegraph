@@ -191,7 +191,11 @@ export function collectMemberAccessChain(args: {
     const keyName = sliceText(nameNode, args.source);
     const value = args.constStringOf?.get(keyName);
     if (typeof value === "string") names.push(value);
-    else if (args.sup.id === "csharp" || args.sup.id === "java") names.push(keyName);
+    // C#/Java qualified names, Rust's `mod::item` path, and Ruby's `receiver.method` call node
+    // all spell every segment as a plain `identifier`, with no dedicated property-identifier
+    // node type to tell a name from a value.
+    else if (args.sup.id === "csharp" || args.sup.id === "java" || args.sup.id === "rust" || args.sup.id === "ruby")
+      names.push(keyName);
   };
 
   while (current && traversalTypes.has(current.type)) {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { LANGUAGE_SUPPORTS, supportById, supportForFileWithoutHeaderSample } from "../languages.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Range } from "../types.js";
 import {
   CSHARP_IDENTIFIER_SOURCE,
@@ -11,6 +11,7 @@ import {
 } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
+import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
 import type { ProjectIndex } from "./types.js";
 
 /**
@@ -61,7 +62,9 @@ export type CompilationUnitPeers = {
 
 /** Languages whose files can name each other's top-level declarations without an import. */
 export const IMPLICIT_UNIT_LANGUAGES: Readonly<Record<string, true>> = Object.fromEntries(
-  LANGUAGE_SUPPORTS.flatMap((support) => (support.implicitCompilationUnit ? [[support.id, true] as const] : [])),
+  Object.entries(IMPORT_RESOLUTION_ROWS).flatMap(([languageId, row]) =>
+    row.implicitCompilationUnit ? [[languageId, true] as const] : [],
+  ),
 );
 
 /**
@@ -90,7 +93,7 @@ function packageClauseLanguage(languageId: string | undefined): languageId is "g
  * namespace, so a Kotlin sibling in the same package is as visible as a Java one.
  */
 function unitLanguageGroup(languageId: string): string {
-  return supportById(languageId)?.implicitCompilationUnitGroup ?? languageId;
+  return IMPORT_RESOLUTION_ROWS[languageId]?.implicitCompilationUnitGroup ?? languageId;
 }
 
 const GO_PACKAGE_PATTERN = new RegExp(String.raw`^\s*package\s+(${GO_IDENTIFIER_SOURCE})`, "mu");
@@ -315,7 +318,7 @@ function unitFactFor(index: ProjectIndex, file: FileId): UnitFact {
 
   const support = supportForFileWithoutHeaderSample(file, index.languageExtensions);
   const languageId = support?.id;
-  const unitKind = support?.implicitCompilationUnit;
+  const unitKind = languageId === undefined ? undefined : IMPORT_RESOLUTION_ROWS[languageId]?.implicitCompilationUnit;
   let identity: UnitIdentity;
   if (unitKind === "package" && packageClauseLanguage(languageId)) {
     const declaration = packageDeclarationFor(index, file, languageId);

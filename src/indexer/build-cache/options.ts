@@ -62,10 +62,6 @@ type LanguageDefinitionFingerprintDescriptor = {
   graph: LanguageDefinition["graph"];
   nodeTypes?: LanguageDefinition["nodeTypes"];
   supportsCrossModuleSymbols: boolean;
-  resolvesImportsFromDeclarations: boolean;
-  implicitCompilationUnit?: LanguageDefinition["implicitCompilationUnit"];
-  implicitCompilationUnitGroup?: string;
-  externalSpecifierResolution?: LanguageDefinition["externalSpecifierResolution"];
   native?: {
     authoritativeKinds: string[];
     notes: string[];
@@ -93,25 +89,6 @@ function languageDefinitionFingerprintDescriptor(
     graph: definition.graph,
     ...(definition.nodeTypes ? { nodeTypes: definition.nodeTypes } : {}),
     supportsCrossModuleSymbols: definition.supportsCrossModuleSymbols ?? false,
-    resolvesImportsFromDeclarations: definition.resolvesImportsFromDeclarations ?? false,
-    ...(definition.implicitCompilationUnit ? { implicitCompilationUnit: definition.implicitCompilationUnit } : {}),
-    ...(definition.implicitCompilationUnitGroup
-      ? { implicitCompilationUnitGroup: definition.implicitCompilationUnitGroup }
-      : {}),
-    ...(definition.externalSpecifierResolution
-      ? {
-          externalSpecifierResolution: {
-            ...definition.externalSpecifierResolution,
-            ...(definition.externalSpecifierResolution.reResolveAnyAddedExtensions
-              ? {
-                  reResolveAnyAddedExtensions: [
-                    ...definition.externalSpecifierResolution.reResolveAnyAddedExtensions,
-                  ].sort(),
-                }
-              : {}),
-          },
-        }
-      : {}),
     ...(native
       ? {
           native: {
@@ -158,10 +135,6 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   createsFunctionScope: true,
   membersAreImplicitlyInScope: true,
   supportsCrossModuleSymbols: true,
-  resolvesImportsFromDeclarations: true,
-  implicitCompilationUnit: true,
-  implicitCompilationUnitGroup: true,
-  externalSpecifierResolution: true,
   isTypeOnly: true,
   nodeTypes: true,
   native: true,

@@ -68,7 +68,17 @@ The resulting file nodes and typed edges are stored with forward and reverse adj
 
 The semantic index links definitions, scopes, exports, imports, and resolved calls. `goto`, `refs`, workspace symbols, call and type hierarchies, implementations, and impact read that index. Results use one snapshot and project-relative locations.
 
-Go-to-definition, find references, and the detailed call graph resolve a bare name through one lookup order in `src/indexer/name-resolution.ts`: the closest scope binding, then a local declared later in the same scope, then imports, compilation-unit peers, and star imports. Language rules (C++ overloads and out-of-line members, PHP role namespaces, members reached through an implicit `this` or `self`, TypeScript overload arity) are hooks in `src/indexer/name-lookup-policies/`. References verify each candidate through go-to-definition, and the graph calls the same lookup synchronously, so all three share one lookup order. The graph then applies two filters of its own: a target must be an indexed symbol (a parameter or block local has no graph node), and a call edge needs a target that accepts the call's argument count, while go-to-definition still names the only candidate so callers of a changed signature stay visible.
+Go-to-definition, find references, and the detailed call graph share one implementation of each resolution decision:
+
+- **Bare names.** `src/indexer/name-resolution.ts` looks up the closest scope binding, then a local declared later in the same scope, then imports, compilation-unit peers, and star imports. Language rules are hooks in `src/indexer/name-lookup-policies/`.
+- **Members.** `src/indexer/member-selection.ts` searches the receiver's type and then its supertypes. It stops at the first type that declares the name, and it applies visibility, static or instance scope, and the argument count. Navigation reads types from the index. The graph reads them from its ownership and inheritance edges.
+- **Receivers.** One classifier decides what a receiver is: `this` or `self`, a declared type, a constructed value, a type name, or a module.
+- **Callables.** Each indexed function stores its identity in `SymbolDef.callable`: a key, its owner, and the argument counts it accepts. A C or C++ prototype and its definition share a key, and so do TypeScript overload signatures and their implementation.
+- **Imports.** `src/util/resolution/specifier-targets.ts` maps an import specifier to its target files for both import bindings and file-graph edges.
+
+References verify each candidate through go-to-definition. The graph applies two filters of its own. A target must be an indexed symbol, because a parameter or block local has no graph node. A call edge needs a target that accepts the call's argument count, while go-to-definition still names the only candidate so callers of a changed signature stay visible.
+
+A test matrix in `tests/call-form-matrix/` checks each language and call form against all three consumers, with a same-named decoy that must not match. The [call-form coverage matrix](./coverage/call-forms.md) reports the results.
 
 Only proven semantic links are reported. Dynamic dispatch, unresolved symbols, and unsupported language features stay absent or appear as limitations; bounds report exact omissions. See the [language parity matrix](./language-parity.md) for per-language coverage.
 

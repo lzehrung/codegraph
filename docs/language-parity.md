@@ -41,7 +41,7 @@ Status key:
 
 The matrix states supported capability classes. It is not a measured accuracy table. The generated [fixture test matrix](./benchmarks/fixture-snapshot.md) reports the real per-language status and test count from the `tests/languages/*.test.ts` run that produced it; regenerate it with `npm run bench:fixtures`.
 
-The generated [call-form coverage matrix](./coverage/call-forms.md) reports per-language, per-call-form go-to-definition, references, and call-graph coverage from a metamorphic test matrix (docs/plans/2026-09-28-unified-name-resolution.md Step 1); regenerate it with `UPDATE_CALL_FORM_REPORT=1 npx vitest run tests/call-form-matrix.report.test.ts`.
+The generated [call-form coverage matrix](./coverage/call-forms.md) shows, for each language and call form, whether go-to-definition, references, and the call graph agree on the expected declaration and exclude a same-named decoy. Regenerate it with `UPDATE_CALL_FORM_REPORT=1 npx vitest run tests/call-form-matrix.report.test.ts`.
 
 Vue and Svelte show `Partial` for the native addon because the addon parses their embedded script, template, and style blocks through the JS/TS, HTML, and CSS-family grammars. The addon also ships Vue and Svelte grammars, but single-file-component indexing does not use them.
 

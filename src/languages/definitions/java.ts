@@ -20,13 +20,6 @@ const JAVA_IMPORT_QUERY = `
 export const JAVA_DEF: LanguageDefinition = {
   id: "java",
   extensions: [".java"],
-  resolvesImportsFromDeclarations: true,
-  implicitCompilationUnit: "package",
-  implicitCompilationUnitGroup: "jvm",
-  externalSpecifierResolution: {
-    separator: "dot",
-    reResolveAnyAddedExtensions: [".java"],
-  },
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

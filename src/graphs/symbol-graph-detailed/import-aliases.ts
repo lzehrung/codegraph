@@ -9,6 +9,7 @@ import {
   resolveImported,
 } from "../../indexer/navigation-resolve.js";
 import { languageHasDeclarationVisibility } from "../../indexer/declaration-visibility.js";
+import { resolveRustModuleNamespace } from "../../indexer/navigation-goto.js";
 import { resolvePhpExplicitImport } from "../../indexer/php-namespace-symbols.js";
 import {
   effectiveExplicitOrLocalBinding,
@@ -127,6 +128,16 @@ export function buildImportAliasMaps(
         return;
       }
       if (languageHasDeclarationVisibility(languageId)) {
+        // A Rust `use crate::mod_name;` binding indexes as a named import pointing at the
+        // crate root, not at an export; the module itself is a separate indexed namespace
+        // import there (`pub mod mod_name;`). Checking this first matches navigation's order.
+        if (languageId === "rust") {
+          const moduleFile = resolveRustModuleNamespace(index, imp);
+          if (moduleFile) {
+            aliasToTargetModule.set(imp.local, normalizePath(moduleFile));
+            return;
+          }
+        }
         // Navigation only admits declarations exported by the imported module. The raw
         // locals also contain private Rust/JVM names and names in other C# namespaces.
         const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });

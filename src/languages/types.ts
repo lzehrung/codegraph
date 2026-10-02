@@ -30,32 +30,6 @@ export type NativeQueryKind = "imports" | "exports" | "locals" | "importBindings
 
 export type NativeCompatibilityQueryKind = NativeQueryKind | "adHoc";
 
-/**
- * How an added file can satisfy an external import specifier.
- * Separator names stay data so a native or bundle load can read the definition.
- */
-export type ExternalSpecifierSeparator = "path" | "slash" | "dot" | "python" | "rust";
-
-export type ExternalSpecifierResolutionData = {
-  separator: ExternalSpecifierSeparator;
-  /** Directory names an import can name: the parent only, or every ancestor. */
-  importNamesDirectory?: "parent" | "ancestors";
-  /**
-   * Declaration imports name packages, not files.
-   * Any added file with one of these extensions re-resolves this language's importers.
-   */
-  reResolveAnyAddedExtensions?: readonly string[];
-  /** An added file stem may match any module segment, not only the last. */
-  matchesModuleSegments?: boolean;
-};
-
-/**
- * Files of this language can name each other's top-level declarations without an import.
- * `package` reads a package clause. `namespace` reads namespace declarations.
- * `module` is the file's directory.
- */
-export type ImplicitCompilationUnitKind = "package" | "namespace" | "module";
-
 export interface NativeCompatibility {
   normalizeQuery?: (kind: NativeCompatibilityQueryKind, query: string) => string;
   authoritativeKinds?: NativeQueryKind[];
@@ -190,26 +164,6 @@ export interface LanguageDefinition {
     shorthandPropertyIdentifier?: string[];
     memberExpression?: string;
   };
-
-  /**
-   * Imports name declarations in other files, so a content change can move the target.
-   */
-  resolvesImportsFromDeclarations?: boolean;
-
-  /** Implicit compilation unit for this language, when it has one. */
-  implicitCompilationUnit?: ImplicitCompilationUnitKind;
-
-  /**
-   * Languages that share one unit identity. Java and Kotlin use `jvm`.
-   * Absent means the language id.
-   */
-  implicitCompilationUnitGroup?: string;
-
-  /**
-   * How an added file can satisfy an external specifier.
-   * Absent means a path separator and no declaration-wide re-resolution.
-   */
-  externalSpecifierResolution?: ExternalSpecifierResolutionData;
 
   /**
    * Optional native-runtime compatibility hooks for grammar/query differences.

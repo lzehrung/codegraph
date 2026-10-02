@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { buildProjectIndex, buildSymbolGraphDetailed } from "../../src/index.js";
+import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../../src/index.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { collectDetailedDeclarations } from "../../src/graphs/symbol-graph-detailed/ast.js";
 import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
@@ -218,6 +218,108 @@ describe("Ruby query-driven locals", () => {
     // scope walker supplies structurally for class, module, and method captures.
     expect(kindByName.get("Point")).toBe("class");
     expect(kindByName.get("point")).toBe("variable");
+  });
+});
+describe("Ruby receiver navigation and calls", () => {
+  it("finds inherited instance methods through a derived constant without selecting a decoy", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-inherited-"));
+    const shapes = path.join(root, "shapes.rb");
+    const use = path.join(root, "use.rb");
+    const decoy = path.join(root, "decoy.rb");
+    try {
+      await Promise.all([
+        fsp.writeFile(shapes, "class Base\n  def run; 1; end\nend\nclass Derived < Base\nend\n"),
+        fsp.writeFile(use, "require_relative 'shapes'\ndef call_derived\n  d = Derived.new\n  d.run\nend\n"),
+        fsp.writeFile(decoy, "class Other\n  def run; -1; end\nend\n"),
+      ]);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, { file: use, line: 4, column: 5 });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") {
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(shapes));
+        expect(result.definition.range.start.line).toBe(2);
+        expect(fileIdentityKey(result.definition.file)).not.toBe(fileIdentityKey(decoy));
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Ruby class instance methods out of require_relative imports and references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-require-methods-"));
+    const shapes = path.join(root, "shapes.rb");
+    const derived = path.join(root, "derived.rb");
+    const onlyClass = path.join(root, "only-class.rb");
+    const bare = path.join(root, "bare.rb");
+    try {
+      await Promise.all([
+        fsp.writeFile(shapes, "class Base\n  def run; 1; end\nend\nclass Decoy\n  def run; -1; end\nend\n"),
+        fsp.writeFile(
+          derived,
+          "require_relative 'shapes'\nclass Derived < Base\n  def run\n    super + 1\n  end\nend\n",
+        ),
+        fsp.writeFile(onlyClass, "class Lone\n  def run; 1; end\nend\n"),
+        fsp.writeFile(bare, "require_relative 'only-class'\ndef caller\n  run\nend\n"),
+      ]);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(derived))?.imports ?? [];
+      expect(imports.some((binding) => binding.kind === "named" && binding.local === "run")).toBe(false);
+      expect((await goToDefinition(index, { file: bare, line: 3, column: 3 })).status).toBe("not_found");
+      const references = await findReferences(index, { file: shapes, line: 2, column: 7 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        const sites = references.references.map((reference) => [
+          fileIdentityKey(reference.file),
+          reference.range.start.line,
+        ]);
+        expect(sites).toContainEqual([fileIdentityKey(shapes), 2]);
+        expect(sites).not.toContainEqual([fileIdentityKey(shapes), 5]);
+        expect(references.referenceCoverage.state).toBe("complete");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records calls to bare Ruby module and class constant methods, excluding same-named decoys", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-constant-call-"));
+    const calc = path.join(root, "calc.rb");
+    const counter = path.join(root, "counter.rb");
+    const decoy = path.join(root, "decoy.rb");
+    const use = path.join(root, "use.rb");
+    try {
+      await Promise.all([
+        fsp.writeFile(calc, "module Calc\n  def self.add(a, b); a + b; end\nend\n"),
+        fsp.writeFile(counter, "class Counter\n  def self.zero; 0; end\nend\n"),
+        fsp.writeFile(decoy, "module Other\n  def self.add(a, b); -1; end\n  def self.zero; -1; end\nend\n"),
+        fsp.writeFile(
+          use,
+          "require_relative 'calc'\nrequire_relative 'counter'\ndef sum_pair; Calc.add(1, 2); end\ndef make_counter; Counter.zero; end\n",
+        ),
+      ]);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const [callerName, targetName, targetFile] of [
+        ["sum_pair", "add", calc],
+        ["make_counter", "zero", counter],
+      ]) {
+        const caller = [...graph.nodes.values()].find(
+          (node) => node.name === callerName && fileIdentityKey(node.file) === fileIdentityKey(use),
+        );
+        expect(caller).toBeDefined();
+        const callees = graph.edges
+          .filter((edge) => edge.from === caller?.id && edge.label === "calls")
+          .map((edge) => graph.nodes.get(edge.to));
+        expect(
+          callees.some(
+            (node) => node?.name === targetName && fileIdentityKey(node.file) === fileIdentityKey(targetFile),
+          ),
+        ).toBe(true);
+        expect(callees.some((node) => node && fileIdentityKey(node.file) === fileIdentityKey(decoy))).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

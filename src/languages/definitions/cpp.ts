@@ -21,7 +21,6 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
   includeFieldIdentifier: true,
   usesQueryDrivenLocals: true,
   membersAreImplicitlyInScope: true,
-  resolvesImportsFromDeclarations: true,
   blocks: (functionNameQuery) => [
     cFamilyFunctionBlock(functionNameQuery),
     cFamilyTypeIdentifierBlock("class_specifier", "class"),

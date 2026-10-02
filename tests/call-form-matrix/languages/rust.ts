@@ -202,21 +202,6 @@ export const rustCells: MatrixCell[] = [
     decoy: { file: "src/decoy_mod.rs", line: 1, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "src/consumer.rs", fromName: "sum_pair" },
-    knownGap: {
-      reason:
-        "a module-path call used directly as a call's callee (`calc::add(1, 2)`), without first bringing the " +
-        "name into scope through a `use` import, is not resolved at all: goToDefinition returns not_found " +
-        "and the detailed graph records no edge for the call site, not even a generic one",
-      classification: "common-code-miss",
-      repro:
-        "src/calc.rs: `pub fn add(a: i32, b: i32) -> i32 { a + b }`; src/consumer.rs has `use crate::calc;` " +
-        "then calls `calc::add(1, 2)` directly. Current: goToDefinition on `add` returns not_found; " +
-        "buildSymbolGraphDetailed reports zero edges from sum_pair. The identical function reached through " +
-        "`use crate::calc::add;` and a bare `add(1, 2)` call resolves correctly (rust/bare-call), and " +
-        "`Counter::zero()` through a type path also resolves correctly (rust/static-receiver), so the gap is " +
-        "specific to a module path used directly as a call's callee. Expected: resolves to calc::add, with a " +
-        "`calls` edge from sum_pair.",
-    },
   },
   {
     id: "rust/inherited-member",
@@ -255,19 +240,5 @@ export const rustCells: MatrixCell[] = [
     decoy: { file: "src/main.rs", line: 9, token: "run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "src/main.rs", fromName: "call_derived" },
-    knownGap: {
-      reason:
-        "a type that implements a trait but adds no members of its own does not find the trait's default " +
-        "method implementation (the same cross-language gap as C++, PHP, C#, Kotlin, Java, Swift, " +
-        "TypeScript, JavaScript, and Ruby, reproduced here through Rust's own inheritance-like mechanism: a " +
-        "trait default method)",
-      classification: "common-code-miss",
-      repro:
-        "`trait Greet { fn run(&self) -> i32 { 1 } }`; `struct Derived; impl Greet for Derived {}` (empty " +
-        "impl, relies on the default); `fn call_derived() -> i32 { let d = Derived; d.run() }`. Current: " +
-        "goToDefinition on `run` returns not_found. As with Ruby, the detailed graph's own receiver-call " +
-        "resolver already finds the right target (a `calls` edge from call_derived to Greet's default run " +
-        "exists), so the graph is ahead of go-to-definition. Expected: resolves to the trait's default run.",
-    },
   },
 ];

@@ -167,6 +167,11 @@ export type MatrixCell = {
   decoyAmbiguous?: boolean;
   /** A variant of the project with the declaration moved; the answer must follow it. */
   moved?: MovedVariant;
+  /**
+   * The use token is a keyword, such as Ruby's bare `super`, not a name. References of the
+   * declaration do not list a keyword, so the cell checks that they exclude it.
+   */
+  keywordUse?: boolean;
   /** Set when this cell fails today. The suite still runs it, through `it.fails`, so a fix is visible. */
   knownGap?: KnownGap;
 };

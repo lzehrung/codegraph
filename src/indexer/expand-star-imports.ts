@@ -21,17 +21,17 @@ const STYLESHEET_LANGUAGE_IDS = new Set(["css", "scss", "less"]);
  * and id selector, which are not importable names; only the module-level
  * mixins, functions, variables and placeholders the exports query captures are.
  */
-function symbolsForStarImport(target: ModuleIndex, isStylesheet: boolean): StarImportSymbol[] {
+function symbolsForStarImport(target: ModuleIndex, isStylesheet: boolean, isRuby: boolean): StarImportSymbol[] {
   const localExports: StarImportSymbol[] = [];
   for (const entry of target.exports) {
-    if (entry.type === "local") {
+    if (entry.type === "local" && (!isRuby || !entry.target.isMember)) {
       localExports.push({ name: entry.exportedAs, symbol: entry.target });
     }
   }
   if (localExports.length || isStylesheet) return localExports;
   const visible: StarImportSymbol[] = [];
   for (const local of target.locals) {
-    if (local.localName.startsWith("_")) continue;
+    if (local.localName.startsWith("_") || (isRuby && local.isMember)) continue;
     visible.push({ name: local.localName, symbol: local });
   }
   return visible;
@@ -85,6 +85,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
       const exportedSymbols = symbolsForStarImport(
         target,
         !!targetSupport && STYLESHEET_LANGUAGE_IDS.has(targetSupport.id),
+        targetSupport?.id === "ruby",
       );
       // `.h` defaults to C in filename-only lookup. Only extracted C tags prove the namespace split.
       const hasCTagExports = exportedSymbols.some(({ symbol }) => Boolean(symbol.cTag));

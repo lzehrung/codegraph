@@ -216,19 +216,6 @@ export const tsCells: MatrixCell[] = [
     decoy: { file: "decoy.ts", line: 2, token: "run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.ts", fromName: "callDerived" },
-    knownGap: {
-      reason:
-        "a typed-local receiver of a derived class that adds no members of its own does not find a member " +
-        "declared only on the base class (the same cross-language gap as C++, PHP, C#, Kotlin, Java, Swift, " +
-        "Ruby, and JavaScript)",
-      classification: "common-code-miss",
-      repro:
-        "shapes.ts: `export class Base { run(): number { return 1; } }` and `export class Derived extends " +
-        "Base {}`; use.ts calls `const d = new Derived(); d.run();`. Current: goToDefinition on `run` returns " +
-        "not_found. Expected: resolves to Base.run. The detailed graph's own receiver-call resolver already " +
-        "records a `calls` edge from callDerived to Base.run for this exact site, so the graph itself is " +
-        "ahead of go-to-definition here.",
-    },
   },
   {
     id: "ts/super-call",

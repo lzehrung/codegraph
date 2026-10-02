@@ -10,8 +10,7 @@ import {
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
 import { listChangedFiles, listUntrackedFiles, type GitDiscoveryCache } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
-import { supportById } from "../languages.js";
-import type { ExternalSpecifierSeparator } from "../languages/types.js";
+import { IMPORT_RESOLUTION_ROWS, type ExternalSpecifierSeparator } from "./import-resolution-tables.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS, stripKnownResolutionExtension } from "../util/resolution-candidates.js";
@@ -203,7 +202,7 @@ function separatorPattern(separator: ExternalSpecifierSeparator): RegExp {
 }
 
 function externalSpecifierResolutionRule(languageId: string): ExternalSpecifierResolutionRule {
-  const data = supportById(languageId)?.externalSpecifierResolution;
+  const data = IMPORT_RESOLUTION_ROWS[languageId]?.externalSpecifierResolution;
   if (!data) return DEFAULT_EXTERNAL_SPECIFIER_RULE;
   return {
     separator: separatorPattern(data.separator),

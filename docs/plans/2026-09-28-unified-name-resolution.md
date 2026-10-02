@@ -1,6 +1,6 @@
 # Plan: unified resolution for navigation, references, and call graphs
 
-Status: in progress on branch `refactor/unified-resolution`. Revised 2026-10-01 after a code
+Status: implemented on branch `refactor/unified-resolution`; in review. Revised 2026-10-01 after a code
 audit of `main` at 2.4.0 (`ed1b0ba2`).
 
 ## Goal
@@ -94,15 +94,15 @@ gap is marked with its reason and stays visible in the report.
 
 ### Step 2: one language-capability registry and one specifier resolver
 
-- Add resolution capabilities to `LanguageDefinition` (`src/languages/types.ts`): whether imports
-  resolve through declarations, the implicit compilation-unit kind (package, namespace, module),
-  and the external-specifier re-resolution rule.
-- Derive `DECLARATION_RESOLVED_IMPORT_LANGUAGES`, `EXTERNAL_SPECIFIER_RESOLUTION_RULES`, and
-  `IMPLICIT_UNIT_LANGUAGES` from the definitions. Delete the hand-written lists.
+- Put the resolution capabilities in one table keyed by language id, next to import resolution:
+  whether imports resolve through declarations, the implicit compilation-unit kind (package,
+  namespace, module), and the external-specifier re-resolution rule.
+- Derive `DECLARATION_RESOLVED_IMPORT_LANGUAGES`, the external-specifier rule, and
+  `IMPLICIT_UNIT_LANGUAGES` from the table. Delete the hand-written lists.
 - One function maps an import specifier to target files for a language. Import bindings and
   file-graph edges both call it. The C# rule that a `using` directive never names another
   language's file exists once.
-- Behavior does not change.
+- Where the two callers disagree today, pick one rule, with a test that fails before.
 
 ### Step 3: canonical callable identity
 
@@ -140,21 +140,43 @@ gap is marked with its reason and stays visible in the report.
   - `src/`: index 2,274 ms, detailed graph 3,862 ms, 27,436 edges.
   - `tests/samples`: index 4,980 ms, detailed graph 2,936 ms, 1,026 edges.
   - `tests/samples/cpp`: first build 1,612 ms, second build 537 ms.
-- [ ] Step 1: matrix harness and cell table.
-- [ ] Step 1: matrix cells for every semantic language and call form.
-- [ ] Step 1: metamorphic checks (decoy, warm versus cold, move).
-- [ ] Step 1: coverage report, linked from `docs/language-parity.md`.
-- [ ] Step 1: fix or record each gap the matrix finds.
-- [ ] Step 2: capabilities on `LanguageDefinition`; the three lists derive from them.
-- [ ] Step 2: one specifier-to-files resolver for bindings and graph edges.
-- [ ] Step 3: callable identity on `SymbolDef`, computed at index time, cached and validated.
-- [ ] Step 3: C++, TypeScript, graph aliases, and impact read the identity.
-- [ ] Step 4a: shared member selection with navigation and graph owner models.
-- [ ] Step 4b: shared receiver classification.
-- [ ] Step 4c: graph-only bare-name precedence moved into lookup policies.
-- [ ] Docs: `how-it-works.md`, `adding-language-support.md`, `language-parity.md`,
+- [x] Step 1: matrix harness and cell table (`tests/call-form-matrix/`).
+- [x] Step 1: 127 cells across 15 languages; a form a language cannot express is omitted with a reason.
+- [x] Step 1: metamorphic checks (unrelated decoy file, warm versus cold build, moved declaration).
+- [x] Step 1: generated report `docs/coverage/call-forms.md`, linked from `docs/language-parity.md`.
+- [x] Step 1: the matrix found 29 gaps; all are fixed, each with a test in its language suite.
+- [x] Step 2: capabilities in one table, `src/indexer/import-resolution-tables.ts` (a subsystem
+      table, as `docs/adding-language-support.md` requires, not `LanguageDefinition` fields).
+- [x] Step 2: one specifier-to-files resolver, `src/util/resolution/specifier-targets.ts`, for
+      bindings and graph edges. Six C#, Ruby, Python, Rust, and SCSS divergences now agree.
+- [x] Step 3: `SymbolDef.callable`, computed at index time (`src/indexer/callable-identity.ts`),
+      cached and validated (epoch 76, parsed cache 7, snapshot 12).
+- [x] Step 3: C++, TypeScript, graph aliases, scope bindings, and impact read the identity.
+- [x] Step 4a: `src/indexer/member-selection.ts` with navigation and graph owner models.
+- [x] Step 4b: one receiver classifier (`classifyReceiver`) for navigation and the graph.
+- [x] Step 4c: graph-only bare-name precedence moved into lookup policies; `hasNonModuleBinding`
+      is gone.
+- [x] Docs: `how-it-works.md`, `adding-language-support.md`, `language-parity.md`,
       `AGENTS.md`, and the changelog.
-- [ ] Full gate (`npm run check`), performance within 5% of the baseline, review, PR.
+- [x] Gate: typecheck, lint, format, build, native tests, coverage run (6,194 passed), fixture
+      cleanliness. `security:production` fails on a new `piscina` advisory that also affects
+      `main`; the fix is a separate dependency change.
+- [ ] Review and PR.
+
+## Results
+
+- Places that list declaration-resolved languages: 4 to 1 table.
+- Specifier-to-file dispatch implementations: 2 to 1.
+- Callable identity forms: 5 to 1. C and C++ cross-file folding through includes and
+  `using` declarations stays a query-time fact, because it needs other files.
+- Member-selection implementations: 2 to 1. Module and namespace export chains
+  (`member-chains.ts`) stay separate: they are not class membership.
+- Detailed graph on the 2.4.0 `src/` tree: 3,675 ms on 2.4.0, 3,148 ms on this branch (median of
+  5), same 27,436 edges. Index time: 1,930 ms and 1,992 ms. `tests/samples`: same graph time
+  and the same 1,026 edges.
+- Source size grew: `src/` has 2,693 lines added and 1,282 removed. The removed duplication is
+  smaller than the code for the 29 gap fixes. The first version of this plan expected a net
+  decrease; that target is not met.
 
 ## Rules for every step
 

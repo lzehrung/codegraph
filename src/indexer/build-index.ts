@@ -9,7 +9,7 @@ import {
   supportForFileWithoutHeaderSample,
   type LanguageSupport,
 } from "../languages.js";
-import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "./declaration-languages.js";
+import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "./import-resolution-tables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage, type WorkspaceConfig } from "../util/workspace.js";
 import {

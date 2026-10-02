@@ -294,6 +294,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     memberCallNamesFreeFunctionOmittedReason: "A call with a receiver names a method, not a free function.",
   },
   rust: {
+    extraTraversalTypes: ["scoped_identifier"],
     memberAccessShapes: [
       {
         nodeTypes: ["scoped_identifier"],

@@ -1,12 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type {
-  ExternalSpecifierResolutionData,
-  ImplicitCompilationUnitKind,
-  LanguageDefinition,
-  NativeCompatibility,
-  SyntaxNodeLike,
-} from "./languages/types.js";
+import type { LanguageDefinition, NativeCompatibility, SyntaxNodeLike } from "./languages/types.js";
 import { getAllLanguages, getLanguageById } from "./languages/registry.js";
 import { maskJsLikeCommentsAndStrings } from "./util/comments.js";
 import "./languages/all.js";
@@ -39,10 +33,6 @@ export type LanguageSupport = {
   isTypeOnly: (stmtText: string) => boolean;
   usesQueryDrivenLocals: boolean;
   supportsExportFromReferences: boolean;
-  resolvesImportsFromDeclarations: boolean;
-  implicitCompilationUnit?: ImplicitCompilationUnitKind;
-  implicitCompilationUnitGroup?: string;
-  externalSpecifierResolution?: ExternalSpecifierResolutionData;
   native?: NativeCompatibility;
   normalizeIdentifier: (name: string) => string;
 };
@@ -64,10 +54,6 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     isTypeOnly: def.isTypeOnly || (() => false),
     exportScopeBlockers: def.exportScopeBlockers ?? [],
     supportsExportFromReferences: def.supportsExportFromReferences ?? false,
-    resolvesImportsFromDeclarations: def.resolvesImportsFromDeclarations ?? false,
-    ...(def.implicitCompilationUnit ? { implicitCompilationUnit: def.implicitCompilationUnit } : {}),
-    ...(def.implicitCompilationUnitGroup ? { implicitCompilationUnitGroup: def.implicitCompilationUnitGroup } : {}),
-    ...(def.externalSpecifierResolution ? { externalSpecifierResolution: def.externalSpecifierResolution } : {}),
     usesQueryDrivenLocals: def.usesQueryDrivenLocals || false,
     normalizeIdentifier: def.normalizeIdentifier || ((name) => name),
     ...(def.native ? { native: def.native } : {}),
