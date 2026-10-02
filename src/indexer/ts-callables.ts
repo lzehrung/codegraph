@@ -47,18 +47,27 @@ const TYPESCRIPT_MEMBER_CONTAINER_TYPES = new Set([
 /**
  * Class, interface, enum, type-literal, object-literal, and namespace/module bodies each own
  * their callables, so a type literal's `m(): void` signature and an object literal's `m() {}`
- * are never one overload set. "ambient_declaration" is a declaration wrapper, not a callable
- * container: nested "internal_module"/"module" nodes are found first, while standalone ambient
- * signatures remain in the file-level group.
+ * are never one overload set. A function or other block body is its own lexical scope: a local
+ * `function helper() {}` inside a method never joins the class member `helper`. Namespace and
+ * `declare global` bodies are statement blocks too, but they belong to their declaration.
+ * "ambient_declaration" is a declaration wrapper, not a callable container: nested
+ * "internal_module"/"module" nodes are found first, while standalone ambient signatures remain
+ * in the file-level group.
  */
 export function typescriptCallableContainerKeyForNode(node: SyntaxNodeLike): string {
   let current: SyntaxNodeLike | null = node;
   while (current) {
     if (TYPESCRIPT_MEMBER_CONTAINER_TYPES.has(current.type)) return "type:" + current.startIndex;
     if (current.type === "internal_module" || current.type === "module") return "namespace:" + current.startIndex;
+    if (current.type === "statement_block" && !isDeclarationBody(current)) return "block:" + current.startIndex;
     current = current.parent;
   }
   return "module";
+}
+
+function isDeclarationBody(block: SyntaxNodeLike): boolean {
+  const owner = block.parent?.type;
+  return owner === "internal_module" || owner === "module" || owner === "ambient_declaration";
 }
 
 export function typescriptCallableContainerKey(tree: SyntaxTreeLike, start: number, end: number): string {

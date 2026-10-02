@@ -26,8 +26,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * changed, or deleted. Older rows can keep bindings from an old file set.
  * Epoch 76 stores canonical callable identities and their call-form arities in module rows.
  * Epoch 77 updates Ruby relative imports, JVM reference candidates, and inherited member selection.
+ * Epoch 78 gives TypeScript functions declared in a block body their own callable key scope.
  */
-export const CORE_ALGORITHM_EPOCH = 77;
+export const CORE_ALGORITHM_EPOCH = 78;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

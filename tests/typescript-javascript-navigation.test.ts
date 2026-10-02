@@ -423,6 +423,37 @@ describe("TypeScript and JavaScript navigation", () => {
     }
   });
 
+  it("keeps a function local to a method body out of the class member's overload group", async () => {
+    const source = [
+      "export abstract class Worker {",
+      "  abstract helper(): number;",
+      "  run(): number {",
+      "    function helper(): number { return 1; }",
+      "    return this.helper() + helper();",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const fixture = await project({ "worker.ts": source });
+    try {
+      const file = fixture.file("worker.ts");
+      const member = await goToDefinition(fixture.index, { file, line: 5, column: columnOf(source, 5, "helper()") });
+      expect(member.status === "ok" && member.definition.range.start.line).toBe(2);
+      const local = await goToDefinition(fixture.index, { file, line: 5, column: columnOf(source, 5, "+ helper") + 2 });
+      expect(local.status === "ok" && local.definition.range.start.line).toBe(4);
+
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(callTargetIds(graph, "run").sort()).toEqual(
+        [
+          `${file}::helper::${tokenIndex(source, 2, "helper")}`,
+          `${file}::helper::${tokenIndex(source, 4, "helper")}`,
+        ].sort(),
+      );
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it("selects later TypeScript overload signatures by arity across navigation, references, and graph edges", async () => {
     const overloads = [
       "export interface Parser {",
