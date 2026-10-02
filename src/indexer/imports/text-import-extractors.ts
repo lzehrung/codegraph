@@ -13,7 +13,7 @@ import {
 } from "../../languages/import-statement-parsers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { extractRustModPathAttribute, rustGraphModuleSpecifier } from "../../util/resolution/rust.js";
-import { extractPythonSpecifiers, type ModuleSpecifier } from "../../util/specifiers.js";
+import { extractPythonSpecifiers, isRubyLoadForm, type ModuleSpecifier } from "../../util/specifiers.js";
 import { maskTrivia } from "../../util/trivia.js";
 import { maskImportBindingTrivia } from "./binding-ranges.js";
 
@@ -309,7 +309,7 @@ function extractRubyImports(source: string, sink: TextImportSink): void {
     const expectedPrefix = match[1] === "autoload" ? RUBY_AUTOLOAD_PREFIX_PATTERN : RUBY_DIRECT_ARGUMENT_PREFIX_PATTERN;
     if (!expectedPrefix.test(prefix)) continue;
     const spec = literal.value.trim();
-    if (spec) sink.specifier({ spec, typeOnly: false });
+    if (spec && isRubyLoadForm(match[1])) sink.specifier({ spec, typeOnly: false, rubyLoadForm: match[1] });
   }
 }
 

@@ -32,15 +32,15 @@ Status key:
 
 | Language   | Cells | Known gaps |
 | ---------- | ----- | ---------- |
-| TypeScript | 10    | 0          |
+| TypeScript | 11    | 0          |
 | TSX        | 10    | 0          |
-| JavaScript | 9     | 0          |
+| JavaScript | 10    | 0          |
 | Python     | 9     | 0          |
 | PHP        | 9     | 0          |
 | Go         | 7     | 0          |
 | Java       | 11    | 0          |
 | C          | 1     | 0          |
-| C++        | 10    | 0          |
+| C++        | 11    | 0          |
 | C#         | 11    | 0          |
 | Kotlin     | 10    | 0          |
 | Ruby       | 8     | 0          |
@@ -48,7 +48,7 @@ Status key:
 | Swift      | 10    | 0          |
 | Zig        | 7     | 0          |
 
-Total: 130 cells across 15 languages, 0 known gaps.
+Total: 133 cells across 15 languages, 0 known gaps.
 
 ## Moved-declaration coverage
 

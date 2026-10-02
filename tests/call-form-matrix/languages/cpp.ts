@@ -193,6 +193,32 @@ export const cppCells: MatrixCell[] = [
     edge: { label: "calls", fromFile: "use.cpp", fromName: "callDerived" },
   },
   {
+    id: "cpp/inherited-member-static-hides",
+    language: "cpp",
+    callForm: "inherited-member",
+    files: {
+      "shapes.hpp": [
+        "class Base {",
+        "public:",
+        "  int run() { return 1; }",
+        "};",
+        "class Derived : public Base {",
+        "public:",
+        "  static int run(int value) { return value; }",
+        "};",
+        "",
+      ].join("\n"),
+      "use.cpp": ['#include "shapes.hpp"', "int callDerived() {", "  Derived d;", "  return d.run();", "}", ""].join(
+        "\n",
+      ),
+    },
+    use: { file: "use.cpp", line: 4, token: "run" },
+    expected: "not_found",
+    decoy: { file: "shapes.hpp", line: 3, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.cpp", fromName: "callDerived" },
+  },
+  {
     id: "cpp/super-call",
     language: "cpp",
     callForm: "super-call",

@@ -17,6 +17,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - C++: a namespace alias such as `namespace dm = a::b;` is followed, and `Base::run()` called from an override now has a call-graph edge.
 - Kotlin and Java: an imported function or static method with several overloads goes to the overload that accepts the call's argument count. Before, none of the calls resolved. A count that two overloads accept stays unresolved.
 - Swift: a call through a `typealias` of a type, such as `Fast.add()`, resolves.
+- JavaScript and TypeScript: `new Derived().run()` goes to the inherited instance method when `Derived` declares only a `static run()`. In C++, Java, C#, PHP, and Python, a static member with that name still hides the inherited one, as in those languages.
+- Ruby: `require_relative "foo"` resolves next to the requiring file. Before, it was looked up from the project root, so in a subdirectory it stayed unresolved or picked a same-named file at the root. `require "foo"` keeps its rule.
 - Java and Kotlin: `import p.C` binds class `C` even when a package `p.C` also exists, and `import p.C.*` names the package. Import bindings, file-graph edges, and go-to-definition now agree on the target.
 - Java and C#: a call that only an inherited overload accepts, such as `this.hit(1)` with `Base.hit()` and `GrandBase.hit(int)`, now has a call-graph edge to `GrandBase.hit`, as go-to-definition already found. An override with the same parameters still hides the ancestor method.
 - Ruby: `Calc.add` and `Counter.zero` calls through a module or class name have call-graph edges. `require_relative` no longer makes instance methods importable names, so references of a method no longer list same-named methods of unrelated classes.

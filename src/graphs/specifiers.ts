@@ -40,6 +40,7 @@ import {
   cFamilyImportFormFromText,
   extractJsTsSpecifiers,
   isJsTsTypeOnlySpecifierStatement,
+  isRubyLoadForm,
   type ModuleSpecifier,
 } from "../util/specifiers.js";
 
@@ -138,6 +139,7 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
           ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
           ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
           ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
+          ...(entry.rubyLoadForm ? { rubyLoadForm: entry.rubyLoadForm } : {}),
         },
   );
 }
@@ -145,7 +147,7 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
 function moduleSpecifierKey(entry: ModuleSpecifier): string {
   return `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.phpImportType ?? ""}::${
     entry.exportCondition ?? ""
-  }::${entry.pathAttribute ?? ""}::${entry.includeForm ?? ""}::${entry.jvmPackageWildcard ? 1 : 0}`;
+  }::${entry.pathAttribute ?? ""}::${entry.includeForm ?? ""}::${entry.rubyLoadForm ?? ""}::${entry.jvmPackageWildcard ? 1 : 0}`;
 }
 
 function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpecifier[], seen: Set<string>): void {
@@ -443,6 +445,8 @@ export function collectModuleSpecifiersFromSource(
           support.id === "java"
             ? parseJavaImportStatement(maskImportBindingTrivia(stmtText, "java").replace(/\s*\.\s*/gu, "."))
             : null;
+        const methodText = match.captures.find((capture) => capture.name === "method")?.text;
+        const rubyLoadForm = support.id === "ruby" && isRubyLoadForm(methodText) ? methodText : undefined;
         for (const capture of match.captures) {
           if (capture.name !== "from") continue;
           const includeForm = isCFamily ? cFamilyImportFormFromText(stmtText, capture.text) : undefined;
@@ -453,6 +457,7 @@ export function collectModuleSpecifiersFromSource(
             ...(stylesheetImport ? { resolutionKind: "stylesheet" } : {}),
             ...(exportCondition ? { exportCondition } : {}),
             ...(includeForm ? { includeForm } : {}),
+            ...(rubyLoadForm ? { rubyLoadForm } : {}),
           });
         }
       }

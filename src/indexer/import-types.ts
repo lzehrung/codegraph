@@ -1,5 +1,5 @@
 import type { FileId, Range } from "../types.js";
-import type { CFamilyIncludeForm } from "../util/specifiers.js";
+import type { CFamilyIncludeForm, RubyLoadForm } from "../util/specifiers.js";
 
 export type ImportBinding =
   | {
@@ -77,6 +77,7 @@ export type ImportBinding =
       confidence?: number;
       /** Present for a C/C++ include. Older cached bindings omit it. */
       includeForm?: CFamilyIncludeForm;
+      rubyLoadForm?: RubyLoadForm;
       /**
        * C# `using static N.T;`: the normalized qualified type name `N.T`. Only static members and
        * nested types of that type in the resolved file are imported, so generic star lookup and

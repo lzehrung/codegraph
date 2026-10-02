@@ -28,6 +28,7 @@ export type MemberSelectionOptions = {
   scope: MemberScope;
   useFile: string;
   phpCaseInsensitive?: boolean;
+  separateMemberScopes?: boolean;
   classAncestorsOnly?: boolean;
   startAtAncestor?: boolean;
   keepUniqueArityMismatch?: boolean;
@@ -36,6 +37,12 @@ export type MemberSelectionOptions = {
   firstDeclarationWins?: boolean;
 };
 
+/** Static and instance members have independent lookup chains in these languages. */
+const SEPARATE_MEMBER_SCOPES = new Set(["js", "ts", "tsx", "ruby", "swift", "kotlin"]);
+
+export function hasSeparateMemberScopes(languageId: string): boolean {
+  return SEPARATE_MEMBER_SCOPES.has(languageId);
+}
 const MAX_DEPTH = 16;
 
 /** Java, Kotlin, and C# inherit overloads beyond the first declaring class. */
@@ -107,7 +114,12 @@ function hasNamedAncestor<Owner, Member>(
       if (seen.has(key)) continue;
       seen.add(key);
       for (const member of model.members(owner)) {
-        if (memberNameMatches(member, model, options, queryName) && model.visible(member, options.useFile)) return true;
+        if (
+          memberNameMatches(member, model, options, queryName) &&
+          model.visible(member, options.useFile) &&
+          (!options.separateMemberScopes || options.scope === "any" || model.scope(member) === options.scope)
+        )
+          return true;
       }
       next.push(...model.supertypes(owner, false));
     }
@@ -137,12 +149,13 @@ export function selectMember<Owner, Member>(
       const ownerKey = model.ownerKey(owner);
       for (const member of model.members(owner)) {
         if (!memberNameMatches(member, model, options, queryName) || !model.visible(member, options.useFile)) continue;
-        named = true;
-        if (options.scope === "any" || model.scope(member) === options.scope) {
+        const matchesScope = options.scope === "any" || model.scope(member) === options.scope;
+        if (matchesScope || !options.separateMemberScopes) named = true;
+        if (matchesScope) {
           candidates.push(member);
           owners?.set(member, ownerKey);
         }
-        if (options.firstDeclarationWins) break;
+        if (options.firstDeclarationWins && (matchesScope || !options.separateMemberScopes)) break;
       }
     }
     const unique = distinctCandidates(candidates, model, options.argumentCount);

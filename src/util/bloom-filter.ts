@@ -10,6 +10,8 @@ import type { LanguageSupport } from "../languages.js";
 import { fileIdentityKey } from "./paths.js";
 import crypto from "node:crypto";
 
+export const JAVA_UNICODE_ESCAPE_BLOOM_TOKEN = "__codegraph_java_unicode_escape__";
+
 /**
  * Calculate optimal bloom filter parameters for a target false positive rate.
  * @param expectedItems - Expected number of items to be added
@@ -193,6 +195,7 @@ export function buildBloomFilterFromSource(
     unique.add(normalized);
     if (isPhp) unique.add(foldPhpIdentifierCase(normalized));
   }
+  if (support.id === "java" && source.includes("\\u")) unique.add(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN);
 
   const filter = BloomFilter.createOptimal(unique.size || 100, falsePositiveRate);
   for (const identifier of unique) {

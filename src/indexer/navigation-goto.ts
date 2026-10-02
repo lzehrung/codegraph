@@ -80,7 +80,12 @@ import {
   isSwiftExtensionContainer,
   sharedOwnerCanUseMembers,
 } from "./shared-owner-identity.js";
-import { inheritsMemberOverloads, selectMember, type MemberModel } from "./member-selection.js";
+import {
+  hasSeparateMemberScopes,
+  inheritsMemberOverloads,
+  selectMember,
+  type MemberModel,
+} from "./member-selection.js";
 import {
   SymbolKind,
   type GoToResult,
@@ -1806,6 +1811,7 @@ async function resolveKeywordReceiverMember(
     keepUniqueArityMismatch: !startAtAncestor,
     inheritOverloads: spansHierarchy,
     phpCaseInsensitive: current.context.sup.id === "php",
+    separateMemberScopes: hasSeparateMemberScopes(current.context.sup.id),
   });
   if (report) {
     report.named = selected.named;

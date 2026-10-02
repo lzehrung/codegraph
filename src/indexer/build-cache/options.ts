@@ -25,8 +25,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 75 re-resolves warm-cache import bindings after declaration-language files are added,
  * changed, or deleted. Older rows can keep bindings from an old file set.
  * Epoch 76 stores canonical callable identities and their call-form arities in module rows.
+ * Epoch 77 updates Ruby relative imports, JVM reference candidates, and inherited member selection.
  */
-export const CORE_ALGORITHM_EPOCH = 76;
+export const CORE_ALGORITHM_EPOCH = 77;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

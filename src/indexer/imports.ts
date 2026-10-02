@@ -140,7 +140,8 @@ export async function collectImportsForFile(
   ): Promise<ResolvedImportTarget> => {
     const resolutionKind = resolverOpts?.resolutionKind;
     const includeForm = resolverOpts?.includeForm;
-    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}\0${includeForm ?? ""}\0${resolverOpts?.jvmPackageWildcard ? "package" : "symbol"}\0${resolverOpts?.pathAttribute ?? ""}\0${resolverOpts?.statementStartIndex ?? ""}`;
+    const rubyLoadForm = resolverOpts?.rubyLoadForm;
+    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}\0${includeForm ?? ""}\0${rubyLoadForm ?? ""}\0${resolverOpts?.jvmPackageWildcard ? "package" : "symbol"}\0${resolverOpts?.pathAttribute ?? ""}\0${resolverOpts?.statementStartIndex ?? ""}`;
     const cached = resolvedImportCache.get(cacheKey);
     if (cached) return await cached;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
@@ -156,6 +157,7 @@ export async function collectImportsForFile(
         ...(phpImportType ? { phpImportType } : {}),
         ...(resolutionKind ? { resolutionKind } : {}),
         ...(includeForm ? { includeForm } : {}),
+        ...(rubyLoadForm ? { rubyLoadForm } : {}),
         ...(resolverOpts?.pathAttribute ? { pathAttribute: resolverOpts.pathAttribute } : {}),
         ...(resolverOpts?.statementStartIndex !== undefined
           ? { statementStartIndex: resolverOpts.statementStartIndex }

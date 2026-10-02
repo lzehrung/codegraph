@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
 import { isGoExportedMemberName } from "../../indexer/declaration-visibility.js";
-import { inheritsMemberOverloads, selectMember, type MemberModel } from "../../indexer/member-selection.js";
+import {
+  hasSeparateMemberScopes,
+  inheritsMemberOverloads,
+  selectMember,
+  type MemberModel,
+} from "../../indexer/member-selection.js";
 import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
@@ -1880,6 +1885,7 @@ export function emitReceiverCallEdges(
     // coalesced type identity so lookup starts on the whole member set.
     const owner = ownerAnchors.get(rawOwner) ?? rawOwner;
     const memberScope = candidate.memberScope ?? inferCallMemberScope(candidate.site, sourceCache);
+    const languageId = supportForFileWithoutHeaderSample(candidate.site.file, languageExtensions)?.id ?? "";
     activeCandidate = candidate;
     const lookup = selectMember([owner], model, {
       name: candidate.memberName,
@@ -1887,10 +1893,9 @@ export function emitReceiverCallEdges(
       scope: memberScope,
       useFile: candidate.site.file,
       phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
+      separateMemberScopes: hasSeparateMemberScopes(languageId),
       startAtAncestor: candidate.viaSupertypes,
-      inheritOverloads: inheritsMemberOverloads(
-        supportForFileWithoutHeaderSample(candidate.site.file, languageExtensions)?.id ?? "",
-      ),
+      inheritOverloads: inheritsMemberOverloads(languageId),
     });
     let receiverDisposition: "none" | "resolved" | "ambiguous" =
       lookup.status === "unique" ? "resolved" : lookup.status;

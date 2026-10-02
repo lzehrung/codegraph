@@ -15,7 +15,7 @@ import { extractRustModPathAttribute } from "../../util/resolution/rust.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
 import type { Range } from "../../types.js";
-import type { CFamilyIncludeForm } from "../../util/specifiers.js";
+import type { CFamilyIncludeForm, RubyLoadForm } from "../../util/specifiers.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
 
@@ -58,6 +58,7 @@ export type ImplicitImportBindingArgs = {
   localRange?: Range;
   wildcard?: boolean;
   includeForm?: CFamilyIncludeForm;
+  rubyLoadForm?: RubyLoadForm;
 };
 
 export type ApplyStatementImportOverride = (
@@ -541,9 +542,9 @@ function appendCsharpImplicitBinding(
 
 function appendRubyImplicitBinding(
   context: LanguageSpecificImportContext,
-  { from, resolved }: ImplicitImportBindingArgs,
+  { from, resolved, rubyLoadForm }: ImplicitImportBindingArgs,
 ): void {
-  context.pushBinding({ kind: "star", from, resolved });
+  context.pushBinding({ kind: "star", from, resolved, ...(rubyLoadForm ? { rubyLoadForm } : {}) });
 }
 
 function appendGoImplicitBinding(

@@ -71,7 +71,10 @@ The semantic index links definitions, scopes, exports, imports, and resolved cal
 Go-to-definition, find references, and the detailed call graph share one implementation of each resolution decision:
 
 - **Bare names.** `src/indexer/name-resolution.ts` looks up the closest scope binding, then a local declared later in the same scope, then imports, compilation-unit peers, and star imports. Language rules are hooks in `src/indexer/name-lookup-policies/`.
-- **Members.** `src/indexer/member-selection.ts` searches the receiver's type and then its supertypes. It stops at the first type that declares the name, and it applies visibility, static or instance scope, and the argument count. Navigation reads types from the index. The graph reads them from its ownership and inheritance edges.
+- **Members.** `src/indexer/member-selection.ts` searches the receiver's type and then its supertypes, and applies visibility, static or instance scope, and the argument count. Navigation reads types from the index. The graph reads them from its ownership and inheritance edges.
+  - The search stops at the first type that declares the name, because that declaration hides the ones above it.
+  - Java, Kotlin, and C# overloads span the class hierarchy. There the search continues to ancestors for an overload that accepts the call, and it skips an ancestor method that a same-signature override replaces.
+  - In JavaScript, TypeScript, Ruby, Swift, and Kotlin, static and instance members are separate, so a member of the other kind does not hide the name.
 - **Receivers.** One classifier decides what a receiver is: `this` or `self`, a declared type, a constructed value, a type name, or a module.
 - **Callables.** Each indexed function stores its identity in `SymbolDef.callable`: a key, its owner, and the argument counts it accepts. A C or C++ prototype and its definition share a key, and so do TypeScript overload signatures and their implementation.
 - **Imports.** `src/util/resolution/specifier-targets.ts` maps an import specifier to its target files for both import bindings and file-graph edges.

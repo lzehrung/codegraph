@@ -1,7 +1,7 @@
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
 import type { WorkspaceConfig } from "../workspace.js";
 import { resolveImportSpecifier, resolvePathLikeModule, resolvePythonModule, resolveSpecifier } from "../resolution.js";
-import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../resolution-candidates.js";
+import { getImportableLanguageExtensions, STYLESHEET_RESOLUTION_EXTENSIONS } from "../resolution-candidates.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "./csharp.js";
 import { resolveJvmPackageImportPaths } from "./jvm.js";
 import type { MatchPathFn } from "./tsconfig.js";
@@ -9,6 +9,7 @@ import type {
   CFamilyIncludeForm,
   ModuleSpecifierExportCondition,
   ModuleSpecifierResolutionKind,
+  RubyLoadForm,
 } from "../specifiers.js";
 
 export type SpecifierTargetMetadata = {
@@ -23,6 +24,7 @@ export type SpecifierTargetMetadata = {
   pathAttribute?: string;
   statementStartIndex?: number;
   includeForm?: CFamilyIncludeForm;
+  rubyLoadForm?: RubyLoadForm;
   languageExtensions?: LanguageExtensionMap;
   /** Distinguishes `import p.C.*` from `import p.C` when both a package and a class exist. */
   jvmPackageWildcard?: true;
@@ -164,6 +166,14 @@ async function resolveCsharpOrRubyTargets(
   languageId: string,
   metadata: SpecifierTargetMetadata,
 ): Promise<SpecifierTargets> {
+  if (languageId === "ruby" && metadata.rubyLoadForm === "require_relative") {
+    const relativeSpecifier = specifier.startsWith(".") ? specifier : "./" + specifier;
+    const relative = await resolveSpecifier(file, relativeSpecifier, metadata.projectRoot, undefined, undefined, {
+      resolutionExtensions: getImportableLanguageExtensions("ruby"),
+    });
+    if (typeof relative === "string") return { files: [relative], externalName: specifier };
+    return { files: [], externalName: specifier };
+  }
   if (languageId === "csharp") {
     const namespaceTargets = await resolveCsharpNamespaceImportPaths(
       metadata.projectRoot,

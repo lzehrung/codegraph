@@ -1,5 +1,4 @@
 import path from "node:path";
-import { readFileSync } from "node:fs";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
@@ -52,6 +51,7 @@ import {
 } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, foldPhpIdentifierCase } from "../util/identifiers.js";
+import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../util/bloom-filter.js";
 
 const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
 const NAMESPACE_EXPORT_PATTERN = new RegExp(
@@ -1075,25 +1075,26 @@ export function getCachedReferenceCandidateFiles(
   }
 
   // A fully package-qualified use needs no import, even from another compilation unit.
-  // Search files whose source can spell the package root; navigation checks the full path.
+  // Probe both its package root and member name; Java Unicode escapes can hide either spelling.
   if (languageId === "java" || languageId === "kotlin") {
     const packageName = getPackageDeclarationName(index, def.file, languageId);
     const rootName = packageName?.split(".")[0];
     if (rootName) {
+      const normalizeIdentifier =
+        supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.normalizeIdentifier ??
+        ((name: string) => name);
+      const rootProbe = normalizeIdentifier(rootName);
+      const nameProbe = normalizeIdentifier(def.localName);
       for (const moduleIndex of index.byFile.values()) {
         if (supportForFileWithoutHeaderSample(moduleIndex.file, index.languageExtensions)?.id !== languageId) continue;
         const fileKey = fileIdentityKey(moduleIndex.file);
         if (candidates.has(fileKey)) continue;
-        let source = index.parsed?.get(fileKey)?.source;
-        if (source === undefined) {
-          try {
-            source = readFileSync(moduleIndex.file, "utf8");
-          } catch {
-            candidates.set(fileKey, moduleIndex.file);
-            continue;
-          }
-        }
-        if (source.includes(rootName) || (languageId === "java" && source.includes("\\u"))) {
+        const filter = index.bloomFilters?.get(fileKey);
+        if (
+          !filter ||
+          (filter.mightContain(rootProbe) && filter.mightContain(nameProbe)) ||
+          (languageId === "java" && filter.mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN))
+        ) {
           candidates.set(fileKey, moduleIndex.file);
         }
       }
