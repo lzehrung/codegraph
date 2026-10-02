@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Security
+
+- `piscina` now requires 4.9.4 or later, which fixes a prototype-pollution issue in its pool options ([GHSA-67c8-pqhq-4rmx](https://github.com/advisories/GHSA-67c8-pqhq-4rmx)).
+
 ## [2.4.0] - 2026-09-30
 
 ### Added
