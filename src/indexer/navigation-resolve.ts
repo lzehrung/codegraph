@@ -1,6 +1,6 @@
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
-import { languageHasDeclarationVisibility } from "./declaration-visibility.js";
+import { isJvmPackageSymbolVisible, languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import type { FileId } from "../types.js";
 import { foldPhpIdentifierCase, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -839,16 +839,14 @@ function resolveJvmPackageExport(
 ): SymbolDef | null {
   const candidates: SymbolDef[] = [];
   for (const file of files) {
-    const javaImportsKotlinTypes =
-      importerLanguageId === "java" &&
-      supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id === "kotlin";
+    const targetLanguage = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
+    if (targetLanguage !== "java" && targetLanguage !== "kotlin") continue;
     const names = moduleNameLookup(index, file);
     if (!names) continue;
     for (const target of names.localExports.get(names.normalizeIdentifier(name)) ?? []) {
       if (
         target.isMember ||
-        (target.javaPackagePrivate && !samePackage) ||
-        (javaImportsKotlinTypes && target.kind !== SymbolKind.Class && target.kind !== SymbolKind.Interface) ||
+        !isJvmPackageSymbolVisible(target, targetLanguage, importerLanguageId ?? targetLanguage, !!samePackage) ||
         candidates.some((candidate) => sameSymbolDef(index, candidate, target))
       )
         continue;

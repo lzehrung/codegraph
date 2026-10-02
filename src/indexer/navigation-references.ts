@@ -26,6 +26,7 @@ import {
 } from "./navigation-php.js";
 import { isKeywordReceiver, memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
 import { getCompilationUnitPeers, getPackageDeclarationName } from "./compilation-units.js";
+import { isJvmPackageSymbolVisible } from "./declaration-visibility.js";
 import { findClosestScopeBinding } from "./navigation-local.js";
 import { scopeNodesFor } from "./scope-nodes.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
@@ -1080,22 +1081,29 @@ export function getCachedReferenceCandidateFiles(
     const packageName = getPackageDeclarationName(index, def.file, languageId);
     const rootName = packageName?.split(".")[0];
     if (rootName) {
-      const normalizeIdentifier =
-        supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.normalizeIdentifier ??
-        ((name: string) => name);
-      const rootProbe = normalizeIdentifier(rootName);
-      const nameProbe = normalizeIdentifier(def.localName);
-      for (const moduleIndex of index.byFile.values()) {
-        if (supportForFileWithoutHeaderSample(moduleIndex.file, index.languageExtensions)?.id !== languageId) continue;
-        const fileKey = fileIdentityKey(moduleIndex.file);
-        if (candidates.has(fileKey)) continue;
-        const filter = index.bloomFilters?.get(fileKey);
-        if (
-          !filter ||
-          (filter.mightContain(rootProbe) && filter.mightContain(nameProbe)) ||
-          (languageId === "java" && filter.mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN))
-        ) {
-          candidates.set(fileKey, moduleIndex.file);
+      const exported =
+        def.isMember ||
+        index.byFile
+          .get(fileIdentityKey(def.file))
+          ?.exports.some((entry) => entry.type === "local" && sameDef(entry.target, def, index.languageExtensions));
+      if (exported) {
+        for (const moduleIndex of index.byFile.values()) {
+          const support = supportForFileWithoutHeaderSample(moduleIndex.file, index.languageExtensions);
+          if (support?.id !== "java" && support?.id !== "kotlin") continue;
+          const samePackage = getPackageDeclarationName(index, moduleIndex.file, support.id) === packageName;
+          if (!isJvmPackageSymbolVisible(def, languageId, support.id, samePackage)) continue;
+          const fileKey = fileIdentityKey(moduleIndex.file);
+          if (candidates.has(fileKey)) continue;
+          const filter = index.bloomFilters?.get(fileKey);
+          const rootProbe = support.normalizeIdentifier(rootName);
+          const nameProbe = support.normalizeIdentifier(def.localName);
+          if (
+            !filter ||
+            (filter.mightContain(rootProbe) && filter.mightContain(nameProbe)) ||
+            (support.id === "java" && filter.mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN))
+          ) {
+            candidates.set(fileKey, moduleIndex.file);
+          }
         }
       }
     }

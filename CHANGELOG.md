@@ -13,7 +13,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - Members inherited through a type that declares none of its own now resolve in go-to-definition, references, and call graphs: `Derived d; d.run();` finds `Base.run` in C++, C#, Java, Kotlin, PHP, Swift, TypeScript, JavaScript, and Ruby. Rust finds a trait's default method through a type that implements the trait, and Go finds a promoted method through an embedded struct, including when the method, the type, and the call are in different files of the package.
 - Go: a method declared in another file of the package resolves on a local of that type, and `d.Base.Run()` through an embedded field resolves.
-- Fully qualified calls resolve without an import: `com.example.Util.add(1, 2)` in Java, `calc.add(1, 2)` in Kotlin, `calc::add(1, 2)` in Rust, and `\App\add()` in PHP, which before had no call-graph edge.
+- Fully qualified calls resolve without an import: `com.example.Util.add(1, 2)` in Java, `calc.add(1, 2)` in Kotlin, `calc::add(1, 2)` in Rust, and `\App\add()` in PHP, which before had no call-graph edge. In mixed Java and Kotlin code, a package-qualified name also reaches a type in the other language. Java sees Kotlin types but not Kotlin top-level functions, and a Java type without `public` stays in its package.
 - C++: a namespace alias such as `namespace dm = a::b;` is followed, and `Base::run()` called from an override now has a call-graph edge.
 - Kotlin and Java: an imported function or static method with several overloads goes to the overload that accepts the call's argument count. Before, none of the calls resolved. A count that two overloads accept stays unresolved.
 - Swift: a call through a `typealias` of a type, such as `Fast.add()`, resolves.

@@ -1,9 +1,17 @@
 /**
  * JavaScript call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
- * "overload-arity" is omitted: JavaScript has no declared-signature overloading, so a second
- * same-name function declaration simply replaces the first rather than adding an arity variant.
+ * `jsOmissions` below states why one form has no cell.
  */
-import type { MatrixCell } from "../types.js";
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+export const jsOmissions: readonly CallFormOmission[] = [
+  {
+    callForm: "overload-arity",
+    reason:
+      "JavaScript has no declared-signature overloading, so a second same-name function declaration " +
+      "simply replaces the first rather than adding an arity variant.",
+  },
+];
 
 export const jsCells: MatrixCell[] = [
   {

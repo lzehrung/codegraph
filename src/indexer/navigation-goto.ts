@@ -49,6 +49,7 @@ import { getCallArgumentCount, memberLookupBinding } from "../languages/callable
 import { getCompilationUnitPeers, getPackageDeclarationName } from "./compilation-units.js";
 import {
   isExportedDeclaration,
+  isJvmPackageSymbolVisible,
   isPrivateDeclaration,
   isGoExportedMemberName,
   isSwiftCrossFileHiddenSharedOwnerMember,
@@ -525,13 +526,22 @@ function resolveJvmPackageSymbol(
   packageName: string,
   symbolName: string,
   languageId: "java" | "kotlin",
+  useFile: string,
 ): SymbolDef | undefined {
+  const samePackage = getPackageDeclarationName(index, useFile, languageId) === packageName;
   let target: SymbolDef | undefined;
   for (const candidate of index.byFile.values()) {
-    if (supportForFileWithoutHeaderSample(candidate.file, index.languageExtensions)?.id !== languageId) continue;
-    if (getPackageDeclarationName(index, candidate.file, languageId) !== packageName) continue;
+    const targetLanguage = supportForFileWithoutHeaderSample(candidate.file, index.languageExtensions)?.id;
+    if (targetLanguage !== "java" && targetLanguage !== "kotlin") continue;
+    if (getPackageDeclarationName(index, candidate.file, targetLanguage) !== packageName) continue;
     for (const entry of candidate.exports) {
-      if (entry.type !== "local" || entry.exportedAs !== symbolName || entry.target.isMember) continue;
+      if (
+        entry.type !== "local" ||
+        entry.exportedAs !== symbolName ||
+        entry.target.isMember ||
+        !isJvmPackageSymbolVisible(entry.target, targetLanguage, languageId, samePackage)
+      )
+        continue;
       if (
         target &&
         (target.file !== entry.target.file || target.range.start.index !== entry.target.range.start.index)
@@ -551,6 +561,7 @@ function resolveJvmPackageExpression(
   source: string,
   expr: SyntaxNodeLike,
   resolveLexicalBinding: ((expression: SyntaxNodeLike) => SymbolDef | null) | undefined,
+  useFile: string,
 ): ResolvedExport | null {
   if (sup.id !== "java" && sup.id !== "kotlin") return null;
   const chain = collectMemberAccessChain({ sup, source, chainNode: expr });
@@ -558,7 +569,7 @@ function resolveJvmPackageExpression(
   const parts = [sliceText(chain.base, source), ...chain.names.toReversed()];
   const member = parts.pop();
   if (!member || !parts.every((part) => /^[\p{L}_][\p{L}\p{N}_]*$/u.test(part))) return null;
-  const target = resolveJvmPackageSymbol(index, parts.join("."), member, sup.id);
+  const target = resolveJvmPackageSymbol(index, parts.join("."), member, sup.id, useFile);
   return target ? { kind: "resolved", def: target } : null;
 }
 
@@ -742,7 +753,7 @@ export async function resolveMemberAccessDefinition(params: {
       if (subObj && subProp) {
         const base = await resolveExpression(subObj);
         if (!base) {
-          const qualified = resolveJvmPackageExpression(index, sup, source, expr, resolveLexicalBinding);
+          const qualified = resolveJvmPackageExpression(index, sup, source, expr, resolveLexicalBinding, mod.file);
           if (qualified) return qualified;
         }
         const memberName = sliceText(subProp, source);
@@ -809,6 +820,10 @@ export async function resolveMemberAccessDefinition(params: {
       const subProp = expr.childForFieldName("name") ?? expr.child(2);
       if (subObj && subProp) {
         const base = await resolveExpression(subObj);
+        if (!base) {
+          const qualified = resolveJvmPackageExpression(index, sup, source, expr, resolveLexicalBinding, mod.file);
+          if (qualified) return qualified;
+        }
         const memberName = sliceText(subProp, source);
         if (base?.kind === "namespace") {
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });

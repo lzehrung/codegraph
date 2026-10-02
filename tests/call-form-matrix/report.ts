@@ -1,7 +1,8 @@
 /**
- * Renders the call-form coverage report (`docs/coverage/call-forms.md`) from the cell tables.
- * Pure and deterministic: the output depends only on the cell data, never on a live test run, so
- * `tests/call-form-matrix.report.test.ts` can compare it byte for byte against the committed file.
+ * Renders the call-form coverage report (`docs/coverage/call-forms.md`) from the cell tables and
+ * the per-language omission lists (`./omissions.ts`). Pure and deterministic: the output depends
+ * only on that data, never on a live test run, so `tests/call-form-matrix.report.test.ts` can
+ * compare it byte for byte against the committed file.
  */
 import {
   CALL_FORM_NAMES,
@@ -13,6 +14,7 @@ import {
   type Language,
   type MatrixCell,
 } from "./types.js";
+import { omissionReason, type OmissionsByLanguage } from "./omissions.js";
 
 type CellStatus = "covered" | "known-gap" | "omitted";
 
@@ -32,7 +34,7 @@ function statusFor(cells: readonly MatrixCell[], language: Language, callForm: C
   return matches.some((cell) => cell.knownGap) ? "known-gap" : "covered";
 }
 
-export function renderCallFormReport(cells: readonly MatrixCell[]): string {
+export function renderCallFormReport(cells: readonly MatrixCell[], omissionsByLanguage: OmissionsByLanguage): string {
   const lines: string[] = [];
   lines.push("# Call-form coverage matrix");
   lines.push("");
@@ -57,7 +59,10 @@ export function renderCallFormReport(cells: readonly MatrixCell[]): string {
   lines.push("");
   lines.push("- Covered = the cell passes today.");
   lines.push("- Known gap = the cell fails today; tracked with `it.fails` so it flips visibly once fixed.");
-  lines.push("- Omitted = the language has no idiomatic form for this call shape.");
+  lines.push(
+    '- Omitted = the language has no idiomatic form for this call shape; see "Omitted call forms" below ' +
+      "for the reason.",
+  );
   lines.push("");
 
   const header = ["Language", ...CALL_FORM_ORDER.map((form) => CALL_FORM_NAMES[form])];
@@ -78,6 +83,25 @@ export function renderCallFormReport(cells: readonly MatrixCell[]): string {
     );
     lines.push("");
   }
+  lines.push("## Omitted call forms");
+  lines.push("");
+  lines.push(
+    'Each entry is a language/call-form pair the table above marks "Omitted", with the reason the ' +
+      "language has no idiomatic form for it. Every pair in the matrix has exactly one of a cell or an " +
+      "entry here, never neither or both -- enforced by a dedicated test in " +
+      "`tests/call-form-matrix.report.test.ts`.",
+  );
+  lines.push("");
+  let omittedCount = 0;
+  for (const language of LANGUAGE_ORDER) {
+    for (const form of CALL_FORM_ORDER) {
+      const reason = omissionReason(omissionsByLanguage, language, form);
+      if (!reason) continue;
+      omittedCount += 1;
+      lines.push(`- **${LANGUAGE_NAMES[language]} / ${CALL_FORM_NAMES[form]}**: ${reason}`);
+    }
+  }
+  if (!omittedCount) lines.push("No omitted call forms.");
 
   lines.push("## Cell counts");
   lines.push("");

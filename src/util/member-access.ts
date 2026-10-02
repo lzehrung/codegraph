@@ -187,7 +187,7 @@ export function collectMemberAccessChain(args: {
     if (args.sup.id === "csharp" && nameNode.type === "generic_name") {
       nameNode = nameNode.childForFieldName("name") ?? nameNode.namedChildren[0] ?? nameNode;
     }
-    if (nameNode.type !== "identifier") return;
+    if (nameNode.type !== "identifier" && !(args.sup.id === "java" && nameNode.type === "type_identifier")) return;
     const keyName = sliceText(nameNode, args.source);
     const value = args.constStringOf?.get(keyName);
     if (typeof value === "string") names.push(value);

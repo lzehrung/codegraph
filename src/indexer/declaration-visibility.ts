@@ -1,5 +1,6 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { fileIdentityKey } from "../util/paths.js";
+import { SymbolKind, type SymbolDef } from "./types.js";
 
 /**
  * Per-language declaration visibility for module exports and Swift shared-owner member lookup.
@@ -274,6 +275,21 @@ export function isExportedDeclaration(languageId: string, node: SyntaxNodeLike):
 export function isJavaPublicDeclaration(node: SyntaxNodeLike): boolean {
   const declaration = findVisibilityDeclaration(node, JAVA_ROW);
   return !!declaration && modifierTokens(collectModifierTexts(declaration, JAVA_ROW)).includes("public");
+}
+
+/** Package-qualified JVM types follow the same visibility rule as package wildcard imports. */
+export function isJvmPackageSymbolVisible(
+  target: SymbolDef,
+  targetLanguage: "java" | "kotlin",
+  consumerLanguage: "java" | "kotlin",
+  samePackage: boolean,
+): boolean {
+  if (target.isMember) return true;
+  if (target.javaPackagePrivate && !samePackage) return false;
+  if (consumerLanguage === "java" && targetLanguage === "kotlin") {
+    return target.kind === SymbolKind.Class || target.kind === SymbolKind.Interface;
+  }
+  return true;
 }
 
 const CSHARP_ACCESS_MODIFIERS = new Set(["public", "protected", "internal", "private"]);

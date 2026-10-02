@@ -1,13 +1,23 @@
 /**
- * Rust call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
- * "overload-arity" is omitted: Rust rejects two functions, inherent methods, or trait
- * implementations with the same name in one scope, so argument-count overloading is not
- * expressible.
- * "super-call" is omitted: a Rust trait has no mechanism for an overriding impl to call the
- * trait's own default implementation of the same method; there is no super/base keyword or
- * equivalent.
+ * Rust call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). `rustOmissions`
+ * below states why two forms have no cell.
  */
-import type { MatrixCell } from "../types.js";
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+export const rustOmissions: readonly CallFormOmission[] = [
+  {
+    callForm: "overload-arity",
+    reason:
+      "Rust rejects two functions, inherent methods, or trait implementations with the same name in " +
+      "one scope, so argument-count overloading is not expressible.",
+  },
+  {
+    callForm: "super-call",
+    reason:
+      "A Rust trait has no mechanism for an overriding impl to call the trait's own default " +
+      "implementation of the same method; there is no super/base keyword or equivalent.",
+  },
+];
 
 export const rustCells: MatrixCell[] = [
   {

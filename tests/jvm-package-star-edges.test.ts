@@ -331,6 +331,214 @@ describe("JVM package wildcard graph edges", () => {
     }
   });
 
+  it("resolves cross-language package-qualified JVM types and members without imports", async () => {
+    const root = await mkTmpDir("cg-jvm-qualified-");
+    const sources = {
+      "java/p/JavaType.java": "package p; public class JavaType { public static int util() { return 1; } }",
+      "java/q/JavaType.java": "package q; public class JavaType { public static int util() { return -1; } }",
+      "java/p/Hidden.java": "package p; class Hidden { public static int util() { return 3; } }",
+      "java/p/Peer.java": "package p; class Peer { p.Hidden visible; }",
+      "kotlin/p/KotlinType.kt":
+        "package p\nclass KotlinType { fun run(): Int = 2; private fun hidden(): Int = 3 }\nfun topLevelKotlinFun(): Int = 3",
+      "kotlin/q/KotlinType.kt": "package q\nclass KotlinType { fun run(): Int = -2 }",
+      "kotlin/client/Use.kt": [
+        "package client",
+        "fun useJava(): Int = p.JavaType.util()",
+        "fun blocked(): Int = p.KotlinType().hidden()",
+        "fun blockedJava(): Int = p.Hidden.util()",
+        "class Use(val secret: p.Secret)",
+        "fun blockedPrivate(): Int = p.Secret().run()",
+      ].join("\n"),
+      "kotlin/p/Secret.kt": "package p\nprivate class Secret { fun run(): Int = 4 }",
+      "kotlin/p/Peer.kt": "package p\nfun peer(): Int = p.Hidden.util()",
+      "java/client/Use.java": [
+        "package client;",
+        "class Use {",
+        "  p.KotlinType value;",
+        "  int call() { return new p.KotlinType().run(); }",
+        "  int absent() { return p.topLevelKotlinFun(); }",
+        "  p.Hidden hidden;",
+        "  p.Secret secret;",
+        "  int hidden() { return new p.KotlinType().hidden(); }",
+        "}",
+      ].join("\n"),
+    };
+    try {
+      for (const [name, source] of Object.entries(sources)) {
+        const file = path.join(root, name);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, source);
+      }
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const goto = async (file: keyof typeof sources, line: number, token: string) => {
+        const sourceLine = sources[file].split("\n")[line - 1]!;
+        return goToDefinition(index, { file: path.join(root, file), line, column: sourceLine.lastIndexOf(token) + 1 });
+      };
+      const javaType = await goto("kotlin/client/Use.kt", 2, "JavaType");
+      const javaMember = await goto("kotlin/client/Use.kt", 2, "util");
+      const kotlinType = await goto("java/client/Use.java", 3, "KotlinType");
+      const constructed = await goto("java/client/Use.java", 4, "KotlinType");
+      const kotlinMember = await goto("java/client/Use.java", 4, "run");
+      const topLevel = await goto("java/client/Use.java", 5, "topLevelKotlinFun");
+      expect(javaType.status).toBe("ok");
+      expect(javaMember.status).toBe("ok");
+      expect(kotlinType.status).toBe("ok");
+      expect(constructed.status).toBe("ok");
+      expect(kotlinMember.status).toBe("ok");
+      expect(topLevel.status).toBe("not_found");
+      expect((await goto("kotlin/client/Use.kt", 4, "Hidden")).status).toBe("not_found");
+      expect((await goto("kotlin/client/Use.kt", 5, "Secret")).status).toBe("not_found");
+      expect((await goto("java/client/Use.java", 6, "Hidden")).status).toBe("not_found");
+      expect((await goto("kotlin/client/Use.kt", 6, "Secret")).status).toBe("not_found");
+      expect((await goto("kotlin/client/Use.kt", 6, "run")).status).toBe("not_found");
+      expect((await goto("java/client/Use.java", 7, "Secret")).status).toBe("not_found");
+      expect((await goto("java/client/Use.java", 8, "hidden")).status).toBe("not_found");
+      expect((await goto("kotlin/client/Use.kt", 3, "hidden")).status).toBe("not_found");
+      const javaPeer = await goto("java/p/Peer.java", 1, "Hidden");
+      const kotlinPeer = await goto("kotlin/p/Peer.kt", 2, "Hidden");
+      expect(javaPeer.status).toBe("ok");
+      expect(kotlinPeer.status).toBe("ok");
+      if (javaPeer.status === "ok")
+        expect(javaPeer.definition.file).toBe(normalizePath(path.join(root, "java/p/Hidden.java")));
+      if (kotlinPeer.status === "ok")
+        expect(kotlinPeer.definition.file).toBe(normalizePath(path.join(root, "java/p/Hidden.java")));
+      const norm = (file: keyof typeof sources) => normalizePath(path.join(root, file));
+      if (
+        javaType.status === "ok" &&
+        javaMember.status === "ok" &&
+        kotlinType.status === "ok" &&
+        constructed.status === "ok" &&
+        kotlinMember.status === "ok"
+      ) {
+        expect(javaType.definition.file).toBe(norm("java/p/JavaType.java"));
+        expect(javaMember.definition.file).toBe(norm("java/p/JavaType.java"));
+        expect(kotlinType.definition.file).toBe(norm("kotlin/p/KotlinType.kt"));
+        expect(constructed.definition.file).toBe(norm("kotlin/p/KotlinType.kt"));
+        expect(kotlinMember.definition.file).toBe(norm("kotlin/p/KotlinType.kt"));
+      }
+      const refs = (file: keyof typeof sources, line: number, token: string) =>
+        findReferences(index, {
+          file: path.join(root, file),
+          line,
+          column: sources[file].split("\n")[line - 1]!.indexOf(token) + 1,
+        });
+      const javaTypeRefs = await refs("java/p/JavaType.java", 1, "JavaType");
+      const javaMemberRefs = await refs("java/p/JavaType.java", 1, "util");
+      const kotlinTypeRefs = await refs("kotlin/p/KotlinType.kt", 2, "KotlinType");
+      const kotlinMemberRefs = await refs("kotlin/p/KotlinType.kt", 2, "run");
+      const topLevelRefs = await refs("kotlin/p/KotlinType.kt", 3, "topLevelKotlinFun");
+      const hiddenTypeRefs = await refs("java/p/Hidden.java", 1, "Hidden");
+      const privateTypeRefs = await refs("kotlin/p/Secret.kt", 2, "Secret");
+      const hiddenMemberRefs = await refs("kotlin/p/KotlinType.kt", 2, "hidden");
+      for (const result of [
+        javaTypeRefs,
+        javaMemberRefs,
+        kotlinTypeRefs,
+        kotlinMemberRefs,
+        topLevelRefs,
+        hiddenTypeRefs,
+        privateTypeRefs,
+        hiddenMemberRefs,
+      ]) {
+        expect(result.status).toBe("ok");
+      }
+      if (javaTypeRefs.status === "ok") {
+        expect(
+          javaTypeRefs.references.some(
+            (ref) => ref.file === norm("kotlin/client/Use.kt") && ref.range.start.line === 2,
+          ),
+        ).toBe(true);
+        expect(javaTypeRefs.references.some((ref) => ref.file === norm("java/q/JavaType.java"))).toBe(false);
+      }
+      if (javaMemberRefs.status === "ok") {
+        expect(
+          javaMemberRefs.references.some(
+            (ref) => ref.file === norm("kotlin/client/Use.kt") && ref.range.start.line === 2,
+          ),
+        ).toBe(true);
+        expect(javaMemberRefs.references.some((ref) => ref.file === norm("java/q/JavaType.java"))).toBe(false);
+      }
+      if (kotlinTypeRefs.status === "ok") {
+        expect(
+          kotlinTypeRefs.references
+            .filter((ref) => ref.file === norm("java/client/Use.java"))
+            .map((ref) => ref.range.start.line),
+        ).toEqual([3, 4, 8]);
+        expect(kotlinTypeRefs.references.some((ref) => ref.file === norm("kotlin/q/KotlinType.kt"))).toBe(false);
+      }
+      if (kotlinMemberRefs.status === "ok") {
+        expect(
+          kotlinMemberRefs.references.some(
+            (ref) => ref.file === norm("java/client/Use.java") && ref.range.start.line === 4,
+          ),
+        ).toBe(true);
+        expect(kotlinMemberRefs.references.some((ref) => ref.file === norm("kotlin/q/KotlinType.kt"))).toBe(false);
+      }
+      if (topLevelRefs.status === "ok") {
+        expect(topLevelRefs.references.some((ref) => ref.file === norm("java/client/Use.java"))).toBe(false);
+      }
+      if (hiddenTypeRefs.status === "ok") {
+        expect(hiddenTypeRefs.references.some((ref) => ref.file === norm("java/p/Peer.java"))).toBe(true);
+        expect(hiddenTypeRefs.references.some((ref) => ref.file === norm("kotlin/p/Peer.kt"))).toBe(true);
+        expect(
+          hiddenTypeRefs.references.some(
+            (ref) => ref.file === norm("java/client/Use.java") || ref.file === norm("kotlin/client/Use.kt"),
+          ),
+        ).toBe(false);
+      }
+      if (privateTypeRefs.status === "ok") {
+        expect(
+          privateTypeRefs.references.some(
+            (ref) => ref.file === norm("java/client/Use.java") || ref.file === norm("kotlin/client/Use.kt"),
+          ),
+        ).toBe(false);
+      }
+      if (hiddenMemberRefs.status === "ok") {
+        expect(
+          hiddenMemberRefs.references.some(
+            (ref) => ref.file === norm("java/client/Use.java") || ref.file === norm("kotlin/client/Use.kt"),
+          ),
+        ).toBe(false);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      const findNode = (file: keyof typeof sources, name: string) =>
+        nodes.find((node) => node.file === norm(file) && node.name === name);
+      const edge = (
+        fromFile: keyof typeof sources,
+        from: string,
+        toFile: keyof typeof sources,
+        to: string,
+        kind: string,
+      ) =>
+        graph.edges.some(
+          (candidate) =>
+            candidate.from === findNode(fromFile, from)?.id &&
+            candidate.to === findNode(toFile, to)?.id &&
+            candidate.label === kind,
+        );
+      expect(findNode("java/p/JavaType.java", "util")).toBeDefined();
+      expect(findNode("kotlin/p/KotlinType.kt", "run")).toBeDefined();
+      expect(findNode("java/q/JavaType.java", "util")).toBeDefined();
+      expect(findNode("kotlin/q/KotlinType.kt", "run")).toBeDefined();
+      expect(edge("kotlin/client/Use.kt", "useJava", "java/p/JavaType.java", "util", "calls")).toBe(true);
+      expect(edge("kotlin/client/Use.kt", "useJava", "java/q/JavaType.java", "util", "calls")).toBe(false);
+      expect(edge("java/client/Use.java", "call", "kotlin/p/KotlinType.kt", "run", "calls")).toBe(true);
+      expect(edge("java/client/Use.java", "call", "kotlin/p/KotlinType.kt", "KotlinType", "instantiates")).toBe(true);
+      expect(edge("java/client/Use.java", "call", "kotlin/q/KotlinType.kt", "run", "calls")).toBe(false);
+      expect(edge("java/client/Use.java", "absent", "kotlin/p/KotlinType.kt", "topLevelKotlinFun", "calls")).toBe(
+        false,
+      );
+      expect(edge("kotlin/p/Peer.kt", "peer", "java/p/Hidden.java", "util", "calls")).toBe(true);
+      expect(edge("kotlin/client/Use.kt", "blockedJava", "java/p/Hidden.java", "util", "calls")).toBe(false);
+      expect(edge("kotlin/client/Use.kt", "blocked", "kotlin/p/KotlinType.kt", "hidden", "calls")).toBe(false);
+      expect(edge("java/client/Use.java", "hidden", "kotlin/p/KotlinType.kt", "hidden", "calls")).toBe(false);
+      expect(findNode("kotlin/p/Secret.kt", "run")).toBeDefined();
+      expect(edge("kotlin/client/Use.kt", "blockedPrivate", "kotlin/p/Secret.kt", "run", "calls")).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
   it("keeps Java package-private and Kotlin file-private types out of other packages' wildcards", async () => {
     const root = await mkTmpDir("cg-jvm-star-visibility-");
     const sources = {

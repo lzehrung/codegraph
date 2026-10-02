@@ -1,12 +1,22 @@
 /**
- * Zig call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
- * "inherited-member" and "super-call" are omitted: Zig has no inheritance or struct-embedding
- * promotion mechanism; a struct that merely contains a field of another struct type does not gain
- * its methods, and there is no base-type keyword.
- * "overload-arity" is omitted: Zig rejects two declarations with the same name in one container,
- * so argument-count overloading is not expressible.
+ * Zig call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). `zigOmissions`
+ * below states why three forms have no cell.
  */
-import type { MatrixCell } from "../types.js";
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+const NO_INHERITANCE =
+  "Zig has no inheritance or struct-embedding promotion mechanism; a struct that merely contains a " +
+  "field of another struct type does not gain its methods, and there is no base-type keyword.";
+
+export const zigOmissions: readonly CallFormOmission[] = [
+  {
+    callForm: "overload-arity",
+    reason:
+      "Zig rejects two declarations with the same name in one container, so argument-count overloading is not expressible.",
+  },
+  { callForm: "inherited-member", reason: NO_INHERITANCE },
+  { callForm: "super-call", reason: NO_INHERITANCE },
+];
 
 export const zigCells: MatrixCell[] = [
   {

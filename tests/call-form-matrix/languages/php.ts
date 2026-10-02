@@ -1,9 +1,17 @@
 /**
- * PHP call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
- * "overload-arity" is omitted: PHP rejects two declarations of the same name in one namespace,
- * so argument-count overloading is not expressible as several declarations.
+ * PHP call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). `phpOmissions`
+ * below states why one form has no cell.
  */
-import type { MatrixCell } from "../types.js";
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+export const phpOmissions: readonly CallFormOmission[] = [
+  {
+    callForm: "overload-arity",
+    reason:
+      "PHP rejects two declarations of the same name in one namespace, so argument-count overloading " +
+      "is not expressible as several declarations.",
+  },
+];
 
 export const phpCells: MatrixCell[] = [
   {

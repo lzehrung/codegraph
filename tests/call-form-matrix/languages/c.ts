@@ -1,18 +1,6 @@
 /**
- * C call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
- * C expresses only "bare-call"; the other nine forms are omitted because C has no construct for
- * them:
- * - "qualified-call" and "imported-alias": C has no namespaces and no renaming import syntax --
- *   `#include` never binds or renames a name.
- * - "self-member-call", "typed-local-receiver", "static-receiver", "inherited-member", and
- *   "super-call": C has no receiver-based member dispatch. `docs/language-parity.md` names C as
- *   the one language excluded from `receiverAwareLanguages`: "C has no methods on types, so a
- *   struct function-pointer call emits no receiver edge."
- * - "construction": C has no construction syntax distinct from an ordinary function call; a
- *   struct is stack-declared or zero-initialized, never "constructed" through a named form this
- *   matrix can address.
- * - "overload-arity": C rejects two function declarations with the same name, so argument-count
- *   overloading is not expressible.
+ * C call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). C expresses only
+ * "bare-call"; `cOmissions` below states why the other nine forms have no cell.
  *
  * No cell sets a `moved` variant: C's only covered form, "bare-call", resolves purely by
  * same-file source order within one translation unit (the decoy proves this -- a same-named
@@ -22,7 +10,35 @@
  * while keeping the existing call site resolvable without inventing a header/prototype split this
  * matrix's C coverage does not otherwise test.
  */
-import type { MatrixCell } from "../types.js";
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+const NO_RECEIVER_DISPATCH =
+  "C has no receiver-based member dispatch. `docs/language-parity.md` names C as the one language " +
+  'excluded from `receiverAwareLanguages`: "C has no methods on types, so a struct function-pointer ' +
+  'call emits no receiver edge."';
+
+const NO_NAMESPACES_OR_RENAMING_IMPORTS =
+  "C has no namespaces and no renaming import syntax -- `#include` never binds or renames a name.";
+
+export const cOmissions: readonly CallFormOmission[] = [
+  { callForm: "qualified-call", reason: NO_NAMESPACES_OR_RENAMING_IMPORTS },
+  { callForm: "self-member-call", reason: NO_RECEIVER_DISPATCH },
+  { callForm: "typed-local-receiver", reason: NO_RECEIVER_DISPATCH },
+  { callForm: "static-receiver", reason: NO_RECEIVER_DISPATCH },
+  {
+    callForm: "construction",
+    reason:
+      "C has no construction syntax distinct from an ordinary function call; a struct is stack-declared or " +
+      'zero-initialized, never "constructed" through a named form this matrix can address.',
+  },
+  { callForm: "imported-alias", reason: NO_NAMESPACES_OR_RENAMING_IMPORTS },
+  {
+    callForm: "overload-arity",
+    reason: "C rejects two function declarations with the same name, so argument-count overloading is not expressible.",
+  },
+  { callForm: "inherited-member", reason: NO_RECEIVER_DISPATCH },
+  { callForm: "super-call", reason: NO_RECEIVER_DISPATCH },
+];
 
 export const cCells: MatrixCell[] = [
   {

@@ -102,6 +102,17 @@ export const CALL_FORM_NAMES: Readonly<Record<CallForm, string>> = {
   "super-call": "Super/base call",
 };
 
+/**
+ * A call form a language has no idiomatic way to express, with the reason why. Keeps the
+ * generated report's "Omitted" status tied to an explicit, data-driven reason instead of a
+ * missing cell, so deleting a covered cell cannot regenerate a report that silently calls the
+ * form omitted (`./omissions.ts` cross-checks this against the cell tables).
+ */
+export type CallFormOmission = {
+  callForm: CallForm;
+  reason: string;
+};
+
 /** A declaration address: a file, a 1-based line, and a token that appears on that line. */
 export type TokenAddress = {
   file: string;

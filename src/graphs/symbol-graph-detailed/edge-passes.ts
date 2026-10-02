@@ -1304,11 +1304,17 @@ export async function emitFunctionBodyEdges(
         ) {
           return;
         }
+        const javaConstructionType =
+          context.sup.id === "java" && access.receiver.type === "object_creation_expression"
+            ? constructionTypeName(access.receiver, context.source, context.sup)
+            : null;
         if (
           (context.sup.id === "csharp" &&
             access.receiver.type === "member_access_expression" &&
             csharpDottedNameRoot(access.receiver)) ||
-          (context.sup.id === "java" && access.receiver.type === "field_access")
+          (context.sup.id === "java" &&
+            (access.receiver.type === "field_access" ||
+              (javaConstructionType && isMemberAccessNode(context.sup, javaConstructionType))))
         ) {
           dottedReceiverCalls.push({ fromId, access });
           return;

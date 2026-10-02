@@ -1,9 +1,17 @@
 /**
  * Python call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
- * "overload-arity" is omitted: Python has no argument-count-based overload dispatch, so the call
- * form cannot be expressed (a later `def` of the same name simply replaces the earlier one).
+ * `pythonOmissions` below states why one form has no cell.
  */
-import type { MatrixCell } from "../types.js";
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+export const pythonOmissions: readonly CallFormOmission[] = [
+  {
+    callForm: "overload-arity",
+    reason:
+      "Python has no argument-count-based overload dispatch, so the call form cannot be expressed (a " +
+      "later `def` of the same name simply replaces the earlier one).",
+  },
+];
 
 export const pythonCells: MatrixCell[] = [
   {

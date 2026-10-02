@@ -1,14 +1,25 @@
 /**
- * Ruby call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
- * "overload-arity" is omitted: a later `def` of the same name replaces the earlier one (the same
- * reason as Python), so argument-count overloading is not expressible.
- * "imported-alias" is omitted: `require`/`require_relative` bind no local name, so there is no
- * import-renaming syntax. The closest approximation, reassigning a constant to another module
- * (`CircleArea = Shapes`), does not resolve a member call through the alias at all (confirmed:
- * `CircleArea.area(2)` returns not_found even though `Shapes.area(2)` resolves), so it is not a
- * reliable ordinary-code form to test.
+ * Ruby call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). `rubyOmissions`
+ * below states why two forms have no cell.
  */
-import type { MatrixCell } from "../types.js";
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+export const rubyOmissions: readonly CallFormOmission[] = [
+  {
+    callForm: "imported-alias",
+    reason:
+      "`require`/`require_relative` bind no local name, so there is no import-renaming syntax. The " +
+      "closest approximation, reassigning a constant to another module (`CircleArea = Shapes`), does " +
+      "not resolve a member call through the alias at all (confirmed: `CircleArea.area(2)` returns " +
+      "not_found even though `Shapes.area(2)` resolves), so it is not a reliable ordinary-code form to test.",
+  },
+  {
+    callForm: "overload-arity",
+    reason:
+      "A later `def` of the same name replaces the earlier one (the same reason as Python), so " +
+      "argument-count overloading is not expressible.",
+  },
+];
 
 export const rubyCells: MatrixCell[] = [
   {

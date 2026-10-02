@@ -1,15 +1,30 @@
 /**
- * Go call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
- * "self-member-call" is omitted: Go has no `this`/`self` keyword. A method's own receiver is an
- * explicitly named, arbitrarily spelled parameter -- the exact mechanism "typed-local-receiver"
- * already exercises -- so the two forms are not distinct in Go.
- * "static-receiver" is omitted: Go has no type-scoped static method distinct from an ordinary
- * package-level function (covered by "qualified-call") or a value-receiver method (covered by
- * "typed-local-receiver"); there is no third form.
- * "overload-arity" is omitted: Go rejects two function or method declarations with the same name
- * in the same scope, so argument-count overloading is not expressible.
+ * Go call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). `goOmissions`
+ * below states why three forms have no cell.
  */
-import type { MatrixCell } from "../types.js";
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+export const goOmissions: readonly CallFormOmission[] = [
+  {
+    callForm: "self-member-call",
+    reason:
+      "Go has no `this`/`self` keyword. A method's own receiver is an explicitly named, arbitrarily " +
+      'spelled parameter -- the exact mechanism "typed-local-receiver" already exercises -- so the two ' +
+      "forms are not distinct in Go.",
+  },
+  {
+    callForm: "static-receiver",
+    reason:
+      "Go has no type-scoped static method distinct from an ordinary package-level function (covered by " +
+      '"qualified-call") or a value-receiver method (covered by "typed-local-receiver"); there is no third form.',
+  },
+  {
+    callForm: "overload-arity",
+    reason:
+      "Go rejects two function or method declarations with the same name in the same scope, so " +
+      "argument-count overloading is not expressible.",
+  },
+];
 
 export const goCells: MatrixCell[] = [
   {

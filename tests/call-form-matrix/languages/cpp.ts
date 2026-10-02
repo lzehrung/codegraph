@@ -1,5 +1,8 @@
 /** C++ call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). */
-import type { MatrixCell } from "../types.js";
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+/** Every call form has a cell; nothing is omitted. */
+export const cppOmissions: readonly CallFormOmission[] = [];
 
 export const cppCells: MatrixCell[] = [
   {
