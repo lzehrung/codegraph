@@ -58,7 +58,7 @@
   "dependencies": {
     "fast-glob": "^3.3.3",
     "picomatch": "^4.0.3",
-    "piscina": "^4.5.1",
+    "piscina": "^4.9.4",
     "tsconfig-paths": "^4.2.0",
     "zod": "^4.4.3"
   },
