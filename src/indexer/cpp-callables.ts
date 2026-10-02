@@ -463,6 +463,28 @@ export function cppCallableOwnerPath(node: SyntaxNodeLike): string {
   return [...lexical, ...declared].join("::");
 }
 
+/** Static namespace functions and anonymous-namespace functions belong to one translation unit. */
+export function cppCallableHasInternalLinkage(node: SyntaxNodeLike): boolean {
+  let insideClass = false;
+  let staticDeclaration = false;
+  for (let current: SyntaxNodeLike | null = node; current; current = current.parent) {
+    if (current.type === "namespace_definition" && !current.childForFieldName("name")) return true;
+    if (
+      current.type === "class_specifier" ||
+      current.type === "struct_specifier" ||
+      current.type === "union_specifier"
+    ) {
+      insideClass = true;
+    }
+    if (current.type === "function_definition" || current.type === "declaration") {
+      if (current.namedChildren.some((child) => child.type === "storage_class_specifier" && child.text === "static")) {
+        staticDeclaration = true;
+      }
+    }
+  }
+  return staticDeclaration && !insideClass;
+}
+
 function cppCallableEntities(
   bindings: readonly Binding[],
   canonicalNames?: ReadonlyMap<Binding, string>,
@@ -473,9 +495,14 @@ function cppCallableEntities(
     if (!callable?.signature || !callable.arity) return null;
     const canonicalName = canonicalNames?.get(binding);
     if (canonicalNames && canonicalName === undefined) return null;
-    // A using-declaration can change the visible name only after imports are known.
-    const key =
-      canonicalName === undefined ? callable.key : `${canonicalName}\0${callable.owner}\0${callable.signature}`;
+    // A using-declaration can change the visible name only after imports are known. Declarations
+    // of one external callable in several headers group by signature; an internal-linkage
+    // function stays in its own translation unit.
+    const signatureScope =
+      binding.node && cppCallableHasInternalLinkage(binding.node)
+        ? callable.key
+        : `${callable.owner}\0${callable.signature}`;
+    const key = canonicalName === undefined ? callable.key : `${canonicalName}\0${signatureScope}`;
     const existing = entities.get(key);
     if (!existing) {
       entities.set(key, {

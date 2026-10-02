@@ -11,6 +11,7 @@ import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { C_SUPPORT, CPP_SUPPORT, supportForFile, supportForFileWithSource } from "../../src/languages.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
+import { closeDiskCacheDatabase } from "../../src/indexer/build-cache/module-cache.js";
 import { cppSelectCallableBinding } from "../../src/indexer/cpp-callables.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import { ProjectedSyntaxTree } from "../../src/native/projected-tree.js";
@@ -18,6 +19,7 @@ import { getNativeQueryExecution, getNativeSyntaxTreeExecution } from "../../src
 import type { LanguageSupport } from "../../src/languages.js";
 import {
   buildProjectIndex,
+  type BuildReport,
   buildProjectIndexIncremental,
   buildScopeIndexFromSource,
   buildSymbolGraph,
@@ -505,6 +507,62 @@ describe("C++ classification and same-file navigation", () => {
       ]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps internal-linkage callable keys file-local and external declarations equivalent", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-internal-keys-"));
+    const movedRoot = `${root}-moved`;
+    const sources = {
+      "api.hpp": "int run();\n",
+      "a.cpp": [
+        '#include "api.hpp"',
+        "int run() { return 1; }",
+        "static int local() { return 2; }",
+        "namespace { int hidden() { return 3; } }",
+        "namespace tools { namespace { int nested() { return 4; } } }",
+        "namespace tools { static int scoped() { return 5; } }",
+      ].join("\n"),
+      "b.cpp": [
+        "static int run() { return 10; }",
+        "static int local() { return 20; }",
+        "namespace { int hidden() { return 30; } }",
+        "namespace tools { namespace { int nested() { return 40; } } }",
+        "namespace tools { static int scoped() { return 50; } }",
+      ].join("\n"),
+    };
+    try {
+      for (const [name, source] of Object.entries(sources)) {
+        await fs.writeFile(path.join(root, name), source, "utf8");
+      }
+      const index = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const key = (name: keyof typeof sources, symbol: string, projectIndex = index, projectRoot = root): string => {
+        const callable = projectIndex.byFile
+          .get(fileIdentityKey(path.join(projectRoot, name)))
+          ?.locals.find((local) => local.localName === symbol && local.callable?.signature)?.callable;
+        expect(callable).toBeDefined();
+        return callable!.key;
+      };
+      expect(key("api.hpp", "run")).toBe(key("a.cpp", "run"));
+      expect(key("api.hpp", "run")).not.toBe(key("b.cpp", "run"));
+      for (const name of ["local", "hidden", "nested", "scoped"] as const) {
+        expect(key("a.cpp", name)).not.toBe(key("b.cpp", name));
+      }
+      closeDiskCacheDatabase(root, { cache: "disk" });
+      await fs.cp(root, movedRoot, { recursive: true });
+      const report: BuildReport = { timings: {} };
+      const warm = await buildProjectIndexIncremental(movedRoot, { cache: "disk", native: "on", report });
+      expect(report.cache?.misses ?? 0).toBe(0);
+      expect(key("api.hpp", "run", warm, movedRoot)).toBe(key("a.cpp", "run", warm, movedRoot));
+      for (const name of ["run", "local", "hidden", "nested", "scoped"] as const) {
+        const warmKey = key("b.cpp", name, warm, movedRoot);
+        expect(warmKey).not.toBe(key("a.cpp", name, warm, movedRoot));
+        expect(warmKey).not.toContain(normalizePath(root) + "/");
+      }
+    } finally {
+      closeDiskCacheDatabase(root, { cache: "disk" });
+      closeDiskCacheDatabase(movedRoot, { cache: "disk" });
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(movedRoot, { recursive: true, force: true });
     }
   });
 

@@ -3473,11 +3473,11 @@ describe("Find References", () => {
     it("should find references to wildcard-imported interfaces", async () => {
       const index = await createTestIndex("java");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "java");
-      const packageFile = path.join(samplePath, "pkg", "PackageTypes.java").replace(/\\/g, "/");
+      const packageFile = path.join(samplePath, "pkg", "ServiceContract.java").replace(/\\/g, "/");
       const wildcardFile = path.join(samplePath, "WildcardImports.java").replace(/\\/g, "/");
 
-      const result = await testFindReferences(index, packageFile, 7, 11, 2);
-      expectReferenceAt(result, packageFile, 7);
+      const result = await testFindReferences(index, packageFile, 3, 18, 2);
+      expectReferenceAt(result, packageFile, 3);
       expectReferenceAt(result, wildcardFile, 7);
     });
 

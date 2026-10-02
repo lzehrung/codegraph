@@ -1,5 +1,6 @@
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import crypto from "node:crypto";
+import { isRubyLoadForm } from "../../util/specifiers.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 
@@ -464,10 +465,12 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
 
 function hasValidCallableSymbol(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
-  const symbol = value as { kind?: unknown; callable?: unknown };
-  return symbol.kind === "function"
-    ? isCallableIdentity(symbol.callable)
-    : symbol.callable === undefined || isCallableIdentity(symbol.callable);
+  const symbol = value as { kind?: unknown; callable?: unknown; javaPackagePrivate?: unknown };
+  const callableValid =
+    symbol.kind === "function"
+      ? isCallableIdentity(symbol.callable)
+      : symbol.callable === undefined || isCallableIdentity(symbol.callable);
+  return callableValid && (symbol.javaPackagePrivate === undefined || typeof symbol.javaPackagePrivate === "boolean");
 }
 
 /**
@@ -481,13 +484,21 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     importedRange?: unknown;
     localRange?: unknown;
     jvmPackageFiles?: unknown;
+    jvmPackageLanguageId?: unknown;
+    jvmSamePackage?: unknown;
+    rubyLoadForm?: unknown;
   };
   return (
     (binding.explicitAlias === undefined || typeof binding.explicitAlias === "boolean") &&
     isOptionalRange(binding.importedRange) &&
     isOptionalRange(binding.localRange) &&
     (binding.jvmPackageFiles === undefined ||
-      (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string")))
+      (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string"))) &&
+    (binding.jvmPackageLanguageId === undefined ||
+      binding.jvmPackageLanguageId === "java" ||
+      binding.jvmPackageLanguageId === "kotlin") &&
+    (binding.jvmSamePackage === undefined || typeof binding.jvmSamePackage === "boolean") &&
+    (binding.rubyLoadForm === undefined || isRubyLoadForm(binding.rubyLoadForm))
   );
 }
 

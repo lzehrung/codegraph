@@ -34,6 +34,7 @@ import {
 import { collectNativeCaptureImportBindings } from "./imports/native-captures.js";
 import { collectPythonImportsFromNativeMatches, collectPythonImportsFromSource } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
+import { jvmPackageNameFromSource } from "./compilation-units.js";
 import type { ImportBinding } from "./types.js";
 import { collectTextImportSpecifiers } from "./imports/text-import-extractors.js";
 
@@ -132,6 +133,7 @@ export async function collectImportsForFile(
   const workspaceConfig = opts?.workspaceConfig ?? (await loadWorkspaceConfig(projectRoot));
   const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();
   const jvmPackageFiles = new Map<string, string[]>();
+  let jvmDeclaredPackage: string | null | undefined;
 
   const stylesheetLanguage = ["css", "scss", "less"].includes(resolvedSup.id);
   const resolveFrom = async (
@@ -210,6 +212,10 @@ export async function collectImportsForFile(
       if (files?.includes(binding.resolved) && (resolvedSup.id === "java" || resolvedSup.id === "kotlin")) {
         binding.jvmPackageFiles = files;
         binding.jvmPackageLanguageId = resolvedSup.id;
+        if (jvmDeclaredPackage === undefined) {
+          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
+        }
+        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === binding.from) binding.jvmSamePackage = true;
       }
     }
   };

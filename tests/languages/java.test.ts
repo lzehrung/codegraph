@@ -73,6 +73,10 @@ const definition: LanguageTestDefinition = {
         },
         {
           from: "WildcardImports.java",
+          to: { type: "file", path: "pkg/ServiceContract.java" },
+        },
+        {
+          from: "WildcardImports.java",
           to: { type: "file", path: "pkg/ScopedEnums.java" },
         },
         {
@@ -120,6 +124,11 @@ const definition: LanguageTestDefinition = {
           symbols: [
             { name: "PackageTypes", kind: "class" },
             { name: "NestedValue", kind: "class" },
+          ],
+        },
+        {
+          file: "pkg/ServiceContract.java",
+          symbols: [
             { name: "ServiceContract", kind: "interface" },
             { name: "serve", kind: "function" },
           ],
@@ -187,11 +196,11 @@ const definition: LanguageTestDefinition = {
         },
         {
           name: "find references for wildcard-imported interface",
-          file: "pkg/PackageTypes.java",
-          line: 7,
-          column: 11,
+          file: "pkg/ServiceContract.java",
+          line: 3,
+          column: 18,
           references: [
-            { file: "pkg/PackageTypes.java", line: 7 },
+            { file: "pkg/ServiceContract.java", line: 3 },
             { file: "WildcardImports.java", line: 7 },
           ],
         },

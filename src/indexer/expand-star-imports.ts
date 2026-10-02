@@ -107,6 +107,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
           if (javaImportsKotlinTypes && symbol.kind !== SymbolKind.Class && symbol.kind !== SymbolKind.Interface) {
             continue;
           }
+          if (packageFiles && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
           let namespace: "tag" | "ordinary" | undefined;
           if (symbol.cTag) namespace = "tag";
           else if (hasCTagExports) namespace = "ordinary";

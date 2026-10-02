@@ -270,6 +270,12 @@ export function isExportedDeclaration(languageId: string, node: SyntaxNodeLike):
   return isExportedByRow(declaration, row);
 }
 
+/** Java top-level types without public access stay within their declared package. */
+export function isJavaPublicDeclaration(node: SyntaxNodeLike): boolean {
+  const declaration = findVisibilityDeclaration(node, JAVA_ROW);
+  return !!declaration && modifierTokens(collectModifierTexts(declaration, JAVA_ROW)).includes("public");
+}
+
 const CSHARP_ACCESS_MODIFIERS = new Set(["public", "protected", "internal", "private"]);
 const CSHARP_MEMBER_CONTAINERS = new Set([
   "class_declaration",

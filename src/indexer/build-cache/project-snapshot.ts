@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
+import { isRubyLoadForm } from "../../util/specifiers.js";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import path from "node:path";
 import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
@@ -1907,6 +1908,7 @@ function isSymbolDef(value: unknown): value is SymbolDef {
       symbol.cTag === "declaration" ||
       symbol.cTag === "forward" ||
       symbol.cTag === "reference") &&
+    isOptionalBoolean(symbol.javaPackagePrivate) &&
     (symbol.docstring === undefined || typeof symbol.docstring === "string") &&
     (symbol.lineSpan === undefined || typeof symbol.lineSpan === "number") &&
     (symbol.complexity === undefined || typeof symbol.complexity === "number")
@@ -1950,7 +1952,12 @@ function isImportBinding(value: unknown): value is ImportBinding {
     binding.kind === "star" &&
     (binding.staticMembersOf === undefined || typeof binding.staticMembersOf === "string") &&
     (binding.jvmPackageFiles === undefined ||
-      (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string")))
+      (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string"))) &&
+    (binding.jvmPackageLanguageId === undefined ||
+      binding.jvmPackageLanguageId === "java" ||
+      binding.jvmPackageLanguageId === "kotlin") &&
+    isOptionalBoolean(binding.jvmSamePackage) &&
+    (binding.rubyLoadForm === undefined || isRubyLoadForm(binding.rubyLoadForm))
   );
 }
 

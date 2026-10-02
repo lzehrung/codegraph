@@ -835,6 +835,7 @@ function resolveJvmPackageExport(
   name: string,
   argumentCount?: number,
   importerLanguageId?: "java" | "kotlin",
+  samePackage?: boolean,
 ): SymbolDef | null {
   const candidates: SymbolDef[] = [];
   for (const file of files) {
@@ -846,6 +847,7 @@ function resolveJvmPackageExport(
     for (const target of names.localExports.get(names.normalizeIdentifier(name)) ?? []) {
       if (
         target.isMember ||
+        (target.javaPackagePrivate && !samePackage) ||
         (javaImportsKotlinTypes && target.kind !== SymbolKind.Class && target.kind !== SymbolKind.Interface) ||
         candidates.some((candidate) => sameSymbolDef(index, candidate, target))
       )
@@ -872,6 +874,7 @@ export function resolveImported(
       exportedName,
       opts?.argumentCount,
       imp.jvmPackageLanguageId,
+      imp.jvmSamePackage,
     );
   }
   const namespace = opts?.cNamespace ?? (imp.kind === "named" ? imp.cNamespace : undefined);

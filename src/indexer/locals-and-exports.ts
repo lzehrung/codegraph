@@ -29,7 +29,7 @@ import type { CallableIdentity } from "../languages/callable-arity.js";
 import type { Range } from "../types.js";
 
 import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
-import { isExportedDeclaration } from "./declaration-visibility.js";
+import { isExportedDeclaration, isJavaPublicDeclaration } from "./declaration-visibility.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { typescriptCollapsedOverloadTarget } from "./ts-callables.js";
 
@@ -803,6 +803,14 @@ export function collectLocalsAndExportsFromSource(
         : {}),
     };
     if (node && isTypeMemberDeclaration(node)) base.isMember = true;
+    if (
+      support.id === "java" &&
+      node &&
+      !base.isMember &&
+      (kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias)
+    ) {
+      if (!isJavaPublicDeclaration(node)) base.javaPackagePrivate = true;
+    }
     if (support.id === "c" && node) {
       const tagRole = cTagRole(node);
       if (tagRole) base.cTag = tagRole;

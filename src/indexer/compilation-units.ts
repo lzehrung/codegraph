@@ -106,6 +106,12 @@ const KOTLIN_PACKAGE_NAME_PATTERN = new RegExp(
   "mu",
 );
 
+/** Read a JVM package clause from the same trivia-masked source used for unit peers. */
+export function jvmPackageNameFromSource(source: string, languageId: "java" | "kotlin"): string | null {
+  const pattern = languageId === "kotlin" ? KOTLIN_PACKAGE_NAME_PATTERN : JAVA_PACKAGE_NAME_PATTERN;
+  return pattern.exec(maskTrivia(source, languageId))?.[1] ?? null;
+}
+
 /**
  * A C# namespace declaration and the source span it governs. A block-scoped namespace spans
  * from its `namespace` keyword to the matching `}`; a file-scoped one spans to end of file.
@@ -246,12 +252,10 @@ function packageDeclarationFor(
   const source = unitDeclarationSource(index, filePath, fileKey);
   let packageName: string | null = null;
   if (source !== null) {
-    const masked = maskTrivia(source, languageId);
     if (languageId === "go") {
-      packageName = GO_PACKAGE_PATTERN.exec(masked)?.[1] ?? null;
+      packageName = GO_PACKAGE_PATTERN.exec(maskTrivia(source, "go"))?.[1] ?? null;
     } else {
-      const pattern = languageId === "kotlin" ? KOTLIN_PACKAGE_NAME_PATTERN : JAVA_PACKAGE_NAME_PATTERN;
-      packageName = pattern.exec(masked)?.[1] ?? null;
+      packageName = jvmPackageNameFromSource(source, languageId);
     }
   }
   const declaration = { name: packageName, readable: source !== null };

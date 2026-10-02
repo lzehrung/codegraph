@@ -761,13 +761,14 @@ C symbol lookup keeps tag and ordinary identifier namespaces separate:
 
 - `goToDefinition` and `findReferences` select the namespace from source syntax, including uses through header includes.
 - Lower-level `resolveExport(index, file, name, options)` and `resolveImported(index, importBinding, name, options)` accept `cNamespace: "tag" | "ordinary"`. `preferredKind` alone cannot distinguish an enum tag from a same-spelled typedef.
+- `SymbolDef.javaPackagePrivate` is `true` for a Java top-level type without `public`. Such a type is visible only in its own package, so a wildcard import from another package does not bind it.
 - `SymbolDef.cTag` records `"declaration"`, `"forward"`, or `"reference"` for C tags. A bodyless tag use can introduce an incomplete tag when no visible tag exists. A file-scope forward declaration reuses an included tag; a block-scope forward declaration can hide an outer tag.
 - Expanded named C imports retain `ImportBinding.cNamespace`. Symbol lists and compact and detailed symbol graphs keep separate import identities for tag and ordinary namespaces.
 
 Function symbols carry `SymbolDef.callable`, computed when the file is indexed:
 
 - `key`: declarations with the same key are one callable.
-  - C++: a prototype and its definition with the same owner path and normalized signature share a key, also across files.
+  - C++: a prototype and its definition with the same owner path and normalized signature share a key, also across files. A function with internal linkage (`static` at file scope, or in an anonymous namespace) has a key per file.
   - C: declarations of one name in one file share a key. A header prototype and a definition in another file have different keys; navigation joins them through includes.
   - TypeScript: overload signatures and their implementation in one container of one file share a key.
   - Other declarations have their own key.

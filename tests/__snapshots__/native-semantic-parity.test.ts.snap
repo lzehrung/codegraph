@@ -450,7 +450,7 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   "references": {
     "refs": [
       "WildcardImports.java:7",
-      "pkg/PackageTypes.java:7",
+      "pkg/ServiceContract.java:3",
     ],
     "status": "ok",
   },

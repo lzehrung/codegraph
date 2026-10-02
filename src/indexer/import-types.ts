@@ -88,6 +88,8 @@ export type ImportBinding =
       jvmPackageFiles?: FileId[];
       /** Consumer language needed to keep Java package stars limited to JVM-visible types. */
       jvmPackageLanguageId?: "java" | "kotlin";
+      /** Whether the importing JVM file declares the wildcard target package. */
+      jvmSamePackage?: boolean;
     };
 
 /**

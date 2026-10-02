@@ -6,7 +6,12 @@ import {
 } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
-import { cppCallableIsDefinition, cppCallableOwnerPath, cppCallableSignatureForNode } from "./cpp-callables.js";
+import {
+  cppCallableHasInternalLinkage,
+  cppCallableIsDefinition,
+  cppCallableOwnerPath,
+  cppCallableSignatureForNode,
+} from "./cpp-callables.js";
 import { typescriptCallableContainerKeyForNode, typescriptCallableRole } from "./ts-callables.js";
 
 function callableDeclaration(node: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined {
@@ -48,7 +53,10 @@ export function callableIdentityForDeclaration(args: {
     const owner = languageId === "cpp" && node ? cppCallableOwnerPath(node) : "";
     let key = uniqueKey;
     if (languageId === "c") key = `${file}\0${name}`;
-    else if (signature) key = `${owner}\0${name}\0${signature}`;
+    else if (signature) {
+      const qualifiedSignature = `${owner}\0${name}\0${signature}`;
+      key = node && cppCallableHasInternalLinkage(node) ? `${file}\0${qualifiedSignature}` : qualifiedSignature;
+    }
     return {
       ...base,
       owner,
@@ -64,7 +72,7 @@ export function callableIdentityForDeclaration(args: {
   return { ...base, owner: "", key: uniqueKey };
 }
 
-/** Rebase file-scoped keys; C++ signature keys deliberately have no file prefix. */
+/** Rebase file-scoped keys; external C++ signature keys have no file prefix. */
 export function callableIdentityWithFile(
   callable: CallableIdentity,
   previousFile: string,

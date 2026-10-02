@@ -2309,6 +2309,48 @@ describe("Cache invalidation and strict hashing", () => {
       }
     }
   });
+
+  it("rebuilds module rows with a malformed Java package-private flag", async () => {
+    const root = await mkTmpDir("dg-java-package-private-row-");
+    const hidden = path.join(root, "p", "Hidden.java");
+    const use = path.join(root, "q", "Use.java");
+    await fsp.mkdir(path.dirname(hidden), { recursive: true });
+    await fsp.mkdir(path.dirname(use), { recursive: true });
+    await fsp.writeFile(hidden, "package p;\nclass Hidden {}\n", "utf8");
+    await fsp.writeFile(path.join(root, "p", "Open.java"), "package p;\npublic class Open {}\n", "utf8");
+    const useLine = "class Use { Hidden h; Open o; }";
+    await fsp.writeFile(use, `package q;\nimport p.*;\n${useLine}\n`, "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const signature = readModuleCacheSignature(root, hidden);
+    if (!signature) throw new Error("expected cached Java module");
+    const normalizedFile = normalize(path.resolve(hidden));
+    buildCache.closeDiskCacheDatabase(root, { cache: "disk" });
+    const db = new DatabaseSync(diskCacheDbPathFor(root));
+    try {
+      const row = db.prepare("SELECT payload FROM module_cache WHERE file = ?").get(cacheFile(root, hidden)) as {
+        payload: Uint8Array;
+      };
+      const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as {
+        locals: Array<{ localName: string; javaPackagePrivate?: unknown }>;
+      };
+      const local = parsed.locals.find((entry) => entry.localName === "Hidden");
+      if (!local) throw new Error("expected Hidden in cached module");
+      expect(local.javaPackagePrivate).toBe(true);
+      local.javaPackagePrivate = "yes";
+      db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+        brotliCompressSync(JSON.stringify(parsed)),
+        cacheFile(root, hidden),
+      );
+    } finally {
+      db.close();
+    }
+    expect(await buildCache.tryLoadFromCache(root, normalizedFile, signature, { cache: "disk" })).toBeNull();
+    const rebuilt = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const hiddenUse = await goToDefinition(rebuilt, { file: use, line: 3, column: useLine.indexOf("Hidden") + 1 });
+    expect(hiddenUse.status).toBe("not_found");
+    const openUse = await goToDefinition(rebuilt, { file: use, line: 3, column: useLine.indexOf("Open") + 1 });
+    expect(openUse.status === "ok" && path.basename(openUse.definition.file)).toBe("Open.java");
+  });
   it("rejects a project snapshot missing indexed callable identity", async () => {
     const root = await mkTmpDir("dg-callable-identity-snapshot-");
     const file = path.join(root, "entry.ts");

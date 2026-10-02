@@ -35,6 +35,8 @@ export type SymbolDef = {
   /** Indexed callable facts; absent for symbols that are not callable. */
   callable?: CallableIdentity;
   isMember?: boolean;
+  /** Java top-level type without public access, visible only in its package. */
+  javaPackagePrivate?: boolean;
   /** C tag identity; a reference can introduce an incomplete tag if no visible tag exists. */
   cTag?: "declaration" | "forward" | "reference";
   docstring?: string;
