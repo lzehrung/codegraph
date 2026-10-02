@@ -14,7 +14,7 @@
  *  - when a cell gives a `moved` variant, the answer follows the moved declaration.
  *
  * Both metamorphic checks above compare a richer snapshot than a bare goto label: the goto
- * target, the sorted `file:line` reference sites of the tracked declaration, whether the cell's
+ * target, the sorted `file:line:column` reference sites of the tracked declaration (duplicates kept), whether the cell's
  * own decoy wrongly shows up among them, and the sorted set of `calls`/`instantiates` edges from
  * the enclosing caller. A mutation that leaves goto unchanged but adds a stray edge to the decoy,
  * or drops/gains a reference site, still fails the comparison.
@@ -189,11 +189,11 @@ export async function runCellCore(cell: MatrixCell): Promise<void> {
  * A comparable answer for one use site, richer than a bare goto label so a metamorphic check
  * catches a regression goto alone would miss:
  *  - `goto`: the resolved declaration, relative to the project root, or "not_found";
- *  - `referenceSites`: sorted `file:line` sites `findReferences` reports for the tracked
+ *  - `referenceSites`: sorted `file:line:column` sites, duplicates kept, that `findReferences` reports for the tracked
  *    declaration (the cell's `expected`, or its `decoy` when `expected` is `not_found`);
  *  - `decoyInReferences`: whether the cell's own decoy declaration wrongly shows up among those
  *    sites -- a sign the decoy and the real declaration were conflated;
- *  - `callerEdges`: sorted `label->file#name` strings for every `calls`/`instantiates` edge from
+ *  - `callerEdges`: sorted `label->file#name@start` strings (start is the target's start index) for every `calls`/`instantiates` edge from
  *    the enclosing caller the cell names, or `null` when the cell has no `edge`. Capturing the
  *    whole set (not just whether one specific edge is present) catches a stray extra edge, such
  *    as a new edge to the decoy, that a presence check alone would not.
