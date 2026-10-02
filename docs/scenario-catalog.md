@@ -72,7 +72,8 @@ Minimal catalog of Tree-sitter scenarios with sample coverage. Each entry names 
 
 - tests/module-alias-shadowing.test.ts: TypeScript, Python, and Rust module calls keep the unshadowed import but exclude shadowed parameter/local calls from navigation, references, and graph edges.
 - tests/kotlin-import-resolution-regression.test.ts and tests/languages/java.test.ts: Kotlin wildcard package overloads choose the right file or remain ambiguous; Java package imports do not import static members.
-- tests/jvm-package-star-edges.test.ts: Java and Kotlin wildcard bindings point to top-level declarations across all package files and exclude class members, enum constants, nested types, companion members, and other packages. Kotlin top-level function use edges remain; bare calls to unimported members have no navigation or graph target.
+- tests/jvm-package-star-edges.test.ts: Java and Kotlin wildcard bindings point to top-level declarations across all package files and exclude class members, enum constants, nested types, companion members, and other packages. Mixed Java/Kotlin packages contribute type bindings to both languages, while only Kotlin imports Kotlin top-level functions. Kotlin function use edges remain; bare calls to unimported members have no navigation or graph target.
+- tests/warm-cache-import-resolution.test.ts: adding a Kotlin file to a Java wildcard package, or a Java file to a Kotlin wildcard package, updates graph targets and navigation from both disk and memory caches without changing the importer.
 - tests/override-arity-hiding.test.ts: C# and Java derived overrides hide the base method even when the call has too few arguments.
 - tests/callable-key-persistence.test.ts: persisted callable keys are project-relative and retain distinct targets after a disk-cached project moves.
 

@@ -29,6 +29,7 @@ import {
   type MatchPathFn,
 } from "../util/resolution.js";
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
+import { resolveJvmPackageImportPaths } from "../util/resolution/jvm.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
 import {
@@ -1370,6 +1371,42 @@ async function collectStaleCachedModules(args: {
         queue.push(key);
       }
     }
+  }
+  // A package star depends on every package file, not just its representative edge.
+  const isJvmFile = (file: string): boolean => {
+    const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id;
+    return languageId === "java" || languageId === "kotlin";
+  };
+  if (args.cacheMisses.added.some(isJvmFile) || args.cacheMisses.changed.some(isJvmFile)) {
+    const packageImporters: Array<readonly [string, ModuleIndex]> = [];
+    for (const [file, cached] of cachedModules) {
+      if (stale.has(file) || !isJvmFile(file)) continue;
+      if (
+        cached.mod.imports.some(
+          (imp) => imp.kind === "star" && (imp.jvmPackageFiles || typeof imp.resolved !== "string"),
+        )
+      ) {
+        packageImporters.push([file, cached.mod]);
+      }
+    }
+    const changed = await mapLimit(packageImporters, args.concurrency, async ([file, mod]) => {
+      for (const imp of mod.imports) {
+        if (imp.kind !== "star") continue;
+        if (!imp.jvmPackageFiles && typeof imp.resolved === "string") continue;
+        const current = await resolveJvmPackageImportPaths(args.projectRoot, imp.from, file);
+        const previous = imp.jvmPackageFiles ?? [];
+        if (
+          current.length !== previous.length ||
+          current.some((target, index) => fileIdentityKey(target) !== fileIdentityKey(previous[index]!))
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
+    packageImporters.forEach(([file], index) => {
+      if (changed[index]) stale.add(file);
+    });
   }
   return { stale, deletedDeclarationFiles };
 }

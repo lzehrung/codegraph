@@ -834,13 +834,22 @@ function resolveJvmPackageExport(
   files: readonly FileId[],
   name: string,
   argumentCount?: number,
+  importerLanguageId?: "java" | "kotlin",
 ): SymbolDef | null {
   const candidates: SymbolDef[] = [];
   for (const file of files) {
+    const javaImportsKotlinTypes =
+      importerLanguageId === "java" &&
+      supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id === "kotlin";
     const names = moduleNameLookup(index, file);
     if (!names) continue;
     for (const target of names.localExports.get(names.normalizeIdentifier(name)) ?? []) {
-      if (target.isMember || candidates.some((candidate) => sameSymbolDef(index, candidate, target))) continue;
+      if (
+        target.isMember ||
+        (javaImportsKotlinTypes && target.kind !== SymbolKind.Class && target.kind !== SymbolKind.Interface) ||
+        candidates.some((candidate) => sameSymbolDef(index, candidate, target))
+      )
+        continue;
       candidates.push(target);
     }
   }
@@ -857,7 +866,13 @@ export function resolveImported(
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
   if (imp.kind === "star" && imp.jvmPackageFiles) {
-    return resolveJvmPackageExport(index, imp.jvmPackageFiles, exportedName, opts?.argumentCount);
+    return resolveJvmPackageExport(
+      index,
+      imp.jvmPackageFiles,
+      exportedName,
+      opts?.argumentCount,
+      imp.jvmPackageLanguageId,
+    );
   }
   const namespace = opts?.cNamespace ?? (imp.kind === "named" ? imp.cNamespace : undefined);
   if (opts?.cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== opts.cNamespace) return null;

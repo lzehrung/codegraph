@@ -86,6 +86,8 @@ export type ImportBinding =
       staticMembersOf?: string;
       /** Files of a proven JVM package wildcard, not just its representative resolved file. */
       jvmPackageFiles?: FileId[];
+      /** Consumer language needed to keep Java package stars limited to JVM-visible types. */
+      jvmPackageLanguageId?: "java" | "kotlin";
     };
 
 /**

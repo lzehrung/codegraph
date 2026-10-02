@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
-import { buildProjectIndex, goToDefinition } from "../src/index.js";
+import { buildProjectIndex, findReferences, goToDefinition } from "../src/index.js";
 import { normalizePath } from "../src/util/paths.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
@@ -164,6 +164,168 @@ describe("JVM package wildcard graph edges", () => {
       expect(serviceGoto.status).toBe("ok");
       if (serviceGoto.status === "ok")
         expect(serviceGoto.definition.file).toBe(normalizePath(path.join(root, "java/p/PackageService.java")));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("resolves mixed Java and Kotlin package wildcards without Java importing Kotlin functions", async () => {
+    const root = await mkTmpDir("cg-mixed-jvm-package-");
+    const sources = {
+      "java/p/Mode.java": "package p; public enum Mode { FAST, SLOW }",
+      "kotlin/p/Helpers.kt": "package p\nclass KotlinWidget\nfun helperFunction(): Int = 1\n",
+      "kotlin/app/Consumer.kt": [
+        "package app",
+        "import p.*",
+        "fun consumeMode(): Mode = Mode.FAST",
+        "fun consumeWidget(): KotlinWidget = KotlinWidget()",
+        "fun consumeHelper(): Int = helperFunction()",
+      ].join("\n"),
+      "java/client/Consumer.java": [
+        "package client;",
+        "import p.*;",
+        "class Consumer {",
+        "  KotlinWidget widget;",
+        "  Mode mode;",
+        "  void use() { helperFunction(); }",
+        "}",
+      ].join("\n"),
+    };
+    try {
+      for (const [name, source] of Object.entries(sources)) {
+        const file = path.join(root, name);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, source);
+      }
+      const index = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      const node = (file: keyof typeof sources, name: string, kind?: string) =>
+        nodes.find(
+          (entry) =>
+            entry.file === normalizePath(path.join(root, file)) &&
+            entry.name === name &&
+            (!kind || entry.kind === kind),
+        );
+      const mode = node("java/p/Mode.java", "Mode");
+      const widget = node("kotlin/p/Helpers.kt", "KotlinWidget");
+      const helper = node("kotlin/p/Helpers.kt", "helperFunction");
+      const kotlinMode = node("kotlin/app/Consumer.kt", "Mode", "import");
+      const kotlinWidget = node("kotlin/app/Consumer.kt", "KotlinWidget", "import");
+      const kotlinHelper = node("kotlin/app/Consumer.kt", "helperFunction", "import");
+      const javaMode = node("java/client/Consumer.java", "Mode", "import");
+      const javaWidget = node("java/client/Consumer.java", "KotlinWidget", "import");
+      const javaHelper = node("java/client/Consumer.java", "helperFunction", "import");
+      const kotlinCaller = node("kotlin/app/Consumer.kt", "consumeHelper");
+      const javaCaller = node("java/client/Consumer.java", "use");
+      const edge = (from?: string, to?: string) => graph.edges.some((entry) => entry.from === from && entry.to === to);
+      expect(mode).toBeDefined();
+      expect(widget).toBeDefined();
+      expect(helper).toBeDefined();
+      expect(kotlinMode).toBeDefined();
+      expect(kotlinWidget).toBeDefined();
+      expect(kotlinHelper).toBeDefined();
+      expect(javaMode).toBeDefined();
+      expect(javaWidget).toBeDefined();
+      expect(javaHelper).toBeUndefined();
+      expect(kotlinCaller).toBeDefined();
+      expect(javaCaller).toBeDefined();
+      expect(edge(kotlinMode?.id, mode?.id)).toBe(true);
+      expect(edge(kotlinWidget?.id, widget?.id)).toBe(true);
+      expect(edge(kotlinHelper?.id, helper?.id)).toBe(true);
+      expect(edge(javaMode?.id, mode?.id)).toBe(true);
+      expect(edge(javaWidget?.id, widget?.id)).toBe(true);
+      expect(edge(kotlinCaller?.id, helper?.id)).toBe(true);
+      expect(edge(javaCaller?.id, helper?.id)).toBe(false);
+      const goto = async (file: keyof typeof sources, line: number, token: string, projectIndex = index) => {
+        const sourceLine = sources[file].split("\n")[line - 1]!;
+        return await goToDefinition(projectIndex, {
+          file: path.join(root, file),
+          line,
+          column: sourceLine.lastIndexOf(token) + 1,
+        });
+      };
+      const kotlinModeGoto = await goto("kotlin/app/Consumer.kt", 3, "Mode");
+      const javaWidgetGoto = await goto("java/client/Consumer.java", 4, "KotlinWidget");
+      const kotlinHelperGoto = await goto("kotlin/app/Consumer.kt", 5, "helperFunction");
+      const javaHelperGoto = await goto("java/client/Consumer.java", 6, "helperFunction");
+      expect(kotlinModeGoto.status).toBe("ok");
+      if (kotlinModeGoto.status === "ok") expect(kotlinModeGoto.definition.file).toBe(mode?.file);
+      expect(javaWidgetGoto.status).toBe("ok");
+      if (javaWidgetGoto.status === "ok") expect(javaWidgetGoto.definition.file).toBe(widget?.file);
+      expect(kotlinHelperGoto.status).toBe("ok");
+      if (kotlinHelperGoto.status === "ok") expect(kotlinHelperGoto.definition.file).toBe(helper?.file);
+      expect(javaHelperGoto.status).toBe("not_found");
+      const widgetReferences = await findReferences(index, {
+        file: path.join(root, "kotlin/p/Helpers.kt"),
+        line: 2,
+        column: sources["kotlin/p/Helpers.kt"].split("\n")[1]!.indexOf("KotlinWidget") + 1,
+      });
+      expect(widgetReferences.status).toBe("ok");
+      if (widgetReferences.status === "ok") {
+        const javaSites = widgetReferences.references
+          .filter((reference) => reference.file === normalizePath(path.join(root, "java/client/Consumer.java")))
+          .map((reference) => reference.range.start.line);
+        expect(javaSites).toContain(4);
+        expect(javaSites).not.toContain(6);
+      }
+      const helperReferences = await findReferences(index, {
+        file: path.join(root, "kotlin/p/Helpers.kt"),
+        line: 3,
+        column: sources["kotlin/p/Helpers.kt"].split("\n")[2]!.indexOf("helperFunction") + 1,
+      });
+      expect(helperReferences.status).toBe("ok");
+      if (helperReferences.status === "ok") {
+        const kotlinSites = helperReferences.references
+          .filter((reference) => reference.file === normalizePath(path.join(root, "kotlin/app/Consumer.kt")))
+          .map((reference) => reference.range.start.line);
+        const javaSites = helperReferences.references
+          .filter((reference) => reference.file === normalizePath(path.join(root, "java/client/Consumer.java")))
+          .map((reference) => reference.range.start.line);
+        expect(kotlinSites).toContain(5);
+        expect(javaSites).not.toContain(6);
+      }
+      const warm = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const warmGraph = await buildSymbolGraphDetailed(warm);
+      const warmNodes = [...warmGraph.nodes.values()];
+      const warmJavaWidget = warmNodes.find(
+        (entry) =>
+          entry.file === normalizePath(path.join(root, "java/client/Consumer.java")) &&
+          entry.name === "KotlinWidget" &&
+          entry.kind === "import",
+      );
+      const warmWidgetTarget = warmNodes.find(
+        (entry) =>
+          entry.file === normalizePath(path.join(root, "kotlin/p/Helpers.kt")) &&
+          entry.name === "KotlinWidget" &&
+          entry.kind === "class",
+      );
+      const warmJavaHelper = warmNodes.find(
+        (entry) =>
+          entry.file === normalizePath(path.join(root, "java/client/Consumer.java")) &&
+          entry.name === "helperFunction" &&
+          entry.kind === "import",
+      );
+      const warmJavaCaller = warmNodes.find(
+        (entry) => entry.file === normalizePath(path.join(root, "java/client/Consumer.java")) && entry.name === "use",
+      );
+      const warmHelperTarget = warmNodes.find(
+        (entry) =>
+          entry.file === normalizePath(path.join(root, "kotlin/p/Helpers.kt")) && entry.name === "helperFunction",
+      );
+      expect(
+        warmGraph.edges.some((entry) => entry.from === warmJavaWidget?.id && entry.to === warmWidgetTarget?.id),
+      ).toBe(true);
+      expect(warmJavaHelper).toBeUndefined();
+      expect(warmJavaCaller).toBeDefined();
+      expect(warmHelperTarget).toBeDefined();
+      expect(
+        warmGraph.edges.some((entry) => entry.from === warmJavaCaller?.id && entry.to === warmHelperTarget?.id),
+      ).toBe(false);
+      const warmJavaWidgetGoto = await goto("java/client/Consumer.java", 4, "KotlinWidget", warm);
+      const warmJavaHelperGoto = await goto("java/client/Consumer.java", 6, "helperFunction", warm);
+      expect(warmJavaWidgetGoto.status).toBe("ok");
+      if (warmJavaWidgetGoto.status === "ok") expect(warmJavaWidgetGoto.definition.file).toBe(widget?.file);
+      expect(warmJavaHelperGoto.status).toBe("not_found");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

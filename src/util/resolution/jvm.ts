@@ -150,12 +150,16 @@ async function jvmIndexRoot(projectRoot: string, fromFile: string): Promise<stri
 export async function resolveJvmPackageImportPaths(
   projectRoot: string,
   spec: string,
-  languageId: "java" | "kotlin",
   fromFile: string,
 ): Promise<string[]> {
   const indexRoot = await jvmIndexRoot(projectRoot, fromFile);
-  const projectIndex = await getJvmProjectSymbolIndex(indexRoot, languageId);
-  const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
+  const [javaIndex, kotlinIndex] = await Promise.all([
+    getJavaProjectSymbolIndex(indexRoot),
+    getKotlinProjectSymbolIndex(indexRoot),
+  ]);
+  const packageFiles = new Set(javaIndex.filesByPackage.get(spec) ?? []);
+  for (const file of kotlinIndex.filesByPackage.get(spec) ?? []) packageFiles.add(file);
+  const packageCandidates = [...packageFiles].sort((left, right) => left.localeCompare(right));
   const confined: string[] = [];
   for (const candidate of packageCandidates) {
     const hit = await confineJvmResolvedPath(projectRoot, candidate);

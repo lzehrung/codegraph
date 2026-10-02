@@ -207,7 +207,10 @@ export async function collectImportsForFile(
       if (binding.kind !== "star" || typeof binding.resolved !== "string") continue;
       const files = jvmPackageFiles.get(binding.from);
       // A static class wildcard can spell the same name as a package wildcard.
-      if (files?.includes(binding.resolved)) binding.jvmPackageFiles = files;
+      if (files?.includes(binding.resolved) && (resolvedSup.id === "java" || resolvedSup.id === "kotlin")) {
+        binding.jvmPackageFiles = files;
+        binding.jvmPackageLanguageId = resolvedSup.id;
+      }
     }
   };
 

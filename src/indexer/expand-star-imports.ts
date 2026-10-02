@@ -99,10 +99,14 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
           targetSupport?.id === "ruby",
           !!packageFiles,
         );
+        const javaImportsKotlinTypes = imp.jvmPackageLanguageId === "java" && targetSupport?.id === "kotlin";
         // Header files default to C in filename-only lookup. Only extracted C tags prove the namespace split.
         const hasCTagExports = exportedSymbols.some(({ symbol }) => Boolean(symbol.cTag));
         const seen = new Set<string>();
         for (const { name, symbol } of exportedSymbols) {
+          if (javaImportsKotlinTypes && symbol.kind !== SymbolKind.Class && symbol.kind !== SymbolKind.Interface) {
+            continue;
+          }
           let namespace: "tag" | "ordinary" | undefined;
           if (symbol.cTag) namespace = "tag";
           else if (hasCTagExports) namespace = "ordinary";

@@ -218,7 +218,7 @@ export async function resolveSpecifierTargets(
   if (languageId === "python") return resolvePythonTargets(file, specifier, metadata);
   if (languageId === "java" || languageId === "kotlin") {
     if (metadata.jvmPackageWildcard) {
-      const packageTargets = await resolveJvmPackageImportPaths(metadata.projectRoot, specifier, languageId, file);
+      const packageTargets = await resolveJvmPackageImportPaths(metadata.projectRoot, specifier, file);
       if (packageTargets.length) return { files: packageTargets, externalName: specifier };
     }
     return resolveLanguageImportTargets(file, specifier, languageId, metadata);
