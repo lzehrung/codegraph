@@ -28,7 +28,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Zig: `const area = @import("shapes.zig").area;` goes to `area` in `shapes.zig`. Calls and construction through a type in another file (`box.Box{}`, `counter.Counter.zero()`) have call-graph edges, and struct literals record `instantiates` edges. A bare `@import("api.zig")` is now a file-graph dependency on `api.zig` instead of an external name.
 - C# `using N.T` binds the file that declares type `T` when `N.T` is not a namespace. An ambiguous or unreadable match stays unresolved instead of a same-shaped path. A bare C# `using` or Ruby `require` prefers a same-named project file over an npm workspace package, and a C# import no longer binds a file of another language.
 - A failed Python relative import such as `from .missing import x` is reported as `.missing`, including by `getUnresolvedImports`.
-- An SCSS partial resolves for a source specifier. A `url()` document specifier still does not.
+- An SCSS partial resolves for a source specifier. A `url()` document specifier still does not. A file with both `@use "icons"` and `url("icons")` keeps both dependencies; before, the second one was dropped.
 
 ### Changed
 

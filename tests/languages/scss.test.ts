@@ -478,3 +478,25 @@ it("resolves an SCSS partial for a source-kind specifier and keeps a document-ki
     await fsp.rm(root, { recursive: true, force: true });
   }
 });
+
+it("keeps a stylesheet @use and a same-spelled document url() as separate dependencies", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-same-spelling-"));
+  try {
+    await Promise.all([
+      fsp.writeFile(path.join(root, "_icons.scss"), "$size: 1px;\n", "utf8"),
+      fsp.writeFile(path.join(root, "use-first.scss"), '@use "icons";\n.a { background: url("icons"); }\n', "utf8"),
+      fsp.writeFile(path.join(root, "url-first.scss"), '.b { background: url("icons"); }\n@use "icons";\n', "utf8"),
+    ]);
+    const index = await buildProjectIndex(root, { cache: "off" });
+    for (const file of ["use-first.scss", "url-first.scss"]) {
+      const targets = index.graph.edges
+        .filter((edge) => path.basename(edge.from) === file)
+        .map((edge) => (edge.to.type === "file" ? `file:${path.basename(edge.to.path)}` : `external:${edge.to.name}`))
+        .sort();
+      // The stylesheet edge reaches the partial; the document URL stays external and never binds it.
+      expect(targets, file).toEqual(["external:icons", "file:_icons.scss"]);
+    }
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
