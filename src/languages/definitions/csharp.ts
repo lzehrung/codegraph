@@ -6,6 +6,12 @@ import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
   extensions: [".cs", ".csx"],
+  resolvesImportsFromDeclarations: true,
+  implicitCompilationUnit: "namespace",
+  externalSpecifierResolution: {
+    separator: "path",
+    reResolveAnyAddedExtensions: [".cs", ".csx"],
+  },
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

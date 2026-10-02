@@ -7,11 +7,11 @@ import {
   rustImportKeywordOffset,
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
+import type { LanguageExtensionMap } from "../../languages.js";
 import { CSHARP_IDENTIFIER_SOURCE, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
-import { extractRustModPathAttribute, resolveRustImportPath } from "../../util/resolution/rust.js";
+import { extractRustModPathAttribute } from "../../util/resolution/rust.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
 import type { Range } from "../../types.js";
@@ -160,18 +160,6 @@ function csharpUsingAliasLocalRange(
   return sourceRangeFromOffsets(collectLineStartOffsets(source), start, start + alias.length);
 }
 
-/** A path-like hit counts for a C# directive only when it is a C# file. */
-function csharpImportTarget(
-  context: LanguageSpecificImportContext,
-  resolved: ResolvedImportTarget,
-  spec: string,
-): ResolvedImportTarget {
-  if (typeof resolved !== "string") return resolved;
-  return supportForFileWithoutHeaderSample(resolved, context.languageExtensions)?.id === "csharp"
-    ? resolved
-    : { external: spec };
-}
-
 async function applyCsharpStatementOverride(
   context: LanguageSpecificImportContext,
   normalizedStmt: string,
@@ -247,7 +235,7 @@ async function applyCsharpStatementOverride(
   let resolved: ResolvedImportTarget =
     !parsed.alias && namespaceTargets.length
       ? namespaceTargets[0]!.replace(/\\/g, "/")
-      : csharpImportTarget(context, await context.resolveFrom(fromValue), fromValue);
+      : await context.resolveFrom(fromValue);
   if (parsed.alias) {
     const fromParts = parsed.from.split(".");
     if (fromParts.length > 1) {
@@ -282,7 +270,7 @@ async function applyCsharpStatementOverride(
           fromValue = fallbackFrom;
           resolved = fallbackNamespaceTargets[0]!.replace(/\\/g, "/");
         } else if (typeof resolved !== "string") {
-          const fallbackResolved = csharpImportTarget(context, await context.resolveFrom(fallbackFrom), fallbackFrom);
+          const fallbackResolved = await context.resolveFrom(fallbackFrom);
           if (typeof fallbackResolved === "string") {
             fromValue = fallbackFrom;
             resolved = fallbackResolved;
@@ -379,18 +367,10 @@ async function resolveRustParsedFrom(
   pathAttribute?: string,
   statementStartIndex?: number,
 ): Promise<ResolvedImportTarget> {
-  if (pathAttribute) {
-    const attributed = await resolveRustImportPath(
-      context.projectRoot,
-      context.file,
-      from,
-      pathAttribute,
-      statementStartIndex,
-    );
-    if (attributed) return attributed.replace(/\\/g, "/");
-    return { external: from };
-  }
-  return context.resolveFrom(from);
+  return context.resolveFrom(from, undefined, {
+    ...(pathAttribute ? { pathAttribute } : {}),
+    ...(statementStartIndex !== undefined ? { statementStartIndex } : {}),
+  });
 }
 
 function rustBindingKey(binding: ImportBinding): string {

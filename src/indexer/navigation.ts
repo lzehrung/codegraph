@@ -89,7 +89,7 @@ import {
   cppOutOfLineMemberDeclarationNode,
   cppQualifiedNameSegments,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import { cppCallableShapeForNode, cppEquivalentCallableBindings } from "./cpp-callables.js";
+import { cppEquivalentCallableBindings } from "./cpp-callables.js";
 import type { Binding } from "./scope-types.js";
 import { resolveCppExportedCallables, resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
 import {
@@ -744,14 +744,10 @@ async function findReferencesInternal(
     !receiverMemberDefinition &&
     localBinding?.sameScopeFunctionBindings
   ) {
-    const start = definition.range.start.index ?? 0;
-    const end = definition.range.end.index ?? start;
     const overloadBindings = typescriptCallableCandidatesInContainer(
       localBinding.sameScopeFunctionBindings,
-      parsedContext.tree,
-      (binding) => binding.def!,
-      start,
-      end,
+      (binding) => binding.callable,
+      definition.callable?.key,
     );
     requiresTypeScriptOverloadVerifiedScan = overloadBindings.length > 1;
   }
@@ -1691,13 +1687,9 @@ function cIncludeLinkedModules(index: ProjectIndex, startFile: string): ModuleIn
  * the other. Two translation units that merely share an unrelated header stay apart,
  * and `static` functions are not exports so they never join the family.
  */
-async function cIncludeLinkedCallableEquivalents(
-  index: ProjectIndex,
-  def: SymbolDef,
-  definitionNameNode: SyntaxNodeLike,
-): Promise<SymbolDef[]> {
+async function cIncludeLinkedCallableEquivalents(index: ProjectIndex, def: SymbolDef): Promise<SymbolDef[]> {
   if (def.kind !== SymbolKind.Function || def.cTag) return [];
-  const expected = cppCallableShapeForNode(definitionNameNode);
+  const expected = def.callable?.signature;
   if (!expected) return [];
   const origin = index.byFile.get(fileIdentityKey(def.file));
   const exported = origin?.exports.some(
@@ -1727,8 +1719,7 @@ async function cIncludeLinkedCallableEquivalents(
     if (candidateParsed.sup.id !== "c") continue;
     for (const candidate of candidates) {
       if (sameDef(candidate, def, index.languageExtensions)) continue;
-      const candidateNode = syntaxNodeForDefinition(candidateParsed, candidate);
-      if (cppCallableShapeForNode(candidateNode)?.signature !== expected.signature) continue;
+      if (candidate.callable?.signature !== expected) continue;
       equivalents.set(referenceSiteKey(candidate.file, candidate.range), candidate);
     }
   }
@@ -1801,10 +1792,10 @@ async function cppEquivalentCallableFamily(
   } else if (context.sup.id === "cpp") {
     equivalents = [
       ...sameFileFunctionEquivalentDefinitions,
-      ...(await cppNamespaceFunctionEquivalentDefinitions(index, definition, context, definitionNameNode)),
+      ...cppNamespaceFunctionEquivalentDefinitions(index, definition, context, definitionNameNode),
     ];
   } else if (context.sup.id === "c" && definition.kind === SymbolKind.Function && !definition.cTag) {
-    const linked = await cIncludeLinkedCallableEquivalents(index, definition, definitionNameNode);
+    const linked = await cIncludeLinkedCallableEquivalents(index, definition);
     const seen = new Set(sameFileFunctionEquivalentDefinitions.map((item) => referenceSiteKey(item.file, item.range)));
     equivalents = [
       ...sameFileFunctionEquivalentDefinitions,
@@ -1879,8 +1870,8 @@ async function cppInClassMemberEquivalentDefinitions(
   const owners = ownerSegments.flat();
   if (!owners.length) return [];
   const qualifiedName = [...owners, def.localName].join("::");
-  const expectedShape = cppCallableShapeForNode(definitionNameNode);
-  if (!expectedShape) return [];
+  const expectedShape = def.callable;
+  if (!expectedShape?.signature || !expectedShape.arity) return [];
 
   const equivalents = new Map<string, SymbolDef>();
   for (const module of index.byFile.values()) {
@@ -1899,8 +1890,8 @@ async function cppInClassMemberEquivalentDefinitions(
         index.languageExtensions,
       );
       const candidateNode = syntaxNodeForDefinition(candidateParsed, entry.target);
-      const candidateShape = cppCallableShapeForNode(candidateNode);
-      if (!candidateShape) continue;
+      const candidateShape = entry.target.callable;
+      if (!candidateShape?.signature || !candidateShape.arity) continue;
       let explicitSpecialization = false;
       let current: SyntaxNodeLike | null = candidateNode;
       while (current) {
@@ -1914,7 +1905,8 @@ async function cppInClassMemberEquivalentDefinitions(
         current = current.parent;
       }
       const arityMatches =
-        candidateShape.minArity === expectedShape.minArity && candidateShape.maxArity === expectedShape.maxArity;
+        candidateShape.arity.minArgs === expectedShape.arity.minArgs &&
+        candidateShape.arity.maxArgs === expectedShape.arity.maxArgs;
       if (candidateShape.signature !== expectedShape.signature && !(explicitSpecialization && arityMatches)) {
         continue;
       }
@@ -1932,12 +1924,12 @@ function shouldScanVerifiedReferences(
   if (parsedContext.sup.id === "php" && !isPhpCaseInsensitiveSymbolKind(def.kind)) return false;
   return supportsReceiverMemberNavigation(parsedContext.sup.id) && receiverMemberDefinition;
 }
-async function cppNamespaceFunctionEquivalentDefinitions(
+function cppNamespaceFunctionEquivalentDefinitions(
   index: ProjectIndex,
   def: SymbolDef,
   parsedContext: ParsedFileContext,
   definitionNameNode: SyntaxNodeLike,
-): Promise<SymbolDef[]> {
+): SymbolDef[] {
   if (parsedContext.sup.id !== "cpp" || def.kind !== SymbolKind.Function) return [];
   const ownerPath = cppOutOfLineOwnerPath(definitionNameNode, parsedContext.source, parsedContext.sup);
   const namespacePath: string[][] = [];
@@ -1958,7 +1950,7 @@ async function cppNamespaceFunctionEquivalentDefinitions(
   const memberName =
     cppOutOfLineMemberName(definitionNameNode, parsedContext.source, parsedContext.sup) ?? def.localName;
   const qualifiedName = [...owners, memberName].join("::");
-  const expectedShape = cppCallableShapeForNode(definitionNameNode);
+  const expectedShape = def.callable?.signature;
   if (!expectedShape) return [];
 
   const equivalents = new Map<string, SymbolDef>();
@@ -1972,13 +1964,7 @@ async function cppNamespaceFunctionEquivalentDefinitions(
       ) {
         continue;
       }
-      const candidateParsed = await ensureParsedContext(
-        entry.target.file,
-        index.parsed?.get(fileIdentityKey(entry.target.file)),
-        index.languageExtensions,
-      );
-      const candidateNode = syntaxNodeForDefinition(candidateParsed, entry.target);
-      if (cppCallableShapeForNode(candidateNode)?.signature !== expectedShape.signature) continue;
+      if (entry.target.callable?.signature !== expectedShape) continue;
       equivalents.set(referenceSiteKey(entry.target.file, entry.target.range), entry.target);
     }
   }

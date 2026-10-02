@@ -5,6 +5,7 @@ import { isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 export const SWIFT_DEF: LanguageDefinition = {
   id: "swift",
   extensions: [".swift"],
+  implicitCompilationUnit: "module",
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

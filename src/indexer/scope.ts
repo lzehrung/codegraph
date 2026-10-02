@@ -3,8 +3,9 @@ import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { declarationKindToBindingKind } from "./declarations.js";
-import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
-import { typescriptCallableCandidatesInContainer, typescriptCallableRole } from "./ts-callables.js";
+import { callableIdentityForDeclaration } from "./callable-identity.js";
+import { cppSelectCallableBinding } from "./cpp-callables.js";
+import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
@@ -20,7 +21,7 @@ import {
 } from "./scope-nodes.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
-import type { ImportBinding } from "./types.js";
+import { SymbolKind, type ImportBinding, type SymbolDef } from "./types.js";
 import type { Binding, BindingKind, Scope, ScopeIndex } from "./scope-types.js";
 
 export type { Binding, BindingKind, Scope, ScopeIndex };
@@ -76,7 +77,7 @@ export function buildScopeIndexFromSource(
   source: string,
   support: LanguageSupport,
   imports: ImportBinding[] = [],
-  opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
+  opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode; locals?: readonly SymbolDef[] },
 ): ScopeIndex {
   let tree = opts?.tree ?? null;
   if (!tree) {
@@ -131,13 +132,28 @@ export function buildScopeIndexFromSource(
   const nameSpanKey = (node: SyntaxNodeLike): string => `${node.startIndex}:${node.endIndex}`;
 
   const normalizeIdentifier = support.normalizeIdentifier;
+  const indexedCallables = opts?.locals ? new Map<string, SymbolDef["callable"]>() : undefined;
+  if (indexedCallables && opts?.locals) {
+    for (const local of opts.locals) {
+      if (local.kind === SymbolKind.Function && local.callable) {
+        indexedCallables.set(`${local.range.start.index}:${local.range.end.index}`, local.callable);
+      }
+    }
+  }
   const buildBinding = (nameNode: SyntaxNodeLike, kind: BindingKind): Binding => {
     const name = sliceText(nameNode, source);
+    const def = toRange(nameNode);
+    const callable =
+      kind === "function"
+        ? (indexedCallables?.get(`${nameNode.startIndex}:${nameNode.endIndex}`) ??
+          callableIdentityForDeclaration({ file, name, range: def, languageId: support.id, source, node: nameNode }))
+        : undefined;
     return {
       name,
       canonicalName: scopeIdentifierKey(row, name, nameNode, normalizeIdentifier),
       kind,
-      def: toRange(nameNode),
+      def,
+      ...(callable ? { callable } : {}),
       node: nameNode,
       occurrences: [],
     };
@@ -347,18 +363,16 @@ export function buildScopeIndexFromSource(
         const candidates = existing.sameScopeFunctionBindings ?? [existing];
         const collisions = typescriptCallableCandidatesInContainer(
           candidates,
-          tree,
-          (candidate) => candidate.def!,
-          nameNode.startIndex,
-          nameNode.endIndex,
+          (candidate) => candidate.callable,
+          binding.callable?.key,
         );
         if (collisions.includes(existing)) {
           let grouped: Binding[] = candidates;
           if (collisions !== candidates) grouped = [...collisions];
           grouped.push(binding);
           for (const collision of grouped) collision.sameScopeFunctionBindings = grouped;
-          const existingRole = existing.node ? typescriptCallableRole(existing.node) : "other";
-          const nextRole = typescriptCallableRole(nameNode);
+          const existingRole = existing.callable?.role ?? "other";
+          const nextRole = binding.callable?.role ?? "other";
           if (existingRole === "implementation" && nextRole === "signature") {
             preserveExtraBinding(binding);
             return;
@@ -1184,14 +1198,14 @@ export function buildScopeIndexFromSource(
   const prepareCppCallableBindings = (bindings: readonly Binding[]): boolean => {
     const bySignature = new Map<string, Binding[]>();
     for (const binding of bindings) {
-      const shape = cppBindingCallableShape(binding);
-      if (!shape) {
+      const callable = binding.callable;
+      if (!callable?.signature || !callable.arity) {
         for (const candidate of bindings) candidate.occurrencesComplete = false;
         return false;
       }
-      const entity = bySignature.get(shape.signature) ?? [];
+      const entity = bySignature.get(callable.key) ?? [];
       entity.push(binding);
-      bySignature.set(shape.signature, entity);
+      bySignature.set(callable.key, entity);
     }
     for (const entity of bySignature.values()) {
       const occurrences = entity.flatMap((binding) => (binding.def ? [binding.def] : []));
@@ -1212,7 +1226,7 @@ export function buildScopeIndexFromSource(
   };
   const cppOccurrenceBindings = (binding: Binding): readonly Binding[] | null => {
     const collisions = binding.sameScopeFunctionBindings ?? [binding];
-    if (collisions.length > 1 || cppBindingCallableShape(binding)) return collisions;
+    if (collisions.length > 1 || binding.callable?.signature) return collisions;
     return null;
   };
 

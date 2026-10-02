@@ -1,5 +1,6 @@
 import { prepareSourceInput } from "../languages/file-prep.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier, type MatchPathFn } from "../util/resolution.js";
+import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
 import { loadWorkspaceConfig, type WorkspaceConfig } from "../util/workspace.js";
 import type { LogLevel } from "../logging.js";
 import {
@@ -139,22 +140,48 @@ export async function collectImportsForFile(
   ): Promise<ResolvedImportTarget> => {
     const resolutionKind = resolverOpts?.resolutionKind;
     const includeForm = resolverOpts?.includeForm;
-    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}\0${includeForm ?? ""}`;
+    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}\0${includeForm ?? ""}\0${resolverOpts?.pathAttribute ?? ""}\0${resolverOpts?.statementStartIndex ?? ""}`;
     const cached = resolvedImportCache.get(cacheKey);
     if (cached) return await cached;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
     const resolved = (async (): Promise<ResolvedImportTarget> => {
-      const result = await resolveImportSpecifier(projectRoot, file, from, resolvedSup.id, {
+      const result = await resolveSpecifierTargets(file, from, resolvedSup.id, {
+        projectRoot,
         ...(matchPath ? { matchPath } : {}),
         ...(workspaceConfig ? { workspaceConfig } : {}),
         resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
         ...(resolutionHints ? { resolutionHints } : {}),
+        ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
         ...(phpImportType ? { phpImportType } : {}),
         ...(resolutionKind ? { resolutionKind } : {}),
         ...(includeForm ? { includeForm } : {}),
-        ...(resolvedSup.id === "scss" && resolutionKind === "stylesheet" ? { allowScssPartialResolution: true } : {}),
+        ...(resolverOpts?.pathAttribute ? { pathAttribute: resolverOpts.pathAttribute } : {}),
+        ...(resolverOpts?.statementStartIndex !== undefined
+          ? { statementStartIndex: resolverOpts.statementStartIndex }
+          : {}),
       });
-      return typeof result === "string" ? result.replace(/\\/g, "/") : result;
+      // Java and Kotlin exact-package imports name every file in the package.
+      // A binding keeps the single file resolveImportSpecifier already chose.
+      if (resolvedSup.id === "java" || resolvedSup.id === "kotlin") {
+        const historical = await resolveImportSpecifier(projectRoot, file, from, resolvedSup.id, {
+          ...(matchPath ? { matchPath } : {}),
+          ...(workspaceConfig ? { workspaceConfig } : {}),
+          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+          ...(resolutionHints ? { resolutionHints } : {}),
+          ...(resolutionKind ? { resolutionKind } : {}),
+          ...(includeForm ? { includeForm } : {}),
+        });
+        if (typeof historical === "string") return historical.replace(/\\/g, "/");
+        return { external: historical.external };
+      }
+      // `using N;` declared in several files binds to the first. An alias of that
+      // namespace is shaped by the C# statement override, which does not call here.
+      if (resolvedSup.id === "csharp" && result.files.length > 1) {
+        return result.files[0]!.replace(/\\/g, "/");
+      }
+      const resolvedFile = result.files[0];
+      if (result.files.length === 1 && resolvedFile) return resolvedFile.replace(/\\/g, "/");
+      return { external: result.externalName };
     })();
     resolvedImportCache.set(cacheKey, resolved);
     return await resolved;

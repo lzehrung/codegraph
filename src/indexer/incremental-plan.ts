@@ -10,6 +10,8 @@ import {
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
 import { listChangedFiles, listUntrackedFiles, type GitDiscoveryCache } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
+import { supportById } from "../languages.js";
+import type { ExternalSpecifierSeparator } from "../languages/types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS, stripKnownResolutionExtension } from "../util/resolution-candidates.js";
@@ -184,20 +186,31 @@ type ExternalSpecifierResolutionRule = {
   matchesModuleSegments?: boolean;
 };
 
-const DEFAULT_EXTERNAL_SPECIFIER_RULE: ExternalSpecifierResolutionRule = { separator: /[/\\]/u };
+const PATH_SEPARATOR = /[/\\]/u;
+const SLASH_SEPARATOR = /\//u;
+const DOT_SEPARATOR = /\./u;
+const PYTHON_SEPARATOR = /[./\\]/u;
+const RUST_SEPARATOR = /::/u;
 
-const EXTERNAL_SPECIFIER_RESOLUTION_RULES: Readonly<Record<string, ExternalSpecifierResolutionRule>> = {
-  csharp: { separator: /[/\\]/u, reResolveAnyAddedExtensions: [".cs", ".csx"] },
-  go: { separator: /\//u, importNamesDirectory: "parent" },
-  java: { separator: /\./u, reResolveAnyAddedExtensions: [".java"] },
-  kotlin: { separator: /\./u, reResolveAnyAddedExtensions: [".kt", ".kts", ".ktm"] },
-  php: { separator: /[/\\]/u, reResolveAnyAddedExtensions: [".php", ".phtml", ".php4", ".php8"] },
-  python: { separator: /[./\\]/u, importNamesDirectory: "ancestors" },
-  rust: { separator: /::/u, matchesModuleSegments: true },
-};
+const DEFAULT_EXTERNAL_SPECIFIER_RULE: ExternalSpecifierResolutionRule = { separator: PATH_SEPARATOR };
+
+function separatorPattern(separator: ExternalSpecifierSeparator): RegExp {
+  if (separator === "slash") return SLASH_SEPARATOR;
+  if (separator === "dot") return DOT_SEPARATOR;
+  if (separator === "python") return PYTHON_SEPARATOR;
+  if (separator === "rust") return RUST_SEPARATOR;
+  return PATH_SEPARATOR;
+}
 
 function externalSpecifierResolutionRule(languageId: string): ExternalSpecifierResolutionRule {
-  return EXTERNAL_SPECIFIER_RESOLUTION_RULES[languageId] ?? DEFAULT_EXTERNAL_SPECIFIER_RULE;
+  const data = supportById(languageId)?.externalSpecifierResolution;
+  if (!data) return DEFAULT_EXTERNAL_SPECIFIER_RULE;
+  return {
+    separator: separatorPattern(data.separator),
+    ...(data.importNamesDirectory ? { importNamesDirectory: data.importNamesDirectory } : {}),
+    ...(data.reResolveAnyAddedExtensions ? { reResolveAnyAddedExtensions: data.reResolveAnyAddedExtensions } : {}),
+    ...(data.matchesModuleSegments ? { matchesModuleSegments: true } : {}),
+  };
 }
 
 /** Stems an added file can satisfy, plus directories used by language-specific module imports. */

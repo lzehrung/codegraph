@@ -4,7 +4,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
-import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
+import { cppSelectCallableBinding } from "./cpp-callables.js";
 import { typescriptCallableCandidatesInContainer, typescriptSelectOverloadCandidate } from "./ts-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import {
@@ -169,7 +169,7 @@ export function getOrBuildScopeIndex(
   const fileKey = fileIdentityKey(file);
   let scopeIndex = index.scopeCache.get(fileKey);
   if (scopeIndex) return scopeIndex;
-  scopeIndex = buildScopeIndexFromSource(file, source, sup, mod.imports, { tree });
+  scopeIndex = buildScopeIndexFromSource(file, source, sup, mod.imports, { tree, locals: mod.locals });
   index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;
 }
@@ -313,35 +313,20 @@ export function laterLocalShadowsUse(
 
 function selectTypeScriptOverloadBinding(
   binding: Binding,
-  file: FileId,
   currentNode: SyntaxNodeLike,
   source: string,
-  tree: SyntaxTreeLike,
   languageId: string,
 ): Binding | null {
   const call = currentNode.parent;
   if (!call || call.type !== "call_expression") return binding;
-  const start = binding.def!.start.index ?? 0;
-  const end = binding.def!.end.index ?? start;
   const candidates = typescriptCallableCandidatesInContainer(
     binding.sameScopeFunctionBindings ?? [binding],
-    tree,
-    (candidate) => candidate.def!,
-    start,
-    end,
+    (candidate) => candidate.callable,
+    binding.callable?.key,
   );
   const selected = typescriptSelectOverloadCandidate({
     group: candidates,
-    tree,
-    definitionOf: (candidate) => ({
-      file,
-      localName: candidate.name,
-      kind: SymbolKind.Function,
-      range: candidate.def!,
-    }),
-    declarationOf: (candidate) => candidate.node?.parent,
-    source,
-    languageId,
+    identityOf: (candidate) => candidate.callable,
     argumentCount: getCallArgumentCount({ languageId, source, call }),
   });
   return selected ?? null;
@@ -373,7 +358,7 @@ export function definitionForBinding(
   if (!binding.def) return null;
   if (support.id === "cpp" && binding.kind === "function" && source) {
     const collisions = binding.sameScopeFunctionBindings ?? [binding];
-    if (collisions.length > 1 || cppBindingCallableShape(binding)) {
+    if (collisions.length > 1 || binding.callable?.signature) {
       const selected = cppSelectCallableBinding(collisions, currentNode, source, file, file);
       if (!selected?.def) return null;
       return {
@@ -381,11 +366,12 @@ export function definitionForBinding(
         localName: selected.name,
         kind: SymbolKind.Function,
         range: selected.def,
+        ...(selected.callable ? { callable: selected.callable } : {}),
       };
     }
   }
   if ((support.id === "ts" || support.id === "tsx") && binding.kind === "function" && source && tree) {
-    const selected = selectTypeScriptOverloadBinding(binding, file, currentNode, source, tree, support.id);
+    const selected = selectTypeScriptOverloadBinding(binding, currentNode, source, support.id);
     if (!selected?.def) return null;
     binding = selected;
   }
@@ -405,6 +391,7 @@ export function definitionForBinding(
     localName: binding.name,
     kind,
     range,
+    ...(binding.callable ? { callable: binding.callable } : {}),
     ...(tagRole ? { cTag: tagRole } : {}),
   };
 }

@@ -1196,3 +1196,30 @@ describe("Python receiver member navigation", () => {
     }
   });
 });
+
+describe("Python failed relative imports", () => {
+  it("keeps the original relative specifier when a Python import fails to resolve", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-relative-external-"));
+    try {
+      const packageDir = path.join(root, "pkg");
+      await fsp.mkdir(packageDir, { recursive: true });
+      const file = path.join(packageDir, "app.py");
+      await fsp.writeFile(path.join(packageDir, "__init__.py"), "");
+      await fsp.writeFile(file, "from .missing import x\n");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const binding = index.byFile.get(fileIdentityKey(file))?.imports.find((entry) => entry.from === ".missing");
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root }).map((entry) => entry.name);
+      const edgeNames = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "external")
+        .map((edge) => (edge.to.type === "external" ? edge.to.name : ""));
+
+      expect(binding?.resolved).toEqual({ external: ".missing" });
+      expect(unresolved).toContain(".missing");
+      expect(unresolved).not.toContain("..missing");
+      expect(edgeNames).toContain(".missing");
+      expect(edgeNames).not.toContain("..missing");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

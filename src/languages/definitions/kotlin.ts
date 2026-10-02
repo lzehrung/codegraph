@@ -18,6 +18,13 @@ const KOTLIN_DECLARATION_NAME_PARENT_TYPES = [
 export const KOTLIN_DEF: LanguageDefinition = {
   id: "kotlin",
   extensions: [".kt", ".kts", ".ktm"],
+  resolvesImportsFromDeclarations: true,
+  implicitCompilationUnit: "package",
+  implicitCompilationUnitGroup: "jvm",
+  externalSpecifierResolution: {
+    separator: "dot",
+    reResolveAnyAddedExtensions: [".kt", ".kts", ".ktm"],
+  },
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

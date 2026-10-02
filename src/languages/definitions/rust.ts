@@ -6,6 +6,10 @@ import { hasNonAsciiCodePoint } from "../../util/identifiers.js";
 export const RUST_DEF: LanguageDefinition = {
   id: "rust",
   extensions: [".rs"],
+  externalSpecifierResolution: {
+    separator: "rust",
+    matchesModuleSegments: true,
+  },
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

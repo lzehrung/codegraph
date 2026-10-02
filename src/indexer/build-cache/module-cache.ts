@@ -26,6 +26,7 @@ import {
   type SqliteTableColumn,
 } from "../../util/sqlite-schema.js";
 import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
+import { isCallableIdentity } from "../callable-identity.js";
 import type { Pos, Range } from "../../types.js";
 import {
   assertFilePathWithinRoot,
@@ -40,8 +41,8 @@ import { cacheRoot } from "./location.js";
 
 import { getImplementationFingerprint } from "./options.js";
 
-// v6: only reexports resolved inside the project are persisted as cache-relative paths.
-const PARSED_CACHE_VERSION = 6;
+// v7: callable groups and arity are persisted with each function symbol.
+const PARSED_CACHE_VERSION = 7;
 const MODULE_CACHE_SCHEMA_VERSION = 2;
 const MODULE_CACHE_TABLE = "module_cache";
 const MODULE_CACHE_SCHEMA_VERSION_KEY = "module_cache.schema_version";
@@ -451,8 +452,22 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     Array.isArray(mod.exports) &&
     Array.isArray(mod.imports) &&
     mod.imports.every(hasValidImportBindingRanges) &&
-    Array.isArray(mod.locals)
+    Array.isArray(mod.locals) &&
+    mod.locals.every(hasValidCallableSymbol) &&
+    mod.exports.every((entry: unknown) => {
+      if (!entry || typeof entry !== "object") return false;
+      const local = entry as { type?: unknown; target?: unknown };
+      return local.type !== "local" || hasValidCallableSymbol(local.target);
+    })
   );
+}
+
+function hasValidCallableSymbol(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const symbol = value as { kind?: unknown; callable?: unknown };
+  return symbol.kind === "function"
+    ? isCallableIdentity(symbol.callable)
+    : symbol.callable === undefined || isCallableIdentity(symbol.callable);
 }
 
 /**

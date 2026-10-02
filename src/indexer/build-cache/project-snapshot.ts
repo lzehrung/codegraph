@@ -13,6 +13,7 @@ import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normal
 import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import { logWithLevel } from "../../logging.js";
 import { SymbolKind } from "../types.js";
+import { isCallableIdentity } from "../callable-identity.js";
 import { importNodeId } from "../import-types.js";
 import type {
   BackendReport,
@@ -48,7 +49,7 @@ import type { ManifestFileEntry } from "./manifest.js";
 import { expandStarImports } from "../expand-star-imports.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-export const PROJECT_SNAPSHOT_VERSION = 11;
+export const PROJECT_SNAPSHOT_VERSION = 12;
 const LEGACY_EMBEDDED_MODULE_SNAPSHOT_VERSION = 10;
 export const BLOOM_FILTER_SNAPSHOT_VERSION = 4;
 export const BLOOM_FILTER_SNAPSHOT_FILENAME = "bloom-filters.json";
@@ -1888,6 +1889,9 @@ function isSymbolDef(value: unknown): value is SymbolDef {
     typeof symbol.localName === "string" &&
     isSymbolKind(symbol.kind) &&
     isRange(symbol.range) &&
+    (symbol.kind === SymbolKind.Function
+      ? isCallableIdentity(symbol.callable)
+      : symbol.callable === undefined || isCallableIdentity(symbol.callable)) &&
     (symbol.cTag === undefined ||
       symbol.cTag === "declaration" ||
       symbol.cTag === "forward" ||

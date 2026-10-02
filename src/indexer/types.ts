@@ -9,6 +9,7 @@ import type { ParsedFileContext } from "./parse-context.js";
 import type { Edge, FileId, Graph, ProgressUpdate, Range } from "../types.js";
 import type { ProjectDiscoveryContext, ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util/project-files.js";
 import type { ImportBinding } from "./import-types.js";
+import type { CallableIdentity } from "../languages/callable-arity.js";
 
 export type { ImportBinding } from "./import-types.js";
 
@@ -31,6 +32,8 @@ export type SymbolDef = {
   localName: string;
   kind: SymbolKind;
   range: Range;
+  /** Indexed callable facts; absent for symbols that are not callable. */
+  callable?: CallableIdentity;
   isMember?: boolean;
   /** C tag identity; a reference can introduce an incomplete tag if no visible tag exists. */
   cTag?: "declaration" | "forward" | "reference";

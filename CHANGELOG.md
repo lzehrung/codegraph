@@ -9,6 +9,12 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- C# `using N.T` binds the file that declares type `T` when `N.T` is not a namespace. An ambiguous or unreadable match stays unresolved instead of a same-shaped path. A bare C# `using` or Ruby `require` prefers a same-named project file over an npm workspace package, and a C# import no longer binds a file of another language.
+- A failed Python relative import such as `from .missing import x` is reported as `.missing`, including by `getUnresolvedImports`.
+- An SCSS partial resolves for a source specifier. A `url()` document specifier still does not.
+
 ### Security
 
 - The production audit accepts `braces` advisory [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) until 2026-12-31. No patched `braces` release exists. Glob patterns from an indexed repository can reach it through `fast-glob`, so a hostile repository can make an index run fail with stack exhaustion. Tracked in [#394](https://github.com/lzehrung/codegraph/issues/394).

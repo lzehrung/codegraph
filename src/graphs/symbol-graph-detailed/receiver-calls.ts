@@ -399,11 +399,8 @@ export function receiverCallAccess(
 
 export type ReceiverMemberScope = "any" | "instance" | "static";
 
-/** Inclusive accepted argument count for one callable member. `max: null` is variadic. */
-export type MemberArityRange = {
-  min: number;
-  max: number | null;
-};
+/** The graph matcher keeps its existing explicit-argument range shape. */
+export type MemberArityRange = { min: number; max: number | null };
 
 export type ReceiverBinding =
   | { kind: "own-type"; memberScope: ReceiverMemberScope }

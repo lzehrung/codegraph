@@ -216,7 +216,7 @@ export async function settleNameResolution(
       if (
         member &&
         options.requireAcceptedArity &&
-        !(await memberAcceptsCallAt(index, member, node, parsed.source, parsed.sup.id))
+        !memberAcceptsCallAt(index, member, node, parsed.source, parsed.sup.id)
       ) {
         return null;
       }

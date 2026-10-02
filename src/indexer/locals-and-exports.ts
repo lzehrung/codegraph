@@ -14,6 +14,7 @@ import {
 } from "../native/tree-sitter-native.js";
 import { maskJsLikeCommentsAndStrings, maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
+import { callableIdentityForDeclaration } from "./callable-identity.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
 import { findClosestScopeBinding } from "./navigation-local.js";
@@ -24,17 +25,13 @@ import { phpConstructorPromotedVariable, phpPropertyPromotionParameter } from ".
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { importCapture } from "../languages/graph-captures.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
+import type { CallableIdentity } from "../languages/callable-arity.js";
 import type { Range } from "../types.js";
 
 import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isExportedDeclaration } from "./declaration-visibility.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import { cppCallableIsDefinition, cppCallableShapeForNode } from "./cpp-callables.js";
-import {
-  typescriptCollapsedOverloadTarget,
-  typescriptCallableContainerKey,
-  typescriptCallableRoleAt,
-} from "./ts-callables.js";
+import { typescriptCollapsedOverloadTarget } from "./ts-callables.js";
 
 // Missing captured comments prove missing documentation only for these languages.
 // Python captures # comments but not triple-quoted function/class docstrings.
@@ -331,20 +328,14 @@ function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>, la
   return `${entry.exportedAs}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
 }
 
-function collapseTypeScriptCallableExports(
-  exports: ExportEntry[],
-  tree: SyntaxTreeLike | null,
-  languageId: string,
-): ExportEntry[] {
-  if ((languageId !== "ts" && languageId !== "tsx") || !tree) return exports;
+function collapseTypeScriptCallableExports(exports: ExportEntry[], languageId: string): ExportEntry[] {
+  if (languageId !== "ts" && languageId !== "tsx") return exports;
   const groups = new Map<string, Extract<ExportEntry, { type: "local" }>[]>();
   for (const entry of exports) {
     if (entry.type !== "local" || entry.target.kind !== SymbolKind.Function) continue;
-    const start = entry.target.range.start.index ?? 0;
-    const end = entry.target.range.end.index ?? start;
-    const role = typescriptCallableRoleAt(tree, start, end);
-    if (role === "other") continue;
-    const key = `${typescriptCallableContainerKey(tree, start, end)}\0${entry.exportedAs}`;
+    const callable = entry.target.callable;
+    if (!callable || callable.role === "other") continue;
+    const key = `${callable.key}\0${entry.exportedAs}`;
     const group = groups.get(key) ?? [];
     group.push(entry);
     groups.set(key, group);
@@ -352,7 +343,7 @@ function collapseTypeScriptCallableExports(
   const drop = new Set<ExportEntry>();
   for (const group of groups.values()) {
     if (group.length < 2) continue;
-    const canonical = typescriptCollapsedOverloadTarget(group, tree, (entry) => entry.target);
+    const canonical = typescriptCollapsedOverloadTarget(group, (entry) => entry.target.callable);
     if (!canonical) continue;
     if (!canonical.target.docstring?.trim()) {
       const documented = group.find((entry) => entry.target.docstring?.trim());
@@ -770,7 +761,13 @@ export function collectLocalsAndExportsFromSource(
     end: positionForIndex(end),
   });
 
-  const buildSymbolDef = (localName: string, kind: SymbolKind, range: Range, node?: SyntaxNodeLike): SymbolDef => {
+  const buildSymbolDef = (
+    localName: string,
+    kind: SymbolKind,
+    range: Range,
+    node?: SyntaxNodeLike,
+    callable?: CallableIdentity,
+  ): SymbolDef => {
     let lineSpan: number | undefined;
     if (
       typeof range.start.line === "number" &&
@@ -790,6 +787,20 @@ export function collectLocalsAndExportsFromSource(
       localName,
       kind,
       range,
+      ...(kind === SymbolKind.Function
+        ? {
+            callable:
+              callable ??
+              callableIdentityForDeclaration({
+                file,
+                name: localName,
+                range,
+                languageId: support.id,
+                source,
+                ...(node ? { node } : {}),
+              }),
+          }
+        : {}),
     };
     if (node && isTypeMemberDeclaration(node)) base.isMember = true;
     if (support.id === "c" && node) {
@@ -865,11 +876,17 @@ export function collectLocalsAndExportsFromSource(
     return SymbolKind.Variable;
   };
 
-  const pushLocal = (localName: string, kind: SymbolKind, range: Range, node?: SyntaxNodeLike) => {
+  const pushLocal = (
+    localName: string,
+    kind: SymbolKind,
+    range: Range,
+    node?: SyntaxNodeLike,
+    callable?: CallableIdentity,
+  ) => {
     const key = `${localName}:${range.start.index ?? 0}:${range.end.index ?? 0}`;
     if (seenLocals.has(key)) return;
     seenLocals.add(key);
-    locals.push(buildSymbolDef(localName, kind, range, node));
+    locals.push(buildSymbolDef(localName, kind, range, node, callable));
   };
 
   const symbolKindForDeclarationNode = (node: SyntaxNodeLike): SymbolKind => {
@@ -954,7 +971,7 @@ export function collectLocalsAndExportsFromSource(
       for (const b of scopeIndexForExports.all) {
         if (!b.def) continue;
         const kind = bindingKindToSymbolKind(b.kind);
-        pushLocal(b.name, kind, b.def, b.node);
+        pushLocal(b.name, kind, b.def, b.node, b.callable);
       }
     }
   }
@@ -1472,15 +1489,10 @@ export function collectLocalsAndExportsFromSource(
       let retainedCount = 0;
       for (const entry of exports) {
         if (entry.type === "local" && entry.target.kind === SymbolKind.Function) {
-          const { start, end } = entry.target.range;
-          const nameNode = treeForUsingDeclarations.rootNode.descendantForPosition(
-            { row: start.line - 1, column: start.column - 1 },
-            { row: end.line - 1, column: end.column - 1 },
-          );
-          const shape = cppCallableShapeForNode(nameNode);
-          if (shape) {
-            const key = `${entry.exportedAs}\0${shape.signature}`;
-            const isDefinition = cppCallableIsDefinition(nameNode);
+          const callable = entry.target.callable;
+          if (callable?.signature) {
+            const key = `${entry.exportedAs}\0${callable.signature}`;
+            const isDefinition = callable.definition === true;
             const existing = callableExports.get(key);
             if (existing) {
               if (isDefinition && !existing.isDefinition) {
@@ -1649,9 +1661,26 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
+  // Regex fallback can create CommonJS callables after native local collection.
+  if (isJsLike) {
+    for (const local of locals) {
+      if (local.kind !== SymbolKind.Function || local.callable) continue;
+      const start = local.range.start.index;
+      const node =
+        start === undefined ? undefined : tree?.rootNode.descendantForIndex(start, local.range.end.index ?? start);
+      local.callable = callableIdentityForDeclaration({
+        file,
+        name: local.localName,
+        range: local.range,
+        languageId: support.id,
+        source,
+        ...(node ? { node } : {}),
+      });
+    }
+  }
   return {
     file,
-    exports: dedupeExportEntries(collapseTypeScriptCallableExports(exports, ensureTree(), support.id), support.id),
+    exports: dedupeExportEntries(collapseTypeScriptCallableExports(exports, support.id), support.id),
     imports,
     locals,
     ...(tree && DOCSTRING_CAPTURE_LANGUAGES.has(support.id) ? { docstringsChecked: true } : {}),

@@ -5,7 +5,6 @@ import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import { ensureParsedContext } from "./parse-context.js";
 import {
-  cppBindingCallableShape,
   cppEquivalentCallableBindings,
   cppSelectCallableByCallArity,
   cppSelectCallableBinding,
@@ -29,6 +28,7 @@ function cppBindingDefinition(file: FileId, binding: Binding): SymbolDef | null 
     localName: binding.name,
     kind: SymbolKind.Function,
     range: binding.def,
+    ...(binding.callable ? { callable: binding.callable } : {}),
   };
 }
 
@@ -54,7 +54,7 @@ export function resolveCppCollidingBinding(
 ): SymbolDef | null | undefined {
   if (binding.kind !== "function") return undefined;
   const collisions = binding.sameScopeFunctionBindings ?? [binding];
-  if (collisions.length < 2 && !cppBindingCallableShape(binding)) return undefined;
+  if (collisions.length < 2 && !binding.callable?.signature) return undefined;
   return resolveCppCallableBindings(file, collisions, node, source);
 }
 

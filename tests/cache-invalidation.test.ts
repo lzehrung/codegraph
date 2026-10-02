@@ -14,6 +14,7 @@ import {
   buildProjectIndexIncremental,
   buildSymbolGraphDetailed,
   findReferences,
+  goToDefinition,
   resolveExport,
   type BuildReport,
 } from "../src/index.js";
@@ -2244,6 +2245,104 @@ describe("Cache invalidation and strict hashing", () => {
     }
 
     expect(await buildCache.tryLoadFromCache(root, normalizedFile, sig, { cache: "disk" })).toBeNull();
+  });
+
+  it("rebuilds module rows missing or corrupting indexed callable identity", async () => {
+    for (const damage of ["missing", "malformed"] as const) {
+      const root = await mkTmpDir("dg-callable-identity-row-");
+      const file = path.join(root, "entry.ts");
+      const source = [
+        "export function pick(x: number): number;",
+        "export function pick(x: number, y: number): number;",
+        "export function pick(x: number, y?: number) { return x; }",
+        "export namespace Other { export function pick(x: number, y: number) { return x; } }",
+        "export const answer = pick(1, 2);",
+        "export const decoy = Other.pick(1, 2);",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      const signature = readModuleCacheSignature(root, file);
+      if (!signature) throw new Error("expected cached callable module");
+      const normalizedFile = normalize(path.resolve(file));
+      expect(await buildCache.tryLoadFromCache(root, normalizedFile, signature, { cache: "disk" })).not.toBeNull();
+      buildCache.closeDiskCacheDatabase(root, { cache: "disk" });
+      const db = new DatabaseSync(diskCacheDbPathFor(root));
+      try {
+        const row = db.prepare("SELECT payload FROM module_cache WHERE file = ?").get(cacheFile(root, file)) as {
+          payload: Uint8Array;
+        };
+        const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as {
+          locals: Array<{ localName: string; callable?: unknown }>;
+        };
+        const pick = parsed.locals.find((local) => local.localName === "pick");
+        if (!pick) throw new Error("expected callable in cached module");
+        if (damage === "missing") delete pick.callable;
+        else pick.callable = { key: "bad", owner: "module", kind: "function", arity: { minArgs: -1, maxArgs: 1 } };
+        db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+          brotliCompressSync(JSON.stringify(parsed)),
+          cacheFile(root, file),
+        );
+      } finally {
+        db.close();
+      }
+      expect(await buildCache.tryLoadFromCache(root, normalizedFile, signature, { cache: "disk" })).toBeNull();
+      const rebuilt = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      const result = await goToDefinition(rebuilt, {
+        file,
+        line: 5,
+        column: source.split("\n")[4]!.indexOf("pick") + 1,
+      });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") {
+        expect(result.definition.range.start.line).toBe(3);
+        expect(result.definition.localName).toBe("pick");
+      }
+      const decoy = await goToDefinition(rebuilt, {
+        file,
+        line: 6,
+        column: source.split("\n")[5]!.lastIndexOf("pick") + 1,
+      });
+      expect(decoy.status).toBe("ok");
+      if (decoy.status === "ok") {
+        expect(decoy.definition.range.start.line).toBe(4);
+        expect(decoy.definition.localName).toBe("pick");
+      }
+    }
+  });
+  it("rejects a project snapshot missing indexed callable identity", async () => {
+    const root = await mkTmpDir("dg-callable-identity-snapshot-");
+    const file = path.join(root, "entry.ts");
+    await fsp.writeFile(
+      file,
+      "export function pick(x: number) { return x; }\nexport const answer = pick(1);\n",
+      "utf8",
+    );
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = await readProjectSnapshot(snapshotPath);
+    embedSqliteModulesInSnapshot(root, snapshot);
+    const modules = snapshot.modules as Array<{ locals: Array<{ localName: string; callable?: unknown }> }>;
+    const pick = modules.flatMap((module) => module.locals).find((local) => local.localName === "pick");
+    if (!pick) throw new Error("expected callable in project snapshot");
+    delete pick.callable;
+    await writeProjectSnapshot(snapshotPath, snapshot);
+
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report });
+      expect(
+        report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("project-index-snapshot.json")),
+      ).toBe(true);
+      const result = await goToDefinition(rebuilt, { file, line: 2, column: 23 });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") {
+        expect(result.definition.localName).toBe("pick");
+        expect(result.definition.range.start.line).toBe(1);
+      }
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("falls back when project snapshot metadata fields are malformed", async () => {

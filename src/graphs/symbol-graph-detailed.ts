@@ -19,12 +19,10 @@ import {
   isNativeRequiredUnavailableError,
 } from "../native/tree-sitter-native.js";
 
-import { cppCallableIsDefinition, cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
+import { cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { cjsRequireValueBinding, resolveExport } from "../indexer/navigation-resolve.js";
 import {
   typescriptCollapsedOverloadTarget,
-  typescriptCallableContainerKey,
-  typescriptCallableRoleAt,
   typescriptOverloadImplementationAcceptsCount,
 } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
@@ -107,7 +105,7 @@ function recordCallableDeclarationAliases(
 ): void {
   const recordGroup = (group: readonly Binding[]): void => {
     if (group.length < 2) return;
-    const canonicalBinding = group.find((binding) => !cppCallableIsDefinition(binding.node)) ?? group[0]!;
+    const canonicalBinding = group.find((binding) => !binding.callable?.definition) ?? group[0]!;
     const canonicalDef = symbolDefForBinding(moduleEntry, canonicalBinding);
     if (!canonicalDef) return;
     const canonicalId = defNodeId(canonicalDef);
@@ -123,9 +121,10 @@ function recordCallableDeclarationAliases(
     const byName = new Map<string, Binding[]>();
     for (const binding of bindings) {
       if (binding.kind !== "function" || !binding.def) continue;
-      const group = byName.get(binding.canonicalName) ?? [];
+      const key = binding.callable?.key ?? binding.canonicalName;
+      const group = byName.get(key) ?? [];
       group.push(binding);
-      byName.set(binding.canonicalName, group);
+      byName.set(key, group);
     }
     for (const group of byName.values()) recordGroup(group);
     return;
@@ -144,26 +143,19 @@ function recordCallableDeclarationAliases(
 function recordTypeScriptCallableAliases(
   moduleEntry: ModuleIndex,
   languageId: string,
-  tree: SyntaxTreeLike,
   nodeAliases: Map<string, string>,
 ): void {
   if (languageId !== "ts" && languageId !== "tsx") return;
   const groups = new Map<string, SymbolDef[]>();
   for (const local of moduleEntry.locals) {
-    if (local.kind !== SymbolKind.Function) continue;
-    const start = local.range.start.index ?? 0;
-    const end = local.range.end.index ?? start;
-    const role = typescriptCallableRoleAt(tree, start, end);
-    if (role === "other") continue;
-    const key = `${typescriptCallableContainerKey(tree, start, end)}\0${local.localName}`;
-    const group = groups.get(key) ?? [];
+    if (local.kind !== SymbolKind.Function || !local.callable || local.callable.role === "other") continue;
+    const group = groups.get(local.callable.key) ?? [];
     group.push(local);
-    groups.set(key, group);
+    groups.set(local.callable.key, group);
   }
   for (const group of groups.values()) {
     if (group.length < 2) continue;
-    // Signature-only and multiply implemented groups keep their distinct declarations.
-    const canonical = typescriptCollapsedOverloadTarget(group, tree, (local) => local);
+    const canonical = typescriptCollapsedOverloadTarget(group, (local) => local.callable);
     if (!canonical) continue;
     const canonicalId = defNodeId(canonical);
     for (const local of group) {
@@ -462,7 +454,7 @@ export async function buildSymbolGraphDetailed(
         memberResolver;
 
       recordCallableDeclarationAliases(moduleEntry, sup.id, scopeIndex.all, nodeAliases);
-      recordTypeScriptCallableAliases(moduleEntry, sup.id, tree, nodeAliases);
+      recordTypeScriptCallableAliases(moduleEntry, sup.id, nodeAliases);
       // Files the shared name lookup reads synchronously for this module (imports, C++ includes).
       const parsedForResolution = new Map<string, ParsedFileContext>([
         [fileIdentityKey(file), { source: src, tree, sup }],
@@ -651,9 +643,6 @@ export async function buildSymbolGraphDetailed(
       return typescriptOverloadImplementationAcceptsCount({
         implementation: target.def,
         locals: target.module.locals,
-        tree: target.parsed.tree,
-        source: target.parsed.source,
-        languageId: target.parsed.sup.id,
         argumentCount: candidate.argumentCount,
       });
     },

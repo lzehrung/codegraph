@@ -19,7 +19,6 @@ import {
   MEMBER_ACCESS_ROWS,
   supportsReceiverMemberNavigation,
 } from "../util/member-access-tables.js";
-import { cppCallableShapeForNode } from "./cpp-callables.js";
 import {
   typescriptCallableContainerKey,
   typescriptMergedNamespaceContainers,
@@ -57,13 +56,7 @@ import {
   type PhpObjectCreationKeyword,
   type ReceiverMemberScope,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import {
-  CALLABLE_DECLARATION_NODE_TYPES,
-  getCallableArity,
-  getCallArgumentCount,
-  memberLookupBinding,
-  type CallableArity,
-} from "../languages/callable-arity.js";
+import { getCallArgumentCount, memberLookupBinding } from "../languages/callable-arity.js";
 import { getCompilationUnitPeers } from "./compilation-units.js";
 import {
   isExportedDeclaration,
@@ -1642,7 +1635,7 @@ async function resolveKeywordReceiverMember(
       for (const candidate of uniqueMatches) {
         if (
           knownArgumentCount !== undefined &&
-          (await receiverMemberAcceptsArgumentCount(index, candidate, knownArgumentCount)) === false
+          receiverMemberAcceptsArgumentCount(index, candidate, knownArgumentCount) === false
         ) {
           continue;
         }
@@ -2078,7 +2071,7 @@ export async function resolveCppOutOfLineImplicitMember(
   const rejected =
     requireAcceptedArity &&
     argumentCount !== undefined &&
-    !(await receiverMemberAcceptsArgumentCount(index, member, argumentCount));
+    !receiverMemberAcceptsArgumentCount(index, member, argumentCount);
   return rejected ? null : member;
 }
 
@@ -2531,63 +2524,37 @@ function matchesReceiverMemberScope(
   return hasStaticModifier(local, targetContext, container) === (memberScope === "static");
 }
 
-async function getCallableArityForDef(index: ProjectIndex, def: SymbolDef): Promise<CallableArity | undefined> {
-  const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
-  const start = def.range.start;
-  const position = { row: start.line - 1, column: start.column - 1 };
-  const nameNode = context.tree.rootNode.descendantForPosition(position, position);
-  const container = nearestMemberContainer(nameNode);
-  let current: SyntaxNodeLike | null = nameNode;
-  while (current && current !== container) {
-    if (CALLABLE_DECLARATION_NODE_TYPES[current.type]) {
-      const range = getCallableArity({
-        languageId: context.sup.id,
-        source: context.source,
-        declaration: current,
-        binding: memberLookupBinding(context.sup.id),
-      });
-      if (range) return range;
-    }
-    current = current.parent;
-  }
-  return undefined;
-}
-
 /**
  * Whether a member found for a receiverless call can accept that call's argument count. Unknown
  * counts and unknown arities accept.
  */
-export async function memberAcceptsCallAt(
+export function memberAcceptsCallAt(
   index: ProjectIndex,
   member: SymbolDef,
   callee: SyntaxNodeLike,
   source: string,
   languageId: string,
-): Promise<boolean> {
+): boolean {
   const argumentCount = getCallArgumentCount({ languageId, source, call: callee.parent ?? callee });
   if (argumentCount === null) return true;
-  return (await receiverMemberAcceptsArgumentCount(index, member, argumentCount)) !== false;
+  return receiverMemberAcceptsArgumentCount(index, member, argumentCount) !== false;
 }
 
-async function receiverMemberAcceptsArgumentCount(
+function receiverMemberAcceptsArgumentCount(
   index: ProjectIndex,
   def: SymbolDef,
   argumentCount: number,
-): Promise<boolean | undefined> {
-  const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
-  const start = def.range.start;
-  const position = {
-    row: start.line - 1,
-    column: start.column - 1,
-  };
-  const nameNode = context.tree.rootNode.descendantForPosition(position, position);
-  if (context.sup.id === "cpp") {
-    const shape = cppCallableShapeForNode(nameNode);
-    return shape
-      ? argumentCount >= shape.minArity && (shape.maxArity === null || argumentCount <= shape.maxArity)
-      : undefined;
-  }
-  const range = await getCallableArityForDef(index, def);
+): boolean | undefined {
+  const languageId = supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.id;
+  if (!languageId) return undefined;
+  const callable =
+    def.callable ??
+    index.byFile
+      .get(fileIdentityKey(def.file))
+      ?.locals.find((local) => local.range.start.index === def.range.start.index && local.localName === def.localName)
+      ?.callable;
+  const range =
+    memberLookupBinding(languageId) === "unbound" ? (callable?.unboundArity ?? callable?.arity) : callable?.arity;
   if (!range) return undefined;
   return argumentCount >= range.minArgs && (range.maxArgs === null || argumentCount <= range.maxArgs);
 }
@@ -2618,11 +2585,7 @@ async function selectReceiverMemberCandidates(
         // Signature-only overloads still need arity selection before generic member deduplication.
         return typescriptSelectOverloadCandidate({
           group: candidates,
-          tree: context.tree,
-          definitionOf: (candidate) => candidate,
-          declarationOf: (candidate) => nameNodeForDef(context, candidate)?.parent,
-          source: context.source,
-          languageId: context.sup.id,
+          identityOf: (candidate) => candidate.callable,
           argumentCount: knownArgumentCount ?? null,
         });
       }
@@ -2634,7 +2597,7 @@ async function selectReceiverMemberCandidates(
   if (knownArgumentCount === undefined) return undefined;
   const matches: SymbolDef[] = [];
   for (const candidate of unique) {
-    if ((await receiverMemberAcceptsArgumentCount(index, candidate, knownArgumentCount)) !== false) {
+    if (receiverMemberAcceptsArgumentCount(index, candidate, knownArgumentCount) !== false) {
       matches.push(candidate);
     }
   }

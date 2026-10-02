@@ -12,6 +12,8 @@ import {
   goToDefinition,
 } from "../../src/index.js";
 import { supportById } from "../../src/languages.js";
+import { resolveModuleSpecifierEdges } from "../../src/graphs/edge-resolution.js";
+import { resolveSpecifierTargets } from "../../src/util/resolution/specifier-targets.js";
 import { isNativeTreeSitterAvailable, runNativeLanguageQueries } from "../../src/native/tree-sitter-native.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
@@ -426,4 +428,53 @@ describe("SCSS same-file navigation", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+});
+it("resolves an SCSS partial for a source-kind specifier and keeps a document-kind url external", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-source-partial-"));
+  const mainFile = path.join(root, "main.scss");
+  const partialFile = path.join(root, "_variables.scss");
+  const documentPartial = path.join(root, "_icons.scss");
+  const wrongPartial = path.join(root, "_variables.ts");
+  await Promise.all([
+    fsp.writeFile(mainFile, '@use "variables";\n', "utf8"),
+    fsp.writeFile(partialFile, "$color: red;\n", "utf8"),
+    fsp.writeFile(documentPartial, ".icon { color: red; }\n", "utf8"),
+    fsp.writeFile(wrongPartial, "export const color = 1;\n", "utf8"),
+  ]);
+  try {
+    const support = supportById("scss");
+    if (!support) throw new Error("missing scss support");
+    const context = {
+      support,
+      file: mainFile,
+      projectRoot: root,
+      workspaceConfig: undefined,
+      matchPath: undefined,
+    };
+    const graphEdges = await resolveModuleSpecifierEdges({ spec: "./variables", resolutionKind: "source" }, context);
+    const graphBases = (graphEdges ?? [])
+      .filter((edge) => edge.to.type === "file")
+      .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : ""));
+    const binding = await resolveSpecifierTargets(mainFile, "./variables", "scss", {
+      projectRoot: root,
+      resolutionKind: "source",
+    });
+    const bindingBases = binding.files.map((file) => path.basename(file));
+    const documentEdges = await resolveModuleSpecifierEdges({ spec: "./icons", resolutionKind: "document" }, context);
+    const documentBinding = await resolveSpecifierTargets(mainFile, "./icons", "scss", {
+      projectRoot: root,
+      resolutionKind: "document",
+    });
+
+    expect(graphBases).toEqual(["_variables.scss"]);
+    expect(graphBases).not.toContain("_variables.ts");
+    expect(bindingBases).toEqual(["_variables.scss"]);
+    expect(bindingBases).not.toContain("_variables.ts");
+    expect(documentEdges?.map((edge) => edge.to)).toEqual([{ type: "external", name: "./icons" }]);
+    expect(documentBinding.files).toEqual([]);
+    expect(documentBinding.externalName).toBe("./icons");
+    expect(documentBinding.files.map((file) => path.basename(file))).not.toContain("_icons.scss");
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
 });

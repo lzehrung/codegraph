@@ -9,6 +9,7 @@ import {
   supportForFileWithoutHeaderSample,
   type LanguageSupport,
 } from "../languages.js";
+import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "./declaration-languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage, type WorkspaceConfig } from "../util/workspace.js";
 import {
@@ -1372,13 +1373,6 @@ async function collectStaleCachedModules(args: {
   }
   return { stale, deletedDeclarationFiles };
 }
-
-/**
- * Languages that resolve imports through the declarations of other files
- * (C# namespaces, JVM packages, PHP namespaces, C++ named modules).
- * A content change in a dependency can move the target.
- */
-const DECLARATION_RESOLVED_IMPORT_LANGUAGES: ReadonlySet<string> = new Set(["cpp", "csharp", "java", "kotlin", "php"]);
 
 /** Files a cached module resolved: import targets and re-export sources. */
 function cachedModuleTargets(mod: ModuleIndex): string[] {

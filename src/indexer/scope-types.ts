@@ -1,6 +1,7 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./import-types.js";
+import type { CallableIdentity } from "../languages/callable-arity.js";
 
 export type BindingKind =
   | "local"
@@ -21,6 +22,7 @@ export type Binding = {
   canonicalName: string;
   kind: BindingKind;
   def?: Range;
+  callable?: CallableIdentity;
   node?: SyntaxNodeLike;
   occurrences: Range[];
   /** False when same-scope overloads or redeclarations prevent exact occurrence ownership. */

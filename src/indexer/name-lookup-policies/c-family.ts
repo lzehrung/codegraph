@@ -6,7 +6,6 @@ import {
   AMBIGUOUS_CPP_USING_DIRECTIVE_REASON,
   AMBIGUOUS_STAR_IMPORT_REASON,
 } from "../ambiguous-resolution.js";
-import { cppBindingCallableShape } from "../cpp-callables.js";
 import { cppOutOfLineOwnerPath } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   cppStarImportClosure,
@@ -111,7 +110,7 @@ export const cppLookupPolicy: NameLookupPolicy = {
 
   beforeCrossModule({ use, closestBinding }) {
     const { index, mod, node, name, parsed } = use;
-    if (closestBinding?.kind === "function" && cppBindingCallableShape(closestBinding)) {
+    if (closestBinding?.kind === "function" && closestBinding.callable?.signature) {
       return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
     }
     const visible = resolveVisibleCppCallableName(index, mod, name, node, parsed.source, loadParsed(use));

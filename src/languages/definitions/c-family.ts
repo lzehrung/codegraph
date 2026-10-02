@@ -142,6 +142,7 @@ export type CFamilyLanguageDefinitionOptions = {
   extraSymbolQueries?: readonly string[];
   usesQueryDrivenLocals?: boolean;
   membersAreImplicitlyInScope?: boolean;
+  resolvesImportsFromDeclarations?: boolean;
   nodeTypes: NonNullable<LanguageDefinition["nodeTypes"]>;
   classifyDefinition: NonNullable<LanguageDefinition["classifyDefinition"]>;
   isDeclarationName: NonNullable<LanguageDefinition["isDeclarationName"]>;
@@ -200,6 +201,7 @@ export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefiniti
     // every header declaration.
     exportScopeBlockers: ["compound_statement", "field_declaration_list"],
     usesQueryDrivenLocals: options.usesQueryDrivenLocals || false,
+    ...(options.resolvesImportsFromDeclarations ? { resolvesImportsFromDeclarations: true } : {}),
     ...(options.membersAreImplicitlyInScope !== undefined
       ? { membersAreImplicitlyInScope: options.membersAreImplicitlyInScope }
       : {}),

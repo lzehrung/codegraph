@@ -1275,6 +1275,36 @@ describe("Rust nested grouped use and path attributes", () => {
     }
   });
 
+  it("keeps a #[path] module outside the project root external", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-root-outside-"));
+    const root = path.join(sandbox, "project");
+    await mkdir(root, { recursive: true });
+    const outside = path.join(sandbox, "outside.rs");
+    await writeFile(outside, "pub fn leaked() {}\n");
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-outside"\nversion = "0.1.0"\n');
+    const lib = path.join(root, "lib.rs");
+    await writeFile(lib, '#[path = "../outside.rs"]\nmod leaked;\n');
+    try {
+      const imports = await collectImportsForFile(lib, root);
+      const leaked = imports.find((entry) => entry.kind === "namespace" && entry.localNS === "leaked");
+      const graph = await collectGraph(root, [lib]);
+      const edgeTargets = graph.edges
+        .filter((edge) => path.basename(edge.from) === "lib.rs")
+        .map((edge) => (edge.to.type === "file" ? edge.to.path.replace(/\\/g, "/") : `external:${edge.to.name}`));
+      const outsidePath = outside.replace(/\\/g, "/");
+
+      expect(leaked).toBeDefined();
+      expect(leaked?.resolved).toEqual({ external: "leaked" });
+      if (typeof leaked?.resolved === "string") {
+        expect(leaked.resolved.replace(/\\/g, "/")).not.toBe(outsidePath);
+      }
+      expect(edgeTargets).toContain("external:leaked");
+      expect(edgeTargets).not.toContain(outsidePath);
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("does not fall back to a conventional sibling when an explicit #[path] file is missing", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-missing-"));
     const src = path.join(root, "src");

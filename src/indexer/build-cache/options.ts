@@ -24,8 +24,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * same-named local, and records synthetic definitions at their export properties.
  * Epoch 75 re-resolves warm-cache import bindings after declaration-language files are added,
  * changed, or deleted. Older rows can keep bindings from an old file set.
+ * Epoch 76 stores canonical callable identities and their call-form arities in module rows.
  */
-export const CORE_ALGORITHM_EPOCH = 75;
+export const CORE_ALGORITHM_EPOCH = 76;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -61,6 +62,10 @@ type LanguageDefinitionFingerprintDescriptor = {
   graph: LanguageDefinition["graph"];
   nodeTypes?: LanguageDefinition["nodeTypes"];
   supportsCrossModuleSymbols: boolean;
+  resolvesImportsFromDeclarations: boolean;
+  implicitCompilationUnit?: LanguageDefinition["implicitCompilationUnit"];
+  implicitCompilationUnitGroup?: string;
+  externalSpecifierResolution?: LanguageDefinition["externalSpecifierResolution"];
   native?: {
     authoritativeKinds: string[];
     notes: string[];
@@ -88,6 +93,25 @@ function languageDefinitionFingerprintDescriptor(
     graph: definition.graph,
     ...(definition.nodeTypes ? { nodeTypes: definition.nodeTypes } : {}),
     supportsCrossModuleSymbols: definition.supportsCrossModuleSymbols ?? false,
+    resolvesImportsFromDeclarations: definition.resolvesImportsFromDeclarations ?? false,
+    ...(definition.implicitCompilationUnit ? { implicitCompilationUnit: definition.implicitCompilationUnit } : {}),
+    ...(definition.implicitCompilationUnitGroup
+      ? { implicitCompilationUnitGroup: definition.implicitCompilationUnitGroup }
+      : {}),
+    ...(definition.externalSpecifierResolution
+      ? {
+          externalSpecifierResolution: {
+            ...definition.externalSpecifierResolution,
+            ...(definition.externalSpecifierResolution.reResolveAnyAddedExtensions
+              ? {
+                  reResolveAnyAddedExtensions: [
+                    ...definition.externalSpecifierResolution.reResolveAnyAddedExtensions,
+                  ].sort(),
+                }
+              : {}),
+          },
+        }
+      : {}),
     ...(native
       ? {
           native: {
@@ -134,6 +158,10 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   createsFunctionScope: true,
   membersAreImplicitlyInScope: true,
   supportsCrossModuleSymbols: true,
+  resolvesImportsFromDeclarations: true,
+  implicitCompilationUnit: true,
+  implicitCompilationUnitGroup: true,
+  externalSpecifierResolution: true,
   isTypeOnly: true,
   nodeTypes: true,
   native: true,

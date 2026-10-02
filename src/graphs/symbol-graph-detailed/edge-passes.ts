@@ -1,7 +1,6 @@
 import type { NameResolution } from "../../indexer/name-resolution-types.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../../indexer/types.js";
 
-import { cppCallableShapeForNode, type CppCallableShape } from "../../indexer/cpp-callables.js";
 import { getCompilationUnitPeers } from "../../indexer/compilation-units.js";
 import {
   isExportedDeclaration,
@@ -37,7 +36,7 @@ import {
 } from "../../indexer/shared-owner-identity.js";
 import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
-import { getCallableArity, getCallArgumentCount, memberLookupBinding } from "../../languages/callable-arity.js";
+import { getCallArgumentCount, memberLookupBinding } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import {
@@ -169,42 +168,29 @@ function markMemberArity(context: EdgePassContext, id: string, declarationNode: 
   if (node) node.memberArity = arity;
 }
 
-function cppShapeNode(node: SyntaxNodeLike): SyntaxNodeLike {
-  return node.type === "function_declarator" ? node : (findFirstNodeByType(node, "function_declarator") ?? node);
-}
-
-function mergeCppCallableShapes(...shapes: Array<CppCallableShape | null | undefined>): MemberArityRange | undefined {
-  const present = shapes.filter((shape): shape is CppCallableShape => !!shape);
-  if (!present.length) return undefined;
-  let min = present[0]!.minArity;
-  let max = present[0]!.maxArity;
-  for (const shape of present.slice(1)) {
-    min = Math.min(min, shape.minArity);
-    if (max === null || shape.maxArity === null) max = null;
-    else max = Math.max(max, shape.maxArity);
+function mergeCppCallableShapes(...defs: Array<SymbolDef | undefined>): MemberArityRange | undefined {
+  let merged: MemberArityRange | undefined;
+  for (const def of defs) {
+    const arity = def?.callable?.arity;
+    if (!arity) continue;
+    if (!merged) {
+      merged = { min: arity.minArgs, max: arity.maxArgs };
+      continue;
+    }
+    merged.min = Math.min(merged.min, arity.minArgs);
+    if (merged.max === null || arity.maxArgs === null) merged.max = null;
+    else merged.max = Math.max(merged.max, arity.maxArgs);
   }
-  return { min, max };
+  return merged;
 }
 
-/**
- * Accepted explicit-argument range of a member declaration from the shared callable
- * facts (default parameters, varargs, explicit receivers), or undefined when the
- * declaration shape is unknown or the language does not select members by call arity.
- * The binding follows the call form member lookup resolves (see `memberLookupBinding`).
- */
-function acceptedMemberArityRange(
-  context: EdgePassContext,
-  declarationNode: SyntaxNodeLike,
-  source: string,
-): MemberArityRange | undefined {
+/** The member call form determines whether a declared receiver takes an argument. */
+function acceptedMemberArityRange(context: EdgePassContext, def: SymbolDef): MemberArityRange | undefined {
   if (!supportsReceiverMemberOverloads(context.sup.id)) return undefined;
-  const arity = getCallableArity({
-    languageId: context.sup.id,
-    source,
-    declaration: declarationNode,
-    binding: memberLookupBinding(context.sup.id),
-  });
-  return arity ? { min: arity.minArgs, max: arity.maxArgs } : undefined;
+  const callable = def.callable;
+  const range =
+    memberLookupBinding(context.sup.id) === "unbound" ? (callable?.unboundArity ?? callable?.arity) : callable?.arity;
+  return range ? { min: range.minArgs, max: range.maxArgs } : undefined;
 }
 
 function recordMemberLookupIdentity(
@@ -446,11 +432,8 @@ export async function emitMemberOwnershipEdges(
     const memberScope = memberScopeForDefinition(context, fn, owner.cppOutOfLine, outOfLineDeclaration);
     const arityRange =
       context.sup.id === "cpp"
-        ? mergeCppCallableShapes(
-            cppCallableShapeForNode(cppShapeNode(fn.node)),
-            outOfLineDeclaration ? cppCallableShapeForNode(cppShapeNode(outOfLineDeclaration.node)) : undefined,
-          )
-        : acceptedMemberArityRange(context, arityNode, outOfLineDeclaration?.source ?? context.source);
+        ? mergeCppCallableShapes(fn.def, outOfLineDeclaration ? memberDef : undefined)
+        : acceptedMemberArityRange(context, memberDef);
     recordMemberLookupIdentity(context, definitionId, memberId, memberScope, arityRange);
     recordDefEdge(context, definitionId, owner.def, "member_of");
     await emitSharedOwnerMembershipEdges(context, owner, definitionId, fn.node);
@@ -770,14 +753,7 @@ function resolveTypeScriptNamespaceMember(
   if (!candidates.length) return undefined;
   return typescriptSelectOverloadCandidate({
     group: candidates,
-    tree: context.tree,
-    definitionOf: (candidate) => candidate,
-    declarationOf: (candidate) => {
-      const start = candidate.range.start.index ?? 0;
-      return context.tree.rootNode.descendantForIndex(start, candidate.range.end.index ?? start).parent;
-    },
-    source: context.source,
-    languageId: context.sup.id,
+    identityOf: (candidate) => candidate.callable,
     argumentCount: getCallArgumentCount({ languageId: context.sup.id, source: context.source, call }),
   });
 }
@@ -1345,10 +1321,7 @@ export async function emitFunctionBodyEdges(
   for (const { fromId, access } of dottedReceiverCalls) {
     const member = await context.resolveMemberAccessTarget(access.property);
     // The graph records no edge for a call its target cannot accept, as for other member calls.
-    if (
-      member &&
-      (await memberAcceptsCallAt(context.index, member, access.accessNode, context.source, context.sup.id))
-    ) {
+    if (member && memberAcceptsCallAt(context.index, member, access.accessNode, context.source, context.sup.id)) {
       recordDefEdge(context, fromId, member, "calls", access.property);
     }
   }

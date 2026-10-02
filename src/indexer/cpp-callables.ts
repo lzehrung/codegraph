@@ -1,15 +1,10 @@
 import { declarationMemberArity, isVariadicParameterMarker } from "../graphs/symbol-graph-detailed/ast.js";
 import { callArgumentCount, cppQualifiedTextSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import type { CallableArity } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import type { Binding } from "./scope-types.js";
-
-export type CppCallableShape = {
-  signature: string;
-  minArity: number;
-  maxArity: number | null;
-};
 
 type CppCallableEntity = {
   bindings: Binding[];
@@ -390,21 +385,14 @@ function parameterListIsVariadic(parameters: SyntaxNodeLike): boolean {
   }
 }
 
-export function cppCallableShapeForNode(node: SyntaxNodeLike): CppCallableShape | null {
+/** Normalized C/C++ parameter types and member qualifiers, independent of defaults. */
+export function cppCallableSignatureForNode(node: SyntaxNodeLike, arity: CallableArity | null): string | null {
   const declarator = functionDeclarator(node);
   const parameters = declarator?.childForFieldName("parameters");
-  if (!declarator || !parameters) return null;
-  const arity = declarationMemberArity(declarator, "cpp");
-  if (arity === undefined) return null;
+  if (!declarator || !parameters || !arity) return null;
   let parameterNodes = parameters.namedChildren.filter((child) => child.type !== "comment");
-  // A `(void)` parameter list is the C/C++ zero-parameter spelling and shares identity with `()`.
-  // C++ variadic markers are not zero parameters: a pack `Args... rest` (arity 0 when it is the
-  // only parameter) keeps its fingerprint so it stays distinct from a zero-parameter overload.
-  if (!arity) parameterNodes = parameterNodes.filter((child) => isVariadicParameterMarker(child));
-  const optionalCount = parameterNodes.filter(
-    (parameter) =>
-      parameter.type === "optional_parameter_declaration" || !!parameter.childForFieldName("default_value"),
-  ).length;
+  // A `(void)` parameter list shares identity with `()`. A variadic pack stays distinct.
+  if (arity.maxArgs === 0) parameterNodes = parameterNodes.filter((child) => isVariadicParameterMarker(child));
   const suffixTokens: string[] = [];
   for (let index = 0; ; index += 1) {
     const child = declarator.child(index);
@@ -412,15 +400,7 @@ export function cppCallableShapeForNode(node: SyntaxNodeLike): CppCallableShape 
     if (child.startIndex >= parameters.endIndex) appendLeafTokens(child, new Set<string>(), suffixTokens);
   }
   const variadic = parameterListIsVariadic(parameters);
-  return {
-    signature: `${parameterNodes.map(parameterFingerprint).join("|")}::${variadic ? "variadic" : "fixed"}::${JSON.stringify(suffixTokens)}`,
-    minArity: Math.max(0, arity - optionalCount),
-    maxArity: variadic ? null : arity,
-  };
-}
-
-export function cppBindingCallableShape(binding: Binding): CppCallableShape | null {
-  return binding.node ? cppCallableShapeForNode(binding.node) : null;
+  return `${parameterNodes.map(parameterFingerprint).join("|")}::${variadic ? "variadic" : "fixed"}::${JSON.stringify(suffixTokens)}`;
 }
 
 function syntaxRoot(node: SyntaxNodeLike): SyntaxNodeLike {
@@ -428,7 +408,6 @@ function syntaxRoot(node: SyntaxNodeLike): SyntaxNodeLike {
   while (current.parent) current = current.parent;
   return current;
 }
-
 /**
  * Only a binding from the query file can be its declaration site. Its scope index may
  * come from an earlier parse, so matching trees still requires source spans and text.
@@ -468,9 +447,7 @@ const CPP_OWNER_SCOPE_TYPES = new Set([
  * share `b::C` while `int a::C::f() {}` is `a::C`. Declarations with the same parameters but
  * different owners are different callables.
  */
-function cppBindingOwnerPath(binding: Binding): string {
-  const node = binding.node;
-  if (!node) return "";
+export function cppCallableOwnerPath(node: SyntaxNodeLike): string {
   let qualified: SyntaxNodeLike | null = null;
   for (let current = node.parent; current?.type === "qualified_identifier"; current = current.parent) {
     qualified = current;
@@ -492,37 +469,35 @@ function cppCallableEntities(
 ): Map<string, CppCallableEntity> | null {
   const entities = new Map<string, CppCallableEntity>();
   for (const binding of bindings) {
-    const shape = cppBindingCallableShape(binding);
-    if (!shape) return null;
+    const callable = binding.callable;
+    if (!callable?.signature || !callable.arity) return null;
     const canonicalName = canonicalNames?.get(binding);
     if (canonicalNames && canonicalName === undefined) return null;
-    const qualifier = cppBindingOwnerPath(binding);
+    // A using-declaration can change the visible name only after imports are known.
     const key =
-      canonicalName === undefined
-        ? `${qualifier}\0${shape.signature}`
-        : `${canonicalName}\0${qualifier}\0${shape.signature}`;
+      canonicalName === undefined ? callable.key : `${canonicalName}\0${callable.owner}\0${callable.signature}`;
     const existing = entities.get(key);
     if (!existing) {
       entities.set(key, {
         bindings: [binding],
-        minArity: shape.minArity,
-        maxArity: shape.maxArity,
+        minArity: callable.arity.minArgs,
+        maxArity: callable.arity.maxArgs,
       });
       continue;
     }
     existing.bindings.push(binding);
-    existing.minArity = Math.min(existing.minArity, shape.minArity);
-    if (existing.maxArity === null || shape.maxArity === null) {
+    existing.minArity = Math.min(existing.minArity, callable.arity.minArgs);
+    if (existing.maxArity === null || callable.arity.maxArgs === null) {
       existing.maxArity = null;
     } else {
-      existing.maxArity = Math.max(existing.maxArity, shape.maxArity);
+      existing.maxArity = Math.max(existing.maxArity, callable.arity.maxArgs);
     }
   }
   return entities;
 }
 
 function preferredCppCallableBinding(bindings: readonly Binding[]): Binding {
-  return bindings.find((binding) => cppCallableIsDefinition(binding.node)) ?? bindings[0]!;
+  return bindings.find((binding) => binding.callable?.definition) ?? bindings[0]!;
 }
 
 /** Same-shape declarations and definitions for one C++ callable binding. */

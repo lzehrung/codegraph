@@ -133,6 +133,7 @@ function pathFixture(root: string): ModuleIndex {
         file: dependency,
         localName: "dependencyValue",
         kind: SymbolKind.Function,
+        callable: { key: `${dependency}\0dependencyValue`, owner: "module", kind: "function", arity: null },
         range: { start: { line: 2, column: 0 }, end: { line: 3, column: 1 } },
       },
     ],

@@ -44,9 +44,6 @@ const typescriptLookupPolicy: NameLookupPolicy = {
     const accepted = typescriptOverloadImplementationAcceptsCount({
       implementation: target,
       locals: targetModule.locals,
-      tree: targetContext.tree,
-      source: targetContext.source,
-      languageId: targetContext.sup.id,
       argumentCount,
     });
     return accepted ? undefined : { status: "not_found", reason: "No matching TypeScript overload signature" };

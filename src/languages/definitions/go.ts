@@ -5,6 +5,11 @@ import { classifyByParentType, isNameFieldOnParent, matchesParentTypePairs, node
 export const GO_DEF: LanguageDefinition = {
   id: "go",
   extensions: [".go"],
+  implicitCompilationUnit: "package",
+  externalSpecifierResolution: {
+    separator: "slash",
+    importNamesDirectory: "parent",
+  },
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

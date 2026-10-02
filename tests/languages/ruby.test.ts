@@ -4,7 +4,8 @@ import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { buildSymbolGraphDetailed } from "../../src/index.js";
+import { buildProjectIndex, buildSymbolGraphDetailed } from "../../src/index.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
 import { collectDetailedDeclarations } from "../../src/graphs/symbol-graph-detailed/ast.js";
 import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { exportedNameOf } from "../helpers/narrow.js";
@@ -217,5 +218,40 @@ describe("Ruby query-driven locals", () => {
     // scope walker supplies structurally for class, module, and method captures.
     expect(kindByName.get("Point")).toBe("class");
     expect(kindByName.get("point")).toBe("variable");
+  });
+});
+
+describe("Ruby bare require targets", () => {
+  it("prefers a path-like Ruby file over a workspace package for a bare require", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-path-before-workspace-"));
+    try {
+      await fsp.mkdir(path.join(root, "pkgs", "foo"), { recursive: true });
+      const rubyFile = path.join(root, "foo.rb");
+      const packageFile = path.join(root, "pkgs", "foo", "index.js");
+      const use = path.join(root, "use.rb");
+      await fsp.writeFile(path.join(root, "package.json"), '{"name":"root","private":true,"workspaces":["pkgs/*"]}\n');
+      await fsp.writeFile(path.join(root, "pkgs", "foo", "package.json"), '{"name":"foo","main":"index.js"}\n');
+      await fsp.writeFile(packageFile, "module.exports = 1;\n");
+      await fsp.writeFile(rubyFile, "module Foo\nend\n");
+      await fsp.writeFile(use, 'require "foo"\n');
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const binding = index.byFile
+        .get(fileIdentityKey(use))
+        ?.imports.find((entry) => entry.kind === "star" && entry.from === "foo");
+      const fileEdges = index.graph.edges.filter(
+        (edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file",
+      );
+      const edgeBases = fileEdges.map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : ""));
+
+      expect(typeof binding?.resolved).toBe("string");
+      if (typeof binding?.resolved === "string") {
+        expect(path.basename(binding.resolved)).toBe("foo.rb");
+        expect(path.basename(binding.resolved)).not.toBe("index.js");
+      }
+      expect(edgeBases).toEqual(["foo.rb"]);
+      expect(edgeBases).not.toContain("index.js");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
