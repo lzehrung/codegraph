@@ -84,6 +84,8 @@ export type ImportBinding =
        * expansion skip this binding.
        */
       staticMembersOf?: string;
+      /** Files of a proven JVM package wildcard, not just its representative resolved file. */
+      jvmPackageFiles?: FileId[];
     };
 
 /**

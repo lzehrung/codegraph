@@ -107,6 +107,7 @@ import {
 import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
 import {
   createLoadingParsedFileProvider,
+  fileBindingIsUnshadowed,
   phpImportTypeAtPosition,
   resolveBareName,
   settleNameResolution,
@@ -1113,6 +1114,7 @@ async function findReferencesInternal(
                     index.languageExtensions,
                     imp,
                     module.imports,
+                    await ensureScope(),
                   );
                   for (const range of ranges) {
                     if (hasReachedCollectionLimit()) break;
@@ -1153,6 +1155,7 @@ async function findReferencesInternal(
             index.languageExtensions,
             imp,
             module.imports,
+            await ensureScope(),
           );
           for (const range of ranges) {
             if (hasReachedCollectionLimit()) break;
@@ -1225,6 +1228,7 @@ async function findReferencesInternal(
               index.languageExtensions,
               undefined,
               module.imports,
+              await ensureScope(),
             );
             for (const range of ranges) {
               if (hasReachedCollectionLimit()) break;
@@ -1279,6 +1283,7 @@ async function findReferencesInternal(
                 index.languageExtensions,
                 undefined,
                 module.imports,
+                await ensureScope(),
               );
               for (const range of ranges) {
                 if (hasReachedCollectionLimit()) break;
@@ -1418,6 +1423,7 @@ async function findReferencesInternal(
           index.languageExtensions,
           importBinding,
           module.imports,
+          await ensureScope(),
         );
         for (const range of ranges) {
           if (hasReachedCollectionLimit()) break;
@@ -2014,6 +2020,7 @@ export async function collectNamespaceMemberRefs(
   languageExtensions?: LanguageExtensionMap,
   importBinding?: ImportBinding,
   imports?: readonly ImportBinding[],
+  scopeIndex?: ScopeIndex,
 ): Promise<Range[]> {
   const parsed = parsedContext ?? (await ensureParsedContext(file, undefined, languageExtensions));
   const sup = parsed.sup;
@@ -2054,6 +2061,15 @@ export async function collectNamespaceMemberRefs(
           ? normalize(objectName) === normalizedNs
           : isMemberObjectIdentifier(obj.type) && normalize(objectName) === normalizedNs;
         if (objectMatches && normalize(propertyName) === normalizedMember) {
+          let receiver = obj;
+          while (!isMemberObjectIdentifier(receiver.type) && receiver.namedChildren.length) {
+            receiver = receiver.namedChildren[0]!;
+          }
+          const closest =
+            scopeIndex && isMemberObjectIdentifier(receiver.type)
+              ? findClosestScopeBinding(scopeIndex, sliceText(receiver, source), receiver, sup)
+              : null;
+          const inFileScope = !scopeIndex || fileBindingIsUnshadowed(scopeIndex, closest);
           const inPythonBindingScope =
             sup.id !== "python" || !effectivePythonBinding || effectivePythonBinding === importBinding;
           const inAliasScope =
@@ -2064,7 +2080,7 @@ export async function collectNamespaceMemberRefs(
               importBinding.kind !== "namespace" ||
               !importBinding.localRange ||
               innermostNamespaceImport(imports, objectName, obj, normalize) === importBinding);
-          if (inAliasScope) ranges.push(toRange(prop));
+          if (inAliasScope && inFileScope) ranges.push(toRange(prop));
         }
       }
     }

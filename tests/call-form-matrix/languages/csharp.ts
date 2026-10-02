@@ -302,6 +302,25 @@ export const csharpCells: MatrixCell[] = [
     edge: { label: "calls", fromFile: "Grand/Derived.cs", fromName: "CallHit" },
   },
   {
+    id: "csharp/overload-arity-hidden-override",
+    language: "csharp",
+    callForm: "overload-arity",
+    files: {
+      "Base.cs": "public class Base { public virtual int M(int x = 0) => 1; }",
+      "Derived.cs": [
+        "public class Derived : Base {",
+        "  public override int M(int x) => 2;",
+        "  public int Invalid() => M();",
+        "}",
+      ].join("\n"),
+    },
+    use: { file: "Derived.cs", line: 3, token: "M" },
+    expected: { file: "Derived.cs", line: 2, token: "M" },
+    decoy: { file: "Base.cs", line: 1, token: "M" },
+    decoyKind: "callable",
+  },
+
+  {
     id: "csharp/inherited-member",
     language: "csharp",
     callForm: "inherited-member",

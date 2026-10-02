@@ -131,6 +131,7 @@ export async function collectImportsForFile(
   }
   const workspaceConfig = opts?.workspaceConfig ?? (await loadWorkspaceConfig(projectRoot));
   const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();
+  const jvmPackageFiles = new Map<string, string[]>();
 
   const stylesheetLanguage = ["css", "scss", "less"].includes(resolvedSup.id);
   const resolveFrom = async (
@@ -163,7 +164,13 @@ export async function collectImportsForFile(
           ? { statementStartIndex: resolverOpts.statementStartIndex }
           : {}),
       });
-      // Package stars and C# namespaces can name several files; bindings retain one representative.
+      if (resolverOpts?.jvmPackageWildcard && result.files.length) {
+        jvmPackageFiles.set(
+          from,
+          result.files.map((target) => target.replace(/\\/g, "/")),
+        );
+      }
+      // JVM package files remain on the star binding; C# namespaces retain a representative.
       if (
         result.files.length > 1 &&
         (resolvedSup.id === "java" || resolvedSup.id === "kotlin" || resolvedSup.id === "csharp")
@@ -196,6 +203,11 @@ export async function collectImportsForFile(
 
   const finalizeImports = async (): Promise<void> => {
     await finalizeLanguageSpecificImports(languageContext);
+    for (const binding of imports) {
+      if (binding.kind !== "star" || typeof binding.resolved !== "string") continue;
+      const files = jvmPackageFiles.get(binding.from);
+      if (files) binding.jvmPackageFiles = files;
+    }
   };
 
   const applyStatementOverride = async (

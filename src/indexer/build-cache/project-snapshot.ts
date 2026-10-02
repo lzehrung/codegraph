@@ -13,7 +13,7 @@ import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normal
 import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import { logWithLevel } from "../../logging.js";
 import { SymbolKind } from "../types.js";
-import { isCallableIdentity } from "../callable-identity.js";
+import { callableIdentityWithFile, isCallableIdentity } from "../callable-identity.js";
 import { importNodeId } from "../import-types.js";
 import type {
   BackendReport,
@@ -260,13 +260,21 @@ function transformHandle(root: string, value: string, toRelative: boolean): stri
 
 function transformModule(root: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
   const file = (value: string): string => transformPath(root, value, toRelative);
+  const symbol = (local: SymbolDef): SymbolDef => {
+    const nextFile = file(local.file);
+    return {
+      ...local,
+      file: nextFile,
+      ...(local.callable ? { callable: callableIdentityWithFile(local.callable, local.file, nextFile) } : {}),
+    };
+  };
   return {
     ...module,
     file: file(module.file),
-    locals: module.locals.map((local) => ({ ...local, file: file(local.file) })),
+    locals: module.locals.map(symbol),
     exports: module.exports.map((entry) => {
       if (entry.type === "local") {
-        return { ...entry, target: { ...entry.target, file: file(entry.target.file) } };
+        return { ...entry, target: symbol(entry.target) };
       }
       const copy = { ...entry };
       transformPersistedExportFromModule(root, copy, toRelative);
@@ -275,6 +283,9 @@ function transformModule(root: string, module: ModuleIndex, toRelative: boolean)
     imports: module.imports.map((binding) => ({
       ...binding,
       ...(typeof binding.resolved === "string" ? { resolved: file(binding.resolved) } : {}),
+      ...(binding.kind === "star" && binding.jvmPackageFiles
+        ? { jvmPackageFiles: binding.jvmPackageFiles.map(file) }
+        : {}),
     })),
   };
 }
@@ -1936,7 +1947,10 @@ function isImportBinding(value: unknown): value is ImportBinding {
     return typeof binding.localNS === "string" && isOptionalRange(binding.localRange);
   }
   return (
-    binding.kind === "star" && (binding.staticMembersOf === undefined || typeof binding.staticMembersOf === "string")
+    binding.kind === "star" &&
+    (binding.staticMembersOf === undefined || typeof binding.staticMembersOf === "string") &&
+    (binding.jvmPackageFiles === undefined ||
+      (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string")))
   );
 }
 

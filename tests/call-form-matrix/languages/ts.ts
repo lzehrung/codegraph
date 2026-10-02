@@ -62,6 +62,25 @@ export const tsCells: MatrixCell[] = [
     edge: { label: "calls", fromFile: "use.ts", fromName: "sumPair" },
   },
   {
+    id: "ts/qualified-call-shadowed",
+    language: "ts",
+    callForm: "qualified-call",
+    files: {
+      "api.ts": "export function run(): number { return 1; }",
+      "use.ts": [
+        'import * as api from "./api";',
+        "export function plain(): number { return api.run(); }",
+        "export function shadowed(api) { return api.run(); }",
+      ].join("\n"),
+    },
+    use: { file: "use.ts", line: 3, token: "run" },
+    expected: "not_found",
+    decoy: { file: "api.ts", line: 1, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.ts", fromName: "shadowed" },
+  },
+
+  {
     id: "ts/self-member-call",
     language: "ts",
     callForm: "self-member-call",

@@ -828,6 +828,26 @@ export function resolveCsharpQualifiedName(
   return null;
 }
 
+/** Select from the entire wildcard package before any representative file can win. */
+function resolveJvmPackageExport(
+  index: ProjectIndex,
+  files: readonly FileId[],
+  name: string,
+  argumentCount?: number,
+): SymbolDef | null {
+  const candidates: SymbolDef[] = [];
+  for (const file of files) {
+    const names = moduleNameLookup(index, file);
+    if (!names) continue;
+    for (const target of names.localExports.get(names.normalizeIdentifier(name)) ?? []) {
+      if (target.isMember || candidates.some((candidate) => sameSymbolDef(index, candidate, target))) continue;
+      candidates.push(target);
+    }
+  }
+  if (candidates.length === 1) return candidates[0]!;
+  return argumentCount === undefined ? null : selectFunctionOverloadByArity(candidates, argumentCount);
+}
+
 export function resolveImported(
   index: ProjectIndex,
   imp: ImportBinding,
@@ -836,6 +856,9 @@ export function resolveImported(
 ): SymbolDef | { namespace: FileId } | null {
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
+  if (imp.kind === "star" && imp.jvmPackageFiles) {
+    return resolveJvmPackageExport(index, imp.jvmPackageFiles, exportedName, opts?.argumentCount);
+  }
   const namespace = opts?.cNamespace ?? (imp.kind === "named" ? imp.cNamespace : undefined);
   if (opts?.cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== opts.cNamespace) return null;
 

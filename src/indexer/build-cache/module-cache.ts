@@ -26,7 +26,7 @@ import {
   type SqliteTableColumn,
 } from "../../util/sqlite-schema.js";
 import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
-import { isCallableIdentity } from "../callable-identity.js";
+import { callableIdentityWithFile, isCallableIdentity } from "../callable-identity.js";
 import type { Pos, Range } from "../../types.js";
 import {
   assertFilePathWithinRoot,
@@ -476,11 +476,18 @@ function hasValidCallableSymbol(value: unknown): boolean {
  */
 function hasValidImportBindingRanges(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
-  const binding = value as { explicitAlias?: unknown; importedRange?: unknown; localRange?: unknown };
+  const binding = value as {
+    explicitAlias?: unknown;
+    importedRange?: unknown;
+    localRange?: unknown;
+    jvmPackageFiles?: unknown;
+  };
   return (
     (binding.explicitAlias === undefined || typeof binding.explicitAlias === "boolean") &&
     isOptionalRange(binding.importedRange) &&
-    isOptionalRange(binding.localRange)
+    isOptionalRange(binding.localRange) &&
+    (binding.jvmPackageFiles === undefined ||
+      (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string")))
   );
 }
 
@@ -535,18 +542,36 @@ function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelati
       ? cacheRelativePath(projectRoot, file)
       : assertFilePathWithinRoot(projectRoot, cacheAbsolutePath(projectRoot, file), "Persisted cache path");
 
+  const transformedSymbol = (local: ModuleIndex["locals"][number]): ModuleIndex["locals"][number] => {
+    const file = transform(local.file);
+    return {
+      ...local,
+      file,
+      ...(local.callable ? { callable: callableIdentityWithFile(local.callable, local.file, file) } : {}),
+    };
+  };
+
   if (!toRelative) {
     module.file = transform(module.file);
-    for (const local of module.locals) local.file = transform(local.file);
+    for (const local of module.locals) {
+      const file = transform(local.file);
+      if (local.callable) local.callable = callableIdentityWithFile(local.callable, local.file, file);
+      local.file = file;
+    }
     for (const entry of module.exports) {
       if (entry.type === "local") {
-        entry.target.file = transform(entry.target.file);
+        const file = transform(entry.target.file);
+        if (entry.target.callable)
+          entry.target.callable = callableIdentityWithFile(entry.target.callable, entry.target.file, file);
+        entry.target.file = file;
       } else {
         transformPersistedExportFromModule(projectRoot, entry, false);
       }
     }
     for (const binding of module.imports) {
       if (typeof binding.resolved === "string") binding.resolved = transform(binding.resolved);
+      if (binding.kind === "star" && binding.jvmPackageFiles)
+        binding.jvmPackageFiles = binding.jvmPackageFiles.map(transform);
     }
     return module;
   }
@@ -554,18 +579,22 @@ function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelati
   return {
     ...module,
     file: transform(module.file),
-    locals: module.locals.map((local) => ({ ...local, file: transform(local.file) })),
+    locals: module.locals.map(transformedSymbol),
     exports: module.exports.map((entry) => {
       if (entry.type === "local") {
-        return { ...entry, target: { ...entry.target, file: transform(entry.target.file) } };
+        return { ...entry, target: transformedSymbol(entry.target) };
       }
       const copy = { ...entry };
       transformPersistedExportFromModule(projectRoot, copy, true);
       return copy;
     }),
-    imports: module.imports.map((binding) =>
-      typeof binding.resolved === "string" ? { ...binding, resolved: transform(binding.resolved) } : binding,
-    ),
+    imports: module.imports.map((binding) => ({
+      ...binding,
+      ...(typeof binding.resolved === "string" ? { resolved: transform(binding.resolved) } : {}),
+      ...(binding.kind === "star" && binding.jvmPackageFiles
+        ? { jvmPackageFiles: binding.jvmPackageFiles.map(transform) }
+        : {}),
+    })),
   };
 }
 

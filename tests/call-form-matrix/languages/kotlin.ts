@@ -281,6 +281,22 @@ export const kotlinCells: MatrixCell[] = [
     edge: { label: "calls", fromFile: "use7.kt", fromName: "sumTriple" },
   },
   {
+    id: "kotlin/overload-arity-wildcard-package",
+    language: "kotlin",
+    callForm: "overload-arity",
+    files: {
+      "calc/A.kt": "package calc\nfun add(a: Int, b: Int): Int = a + b\n",
+      "calc/B.kt": "package calc\nfun add(a: Int, b: Int, c: Int): Int = a + b + c\n",
+      "app/Use.kt": "package app\nimport calc.*\nfun triple(): Int = add(1, 2, 3)\n",
+    },
+    use: { file: "app/Use.kt", line: 3, token: "add" },
+    expected: { file: "calc/B.kt", line: 2, token: "add" },
+    decoy: { file: "calc/A.kt", line: 2, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "app/Use.kt", fromName: "triple" },
+  },
+
+  {
     id: "kotlin/inherited-member",
     language: "kotlin",
     callForm: "inherited-member",

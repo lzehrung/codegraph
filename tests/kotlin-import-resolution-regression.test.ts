@@ -3,10 +3,13 @@ import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   buildProjectIndex,
+  buildSymbolGraphDetailed,
   clearResolutionCaches,
   collectGraph,
   collectImportsForFile,
   parseFile,
+  findReferences,
+  goToDefinition,
 } from "../src/index.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -167,5 +170,76 @@ describe("Kotlin import resolution regression", () => {
 
     expect(imports).toHaveLength(1);
     expect(imports[0]?.resolved).not.toBe(sourceFile.replace(/\\/g, "/"));
+  });
+  it("selects wildcard-package overloads across files without attributing ambiguous calls", async () => {
+    const root = await mkTmpDir("cg-kotlin-package-overloads-");
+    const files = {
+      "calc/A.kt": "package calc\nfun add(a: Int, b: Int): Int = a + b\n",
+      "calc/B.kt": "package calc\nfun add(a: Int, b: Int, c: Int): Int = a + b + c\n",
+      "other/Decoy.kt": "package other\nfun add(a: Int, b: Int, c: Int): Int = -1\n",
+      "overlap/A.kt": "package overlap\nfun choose(a: Int, b: Int = 0): Int = a + b\n",
+      "overlap/B.kt": "package overlap\nfun choose(a: Int, b: Int = 1): Int = a + b\n",
+      "app/Use.kt": [
+        "package app",
+        "import calc.*",
+        "import overlap.*",
+        "fun two(): Int = add(1, 2)",
+        "fun three(): Int = add(1, 2, 3)",
+        "fun both(): Int = choose(1)",
+      ].join("\n"),
+    };
+    try {
+      for (const [filename, source] of Object.entries(files)) {
+        const file = path.join(root, filename);
+        await fsp.mkdir(path.dirname(file), { recursive: true });
+        await fsp.writeFile(file, source);
+      }
+      const app = path.join(root, "app", "Use.kt");
+      const a = path.join(root, "calc", "A.kt").replace(/\\/g, "/");
+      const b = path.join(root, "calc", "B.kt").replace(/\\/g, "/");
+      const decoy = path.join(root, "other", "Decoy.kt").replace(/\\/g, "/");
+      const appLines = files["app/Use.kt"].split("\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const at = async (line: number, name: string) =>
+        await goToDefinition(index, { file: app, line, column: appLines[line - 1]!.indexOf(name) + 1 });
+      const two = await at(4, "add");
+      const three = await at(5, "add");
+      const both = await at(6, "choose");
+      expect(two.status).toBe("ok");
+      expect(three.status).toBe("ok");
+      expect(both.status).toBe("not_found");
+      if (two.status !== "ok" || three.status !== "ok") throw new Error("expected package overloads");
+      expect(two.definition.file).toBe(a);
+      expect(three.definition.file).toBe(b);
+      expect(two.definition.file).not.toBe(decoy);
+      expect(three.definition.file).not.toBe(decoy);
+
+      const referencesFor = async (file: string) => {
+        const result = await findReferences(index, { file, line: 2, column: 5 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("expected references");
+        return result.references
+          .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(app))
+          .map((ref) => ref.range.start.line);
+      };
+      expect(await referencesFor(a)).toContain(4);
+      expect(await referencesFor(a)).not.toContain(5);
+      expect(await referencesFor(b)).toContain(5);
+      expect(await referencesFor(b)).not.toContain(4);
+      expect(await referencesFor(decoy)).toEqual([]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callTargets = (caller: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => graph.nodes.get(edge.to)?.file);
+      expect(callTargets("two")).toEqual([a]);
+      expect(callTargets("three")).toEqual([b]);
+      expect(callTargets("both")).toEqual([]);
+      expect(callTargets("two")).not.toContain(decoy);
+      expect(callTargets("three")).not.toContain(decoy);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

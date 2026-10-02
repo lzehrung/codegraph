@@ -74,11 +74,10 @@ function resolvedImportKey(resolved: ImportBinding["resolved"]): string {
 }
 
 /**
- * `expandStarImports` copies each star import into a named or namespace binding with the
- * same `from` and resolved file, and without a source range. Those copies are the star
- * import, not an explicit one. An explicit binding (Java `import pkg.Type`, Python
- * `from a import name`, Rust `use a::Name`) keeps the range the statement attributed,
- * or an alias flag star expansion never sets.
+ * expandStarImports copies each star import into a named or namespace binding with the
+ * same source specifier and one of its resolved target files, without a source range.
+ * These copies remain star imports. Explicit bindings retain their source ranges or
+ * an alias flag that star expansion never adds.
  */
 export function isExpandedStarBinding(binding: ImportBinding, imports: readonly ImportBinding[]): boolean {
   if (binding.kind !== "named" && binding.kind !== "namespace") return false;
@@ -87,12 +86,13 @@ export function isExpandedStarBinding(binding: ImportBinding, imports: readonly 
   if (binding.kind === "namespace" && binding.localRange) return false;
   const resolved = resolvedImportKey(binding.resolved);
   if (!resolved) return false;
-  return imports.some(
-    (candidate) =>
-      candidate.kind === "star" &&
-      candidate.from === binding.from &&
-      resolvedImportKey(candidate.resolved) === resolved,
-  );
+  return imports.some((candidate) => {
+    if (candidate.kind !== "star" || candidate.from !== binding.from) return false;
+    if (candidate.jvmPackageFiles) {
+      return candidate.jvmPackageFiles.some((file) => resolvedImportKey(file) === resolved);
+    }
+    return resolvedImportKey(candidate.resolved) === resolved;
+  });
 }
 
 function explicitBindingStartIndex(binding: ImportBinding): number | undefined {

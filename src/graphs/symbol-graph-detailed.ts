@@ -8,7 +8,6 @@ import {
   type BareNameUse,
   type NameResolution,
 } from "../indexer/name-resolution.js";
-import { nameLookupPolicyFor } from "../indexer/name-lookup-policies/index.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
 import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
@@ -39,7 +38,7 @@ import {
 
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
-import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
+import { getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 
 import type { CallableIdentity } from "../languages/callable-arity.js";
@@ -421,43 +420,23 @@ export async function buildSymbolGraphDetailed(
         constStringOf,
         aliasToTargetModule,
         resolveMemberPathFromModule,
-        ...(sup.id === "zig" || sup.id === "csharp" || isJsTsLanguage(sup.id)
-          ? {
-              resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
-                if (sup.id === "zig") {
-                  const binding = findClosestScopeBinding(scopeIndex, alias, useNode, sup);
-                  if (binding && binding.kind !== "namespace") return undefined;
-                }
-                const imported = innermostNamespaceImport(moduleEntry.imports, alias, useNode, sup.normalizeIdentifier);
-                if (
-                  isJsTsLanguage(sup.id) &&
-                  imported?.mechanism === "cjs" &&
-                  typeof imported.resolved === "string" &&
-                  cjsRequireValueBinding(index, imported.resolved)
-                ) {
-                  return undefined;
-                }
-                if (typeof imported?.resolved === "string") return imported.resolved;
-                if (isJsTsLanguage(sup.id)) return aliasToTargetModule.get(alias);
-                return undefined;
-              },
+        resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
+          if (!moduleAliasIsUnshadowed(bareNameUse(alias, useNode))) return undefined;
+          if (sup.id === "zig" || sup.id === "csharp" || isJsTsLanguage(sup.id)) {
+            const imported = innermostNamespaceImport(moduleEntry.imports, alias, useNode, sup.normalizeIdentifier);
+            if (
+              isJsTsLanguage(sup.id) &&
+              imported?.mechanism === "cjs" &&
+              typeof imported.resolved === "string" &&
+              cjsRequireValueBinding(index, imported.resolved)
+            ) {
+              return undefined;
             }
-          : {}),
-        // Go has no `resolveNamespaceAlias` override otherwise, so a local variable that
-        // shadows a package alias (`u := LocalU{}; u.Square()` alongside `import u "pkg"`)
-        // would still resolve `u.Square` through the blind `aliasToTargetModule` text map.
-        // Refuse the package alias whenever a closer, non-namespace scope binding owns the
-        // name at this exact use site, matching how the receiver-proof path already treats
-        // the local as the real receiver instead.
-        ...(sup.id === "go"
-          ? {
-              resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
-                const binding = findClosestScopeBinding(scopeIndex, alias, useNode, sup);
-                if (binding && binding.kind !== "namespace") return undefined;
-                return aliasToTargetModule.get(alias);
-              },
-            }
-          : {}),
+            if (typeof imported?.resolved === "string") return imported.resolved;
+            if (sup.id === "csharp" || sup.id === "zig") return undefined;
+          }
+          return aliasToTargetModule.get(alias);
+        },
       });
       const { memberExpressionType, optionalMemberTypes, propertyIdentifierTypes, resolveMemberChainTarget } =
         memberResolver;
@@ -534,9 +513,8 @@ export async function buildSymbolGraphDetailed(
         resolveIdentifier,
         resolveName,
         settleName,
-        moduleAliasIsUnshadowed: nameLookupPolicyFor(sup.id).moduleAliasIsUnshadowed
-          ? (name: string, node: SyntaxNodeLike): boolean => moduleAliasIsUnshadowed(bareNameUse(name, node))
-          : (): boolean => true,
+        moduleAliasIsUnshadowed: (name: string, node: SyntaxNodeLike): boolean =>
+          moduleAliasIsUnshadowed(bareNameUse(name, node)),
         resolveExportFrom,
         resolveMemberChainTarget,
         cppDeclaresClass: (def: SymbolDef): boolean => {

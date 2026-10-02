@@ -64,6 +64,17 @@ export function callableIdentityForDeclaration(args: {
   return { ...base, owner: "", key: uniqueKey };
 }
 
+/** Rebase file-scoped keys; C++ signature keys deliberately have no file prefix. */
+export function callableIdentityWithFile(
+  callable: CallableIdentity,
+  previousFile: string,
+  file: string,
+): CallableIdentity {
+  if (previousFile === file) return callable;
+  if (!callable.key.startsWith(previousFile) || callable.key.charCodeAt(previousFile.length) !== 0) return callable;
+  return { ...callable, key: file + callable.key.slice(previousFile.length) };
+}
+
 function isArity(value: unknown): value is CallableArity {
   if (!value || typeof value !== "object") return false;
   const range = value as Partial<CallableArity>;

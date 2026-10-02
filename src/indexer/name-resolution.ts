@@ -47,6 +47,8 @@ export type {
 } from "./name-resolution-types.js";
 
 import { type GoToResult, type ImportBinding, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
+import type { Binding, ScopeIndex } from "./scope.js";
+
 import { importBindingReferenceSites } from "./navigation-references.js";
 
 import { rangeContains } from "./reference-context.js";
@@ -117,12 +119,19 @@ export async function withParsedFiles<T>(files: LoadingParsedFileProvider, step:
   return result;
 }
 
-/** File import aliases are text-indexed; the language policy checks closer bindings. */
+/** A closer lexical binding hides an imported file alias. */
+export function fileBindingIsUnshadowed(scopeIndex: ScopeIndex, binding: Binding | null): boolean {
+  return !binding || scopeIndex.allScopes[0]?.map.get(binding.canonicalName) === binding;
+}
+
+/** File import aliases yield to closer lexical bindings unless a language policy says otherwise. */
 export function moduleAliasIsUnshadowed(use: BareNameUse): boolean {
   const policy = nameLookupPolicyFor(use.parsed.sup.id);
-  if (!policy.moduleAliasIsUnshadowed) return true;
   const closestBinding = findClosestScopeBinding(use.scopeIndex, use.name, use.node, use.parsed.sup);
-  return policy.moduleAliasIsUnshadowed({ use, lookupName: use.name, closestBinding });
+  if (policy.moduleAliasIsUnshadowed) {
+    return policy.moduleAliasIsUnshadowed({ use, lookupName: use.name, closestBinding });
+  }
+  return fileBindingIsUnshadowed(use.scopeIndex, closestBinding);
 }
 /**
  * Resolves a bare (unqualified or C++-qualified) name at a use site. Returns `null` when no

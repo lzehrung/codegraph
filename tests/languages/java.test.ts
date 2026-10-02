@@ -455,6 +455,44 @@ describe("Java imports with a same-named package", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("does not import static members through a package wildcard", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-package-static-star-"));
+    try {
+      const packageSource = "package client; import p.*; class PackageUse { int cannot() { return hit(); } }";
+      const staticSource = "package client; import static p.Util.*; class StaticUse { int can() { return hit(); } }";
+      const paths = await writeFixtureFiles(root, {
+        "p/Util.java": "package p; public class Util { public static int hit() { return 1; } }",
+        "p/Decoy.java": "package p; public class Decoy { public static int hit() { return -1; } }",
+        "client/PackageUse.java": packageSource,
+        "client/StaticUse.java": staticSource,
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const fromPackage = await goToDefinition(index, {
+        file: paths["client/PackageUse.java"]!,
+        line: 1,
+        column: packageSource.lastIndexOf("hit") + 1,
+      });
+      const fromStatic = await goToDefinition(index, {
+        file: paths["client/StaticUse.java"]!,
+        line: 1,
+        column: staticSource.lastIndexOf("hit") + 1,
+      });
+      expect(fromPackage.status).toBe("not_found");
+      expect(fromStatic.status).toBe("ok");
+      if (fromStatic.status === "ok") expect(normalizePath(fromStatic.definition.file)).toBe(paths["p/Util.java"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targetFiles = (caller: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => graph.nodes.get(edge.to)?.file);
+      expect(targetFiles("cannot")).not.toContain(paths["p/Util.java"]);
+      expect(targetFiles("cannot")).not.toContain(paths["p/Decoy.java"]);
+      expect(targetFiles("can")).toContain(paths["p/Util.java"]);
+      expect(targetFiles("can")).not.toContain(paths["p/Decoy.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Java lowercase class import bindings", () => {

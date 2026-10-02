@@ -137,8 +137,9 @@ export function selectMember<Owner, Member>(
   const visited = new Set(starts.map((owner) => model.ownerKey(owner)));
   const overloadState: {
     subclasses: Map<string, Set<string>>;
+    declarations: Array<{ member: Member; owner: string }>;
     accepted: Array<{ member: Member; owner: string }>;
-  } | null = options.inheritOverloads ? { subclasses: new Map(), accepted: [] } : null;
+  } | null = options.inheritOverloads ? { subclasses: new Map(), declarations: [], accepted: [] } : null;
   let lenient: Member | undefined;
   let named = false;
   const queryName = options.phpCaseInsensitive ? foldPhpIdentifierCase(options.name) : options.name;
@@ -179,17 +180,19 @@ export function selectMember<Owner, Member>(
       }
     }
     if (overloadState) {
-      const matching = unique.filter((member) => accepts(model.callable(member)?.arity, options.argumentCount));
-      for (const member of matching) {
+      for (const member of unique) {
         const owner = owners?.get(member) ?? "";
         const descendants = overloadState.subclasses.get(owner);
         if (
-          overloadState.accepted.some(
+          overloadState.declarations.some(
             (entry) => descendants?.has(entry.owner) && model.sameSignature?.(entry.member, member),
           )
         )
           continue;
-        overloadState.accepted.push({ member, owner });
+        overloadState.declarations.push({ member, owner });
+        if (accepts(model.callable(member)?.arity, options.argumentCount)) {
+          overloadState.accepted.push({ member, owner });
+        }
       }
       if (lenient === undefined && depth === 0 && options.keepUniqueArityMismatch && unique.length === 1)
         lenient = unique[0];
