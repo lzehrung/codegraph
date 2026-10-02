@@ -766,8 +766,12 @@ C symbol lookup keeps tag and ordinary identifier namespaces separate:
 
 Function symbols carry `SymbolDef.callable`, computed when the file is indexed:
 
-- `key`: declarations with the same key are one callable. A C or C++ prototype and its definition share a key, and so do TypeScript overload signatures and their implementation. Other declarations have their own key.
-- `owner`: the enclosing type or namespace path, or `""`.
+- `key`: declarations with the same key are one callable.
+  - C++: a prototype and its definition with the same owner path and normalized signature share a key, also across files.
+  - C: declarations of one name in one file share a key. A header prototype and a definition in another file have different keys; navigation joins them through includes.
+  - TypeScript: overload signatures and their implementation in one container of one file share a key.
+  - Other declarations have their own key.
+- `owner`: an opaque grouping value. Do not parse it as a source-level path.
 - `kind`: `"function"`, `"instance-method"`, `"class-method"`, or `"static-method"`.
 - `arity`: the accepted explicit-argument range `{ minArgs, maxArgs }` (`maxArgs: null` means variadic), or `null` when it is unknown. `unboundArity` is the range when the receiver is passed as the first argument.
 - `signature` (C and C++), `role` (TypeScript: `"signature"`, `"implementation"`, or `"other"`), and `definition` (C and C++) are present only for those languages.

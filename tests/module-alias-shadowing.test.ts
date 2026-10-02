@@ -133,4 +133,78 @@ describe("module import alias shadowing", () => {
       }
     });
   }
+  it("Python module reassignment hides the import without hiding a separate plain import", async () => {
+    const root = await mkTmpDir("cg-python-rebound-import-");
+    try {
+      const sources = {
+        "api.py": "def run():\n    return 1\n",
+        "plain.py": "import api\ndef plain():\n    return api.run()\n",
+        "rebound.py": [
+          "import api",
+          "class Receiver:",
+          "    def run(self): return 2",
+          "api = Receiver()",
+          "def rebound():",
+          "    return api.run()",
+          "",
+        ].join("\n"),
+      };
+      for (const [name, source] of Object.entries(sources)) await fs.writeFile(path.join(root, name), source);
+      const target = path.join(root, "api.py").split(path.sep).join("/");
+      const plainFile = path.join(root, "plain.py").split(path.sep).join("/");
+      const reboundFile = path.join(root, "rebound.py").split(path.sep).join("/");
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      const member = nodes.find((node) => node.file === target && node.name === "run");
+      const plain = nodes.find((node) => node.file === plainFile && node.name === "plain");
+      const rebound = nodes.find((node) => node.file === reboundFile && node.name === "rebound");
+      expect(member).toBeDefined();
+      expect(plain).toBeDefined();
+      expect(rebound).toBeDefined();
+      expect(
+        graph.edges.some((edge) => edge.from === plain?.id && edge.to === member?.id && edge.label === "calls"),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.from === rebound?.id && edge.to === member?.id && (edge.label === "calls" || edge.label === "uses"),
+        ),
+      ).toBe(false);
+
+      const plainLine = sources["plain.py"].split("\n")[2]!;
+      const reboundLine = sources["rebound.py"].split("\n")[5]!;
+      const plainGoto = await goToDefinition(index, {
+        file: plainFile,
+        line: 3,
+        column: plainLine.lastIndexOf("run") + 1,
+      });
+      const reboundGoto = await goToDefinition(index, {
+        file: reboundFile,
+        line: 6,
+        column: reboundLine.lastIndexOf("run") + 1,
+      });
+      expect(plainGoto.status).toBe("ok");
+      if (plainGoto.status === "ok") expect(plainGoto.definition.file).toBe(target);
+      if (reboundGoto.status === "ok") expect(reboundGoto.definition.file).not.toBe(target);
+      const references = await findReferences(index, {
+        file: target,
+        line: 1,
+        column: sources["api.py"].indexOf("run") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        const plainSites = references.references
+          .filter((site) => site.file === plainFile)
+          .map((site) => site.range.start.line);
+        const reboundSites = references.references
+          .filter((site) => site.file === reboundFile)
+          .map((site) => site.range.start.line);
+        expect(plainSites).toContain(3);
+        expect(reboundSites).not.toContain(6);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

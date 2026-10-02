@@ -121,7 +121,7 @@ export async function withParsedFiles<T>(files: LoadingParsedFileProvider, step:
 
 /** A closer lexical binding hides an imported file alias. */
 export function fileBindingIsUnshadowed(scopeIndex: ScopeIndex, binding: Binding | null): boolean {
-  return !binding || scopeIndex.allScopes[0]?.map.get(binding.canonicalName) === binding;
+  return !binding || (!!binding.import && scopeIndex.allScopes[0]?.map.get(binding.canonicalName) === binding);
 }
 
 /** File import aliases yield to closer lexical bindings unless a language policy says otherwise. */
