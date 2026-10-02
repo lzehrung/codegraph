@@ -1,6 +1,6 @@
 # Plan: unified resolution for navigation, references, and call graphs
 
-Status: implemented on branch `refactor/unified-resolution`; in review. Revised 2026-10-01 after a code
+Status: implemented on branch `refactor/unified-resolution` (PR #392); in review. Revised 2026-10-01 after a code
 audit of `main` at 2.4.0 (`ed1b0ba2`).
 
 ## Goal
@@ -161,7 +161,7 @@ gap is marked with its reason and stays visible in the report.
 - [x] Gate: typecheck, lint, format, build, native tests, coverage run (6,194 passed), fixture
       cleanliness. `security:production` fails on a new `piscina` advisory that also affects
       `main`; the fix is a separate dependency change.
-- [ ] Review and PR.
+- [x] Review: two review-and-correct rounds, then Copilot review rounds on PR #392.
 
 ## Results
 
