@@ -135,8 +135,11 @@ gap is marked with its reason and stays visible in the report.
 ## Progress
 
 - [x] Audit `main` and revise this plan.
-- [ ] Record baselines: test count, parity suite, graph build time for `src/` and
-      `tests/samples`, first and second build time for `tests/samples/cpp`.
+- [x] Record baselines (`ed1b0ba2`, median of 3, `cache: "off"`):
+  - `npm run test:fast`: 5,542 passed, 19 skipped, 336 files.
+  - `src/`: index 2,274 ms, detailed graph 3,862 ms, 27,436 edges.
+  - `tests/samples`: index 4,980 ms, detailed graph 2,936 ms, 1,026 edges.
+  - `tests/samples/cpp`: first build 1,612 ms, second build 537 ms.
 - [ ] Step 1: matrix harness and cell table.
 - [ ] Step 1: matrix cells for every semantic language and call form.
 - [ ] Step 1: metamorphic checks (decoy, warm versus cold, move).
