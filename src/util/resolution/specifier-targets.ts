@@ -24,6 +24,8 @@ export type SpecifierTargetMetadata = {
   statementStartIndex?: number;
   includeForm?: CFamilyIncludeForm;
   languageExtensions?: LanguageExtensionMap;
+  /** Distinguishes `import p.C.*` from `import p.C` when both a package and a class exist. */
+  jvmPackageWildcard?: true;
   /** Rust tries this spelling before `specifier` when it differs, without `pathAttribute`. */
   rawSpecifier?: string;
   resolutionExtensions?: readonly string[];
@@ -205,8 +207,10 @@ export async function resolveSpecifierTargets(
 ): Promise<SpecifierTargets> {
   if (languageId === "python") return resolvePythonTargets(file, specifier, metadata);
   if (languageId === "java" || languageId === "kotlin") {
-    const packageTargets = await resolveJvmPackageImportPaths(metadata.projectRoot, specifier, languageId, file);
-    if (packageTargets.length) return { files: packageTargets, externalName: specifier };
+    if (metadata.jvmPackageWildcard) {
+      const packageTargets = await resolveJvmPackageImportPaths(metadata.projectRoot, specifier, languageId, file);
+      if (packageTargets.length) return { files: packageTargets, externalName: specifier };
+    }
     return resolveLanguageImportTargets(file, specifier, languageId, metadata);
   }
   if (

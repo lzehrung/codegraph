@@ -88,6 +88,21 @@ export const swiftCells: MatrixCell[] = [
     decoy: { file: "widget2.swift", line: 2, token: "run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.swift", fromName: "callWithLocal" },
+    // Moved: Box relocates to another file; a plain Swift module has no per-file imports (see
+    // swift/bare-call), so every file already sees every other file's declarations and use.swift
+    // needs no change at all.
+    moved: {
+      files: {
+        "box-impl.swift": ["class Box {", "    func run() -> Int {", "        return 1", "    }", "}", ""].join("\n"),
+        "widget2.swift": ["class Widget2 {", "    func run() -> Int {", "        return -1", "    }", "}", ""].join(
+          "\n",
+        ),
+        "use.swift": ["func callWithLocal() -> Int {", "    let b: Box = Box()", "    return b.run()", "}", ""].join(
+          "\n",
+        ),
+      },
+      expected: { file: "box-impl.swift", line: 2, token: "run" },
+    },
   },
   {
     id: "swift/static-receiver",

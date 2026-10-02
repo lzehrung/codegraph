@@ -22,10 +22,14 @@ const STATUS_LABEL: Readonly<Record<CellStatus, string>> = {
   omitted: "Omitted",
 };
 
+/** The worst status across every cell sharing a language and call form: a language/form pair can
+ * carry more than one cell (for example a second cell probing a harder variant of the same
+ * form), and a known gap in any of them must stay visible in the main table, not be hidden by an
+ * earlier-declared cell that happens to pass. */
 function statusFor(cells: readonly MatrixCell[], language: Language, callForm: CallForm): CellStatus {
-  const cell = cells.find((candidate) => candidate.language === language && candidate.callForm === callForm);
-  if (!cell) return "omitted";
-  return cell.knownGap ? "known-gap" : "covered";
+  const matches = cells.filter((candidate) => candidate.language === language && candidate.callForm === callForm);
+  if (!matches.length) return "omitted";
+  return matches.some((cell) => cell.knownGap) ? "known-gap" : "covered";
 }
 
 export function renderCallFormReport(cells: readonly MatrixCell[]): string {
@@ -43,8 +47,10 @@ export function renderCallFormReport(cells: readonly MatrixCell[]): string {
       "to (or `not_found`), and a same-named decoy declaration it must not resolve to. A cell passes when " +
       "`goToDefinition`, `findReferences`, and the detailed call graph agree on the use site, the decoy is " +
       "excluded, and three metamorphic checks hold: an unrelated same-named file elsewhere changes nothing, a " +
-      "warm disk-cache build matches a cold build across a sequence of file mutations, and, where the cell gives " +
-      "one, moving the declaration moves the answer with it. " +
+      "warm disk-cache build matches a cold build after each of a sequence of file mutations, and, where the " +
+      "cell gives one, moving the declaration moves the answer with it. A language/call-form pair can carry " +
+      "more than one cell; the table below shows the worst status among them, and every cell is still listed " +
+      'individually under "Cell counts" and "Known gaps". ' +
       "`docs/plans/2026-09-28-unified-name-resolution.md` Step 1 is the design source.",
   );
   lines.push("");
@@ -89,6 +95,26 @@ export function renderCallFormReport(cells: readonly MatrixCell[]): string {
   }
   lines.push("");
   lines.push(`Total: ${total} cells across ${LANGUAGE_ORDER.length} languages, ${totalGaps} known gaps.`);
+  lines.push("");
+
+  lines.push("## Moved-declaration coverage");
+  lines.push("");
+  lines.push(
+    "The moved-declaration metamorphic check only runs for a cell that sets a `moved` variant. One cell per " +
+      "language sets one where the language's import model allows it cheaply (see each language's cell table " +
+      "for languages that cannot, and why).",
+  );
+  lines.push("");
+  lines.push("| Language | Cell running the moved check |");
+  lines.push("| --- | --- |");
+  let movedLanguages = 0;
+  for (const language of LANGUAGE_ORDER) {
+    const movedCell = cells.find((cell) => cell.language === language && cell.moved);
+    if (movedCell) movedLanguages += 1;
+    lines.push(`| ${LANGUAGE_NAMES[language]} | ${movedCell ? `\`${movedCell.id}\`` : "none"} |`);
+  }
+  lines.push("");
+  lines.push(`${movedLanguages} of ${LANGUAGE_ORDER.length} languages run the moved-declaration check.`);
   lines.push("");
 
   lines.push("## Known gaps");

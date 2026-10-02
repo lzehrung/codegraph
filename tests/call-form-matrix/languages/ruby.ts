@@ -64,6 +64,19 @@ export const rubyCells: MatrixCell[] = [
     decoy: { file: "widget2.rb", line: 2, token: "run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.rb", fromName: "call_with_local" },
+    // Moved: box.rb relocates under lib/, and use.rb's require_relative path updates to match --
+    // require_relative names a file, not a declaration in another file
+    // (`import-resolution-tables.ts`).
+    moved: {
+      files: {
+        "lib/box.rb": ["class Box", "  def run", "    1", "  end", "end", ""].join("\n"),
+        "widget2.rb": ["class Widget2", "  def run", "    -1", "  end", "end", ""].join("\n"),
+        "use.rb": ["require_relative 'lib/box'", "", "def call_with_local", "  b = Box.new", "  b.run", "end", ""].join(
+          "\n",
+        ),
+      },
+      expected: { file: "lib/box.rb", line: 2, token: "run" },
+    },
   },
   {
     id: "ruby/construction",

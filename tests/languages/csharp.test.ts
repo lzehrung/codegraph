@@ -2327,6 +2327,36 @@ describe("C# inherited overloads", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves an explicit this call to a grandparent overload instead of a nearer wrong-arity method", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-this-grand-overload-"));
+    try {
+      const lines = ["namespace P;", "public class Derived : Base {", "  public int Call() => this.Hit(1);", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "GrandBase.cs": "namespace P;\npublic class GrandBase { public int Hit(int value) => value; }\n",
+        "Base.cs": "namespace P;\npublic class Base : GrandBase { public int Hit() => 0; }\n",
+        "Derived.cs": lines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const goto = await goToDefinition(index, {
+        file: paths["Derived.cs"]!,
+        line: 3,
+        column: columnOf(lines, 3, "Hit"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected GrandBase.Hit(int)");
+      expect(normalizePath(goto.definition.file)).toBe(paths["GrandBase.cs"]);
+      expect(normalizePath(goto.definition.file)).not.toBe(paths["Base.cs"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "Call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(targets).toEqual([paths["GrandBase.cs"]]);
+      expect(targets).not.toContain(paths["Base.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("C# inherited member accessibility", () => {

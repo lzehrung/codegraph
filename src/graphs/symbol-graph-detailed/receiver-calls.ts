@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
 import { isGoExportedMemberName } from "../../indexer/declaration-visibility.js";
-import { selectMember, type MemberModel } from "../../indexer/member-selection.js";
+import { inheritsMemberOverloads, selectMember, type MemberModel } from "../../indexer/member-selection.js";
 import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
-import type { LanguageSupport } from "../../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
@@ -1674,6 +1674,96 @@ function callSiteKey(callerId: string, site: ReceiverCallCandidate["site"]): str
   return `${callerId}\u0000${site.file}\u0000${start.line}:${start.column}:${start.index ?? ""}-${end.line}:${end.column}:${end.index ?? ""}`;
 }
 
+/** Prove overriding member pairs only for hierarchy receiver calls. */
+export async function inheritedReceiverMemberSignatures(
+  graph: SymbolGraph,
+  candidates: readonly ReceiverCallCandidate[],
+  definitions: ReadonlyMap<string, SymbolDef>,
+  ownerAnchors: ReadonlyMap<string, string>,
+  accessibleMembers: ReadonlyMap<string, ReadonlySet<string>>,
+  languageExtensions: LanguageExtensionMap | undefined,
+  sameParameterTypes: (derived: SymbolDef, inherited: SymbolDef) => Promise<boolean>,
+): Promise<ReadonlyMap<string, ReadonlySet<string>>> {
+  const signatures = new Map<string, Set<string>>();
+  const membersByOwner = new Map<string, string[]>();
+  const ownerByMember = new Map<string, string>();
+  const parentsByOwner = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (edge.label === "member_of") {
+      ownerByMember.set(edge.from, edge.to);
+      if (definitions.has(edge.from)) {
+        const members = membersByOwner.get(edge.to) ?? [];
+        members.push(edge.from);
+        membersByOwner.set(edge.to, members);
+      }
+    } else if (edge.label && HIERARCHY_LABELS[edge.label]) {
+      const parents = parentsByOwner.get(edge.from) ?? [];
+      parents.push(edge.to);
+      parentsByOwner.set(edge.from, parents);
+    }
+  }
+  for (const [owner, accessible] of accessibleMembers) {
+    const members = membersByOwner.get(owner) ?? [];
+    for (const id of accessible) if (definitions.has(id) && !members.includes(id)) members.push(id);
+    membersByOwner.set(owner, members);
+  }
+  const checkedPairs = new Set<string>();
+  const checkedGroups = new Set<string>();
+  const separator = "\0";
+  for (const candidate of candidates) {
+    if (
+      !inheritsMemberOverloads(supportForFileWithoutHeaderSample(candidate.site.file, languageExtensions)?.id ?? "")
+    ) {
+      continue;
+    }
+    const rawOwner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
+    if (!rawOwner) continue;
+    const owner = ownerAnchors.get(rawOwner) ?? rawOwner;
+    const group = `${owner}\0${candidate.memberName}\0${candidate.argumentCount}\0${candidate.viaSupertypes}`;
+    if (checkedGroups.has(group)) continue;
+    checkedGroups.add(group);
+    let level = candidate.viaSupertypes ? (parentsByOwner.get(owner) ?? []) : [owner];
+    const seen = new Set([owner]);
+    const shallower: string[] = [];
+    for (let depth = 0; depth < 16 && level.length; depth += 1) {
+      const current: string[] = [];
+      const next: string[] = [];
+      for (const id of level) {
+        for (const memberId of membersByOwner.get(id) ?? []) {
+          if (graph.nodes.get(memberId)?.name !== candidate.memberName) continue;
+          const member = definitions.get(memberId)!;
+          const arity = member.callable?.arity;
+          const count = candidate.argumentCount;
+          if (count !== null && arity && (count < arity.minArgs || (arity.maxArgs !== null && count > arity.maxArgs))) {
+            continue;
+          }
+          current.push(memberId);
+        }
+        for (const parent of parentsByOwner.get(id) ?? []) {
+          if (seen.has(parent)) continue;
+          seen.add(parent);
+          next.push(parent);
+        }
+      }
+      for (const derivedId of shallower) {
+        const derived = definitions.get(derivedId)!;
+        for (const inheritedId of current) {
+          const pair = derivedId + separator + inheritedId;
+          if (checkedPairs.has(pair)) continue;
+          checkedPairs.add(pair);
+          if (!(await sameParameterTypes(derived, definitions.get(inheritedId)!))) continue;
+          const inherited = signatures.get(derivedId) ?? new Set<string>();
+          inherited.add(inheritedId);
+          signatures.set(derivedId, inherited);
+        }
+      }
+      shallower.push(...current);
+      level = next;
+    }
+  }
+  return signatures;
+}
+
 /**
  * Records proven `calls` edges for deferred receiver invocations.
  * Ambiguous names at a level stop the walk.
@@ -1691,6 +1781,8 @@ export function emitReceiverCallEdges(
   fileHiddenMemberIds: ReadonlySet<string> = new Set(),
   acceptsCallTarget?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
   callableIdentities: ReadonlyMap<string, import("../../languages/callable-arity.js").CallableIdentity> = new Map(),
+  languageExtensions?: LanguageExtensionMap,
+  overridingSignatures?: ReadonlyMap<string, ReadonlySet<string>>,
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1761,6 +1853,7 @@ export function emitReceiverCallEdges(
         activeCandidate.goPackagePeerFiles.has(node.file)
       );
     },
+    sameSignature: (a, b) => overridingSignatures?.get(a)?.has(b) ?? false,
   };
 
   const callTargetsBySite = new Map<string, Set<string>>();
@@ -1795,6 +1888,9 @@ export function emitReceiverCallEdges(
       useFile: candidate.site.file,
       phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
       startAtAncestor: candidate.viaSupertypes,
+      inheritOverloads: inheritsMemberOverloads(
+        supportForFileWithoutHeaderSample(candidate.site.file, languageExtensions)?.id ?? "",
+      ),
     });
     let receiverDisposition: "none" | "resolved" | "ambiguous" =
       lookup.status === "unique" ? "resolved" : lookup.status;

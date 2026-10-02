@@ -53,6 +53,23 @@ export const zigCells: MatrixCell[] = [
     decoy: { file: "decoy.zig", line: 1, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.zig", fromName: "sumPair" },
+    // Moved: calc.zig relocates under lib/, and use.zig's @import path updates to match -- @import
+    // names a file path, not a declaration in another file (`import-resolution-tables.ts`).
+    moved: {
+      files: {
+        "lib/calc.zig": ["pub fn add(a: i32, b: i32) i32 {", "    return a + b;", "}", ""].join("\n"),
+        "decoy.zig": ["pub fn add(a: i32, b: i32) i32 {", "    return -1;", "}", ""].join("\n"),
+        "use.zig": [
+          'const calc = @import("lib/calc.zig");',
+          "",
+          "pub fn sumPair() i32 {",
+          "    return calc.add(1, 2);",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "lib/calc.zig", line: 1, token: "add" },
+    },
   },
   {
     id: "zig/self-member-call",

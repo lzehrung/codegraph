@@ -22,6 +22,23 @@ export const tsxCells: MatrixCell[] = [
     decoy: { file: "decoy.tsx", line: 1, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.tsx", fromName: "Sum" },
+    // Moved: calc.tsx relocates under lib/, and use.tsx's import specifier updates to match -- a
+    // TSX import names a module specifier, not a declaration in another file
+    // (`import-resolution-tables.ts`).
+    moved: {
+      files: {
+        "lib/calc.tsx": ["export function add(a: number, b: number): number {", "  return a + b;", "}", ""].join("\n"),
+        "decoy.tsx": ["export function add(a: number, b: number): number {", "  return -1;", "}", ""].join("\n"),
+        "use.tsx": [
+          'import { add } from "./lib/calc";',
+          "export function Sum() {",
+          "  return <span>{add(1, 2)}</span>;",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "lib/calc.tsx", line: 1, token: "add" },
+    },
   },
   {
     id: "tsx/qualified-call",

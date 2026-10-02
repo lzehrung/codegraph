@@ -11,6 +11,7 @@ export type ResolvedImportTarget = Exclude<ImportBinding["resolved"], undefined>
 export type ImportResolverOptions = {
   includeForm?: CFamilyIncludeForm;
   resolutionKind?: ModuleSpecifierResolutionKind;
+  jvmPackageWildcard?: true;
   /** Rust `#[path = "..."]` on this module item. Resolved only inside the project root. */
   pathAttribute?: string;
   statementStartIndex?: number;

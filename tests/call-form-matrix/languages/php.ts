@@ -59,6 +59,40 @@ export const phpCells: MatrixCell[] = [
     decoy: { file: "decoy.php", line: 5, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.php", fromName: "sumPair" },
+    // Moved: math.php relocates under lib/; PHP resolves the qualified call by namespace and
+    // name, not by the require path (`resolvesImportsFromDeclarations` in
+    // `import-resolution-tables.ts`), but `require_once` itself still names a file, so use.php's
+    // require path updates to match.
+    moved: {
+      files: {
+        "lib/math.php": [
+          "<?php",
+          "",
+          "namespace App;",
+          "",
+          "function add($a, $b)",
+          "{",
+          "    return $a + $b;",
+          "}",
+          "",
+        ].join("\n"),
+        "decoy.php": ["<?php", "", "namespace Other;", "", "function add($a, $b)", "{", "    return -1;", "}", ""].join(
+          "\n",
+        ),
+        "use.php": [
+          "<?php",
+          "",
+          "require_once 'lib/math.php';",
+          "",
+          "function sumPair()",
+          "{",
+          "    return \\App\\add(1, 2);",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "lib/math.php", line: 5, token: "add" },
+    },
   },
   {
     id: "php/self-member-call",

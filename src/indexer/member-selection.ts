@@ -38,6 +38,11 @@ export type MemberSelectionOptions = {
 
 const MAX_DEPTH = 16;
 
+/** Java, Kotlin, and C# inherit overloads beyond the first declaring class. */
+export function inheritsMemberOverloads(languageId: string): boolean {
+  return languageId === "java" || languageId === "kotlin" || languageId === "csharp";
+}
+
 function accepts(range: CallableArity | null | undefined, count: number | null): boolean {
   return count === null || !range || (count >= range.minArgs && (range.maxArgs === null || count <= range.maxArgs));
 }

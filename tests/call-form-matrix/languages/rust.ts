@@ -29,6 +29,27 @@ export const rustCells: MatrixCell[] = [
     decoy: { file: "src/decoy.rs", line: 1, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "src/consumer.rs", fromName: "sum_pair" },
+    // Moved: calc relocates to a new module, mathlib; a Rust `use` path names a module file, not
+    // a declaration that can move on its own (`import-resolution-tables.ts`), so lib.rs's module
+    // declaration and consumer.rs's `use` path both update to the new module name.
+    moved: {
+      files: {
+        "Cargo.toml": ["[package]", 'name = "probe"', 'version = "0.1.0"', ""].join("\n"),
+        "src/main.rs": ["fn main() {}", ""].join("\n"),
+        "src/lib.rs": ["pub mod mathlib;", "pub mod decoy;", "pub mod consumer;", ""].join("\n"),
+        "src/mathlib.rs": ["pub fn add(a: i32, b: i32) -> i32 {", "    a + b", "}", ""].join("\n"),
+        "src/decoy.rs": ["pub fn add(a: i32, b: i32) -> i32 {", "    -1", "}", ""].join("\n"),
+        "src/consumer.rs": [
+          "use crate::mathlib::add;",
+          "",
+          "pub fn sum_pair() -> i32 {",
+          "    add(1, 2)",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "src/mathlib.rs", line: 1, token: "add" },
+    },
   },
   {
     id: "rust/self-member-call",

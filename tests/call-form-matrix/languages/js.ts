@@ -26,6 +26,23 @@ export const jsCells: MatrixCell[] = [
     decoy: { file: "decoy.js", line: 1, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.js", fromName: "sumPair" },
+    // Moved: calc.js relocates under lib/, and use.js's import specifier updates to match -- a
+    // JavaScript import names a module specifier, not a declaration in another file
+    // (`import-resolution-tables.ts`).
+    moved: {
+      files: {
+        "lib/calc.js": ["export function add(a, b) {", "  return a + b;", "}", ""].join("\n"),
+        "decoy.js": ["export function add(a, b) {", "  return -1;", "}", ""].join("\n"),
+        "use.js": [
+          'import { add } from "./lib/calc.js";',
+          "export function sumPair() {",
+          "  return add(1, 2);",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "lib/calc.js", line: 1, token: "add" },
+    },
   },
   {
     id: "js/qualified-call",

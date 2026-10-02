@@ -17,6 +17,18 @@ export const cppCells: MatrixCell[] = [
     decoy: { file: "decoy.cpp", line: 1, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.cpp", fromName: "sumPair" },
+    // Moved: calc.hpp relocates under lib/, and both includes update to match -- C++ needs an
+    // explicit #include to see a cross-file name at all (`import-resolution-tables.ts`), so an
+    // #include path that no longer matches the header's location would stop seeing it.
+    moved: {
+      files: {
+        "lib/calc.hpp": ["int add(int a, int b);", ""].join("\n"),
+        "calc.cpp": ['#include "lib/calc.hpp"', "int add(int a, int b) { return a + b; }", ""].join("\n"),
+        "decoy.cpp": ["int add(int a, int b) { return -1; }", ""].join("\n"),
+        "use.cpp": ['#include "lib/calc.hpp"', "int sumPair() {", "  return add(1, 2);", "}", ""].join("\n"),
+      },
+      expected: { file: "lib/calc.hpp", line: 1, token: "add" },
+    },
   },
   {
     id: "cpp/qualified-call",

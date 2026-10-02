@@ -22,6 +22,23 @@ export const tsCells: MatrixCell[] = [
     decoy: { file: "decoy.ts", line: 1, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.ts", fromName: "sumPair" },
+    // Moved: math.ts relocates under lib/, and use.ts's import specifier updates to match -- a
+    // TypeScript import names a module specifier, not a declaration in another file
+    // (`import-resolution-tables.ts`).
+    moved: {
+      files: {
+        "lib/math.ts": ["export function add(a: number, b: number): number {", "  return a + b;", "}", ""].join("\n"),
+        "decoy.ts": ["export function add(a: number, b: number): number {", "  return -1;", "}", ""].join("\n"),
+        "use.ts": [
+          'import { add } from "./lib/math";',
+          "export function sumPair(): number {",
+          "  return add(1, 2);",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "lib/math.ts", line: 1, token: "add" },
+    },
   },
   {
     id: "ts/qualified-call",

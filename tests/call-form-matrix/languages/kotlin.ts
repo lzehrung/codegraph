@@ -111,6 +111,45 @@ export const kotlinCells: MatrixCell[] = [
     decoy: { file: "widget2.kt", line: 4, token: "run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use3.kt", fromName: "callWithLocal" },
+    // Moved: Box relocates to another file of the same package ("box"); Kotlin's package is an
+    // implicit compilation unit (`import-resolution-tables.ts`), so `import box.Box` in use3.kt
+    // needs no change at all.
+    moved: {
+      files: {
+        "box-impl.kt": [
+          "package box",
+          "",
+          "class Box {",
+          "    fun run(): Int {",
+          "        return 1",
+          "    }",
+          "}",
+          "",
+        ].join("\n"),
+        "widget2.kt": [
+          "package widget2",
+          "",
+          "class Widget2 {",
+          "    fun run(): Int {",
+          "        return -1",
+          "    }",
+          "}",
+          "",
+        ].join("\n"),
+        "use3.kt": [
+          "package use3",
+          "",
+          "import box.Box",
+          "",
+          "fun callWithLocal(): Int {",
+          "    val b: Box = Box()",
+          "    return b.run()",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "box-impl.kt", line: 4, token: "run" },
+    },
   },
   {
     id: "kotlin/static-receiver",

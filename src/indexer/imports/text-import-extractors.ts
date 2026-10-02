@@ -112,7 +112,13 @@ function extractJavaImports(source: string, sink: TextImportSink): void {
     if (!rawSpecifier || match.index === undefined) continue;
     const spec = rawSpecifier.replace(/\s+/gu, "");
     if (!spec) continue;
-    sink.specifier({ spec, typeOnly: false });
+    const prefix = match[0].slice(0, match[0].indexOf(rawSpecifier));
+    const suffix = match[0].slice(match[0].indexOf(rawSpecifier) + rawSpecifier.length);
+    sink.specifier({
+      spec,
+      typeOnly: false,
+      ...(suffix.includes("*") && !prefix.includes("static") ? { jvmPackageWildcard: true } : {}),
+    });
     sink.binding({ raw: source.slice(match.index, match.index + match[0].length), start: match.index });
   }
 }
@@ -131,7 +137,8 @@ function extractKotlinImports(source: string, sink: TextImportSink): void {
     if (!rawSpecifier || match.index === undefined) continue;
     const spec = rawSpecifier.replace(/\s+/gu, "");
     if (!spec) continue;
-    sink.specifier({ spec, typeOnly: false });
+    const suffix = match[0].slice(match[0].indexOf(rawSpecifier) + rawSpecifier.length);
+    sink.specifier({ spec, typeOnly: false, ...(suffix.includes("*") ? { jvmPackageWildcard: true } : {}) });
     sink.binding({ raw: source.slice(match.index, match.index + match[0].length), start: match.index });
   }
 }

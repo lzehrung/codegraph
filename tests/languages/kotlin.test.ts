@@ -446,6 +446,62 @@ describe("Kotlin .ktm script files", () => {
   });
 });
 
+describe("Kotlin imports with a same-named package", () => {
+  it("binds an imported class to its declaration and a star import to the package", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-package-class-import-"));
+    try {
+      const useLines = ["package client", "import p.C", "fun make(): C = C()"];
+      const paths = await writeFixtureFiles(root, {
+        "p/C.kt": "package p\nclass C\n",
+        "p/C/Decoy.kt": "package p.C\nclass Decoy\n",
+        "Use.kt": useLines.join("\n") + "\n",
+        "UseStar.kt": "package client\nimport p.C.*\nfun make(): Decoy = Decoy()\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = paths["Use.kt"]!;
+      const declaration = paths["p/C.kt"]!;
+      const decoy = paths["p/C/Decoy.kt"]!;
+      const binding = index.byFile.get(fileIdentityKey(use))?.imports.find((entry) => entry.from === "p.C");
+      expect(binding?.resolved).toBe(declaration);
+      expect(binding?.resolved).not.toBe(decoy);
+
+      const importsFrom = (file: string) =>
+        index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(importsFrom(use)).toEqual([declaration]);
+      expect(importsFrom(use)).not.toContain(decoy);
+      expect(importsFrom(paths["UseStar.kt"]!)).toEqual([decoy]);
+      const starBinding = index.byFile
+        .get(fileIdentityKey(paths["UseStar.kt"]!))
+        ?.imports.find((entry) => entry.from === "p.C");
+      expect(starBinding?.resolved).toBe(decoy);
+
+      const reduced = await buildProjectIndex(root, { cache: "off", native: "off" });
+      const reducedBinding = reduced.byFile.get(fileIdentityKey(use))?.imports.find((entry) => entry.from === "p.C");
+      const reducedStar = reduced.byFile
+        .get(fileIdentityKey(paths["UseStar.kt"]!))
+        ?.imports.find((entry) => entry.from === "p.C");
+      const reducedTargets = (file: string) =>
+        reduced.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(reducedBinding?.resolved).toBe(declaration);
+      expect(reducedTargets(use)).toEqual([declaration]);
+      expect(reducedTargets(use)).not.toContain(decoy);
+      expect(reducedStar?.resolved).toBe(decoy);
+      expect(reducedTargets(paths["UseStar.kt"]!)).toEqual([decoy]);
+      const goto = await goToDefinition(index, { file: use, line: 3, column: columnInLines(useLines, 3, "C()") });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected imported class C");
+      expect(normalizePath(goto.definition.file)).toBe(declaration);
+      expect(normalizePath(goto.definition.file)).not.toBe(decoy);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Kotlin receiver member navigation", () => {
   it("resolves property and method navigation to the proven receiver, not a local or decoy member", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-receiver-nav-"));

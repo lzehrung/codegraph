@@ -60,6 +60,38 @@ export const csharpCells: MatrixCell[] = [
     decoy: { file: "util.cs", line: 8, token: "Add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.cs", fromName: "SumPair" },
+    // Moved: Some.Namespace.Util relocates to its own file; C#'s namespace is an implicit
+    // compilation unit (`import-resolution-tables.ts`), and use.cs names the type by its fully
+    // qualified name, so it needs no change at all -- only util.cs's internal layout changes.
+    moved: {
+      files: {
+        "util.cs": [
+          "namespace Other.Namespace {",
+          "  public class Util {",
+          "    public static int Add(int a, int b) { return -1; }",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+        "util-moved.cs": [
+          "namespace Some.Namespace {",
+          "  public class Util {",
+          "    public static int Add(int a, int b) { return a + b; }",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+        "use.cs": [
+          "public class Program {",
+          "  public int SumPair() {",
+          "    return Some.Namespace.Util.Add(1, 2);",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "util-moved.cs", line: 3, token: "Add" },
+    },
   },
   {
     id: "csharp/self-member-call",
@@ -218,6 +250,55 @@ export const csharpCells: MatrixCell[] = [
     decoy: { file: "decoy4.cs", line: 2, token: "Add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.cs", fromName: "SumTriple" },
+  },
+  {
+    // A second "overload-arity" cell (the report shows the worst status across every cell that
+    // shares a language and call form): overload resolution must keep searching past an
+    // intermediate ancestor's same-named, wrong-arity method to reach a grandparent's matching
+    // overload. `GrandBase` declares `Hit(int)`; `Base : GrandBase` declares a different
+    // overload, `Hit()`; `Derived : Base` calls `this.Hit(1)`, which only `GrandBase.Hit`
+    // accepts -- including the detailed graph's `calls` edge, via `inheritsMemberOverloads` in
+    // `src/indexer/member-selection.ts`.
+    id: "csharp/overload-arity-inherited",
+    language: "csharp",
+    callForm: "overload-arity",
+    files: {
+      "Grand/GrandBase.cs": [
+        "namespace Grand {",
+        "  public class GrandBase {",
+        "    public int Hit(int x) {",
+        "      return x;",
+        "    }",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+      "Grand/Base.cs": [
+        "namespace Grand {",
+        "  public class Base : GrandBase {",
+        "    public int Hit() {",
+        "      return 0;",
+        "    }",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+      "Grand/Derived.cs": [
+        "namespace Grand {",
+        "  public class Derived : Base {",
+        "    public int CallHit() {",
+        "      return this.Hit(1);",
+        "    }",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "Grand/Derived.cs", line: 4, token: "Hit" },
+    expected: { file: "Grand/GrandBase.cs", line: 3, token: "Hit" },
+    decoy: { file: "Grand/Base.cs", line: 3, token: "Hit" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "Grand/Derived.cs", fromName: "CallHit" },
   },
   {
     id: "csharp/inherited-member",

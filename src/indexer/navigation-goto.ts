@@ -80,7 +80,7 @@ import {
   isSwiftExtensionContainer,
   sharedOwnerCanUseMembers,
 } from "./shared-owner-identity.js";
-import { selectMember, type MemberModel } from "./member-selection.js";
+import { inheritsMemberOverloads, selectMember, type MemberModel } from "./member-selection.js";
 import {
   SymbolKind,
   type GoToResult,
@@ -1647,8 +1647,6 @@ async function baseRefsFromContainer(
   return refs;
 }
 
-const HIERARCHY_OVERLOAD_LANGUAGES: ReadonlySet<string> = new Set(["java", "kotlin", "csharp"]);
-
 /** What a hierarchy member walk saw, for callers that must not fall back past it. */
 type KeywordMemberReport = { named: boolean; ambiguous: boolean };
 
@@ -1667,7 +1665,7 @@ async function resolveKeywordReceiverMember(
     ? await keywordClassRefFromDef(index, explicitClassDef)
     : await keywordClassRefFromNode(index, mod, node);
   if (!current) return undefined;
-  const spansHierarchy = HIERARCHY_OVERLOAD_LANGUAGES.has(current.context.sup.id);
+  const spansHierarchy = inheritsMemberOverloads(current.context.sup.id);
   const ownerKey = (ref: KeywordClassRef): string => keywordContainerKey(ref.file, ref.container);
   const preloadHiddenNames = isJsTsLanguage(current.context.sup.id) && knownArgumentCount !== undefined;
   const memberKey = (def: SymbolDef): string => `${fileIdentityKey(def.file)}:${def.range.start.index}`;
@@ -1930,7 +1928,7 @@ const BUILTIN_PARAMETER_TYPES: Readonly<Record<string, ReadonlySet<string>>> = {
  * other. Equal spelling is proof only within one file or for built-in types; elsewhere each
  * spelling must resolve to the same declaration from its own file.
  */
-async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, right: SymbolDef): Promise<boolean> {
+export async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, right: SymbolDef): Promise<boolean> {
   // A type parameter (`T`) names a different type in each declaration after substitution, so
   // equal spelling proves nothing.
   const [leftGenerics, rightGenerics] = await Promise.all([

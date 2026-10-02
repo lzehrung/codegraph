@@ -13,6 +13,14 @@
  *   matrix can address.
  * - "overload-arity": C rejects two function declarations with the same name, so argument-count
  *   overloading is not expressible.
+ *
+ * No cell sets a `moved` variant: C's only covered form, "bare-call", resolves purely by
+ * same-file source order within one translation unit (the decoy proves this -- a same-named
+ * function in an unrelated file is never a candidate). `import-resolution-tables.ts` confirms C
+ * has neither declaration-resolved imports nor an implicit compilation unit: `#include` names a
+ * header file, not a declaration, so there is no mechanism to move a declaration to another file
+ * while keeping the existing call site resolvable without inventing a header/prototype split this
+ * matrix's C coverage does not otherwise test.
  */
 import type { MatrixCell } from "../types.js";
 

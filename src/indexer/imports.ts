@@ -1,5 +1,5 @@
 import { prepareSourceInput } from "../languages/file-prep.js";
-import { loadNearestTsconfigFor, resolveImportSpecifier, type MatchPathFn } from "../util/resolution.js";
+import { loadNearestTsconfigFor, type MatchPathFn } from "../util/resolution.js";
 import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
 import { loadWorkspaceConfig, type WorkspaceConfig } from "../util/workspace.js";
 import type { LogLevel } from "../logging.js";
@@ -140,7 +140,7 @@ export async function collectImportsForFile(
   ): Promise<ResolvedImportTarget> => {
     const resolutionKind = resolverOpts?.resolutionKind;
     const includeForm = resolverOpts?.includeForm;
-    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}\0${includeForm ?? ""}\0${resolverOpts?.pathAttribute ?? ""}\0${resolverOpts?.statementStartIndex ?? ""}`;
+    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}\0${includeForm ?? ""}\0${resolverOpts?.jvmPackageWildcard ? "package" : "symbol"}\0${resolverOpts?.pathAttribute ?? ""}\0${resolverOpts?.statementStartIndex ?? ""}`;
     const cached = resolvedImportCache.get(cacheKey);
     if (cached) return await cached;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
@@ -152,6 +152,7 @@ export async function collectImportsForFile(
         resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
         ...(resolutionHints ? { resolutionHints } : {}),
         ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+        ...(resolverOpts?.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
         ...(phpImportType ? { phpImportType } : {}),
         ...(resolutionKind ? { resolutionKind } : {}),
         ...(includeForm ? { includeForm } : {}),
@@ -160,23 +161,11 @@ export async function collectImportsForFile(
           ? { statementStartIndex: resolverOpts.statementStartIndex }
           : {}),
       });
-      // Java and Kotlin exact-package imports name every file in the package.
-      // A binding keeps the single file resolveImportSpecifier already chose.
-      if (resolvedSup.id === "java" || resolvedSup.id === "kotlin") {
-        const historical = await resolveImportSpecifier(projectRoot, file, from, resolvedSup.id, {
-          ...(matchPath ? { matchPath } : {}),
-          ...(workspaceConfig ? { workspaceConfig } : {}),
-          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-          ...(resolutionHints ? { resolutionHints } : {}),
-          ...(resolutionKind ? { resolutionKind } : {}),
-          ...(includeForm ? { includeForm } : {}),
-        });
-        if (typeof historical === "string") return historical.replace(/\\/g, "/");
-        return { external: historical.external };
-      }
-      // `using N;` declared in several files binds to the first. An alias of that
-      // namespace is shaped by the C# statement override, which does not call here.
-      if (resolvedSup.id === "csharp" && result.files.length > 1) {
+      // Package stars and C# namespaces can name several files; bindings retain one representative.
+      if (
+        result.files.length > 1 &&
+        (resolvedSup.id === "java" || resolvedSup.id === "kotlin" || resolvedSup.id === "csharp")
+      ) {
         return result.files[0]!.replace(/\\/g, "/");
       }
       const resolvedFile = result.files[0];

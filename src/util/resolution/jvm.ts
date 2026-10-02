@@ -42,7 +42,6 @@ type JvmSymbolIndexReaderOptions = {
 type JvmImportResolutionOptions = {
   languageId: "java" | "kotlin";
   allowBarePackage: boolean;
-  matchExactPackage: boolean;
   filenameFallback: boolean;
   fromFile: string;
 };
@@ -192,15 +191,6 @@ async function resolveJvmImportPath(
     return resolved;
   }
 
-  if (options.matchExactPackage) {
-    const exactPackageFiles = projectIndex.filesByPackage.get(spec) ?? [];
-    if (exactPackageFiles[0]) {
-      const resolved = await confineJvmResolvedPath(projectRoot, path.resolve(exactPackageFiles[0]));
-      cache.set(cacheKey, resolved);
-      return resolved;
-    }
-  }
-
   const importedName = parts[parts.length - 1]!;
   const packageName = parts.slice(0, -1).join(".");
   const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
@@ -233,7 +223,6 @@ export async function resolveKotlinImportPath(
   return await resolveJvmImportPath(projectRoot, spec, {
     languageId: "kotlin",
     allowBarePackage: true,
-    matchExactPackage: false,
     filenameFallback: false,
     fromFile,
   });
@@ -247,7 +236,6 @@ export async function resolveJavaImportPath(
   return await resolveJvmImportPath(projectRoot, spec, {
     languageId: "java",
     allowBarePackage: false,
-    matchExactPackage: true,
     filenameFallback: true,
     fromFile,
   });

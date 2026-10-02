@@ -61,6 +61,29 @@ export const goCells: MatrixCell[] = [
     decoy: { file: "otherpkg/otherpkg.go", line: 3, token: "Add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use/use.go", fromName: "SumPair" },
+    // Moved: Add relocates to another file of the same package ("calc", same directory); Go's
+    // package is an implicit compilation unit (`import-resolution-tables.ts`), so the import and
+    // the qualified call in use/use.go need no change at all.
+    moved: {
+      files: {
+        "go.mod": ["module example.com/m", "", "go 1.21", ""].join("\n"),
+        "calc/implementation.go": ["package calc", "", "func Add(a, b int) int {", "\treturn a + b", "}", ""].join(
+          "\n",
+        ),
+        "otherpkg/otherpkg.go": ["package otherpkg", "", "func Add(a, b int) int {", "\treturn -1", "}", ""].join("\n"),
+        "use/use.go": [
+          "package use",
+          "",
+          'import "example.com/m/calc"',
+          "",
+          "func SumPair() int {",
+          "\treturn calc.Add(1, 2)",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "calc/implementation.go", line: 3, token: "Add" },
+    },
   },
   {
     id: "go/construction",

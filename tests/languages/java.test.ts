@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
-import { normalizePath } from "../../src/util/paths.js";
+import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
 
@@ -401,6 +401,62 @@ describe("Java Unicode symbol ranges (C11)", () => {
   });
 });
 
+describe("Java imports with a same-named package", () => {
+  it("binds a class import and its edge to the class, not a same-named package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-package-class-import-"));
+    try {
+      const useLines = ["package client;", "import p.C;", "class Use { C make() { return new C(); } }"];
+      const paths = await writeFixtureFiles(root, {
+        "p/C.java": "package p;\npublic class C {}\n",
+        "p/C/Decoy.java": "package p.C;\npublic class Decoy {}\n",
+        "Use.java": useLines.join("\n") + "\n",
+        "UseStar.java": "package client;\nimport p.C.*;\nclass UseStar { Decoy make() { return new Decoy(); } }\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = paths["Use.java"]!;
+      const declaration = paths["p/C.java"]!;
+      const decoy = paths["p/C/Decoy.java"]!;
+      const binding = index.byFile.get(fileIdentityKey(use))?.imports.find((entry) => entry.from === "p.C");
+      expect(binding?.resolved).toBe(declaration);
+      expect(binding?.resolved).not.toBe(decoy);
+
+      const importsFrom = (file: string) =>
+        index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(importsFrom(use)).toEqual([declaration]);
+      expect(importsFrom(use)).not.toContain(decoy);
+      expect(importsFrom(paths["UseStar.java"]!)).toEqual([decoy]);
+      const starBinding = index.byFile
+        .get(fileIdentityKey(paths["UseStar.java"]!))
+        ?.imports.find((entry) => entry.from === "p.C");
+      expect(starBinding?.resolved).toBe(decoy);
+
+      const reduced = await buildProjectIndex(root, { cache: "off", native: "off" });
+      const reducedBinding = reduced.byFile.get(fileIdentityKey(use))?.imports.find((entry) => entry.from === "p.C");
+      const reducedStar = reduced.byFile
+        .get(fileIdentityKey(paths["UseStar.java"]!))
+        ?.imports.find((entry) => entry.from === "p.C");
+      const reducedTargets = (file: string) =>
+        reduced.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(reducedBinding?.resolved).toBe(declaration);
+      expect(reducedTargets(use)).toEqual([declaration]);
+      expect(reducedTargets(use)).not.toContain(decoy);
+      expect(reducedStar?.resolved).toBe(decoy);
+      expect(reducedTargets(paths["UseStar.java"]!)).toEqual([decoy]);
+      const goto = await goToDefinition(index, { file: use, line: 3, column: columnOf(useLines, 3, "C make") });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected imported class C");
+      expect(normalizePath(goto.definition.file)).toBe(declaration);
+      expect(normalizePath(goto.definition.file)).not.toBe(decoy);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Java lowercase class import bindings", () => {
   it("creates a named implicit binding for a lowercase class segment and keeps star imports", () => {
     const bindings: ImportBinding[] = [];
@@ -719,6 +775,36 @@ describe("Java implicit-receiver precedence", () => {
         .filter((edge) => edge.label === "calls")
         .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
       expect(targets).toEqual(["GrandBase.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an explicit this call to a grandparent overload instead of a nearer wrong-arity method", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-this-grand-overload-"));
+    try {
+      const lines = ["package p;", "class Derived extends Base {", "  int call() { return this.hit(1); }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "p/GrandBase.java": "package p;\nclass GrandBase { int hit(int value) { return value; } }\n",
+        "p/Base.java": "package p;\nclass Base extends GrandBase { int hit() { return 0; } }\n",
+        "p/Derived.java": lines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const goto = await goToDefinition(index, {
+        file: paths["p/Derived.java"]!,
+        line: 3,
+        column: columnOf(lines, 3, "hit"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected GrandBase.hit(int)");
+      expect(normalizePath(goto.definition.file)).toBe(paths["p/GrandBase.java"]);
+      expect(normalizePath(goto.definition.file)).not.toBe(paths["p/Base.java"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(targets).toEqual([paths["p/GrandBase.java"]]);
+      expect(targets).not.toContain(paths["p/Base.java"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -176,6 +176,25 @@ nativeDescribe("receiver method call edges", () => {
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["helper"]);
   });
 
+  it("keeps TypeScript derived-name hiding when only a base overload accepts the call", async () => {
+    const files: Record<string, string> = {
+      "base.ts": "export class Base { shared(): void {} }\n",
+      "derived.ts": [
+        'import { Base } from "./base";',
+        "export class Derived extends Base {",
+        "  shared(value: number): void {}",
+        "  run(): void { this.shared(); }",
+        "}",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-ts-derived-hide-", files);
+    const base = nodeIn(graph, "base.ts", "shared");
+    const derived = nodeIn(graph, "derived.ts", "shared");
+    const run = nodeIn(graph, "derived.ts", "run");
+    expect(callsiteTexts(graph, base, run, files)).toBeNull();
+    expect(callsiteTexts(graph, derived, run, files)).toBeNull();
+  });
+
   it("does not turn names inside a computed TypeScript extends expression into inheritance", async () => {
     const files: Record<string, string> = {
       "box.ts": [
@@ -620,7 +639,7 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["swHelper"]);
   });
 
-  it("does not record a deeper unique member when the shallowest overloads stay ambiguous", async () => {
+  it("reaches a grandparent when the middle class's overloads reject the call", async () => {
     const files: Record<string, string> = {
       "amb.java": [
         "class GrandAmb { void shared() {} }",
@@ -634,12 +653,11 @@ nativeDescribe("receiver method call edge language parity", () => {
     const grandShared = membersOwnedBy(graph, "GrandAmb", "shared");
     expect(midShared.length).toBeGreaterThan(1);
     expect(grandShared).toHaveLength(1);
-    for (const memberId of [...midShared, ...grandShared]) {
-      expect(callsiteTexts(graph, memberId, go, files)).toBeNull();
-    }
+    for (const memberId of midShared) expect(callsiteTexts(graph, memberId, go, files)).toBeNull();
+    expect(callsiteTexts(graph, grandShared[0]!, go, files)).toEqual(["shared"]);
   });
 
-  it("does not walk past one shallow member whose arity rejects the call", async () => {
+  it("reaches a grandparent when the middle class's sole overload rejects the call", async () => {
     const files: Record<string, string> = {
       "single.java": [
         "class GrandSingle { void shared() {} }",
@@ -654,7 +672,7 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(midShared).toHaveLength(1);
     expect(grandShared).toHaveLength(1);
     expect(callsiteTexts(graph, midShared[0]!, go, files)).toBeNull();
-    expect(callsiteTexts(graph, grandShared[0]!, go, files)).toBeNull();
+    expect(callsiteTexts(graph, grandShared[0]!, go, files)).toEqual(["shared"]);
   });
 
   it("records the arity-unique overload at the shallowest type instead of a deeper unique member", async () => {
@@ -674,6 +692,51 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(grandShared).toHaveLength(1);
     expect(callsiteTexts(graph, zeroArity[0]!, go, files)).toEqual(["shared"]);
     expect(callsiteTexts(graph, grandShared[0]!, go, files)).toBeNull();
+  });
+
+  it("keeps distinct same-arity ancestor overloads ambiguous while retaining another inherited call", async () => {
+    const cases = [
+      {
+        file: "Amb.java",
+        grand: "GrandAmb",
+        base: "BaseAmb",
+        caller: "run",
+        hit: "hit",
+        only: "only",
+        source: [
+          "class GrandAmb { void hit(int value) {} void only() {} }",
+          "class BaseAmb extends GrandAmb { void hit(String value) {} }",
+          "class DerivedAmb extends BaseAmb { void run() { this.hit(1); this.only(); } }",
+        ].join("\n"),
+      },
+      {
+        file: "Amb.cs",
+        grand: "GrandAmb",
+        base: "BaseAmb",
+        caller: "Run",
+        hit: "Hit",
+        only: "Only",
+        source: [
+          "public class GrandAmb { public void Hit(int value) {} public void Only() {} }",
+          "public class BaseAmb : GrandAmb { public void Hit(string value) {} }",
+          "public class DerivedAmb : BaseAmb { public void Run() { this.Hit(1); this.Only(); } }",
+        ].join("\n"),
+      },
+    ];
+    for (const fixture of cases) {
+      const files = { [fixture.file]: fixture.source };
+      const graph = await buildFixture("cg-receiver-distinct-arity-", files);
+      const caller = nodeIn(graph, fixture.file, fixture.caller);
+      const grandHit = membersOwnedBy(graph, fixture.grand, fixture.hit);
+      const baseHit = membersOwnedBy(graph, fixture.base, fixture.hit);
+      const inheritedOnly = membersOwnedBy(graph, fixture.grand, fixture.only);
+      expect(grandHit).toHaveLength(1);
+      expect(baseHit).toHaveLength(1);
+      expect(inheritedOnly).toHaveLength(1);
+      expect(callsiteTexts(graph, grandHit[0]!, caller, files)).toBeNull();
+      expect(callsiteTexts(graph, baseHit[0]!, caller, files)).toBeNull();
+      expect(callsiteTexts(graph, inheritedOnly[0]!, caller, files)).toEqual([fixture.only]);
+    }
   });
 
   it("records a Java super call on the class ancestor when an interface declares the same name", async () => {

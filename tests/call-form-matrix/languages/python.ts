@@ -20,6 +20,17 @@ export const pythonCells: MatrixCell[] = [
     decoy: { file: "decoy.py", line: 1, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.py", fromName: "sum_pair" },
+    // Moved: calc.py relocates under lib/, and use.py's import path updates to match -- Python's
+    // import names a module path, not a declaration that can move to another file
+    // (`import-resolution-tables.ts`), so this is the only way to keep the import working.
+    moved: {
+      files: {
+        "lib/calc.py": ["def add(a, b):", "    return a + b", ""].join("\n"),
+        "decoy.py": ["def add(a, b):", "    return -1", ""].join("\n"),
+        "use.py": ["from lib.calc import add", "", "", "def sum_pair():", "    return add(1, 2)", ""].join("\n"),
+      },
+      expected: { file: "lib/calc.py", line: 1, token: "add" },
+    },
   },
   {
     id: "python/qualified-call",

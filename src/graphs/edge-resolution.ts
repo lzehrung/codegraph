@@ -68,6 +68,7 @@ export async function resolveModuleSpecifierEdges(
     resolveNodeModules: !!context.resolveNodeModules,
     ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
     ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
+    ...(entry.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
     ...(entry.raw !== undefined ? { rawSpecifier: entry.raw } : {}),
     ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
     ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),

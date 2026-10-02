@@ -29,8 +29,13 @@ import {
 } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
+import { inheritsMemberOverloads } from "../indexer/member-selection.js";
 
-import { innermostNamespaceImport, resolveMemberAccessDefinition } from "../indexer/navigation-goto.js";
+import {
+  innermostNamespaceImport,
+  resolveMemberAccessDefinition,
+  sameParameterTypes,
+} from "../indexer/navigation-goto.js";
 
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
@@ -64,6 +69,7 @@ import { buildImportAliasMaps } from "./symbol-graph-detailed/import-aliases.js"
 import { createMemberChainResolver } from "./symbol-graph-detailed/member-chains.js";
 import {
   emitReceiverCallEdges,
+  inheritedReceiverMemberSignatures,
   type ReceiverCallCandidate,
   type ReceiverMemberScope,
   type MemberArityRange,
@@ -626,14 +632,32 @@ export async function buildSymbolGraphDetailed(
   }
 
   const memberIdentities = new Map<string, CallableIdentity>();
+  const hasHierarchyReceiver = callableReceiverCalls.some((candidate) =>
+    inheritsMemberOverloads(supportForFileWithoutHeaderSample(candidate.site.file, index.languageExtensions)?.id ?? ""),
+  );
+  const receiverMemberDefinitions = hasHierarchyReceiver ? new Map<string, SymbolDef>() : undefined;
   if (callableReceiverCalls.length) {
     const names = new Set(callableReceiverCalls.map((candidate) => candidate.memberName));
     for (const mod of index.byFile.values()) {
       for (const def of mod.locals) {
-        if (def.callable && names.has(def.localName)) memberIdentities.set(defNodeId(def), def.callable);
+        if (!def.callable || !names.has(def.localName)) continue;
+        const id = defNodeId(def);
+        memberIdentities.set(id, def.callable);
+        receiverMemberDefinitions?.set(id, def);
       }
     }
   }
+  const overridingSignatures = receiverMemberDefinitions
+    ? await inheritedReceiverMemberSignatures(
+        { nodes, edges },
+        callableReceiverCalls,
+        receiverMemberDefinitions,
+        sharedOwnerAnchors,
+        sharedOwnerAccessibleMembers,
+        index.languageExtensions,
+        (derived, inherited) => sameParameterTypes(index, derived, inherited),
+      )
+    : undefined;
   const removedReceiverEdges = emitReceiverCallEdges(
     { nodes, edges },
     callableReceiverCalls,
@@ -658,6 +682,8 @@ export async function buildSymbolGraphDetailed(
       });
     },
     memberIdentities,
+    index.languageExtensions,
+    overridingSignatures,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

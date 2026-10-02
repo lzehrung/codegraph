@@ -103,7 +103,7 @@ export type ImportBindingRow = {
 };
 
 type ParsedJvmImportStatement =
-  | { kind: "star"; from: string }
+  | { kind: "star"; from: string; isStatic?: boolean }
   | { kind: "named"; from: string; imported: string; explicitAlias?: boolean };
 
 function pushCsharpOverride(
@@ -319,11 +319,15 @@ async function applyJvmStatementOverride<TParsed extends ParsedJvmImportStatemen
 
 async function pushJvmImportBinding(
   context: LanguageSpecificImportContext,
-  parsed: { kind: "star"; from: string } | { kind: "named"; from: string; imported: string; explicitAlias?: boolean },
+  parsed: ParsedJvmImportStatement,
   local: string | undefined,
   typeOnly: boolean,
 ): Promise<boolean> {
-  const resolved = await context.resolveFrom(parsed.from);
+  const resolved = await context.resolveFrom(
+    parsed.from,
+    undefined,
+    parsed.kind === "star" && !parsed.isStatic ? { jvmPackageWildcard: true } : undefined,
+  );
   if (parsed.kind === "star") {
     context.pushBinding({
       kind: "star",

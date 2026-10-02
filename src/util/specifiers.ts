@@ -56,6 +56,8 @@ export function cFamilyImportFormFromText(
 export type ModuleSpecifier = {
   spec: string;
   raw?: string;
+  /** A Java/Kotlin package star import, distinct from a same-spelled class import. */
+  jvmPackageWildcard?: true;
   typeOnly?: boolean;
   phpImportType?: "class" | "function" | "const";
   resolutionKind?: ModuleSpecifierResolutionKind;

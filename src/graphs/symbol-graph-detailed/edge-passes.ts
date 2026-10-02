@@ -430,9 +430,10 @@ export async function emitMemberOwnershipEdges(
     markMemberArity(context, definitionId, arityNode);
     if (memberId !== definitionId) markMemberArity(context, memberId, arityNode);
     const memberScope = memberScopeForDefinition(context, fn, owner.cppOutOfLine, outOfLineDeclaration);
+    const outOfLineMember = outOfLineDeclaration ? memberDef : undefined;
     const arityRange =
       context.sup.id === "cpp"
-        ? mergeCppCallableShapes(fn.def, outOfLineDeclaration ? memberDef : undefined)
+        ? mergeCppCallableShapes(fn.def, outOfLineMember)
         : acceptedMemberArityRange(context, memberDef);
     recordMemberLookupIdentity(context, definitionId, memberId, memberScope, arityRange);
     recordDefEdge(context, definitionId, owner.def, "member_of");

@@ -5,11 +5,19 @@
  *    on the use site, and the same-named decoy is excluded (`../helpers/consumer-agreement.ts`
  *    already proves these facts together; this module adapts a `MatrixCell` to its site shape);
  *  - an unrelated same-named decoy file added in another directory must not change the answer;
- *  - a warm disk-cache build must match a cold build after a sequence of file mutations
+ *  - a warm disk-cache build must match a cold build after EACH of a sequence of file mutations
  *    (add a decoy, rewrite the declaring file, delete the decoy, and -- for languages that
  *    resolve by declaration, not path -- rename the declaring file), matching the pattern in
- *    `../warm-cache-import-resolution.test.ts`;
- *  - when a cell gives a `moved` variant, the answer must follow the moved declaration.
+ *    `../warm-cache-import-resolution.test.ts`. The comparison runs after every mutation, not
+ *    only once at the end, so a warm/cold divergence is caught at the step that introduced it
+ *    instead of being masked by a later step;
+ *  - when a cell gives a `moved` variant, the answer follows the moved declaration.
+ *
+ * Both metamorphic checks above compare a richer snapshot than a bare goto label: the goto
+ * target, the sorted `file:line` reference sites of the tracked declaration, whether the cell's
+ * own decoy wrongly shows up among them, and the sorted set of `calls`/`instantiates` edges from
+ * the enclosing caller. A mutation that leaves goto unchanged but adds a stray edge to the decoy,
+ * or drops/gains a reference site, still fails the comparison.
  *
  * A cell marked `knownGap` runs through `it.fails`, so every assertion for it is expected to
  * fail today and the suite still flags the day it starts passing.
@@ -17,9 +25,14 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndex, buildProjectIndexIncremental, goToDefinition, type ProjectIndex } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  findReferences,
+  goToDefinition,
+  type ProjectIndex,
+} from "../../src/index.js";
 import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "../../src/indexer/import-resolution-tables.js";
-import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../../src/graphs/symbol-graph-detailed.js";
 import { normalizePath } from "../../src/util/paths.js";
 import {
@@ -172,10 +185,26 @@ export async function runCellCore(cell: MatrixCell): Promise<void> {
   }
 }
 
-type AnswerSnapshot = { goto: string; edgePresent: boolean | null };
+/**
+ * A comparable answer for one use site, richer than a bare goto label so a metamorphic check
+ * catches a regression goto alone would miss:
+ *  - `goto`: the resolved declaration, relative to the project root, or "not_found";
+ *  - `referenceSites`: sorted `file:line` sites `findReferences` reports for the tracked
+ *    declaration (the cell's `expected`, or its `decoy` when `expected` is `not_found`);
+ *  - `decoyInReferences`: whether the cell's own decoy declaration wrongly shows up among those
+ *    sites -- a sign the decoy and the real declaration were conflated;
+ *  - `callerEdges`: sorted `label->file#name` strings for every `calls`/`instantiates` edge from
+ *    the enclosing caller the cell names, or `null` when the cell has no `edge`. Capturing the
+ *    whole set (not just whether one specific edge is present) catches a stray extra edge, such
+ *    as a new edge to the decoy, that a presence check alone would not.
+ */
+type AnswerSnapshot = {
+  goto: string;
+  referenceSites: readonly string[];
+  decoyInReferences: boolean;
+  callerEdges: readonly string[] | null;
+};
 
-/** A comparable answer for one use site: goto's target (relative to `root`) and, when `edge` is given, whether a
- * matching graph edge reaches it. Used to compare two separate builds of the same (or an equivalent) project. */
 async function snapshotAnswer(args: {
   index: ProjectIndex;
   graph: DetailedSymbolGraph;
@@ -183,49 +212,89 @@ async function snapshotAnswer(args: {
   useFile: string;
   useLine: number;
   useColumn: number;
-  edge?: { fromFile: string; fromName: string; label: string } | undefined;
+  /** The declaration whose `findReferences` call anchors `referenceSites`, resolved to this
+   * build's current file path (a declaring file may have been renamed by the mutation sequence). */
+  declaration: { file: string; line: number; column: number };
+  /** The cell's own same-named decoy, resolved to this build's current file path. */
+  decoySite: { file: string; line: number };
+  /** The enclosing caller a `calls`/`instantiates` edge must originate from, when the cell names one. */
+  caller?: { fromFile: string; fromName: string } | undefined;
 }): Promise<AnswerSnapshot> {
   const rootNorm = normalizePath(args.root).replace(/\/$/, "");
   const relative = (file: string) => {
     const normalized = normalizePath(file);
     return normalized.startsWith(rootNorm + "/") ? normalized.slice(rootNorm.length + 1) : normalized;
   };
+
   const goto = await goToDefinition(args.index, { file: args.useFile, line: args.useLine, column: args.useColumn });
-  if (goto.status !== "ok") return { goto: "not_found", edgePresent: args.edge ? false : null };
-  const gotoLabel = `${relative(goto.definition.file)}:${goto.definition.range.start.line}`;
-  const edge = args.edge;
-  if (!edge) return { goto: gotoLabel, edgePresent: null };
-  const fromMatches = [...args.graph.nodes.values()].filter(
-    (node) => node.name === edge.fromName && normalizePath(node.file) === normalizePath(edge.fromFile),
-  );
-  if (fromMatches.length !== 1) {
-    throw new Error(
-      `expected exactly one caller node named "${edge.fromName}" in ${edge.fromFile}, found ${fromMatches.length}`,
+  const gotoLabel =
+    goto.status === "ok" ? `${relative(goto.definition.file)}:${goto.definition.range.start.line}` : "not_found";
+
+  const refs = await findReferences(args.index, {
+    file: args.declaration.file,
+    line: args.declaration.line,
+    column: args.declaration.column,
+  });
+  const referenceSites =
+    refs.status === "ok"
+      ? [
+          ...new Set(refs.references.map((reference) => `${relative(reference.file)}:${reference.range.start.line}`)),
+        ].sort()
+      : [];
+  const decoyKey = `${relative(args.decoySite.file)}:${args.decoySite.line}`;
+  const decoyInReferences = referenceSites.includes(decoyKey);
+
+  let callerEdges: readonly string[] | null = null;
+  const caller = args.caller;
+  if (caller) {
+    const fromMatches = [...args.graph.nodes.values()].filter(
+      (node) => node.name === caller.fromName && normalizePath(node.file) === normalizePath(caller.fromFile),
     );
+    if (fromMatches.length !== 1) {
+      throw new Error(
+        `expected exactly one caller node named "${caller.fromName}" in ${caller.fromFile}, found ${fromMatches.length}`,
+      );
+    }
+    const fromNode = fromMatches[0]!;
+    callerEdges = args.graph.edges
+      .filter((edge) => edge.from === fromNode.id && (edge.label === "calls" || edge.label === "instantiates"))
+      .map((edge) => {
+        const toNode = args.graph.nodes.get(edge.to);
+        return `${edge.label}->${toNode ? `${relative(toNode.file)}#${toNode.name}` : edge.to}`;
+      })
+      .sort();
   }
-  const fromNode = fromMatches[0]!;
-  const targetId = defNodeId(goto.definition);
-  const present = args.graph.edges.some(
-    (candidate) => candidate.from === fromNode.id && candidate.to === targetId && candidate.label === edge.label,
-  );
-  return { goto: gotoLabel, edgePresent: present };
+
+  return { goto: gotoLabel, referenceSites, decoyInReferences, callerEdges };
 }
 
 async function cellSnapshot(fixture: ConsumerAgreementFixture, cell: MatrixCell): Promise<AnswerSnapshot> {
   const useFile = fixture.paths[cell.use.file]!;
   const useSource = fixture.sources[cell.use.file]!;
-  const column = columnAt(useSource, cell.use.line, cell.use.token, cell.use.occurrence ?? 1, `${cell.id} use`);
-  const edge = cell.edge
-    ? { fromFile: fixture.paths[cell.edge.fromFile]!, fromName: cell.edge.fromName, label: cell.edge.label }
-    : undefined;
+  const useColumn = columnAt(useSource, cell.use.line, cell.use.token, cell.use.occurrence ?? 1, `${cell.id} use`);
+
+  const trackedAddress = cell.expected === "not_found" ? cell.decoy : cell.expected;
+  const trackedSource = fixture.sources[trackedAddress.file]!;
+  const trackedColumn = columnAt(
+    trackedSource,
+    trackedAddress.line,
+    trackedAddress.token,
+    trackedAddress.occurrence ?? 1,
+    `${cell.id} tracked declaration`,
+  );
+
+  const caller = cell.edge ? { fromFile: fixture.paths[cell.edge.fromFile]!, fromName: cell.edge.fromName } : undefined;
+
   return snapshotAnswer({
     index: fixture.index,
     graph: fixture.graph,
     root: fixture.root,
     useFile,
     useLine: cell.use.line,
-    useColumn: column,
-    edge,
+    useColumn,
+    declaration: { file: fixture.paths[trackedAddress.file]!, line: trackedAddress.line, column: trackedColumn },
+    decoySite: { file: fixture.paths[cell.decoy.file]!, line: cell.decoy.line },
+    caller,
   });
 }
 
@@ -250,10 +319,11 @@ export async function runUnrelatedDecoyMetamorphic(cell: MatrixCell): Promise<vo
 }
 
 /**
- * Metamorphic check (b): a warm disk-cache build must match a cold build after a sequence of
- * mutations applied to one project (add a decoy, rewrite the declaring file, delete the decoy,
- * and, for declaration-resolved languages, rename the declaring file). The comparison runs once,
- * after the whole sequence, per the runtime budget in the plan's Step 1.
+ * Metamorphic check (b): a warm disk-cache build must match a cold build after EACH of a
+ * sequence of mutations applied to one project (add a decoy, rewrite the declaring file, delete
+ * the decoy, and, for declaration-resolved languages, rename the declaring file). Warm and cold
+ * share one on-disk project (`root`): the cold build just re-reads it with `cache: "off"`, so
+ * comparing after every step costs one extra from-scratch build per step, not a second project.
  */
 export async function runWarmColdMetamorphic(cell: MatrixCell): Promise<void> {
   const root = await mkTmpDir(fixturePrefix(cell, "wc"));
@@ -265,10 +335,66 @@ export async function runWarmColdMetamorphic(cell: MatrixCell): Promise<void> {
       await fsp.writeFile(absolute, source, "utf8");
       current.set(relative, absolute);
     }
-    let warmIndex = await buildProjectIndex(root, DISK_BUILD);
 
     const declarationName = cell.expected === "not_found" ? cell.decoy.token : cell.expected.token;
     const declaringRelative = cell.expected === "not_found" ? cell.decoy.file : cell.expected.file;
+    const trackedAddress = cell.expected === "not_found" ? cell.decoy : cell.expected;
+    const trackedSource = requireFile(cell.files, trackedAddress.file, `${cell.id} tracked declaration`);
+    const trackedColumn = columnAt(
+      trackedSource,
+      trackedAddress.line,
+      trackedAddress.token,
+      trackedAddress.occurrence ?? 1,
+      `${cell.id} tracked declaration`,
+    );
+    const useSource = requireFile(cell.files, cell.use.file, `${cell.id} use`);
+    const useColumn = columnAt(useSource, cell.use.line, cell.use.token, cell.use.occurrence ?? 1, `${cell.id} use`);
+
+    let warmIndex = await buildProjectIndex(root, DISK_BUILD);
+
+    /** Snapshots the current on-disk state through both the just-rebuilt `warmIndex` and a fresh
+     * cold build, then asserts they agree. Called after every mutation below, so a divergence is
+     * caught at the step that introduced it instead of being masked by a later step. */
+    const compareWarmToCold = async (step: string): Promise<void> => {
+      const coldIndex = await buildProjectIndex(root, COLD_BUILD);
+      const warmGraph = await buildSymbolGraphDetailed(warmIndex);
+      const coldGraph = await buildSymbolGraphDetailed(coldIndex);
+      const useFile = current.get(cell.use.file)!;
+      const declaration = {
+        file: current.get(trackedAddress.file)!,
+        line: trackedAddress.line,
+        column: trackedColumn,
+      };
+      const decoySite = { file: current.get(cell.decoy.file)!, line: cell.decoy.line };
+      const caller = cell.edge
+        ? { fromFile: current.get(cell.edge.fromFile)!, fromName: cell.edge.fromName }
+        : undefined;
+      const warmSnapshot = await snapshotAnswer({
+        index: warmIndex,
+        graph: warmGraph,
+        root,
+        useFile,
+        useLine: cell.use.line,
+        useColumn,
+        declaration,
+        decoySite,
+        caller,
+      });
+      const coldSnapshot = await snapshotAnswer({
+        index: coldIndex,
+        graph: coldGraph,
+        root,
+        useFile,
+        useLine: cell.use.line,
+        useColumn,
+        declaration,
+        decoySite,
+        caller,
+      });
+      expect(warmSnapshot, `${cell.id}: warm disk-cache build must match a cold build after ${step}`).toEqual(
+        coldSnapshot,
+      );
+    };
 
     // Add an unrelated same-named decoy file.
     const decoyFiles = elsewhereDecoyFiles(cell.language, declarationName, cell.decoyKind);
@@ -280,6 +406,7 @@ export async function runWarmColdMetamorphic(cell: MatrixCell): Promise<void> {
       decoyAbsolutePaths.push(absolute);
     }
     warmIndex = await buildProjectIndexIncremental(root, DISK_BUILD);
+    await compareWarmToCold("adding an unrelated same-named decoy file");
 
     // Rewrite the declaring file: append a trailing comment, which never shifts an earlier line.
     const declaringAbsolute = current.get(declaringRelative)!;
@@ -287,10 +414,12 @@ export async function runWarmColdMetamorphic(cell: MatrixCell): Promise<void> {
     const comment = LINE_COMMENT[cell.language];
     await fsp.writeFile(declaringAbsolute, `${originalSource}\n${comment} metamorphic-rewrite\n`, "utf8");
     warmIndex = await buildProjectIndexIncremental(root, DISK_BUILD);
+    await compareWarmToCold("rewriting the declaring file");
 
     // Delete the decoy.
     for (const absolute of decoyAbsolutePaths) await fsp.rm(absolute, { force: true });
     warmIndex = await buildProjectIndexIncremental(root, DISK_BUILD);
+    await compareWarmToCold("deleting the unrelated decoy file");
 
     // Rename the declaring file, only where the language resolves by declaration, not path (see the top-of-file
     // comment): renaming a path-resolved import's target would break the import itself.
@@ -299,41 +428,8 @@ export async function runWarmColdMetamorphic(cell: MatrixCell): Promise<void> {
       await fsp.rename(declaringAbsolute, renamed);
       current.set(declaringRelative, renamed);
       warmIndex = await buildProjectIndexIncremental(root, DISK_BUILD);
+      await compareWarmToCold("renaming the declaring file");
     }
-
-    const coldIndex = await buildProjectIndex(root, COLD_BUILD);
-    const warmGraph = await buildSymbolGraphDetailed(warmIndex);
-    const coldGraph = await buildSymbolGraphDetailed(coldIndex);
-
-    const useFile = current.get(cell.use.file)!;
-    const useSource = requireFile(cell.files, cell.use.file, `${cell.id} use`);
-    const useColumn = columnAt(useSource, cell.use.line, cell.use.token, cell.use.occurrence ?? 1, `${cell.id} use`);
-    const edge = cell.edge
-      ? { fromFile: current.get(cell.edge.fromFile)!, fromName: cell.edge.fromName, label: cell.edge.label }
-      : undefined;
-
-    const warmSnapshot = await snapshotAnswer({
-      index: warmIndex,
-      graph: warmGraph,
-      root,
-      useFile,
-      useLine: cell.use.line,
-      useColumn,
-      edge,
-    });
-    const coldSnapshot = await snapshotAnswer({
-      index: coldIndex,
-      graph: coldGraph,
-      root,
-      useFile,
-      useLine: cell.use.line,
-      useColumn,
-      edge,
-    });
-    expect(
-      warmSnapshot,
-      `${cell.id}: warm disk-cache build must match a cold build after the mutation sequence`,
-    ).toEqual(coldSnapshot);
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }

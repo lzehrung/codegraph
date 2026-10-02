@@ -1,8 +1,4 @@
-/**
- * Java call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
- * "imported-alias" is omitted: Java's `import` statement has no renaming form (`import X as Y`
- * does not exist), so an aliased import is not expressible.
- */
+/** Java call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). */
 import type { MatrixCell } from "../types.js";
 
 export const javaCells: MatrixCell[] = [
@@ -162,6 +158,47 @@ export const javaCells: MatrixCell[] = [
     decoy: { file: "widget2/Widget2.java", line: 4, token: "run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "caller/Caller.java", fromName: "callWithLocal" },
+    // Moved: Box relocates to another file of the same package ("box"); Java's package is an
+    // implicit compilation unit (`import-resolution-tables.ts`), so `import box.Box;` and the
+    // `Box`-typed local in Caller.java need no change at all.
+    moved: {
+      files: {
+        "box/BoxImpl.java": [
+          "package box;",
+          "",
+          "public class Box {",
+          "    public int run() {",
+          "        return 1;",
+          "    }",
+          "}",
+          "",
+        ].join("\n"),
+        "widget2/Widget2.java": [
+          "package widget2;",
+          "",
+          "public class Widget2 {",
+          "    public int run() {",
+          "        return -1;",
+          "    }",
+          "}",
+          "",
+        ].join("\n"),
+        "caller/Caller.java": [
+          "package caller;",
+          "",
+          "import box.Box;",
+          "",
+          "public class Caller {",
+          "    public int callWithLocal() {",
+          "        Box b = new Box();",
+          "        return b.run();",
+          "    }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "box/BoxImpl.java", line: 4, token: "run" },
+    },
   },
   {
     id: "java/static-receiver",
@@ -234,6 +271,55 @@ export const javaCells: MatrixCell[] = [
     edge: { label: "instantiates", fromFile: "factory2/Factory2.java", fromName: "makeWidget" },
   },
   {
+    id: "java/imported-alias",
+    language: "java",
+    callForm: "imported-alias",
+    // Java's `import` has no renaming form (`import X as Y` does not exist), but `import static`
+    // brings one specific member name into bare scope, the same shape every other language's
+    // "imported-alias" cell tests once renaming is set aside. `tests/languages/java.test.ts`
+    // ("lets inherited, non-private methods shadow a static import ...") already proves goto,
+    // references, and calls through a static import resolve correctly.
+    files: {
+      "statichit/StaticUtil.java": [
+        "package statichit;",
+        "",
+        "public class StaticUtil {",
+        "    public static int hit() {",
+        "        return 1;",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+      "statichitdecoy/StaticUtilDecoy.java": [
+        "package statichitdecoy;",
+        "",
+        "public class StaticUtilDecoy {",
+        "    public static int hit() {",
+        "        return -1;",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+      "program4/Program4.java": [
+        "package program4;",
+        "",
+        "import static statichit.StaticUtil.hit;",
+        "",
+        "public class Program4 {",
+        "    public int callHit() {",
+        "        return hit();",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "program4/Program4.java", line: 7, token: "hit" },
+    expected: { file: "statichit/StaticUtil.java", line: 4, token: "hit" },
+    decoy: { file: "statichitdecoy/StaticUtilDecoy.java", line: 4, token: "hit" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "program4/Program4.java", fromName: "callHit" },
+  },
+  {
     id: "java/overload-arity",
     language: "java",
     callForm: "overload-arity",
@@ -279,6 +365,55 @@ export const javaCells: MatrixCell[] = [
     decoy: { file: "calc2decoy/Calc2Decoy.java", line: 4, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "program2/Program2.java", fromName: "sumTriple" },
+  },
+  {
+    // A second "overload-arity" cell (the report shows the worst status across every cell that
+    // shares a language and call form): overload resolution must keep searching past an
+    // intermediate ancestor's same-named, wrong-arity method to reach a grandparent's matching
+    // overload. `GrandBase` declares `hit(int)`; `Base extends GrandBase` declares a different
+    // overload, `hit()`; `Derived extends Base` calls `this.hit(1)`, which only `GrandBase.hit`
+    // accepts -- including the detailed graph's `calls` edge, via `inheritsMemberOverloads` in
+    // `src/indexer/member-selection.ts`.
+    id: "java/overload-arity-inherited",
+    language: "java",
+    callForm: "overload-arity",
+    files: {
+      "grand/GrandBase.java": [
+        "package grand;",
+        "",
+        "public class GrandBase {",
+        "    public int hit(int x) {",
+        "        return x;",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+      "grand/Base.java": [
+        "package grand;",
+        "",
+        "public class Base extends GrandBase {",
+        "    public int hit() {",
+        "        return 0;",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+      "grand/Derived.java": [
+        "package grand;",
+        "",
+        "public class Derived extends Base {",
+        "    public int callHit() {",
+        "        return this.hit(1);",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "grand/Derived.java", line: 5, token: "hit" },
+    expected: { file: "grand/GrandBase.java", line: 4, token: "hit" },
+    decoy: { file: "grand/Base.java", line: 4, token: "hit" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "grand/Derived.java", fromName: "callHit" },
   },
   {
     id: "java/inherited-member",
