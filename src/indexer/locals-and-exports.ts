@@ -180,6 +180,24 @@ function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
   }
   return false;
 }
+
+function enclosingJvmTypeDeclaration(node: SyntaxNodeLike): SyntaxNodeLike | undefined {
+  let current = node.parent?.parent ?? null;
+  while (current) {
+    if (
+      current.type === "class_declaration" ||
+      current.type === "interface_declaration" ||
+      current.type === "enum_declaration" ||
+      current.type === "record_declaration" ||
+      current.type === "annotation_type_declaration" ||
+      current.type === "object_declaration"
+    ) {
+      return current;
+    }
+    current = current.parent;
+  }
+  return undefined;
+}
 function cppQualifiedExportName(
   nameNode: SyntaxNodeLike,
   source: string,
@@ -803,13 +821,26 @@ export function collectLocalsAndExportsFromSource(
         : {}),
     };
     if (node && isTypeMemberDeclaration(node)) base.isMember = true;
+    const jvmOwner =
+      node &&
+      (support.id === "java" || support.id === "kotlin") &&
+      (kind === SymbolKind.Class || kind === SymbolKind.Interface)
+        ? enclosingJvmTypeDeclaration(node)
+        : undefined;
+    const jvmOwnerStartIndex = jvmOwner?.childForFieldName("name")?.startIndex;
+    if (jvmOwnerStartIndex !== undefined) base.jvmTypeOwnerStartIndex = jvmOwnerStartIndex;
     if (
       support.id === "java" &&
       node &&
-      !base.isMember &&
       (kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias)
     ) {
-      if (!isJavaPublicDeclaration(node)) base.javaPackagePrivate = true;
+      if (
+        !isJavaPublicDeclaration(node) &&
+        jvmOwner?.type !== "interface_declaration" &&
+        jvmOwner?.type !== "annotation_type_declaration"
+      ) {
+        base.javaPackagePrivate = true;
+      }
     }
     if (support.id === "c" && node) {
       const tagRole = cTagRole(node);

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isJvmPackageSymbolVisible, languageHasDeclarationVisibility } from "./declaration-visibility.js";
+import { isJvmTypeWildcardMember, jvmWildcardTypeOwner } from "./expand-star-imports.js";
 import type { FileId } from "../types.js";
 import { foldPhpIdentifierCase, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -874,6 +875,32 @@ export function resolveImported(
       imp.jvmPackageLanguageId,
       imp.jvmSamePackage,
     );
+  }
+  if (
+    (imp.kind === "star" && imp.jvmTypeWildcardName) ||
+    (imp.kind === "named" && imp.jvmTypeOwnerStartIndex !== undefined)
+  ) {
+    const target = moduleFor(index, targetFile);
+    if (!target) return null;
+    let ownerStartIndex: number | undefined;
+    if (imp.kind === "star") {
+      const owner = jvmWildcardTypeOwner(target, imp.jvmTypeWildcardName!);
+      if (!owner || (owner.javaPackagePrivate && !imp.jvmSamePackage)) return null;
+      ownerStartIndex = owner.range.start.index;
+    } else {
+      ownerStartIndex = imp.jvmTypeOwnerStartIndex;
+    }
+    if (ownerStartIndex === undefined) return null;
+    const names = moduleNameLookup(index, targetFile);
+    if (!names) return null;
+    let match: SymbolDef | undefined;
+    for (const candidate of names.localExports.get(names.normalizeIdentifier(exportedName)) ?? []) {
+      if (!isJvmTypeWildcardMember(candidate, ownerStartIndex) || (candidate.javaPackagePrivate && !imp.jvmSamePackage))
+        continue;
+      if (match && !sameSymbolDef(index, candidate, match)) return null;
+      match = candidate;
+    }
+    return match ?? null;
   }
   const namespace = opts?.cNamespace ?? (imp.kind === "named" ? imp.cNamespace : undefined);
   if (opts?.cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== opts.cNamespace) return null;

@@ -331,6 +331,176 @@ describe("JVM package wildcard graph edges", () => {
     }
   });
 
+  it("resolves JVM type-on-demand nested types without importing ordinary class members", async () => {
+    const root = await mkTmpDir("cg-jvm-type-wildcard-");
+    const sources = {
+      "java/p/C.java": [
+        "package p;",
+        "public class C {",
+        "  public static class Inner {}",
+        "  static class PackageInner {}",
+        "  private static class Secret {}",
+        "  public static int ping() { return 1; }",
+        "}",
+        "class Neighbor { public static class Inner {} public static class Other {} }",
+      ].join("\n"),
+      "java/q/C.java": "package q; public class C { public static class Inner {} }",
+      "java/p/I.java": "package p; public interface I { class Member {} }",
+      "java/q/I.java": "package q; public interface I { class Member {} }",
+      "java/client/IUse.java": "package client;\nimport p.I.*;\nclass IUse { Member member; }",
+      "java/p/Peer.java": "package p;\nimport p.C.*;\nclass Peer { PackageInner value; }",
+      "java/client/Use.java": [
+        "package client;",
+        "import p.C.*;",
+        "class Use {",
+        "  Inner value;",
+        "  Other other;",
+        "  int call() { return ping(); }",
+        "  PackageInner packageInner;",
+        "  Secret secret;",
+        "}",
+      ].join("\n"),
+      "kotlin/p/Box.kt": [
+        "package p",
+        "class Box {",
+        "  class Nested",
+        "  object Singleton",
+        "  private class Hidden",
+        "  fun run(): Int = 1",
+        "}",
+        "class Neighbor { class Nested; class Other }",
+      ].join("\n"),
+      "kotlin/q/Box.kt": "package q\nclass Box { class Nested }",
+      "kotlin/client/Use.kt": [
+        "package client",
+        "import p.Box.*",
+        "class Use(val nested: Nested, val singleton: Singleton, val other: Other)",
+        "fun call(): Int = run()",
+        "class PrivateReference(val hidden: Hidden)",
+      ].join("\n"),
+    };
+    try {
+      for (const [name, source] of Object.entries(sources)) {
+        const file = path.join(root, name);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, source);
+      }
+      const index = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const goto = async (file: keyof typeof sources, line: number, token: string) => {
+        const sourceLine = sources[file].split("\n")[line - 1]!;
+        return goToDefinition(index, { file: path.join(root, file), line, column: sourceLine.indexOf(token) + 1 });
+      };
+      const inner = await goto("java/client/Use.java", 4, "Inner");
+      const nested = await goto("kotlin/client/Use.kt", 3, "Nested");
+      const singleton = await goto("kotlin/client/Use.kt", 3, "Singleton");
+      const packageInner = await goto("java/p/Peer.java", 3, "PackageInner");
+      const interfaceMember = await goto("java/client/IUse.java", 3, "Member");
+      expect(interfaceMember.status).toBe("ok");
+      if (interfaceMember.status === "ok")
+        expect(interfaceMember.definition.file).toBe(normalizePath(path.join(root, "java/p/I.java")));
+      expect(packageInner.status).toBe("ok");
+      if (packageInner.status === "ok")
+        expect(packageInner.definition.file).toBe(normalizePath(path.join(root, "java/p/C.java")));
+      expect(inner.status).toBe("ok");
+      expect(nested.status).toBe("ok");
+      expect(singleton.status).toBe("ok");
+      if (inner.status === "ok") expect(inner.definition.file).toBe(normalizePath(path.join(root, "java/p/C.java")));
+      if (nested.status === "ok")
+        expect(nested.definition.file).toBe(normalizePath(path.join(root, "kotlin/p/Box.kt")));
+      if (singleton.status === "ok")
+        expect(singleton.definition.file).toBe(normalizePath(path.join(root, "kotlin/p/Box.kt")));
+      if (inner.status === "ok") expect(inner.definition.range.start.line).toBe(3);
+      if (nested.status === "ok") expect(nested.definition.range.start.line).toBe(3);
+      expect((await goto("java/client/Use.java", 5, "Other")).status).toBe("not_found");
+      expect((await goto("java/client/Use.java", 6, "ping")).status).toBe("not_found");
+      expect((await goto("kotlin/client/Use.kt", 3, "Other")).status).toBe("not_found");
+      expect((await goto("kotlin/client/Use.kt", 4, "run")).status).toBe("not_found");
+      expect((await goto("java/client/Use.java", 7, "PackageInner")).status).toBe("not_found");
+      expect((await goto("java/client/Use.java", 8, "Secret")).status).toBe("not_found");
+      expect((await goto("kotlin/client/Use.kt", 5, "Hidden")).status).toBe("not_found");
+      const refs = async (file: keyof typeof sources, line: number, token: string) => {
+        const sourceLine = sources[file].split("\n")[line - 1]!;
+        return findReferences(index, { file: path.join(root, file), line, column: sourceLine.indexOf(token) + 1 });
+      };
+      const innerRefs = await refs("java/p/C.java", 3, "Inner");
+      const nestedRefs = await refs("kotlin/p/Box.kt", 3, "Nested");
+      const javaDecoyRefs = await refs("java/p/C.java", 8, "Inner");
+      const kotlinDecoyRefs = await refs("kotlin/p/Box.kt", 8, "Nested");
+      expect(innerRefs.status).toBe("ok");
+      expect(nestedRefs.status).toBe("ok");
+      expect(javaDecoyRefs.status).toBe("ok");
+      expect(kotlinDecoyRefs.status).toBe("ok");
+      if (innerRefs.status === "ok") {
+        expect(
+          innerRefs.references.some(
+            (ref) => ref.file === normalizePath(path.join(root, "java/client/Use.java")) && ref.range.start.line === 4,
+          ),
+        ).toBe(true);
+      }
+      if (nestedRefs.status === "ok") {
+        expect(
+          nestedRefs.references.some(
+            (ref) => ref.file === normalizePath(path.join(root, "kotlin/client/Use.kt")) && ref.range.start.line === 3,
+          ),
+        ).toBe(true);
+      }
+      if (javaDecoyRefs.status === "ok") {
+        expect(
+          javaDecoyRefs.references.some((ref) => ref.file === normalizePath(path.join(root, "java/client/Use.java"))),
+        ).toBe(false);
+      }
+      if (kotlinDecoyRefs.status === "ok") {
+        expect(
+          kotlinDecoyRefs.references.some((ref) => ref.file === normalizePath(path.join(root, "kotlin/client/Use.kt"))),
+        ).toBe(false);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: keyof typeof sources, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) =>
+            entry.file === normalizePath(path.join(root, file)) &&
+            entry.name === name &&
+            (!kind || entry.kind === kind),
+        );
+      const edge = (from?: string, to?: string) => graph.edges.some((entry) => entry.from === from && entry.to === to);
+      expect(node("java/client/Use.java", "Inner", "import")).toBeDefined();
+      expect(node("kotlin/client/Use.kt", "Nested", "import")).toBeDefined();
+      expect(edge(node("java/client/Use.java", "Inner", "import")?.id, node("java/p/C.java", "Inner")?.id)).toBe(true);
+      expect(edge(node("kotlin/client/Use.kt", "Nested", "import")?.id, node("kotlin/p/Box.kt", "Nested")?.id)).toBe(
+        true,
+      );
+      expect(edge(node("java/client/IUse.java", "Member", "import")?.id, node("java/p/I.java", "Member")?.id)).toBe(
+        true,
+      );
+      expect(edge(node("java/client/IUse.java", "Member", "import")?.id, node("java/q/I.java", "Member")?.id)).toBe(
+        false,
+      );
+      expect(node("java/client/Use.java", "ping", "import")).toBeUndefined();
+      expect(node("java/client/Use.java", "PackageInner", "import")).toBeUndefined();
+      expect(node("java/client/Use.java", "Secret", "import")).toBeUndefined();
+      expect(node("kotlin/client/Use.kt", "Hidden", "import")).toBeUndefined();
+      expect(node("kotlin/client/Use.kt", "run", "import")).toBeUndefined();
+      const warm = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const warmType = await goToDefinition(warm, {
+        file: path.join(root, "java/client/Use.java"),
+        line: 4,
+        column: sources["java/client/Use.java"].split("\n")[3]!.indexOf("Inner") + 1,
+      });
+      expect(warmType.status).toBe("ok");
+      if (warmType.status === "ok") expect(warmType.definition.range.start.line).toBe(3);
+      const warmGraph = await buildSymbolGraphDetailed(warm);
+      expect(
+        warmGraph.edges.some(
+          (entry) =>
+            entry.from === node("java/client/Use.java", "Inner", "import")?.id &&
+            entry.to === node("java/p/C.java", "Inner")?.id,
+        ),
+      ).toBe(true);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves cross-language package-qualified JVM types and members without imports", async () => {
     const root = await mkTmpDir("cg-jvm-qualified-");
     const sources = {

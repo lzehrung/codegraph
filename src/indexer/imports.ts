@@ -166,7 +166,7 @@ export async function collectImportsForFile(
           ? { statementStartIndex: resolverOpts.statementStartIndex }
           : {}),
       });
-      if (resolverOpts?.jvmPackageWildcard && result.files.length) {
+      if (result.jvmPackageMatched) {
         jvmPackageFiles.set(
           from,
           result.files.map((target) => target.replace(/\\/g, "/")),
@@ -209,13 +209,28 @@ export async function collectImportsForFile(
       if (binding.kind !== "star" || typeof binding.resolved !== "string") continue;
       const files = jvmPackageFiles.get(binding.from);
       // A static class wildcard can spell the same name as a package wildcard.
-      if (files?.includes(binding.resolved) && (resolvedSup.id === "java" || resolvedSup.id === "kotlin")) {
+      if (
+        binding.jvmTypeWildcardName &&
+        files?.includes(binding.resolved) &&
+        (resolvedSup.id === "java" || resolvedSup.id === "kotlin")
+      ) {
         binding.jvmPackageFiles = files;
         binding.jvmPackageLanguageId = resolvedSup.id;
         if (jvmDeclaredPackage === undefined) {
           jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
         }
         if (jvmDeclaredPackage !== null && jvmDeclaredPackage === binding.from) binding.jvmSamePackage = true;
+      }
+      if (
+        binding.jvmTypeWildcardName &&
+        !binding.jvmPackageFiles &&
+        (resolvedSup.id === "java" || resolvedSup.id === "kotlin")
+      ) {
+        if (jvmDeclaredPackage === undefined) {
+          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
+        }
+        const typePackage = binding.from.slice(0, -(binding.jvmTypeWildcardName.length + 1));
+        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === typePackage) binding.jvmSamePackage = true;
       }
     }
   };

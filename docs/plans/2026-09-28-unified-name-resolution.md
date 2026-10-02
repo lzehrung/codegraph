@@ -150,7 +150,7 @@ gap is marked with its reason and stays visible in the report.
 - [x] Step 2: one specifier-to-files resolver, `src/util/resolution/specifier-targets.ts`, for
       bindings and graph edges. Six C#, Ruby, Python, Rust, and SCSS divergences now agree.
 - [x] Step 3: `SymbolDef.callable`, computed at index time (`src/indexer/callable-identity.ts`),
-      cached and validated (epoch 77, parsed cache 7, snapshot 12).
+      cached and validated (epoch 77, parsed cache 8, snapshot 13).
 - [x] Step 3: C++, TypeScript, graph aliases, scope bindings, and impact read the identity.
 - [x] Step 4a: `src/indexer/member-selection.ts` with navigation and graph owner models.
 - [x] Step 4b: one receiver classifier (`classifyReceiver`) for navigation and the graph.

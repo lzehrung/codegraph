@@ -42,8 +42,8 @@ import { cacheRoot } from "./location.js";
 
 import { getImplementationFingerprint } from "./options.js";
 
-// v7: callable groups and arity are persisted with each function symbol.
-const PARSED_CACHE_VERSION = 7;
+// v8: JVM nested type owners make type-on-demand imports owner-scoped.
+const PARSED_CACHE_VERSION = 8;
 const MODULE_CACHE_SCHEMA_VERSION = 2;
 const MODULE_CACHE_TABLE = "module_cache";
 const MODULE_CACHE_SCHEMA_VERSION_KEY = "module_cache.schema_version";
@@ -465,12 +465,21 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
 
 function hasValidCallableSymbol(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
-  const symbol = value as { kind?: unknown; callable?: unknown; javaPackagePrivate?: unknown };
+  const symbol = value as {
+    kind?: unknown;
+    callable?: unknown;
+    javaPackagePrivate?: unknown;
+    jvmTypeOwnerStartIndex?: unknown;
+  };
   const callableValid =
     symbol.kind === "function"
       ? isCallableIdentity(symbol.callable)
       : symbol.callable === undefined || isCallableIdentity(symbol.callable);
-  return callableValid && (symbol.javaPackagePrivate === undefined || typeof symbol.javaPackagePrivate === "boolean");
+  return (
+    callableValid &&
+    (symbol.javaPackagePrivate === undefined || typeof symbol.javaPackagePrivate === "boolean") &&
+    (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number")
+  );
 }
 
 /**
@@ -483,6 +492,8 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     explicitAlias?: unknown;
     importedRange?: unknown;
     localRange?: unknown;
+    jvmTypeOwnerStartIndex?: unknown;
+    jvmTypeWildcardName?: unknown;
     jvmPackageFiles?: unknown;
     jvmPackageLanguageId?: unknown;
     jvmSamePackage?: unknown;
@@ -492,6 +503,8 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     (binding.explicitAlias === undefined || typeof binding.explicitAlias === "boolean") &&
     isOptionalRange(binding.importedRange) &&
     isOptionalRange(binding.localRange) &&
+    (binding.jvmTypeOwnerStartIndex === undefined || typeof binding.jvmTypeOwnerStartIndex === "number") &&
+    (binding.jvmTypeWildcardName === undefined || typeof binding.jvmTypeWildcardName === "string") &&
     (binding.jvmPackageFiles === undefined ||
       (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string"))) &&
     (binding.jvmPackageLanguageId === undefined ||

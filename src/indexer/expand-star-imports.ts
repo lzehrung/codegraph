@@ -28,20 +28,49 @@ function symbolsForStarImport(
   isStylesheet: boolean,
   isRuby: boolean,
   packageOnly: boolean,
+  typeOwnerStartIndex?: number,
 ): StarImportSymbol[] {
   const localExports: StarImportSymbol[] = [];
   for (const entry of target.exports) {
-    if (entry.type === "local" && (!(isRuby || packageOnly) || !entry.target.isMember)) {
+    if (
+      entry.type === "local" &&
+      (!(isRuby || packageOnly) || !entry.target.isMember) &&
+      (typeOwnerStartIndex === undefined || isJvmTypeWildcardMember(entry.target, typeOwnerStartIndex))
+    ) {
       localExports.push({ name: entry.exportedAs, symbol: entry.target });
     }
   }
-  if (localExports.length || isStylesheet || packageOnly) return localExports;
+  if (localExports.length || isStylesheet || packageOnly || typeOwnerStartIndex !== undefined) return localExports;
   const visible: StarImportSymbol[] = [];
   for (const local of target.locals) {
     if (local.localName.startsWith("_") || (isRuby && local.isMember)) continue;
     visible.push({ name: local.localName, symbol: local });
   }
   return visible;
+}
+
+/** The owner must be unique within the resolved JVM file. */
+export function jvmWildcardTypeOwner(target: ModuleIndex, typeName: string): SymbolDef | undefined {
+  let owner: SymbolDef | undefined;
+  for (const entry of target.exports) {
+    if (
+      entry.type !== "local" ||
+      entry.exportedAs !== typeName ||
+      entry.target.isMember ||
+      (entry.target.kind !== SymbolKind.Class && entry.target.kind !== SymbolKind.Interface)
+    )
+      continue;
+    if (owner && owner.range.start.index !== entry.target.range.start.index) return undefined;
+    owner = entry.target;
+  }
+  return owner;
+}
+
+export function isJvmTypeWildcardMember(symbol: SymbolDef, ownerStartIndex: number): boolean {
+  return (
+    (symbol.kind === SymbolKind.Class || symbol.kind === SymbolKind.Interface) &&
+    symbol.jvmTypeOwnerStartIndex === ownerStartIndex
+  );
 }
 
 /**
@@ -93,11 +122,23 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
         // Only stylesheet and Ruby membership is asked below, and C and C++ answer both the same,
         // so a header target must not pay for a header sample read here.
         const targetSupport = supportForFileWithoutHeaderSample(targetFile, opts?.languageExtensions);
+        const typeOnDemand =
+          !packageFiles &&
+          !!imp.jvmTypeWildcardName &&
+          (targetSupport?.id === "java" || targetSupport?.id === "kotlin");
+        const typeOwner = typeOnDemand ? jvmWildcardTypeOwner(target, imp.jvmTypeWildcardName!) : undefined;
+        const typeOwnerStartIndex = typeOwner?.range.start.index;
+        if (
+          typeOnDemand &&
+          (typeOwnerStartIndex === undefined || (typeOwner?.javaPackagePrivate && !imp.jvmSamePackage))
+        )
+          continue;
         const exportedSymbols = symbolsForStarImport(
           target,
           !!targetSupport && STYLESHEET_LANGUAGE_IDS.has(targetSupport.id),
           targetSupport?.id === "ruby",
           !!packageFiles,
+          typeOwnerStartIndex,
         );
         const javaImportsKotlinTypes = imp.jvmPackageLanguageId === "java" && targetSupport?.id === "kotlin";
         // Header files default to C in filename-only lookup. Only extracted C tags prove the namespace split.
@@ -108,6 +149,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
             continue;
           }
           if (packageFiles && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
+          if (typeOnDemand && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
           let namespace: "tag" | "ordinary" | undefined;
           if (symbol.cTag) namespace = "tag";
           else if (hasCTagExports) namespace = "ordinary";
@@ -132,6 +174,10 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
                 resolved: targetFile,
                 ...(namespace ? { cNamespace: namespace } : {}),
                 ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
+                ...(typeOnDemand && typeOwnerStartIndex !== undefined
+                  ? { jvmTypeOwnerStartIndex: typeOwnerStartIndex }
+                  : {}),
+                ...(typeOnDemand && imp.jvmSamePackage !== undefined ? { jvmSamePackage: imp.jvmSamePackage } : {}),
                 ...(imp.includeForm ? { includeForm: imp.includeForm } : {}),
               };
           const expandedImportKeyValue = expandedImportKey(expandedImport);

@@ -284,8 +284,8 @@ export function isJvmPackageSymbolVisible(
   consumerLanguage: "java" | "kotlin",
   samePackage: boolean,
 ): boolean {
-  if (target.isMember) return true;
   if (target.javaPackagePrivate && !samePackage) return false;
+  if (target.isMember) return true;
   if (consumerLanguage === "java" && targetLanguage === "kotlin") {
     return target.kind === SymbolKind.Class || target.kind === SymbolKind.Interface;
   }

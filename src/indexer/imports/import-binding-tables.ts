@@ -334,6 +334,7 @@ async function pushJvmImportBinding(
       kind: "star",
       from: parsed.from,
       resolved,
+      ...(parsed.isStatic ? {} : { jvmTypeWildcardName: parsed.from.slice(parsed.from.lastIndexOf(".") + 1) }),
       typeOnly,
     });
     return true;

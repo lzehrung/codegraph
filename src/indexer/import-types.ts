@@ -30,6 +30,10 @@ export type ImportBinding =
        * same range as `importedRange`; for `import { a as b }` it is the alias token.
        */
       localRange?: Range;
+      /** Direct owner of a nested JVM type expanded from a type-on-demand import. */
+      jvmTypeOwnerStartIndex?: number;
+      /** Whether the importer shares the declaring JVM package. */
+      jvmSamePackage?: boolean;
       phpImportType?: "class" | "function" | "const";
       /** Namespace retained when a C include expands tags and ordinary names. */
       cNamespace?: "tag" | "ordinary";
@@ -84,11 +88,13 @@ export type ImportBinding =
        * expansion skip this binding.
        */
       staticMembersOf?: string;
+      /** The requested type for a non-static JVM type-on-demand import. */
+      jvmTypeWildcardName?: string;
       /** Files of a proven JVM package wildcard, not just its representative resolved file. */
       jvmPackageFiles?: FileId[];
       /** Consumer language needed to keep Java package stars limited to JVM-visible types. */
       jvmPackageLanguageId?: "java" | "kotlin";
-      /** Whether the importing JVM file declares the wildcard target package. */
+      /** Whether the importer shares the imported JVM package or type's package. */
       jvmSamePackage?: boolean;
     };
 

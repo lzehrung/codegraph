@@ -50,7 +50,7 @@ import type { ManifestFileEntry } from "./manifest.js";
 import { expandStarImports } from "../expand-star-imports.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-export const PROJECT_SNAPSHOT_VERSION = 12;
+export const PROJECT_SNAPSHOT_VERSION = 13;
 const LEGACY_EMBEDDED_MODULE_SNAPSHOT_VERSION = 10;
 export const BLOOM_FILTER_SNAPSHOT_VERSION = 4;
 export const BLOOM_FILTER_SNAPSHOT_FILENAME = "bloom-filters.json";
@@ -92,7 +92,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // namespace, and same-unit peer edges, and drop invalid cross-file, unexported, and ambiguous ones.
 // v27: C# type aliases in a multi-file namespace can add call edges, or drop a guessed one.
 // A same-named type in another namespace is not the alias target.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 27;
+// v28: JVM type-on-demand imports only bind direct nested classifiers.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 28;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
@@ -1909,6 +1910,7 @@ function isSymbolDef(value: unknown): value is SymbolDef {
       symbol.cTag === "forward" ||
       symbol.cTag === "reference") &&
     isOptionalBoolean(symbol.javaPackagePrivate) &&
+    (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number") &&
     (symbol.docstring === undefined || typeof symbol.docstring === "string") &&
     (symbol.lineSpan === undefined || typeof symbol.lineSpan === "number") &&
     (symbol.complexity === undefined || typeof symbol.complexity === "number")
@@ -1938,6 +1940,8 @@ function isImportBinding(value: unknown): value is ImportBinding {
       isOptionalBoolean(binding.explicitAlias) &&
       isOptionalRange(binding.importedRange) &&
       isOptionalRange(binding.localRange) &&
+      (binding.jvmTypeOwnerStartIndex === undefined || typeof binding.jvmTypeOwnerStartIndex === "number") &&
+      isOptionalBoolean(binding.jvmSamePackage) &&
       (binding.cNamespace === undefined || binding.cNamespace === "tag" || binding.cNamespace === "ordinary") &&
       (binding.phpImportType === undefined ||
         binding.phpImportType === "class" ||
@@ -1951,6 +1955,7 @@ function isImportBinding(value: unknown): value is ImportBinding {
   return (
     binding.kind === "star" &&
     (binding.staticMembersOf === undefined || typeof binding.staticMembersOf === "string") &&
+    (binding.jvmTypeWildcardName === undefined || typeof binding.jvmTypeWildcardName === "string") &&
     (binding.jvmPackageFiles === undefined ||
       (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string"))) &&
     (binding.jvmPackageLanguageId === undefined ||

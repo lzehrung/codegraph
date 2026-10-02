@@ -38,6 +38,8 @@ export type SpecifierTargets = {
   files: string[];
   /** Name for an external edge or binding. Unused when `files` is non-empty. */
   externalName: string;
+  /** True only when the JVM wildcard matched a package rather than a type. */
+  jvmPackageMatched?: true;
   /**
    * C# ambiguous and partial type matches keep an external edge.
    * Other unresolved specifiers still honor `dropIfUnresolved`.
@@ -219,7 +221,7 @@ export async function resolveSpecifierTargets(
   if (languageId === "java" || languageId === "kotlin") {
     if (metadata.jvmPackageWildcard) {
       const packageTargets = await resolveJvmPackageImportPaths(metadata.projectRoot, specifier, file);
-      if (packageTargets.length) return { files: packageTargets, externalName: specifier };
+      if (packageTargets.length) return { files: packageTargets, externalName: specifier, jvmPackageMatched: true };
     }
     return resolveLanguageImportTargets(file, specifier, languageId, metadata);
   }
