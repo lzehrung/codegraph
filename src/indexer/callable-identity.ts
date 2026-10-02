@@ -6,6 +6,7 @@ import {
 } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
+import type { SymbolDef } from "./types.js";
 import {
   cppCallableHasInternalLinkage,
   cppCallableIsDefinition,
@@ -70,6 +71,25 @@ export function callableIdentityForDeclaration(args: {
     return { ...base, owner, key: node ? `${file}\0${owner}\0${name}` : uniqueKey, role: typescriptCallableRole(node) };
   }
   return { ...base, owner: "", key: uniqueKey };
+}
+
+/**
+ * A C++ function first declared `static` keeps internal linkage when a later declaration in the
+ * same file omits `static` (`static int run(); int run() {}`). One declaration node cannot see
+ * that, so give every same-signature declaration in the file the static one's file-scoped key.
+ */
+export function propagateCppInternalLinkage(file: string, locals: readonly SymbolDef[]): void {
+  const prefix = file + "\0";
+  const internal = new Set<string>();
+  for (const local of locals) {
+    const callable = local.callable;
+    if (callable?.signature && callable.key.startsWith(prefix)) internal.add(callable.key.slice(prefix.length));
+  }
+  if (!internal.size) return;
+  for (const local of locals) {
+    const callable = local.callable;
+    if (callable?.signature && internal.has(callable.key)) local.callable = { ...callable, key: prefix + callable.key };
+  }
 }
 
 /** Rebase file-scoped keys; external C++ signature keys have no file prefix. */

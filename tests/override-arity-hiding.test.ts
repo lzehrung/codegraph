@@ -85,4 +85,37 @@ describe("override hiding before arity", () => {
       }
     });
   }
+
+  it("C# hides the base method when the only call has a count the override rejects", async () => {
+    const root = await mkTmpDir("cg-override-hiding-only-");
+    try {
+      const baseFile = path.join(root, "Base.cs").replace(/\\/g, "/");
+      const derivedFile = path.join(root, "Derived.cs").replace(/\\/g, "/");
+      const useFile = path.join(root, "Use.cs").replace(/\\/g, "/");
+      await fs.writeFile(baseFile, fixtures[0].baseSource);
+      await fs.writeFile(
+        derivedFile,
+        ["public class Derived : Base {", "  public override int M(int x) => 2;", "}"].join("\n"),
+      );
+      await fs.writeFile(
+        useFile,
+        [
+          "public class Use {",
+          "  public int Invalid() => new Derived().M();",
+          "  public int Other() => new Derived().Inherited();",
+          "}",
+        ].join("\n"),
+      );
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const callees = (caller: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => graph.nodes.get(edge.to)?.file);
+      expect(callees("Invalid")).not.toContain(baseFile);
+      expect(callees("Other")).toContain(baseFile);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

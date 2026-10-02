@@ -1724,7 +1724,9 @@ export async function inheritedReceiverMemberSignatures(
     const rawOwner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
     if (!rawOwner) continue;
     const owner = ownerAnchors.get(rawOwner) ?? rawOwner;
-    const group = `${owner}\0${candidate.memberName}\0${candidate.argumentCount}\0${candidate.viaSupertypes}`;
+    // Override pairs are a fact of the declarations, not of this call: an override that rejects
+    // the argument count still hides the base declaration it overrides.
+    const group = `${owner}\0${candidate.memberName}\0${candidate.viaSupertypes}`;
     if (checkedGroups.has(group)) continue;
     checkedGroups.add(group);
     let level = candidate.viaSupertypes ? (parentsByOwner.get(owner) ?? []) : [owner];
@@ -1735,14 +1737,7 @@ export async function inheritedReceiverMemberSignatures(
       const next: string[] = [];
       for (const id of level) {
         for (const memberId of membersByOwner.get(id) ?? []) {
-          if (graph.nodes.get(memberId)?.name !== candidate.memberName) continue;
-          const member = definitions.get(memberId)!;
-          const arity = member.callable?.arity;
-          const count = candidate.argumentCount;
-          if (count !== null && arity && (count < arity.minArgs || (arity.maxArgs !== null && count > arity.maxArgs))) {
-            continue;
-          }
-          current.push(memberId);
+          if (graph.nodes.get(memberId)?.name === candidate.memberName) current.push(memberId);
         }
         for (const parent of parentsByOwner.get(id) ?? []) {
           if (seen.has(parent)) continue;

@@ -566,6 +566,58 @@ describe("C++ classification and same-file navigation", () => {
     }
   });
 
+  it("keeps a static prototype and its definition without static as one internal callable", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-static-prototype-"));
+    const lines = ["static int run();", "int run() { return 1; }", "int use() { return run(); }"];
+    const decoy = "int run() { return 2; }\n";
+    try {
+      const file = path.join(root, "a.cpp");
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      await fs.writeFile(path.join(root, "b.cpp"), decoy, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const keys = (name: string) =>
+        index.byFile
+          .get(fileIdentityKey(path.join(root, name)))
+          ?.locals.filter((local) => local.localName === "run" && local.callable?.signature)
+          .map((local) => local.callable!.key) ?? [];
+      const [prototypeKey, definitionKey] = keys("a.cpp");
+      expect(keys("a.cpp")).toHaveLength(2);
+      expect(prototypeKey).toBe(definitionKey);
+      expect(keys("b.cpp")).not.toContain(prototypeKey);
+
+      const navigation = await goToDefinition(index, { file, line: 3, column: lines[2]!.lastIndexOf("run") + 1 });
+      expect(navigation.status).toBe("ok");
+      if (navigation.status !== "ok") throw new Error("Expected the internal definition");
+      expect([fileIdentityKey(navigation.definition.file), navigation.definition.range.start.line]).toEqual([
+        fileIdentityKey(file),
+        2,
+      ]);
+      const references = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("run") + 1 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.map((ref) => [path.basename(ref.file), ref.range.start.line])).toEqual([
+          ["a.cpp", 1],
+          ["a.cpp", 2],
+          ["a.cpp", 3],
+        ]);
+      }
+      // Equivalent declarations share one graph node: the prototype, which the definition aliases.
+      const graph = await buildSymbolGraphDetailed(index);
+      const runNodes = [...graph.nodes.values()].filter(
+        (node) => node.name === "run" && fileIdentityKey(node.file) === fileIdentityKey(file),
+      );
+      expect(runNodes).toHaveLength(1);
+      expect(runNodes[0]!.id.endsWith(`::run::${lines[0]!.indexOf("run")}`)).toBe(true);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "use")
+          .map((edge) => edge.to),
+      ).toEqual([runNodes[0]!.id]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps adjusted parameter shapes on one C++ callable identity", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-adjusted-identity-"));
     const file = path.join(root, "probe.cpp");
