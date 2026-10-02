@@ -882,9 +882,10 @@ export function resolveImported(
   ) {
     const target = moduleFor(index, targetFile);
     if (!target) return null;
+    const targetLanguageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
     let ownerStartIndex: number | undefined;
     if (imp.kind === "star") {
-      const owner = jvmWildcardTypeOwner(target, imp.jvmTypeWildcardName!);
+      const owner = jvmWildcardTypeOwner(target, imp.jvmTypeWildcardName!, targetLanguageId);
       if (!owner || (owner.javaPackagePrivate && !imp.jvmSamePackage)) return null;
       ownerStartIndex = owner.range.start.index;
     } else {
@@ -895,7 +896,10 @@ export function resolveImported(
     if (!names) return null;
     let match: SymbolDef | undefined;
     for (const candidate of names.localExports.get(names.normalizeIdentifier(exportedName)) ?? []) {
-      if (!isJvmTypeWildcardMember(candidate, ownerStartIndex) || (candidate.javaPackagePrivate && !imp.jvmSamePackage))
+      if (
+        !isJvmTypeWildcardMember(candidate, ownerStartIndex, targetLanguageId) ||
+        (candidate.javaPackagePrivate && !imp.jvmSamePackage)
+      )
         continue;
       if (match && !sameSymbolDef(index, candidate, match)) return null;
       match = candidate;

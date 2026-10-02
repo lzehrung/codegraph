@@ -29,13 +29,15 @@ function symbolsForStarImport(
   isRuby: boolean,
   packageOnly: boolean,
   typeOwnerStartIndex?: number,
+  typeOwnerLanguageId?: string,
 ): StarImportSymbol[] {
   const localExports: StarImportSymbol[] = [];
   for (const entry of target.exports) {
     if (
       entry.type === "local" &&
       (!(isRuby || packageOnly) || !entry.target.isMember) &&
-      (typeOwnerStartIndex === undefined || isJvmTypeWildcardMember(entry.target, typeOwnerStartIndex))
+      (typeOwnerStartIndex === undefined ||
+        isJvmTypeWildcardMember(entry.target, typeOwnerStartIndex, typeOwnerLanguageId))
     ) {
       localExports.push({ name: entry.exportedAs, symbol: entry.target });
     }
@@ -49,15 +51,27 @@ function symbolsForStarImport(
   return visible;
 }
 
+function isJvmClassifier(symbol: SymbolDef, languageId: string | undefined): boolean {
+  return (
+    symbol.kind === SymbolKind.Class ||
+    symbol.kind === SymbolKind.Interface ||
+    (languageId === "java" && symbol.kind === SymbolKind.TypeAlias)
+  );
+}
+
 /** The owner must be unique within the resolved JVM file. */
-export function jvmWildcardTypeOwner(target: ModuleIndex, typeName: string): SymbolDef | undefined {
+export function jvmWildcardTypeOwner(
+  target: ModuleIndex,
+  typeName: string,
+  languageId: string | undefined,
+): SymbolDef | undefined {
   let owner: SymbolDef | undefined;
   for (const entry of target.exports) {
     if (
       entry.type !== "local" ||
       entry.exportedAs !== typeName ||
       entry.target.isMember ||
-      (entry.target.kind !== SymbolKind.Class && entry.target.kind !== SymbolKind.Interface)
+      !isJvmClassifier(entry.target, languageId)
     )
       continue;
     if (owner && owner.range.start.index !== entry.target.range.start.index) return undefined;
@@ -66,11 +80,12 @@ export function jvmWildcardTypeOwner(target: ModuleIndex, typeName: string): Sym
   return owner;
 }
 
-export function isJvmTypeWildcardMember(symbol: SymbolDef, ownerStartIndex: number): boolean {
-  return (
-    (symbol.kind === SymbolKind.Class || symbol.kind === SymbolKind.Interface) &&
-    symbol.jvmTypeOwnerStartIndex === ownerStartIndex
-  );
+export function isJvmTypeWildcardMember(
+  symbol: SymbolDef,
+  ownerStartIndex: number,
+  languageId: string | undefined,
+): boolean {
+  return isJvmClassifier(symbol, languageId) && symbol.jvmTypeOwnerStartIndex === ownerStartIndex;
 }
 
 /**
@@ -126,7 +141,9 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
           !packageFiles &&
           !!imp.jvmTypeWildcardName &&
           (targetSupport?.id === "java" || targetSupport?.id === "kotlin");
-        const typeOwner = typeOnDemand ? jvmWildcardTypeOwner(target, imp.jvmTypeWildcardName!) : undefined;
+        const typeOwner = typeOnDemand
+          ? jvmWildcardTypeOwner(target, imp.jvmTypeWildcardName!, targetSupport?.id)
+          : undefined;
         const typeOwnerStartIndex = typeOwner?.range.start.index;
         if (
           typeOnDemand &&
@@ -139,6 +156,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
           targetSupport?.id === "ruby",
           !!packageFiles,
           typeOwnerStartIndex,
+          targetSupport?.id,
         );
         const javaImportsKotlinTypes = imp.jvmPackageLanguageId === "java" && targetSupport?.id === "kotlin";
         // Header files default to C in filename-only lookup. Only extracted C tags prove the namespace split.

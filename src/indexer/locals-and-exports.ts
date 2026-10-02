@@ -824,7 +824,9 @@ export function collectLocalsAndExportsFromSource(
     const jvmOwner =
       node &&
       (support.id === "java" || support.id === "kotlin") &&
-      (kind === SymbolKind.Class || kind === SymbolKind.Interface)
+      (kind === SymbolKind.Class ||
+        kind === SymbolKind.Interface ||
+        (support.id === "java" && kind === SymbolKind.TypeAlias))
         ? enclosingJvmTypeDeclaration(node)
         : undefined;
     const jvmOwnerStartIndex = jvmOwner?.childForFieldName("name")?.startIndex;

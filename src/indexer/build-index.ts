@@ -1411,9 +1411,16 @@ async function collectStaleCachedModules(args: {
   return { stale, deletedDeclarationFiles };
 }
 
-/** Files a cached module resolved: import targets and re-export sources. */
+/** Files a cached module depends on, including every JVM wildcard package file. */
 function cachedModuleTargets(mod: ModuleIndex): string[] {
-  const targets = mod.imports.flatMap((binding) => (typeof binding.resolved === "string" ? [binding.resolved] : []));
+  const targets: string[] = [];
+  for (const binding of mod.imports) {
+    if (typeof binding.resolved === "string") targets.push(binding.resolved);
+    if (binding.kind !== "star" || !binding.jvmPackageFiles) continue;
+    for (const file of binding.jvmPackageFiles) {
+      if (file !== binding.resolved) targets.push(file);
+    }
+  }
   for (const entry of mod.exports) {
     if (entry.type === "local" || !entry.moduleSpecifier || entry.fromModule === entry.moduleSpecifier) continue;
     targets.push(entry.fromModule);

@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
-import { buildProjectIndex, findReferences, goToDefinition } from "../src/index.js";
-import { normalizePath } from "../src/util/paths.js";
+import { buildProjectIndex, buildProjectIndexFromFiles, findReferences, goToDefinition } from "../src/index.js";
+import type { ProjectIndex } from "../src/indexer/types.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 const files = {
@@ -501,6 +502,83 @@ describe("JVM package wildcard graph edges", () => {
     }
   });
 
+  it("imports Java nested enums and nested types of enums only from their declared owner", async () => {
+    const root = await mkTmpDir("cg-jvm-enum-wildcard-");
+    const sources = {
+      "java/p/Outer.java": [
+        "package p;",
+        "public class Outer {",
+        "  public enum Mode { FAST }",
+        "}",
+        "class Other { public enum Mode { SLOW } }",
+      ].join("\n"),
+      "java/p/OuterEnum.java": "package p; public enum OuterEnum { ONE; public static class Inner {} }",
+      "java/q/Outer.java": "package q; public class Outer { public enum Mode { WRONG } }",
+      "java/client/Use.java": [
+        "package client;",
+        "import p.Outer.*;",
+        "import p.OuterEnum.*;",
+        "class Use {",
+        "  Mode value = Mode.FAST;",
+        "  Inner inner;",
+        "}",
+      ].join("\n"),
+    };
+    try {
+      for (const [name, source] of Object.entries(sources)) {
+        const file = path.join(root, name);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, source);
+      }
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const consumer = path.join(root, "java/client/Use.java");
+      const goto = async (line: number, name: string) =>
+        goToDefinition(index, {
+          file: consumer,
+          line,
+          column: sources["java/client/Use.java"].split("\n")[line - 1]!.indexOf(name) + 1,
+        });
+      const mode = await goto(5, "Mode");
+      const inner = await goto(6, "Inner");
+      expect(mode.status).toBe("ok");
+      expect(inner.status).toBe("ok");
+      if (mode.status === "ok") {
+        expect(mode.definition.file).toBe(normalizePath(path.join(root, "java/p/Outer.java")));
+        expect(mode.definition.range.start.line).toBe(3);
+      }
+      if (inner.status === "ok")
+        expect(inner.definition.file).toBe(normalizePath(path.join(root, "java/p/OuterEnum.java")));
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: keyof typeof sources, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) =>
+            entry.file === normalizePath(path.join(root, file)) &&
+            entry.name === name &&
+            (!kind || entry.kind === kind),
+        );
+      const edge = (from?: string, to?: string) => graph.edges.some((entry) => entry.from === from && entry.to === to);
+      expect(
+        edge(node("java/client/Use.java", "Mode", "import")?.id, node("java/p/Outer.java", "Mode", "type")?.id),
+      ).toBe(true);
+      expect(
+        edge(node("java/client/Use.java", "Inner", "import")?.id, node("java/p/OuterEnum.java", "Inner", "class")?.id),
+      ).toBe(true);
+      expect(
+        edge(node("java/client/Use.java", "Mode", "import")?.id, node("java/q/Outer.java", "Mode", "type")?.id),
+      ).toBe(false);
+      const otherModeRefs = await findReferences(index, {
+        file: path.join(root, "java/p/Outer.java"),
+        line: 5,
+        column: sources["java/p/Outer.java"].split("\n")[4]!.indexOf("Mode") + 1,
+      });
+      expect(otherModeRefs.status).toBe("ok");
+      if (otherModeRefs.status === "ok") {
+        expect(otherModeRefs.references.some((ref) => ref.file === normalizePath(consumer))).toBe(false);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
   it("resolves cross-language package-qualified JVM types and members without imports", async () => {
     const root = await mkTmpDir("cg-jvm-qualified-");
     const sources = {
@@ -837,4 +915,66 @@ describe("JVM package wildcard graph edges", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+  for (const cache of ["memory", "disk"] as const) {
+    it(`drops deleted non-representative Kotlin package files from warm ${cache} imports`, async () => {
+      const root = await mkTmpDir("cg-jvm-wildcard-deletion-");
+      try {
+        const a = path.join(root, "calc/A.kt");
+        const b = path.join(root, "calc/B.kt");
+        const consumer = path.join(root, "app/Use.kt");
+        const lines = ["package app", "import calc.*", "class Use(val keep: A, val gone: B)"];
+        await fs.mkdir(path.dirname(a), { recursive: true });
+        await fs.mkdir(path.dirname(consumer), { recursive: true });
+        await fs.writeFile(a, "package calc\nclass A\n");
+        await fs.writeFile(b, "package calc\nclass B\n");
+        await fs.writeFile(consumer, lines.join("\n"));
+        const lookup = (name: string) => ({ file: consumer, line: 3, column: lines[2]!.indexOf(name) + 1 });
+        const bindingFiles = (index: ProjectIndex) => {
+          const binding = index.byFile
+            .get(fileIdentityKey(consumer))
+            ?.imports.find((candidate) => candidate.kind === "star" && candidate.from === "calc");
+          return binding?.kind === "star"
+            ? binding.jvmPackageFiles?.map((file) => normalizePath(file)).sort()
+            : undefined;
+        };
+        const initial = await buildProjectIndexFromFiles(root, [a, b, consumer], { cache });
+        expect(bindingFiles(initial)).toEqual([normalizePath(a), normalizePath(b)]);
+        expect((await goToDefinition(initial, lookup("B"))).status).toBe("ok");
+
+        await fs.rm(b);
+        const warm = await buildProjectIndexFromFiles(root, [a, consumer], { cache });
+        const cold = await buildProjectIndexFromFiles(root, [a, consumer], { cache: "off" });
+        expect(bindingFiles(warm)).toEqual(bindingFiles(cold));
+        expect(bindingFiles(warm)).toEqual([normalizePath(a)]);
+        const warmA = await goToDefinition(warm, lookup("A"));
+        const coldA = await goToDefinition(cold, lookup("A"));
+        const warmB = await goToDefinition(warm, lookup("B"));
+        const coldB = await goToDefinition(cold, lookup("B"));
+        expect(warmA.status).toBe(coldA.status);
+        expect(warmB.status).toBe(coldB.status);
+        expect(warmA.status).toBe("ok");
+        if (warmA.status === "ok") expect(warmA.definition.file).toBe(normalizePath(a));
+        expect(warmB.status).toBe("not_found");
+
+        const importEdges = async (index: ProjectIndex) => {
+          const graph = await buildSymbolGraphDetailed(index);
+          return graph.edges
+            .flatMap((edge) => {
+              const from = graph.nodes.get(edge.from);
+              const to = graph.nodes.get(edge.to);
+              return from?.file === normalizePath(consumer) && from.kind === "import" && to
+                ? [`${from.name}->${to.file}:${to.name}`]
+                : [];
+            })
+            .sort();
+        };
+        const warmEdges = await importEdges(warm);
+        expect(warmEdges).toEqual(await importEdges(cold));
+        expect(warmEdges).toContain(`A->${normalizePath(a)}:A`);
+        expect(warmEdges).not.toContain(`B->${normalizePath(b)}:B`);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
 });
