@@ -1372,27 +1372,23 @@ async function collectStaleCachedModules(args: {
       }
     }
   }
-  // A package star depends on every package file, not just its representative edge.
+  // A package star depends on every package file, not just its representative edge. A type
+  // wildcard (`import p.C.*` naming class `p.C`) turns into a package star once package `p.C` exists.
   const isJvmFile = (file: string): boolean => {
     const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id;
     return languageId === "java" || languageId === "kotlin";
   };
+  const dependsOnJvmPackage = (imp: ImportBinding): boolean =>
+    imp.kind === "star" && (!!imp.jvmPackageFiles || !!imp.jvmTypeWildcardName || typeof imp.resolved !== "string");
   if (args.cacheMisses.added.some(isJvmFile) || args.cacheMisses.changed.some(isJvmFile)) {
     const packageImporters: Array<readonly [string, ModuleIndex]> = [];
     for (const [file, cached] of cachedModules) {
       if (stale.has(file) || !isJvmFile(file)) continue;
-      if (
-        cached.mod.imports.some(
-          (imp) => imp.kind === "star" && (imp.jvmPackageFiles || typeof imp.resolved !== "string"),
-        )
-      ) {
-        packageImporters.push([file, cached.mod]);
-      }
+      if (cached.mod.imports.some(dependsOnJvmPackage)) packageImporters.push([file, cached.mod]);
     }
     const changed = await mapLimit(packageImporters, args.concurrency, async ([file, mod]) => {
       for (const imp of mod.imports) {
-        if (imp.kind !== "star") continue;
-        if (!imp.jvmPackageFiles && typeof imp.resolved === "string") continue;
+        if (imp.kind !== "star" || !dependsOnJvmPackage(imp)) continue;
         const current = await resolveJvmPackageImportPaths(args.projectRoot, imp.from, file);
         const previous = imp.jvmPackageFiles ?? [];
         if (

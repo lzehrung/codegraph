@@ -976,5 +976,39 @@ describe("JVM package wildcard graph edges", () => {
         await fs.rm(root, { recursive: true, force: true });
       }
     });
+    it(`rechecks a warm ${cache} Java type wildcard when a Kotlin package of that name is added`, async () => {
+      const root = await mkTmpDir("cg-jvm-type-wildcard-package-");
+      try {
+        const owner = path.join(root, "p/C.java");
+        const added = path.join(root, "p/C/Added.kt");
+        const consumer = path.join(root, "app/Use.java");
+        const lines = ["package app;", "import p.C.*;", "class Use { Added added; }"];
+        await fs.mkdir(path.dirname(added), { recursive: true });
+        await fs.mkdir(path.dirname(consumer), { recursive: true });
+        await fs.writeFile(owner, "package p;\npublic class C { public static class Inner {} }\n");
+        await fs.writeFile(consumer, lines.join("\n"));
+        const lookup = { file: consumer, line: 3, column: lines[2]!.indexOf("Added") + 1 };
+        const bindingFiles = (index: ProjectIndex) => {
+          const binding = index.byFile
+            .get(fileIdentityKey(consumer))
+            ?.imports.find((candidate) => candidate.kind === "star" && candidate.from === "p.C");
+          return binding?.kind === "star" ? binding.jvmPackageFiles?.map((file) => normalizePath(file)) : undefined;
+        };
+        const initial = await buildProjectIndexFromFiles(root, [owner, consumer], { cache });
+        expect(bindingFiles(initial)).toBeUndefined();
+        expect((await goToDefinition(initial, lookup)).status).toBe("not_found");
+
+        await fs.writeFile(added, "package p.C\nclass Added\n");
+        const warm = await buildProjectIndexFromFiles(root, [owner, added, consumer], { cache });
+        const cold = await buildProjectIndexFromFiles(root, [owner, added, consumer], { cache: "off" });
+        expect(bindingFiles(warm)).toEqual(bindingFiles(cold));
+        expect(bindingFiles(warm)).toEqual([normalizePath(added)]);
+        const warmAdded = await goToDefinition(warm, lookup);
+        expect(warmAdded.status).toBe("ok");
+        if (warmAdded.status === "ok") expect(warmAdded.definition.file).toBe(normalizePath(added));
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
   }
 });
