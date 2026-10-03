@@ -8,6 +8,7 @@ import {
 import { JAVA_IDENTIFIER_IGNORABLE_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { confineResolvedPath, readUtf8WithoutBom } from "../paths.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
+import { buildTriviaMask } from "../trivia.js";
 import { JVM_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
 
 const KOTLIN_PACKAGE_PATTERN = new RegExp(
@@ -35,6 +36,7 @@ type JvmSymbolIndexEntry = {
 };
 
 type JvmSymbolIndexReaderOptions = {
+  languageId: "java" | "kotlin";
   packagePattern: RegExp;
   declarationPattern: RegExp;
   normalizeSymbol?: (symbol: string) => string;
@@ -68,7 +70,17 @@ async function readJvmSymbolIndex(
   const packageName = source.match(options.packagePattern)?.[1] ?? null;
   const javaImportableTypes = options.javaImportableTypes ? new Set<string>() : undefined;
   const symbols = new Set<string>();
+  const trivia = buildTriviaMask(source, options.languageId);
+  let depth = 0;
+  let cursor = 0;
   for (const match of source.matchAll(options.declarationPattern)) {
+    const matchIndex = match.index ?? 0;
+    for (; cursor < matchIndex; cursor += 1) {
+      if (trivia[cursor]) continue;
+      if (source[cursor] === "{") depth += 1;
+      else if (depth && source[cursor] === "}") depth -= 1;
+    }
+    if (depth || trivia[matchIndex]) continue;
     const symbolName = match[options.declarationNameGroup ?? 1];
     if (symbolName) {
       if (javaImportableTypes && (match[1] === "class" || match[1] === "object" || match[1] === "interface")) {
@@ -87,6 +99,7 @@ async function readJvmSymbolIndex(
 
 async function readKotlinSymbolIndex(filePath: string): Promise<JvmSymbolIndexEntry> {
   return await readJvmSymbolIndex(filePath, kotlinSymbolIndexCache, {
+    languageId: "kotlin",
     packagePattern: KOTLIN_PACKAGE_PATTERN,
     declarationPattern: KOTLIN_DECLARATION_PATTERN,
     declarationNameGroup: 2,
@@ -96,6 +109,7 @@ async function readKotlinSymbolIndex(filePath: string): Promise<JvmSymbolIndexEn
 
 async function readJavaSymbolIndex(filePath: string): Promise<JvmSymbolIndexEntry> {
   return await readJvmSymbolIndex(filePath, javaSymbolIndexCache, {
+    languageId: "java",
     packagePattern: JAVA_PACKAGE_PATTERN,
     declarationPattern: JAVA_DECLARATION_PATTERN,
     normalizeSymbol: (symbol) => symbol.replace(JAVA_IDENTIFIER_IGNORABLE_PATTERN, ""),
@@ -229,10 +243,14 @@ async function resolveJvmImportPath(
         )
       : otherFiles;
   const symbolFiles = [...ownFiles, ...sharedFiles.filter((file): file is string => file !== null)];
-  const filenameMatched =
-    options.filenameFallback && !symbolFiles.length
-      ? packageCandidates.filter((candidate) => path.parse(candidate).name === importedName)
-      : [];
+  const filenameMatched: string[] = [];
+  if (options.filenameFallback && !symbolFiles.length) {
+    for (const candidate of packageCandidates) {
+      if (path.parse(candidate).name !== importedName) continue;
+      const entry = await readJavaSymbolIndex(candidate);
+      if (!entry.symbols.size || entry.symbols.has(importedName)) filenameMatched.push(candidate);
+    }
+  }
   const candidates = symbolFiles.length ? symbolFiles : filenameMatched;
   const resolved =
     candidates.length === 1 ? await confineJvmResolvedPath(projectRoot, path.resolve(candidates[0]!)) : null;

@@ -1115,6 +1115,131 @@ describe("JVM package wildcard graph edges", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+  it("imports top-level Kotlin types without confusing Java nested types in the same package", async () => {
+    const root = await mkTmpDir("cg-jvm-named-nested-decoy-");
+    const sources = {
+      "kotlin/utils/Helper.kt": [
+        "package utils",
+        "// class UtilityClass {}",
+        'private const val brace = "{"',
+        "class UtilityClass(val value: Int)",
+      ].join("\n"),
+      "java/utils/Utils.java": [
+        "package utils;",
+        "/* class UtilityClass {} */",
+        "public class Utils { public static class UtilityClass {} }",
+      ].join("\n"),
+      "java/other/NestedOnly.java": "package other;\nclass Owner { public static class NestedOnly {} }",
+      "java/client/Use.java": [
+        "package client;",
+        "import utils.UtilityClass;",
+        "class JavaUse { UtilityClass value; }",
+      ].join("\n"),
+      "java/client/Invalid.java": [
+        "package client;",
+        "import other.NestedOnly;",
+        "class Invalid { NestedOnly value; }",
+      ].join("\n"),
+      "kotlin/client/Use.kt": [
+        "package client",
+        "import utils.UtilityClass",
+        "fun use(): UtilityClass = UtilityClass(1)",
+      ].join("\n"),
+      "kotlin/client/Aliases.kt": [
+        "package client",
+        "import utils.UtilityClass as RenamedUtilityClass",
+        "fun aliased(): RenamedUtilityClass = RenamedUtilityClass(2)",
+      ].join("\n"),
+    };
+    try {
+      for (const [file, source] of Object.entries(sources)) {
+        const destination = path.join(root, file);
+        await fs.mkdir(path.dirname(destination), { recursive: true });
+        await fs.writeFile(destination, source);
+      }
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const definition = normalizePath(path.join(root, "kotlin/utils/Helper.kt"));
+      const decoy = normalizePath(path.join(root, "java/utils/Utils.java"));
+      const goto = (file: keyof typeof sources, line: number, name: string) =>
+        goToDefinition(index, {
+          file: path.join(root, file),
+          line,
+          column: sources[file].split("\n")[line - 1]!.indexOf(name) + 1,
+        });
+      for (const [file, line, name] of [
+        ["kotlin/client/Use.kt", 2, "UtilityClass"],
+        ["kotlin/client/Use.kt", 3, "UtilityClass"],
+        ["kotlin/client/Aliases.kt", 2, "UtilityClass"],
+        ["kotlin/client/Aliases.kt", 3, "RenamedUtilityClass"],
+        ["java/client/Use.java", 2, "UtilityClass"],
+        ["java/client/Use.java", 3, "UtilityClass"],
+      ] as const) {
+        const result = await goto(file, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(definition);
+      }
+      expect((await goto("java/client/Invalid.java", 3, "NestedOnly")).status).toBe("not_found");
+      const refs = await findReferences(index, {
+        file: definition,
+        line: 4,
+        column: sources["kotlin/utils/Helper.kt"].split("\n")[3]!.indexOf("UtilityClass") + 1,
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        const sites = refs.references.map((ref) => ref.file);
+        expect(sites).toContain(normalizePath(path.join(root, "kotlin/client/Use.kt")));
+        expect(sites).toContain(normalizePath(path.join(root, "kotlin/client/Aliases.kt")));
+        expect(sites).toContain(normalizePath(path.join(root, "java/client/Use.java")));
+        expect(sites).not.toContain(decoy);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: keyof typeof sources, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) =>
+            entry.file === normalizePath(path.join(root, file)) &&
+            entry.name === name &&
+            (!kind || entry.kind === kind),
+        );
+      const target = node("kotlin/utils/Helper.kt", "UtilityClass")?.id;
+      const wrong = node("java/utils/Utils.java", "UtilityClass")?.id;
+      expect(target).toBeDefined();
+      expect(wrong).toBeDefined();
+      for (const [file, caller, imported] of [
+        ["kotlin/client/Use.kt", "use", "UtilityClass"],
+        ["kotlin/client/Aliases.kt", "aliased", "RenamedUtilityClass"],
+      ] as const) {
+        const importer = node(file, imported, "import")?.id;
+        const from = node(file, caller)?.id;
+        expect(graph.edges.some((edge) => edge.from === importer && edge.to === target)).toBe(true);
+        expect(graph.edges.some((edge) => edge.from === importer && edge.to === wrong)).toBe(false);
+        expect(graph.edges.some((edge) => edge.from === from && edge.to === target && edge.label === "calls")).toBe(
+          true,
+        );
+        expect(graph.edges.some((edge) => edge.from === from && edge.to === wrong && edge.label === "calls")).toBe(
+          false,
+        );
+        expect(graph.edges.some((edge) => edge.from === from && edge.to === target && edge.label === "uses")).toBe(
+          true,
+        );
+        expect(graph.edges.some((edge) => edge.from === from && edge.to === wrong && edge.label === "uses")).toBe(
+          false,
+        );
+      }
+      const javaImport = node("java/client/Use.java", "UtilityClass", "import")?.id;
+      expect(graph.edges.some((edge) => edge.from === javaImport && edge.to === target)).toBe(true);
+      expect(graph.edges.some((edge) => edge.from === javaImport && edge.to === wrong)).toBe(false);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.from === node("java/client/Invalid.java", "NestedOnly", "import")?.id &&
+            edge.to === node("java/other/NestedOnly.java", "NestedOnly")?.id,
+        ),
+      ).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   for (const cache of ["memory", "disk"] as const) {
     it(`re-resolves a warm Java named import when a Kotlin file declares its class (${cache})`, async () => {
       const root = await mkTmpDir("cg-jvm-named-added-");

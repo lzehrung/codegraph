@@ -30,8 +30,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 79 gives a C++ declaration without `static` the file-scoped key of a same-file `static` one.
  * Epoch 80 indexes Java static members by their declaring type and keeps static wildcards distinct
  * from JVM package and type-on-demand imports.
+ * Epoch 81 ignores nested JVM declarations when resolving package-qualified named imports.
  */
-export const CORE_ALGORITHM_EPOCH = 80;
+export const CORE_ALGORITHM_EPOCH = 81;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
