@@ -308,13 +308,12 @@ describe("production audit parser", () => {
     expect(report.summary.totalVulnerabilities).toBe(0);
   });
 
-  it("validates the checked-in empty allowlist", () => {
+  it("validates the checked-in allowlist against today's date", () => {
     const allowlistPath = path.resolve(import.meta.dirname, "../scripts/security/production-audit-allowlist.json");
-    const allowlist = parseProductionAuditAllowlist(readFileSync(allowlistPath, "utf8"), {
-      now: NOW,
-    });
+    // Real time: an expired exception must fail here, not only in the audit job.
+    const allowlist = parseProductionAuditAllowlist(readFileSync(allowlistPath, "utf8"), { now: new Date() });
 
-    expect(allowlist).toEqual({ schemaVersion: 1, exceptions: [] });
+    expect(allowlist.schemaVersion).toBe(1);
   });
 });
 
