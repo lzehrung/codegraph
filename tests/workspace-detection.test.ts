@@ -143,4 +143,51 @@ describe("Workspace detection modes", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("prefers a package's own directory over a directory-link alias, and keeps an alias-only match", async () => {
+    const base = (await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ws-alias-")))).replace(/\\/g, "/");
+    const project = `${base}/project`;
+    const pkg = async (dir: string, name: string): Promise<void> => {
+      await fsp.mkdir(`${project}/${dir}`, { recursive: true });
+      await fsp.writeFile(`${project}/${dir}/package.json`, JSON.stringify({ name }));
+    };
+    try {
+      await pkg("packages/z-core", "z-core");
+      await pkg("packages/deep/core", "deep-core");
+      await pkg("vendor/ext", "ext");
+      await fsp.mkdir(`${project}/links`, { recursive: true });
+      await fsp.writeFile(
+        `${project}/package.json`,
+        JSON.stringify({ name: "root", workspaces: ["packages/**", "links/*"] }),
+      );
+      try {
+        // Same depth and sorts first; shallower than its target; the only match for `vendor/ext`.
+        await fsp.symlink(`${project}/packages/z-core`, `${project}/packages/a-alias`, "junction");
+        await fsp.symlink(`${project}/packages/deep/core`, `${project}/packages/core-link`, "junction");
+        await fsp.symlink(`${project}/vendor/ext`, `${project}/links/ext`, "junction");
+        await fsp.symlink(project, `${base}/project-link`, "junction");
+      } catch (error) {
+        if (isSymlinkUnavailable(error)) return;
+        throw error;
+      }
+
+      for (const root of [project, `${base}/project-link`]) {
+        clearWorkspaceCaches();
+        const workspace = await loadWorkspaceConfig(root);
+        if (!workspace) throw new Error("expected a workspace config");
+        const packagePaths = [...workspace.packages].map(([name, entry]) => [
+          name,
+          entry.path.replace(/\\/g, "/").slice(root.length),
+        ]);
+        expect(packagePaths.sort()).toEqual([
+          ["deep-core", "/packages/deep/core"],
+          ["ext", "/links/ext"],
+          ["z-core", "/packages/z-core"],
+        ]);
+      }
+    } finally {
+      clearWorkspaceCaches();
+      await fsp.rm(base, { recursive: true, force: true });
+    }
+  });
 });

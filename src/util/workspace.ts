@@ -230,26 +230,37 @@ export async function loadWorkspaceConfig(projectRoot: string): Promise<Workspac
       dot: true,
       ignore: ["**/node_modules/**", ...ignorePatterns],
     });
-    // A directory link can reach one package by several paths (a link cycle repeats it). Visit
-    // shorter paths first and register each real package directory once, so the package keeps
-    // the path a reader would write rather than an alias through the link.
-    const seenPackageDirectories = new Set<string>();
+    // A directory link can reach one package by several paths (a link cycle repeats it).
+    // Register each real package directory once, at its own path when a pattern matched it
+    // there, else at the shortest alias, so a link never replaces the package's directory.
     const byDepth = (left: string, right: string): number =>
       left.split("/").length - right.split("/").length || left.localeCompare(right);
+    let realRoot = root;
+    try {
+      realRoot = await fsp.realpath(root);
+    } catch {
+      // An unreadable root still has comparable matched paths below it.
+    }
+    const byRealDirectory = new Map<string, { pkgPath: string; direct: boolean }>();
     for (const pkgPath of [...found].sort(byDepth)) {
-      const dir = path.dirname(pkgPath);
       let realDirectory: string;
       try {
-        realDirectory = await fsp.realpath(dir);
+        realDirectory = await fsp.realpath(path.dirname(pkgPath));
       } catch {
         continue;
       }
       const realKey = fileIdentityKey(realDirectory);
-      if (seenPackageDirectories.has(realKey)) continue;
-      seenPackageDirectories.add(realKey);
+      const ownDirectory = path.join(realRoot, path.relative(root, path.dirname(pkgPath)));
+      const direct = fileIdentityKey(ownDirectory) === realKey;
+      const chosen = byRealDirectory.get(realKey);
+      if (!chosen || (direct && !chosen.direct)) byRealDirectory.set(realKey, { pkgPath, direct });
+    }
+    const selected = [...byRealDirectory.values()].map(({ pkgPath }) => pkgPath).sort(byDepth);
+    for (const pkgPath of selected) {
       const info = await loadJSON<MinimalPackageJson>(pkgPath);
       if (!info || !info.name) continue;
       const name = info.name;
+      const dir = path.dirname(pkgPath);
       packages.set(name, {
         name,
         path: dir,
