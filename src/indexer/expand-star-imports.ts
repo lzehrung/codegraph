@@ -1,4 +1,4 @@
-import { supportForFileWithoutHeaderSample } from "../languages.js";
+import { JAVA_SUPPORT, KOTLIN_SUPPORT, supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import { SymbolKind, type BuildOptions, type ModuleIndex, type SymbolDef } from "./types.js";
@@ -68,11 +68,14 @@ export function jvmWildcardTypeOwner(
   typeName: string,
   languageId: string | undefined,
 ): SymbolDef | undefined {
+  let normalizeIdentifier = languageId === "java" ? JAVA_SUPPORT.normalizeIdentifier : undefined;
+  if (languageId === "kotlin") normalizeIdentifier = KOTLIN_SUPPORT.normalizeIdentifier;
+  const normalizedTypeName = normalizeIdentifier ? normalizeIdentifier(typeName) : typeName;
   let owner: SymbolDef | undefined;
   for (const entry of target.exports) {
     if (
       entry.type !== "local" ||
-      entry.exportedAs !== typeName ||
+      (normalizeIdentifier ? normalizeIdentifier(entry.exportedAs) : entry.exportedAs) !== normalizedTypeName ||
       entry.target.isMember ||
       !isJvmClassifier(entry.target, languageId)
     )

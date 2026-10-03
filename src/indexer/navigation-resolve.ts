@@ -857,6 +857,26 @@ function resolveJvmPackageExport(
   if (candidates.length === 1) return candidates[0]!;
   return argumentCount === undefined ? null : selectFunctionOverloadByArity(candidates, argumentCount);
 }
+/** Whether a Java named static import can expose this exact direct member. */
+export function javaStaticNamedImportIncludes(index: ProjectIndex, imp: ImportBinding, def: SymbolDef): boolean {
+  if (imp.kind !== "named" || !imp.jvmStaticWildcardName) return false;
+  const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
+  if (!targetFile || fileIdentityKey(targetFile) !== fileIdentityKey(def.file)) return false;
+  const target = moduleFor(index, targetFile);
+  if (!target) return false;
+  const owner = jvmWildcardTypeOwner(target, imp.jvmStaticWildcardName, "java");
+  if (!owner || owner.range.start.index === undefined || (owner.javaPackagePrivate && !imp.jvmSamePackage))
+    return false;
+  if (!isJvmStaticWildcardMember(def, owner.range.start.index) || (def.javaPackagePrivate && !imp.jvmSamePackage))
+    return false;
+  const names = moduleNameLookup(index, targetFile);
+  if (!names || names.normalizeIdentifier(imp.imported) !== names.normalizeIdentifier(def.localName)) return false;
+  return (
+    names.localExports
+      .get(names.normalizeIdentifier(imp.imported))
+      ?.some((candidate) => sameSymbolDef(index, candidate, def)) ?? false
+  );
+}
 
 export function resolveImported(
   index: ProjectIndex,
@@ -878,14 +898,15 @@ export function resolveImported(
   }
   if (
     (imp.kind === "star" && (imp.jvmTypeWildcardName || imp.jvmStaticWildcardName)) ||
-    (imp.kind === "named" && imp.jvmTypeOwnerStartIndex !== undefined)
+    (imp.kind === "named" && (imp.jvmTypeOwnerStartIndex !== undefined || imp.jvmStaticWildcardName !== undefined))
   ) {
     const target = moduleFor(index, targetFile);
     if (!target) return null;
     const targetLanguageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
     let ownerStartIndex: number | undefined;
-    if (imp.kind === "star") {
-      const ownerName = imp.jvmTypeWildcardName ?? imp.jvmStaticWildcardName;
+    if (imp.kind === "star" || imp.jvmTypeOwnerStartIndex === undefined) {
+      const ownerName =
+        imp.kind === "star" ? (imp.jvmTypeWildcardName ?? imp.jvmStaticWildcardName) : imp.jvmStaticWildcardName;
       const owner = ownerName && jvmWildcardTypeOwner(target, ownerName, targetLanguageId);
       if (!owner || (owner.javaPackagePrivate && !imp.jvmSamePackage)) return null;
       ownerStartIndex = owner.range.start.index;
@@ -896,6 +917,7 @@ export function resolveImported(
     const names = moduleNameLookup(index, targetFile);
     if (!names) return null;
     let match: SymbolDef | undefined;
+    let overloads: SymbolDef[] | undefined;
     for (const candidate of names.localExports.get(names.normalizeIdentifier(exportedName)) ?? []) {
       if (
         (imp.jvmStaticWildcardName
@@ -904,8 +926,23 @@ export function resolveImported(
         (candidate.javaPackagePrivate && !imp.jvmSamePackage)
       )
         continue;
-      if (match && !sameSymbolDef(index, candidate, match)) return null;
-      match = candidate;
+      if (match && !sameSymbolDef(index, candidate, match)) {
+        if (imp.kind !== "named" || !imp.jvmStaticWildcardName || opts?.argumentCount === undefined) return null;
+        if (!overloads) overloads = [match];
+        overloads.push(candidate);
+      } else {
+        match = candidate;
+      }
+    }
+    if (overloads && opts?.argumentCount !== undefined)
+      return selectFunctionOverloadByArity(overloads, opts.argumentCount);
+    if (match && imp.kind === "named" && imp.jvmStaticWildcardName && opts?.argumentCount !== undefined) {
+      const arity = match.callable?.arity;
+      if (
+        arity &&
+        (opts.argumentCount < arity.minArgs || (arity.maxArgs !== null && opts.argumentCount > arity.maxArgs))
+      )
+        return null;
     }
     return match ?? null;
   }

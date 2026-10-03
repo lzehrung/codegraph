@@ -276,6 +276,11 @@ export function isJavaPublicDeclaration(node: SyntaxNodeLike): boolean {
   const declaration = findVisibilityDeclaration(node, JAVA_ROW);
   return !!declaration && modifierTokens(collectModifierTexts(declaration, JAVA_ROW)).includes("public");
 }
+/** Protected Java members remain visible to subclasses outside their package. */
+export function isJavaProtectedDeclaration(node: SyntaxNodeLike): boolean {
+  const declaration = findVisibilityDeclaration(node, JAVA_ROW);
+  return !!declaration && modifierTokens(collectModifierTexts(declaration, JAVA_ROW)).includes("protected");
+}
 
 /** Package-qualified JVM types follow the same visibility rule as package wildcard imports. */
 export function isJvmPackageSymbolVisible(

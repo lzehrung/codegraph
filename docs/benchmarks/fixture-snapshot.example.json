@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-03T02:33:51.658Z",
+  "generatedAt": "2026-10-03T04:33:21.114Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 633,
+  "numTotalTests": 636,
   "numFailedTests": 0,
   "languages": [
     {
@@ -55,8 +55,8 @@
       "files": [
         "tests/languages/cpp.test.ts"
       ],
-      "tests": 49,
-      "passed": 49,
+      "tests": 50,
+      "passed": 50,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -110,8 +110,8 @@
       "files": [
         "tests/languages/java.test.ts"
       ],
-      "tests": 44,
-      "passed": 44,
+      "tests": 46,
+      "passed": 46,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

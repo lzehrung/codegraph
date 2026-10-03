@@ -105,7 +105,7 @@ export type ImportBindingRow = {
 
 type ParsedJvmImportStatement =
   | { kind: "star"; from: string; isStatic?: boolean }
-  | { kind: "named"; from: string; imported: string; explicitAlias?: boolean };
+  | { kind: "named"; from: string; imported: string; explicitAlias?: boolean; isStatic?: boolean };
 
 function pushCsharpOverride(
   context: LanguageSpecificImportContext,
@@ -347,6 +347,9 @@ async function pushJvmImportBinding(
     local: local ?? parsed.imported,
     imported: parsed.imported,
     from: parsed.from,
+    ...(parsed.isStatic && context.languageId === "java"
+      ? { jvmStaticWildcardName: parsed.from.slice(parsed.from.lastIndexOf(".") + 1) }
+      : {}),
     ...(parsed.explicitAlias ? { explicitAlias: true } : {}),
     resolved,
     typeOnly,

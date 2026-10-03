@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
+import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
@@ -834,6 +835,219 @@ describe("Java imports with a same-named package", () => {
         expect(edge(paths["p/NamedInside.java"]!, caller, name, "calls")).toBe(true);
         expect(edge(paths["p/NamedInside.java"]!, name, name, "imports")).toBe(true);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("binds named Java static imports only to the declared owner's visible static members", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-named-static-owner-"));
+    const util = [
+      "package p;",
+      "public class Util {",
+      "  public static int hit(int a) { return a; }",
+      "  public int other() { return 0; }",
+      "  static int hidden() { return 3; }",
+      "}",
+      "class Other { public static int hit(int a, int b) { return a + b; } }",
+    ];
+    const consumer = [
+      "package client;",
+      "import static p.Util.hit;",
+      "import static p.Util.other;",
+      "class Use {",
+      "  int yes() { return hit(1); }",
+      "  int noInstance() { return other(); }",
+      "  int noSibling() { return hit(1, 2); }",
+      "}",
+    ];
+    const samePackage = [
+      "package p;",
+      "import static p.Util.hidden;",
+      "class Same { int call() { return hidden(); } }",
+    ];
+    const outside = [
+      "package client;",
+      "import static p.Util.hidden;",
+      "class Outside { int call() { return hidden(); } }",
+    ];
+    try {
+      const files = await writeFixtureFiles(root, {
+        "p/Util.java": util.join("\n"),
+        "p/Same.java": samePackage.join("\n"),
+        "client/Use.java": consumer.join("\n"),
+        "client/Outside.java": outside.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const go = (file: string, lines: string[], line: number, name: string) =>
+        goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
+      const hit = await go(files["client/Use.java"]!, consumer, 5, "hit");
+      const local = await go(files["p/Same.java"]!, samePackage, 3, "hidden");
+      expect(hit.status).toBe("ok");
+      if (hit.status === "ok") expect(hit.definition.range.start.line).toBe(3);
+      expect(local.status).toBe("ok");
+      if (local.status === "ok") expect(local.definition.file).toBe(files["p/Util.java"]);
+      expect((await go(files["client/Use.java"]!, consumer, 6, "other")).status).toBe("not_found");
+      expect((await go(files["client/Use.java"]!, consumer, 7, "hit")).status).toBe("not_found");
+      expect((await go(files["client/Outside.java"]!, outside, 3, "hidden")).status).toBe("not_found");
+      const ref = (line: number, name: string) =>
+        findReferences(index, { file: files["p/Util.java"]!, line, column: columnOf(util, line, name) });
+      for (const [line, name, included, excluded] of [
+        [3, "hit", files["client/Use.java"]!, files["client/Outside.java"]!],
+        [5, "hidden", files["p/Same.java"]!, files["client/Outside.java"]!],
+      ] as const) {
+        const result = await ref(line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.references.some((site) => site.file === included)).toBe(true);
+          expect(result.references.some((site) => site.file === excluded)).toBe(false);
+        }
+      }
+      const siblingRefs = await ref(7, "hit");
+      expect(siblingRefs.status).toBe("ok");
+      if (siblingRefs.status === "ok")
+        expect(siblingRefs.references.some((site) => site.file === files["client/Use.java"])).toBe(false);
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: string, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) => entry.file === file && entry.name === name && (!kind || entry.kind === kind),
+        );
+      const utilDefs = index.byFile.get(fileIdentityKey(files["p/Util.java"]!))!.locals;
+      const target = (name: string, line: number) =>
+        defNodeId(utilDefs.find((def) => def.localName === name && def.range.start.line === line)!);
+      const edge = (from: string | undefined, to: string | undefined, label?: string) =>
+        graph.edges.some((entry) => entry.from === from && entry.to === to && (!label || entry.label === label));
+      const use = files["client/Use.java"]!;
+      expect(edge(node(use, "yes")?.id, target("hit", 3), "calls")).toBe(true);
+      expect(edge(node(use, "noSibling")?.id, target("hit", 7), "calls")).toBe(false);
+      expect(edge(node(use, "noSibling")?.id, target("hit", 3), "calls")).toBe(false);
+      expect(edge(node(use, "noInstance")?.id, target("other", 4), "calls")).toBe(false);
+      expect(edge(node(use, "hit", "import")?.id, target("hit", 3))).toBe(true);
+      expect(edge(node(use, "hit", "import")?.id, target("hit", 7))).toBe(false);
+      expect(edge(node(use, "other", "import")?.id, target("other", 4))).toBe(false);
+      expect(edge(node(files["p/Same.java"]!, "hidden", "import")?.id, target("hidden", 5))).toBe(true);
+      expect(edge(node(files["client/Outside.java"]!, "hidden", "import")?.id, target("hidden", 5))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("Java inherited package access", () => {
+  it("does not inherit package-private methods across packages or hide a named static import", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-inherited-package-"));
+    const base = [
+      "package a;",
+      "public class Base {",
+      "  void hit() {}",
+      "  public void open() {}",
+      "  protected void guard() {}",
+      "}",
+    ];
+    const same = [
+      "package a;",
+      "class Same extends Base {",
+      "  void qualified() { this.hit(); }",
+      "  void bare() { hit(); }",
+      "}",
+    ];
+    const derived = [
+      "package b;",
+      "import a.Base;",
+      "import static q.Tools.hit;",
+      "class Derived extends Base {",
+      "  void qualified() { this.hit(); }",
+      "  void bare() { hit(); }",
+      "  void publicCall() { open(); }",
+      "  void protectedCall() { guard(); }",
+      "}",
+    ];
+    const plain = [
+      "package b;",
+      "import a.Base;",
+      "class Plain extends Base {",
+      "  void qualified() { this.hit(); }",
+      "  void bare() { hit(); }",
+      "}",
+    ];
+    const tools = "package q; public class Tools { public static void hit() {} }";
+    try {
+      const files = await writeFixtureFiles(root, {
+        "a/Base.java": base.join("\n"),
+        "a/Same.java": same.join("\n"),
+        "b/Derived.java": derived.join("\n"),
+        "b/Plain.java": plain.join("\n"),
+        "q/Tools.java": tools,
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const go = (file: string, lines: string[], line: number, name: string) =>
+        goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
+      for (const [file, lines, line, name, target] of [
+        [files["a/Same.java"]!, same, 3, "hit", files["a/Base.java"]!],
+        [files["a/Same.java"]!, same, 4, "hit", files["a/Base.java"]!],
+        [files["b/Derived.java"]!, derived, 6, "hit", files["q/Tools.java"]!],
+        [files["b/Derived.java"]!, derived, 7, "open", files["a/Base.java"]!],
+        [files["b/Derived.java"]!, derived, 8, "guard", files["a/Base.java"]!],
+      ] as const) {
+        const result = await go(file, lines, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(target);
+      }
+      for (const [file, lines, line] of [
+        [files["b/Derived.java"]!, derived, 5],
+        [files["b/Plain.java"]!, plain, 4],
+        [files["b/Plain.java"]!, plain, 5],
+      ] as const) {
+        expect((await go(file, lines, line, "hit")).status).toBe("not_found");
+      }
+      const refs = (file: string, lines: string[], line: number, name: string) =>
+        findReferences(index, { file, line, column: columnOf(lines, line, name) });
+      const inheritedRefs = await refs(files["a/Base.java"]!, base, 3, "hit");
+      expect(inheritedRefs.status).toBe("ok");
+      if (inheritedRefs.status === "ok") {
+        const sites = inheritedRefs.references;
+        expect(sites.some((site) => site.file === files["a/Same.java"] && site.range.start.line === 3)).toBe(true);
+        expect(sites.some((site) => site.file === files["a/Same.java"] && site.range.start.line === 4)).toBe(true);
+        expect(sites.some((site) => site.file === files["b/Derived.java"] || site.file === files["b/Plain.java"])).toBe(
+          false,
+        );
+      }
+      const toolsRefs = await refs(files["q/Tools.java"]!, [tools], 1, "hit");
+      expect(toolsRefs.status).toBe("ok");
+      if (toolsRefs.status === "ok")
+        expect(
+          toolsRefs.references.some((site) => site.file === files["b/Derived.java"] && site.range.start.line === 6),
+        ).toBe(true);
+      for (const [line, name, useLine] of [
+        [4, "open", 7],
+        [5, "guard", 8],
+      ] as const) {
+        const result = await refs(files["a/Base.java"]!, base, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok")
+          expect(
+            result.references.some(
+              (site) => site.file === files["b/Derived.java"] && site.range.start.line === useLine,
+            ),
+          ).toBe(true);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: string, name: string) =>
+        [...graph.nodes.values()].find((entry) => entry.file === file && entry.name === name)?.id;
+      const calls = (file: string, caller: string, target: string, name: string) =>
+        graph.edges.some(
+          (edge) => edge.from === node(file, caller) && edge.to === node(target, name) && edge.label === "calls",
+        );
+      const baseFile = files["a/Base.java"]!;
+      const toolsFile = files["q/Tools.java"]!;
+      const derivedFile = files["b/Derived.java"]!;
+      expect(calls(files["a/Same.java"]!, "qualified", baseFile, "hit")).toBe(true);
+      expect(calls(files["a/Same.java"]!, "bare", baseFile, "hit")).toBe(true);
+      expect(calls(derivedFile, "qualified", baseFile, "hit")).toBe(false);
+      expect(calls(derivedFile, "bare", baseFile, "hit")).toBe(false);
+      expect(calls(derivedFile, "bare", toolsFile, "hit")).toBe(true);
+      expect(calls(files["b/Plain.java"]!, "qualified", baseFile, "hit")).toBe(false);
+      expect(calls(files["b/Plain.java"]!, "bare", baseFile, "hit")).toBe(false);
+      expect(calls(derivedFile, "publicCall", baseFile, "open")).toBe(true);
+      expect(calls(derivedFile, "protectedCall", baseFile, "guard")).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

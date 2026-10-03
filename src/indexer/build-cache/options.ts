@@ -32,8 +32,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * from JVM package and type-on-demand imports.
  * Epoch 81 ignores nested JVM declarations when resolving package-qualified named imports.
  * Epoch 82 marks non-public Java static members package-restricted for static imports.
+ * Epoch 83 stores Java package-private instance and protected member visibility.
+ * Epoch 84 resolves the visible first segment of a C++ qualified name before the direct path.
  */
-export const CORE_ALGORITHM_EPOCH = 82;
+export const CORE_ALGORITHM_EPOCH = 84;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

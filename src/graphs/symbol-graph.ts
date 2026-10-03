@@ -138,7 +138,7 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
     const languageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
     const allowLocalFallback = languageId !== "c" && languageId !== "cpp";
     const roleSegment = imp ? importIdRoleSegment(imp) : undefined;
-    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}::${roleSegment ?? ""}::${allowLocalFallback ? "local" : "export"}::${imp?.jvmTypeOwnerStartIndex ?? ""}::${imp?.jvmSamePackage ? "same-jvm-package" : "other-jvm-package"}`;
+    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}::${roleSegment ?? ""}::${allowLocalFallback ? "local" : "export"}::${imp?.jvmTypeOwnerStartIndex ?? ""}::${imp?.jvmStaticWildcardName ?? ""}::${imp?.jvmSamePackage ? "same-jvm-package" : "other-jvm-package"}`;
     let def: SymbolDef | null;
     if (exportResolutions.has(resolutionKey)) {
       def = exportResolutions.get(resolutionKey)!;

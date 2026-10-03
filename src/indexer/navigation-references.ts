@@ -32,7 +32,12 @@ import { scopeNodesFor } from "./scope-nodes.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
-import { javaKotlinFunctionOverloadIncludes, resolveExport, resolveImported } from "./navigation-resolve.js";
+import {
+  javaKotlinFunctionOverloadIncludes,
+  javaStaticNamedImportIncludes,
+  resolveExport,
+  resolveImported,
+} from "./navigation-resolve.js";
 import { isAmbiguousResolutionReason } from "./ambiguous-resolution.js";
 import {
   ensurePhpNamespaceSymbolIndex,
@@ -861,6 +866,7 @@ function importCanReferenceDefinition(
   };
 
   if (imp.kind === "named") {
+    if (imp.jvmStaticWildcardName) return javaStaticNamedImportIncludes(index, imp, def);
     if (resolvesToDefinition(imp.imported)) return true;
     // A python `from pkg import name` binds `name` from the package's own namespace; when the
     // package has no such export, Python's own import system falls back to treating `name` as

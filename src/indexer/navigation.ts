@@ -63,6 +63,7 @@ import {
 } from "./navigation-references.js";
 import {
   directModuleValueEntry,
+  javaStaticNamedImportIncludes,
   resolveExport,
   resolveImported,
   resolveModuleExports,
@@ -1243,8 +1244,10 @@ async function findReferencesInternal(
           } else if (imp.kind === "default") {
             exported = "default";
           }
-          const hit = resolveExport(index, targetFile, exported, exportOptions);
-          let matchesDef = hit?.kind === "resolved" && matchesReferenceDefinition(hit.def);
+          const staticNamedImport = imp.kind === "named" && !!imp.jvmStaticWildcardName;
+          if (staticNamedImport && !javaStaticNamedImportIncludes(index, imp, definition)) continue;
+          const hit = staticNamedImport ? null : resolveExport(index, targetFile, exported, exportOptions);
+          let matchesDef = staticNamedImport || (hit?.kind === "resolved" && matchesReferenceDefinition(hit.def));
           let attributedByProof = matchesDef;
           if (!matchesDef && bindingSites.length) {
             matchesDef = await bindingMatchesDefinition();

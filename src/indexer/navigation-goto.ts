@@ -2090,7 +2090,7 @@ export async function resolveImplicitSelfMember(
   return instance || instanceReport.named ? null : undefined;
 }
 
-/** Whether a Java or Kotlin member is `private` and declared outside the class enclosing the use. */
+/** Whether an inherited JVM member is inaccessible through this receiver. */
 async function isUninheritedPrivateMember(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -2105,6 +2105,12 @@ async function isUninheritedPrivateMember(
     start >= container.startIndex &&
     start < container.endIndex;
   if (ownMember) return false;
+  if (member.javaPackagePrivate && !member.javaProtectedMember) {
+    const memberPackage = getPackageDeclarationName(index, member.file, "java");
+    const useLanguage = supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id;
+    const usePackage = getPackageDeclarationName(index, mod.file, useLanguage === "kotlin" ? "kotlin" : "java");
+    if (memberPackage !== usePackage) return true;
+  }
   const parsed = await ensureParsedContext(
     member.file,
     index.parsed?.get(fileIdentityKey(member.file)),

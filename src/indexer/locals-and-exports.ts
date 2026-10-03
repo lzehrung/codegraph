@@ -29,7 +29,11 @@ import type { CallableIdentity } from "../languages/callable-arity.js";
 import type { Range } from "../types.js";
 
 import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
-import { isExportedDeclaration, isJavaPublicDeclaration } from "./declaration-visibility.js";
+import {
+  isExportedDeclaration,
+  isJavaProtectedDeclaration,
+  isJavaPublicDeclaration,
+} from "./declaration-visibility.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { typescriptCollapsedOverloadTarget } from "./ts-callables.js";
 
@@ -848,11 +852,9 @@ export function collectLocalsAndExportsFromSource(
     if (
       support.id === "java" &&
       node &&
-      (kind === SymbolKind.Class ||
-        kind === SymbolKind.Interface ||
-        kind === SymbolKind.TypeAlias ||
-        (base.isMember && base.jvmStaticMember))
+      (kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias || base.isMember)
     ) {
+      if (base.isMember && isJavaProtectedDeclaration(node)) base.javaProtectedMember = true;
       if (
         !isJavaPublicDeclaration(node) &&
         jvmOwner?.type !== "interface_declaration" &&

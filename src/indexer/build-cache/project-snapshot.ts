@@ -1910,6 +1910,7 @@ function isSymbolDef(value: unknown): value is SymbolDef {
       symbol.cTag === "forward" ||
       symbol.cTag === "reference") &&
     isOptionalBoolean(symbol.javaPackagePrivate) &&
+    isOptionalBoolean(symbol.javaProtectedMember) &&
     (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number") &&
     isOptionalBoolean(symbol.jvmStaticMember) &&
     (symbol.docstring === undefined || typeof symbol.docstring === "string") &&

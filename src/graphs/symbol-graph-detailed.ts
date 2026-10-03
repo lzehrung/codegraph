@@ -29,6 +29,7 @@ import {
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
 import { inheritsMemberOverloads } from "../indexer/member-selection.js";
+import { getPackageDeclarationName } from "../indexer/compilation-units.js";
 
 import {
   innermostNamespaceImport,
@@ -677,6 +678,14 @@ export async function buildSymbolGraphDetailed(
     memberIdentities,
     index.languageExtensions,
     overridingSignatures,
+    (memberId, useFile) => {
+      const member = receiverMemberDefinitions?.get(memberId);
+      if (!member?.javaPackagePrivate || member.javaProtectedMember) return true;
+      const useLanguage = supportForFileWithoutHeaderSample(useFile, index.languageExtensions)?.id;
+      const memberPackage = getPackageDeclarationName(index, member.file, "java");
+      const usePackage = getPackageDeclarationName(index, useFile, useLanguage === "kotlin" ? "kotlin" : "java");
+      return memberPackage === usePackage;
+    },
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

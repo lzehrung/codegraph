@@ -1783,6 +1783,7 @@ export function emitReceiverCallEdges(
   callableIdentities: ReadonlyMap<string, import("../../languages/callable-arity.js").CallableIdentity> = new Map(),
   languageExtensions?: LanguageExtensionMap,
   overridingSignatures?: ReadonlyMap<string, ReadonlySet<string>>,
+  isReceiverMemberVisible?: (memberId: string, useFile: string) => boolean,
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1842,6 +1843,7 @@ export function emitReceiverCallEdges(
       const canonicalId = canonicalMemberId(id, nodeAliases);
       const node = graph.nodes.get(id) ?? graph.nodes.get(canonicalId);
       if (!node || (node.kind !== "function" && !node.callable)) return false;
+      if (isReceiverMemberVisible && !isReceiverMemberVisible(canonicalId, useFile)) return false;
       if (
         (fileHiddenMemberIds.has(id) || fileHiddenMemberIds.has(canonicalId)) &&
         fileIdentityKey(node.file) !== fileIdentityKey(useFile)

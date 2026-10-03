@@ -2097,6 +2097,84 @@ describe("C++ implicit this in qualified and bare member calls", () => {
 });
 
 describe("C++ namespace aliases", () => {
+  it("prefers the visible namespace or type prefix over an unrelated global namespace", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-prefix-"));
+    const file = path.join(root, "probe.cpp");
+    const lines = [
+      "namespace target { int add() { return 1; } }",
+      "namespace dm { int add() { return 2; } int onlyGlobal() { return 3; } }",
+      "namespace client { namespace dm = target; int f() { return dm::add(); } int bad() { return dm::onlyGlobal(); } }",
+      "int g() { return dm::add(); }",
+      "namespace outer { namespace dm { int add() { return 4; } } namespace inner { int nested() { return dm::add(); } int nestedBad() { return dm::onlyGlobal(); } } }",
+      "namespace types { struct dm { static int add() { return 5; } }; namespace inner { int typed() { return dm::add(); } int typeBad() { return dm::onlyGlobal(); } } }",
+      "namespace client { int explicitGlobal() { return ::dm::add(); } }",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n") + "\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const at = async (line: number, name: string, use = false) => {
+        const source = lines[line - 1]!;
+        const column = (use ? source.lastIndexOf(name) : source.indexOf(name)) + 1;
+        return goToDefinition(index, { file, line, column });
+      };
+      const target = await at(1, "add");
+      const global = await at(2, "add");
+      const nested = await at(5, "add");
+      const typed = await at(6, "add");
+      for (const result of [target, global, nested, typed]) expect(result.status).toBe("ok");
+      if (target.status !== "ok" || global.status !== "ok" || nested.status !== "ok" || typed.status !== "ok") {
+        throw new Error("expected C++ declarations");
+      }
+      for (const [line, expected] of [
+        [3, 1],
+        [4, 2],
+        [5, 5],
+        [6, 6],
+        [7, 2],
+      ] as const) {
+        const result = await at(line, "add", true);
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("expected qualified C++ call");
+        expect(result.definition.range.start.line).toBe(expected);
+      }
+      expect((await at(3, "onlyGlobal", true)).status).toBe("not_found");
+      expect((await at(5, "onlyGlobal", true)).status).toBe("not_found");
+      expect((await at(6, "onlyGlobal", true)).status).toBe("not_found");
+
+      const referencesAt = async (line: number) => {
+        const refs = await findReferences(index, { file, line, column: lines[line - 1]!.indexOf("add") + 1 });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("expected C++ references");
+        return refs.references.map((ref) => ref.range.start.line);
+      };
+      expect(await referencesAt(1)).toContain(3);
+      expect(await referencesAt(1)).not.toContain(4);
+      expect(await referencesAt(1)).not.toContain(7);
+      expect(await referencesAt(2)).toContain(4);
+      expect(await referencesAt(2)).toContain(7);
+      expect(await referencesAt(2)).not.toContain(3);
+      expect(await referencesAt(2)).not.toContain(5);
+      expect(await referencesAt(5)).toContain(5);
+      expect(await referencesAt(6)).toContain(6);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callsFrom = (name: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === name)
+          .map((edge) => edge.to);
+      expect(callsFrom("f")).toEqual([defNodeId(target.definition)]);
+      expect(callsFrom("f")).not.toContain(defNodeId(global.definition));
+      expect(callsFrom("g")).toEqual([defNodeId(global.definition)]);
+      expect(callsFrom("explicitGlobal")).toEqual([defNodeId(global.definition)]);
+      expect(callsFrom("nested")).toEqual([defNodeId(nested.definition)]);
+      expect(callsFrom("typed")).toEqual([defNodeId(typed.definition)]);
+      expect(callsFrom("bad")).toEqual([]);
+      expect(callsFrom("nestedBad")).toEqual([]);
+      expect(callsFrom("typeBad")).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
   it("follows a namespace alias in goto, references, and calls", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-alias-"));
     const header = path.join(root, "math.hpp");

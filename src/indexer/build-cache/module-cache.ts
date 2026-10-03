@@ -469,6 +469,7 @@ function hasValidCallableSymbol(value: unknown): boolean {
     kind?: unknown;
     callable?: unknown;
     javaPackagePrivate?: unknown;
+    javaProtectedMember?: unknown;
     jvmTypeOwnerStartIndex?: unknown;
     jvmStaticMember?: unknown;
   };
@@ -479,6 +480,7 @@ function hasValidCallableSymbol(value: unknown): boolean {
   return (
     callableValid &&
     (symbol.javaPackagePrivate === undefined || typeof symbol.javaPackagePrivate === "boolean") &&
+    (symbol.javaProtectedMember === undefined || typeof symbol.javaProtectedMember === "boolean") &&
     (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number") &&
     (symbol.jvmStaticMember === undefined || typeof symbol.jvmStaticMember === "boolean")
   );

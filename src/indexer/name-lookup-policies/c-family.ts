@@ -8,13 +8,14 @@ import {
 } from "../ambiguous-resolution.js";
 import { cppOutOfLineOwnerPath } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
-  cppQualifiedNameThroughNamespaceAlias,
+  cppQualifiedNameThroughVisiblePrefix,
   cppStarImportClosure,
   cppUsingDeclarationTarget,
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppUsingDirectiveName,
   resolveVisibleCppCallableName,
+  resolveCppVisibleStaticCallableName,
 } from "../navigation-cpp.js";
 import { resolveNamedDefinition } from "../navigation-local.js";
 import { okGoToResult } from "../navigation-provenance.js";
@@ -65,19 +66,26 @@ function lookupCppQualifiedName(use: BareNameUse, qualifiedName: string): GoToRe
     if (!visible) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
     return okGoToResult(index, visible, { resolution: "exact", confidence: "high" });
   }
+  const staticMember = resolveCppVisibleStaticCallableName(
+    index,
+    mod,
+    qualifiedName,
+    node,
+    parsed.source,
+    loadParsed(use),
+  );
+  if (staticMember !== undefined) {
+    if (!staticMember) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
+    return okGoToResult(index, staticMember, { resolution: "exact", confidence: "high" });
+  }
   return resolveNamedDefinition(index, mod, file, parsed.sup, qualifiedName) ?? undefined;
 }
 
-/**
- * A qualified name (`ns::f`, `Box::make`) names a namespace or static member directly.
- * `namespace dm = detailed_math; dm::f` is the same name after the alias is followed.
- */
+/** Qualifier lookup is lexical before the direct textual path can name a global declaration. */
 export function resolveCppQualifiedName(use: BareNameUse): GoToResult | undefined {
   const { name } = use;
   if (!name.includes("::")) return undefined;
-  const direct = lookupCppQualifiedName(use, name);
-  if (direct) return direct;
-  const rewritten = cppQualifiedNameThroughNamespaceAlias(
+  const rewritten = cppQualifiedNameThroughVisiblePrefix(
     use.index,
     use.mod,
     name,
@@ -87,13 +95,15 @@ export function resolveCppQualifiedName(use: BareNameUse): GoToResult | undefine
     loadParsed(use),
   );
   if (rewritten === null) return { status: "not_found", reason: AMBIGUOUS_CPP_NAMESPACE_ALIAS_REASON };
-  if (!rewritten || rewritten === name) return undefined;
-  return (
-    lookupCppQualifiedName(use, rewritten) ?? {
-      status: "not_found",
-      reason: "No matching C++ declaration through a namespace alias",
-    }
-  );
+  if (rewritten !== undefined) {
+    return (
+      lookupCppQualifiedName(use, rewritten) ?? {
+        status: "not_found",
+        reason: "No matching C++ declaration in the visible qualifier",
+      }
+    );
+  }
+  return lookupCppQualifiedName(use, name);
 }
 
 export const cppLookupPolicy: NameLookupPolicy = {
