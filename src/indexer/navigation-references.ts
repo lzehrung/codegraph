@@ -25,13 +25,19 @@ import {
   selectFirstExistingPhpCanonicalName,
 } from "./navigation-php.js";
 import { isKeywordReceiver, memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
-import { getCompilationUnitPeers } from "./compilation-units.js";
-import { findClosestScopeBinding } from "./navigation-local.js";
+import { getCompilationUnitPeers, getPackageDeclarationName } from "./compilation-units.js";
+import { isJvmPackageSymbolVisible } from "./declaration-visibility.js";
+import { findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
 import { scopeNodesFor } from "./scope-nodes.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
-import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
+import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
-import { resolveExport, resolveImported } from "./navigation-resolve.js";
+import {
+  javaKotlinFunctionOverloadIncludes,
+  javaStaticNamedImportIncludes,
+  resolveExport,
+  resolveImported,
+} from "./navigation-resolve.js";
 import { isAmbiguousResolutionReason } from "./ambiguous-resolution.js";
 import {
   ensurePhpNamespaceSymbolIndex,
@@ -51,6 +57,7 @@ import {
 } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, foldPhpIdentifierCase } from "../util/identifiers.js";
+import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../util/bloom-filter.js";
 
 const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
 const NAMESPACE_EXPORT_PATTERN = new RegExp(
@@ -179,21 +186,11 @@ export function getCachedScope(
     const node = parsedCtx.tree.rootNode.descendantForIndex(start, start);
     return phpReferenceRoleMatchesKind(node, kind);
   };
-  const fileKey = fileIdentityKey(fileId);
-  const cachedScope = index.scopeCache.get(fileKey);
-  if (cachedScope) {
-    for (const binding of cachedScope.all) {
-      binding.occurrences = binding.occurrences.filter((occurrence) => keepOccurrence(binding, occurrence));
-    }
-    return cachedScope;
-  }
-  const scopeIndex = buildScopeIndexFromSource(fileId, parsedCtx.source, parsedCtx.sup, moduleIndex.imports, {
-    tree: parsedCtx.tree,
-  });
+  // One builder for the shared scope cache: it reuses the module's indexed callables.
+  const scopeIndex = getOrBuildScopeIndex(index, fileId, parsedCtx.source, parsedCtx.sup, moduleIndex, parsedCtx.tree);
   for (const binding of scopeIndex.all) {
     binding.occurrences = binding.occurrences.filter((occurrence) => keepOccurrence(binding, occurrence));
   }
-  index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;
 }
 /**
@@ -861,6 +858,7 @@ function importCanReferenceDefinition(
     if (hit?.kind === "resolved") {
       return sameDef(hit.def, def, index.languageExtensions);
     }
+    if (javaKotlinFunctionOverloadIncludes(index, targetFile, exportedName, def)) return true;
     if (cppCanonicalStructuralExport(index, targetFile, exportedName, def, languageId)) {
       return true;
     }
@@ -868,6 +866,7 @@ function importCanReferenceDefinition(
   };
 
   if (imp.kind === "named") {
+    if (imp.jvmStaticWildcardName) return javaStaticNamedImportIncludes(index, imp, def);
     if (resolvesToDefinition(imp.imported)) return true;
     // A python `from pkg import name` binds `name` from the package's own namespace; when the
     // package has no such export, Python's own import system falls back to treating `name` as
@@ -1072,6 +1071,39 @@ export function getCachedReferenceCandidateFiles(
     }
   }
 
+  // A fully package-qualified use needs no import, even from another compilation unit.
+  // Probe both its package root and member name; Java Unicode escapes can hide either spelling.
+  if (languageId === "java" || languageId === "kotlin") {
+    const packageName = getPackageDeclarationName(index, def.file, languageId);
+    const rootName = packageName?.split(".")[0];
+    if (rootName) {
+      const exported =
+        def.isMember ||
+        index.byFile
+          .get(fileIdentityKey(def.file))
+          ?.exports.some((entry) => entry.type === "local" && sameDef(entry.target, def, index.languageExtensions));
+      if (exported) {
+        for (const moduleIndex of index.byFile.values()) {
+          const support = supportForFileWithoutHeaderSample(moduleIndex.file, index.languageExtensions);
+          if (support?.id !== "java" && support?.id !== "kotlin") continue;
+          const samePackage = getPackageDeclarationName(index, moduleIndex.file, support.id) === packageName;
+          if (!isJvmPackageSymbolVisible(def, languageId, support.id, samePackage)) continue;
+          const fileKey = fileIdentityKey(moduleIndex.file);
+          if (candidates.has(fileKey)) continue;
+          const filter = index.bloomFilters?.get(fileKey);
+          const rootProbe = support.normalizeIdentifier(rootName);
+          const nameProbe = support.normalizeIdentifier(def.localName);
+          if (
+            !filter ||
+            (filter.mightContain(rootProbe) && filter.mightContain(nameProbe)) ||
+            (support.id === "java" && filter.mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN))
+          ) {
+            candidates.set(fileKey, moduleIndex.file);
+          }
+        }
+      }
+    }
+  }
   // A plain package import does not prove its child's attribute, but a same-name use
   // through that package must be checked before coverage can claim completeness.
   if (languageId === "python" && !def.isMember) {

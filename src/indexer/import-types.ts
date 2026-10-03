@@ -1,5 +1,5 @@
 import type { FileId, Range } from "../types.js";
-import type { CFamilyIncludeForm } from "../util/specifiers.js";
+import type { CFamilyIncludeForm, RubyLoadForm } from "../util/specifiers.js";
 
 export type ImportBinding =
   | {
@@ -30,6 +30,12 @@ export type ImportBinding =
        * same range as `importedRange`; for `import { a as b }` it is the alias token.
        */
       localRange?: Range;
+      /** Direct type owner for an expanded JVM type-on-demand or Java static import. */
+      jvmTypeOwnerStartIndex?: number;
+      /** Static Java type owner when expanded from a static star import. */
+      jvmStaticWildcardName?: string;
+      /** Whether the importer shares the declaring JVM package. */
+      jvmSamePackage?: boolean;
       phpImportType?: "class" | "function" | "const";
       /** Namespace retained when a C include expands tags and ordinary names. */
       cNamespace?: "tag" | "ordinary";
@@ -77,12 +83,23 @@ export type ImportBinding =
       confidence?: number;
       /** Present for a C/C++ include. Older cached bindings omit it. */
       includeForm?: CFamilyIncludeForm;
+      rubyLoadForm?: RubyLoadForm;
       /**
        * C# `using static N.T;`: the normalized qualified type name `N.T`. Only static members and
        * nested types of that type in the resolved file are imported, so generic star lookup and
        * expansion skip this binding.
        */
       staticMembersOf?: string;
+      /** The requested type for a non-static JVM type-on-demand import. */
+      jvmTypeWildcardName?: string;
+      /** Declaring type for a Java static star import, not a type-on-demand import. */
+      jvmStaticWildcardName?: string;
+      /** Files of a proven JVM package wildcard, not just its representative resolved file. */
+      jvmPackageFiles?: FileId[];
+      /** Consumer language needed to keep Java package stars limited to JVM-visible types. */
+      jvmPackageLanguageId?: "java" | "kotlin";
+      /** Whether the importer shares the imported JVM package or type's package. */
+      jvmSamePackage?: boolean;
     };
 
 /**

@@ -43,7 +43,13 @@ function referenceWriteTransform(projectRoot: string, module: ModuleIndex): Modu
   const copy = structuredClone(module);
   const transform = (file: string): string => cacheRelativePath(projectRoot, file);
   copy.file = transform(copy.file);
-  for (const local of copy.locals) local.file = transform(local.file);
+  for (const local of copy.locals) {
+    const sourceFile = local.file;
+    local.file = transform(sourceFile);
+    if (local.callable?.key.startsWith(sourceFile + "\0")) {
+      local.callable.key = local.file + local.callable.key.slice(sourceFile.length);
+    }
+  }
   for (const entry of copy.exports) {
     if (entry.type === "local") {
       entry.target.file = transform(entry.target.file);
@@ -133,6 +139,7 @@ function pathFixture(root: string): ModuleIndex {
         file: dependency,
         localName: "dependencyValue",
         kind: SymbolKind.Function,
+        callable: { key: `${dependency}\0dependencyValue`, owner: "module", kind: "function", arity: null },
         range: { start: { line: 2, column: 0 }, end: { line: 3, column: 1 } },
       },
     ],

@@ -13,7 +13,7 @@ import {
 } from "../../languages/import-statement-parsers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { extractRustModPathAttribute, rustGraphModuleSpecifier } from "../../util/resolution/rust.js";
-import { extractPythonSpecifiers, type ModuleSpecifier } from "../../util/specifiers.js";
+import { extractPythonSpecifiers, isRubyLoadForm, type ModuleSpecifier } from "../../util/specifiers.js";
 import { maskTrivia } from "../../util/trivia.js";
 import { maskImportBindingTrivia } from "./binding-ranges.js";
 
@@ -112,7 +112,13 @@ function extractJavaImports(source: string, sink: TextImportSink): void {
     if (!rawSpecifier || match.index === undefined) continue;
     const spec = rawSpecifier.replace(/\s+/gu, "");
     if (!spec) continue;
-    sink.specifier({ spec, typeOnly: false });
+    const prefix = match[0].slice(0, match[0].indexOf(rawSpecifier));
+    const suffix = match[0].slice(match[0].indexOf(rawSpecifier) + rawSpecifier.length);
+    sink.specifier({
+      spec,
+      typeOnly: false,
+      ...(suffix.includes("*") && !prefix.includes("static") ? { jvmPackageWildcard: true } : {}),
+    });
     sink.binding({ raw: source.slice(match.index, match.index + match[0].length), start: match.index });
   }
 }
@@ -131,7 +137,8 @@ function extractKotlinImports(source: string, sink: TextImportSink): void {
     if (!rawSpecifier || match.index === undefined) continue;
     const spec = rawSpecifier.replace(/\s+/gu, "");
     if (!spec) continue;
-    sink.specifier({ spec, typeOnly: false });
+    const suffix = match[0].slice(match[0].indexOf(rawSpecifier) + rawSpecifier.length);
+    sink.specifier({ spec, typeOnly: false, ...(suffix.includes("*") ? { jvmPackageWildcard: true } : {}) });
     sink.binding({ raw: source.slice(match.index, match.index + match[0].length), start: match.index });
   }
 }
@@ -302,7 +309,7 @@ function extractRubyImports(source: string, sink: TextImportSink): void {
     const expectedPrefix = match[1] === "autoload" ? RUBY_AUTOLOAD_PREFIX_PATTERN : RUBY_DIRECT_ARGUMENT_PREFIX_PATTERN;
     if (!expectedPrefix.test(prefix)) continue;
     const spec = literal.value.trim();
-    if (spec) sink.specifier({ spec, typeOnly: false });
+    if (spec && isRubyLoadForm(match[1])) sink.specifier({ spec, typeOnly: false, rubyLoadForm: match[1] });
   }
 }
 

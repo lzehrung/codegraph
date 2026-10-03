@@ -7,15 +7,18 @@ export function buildReferenceCandidateIndex(modules: ReadonlyMap<FileId, Module
   const byTargetFile = new Map<FileId, Set<FileId>>();
   for (const moduleIndex of modules.values()) {
     const fileId = moduleIndex.file;
-    for (const imp of moduleIndex.imports) {
-      const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
-      if (!targetFile || fileIdentityKey(targetFile) === fileIdentityKey(fileId)) continue;
+    const recordTarget = (targetFile: FileId): void => {
+      if (fileIdentityKey(targetFile) === fileIdentityKey(fileId)) return;
       const targetKey = fileIdentityKey(targetFile);
       const files = byTargetFile.get(targetKey);
-      if (files) {
-        files.add(fileId);
-      } else {
-        byTargetFile.set(targetKey, new Set([fileId]));
+      if (files) files.add(fileId);
+      else byTargetFile.set(targetKey, new Set([fileId]));
+    };
+    for (const imp of moduleIndex.imports) {
+      if (imp.kind === "star" && imp.jvmPackageFiles) {
+        for (const targetFile of imp.jvmPackageFiles) recordTarget(targetFile);
+      } else if (typeof imp.resolved === "string") {
+        recordTarget(imp.resolved);
       }
     }
   }

@@ -194,6 +194,36 @@ describe("TypeScript declaration-only symbols", () => {
   });
 });
 
+describe("TypeScript inherited instance methods", () => {
+  it("resolves inherited instance calls in TS and TSX without selecting an unrelated owner", async () => {
+    for (const extension of ["ts", "tsx"]) {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-inherited-member-"));
+      const shapes = path.join(root, `shapes.${extension}`);
+      const decoy = path.join(root, `decoy.${extension}`);
+      const use = path.join(root, `use.${extension}`);
+      try {
+        await Promise.all([
+          writeFile(
+            shapes,
+            "export class Base { run(): number { return 1; } }\nexport class Derived extends Base {}\n",
+          ),
+          writeFile(decoy, "export class Other { run(): number { return 2; } }\n"),
+          writeFile(use, 'import { Derived } from "./shapes";\nconst d = new Derived();\nd.run();\n'),
+        ]);
+        const index = await createTestIndexFromFiles(root, [shapes, decoy, use]);
+        const result = await goToDefinition(index, { file: use, line: 3, column: 3 });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(shapes));
+          expect(result.definition.range.start.line).toBe(1);
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+});
+
 describe("TypeScript enum and field member navigation", () => {
   it("resolves enum members and class fields without treating initializer reads as declarations", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-members-"));

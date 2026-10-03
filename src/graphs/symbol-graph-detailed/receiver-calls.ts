@@ -1,8 +1,14 @@
 import { readFileSync } from "node:fs";
 import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
 import { isGoExportedMemberName } from "../../indexer/declaration-visibility.js";
+import {
+  hasSeparateMemberScopes,
+  inheritsMemberOverloads,
+  selectMember,
+  type MemberModel,
+} from "../../indexer/member-selection.js";
 import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
-import type { LanguageSupport } from "../../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
@@ -56,6 +62,7 @@ const STATIC_MEMBER_LANGUAGES: Record<string, true> = {
   java: true,
   js: true,
   php: true,
+  ruby: true,
   swift: true,
   ts: true,
   tsx: true,
@@ -352,9 +359,6 @@ const LANGUAGE_CONSTRUCTION_FORMS: Record<
   zig: { compositeLiteral: true },
 };
 
-/** Guards against a cyclic or pathological declared hierarchy. */
-const MAX_SUPERTYPE_DEPTH = 16;
-
 export type ReceiverCallAccess = {
   /** Member-access node carrying the receiver, used for import-chain resolution. */
   accessNode: SyntaxNodeLike;
@@ -399,33 +403,33 @@ export function receiverCallAccess(
 
 export type ReceiverMemberScope = "any" | "instance" | "static";
 
-/** Inclusive accepted argument count for one callable member. `max: null` is variadic. */
-export type MemberArityRange = {
-  min: number;
-  max: number | null;
-};
+/** The graph matcher keeps its existing explicit-argument range shape. */
+export type MemberArityRange = { min: number; max: number | null };
 
 export type ReceiverBinding =
   | { kind: "own-type"; memberScope: ReceiverMemberScope }
   | { kind: "supertype"; memberScope: ReceiverMemberScope }
+  | { kind: "module-import"; receiver: SyntaxNodeLike }
+  | { kind: "unknown"; receiver: SyntaxNodeLike }
   | {
       kind: "named-type";
+      proof: "constructor" | "declared-type" | "static-type";
       typeName: string;
-      /** Syntax proving the type, including an imported qualified type such as `pkg.T`. */
+      /** Syntax proving the type, including imported qualified types. */
       typeNode: SyntaxNodeLike;
       memberScope: ReceiverMemberScope;
-      /** Set when `typeName` names the type a constructor expression built. */
-      constructed?: true;
+      constructed?: boolean;
     };
 
 /** What one receiver expression proves, memoized per enclosing function and text. */
 export type ReceiverProof = {
-  /** Node naming the constructed type, when a prior constructor proves one. */
-  constructed: SyntaxNodeLike | null;
+  /** A constructor or declared type from a binding visible at this receiver. */
+  typeEvidence: ReceiverTypeEvidence | null;
   /** Whether an enclosing scope binds the receiver name as a value. */
   locallyBound: boolean;
 };
 
+type ReceiverTypeEvidence = { typeNode: SyntaxNodeLike; origin: "constructor" | "declared-type" };
 type BindingProof =
   | { status: "none" }
   | { status: "unproven" }
@@ -824,6 +828,7 @@ function declaredTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): Synta
       child.type === "type",
   );
   if (typedChild) return unwrapNamedType(typedChild, sup) ?? typedChild;
+  if (node.type === "let_declaration") return null;
   const ids = node.namedChildren.filter(
     (child) => isReceiverNameNode(sup, child.type) || child.type === "type_identifier" || child.type === "name",
   );
@@ -918,6 +923,8 @@ function bindingProof(node: SyntaxNodeLike, receiverName: string, source: string
   const annotation = isJsTsLanguage(sup.id) ? node.childForFieldName("type") : null;
   const annotated = annotation ? (unwrapNamedType(annotation, sup) ?? typescriptImportTypeQuery(annotation)) : null;
   if (annotated) return { status: "declared", node: annotated };
+  const declared = declaredTypeNameNode(node, sup);
+  if (declared) return { status: "declared", node: declared };
   const typeNode = constructionTypeFromBinding(node, receiverName, source, sup);
   if (typeNode) return { status: "type", node: typeNode };
   return { status: "unproven" };
@@ -933,8 +940,8 @@ function findPriorConstructorInContainer(
   receiverName: string,
   source: string,
   sup: LanguageSupport,
-): SyntaxNodeLike | null {
-  let constructor: SyntaxNodeLike | null = null;
+): ReceiverTypeEvidence | null {
+  let typeEvidence: ReceiverTypeEvidence | null = null;
   let sawUnproven = false;
   let declared = false;
   const visit = (current: SyntaxNodeLike): boolean => {
@@ -942,15 +949,15 @@ function findPriorConstructorInContainer(
     if (current !== node && isSkippableBindingContainer(current, receiver)) return true;
     const proof = bindingProof(current, receiverName, source, sup);
     if (proof.status === "declared") {
-      constructor = proof.node;
-      declared = true;
+      typeEvidence = { typeNode: proof.node, origin: "declared-type" };
+      declared = isJsTsLanguage(sup.id);
       return true;
     }
     // A later assignment to an annotated binding cannot change its declared type.
     if (declared && proof.status !== "none") return true;
     if (proof.status === "unproven") {
-      if (constructor) {
-        constructor = null;
+      if (typeEvidence) {
+        typeEvidence = null;
         return false;
       }
       sawUnproven = true;
@@ -958,14 +965,14 @@ function findPriorConstructorInContainer(
     }
     if (proof.status === "type") {
       if (sawUnproven) {
-        constructor = null;
+        typeEvidence = null;
         return false;
       }
-      if (constructor && sliceText(constructor, source) !== sliceText(proof.node, source)) {
-        constructor = null;
+      if (typeEvidence && sliceText(typeEvidence.typeNode, source) !== sliceText(proof.node, source)) {
+        typeEvidence = null;
         return false;
       }
-      constructor = proof.node;
+      typeEvidence = { typeNode: proof.node, origin: "constructor" };
       return true;
     }
     for (const child of current.namedChildren) {
@@ -974,7 +981,7 @@ function findPriorConstructorInContainer(
     return true;
   };
   visit(node);
-  return constructor;
+  return typeEvidence;
 }
 
 function bindingContainerDeclaresNameBefore(
@@ -1015,7 +1022,7 @@ function findVisiblePriorConstructor(
   receiverName: string,
   source: string,
   sup: LanguageSupport,
-): SyntaxNodeLike | null {
+): ReceiverTypeEvidence | null {
   let current: SyntaxNodeLike | null = receiver;
   while (current) {
     if (BINDING_CONTAINER_TYPES.has(current.type)) {
@@ -1029,24 +1036,24 @@ function findVisiblePriorConstructor(
   return findPriorConstructorInContainer(rootOf(receiver), receiver, receiverName, source, sup);
 }
 
-/**
- * Resolves the node naming the type a receiver expression was constructed from, or
- * null when no constructor is proven for it. Shared with detailed symbol-graph call
- * extraction so `goto` and resolved `calls` edges accept the same receiver forms.
- * A bare name is unit-struct construction only while no local binding of the same
- * name shadows it; a shadowing binding is a value whose type must come from the
- * binding, never from the type the name also spells.
- */
+/** Constructor or declared type visible at a receiver, without resolving its owner. */
+function receiverTypeEvidence(obj: SyntaxNodeLike, source: string, sup: LanguageSupport): ReceiverTypeEvidence | null {
+  const direct = constructionTypeName(obj, source, sup);
+  if (!isReceiverNameNode(sup, obj.type)) return direct ? { typeNode: direct, origin: "constructor" } : null;
+  const receiverName = sliceText(obj, source);
+  if (direct && !bindsLocalValue(obj, receiverName, source, sup)) {
+    return { typeNode: direct, origin: "constructor" };
+  }
+  return findVisiblePriorConstructor(obj, receiverName, source, sup);
+}
+
+/** Syntax naming the type of a constructed or declared receiver. */
 export function receiverConstructorExpression(
   obj: SyntaxNodeLike,
   source: string,
   sup: LanguageSupport,
 ): SyntaxNodeLike | null {
-  const direct = constructionTypeName(obj, source, sup);
-  if (!isReceiverNameNode(sup, obj.type)) return direct;
-  const receiverName = sliceText(obj, source);
-  if (direct && !bindsLocalValue(obj, receiverName, source, sup)) return direct;
-  return findVisiblePriorConstructor(obj, receiverName, source, sup);
+  return receiverTypeEvidence(obj, source, sup)?.typeNode ?? null;
 }
 
 /** Identifier segments in a C++ qualified name, excluding template arguments. */
@@ -1222,6 +1229,10 @@ export function cppOutOfLineMemberDeclarationNode(
 }
 
 export function nodeDeclaresStatic(node: SyntaxNodeLike, source: string): boolean {
+  if (node.type === "singleton_method") {
+    const receiver = node.childForFieldName("object") ?? node.childForFieldName("receiver") ?? node.namedChildren[0];
+    return !!receiver && sliceText(receiver, source).trim() === "self";
+  }
   if (node.type === "static" || node.type === "static_modifier") return true;
   if (node.type === "storage_class_specifier" || node.type === "modifier" || node.type === "property_modifier") {
     return sliceText(node, source).trim() === "static";
@@ -1321,54 +1332,53 @@ export function csharpDottedNameRoot(node: SyntaxNodeLike): SyntaxNodeLike | nul
   return csharpDottedNameRoot(object);
 }
 
-/**
- * Classifies a receiver as the declaring type, a supertype, or a named/constructed type.
- * Returns null when the receiver cannot be proven.
- * Named-local constructor lookup is memoized per enclosing function and receiver text.
- */
+/** Classify a receiver from syntax and consumer-proven import bindings. */
 export function classifyReceiver(
   sup: LanguageSupport,
   receiver: SyntaxNodeLike,
   source: string,
-  proofCache: Map<string, ReceiverProof>,
+  proofCache: Map<string, ReceiverProof> | null,
   cacheScope: number,
   accessNode: SyntaxNodeLike,
   hasLexicalBinding: (callee: SyntaxNodeLike) => boolean,
-): ReceiverBinding | null {
+  classifyImport?: (name: string, node: SyntaxNodeLike) => "module-import" | "static-type" | null,
+): ReceiverBinding {
   const text = receiverKeywordText(sup, receiver, source, hasLexicalBinding);
-  if (!text) return null;
+  if (!text) return { kind: "unknown", receiver };
   const keywordKind = keywordReceiverKind(sup.id, text);
   if (keywordKind) {
-    if (keywordReceiverCrossesDynamicBoundary(sup, accessNode)) return null;
+    if (keywordReceiverCrossesDynamicBoundary(sup, accessNode)) return { kind: "unknown", receiver };
     const memberScope = keywordReceiverMemberScope(sup, text, accessNode, source);
     return keywordKind === "own" ? { kind: "own-type", memberScope } : { kind: "supertype", memberScope };
   }
-
   const receiverIsName = isReceiverNameNode(sup, receiver.type);
-
-  const cacheKey = `${cacheScope}\u0000${text}`;
-  let proof = proofCache.get(cacheKey);
+  const importProof = receiverIsName ? classifyImport?.(text, receiver) : null;
+  if (importProof === "module-import") return { kind: "module-import", receiver };
+  const cacheKey = proofCache ? cacheScope + "\u0000" + text : "";
+  let proof = proofCache?.get(cacheKey);
   if (!proof) {
-    const constructed = receiverConstructorExpression(receiver, source, sup);
+    const typeEvidence = receiverTypeEvidence(receiver, source, sup);
     proof = {
-      constructed,
-      locallyBound: !constructed && receiverIsName && bindsLocalValue(receiver, text, source, sup),
+      typeEvidence,
+      locallyBound: !typeEvidence && receiverIsName && bindsLocalValue(receiver, text, source, sup),
     };
-    proofCache.set(cacheKey, proof);
+    proofCache?.set(cacheKey, proof);
   }
-  if (proof.constructed) {
+  if (proof.typeEvidence) {
+    const { typeNode, origin } = proof.typeEvidence;
     return {
       kind: "named-type",
-      typeName: sliceText(proof.constructed, source),
-      typeNode: proof.constructed,
+      proof: origin,
+      typeName: sliceText(typeNode, source),
+      typeNode,
       memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
-      constructed: true,
+      constructed: origin === "constructor",
     };
   }
-  if (!receiverIsName) return null;
-  // A name bound by a local or parameter is a value, not a type. Without this guard
-  // `Example::shared()` would still be attributed to a colliding parameter named Example.
-  if (proof.locallyBound) return null;
+  if (importProof === "static-type") {
+    return { kind: "named-type", proof: "static-type", typeName: text, typeNode: receiver, memberScope: "static" };
+  }
+  if (!receiverIsName || proof.locallyBound) return { kind: "unknown", receiver };
   // Dotted `Cfg.load()` is not proof in languages where the identifier may be a
   // value. Type-scoped `::` is one named-type proof; C# `Box.Left()` is another
   // because a capitalized unbound name is the static type receiver. Ruby
@@ -1382,9 +1392,10 @@ export function classifyReceiver(
     // `Box()` as a Box, and for static type-name receivers (`Box.Left()`).
     // The named type must still resolve to a members-declaring definition
     // before any call edge is recorded, so a name alone never invents a target.
-    if (!capitalizedTypeReceiverName(sup, receiver, text)) return null;
+    if (!capitalizedTypeReceiverName(sup, receiver, text)) return { kind: "unknown", receiver };
     return {
       kind: "named-type",
+      proof: "static-type",
       typeName: text,
       typeNode: receiver,
       memberScope: UNBOUND_INSTANCE_CALL_LANGUAGE_IDS[sup.id] ? "any" : "static",
@@ -1392,6 +1403,7 @@ export function classifyReceiver(
   }
   return {
     kind: "named-type",
+    proof: "static-type",
     typeName: text,
     typeNode: receiver,
     memberScope: hasStaticMemberDistinction(sup.id) && typeScoped ? "static" : "any",
@@ -1417,6 +1429,7 @@ const STATIC_TYPE_NAME_RECEIVER_LANGUAGE_IDS: Record<string, true> = {
   js: true,
   kotlin: true,
   ts: true,
+  ruby: true,
   tsx: true,
 };
 
@@ -1666,6 +1679,91 @@ function callSiteKey(callerId: string, site: ReceiverCallCandidate["site"]): str
   return `${callerId}\u0000${site.file}\u0000${start.line}:${start.column}:${start.index ?? ""}-${end.line}:${end.column}:${end.index ?? ""}`;
 }
 
+/** Prove overriding member pairs only for hierarchy receiver calls. */
+export async function inheritedReceiverMemberSignatures(
+  graph: SymbolGraph,
+  candidates: readonly ReceiverCallCandidate[],
+  definitions: ReadonlyMap<string, SymbolDef>,
+  ownerAnchors: ReadonlyMap<string, string>,
+  accessibleMembers: ReadonlyMap<string, ReadonlySet<string>>,
+  languageExtensions: LanguageExtensionMap | undefined,
+  sameParameterTypes: (derived: SymbolDef, inherited: SymbolDef) => Promise<boolean>,
+): Promise<ReadonlyMap<string, ReadonlySet<string>>> {
+  const signatures = new Map<string, Set<string>>();
+  const membersByOwner = new Map<string, string[]>();
+  const ownerByMember = new Map<string, string>();
+  const parentsByOwner = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (edge.label === "member_of") {
+      ownerByMember.set(edge.from, edge.to);
+      if (definitions.has(edge.from)) {
+        const members = membersByOwner.get(edge.to) ?? [];
+        members.push(edge.from);
+        membersByOwner.set(edge.to, members);
+      }
+    } else if (edge.label && HIERARCHY_LABELS[edge.label]) {
+      const parents = parentsByOwner.get(edge.from) ?? [];
+      parents.push(edge.to);
+      parentsByOwner.set(edge.from, parents);
+    }
+  }
+  for (const [owner, accessible] of accessibleMembers) {
+    const members = membersByOwner.get(owner) ?? [];
+    for (const id of accessible) if (definitions.has(id) && !members.includes(id)) members.push(id);
+    membersByOwner.set(owner, members);
+  }
+  const checkedPairs = new Set<string>();
+  const checkedGroups = new Set<string>();
+  const separator = "\0";
+  for (const candidate of candidates) {
+    if (
+      !inheritsMemberOverloads(supportForFileWithoutHeaderSample(candidate.site.file, languageExtensions)?.id ?? "")
+    ) {
+      continue;
+    }
+    const rawOwner = candidate.ownerId ?? ownerByMember.get(candidate.callerId);
+    if (!rawOwner) continue;
+    const owner = ownerAnchors.get(rawOwner) ?? rawOwner;
+    // Override pairs are a fact of the declarations, not of this call: an override that rejects
+    // the argument count still hides the base declaration it overrides.
+    const group = `${owner}\0${candidate.memberName}\0${candidate.viaSupertypes}`;
+    if (checkedGroups.has(group)) continue;
+    checkedGroups.add(group);
+    let level = candidate.viaSupertypes ? (parentsByOwner.get(owner) ?? []) : [owner];
+    const seen = new Set([owner]);
+    const shallower: string[] = [];
+    for (let depth = 0; depth < 16 && level.length; depth += 1) {
+      const current: string[] = [];
+      const next: string[] = [];
+      for (const id of level) {
+        for (const memberId of membersByOwner.get(id) ?? []) {
+          if (graph.nodes.get(memberId)?.name === candidate.memberName) current.push(memberId);
+        }
+        for (const parent of parentsByOwner.get(id) ?? []) {
+          if (seen.has(parent)) continue;
+          seen.add(parent);
+          next.push(parent);
+        }
+      }
+      for (const derivedId of shallower) {
+        const derived = definitions.get(derivedId)!;
+        for (const inheritedId of current) {
+          const pair = derivedId + separator + inheritedId;
+          if (checkedPairs.has(pair)) continue;
+          checkedPairs.add(pair);
+          if (!(await sameParameterTypes(derived, definitions.get(inheritedId)!))) continue;
+          const inherited = signatures.get(derivedId) ?? new Set<string>();
+          inherited.add(inheritedId);
+          signatures.set(derivedId, inherited);
+        }
+      }
+      shallower.push(...current);
+      level = next;
+    }
+  }
+  return signatures;
+}
+
 /**
  * Records proven `calls` edges for deferred receiver invocations.
  * Ambiguous names at a level stop the walk.
@@ -1682,6 +1780,10 @@ export function emitReceiverCallEdges(
   accessibleMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   fileHiddenMemberIds: ReadonlySet<string> = new Set(),
   acceptsCallTarget?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
+  callableIdentities: ReadonlyMap<string, import("../../languages/callable-arity.js").CallableIdentity> = new Map(),
+  languageExtensions?: LanguageExtensionMap,
+  overridingSignatures?: ReadonlyMap<string, ReadonlySet<string>>,
+  isReceiverMemberVisible?: (memberId: string, useFile: string) => boolean,
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1710,9 +1812,50 @@ export function emitReceiverCallEdges(
     for (const memberId of memberIds) pushUnique(membersByOwner, ownerId, memberId);
   }
 
-  const nextOwners = (ownerId: string, viaSupertypes: boolean): string[] => {
-    if (!viaSupertypes) return supertypesByOwner.get(ownerId) ?? [];
-    return (classAncestorsByOwner.get(ownerId) ?? []).filter((id) => graph.nodes.get(id)?.kind === "class");
+  let activeCandidate: ReceiverCallCandidate;
+  const facts = new Map<string, import("../../languages/callable-arity.js").CallableIdentity>();
+  for (const [ownerId, ids] of membersByOwner) {
+    for (const id of ids) {
+      const canonicalId = canonicalMemberId(id, nodeAliases);
+      const indexed = callableIdentities.get(id) ?? callableIdentities.get(canonicalId);
+      const bounds = memberArities.get(id) ?? memberArities.get(canonicalId);
+      facts.set(id, {
+        key: indexed?.key ?? canonicalId,
+        owner: indexed?.owner ?? ownerId,
+        kind: indexed?.kind ?? "function",
+        arity: bounds ? { minArgs: bounds.min, maxArgs: bounds.max } : null,
+        ...(indexed?.role ? { role: indexed.role } : {}),
+      });
+    }
+  }
+  const model: MemberModel<string, string> = {
+    ownerKey: (id) => id,
+    members: (id) => membersByOwner.get(id) ?? [],
+    supertypes: (id, classOnly) => {
+      if (!classOnly) return supertypesByOwner.get(id) ?? [];
+      return (classAncestorsByOwner.get(id) ?? []).filter((base) => graph.nodes.get(base)?.kind === "class");
+    },
+    name: (id) => graph.nodes.get(id)?.name ?? graph.nodes.get(canonicalMemberId(id, nodeAliases))?.name ?? "",
+    key: (id) => facts.get(id)?.key ?? canonicalMemberId(id, nodeAliases),
+    callable: (id) => facts.get(id),
+    scope: (id) => memberScopes.get(id) ?? memberScopes.get(canonicalMemberId(id, nodeAliases)) ?? "any",
+    visible: (id, useFile) => {
+      const canonicalId = canonicalMemberId(id, nodeAliases);
+      const node = graph.nodes.get(id) ?? graph.nodes.get(canonicalId);
+      if (!node || (node.kind !== "function" && !node.callable)) return false;
+      if (isReceiverMemberVisible && !isReceiverMemberVisible(canonicalId, useFile)) return false;
+      if (
+        (fileHiddenMemberIds.has(id) || fileHiddenMemberIds.has(canonicalId)) &&
+        fileIdentityKey(node.file) !== fileIdentityKey(useFile)
+      )
+        return false;
+      return (
+        !activeCandidate.goPackagePeerFiles ||
+        isGoExportedMemberName("go", node.name) ||
+        activeCandidate.goPackagePeerFiles.has(node.file)
+      );
+    },
+    sameSignature: (a, b) => overridingSignatures?.get(a)?.has(b) ?? false,
   };
 
   const callTargetsBySite = new Map<string, Set<string>>();
@@ -1739,55 +1882,38 @@ export function emitReceiverCallEdges(
     // coalesced type identity so lookup starts on the whole member set.
     const owner = ownerAnchors.get(rawOwner) ?? rawOwner;
     const memberScope = candidate.memberScope ?? inferCallMemberScope(candidate.site, sourceCache);
-    let level = candidate.viaSupertypes ? nextOwners(owner, true) : [owner];
-    const visited = new Set<string>(level);
-    let receiverDisposition: "none" | "resolved" | "ambiguous" = "none";
-    for (let depth = 0; depth < MAX_SUPERTYPE_DEPTH && level.length; depth += 1) {
-      const lookup = provenMemberTarget(
-        graph,
-        membersByOwner,
-        level,
-        candidate,
-        memberScope,
-        memberScopes,
-        nodeAliases,
-        memberArities,
-        fileHiddenMemberIds,
-        candidate.site.file,
-      );
-      if (lookup.status === "unique") {
-        if (acceptsCallTarget && !acceptsCallTarget(lookup.memberId, candidate)) {
-          receiverDisposition = "ambiguous";
-          if (existingTargets.size) rejectedCallSites.add(siteKey);
-          break;
-        }
-        receiverDisposition = "resolved";
-        const combinedTargets = new Set(existingTargets);
-        combinedTargets.add(lookup.memberId);
-        if (combinedTargets.size === 1) {
-          if (existingTargets.size === 0 && recordEdge(candidate.callerId, lookup.memberId, "calls", candidate.site)) {
-            existingTargets.add(lookup.memberId);
-            callTargetsBySite.set(siteKey, existingTargets);
-          }
-        } else {
-          rejectedCallSites.add(siteKey);
-        }
-        break;
-      }
-      if (lookup.status === "ambiguous") {
+    const languageId = supportForFileWithoutHeaderSample(candidate.site.file, languageExtensions)?.id ?? "";
+    activeCandidate = candidate;
+    const lookup = selectMember([owner], model, {
+      name: candidate.memberName,
+      argumentCount: candidate.argumentCount,
+      scope: memberScope,
+      useFile: candidate.site.file,
+      phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
+      separateMemberScopes: hasSeparateMemberScopes(languageId),
+      startAtAncestor: candidate.viaSupertypes,
+      inheritOverloads: inheritsMemberOverloads(languageId),
+    });
+    let receiverDisposition: "none" | "resolved" | "ambiguous" =
+      lookup.status === "unique" ? "resolved" : lookup.status;
+    if (lookup.status === "unique") {
+      const memberId = canonicalMemberId(lookup.member, nodeAliases);
+      if (acceptsCallTarget && !acceptsCallTarget(memberId, candidate)) {
         receiverDisposition = "ambiguous";
         if (existingTargets.size) rejectedCallSites.add(siteKey);
-        break;
+      } else {
+        receiverDisposition = "resolved";
+        const combinedTargets = new Set(existingTargets);
+        combinedTargets.add(memberId);
+        if (combinedTargets.size === 1) {
+          if (!existingTargets.size && recordEdge(candidate.callerId, memberId, "calls", candidate.site)) {
+            existingTargets.add(memberId);
+            callTargetsBySite.set(siteKey, existingTargets);
+          }
+        } else rejectedCallSites.add(siteKey);
       }
-      const next: string[] = [];
-      for (const ownerId of level) {
-        for (const supertype of nextOwners(ownerId, candidate.viaSupertypes)) {
-          if (visited.has(supertype)) continue;
-          visited.add(supertype);
-          next.push(supertype);
-        }
-      }
-      level = next;
+    } else if (lookup.status === "ambiguous" && existingTargets.size) {
+      rejectedCallSites.add(siteKey);
     }
     if (receiverDisposition === "none") {
       if (candidate.fallbackTargetId && !existingTargets.size) {
@@ -1813,8 +1939,6 @@ export function emitReceiverCallEdges(
   return removed;
 }
 
-type MemberTargetLookup = { status: "none" } | { status: "unique"; memberId: string } | { status: "ambiguous" };
-
 function canonicalMemberId(id: string, aliases: ReadonlyMap<string, string>): string {
   let current = id;
   const seen = new Set<string>();
@@ -1823,78 +1947,4 @@ function canonicalMemberId(id: string, aliases: ReadonlyMap<string, string>): st
     current = aliases.get(current)!;
   }
   return current;
-}
-
-function memberArityMatches(
-  memberId: string,
-  argumentCount: number | null,
-  memberArities: ReadonlyMap<string, MemberArityRange>,
-): boolean {
-  if (argumentCount === null) return true;
-  const range = memberArities.get(memberId);
-  // Declaration parameter counts do not prove required/default/variadic call bounds.
-  // An unknown range cannot reject a unique target or eliminate an overload.
-  return !range || (argumentCount >= range.min && (range.max === null || argumentCount <= range.max));
-}
-
-/**
- * The single callable member named by `candidate` across `owners`.
- * `none` means this depth has no name match and the walk may continue.
- * `ambiguous` means this depth matched the name but could not prove one member,
- * including arity ambiguity, and the walk must stop.
- */
-function provenMemberTarget(
-  graph: SymbolGraph,
-  membersByOwner: ReadonlyMap<string, readonly string[]>,
-  owners: readonly string[],
-  candidate: ReceiverCallCandidate,
-  memberScope: ReceiverMemberScope,
-  memberScopes: ReadonlyMap<string, ReceiverMemberScope>,
-  nodeAliases: ReadonlyMap<string, string>,
-  memberArities: ReadonlyMap<string, MemberArityRange>,
-  fileHiddenMemberIds: ReadonlySet<string>,
-  useFile: string,
-): MemberTargetLookup {
-  const matches = new Set<string>();
-  for (const ownerId of owners) {
-    for (const memberId of membersByOwner.get(ownerId) ?? []) {
-      const canonicalId = canonicalMemberId(memberId, nodeAliases);
-      const node = graph.nodes.get(memberId) ?? graph.nodes.get(canonicalId);
-      if (!node || (node.kind !== "function" && !node.callable)) continue;
-      if (
-        (fileHiddenMemberIds.has(memberId) || fileHiddenMemberIds.has(canonicalId)) &&
-        fileIdentityKey(node.file) !== fileIdentityKey(useFile)
-      ) {
-        continue;
-      }
-      const nameMatches = candidate.caseInsensitiveMemberName
-        ? foldPhpIdentifierCase(node.name) === foldPhpIdentifierCase(candidate.memberName)
-        : node.name === candidate.memberName;
-      if (!nameMatches) continue;
-      if (
-        candidate.goPackagePeerFiles &&
-        !isGoExportedMemberName("go", node.name) &&
-        !candidate.goPackagePeerFiles.has(node.file)
-      ) {
-        continue;
-      }
-      const scope = memberScopes.get(memberId) ?? memberScopes.get(canonicalId);
-      if (memberScope !== "any" && scope !== memberScope) continue;
-      matches.add(canonicalId);
-    }
-  }
-  if (!matches.size) return { status: "none" };
-  if (matches.size === 1) {
-    const [memberId] = matches;
-    if (memberArityMatches(memberId!, candidate.argumentCount, memberArities)) {
-      return { status: "unique", memberId: memberId! };
-    }
-    return { status: "ambiguous" };
-  }
-  const byArity =
-    candidate.argumentCount === null
-      ? []
-      : [...matches].filter((memberId) => memberArityMatches(memberId, candidate.argumentCount, memberArities));
-  if (byArity.length === 1) return { status: "unique", memberId: byArity[0]! };
-  return { status: "ambiguous" };
 }

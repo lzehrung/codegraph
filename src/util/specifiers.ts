@@ -27,6 +27,12 @@ export function isCFamilyIncludeForm(value: unknown): value is CFamilyIncludeFor
   return value === "literal" || value === "angle" || value === "macro";
 }
 
+export type RubyLoadForm = "require_relative" | "require" | "load" | "autoload";
+
+export function isRubyLoadForm(value: unknown): value is RubyLoadForm {
+  return value === "require_relative" || value === "require" || value === "load" || value === "autoload";
+}
+
 /**
  * Classifies one C/C++ include's raw source text: `"..."` is a string-literal include, `<...>` a
  * system-header include, and anything else an identifier macro. Empty text has no form.
@@ -56,6 +62,8 @@ export function cFamilyImportFormFromText(
 export type ModuleSpecifier = {
   spec: string;
   raw?: string;
+  /** A Java/Kotlin package star import, distinct from a same-spelled class import. */
+  jvmPackageWildcard?: true;
   typeOnly?: boolean;
   phpImportType?: "class" | "function" | "const";
   resolutionKind?: ModuleSpecifierResolutionKind;
@@ -66,6 +74,7 @@ export type ModuleSpecifier = {
   pathAttribute?: string;
   statementStartIndex?: number;
   includeForm?: CFamilyIncludeForm;
+  rubyLoadForm?: RubyLoadForm;
 };
 
 const JS_TS_NAMED_TYPE_SPECIFIER_PATTERN = new RegExp(

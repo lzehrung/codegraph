@@ -1,5 +1,6 @@
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import crypto from "node:crypto";
+import { isRubyLoadForm } from "../../util/specifiers.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 
@@ -26,6 +27,7 @@ import {
   type SqliteTableColumn,
 } from "../../util/sqlite-schema.js";
 import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
+import { callableIdentityWithFile, isCallableIdentity } from "../callable-identity.js";
 import type { Pos, Range } from "../../types.js";
 import {
   assertFilePathWithinRoot,
@@ -40,8 +42,8 @@ import { cacheRoot } from "./location.js";
 
 import { getImplementationFingerprint } from "./options.js";
 
-// v6: only reexports resolved inside the project are persisted as cache-relative paths.
-const PARSED_CACHE_VERSION = 6;
+// v9: Java static member and owner facts restrict static star imports.
+const PARSED_CACHE_VERSION = 9;
 const MODULE_CACHE_SCHEMA_VERSION = 2;
 const MODULE_CACHE_TABLE = "module_cache";
 const MODULE_CACHE_SCHEMA_VERSION_KEY = "module_cache.schema_version";
@@ -451,7 +453,36 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     Array.isArray(mod.exports) &&
     Array.isArray(mod.imports) &&
     mod.imports.every(hasValidImportBindingRanges) &&
-    Array.isArray(mod.locals)
+    Array.isArray(mod.locals) &&
+    mod.locals.every(hasValidCallableSymbol) &&
+    mod.exports.every((entry: unknown) => {
+      if (!entry || typeof entry !== "object") return false;
+      const local = entry as { type?: unknown; target?: unknown };
+      return local.type !== "local" || hasValidCallableSymbol(local.target);
+    })
+  );
+}
+
+function hasValidCallableSymbol(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const symbol = value as {
+    kind?: unknown;
+    callable?: unknown;
+    javaPackagePrivate?: unknown;
+    javaProtectedMember?: unknown;
+    jvmTypeOwnerStartIndex?: unknown;
+    jvmStaticMember?: unknown;
+  };
+  const callableValid =
+    symbol.kind === "function"
+      ? isCallableIdentity(symbol.callable)
+      : symbol.callable === undefined || isCallableIdentity(symbol.callable);
+  return (
+    callableValid &&
+    (symbol.javaPackagePrivate === undefined || typeof symbol.javaPackagePrivate === "boolean") &&
+    (symbol.javaProtectedMember === undefined || typeof symbol.javaProtectedMember === "boolean") &&
+    (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number") &&
+    (symbol.jvmStaticMember === undefined || typeof symbol.jvmStaticMember === "boolean")
   );
 }
 
@@ -461,11 +492,32 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
  */
 function hasValidImportBindingRanges(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
-  const binding = value as { explicitAlias?: unknown; importedRange?: unknown; localRange?: unknown };
+  const binding = value as {
+    explicitAlias?: unknown;
+    importedRange?: unknown;
+    localRange?: unknown;
+    jvmTypeOwnerStartIndex?: unknown;
+    jvmTypeWildcardName?: unknown;
+    jvmStaticWildcardName?: unknown;
+    jvmPackageFiles?: unknown;
+    jvmPackageLanguageId?: unknown;
+    jvmSamePackage?: unknown;
+    rubyLoadForm?: unknown;
+  };
   return (
     (binding.explicitAlias === undefined || typeof binding.explicitAlias === "boolean") &&
     isOptionalRange(binding.importedRange) &&
-    isOptionalRange(binding.localRange)
+    isOptionalRange(binding.localRange) &&
+    (binding.jvmTypeOwnerStartIndex === undefined || typeof binding.jvmTypeOwnerStartIndex === "number") &&
+    (binding.jvmTypeWildcardName === undefined || typeof binding.jvmTypeWildcardName === "string") &&
+    (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&
+    (binding.jvmPackageFiles === undefined ||
+      (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string"))) &&
+    (binding.jvmPackageLanguageId === undefined ||
+      binding.jvmPackageLanguageId === "java" ||
+      binding.jvmPackageLanguageId === "kotlin") &&
+    (binding.jvmSamePackage === undefined || typeof binding.jvmSamePackage === "boolean") &&
+    (binding.rubyLoadForm === undefined || isRubyLoadForm(binding.rubyLoadForm))
   );
 }
 
@@ -520,18 +572,36 @@ function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelati
       ? cacheRelativePath(projectRoot, file)
       : assertFilePathWithinRoot(projectRoot, cacheAbsolutePath(projectRoot, file), "Persisted cache path");
 
+  const transformedSymbol = (local: ModuleIndex["locals"][number]): ModuleIndex["locals"][number] => {
+    const file = transform(local.file);
+    return {
+      ...local,
+      file,
+      ...(local.callable ? { callable: callableIdentityWithFile(local.callable, local.file, file) } : {}),
+    };
+  };
+
   if (!toRelative) {
     module.file = transform(module.file);
-    for (const local of module.locals) local.file = transform(local.file);
+    for (const local of module.locals) {
+      const file = transform(local.file);
+      if (local.callable) local.callable = callableIdentityWithFile(local.callable, local.file, file);
+      local.file = file;
+    }
     for (const entry of module.exports) {
       if (entry.type === "local") {
-        entry.target.file = transform(entry.target.file);
+        const file = transform(entry.target.file);
+        if (entry.target.callable)
+          entry.target.callable = callableIdentityWithFile(entry.target.callable, entry.target.file, file);
+        entry.target.file = file;
       } else {
         transformPersistedExportFromModule(projectRoot, entry, false);
       }
     }
     for (const binding of module.imports) {
       if (typeof binding.resolved === "string") binding.resolved = transform(binding.resolved);
+      if (binding.kind === "star" && binding.jvmPackageFiles)
+        binding.jvmPackageFiles = binding.jvmPackageFiles.map(transform);
     }
     return module;
   }
@@ -539,18 +609,22 @@ function transformModulePaths(projectRoot: string, module: ModuleIndex, toRelati
   return {
     ...module,
     file: transform(module.file),
-    locals: module.locals.map((local) => ({ ...local, file: transform(local.file) })),
+    locals: module.locals.map(transformedSymbol),
     exports: module.exports.map((entry) => {
       if (entry.type === "local") {
-        return { ...entry, target: { ...entry.target, file: transform(entry.target.file) } };
+        return { ...entry, target: transformedSymbol(entry.target) };
       }
       const copy = { ...entry };
       transformPersistedExportFromModule(projectRoot, copy, true);
       return copy;
     }),
-    imports: module.imports.map((binding) =>
-      typeof binding.resolved === "string" ? { ...binding, resolved: transform(binding.resolved) } : binding,
-    ),
+    imports: module.imports.map((binding) => ({
+      ...binding,
+      ...(typeof binding.resolved === "string" ? { resolved: transform(binding.resolved) } : {}),
+      ...(binding.kind === "star" && binding.jvmPackageFiles
+        ? { jvmPackageFiles: binding.jvmPackageFiles.map(transform) }
+        : {}),
+    })),
   };
 }
 

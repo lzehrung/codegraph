@@ -4,7 +4,8 @@ import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { buildSymbolGraphDetailed } from "../../src/index.js";
+import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../../src/index.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
 import { collectDetailedDeclarations } from "../../src/graphs/symbol-graph-detailed/ast.js";
 import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { exportedNameOf } from "../helpers/narrow.js";
@@ -218,4 +219,215 @@ describe("Ruby query-driven locals", () => {
     expect(kindByName.get("Point")).toBe("class");
     expect(kindByName.get("point")).toBe("variable");
   });
+});
+describe("Ruby receiver navigation and calls", () => {
+  it("finds inherited instance methods through a derived constant without selecting a decoy", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-inherited-"));
+    const shapes = path.join(root, "shapes.rb");
+    const use = path.join(root, "use.rb");
+    const decoy = path.join(root, "decoy.rb");
+    try {
+      await Promise.all([
+        fsp.writeFile(shapes, "class Base\n  def run; 1; end\nend\nclass Derived < Base\nend\n"),
+        fsp.writeFile(use, "require_relative 'shapes'\ndef call_derived\n  d = Derived.new\n  d.run\nend\n"),
+        fsp.writeFile(decoy, "class Other\n  def run; -1; end\nend\n"),
+      ]);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, { file: use, line: 4, column: 5 });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") {
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(shapes));
+        expect(result.definition.range.start.line).toBe(2);
+        expect(fileIdentityKey(result.definition.file)).not.toBe(fileIdentityKey(decoy));
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Ruby class instance methods out of require_relative imports and references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-require-methods-"));
+    const shapes = path.join(root, "shapes.rb");
+    const derived = path.join(root, "derived.rb");
+    const onlyClass = path.join(root, "only-class.rb");
+    const bare = path.join(root, "bare.rb");
+    try {
+      await Promise.all([
+        fsp.writeFile(shapes, "class Base\n  def run; 1; end\nend\nclass Decoy\n  def run; -1; end\nend\n"),
+        fsp.writeFile(
+          derived,
+          "require_relative 'shapes'\nclass Derived < Base\n  def run\n    super + 1\n  end\nend\n",
+        ),
+        fsp.writeFile(onlyClass, "class Lone\n  def run; 1; end\nend\n"),
+        fsp.writeFile(bare, "require_relative 'only-class'\ndef caller\n  run\nend\n"),
+      ]);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const imports = index.byFile.get(fileIdentityKey(derived))?.imports ?? [];
+      expect(imports.some((binding) => binding.kind === "named" && binding.local === "run")).toBe(false);
+      expect((await goToDefinition(index, { file: bare, line: 3, column: 3 })).status).toBe("not_found");
+      const references = await findReferences(index, { file: shapes, line: 2, column: 7 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        const sites = references.references.map((reference) => [
+          fileIdentityKey(reference.file),
+          reference.range.start.line,
+        ]);
+        expect(sites).toContainEqual([fileIdentityKey(shapes), 2]);
+        expect(sites).not.toContainEqual([fileIdentityKey(shapes), 5]);
+        expect(references.referenceCoverage.state).toBe("complete");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records calls to bare Ruby module and class constant methods, excluding same-named decoys", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-constant-call-"));
+    const calc = path.join(root, "calc.rb");
+    const counter = path.join(root, "counter.rb");
+    const decoy = path.join(root, "decoy.rb");
+    const use = path.join(root, "use.rb");
+    try {
+      await Promise.all([
+        fsp.writeFile(calc, "module Calc\n  def self.add(a, b); a + b; end\nend\n"),
+        fsp.writeFile(counter, "class Counter\n  def self.zero; 0; end\nend\n"),
+        fsp.writeFile(decoy, "module Other\n  def self.add(a, b); -1; end\n  def self.zero; -1; end\nend\n"),
+        fsp.writeFile(
+          use,
+          "require_relative 'calc'\nrequire_relative 'counter'\ndef sum_pair; Calc.add(1, 2); end\ndef make_counter; Counter.zero; end\n",
+        ),
+      ]);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const [callerName, targetName, targetFile] of [
+        ["sum_pair", "add", calc],
+        ["make_counter", "zero", counter],
+      ]) {
+        const caller = [...graph.nodes.values()].find(
+          (node) => node.name === callerName && fileIdentityKey(node.file) === fileIdentityKey(use),
+        );
+        expect(caller).toBeDefined();
+        const callees = graph.edges
+          .filter((edge) => edge.from === caller?.id && edge.label === "calls")
+          .map((edge) => graph.nodes.get(edge.to));
+        expect(
+          callees.some(
+            (node) => node?.name === targetName && fileIdentityKey(node.file) === fileIdentityKey(targetFile),
+          ),
+        ).toBe(true);
+        expect(callees.some((node) => node && fileIdentityKey(node.file) === fileIdentityKey(decoy))).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby bare require targets", () => {
+  it("prefers a path-like Ruby file over a workspace package for a bare require", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-path-before-workspace-"));
+    try {
+      await fsp.mkdir(path.join(root, "pkgs", "foo"), { recursive: true });
+      const rubyFile = path.join(root, "foo.rb");
+      const packageFile = path.join(root, "pkgs", "foo", "index.js");
+      const use = path.join(root, "use.rb");
+      await fsp.writeFile(path.join(root, "package.json"), '{"name":"root","private":true,"workspaces":["pkgs/*"]}\n');
+      await fsp.writeFile(path.join(root, "pkgs", "foo", "package.json"), '{"name":"foo","main":"index.js"}\n');
+      await fsp.writeFile(packageFile, "module.exports = 1;\n");
+      await fsp.writeFile(rubyFile, "module Foo\nend\n");
+      await fsp.writeFile(use, 'require "foo"\n');
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const binding = index.byFile
+        .get(fileIdentityKey(use))
+        ?.imports.find((entry) => entry.kind === "star" && entry.from === "foo");
+      const fileEdges = index.graph.edges.filter(
+        (edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file",
+      );
+      const edgeBases = fileEdges.map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : ""));
+
+      expect(typeof binding?.resolved).toBe("string");
+      if (typeof binding?.resolved === "string") {
+        expect(path.basename(binding.resolved)).toBe("foo.rb");
+        expect(path.basename(binding.resolved)).not.toBe("index.js");
+      }
+      expect(edgeBases).toEqual(["foo.rb"]);
+      expect(edgeBases).not.toContain("index.js");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("Ruby require_relative lookup", () => {
+  it.each(["on", "off"] as const)(
+    "resolves the sibling before a root decoy in %s mode while bare require keeps root precedence",
+    async (native) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-relative-root-"));
+      try {
+        const nested = path.join(root, "lib", "a");
+        await fsp.mkdir(nested, { recursive: true });
+        const rootFoo = path.join(root, "foo.rb");
+        const siblingFoo = path.join(nested, "foo.rb");
+        const relative = path.join(nested, "relative.rb");
+        const bare = path.join(nested, "bare.rb");
+        const mixedFile = path.join(nested, "mixed.rb");
+        const missingFile = path.join(nested, "missing.rb");
+        const rootOnly = path.join(root, "root_only.rb");
+        await Promise.all([
+          fsp.writeFile(rootFoo, "class Widget\n  def render; -1; end\nend\n"),
+          fsp.writeFile(siblingFoo, "class Widget\n  def render; 1; end\nend\n"),
+          fsp.writeFile(relative, "require_relative 'foo'\ndef relative_use\n  Widget.new.render\nend\n"),
+          fsp.writeFile(bare, "require 'foo'\ndef bare_use\n  Widget.new.render\nend\n"),
+          fsp.writeFile(mixedFile, "require 'foo'\nrequire_relative 'foo'\n"),
+          fsp.writeFile(rootOnly, "class RootOnly; end\n"),
+          fsp.writeFile(missingFile, "require_relative 'root_only'\n"),
+        ]);
+        const index = await buildProjectIndex(root, { cache: "off", native });
+        const mixed = index.byFile
+          .get(fileIdentityKey(mixedFile))
+          ?.imports.filter((entry) => entry.kind === "star" && entry.from === "foo");
+        expect(
+          mixed?.map((entry) => (typeof entry.resolved === "string" ? fileIdentityKey(entry.resolved) : "external")),
+        ).toEqual(native === "on" ? [fileIdentityKey(rootFoo), fileIdentityKey(siblingFoo)] : []);
+        const mixedEdges = index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(mixedFile) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : ""));
+        expect(new Set(mixedEdges)).toEqual(new Set([fileIdentityKey(rootFoo), fileIdentityKey(siblingFoo)]));
+        const missingBinding = index.byFile
+          .get(fileIdentityKey(missingFile))
+          ?.imports.find((entry) => entry.kind === "star" && entry.from === "root_only");
+        expect(missingBinding?.resolved).toEqual(native === "on" ? { external: "root_only" } : undefined);
+        expect(
+          index.graph.edges.some(
+            (edge) =>
+              fileIdentityKey(edge.from) === fileIdentityKey(missingFile) &&
+              edge.to.type === "file" &&
+              fileIdentityKey(edge.to.path) === fileIdentityKey(rootOnly),
+          ),
+        ).toBe(false);
+        for (const [consumer, expected, excluded] of [
+          [relative, siblingFoo, rootFoo],
+          [bare, rootFoo, siblingFoo],
+        ]) {
+          const binding = index.byFile
+            .get(fileIdentityKey(consumer))
+            ?.imports.find((entry) => entry.kind === "star" && entry.from === "foo");
+          const targets = index.graph.edges
+            .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer) && edge.to.type === "file")
+            .map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : ""));
+          expect(targets).toEqual([fileIdentityKey(expected)]);
+          expect(targets).not.toContain(fileIdentityKey(excluded));
+          if (native === "off") continue;
+          expect(fileIdentityKey(String(binding?.resolved))).toBe(fileIdentityKey(expected));
+          expect(fileIdentityKey(String(binding?.resolved))).not.toBe(fileIdentityKey(excluded));
+          const goto = await goToDefinition(index, { file: consumer, line: 3, column: 4 });
+          expect(goto.status).toBe("ok");
+          if (goto.status !== "ok") throw new Error("Expected required Ruby constant");
+          expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(expected));
+          expect(fileIdentityKey(goto.definition.file)).not.toBe(fileIdentityKey(excluded));
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

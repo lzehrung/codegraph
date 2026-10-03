@@ -2,11 +2,7 @@ import path from "node:path";
 import { findUsageReferences, getCppEquivalentCallableDefinitions, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex, resolveNamedDefinition } from "../indexer/navigation-local.js";
-import {
-  cppCallableShapeForNode,
-  cppCallableIsDefinition,
-  cppEquivalentCallableBindings,
-} from "../indexer/cpp-callables.js";
+import { cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { getCachedReferenceCandidateFiles } from "../indexer/navigation-references.js";
 import type { Binding } from "../indexer/scope-types.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
@@ -425,7 +421,7 @@ function cppUnqualifiedCallTarget(
   if (binding?.kind === "function") {
     const equivalents = cppEquivalentCallableBindings(binding);
     if (equivalents.length !== (binding.sameScopeFunctionBindings?.length ?? 1)) return null;
-    const canonical = equivalents.find((candidate) => cppCallableIsDefinition(candidate.node)) ?? equivalents[0];
+    const canonical = equivalents.find((candidate) => candidate.callable?.definition) ?? equivalents[0];
     const range = canonical?.def;
     if (!range) return null;
     return module.locals.find((local) => sameRangeStart(local.range, range)) ?? null;
@@ -819,12 +815,23 @@ export async function attachCallCompatibilityHints(
       incrementSkippedReason(diagnostics, "unsupported_language");
       continue;
     }
-    const signature = extractCallableSignature({
-      languageId: parsedDefinition.sup.id,
-      source: parsedDefinition.source,
-      symbolStartIndex: changedSymbol.range.start.index ?? 0,
-      tree: parsedDefinition.tree,
-    });
+    const module = index.byFile.get(fileIdentityKey(changedSymbol.file));
+    const referenceDef: SymbolDef = module?.locals.find(
+      (local) => local.kind === changedSymbol.kind && sameRangeStart(local.range, changedSymbol.range),
+    ) ?? {
+      file: changedSymbol.file,
+      localName: changedSymbol.name,
+      kind: changedSymbol.kind,
+      range: changedSymbol.range,
+    };
+    const signature: CallableSignature | null = referenceDef.callable?.arity
+      ? { ...referenceDef.callable.arity, confidence: "high" }
+      : extractCallableSignature({
+          languageId: parsedDefinition.sup.id,
+          source: parsedDefinition.source,
+          symbolStartIndex: changedSymbol.range.start.index ?? 0,
+          tree: parsedDefinition.tree,
+        });
     if (!signature) {
       incrementSkippedReason(diagnostics, "signature_unknown");
       continue;
@@ -832,13 +839,15 @@ export async function attachCallCompatibilityHints(
     // Receiver-bearing declarations accept different argument counts per call form: a bound call
     // never passes the receiver, an unbound call does. Both arities are merged below so prototype
     // defaults apply to each.
-    const unboundSignature = extractCallableSignature({
-      languageId: parsedDefinition.sup.id,
-      source: parsedDefinition.source,
-      symbolStartIndex: changedSymbol.range.start.index ?? 0,
-      tree: parsedDefinition.tree,
-      binding: "unbound",
-    });
+    const unboundSignature: CallableSignature | null = referenceDef.callable?.arity
+      ? { ...(referenceDef.callable.unboundArity ?? referenceDef.callable.arity), confidence: "high" }
+      : extractCallableSignature({
+          languageId: parsedDefinition.sup.id,
+          source: parsedDefinition.source,
+          symbolStartIndex: changedSymbol.range.start.index ?? 0,
+          tree: parsedDefinition.tree,
+          binding: "unbound",
+        });
     const hasDistinctUnboundForm =
       unboundSignature !== null &&
       (unboundSignature.minArgs !== signature.minArgs || unboundSignature.maxArgs !== signature.maxArgs);
@@ -854,15 +863,6 @@ export async function attachCallCompatibilityHints(
       incrementSkippedReason(diagnostics, "overload_set");
       continue;
     }
-    const module = index.byFile.get(fileIdentityKey(changedSymbol.file));
-    const referenceDef: SymbolDef = module?.locals.find(
-      (local) => local.kind === changedSymbol.kind && sameRangeStart(local.range, changedSymbol.range),
-    ) ?? {
-      file: changedSymbol.file,
-      localName: changedSymbol.name,
-      kind: changedSymbol.kind,
-      range: changedSymbol.range,
-    };
     const equivalentDefinitions =
       parsedDefinition.sup.id === "cpp"
         ? await getCppEquivalentCallableDefinitions(index, referenceDef, parsedDefinition)
@@ -871,27 +871,14 @@ export async function attachCallCompatibilityHints(
     // Both sites describe the same accepted range.
     if (equivalentDefinitions) {
       for (const definition of equivalentDefinitions) {
-        const startIndex = definition.range.start.index;
-        if (startIndex === undefined) continue;
-        const parsed =
-          fileIdentityKey(definition.file) === fileIdentityKey(referenceDef.file)
-            ? parsedDefinition
-            : await tryEnsureParsedContext(
-                definition.file,
-                index.parsed?.get(fileIdentityKey(definition.file)),
-                index.languageExtensions,
-                diagnostics,
-              );
-        if (!parsed) continue;
-        const node = parsed.tree.rootNode.descendantForIndex(startIndex, startIndex);
-        const shape = cppCallableShapeForNode(node);
-        if (!shape) continue;
+        const arity = definition.callable?.arity;
+        if (!arity) continue;
         for (const target of arityTargets) {
-          target.minArgs = Math.min(target.minArgs, shape.minArity);
-          if (target.maxArgs === null || shape.maxArity === null) {
+          target.minArgs = Math.min(target.minArgs, arity.minArgs);
+          if (target.maxArgs === null || arity.maxArgs === null) {
             target.maxArgs = null;
           } else {
-            target.maxArgs = Math.max(target.maxArgs, shape.maxArity);
+            target.maxArgs = Math.max(target.maxArgs, arity.maxArgs);
           }
         }
       }
@@ -900,13 +887,15 @@ export async function attachCallCompatibilityHints(
     const changedStartIndex = changedSymbol.range.start.index;
     const declarationNode =
       changedStartIndex === undefined ? null : callableDeclarationAt(parsedDefinition.tree, changedStartIndex);
-    const declarationKind = declarationNode
-      ? getCallableDeclarationKind({
-          languageId: parsedDefinition.sup.id,
-          source: parsedDefinition.source,
-          declaration: declarationNode,
-        })
-      : null;
+    const declarationKind =
+      referenceDef.callable?.kind ??
+      (declarationNode
+        ? getCallableDeclarationKind({
+            languageId: parsedDefinition.sup.id,
+            source: parsedDefinition.source,
+            declaration: declarationNode,
+          })
+        : null);
     const ownerTypeName = declarationNode ? ownerTypeNameOf(declarationNode, parsedDefinition.source) : null;
 
     const referenceScanLimit = referenceScanLimitForCallsites(options.maxRefs);

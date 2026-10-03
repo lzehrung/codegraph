@@ -7,7 +7,7 @@ import { getNativeSyntaxTreeExecution, type NativeMatch } from "../../native/tre
 import { maskPythonCommentsAndStrings, stripPythonCommentsAndStrings } from "../../util/comments.js";
 import { PYTHON_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
-import { resolvePythonModule } from "../../util/resolution.js";
+import { resolveSpecifierTargets } from "../../util/resolution/specifier-targets.js";
 import { resolvePythonSubmoduleExact } from "../../util/resolution/python.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
 import { buildScopeIndexFromSource } from "../scope.js";
@@ -23,13 +23,17 @@ export type PythonImportExtractionContext = ImportBindingSink & {
   packageSources?: Map<string, PythonPackageSource | null>;
 };
 
-function splitRelativeModuleSpec(moduleSpec: string): { relDots: number; mod: string | null } {
-  const match = moduleSpec.match(/^(\.+)(.*)$/);
-  if (!match) return { relDots: 0, mod: moduleSpec };
-  return {
-    relDots: match[1]!.length,
-    mod: match[2] || null,
-  };
+async function resolvePythonImportTarget(
+  projectRoot: string,
+  fromFile: string,
+  moduleSpec: string,
+): Promise<ResolvedImportTarget> {
+  const targets = await resolveSpecifierTargets(fromFile, moduleSpec, "python", {
+    projectRoot,
+  });
+  const resolvedFile = targets.files[0];
+  if (targets.files.length === 1 && resolvedFile) return resolvedFile;
+  return { external: targets.externalName };
 }
 
 async function pushStarImport(
@@ -37,8 +41,7 @@ async function pushStarImport(
   moduleSpec: string,
   moduleLevel: boolean,
 ): Promise<void> {
-  const { relDots, mod } = splitRelativeModuleSpec(moduleSpec);
-  const resolved = await resolvePythonModule(context.projectRoot, context.file, mod, relDots);
+  const resolved = await resolvePythonImportTarget(context.projectRoot, context.file, moduleSpec);
   context.pushBinding({
     kind: "star",
     from: moduleSpec,
@@ -94,8 +97,7 @@ async function pythonPackageMayBindAttribute(
     if (statement.type === "import_from_statement") {
       const specifier = statement.childForFieldName("module_name")?.text;
       if (!specifier) continue;
-      const { relDots, mod } = splitRelativeModuleSpec(specifier);
-      const target = await resolvePythonModule(context.projectRoot, resolved, mod, relDots);
+      const target = await resolvePythonImportTarget(context.projectRoot, resolved, specifier);
       const targetKey = typeof target === "string" ? fileIdentityKey(target) : undefined;
       const loadsSubmodule = targetKey === submoduleKey;
       if (loadsSubmodule) attribute = false;
@@ -111,7 +113,7 @@ async function pythonPackageMayBindAttribute(
         if (item.type !== "aliased_import" && item.type !== "dotted_name") continue;
         const dotted = item.type === "aliased_import" ? item.childForFieldName("name")?.text : item.text;
         if (!dotted) continue;
-        const target = await resolvePythonModule(context.projectRoot, resolved, dotted, 0);
+        const target = await resolvePythonImportTarget(context.projectRoot, resolved, dotted);
         if (typeof target === "string" && fileIdentityKey(target) === submoduleKey) attribute = false;
         else if ((item.type === "aliased_import" ? item.childForFieldName("alias")?.text : dotted) === imported) {
           attribute = true;
@@ -130,8 +132,7 @@ async function pushNamedImport(
   moduleLevel: boolean,
   explicitAlias: boolean,
 ): Promise<void> {
-  const { relDots, mod } = splitRelativeModuleSpec(moduleSpec);
-  const resolved = await resolvePythonModule(context.projectRoot, context.file, mod, relDots);
+  const resolved = await resolvePythonImportTarget(context.projectRoot, context.file, moduleSpec);
   const submodule = resolvePythonSubmoduleExact(resolved, imported);
   if (submodule && !(await pythonPackageMayBindAttribute(context, resolved, imported, submodule))) {
     context.pushBinding({
@@ -165,7 +166,7 @@ async function pushDefaultImport(
   moduleLevel: boolean,
   explicitAlias: boolean,
 ): Promise<void> {
-  const resolved = await resolvePythonModule(context.projectRoot, context.file, dotted, 0);
+  const resolved = await resolvePythonImportTarget(context.projectRoot, context.file, dotted);
   context.pushBinding({
     kind: "namespace",
     localNS: local,

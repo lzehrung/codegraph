@@ -43,6 +43,12 @@ export const ZIG_DEF: LanguageDefinition = {
     importBindings: `
       (variable_declaration
         (identifier) @alias
+        (field_expression
+          (builtin_function (builtin_identifier) @fn (arguments (string) @from) (#eq? @fn "@import"))
+          (identifier) @iname)
+      ) @stmt
+      (variable_declaration
+        (identifier) @alias
         (builtin_function (builtin_identifier) @fn (arguments (string) @from) (#eq? @fn "@import"))
       ) @stmt
       (variable_declaration

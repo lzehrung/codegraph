@@ -1,11 +1,11 @@
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { cppOutOfLineOwnerPath, cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { sliceText } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import { ensureParsedContext } from "./parse-context.js";
 import {
-  cppBindingCallableShape,
   cppEquivalentCallableBindings,
   cppSelectCallableByCallArity,
   cppSelectCallableBinding,
@@ -29,6 +29,7 @@ function cppBindingDefinition(file: FileId, binding: Binding): SymbolDef | null 
     localName: binding.name,
     kind: SymbolKind.Function,
     range: binding.def,
+    ...(binding.callable ? { callable: binding.callable } : {}),
   };
 }
 
@@ -54,7 +55,7 @@ export function resolveCppCollidingBinding(
 ): SymbolDef | null | undefined {
   if (binding.kind !== "function") return undefined;
   const collisions = binding.sameScopeFunctionBindings ?? [binding];
-  if (collisions.length < 2 && !cppBindingCallableShape(binding)) return undefined;
+  if (collisions.length < 2 && !binding.callable?.signature) return undefined;
   return resolveCppCallableBindings(file, collisions, node, source);
 }
 
@@ -499,6 +500,258 @@ function cppIncludeEntryOffsets(
   return offsets;
 }
 
+type CppNamespaceAlias = {
+  startIndex: number;
+  name: string;
+  target: readonly string[];
+  enclosing: readonly string[];
+  /** False inside a function or class: those aliases are block-scope, not namespace members. */
+  namespaceScope: boolean;
+};
+
+type CachedCppNamespaceAliases = { fileKey: string; aliases: readonly CppNamespaceAlias[] };
+
+const cppNamespaceAliasesByTree = new WeakMap<SyntaxTreeLike, CachedCppNamespaceAliases>();
+
+function cppNamespaceAliasTargetSegments(node: SyntaxNodeLike, source: string): string[] | null {
+  const name = node.childForFieldName("name");
+  for (const child of node.namedChildren) {
+    if (name && child.startIndex === name.startIndex && child.endIndex === name.endIndex) continue;
+    if (
+      child.type !== "namespace_identifier" &&
+      child.type !== "nested_namespace_specifier" &&
+      child.type !== "splice_specifier"
+    ) {
+      continue;
+    }
+    const segments = cppQualifiedNameSegments(child, source);
+    if (segments.length) return segments;
+  }
+  return null;
+}
+
+function collectCppNamespaceAliases(root: SyntaxNodeLike, source: string, fileKey: string): CppNamespaceAlias[] {
+  const aliases: CppNamespaceAlias[] = [];
+  const visit = (node: SyntaxNodeLike): void => {
+    if (node.type === "namespace_alias_definition") {
+      const nameNode = node.childForFieldName("name");
+      const name = nameNode ? sliceText(nameNode, source) : "";
+      const target = cppNamespaceAliasTargetSegments(node, source);
+      if (name && target) {
+        aliases.push({
+          startIndex: node.startIndex,
+          name,
+          target,
+          enclosing: cppEnclosingNamespace(node, source, fileKey),
+          namespaceScope: cppUsingDirectiveIsFileOrNamespaceScope(node),
+        });
+      }
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(root);
+  return aliases;
+}
+
+function cppNamespaceAliasesForTree(
+  tree: SyntaxTreeLike,
+  source: string,
+  fileKey: string,
+): readonly CppNamespaceAlias[] {
+  const cached = cppNamespaceAliasesByTree.get(tree);
+  if (cached?.fileKey === fileKey) return cached.aliases;
+  const aliases = collectCppNamespaceAliases(tree.rootNode, source, fileKey);
+  cppNamespaceAliasesByTree.set(tree, { fileKey, aliases });
+  return aliases;
+}
+
+function sameNamespacePath(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index]);
+}
+
+/** A block-scope alias hides namespace aliases. The innermost preceding alias wins. */
+function cppBlockNamespaceAliasTarget(
+  node: SyntaxNodeLike,
+  source: string,
+  name: string,
+  useStart: number,
+): readonly string[] | undefined {
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type !== "compound_statement") continue;
+    let found: readonly string[] | undefined;
+    for (const child of current.namedChildren) {
+      if (child.type !== "namespace_alias_definition" || child.startIndex >= useStart) continue;
+      const nameNode = child.childForFieldName("name");
+      if (!nameNode || sliceText(nameNode, source) !== name) continue;
+      const target = cppNamespaceAliasTargetSegments(child, source);
+      if (target) found = target;
+    }
+    if (found) return found;
+  }
+  return undefined;
+}
+
+type CppAliasFile = {
+  module: ModuleIndex;
+  aliases: readonly CppNamespaceAlias[];
+  /** Position in the use file, or undefined when a declaration is not yet visible. */
+  positionOf: (startIndex: number) => number | undefined;
+};
+
+/**
+ * Latest visible namespace-scope alias of `name` in `enclosing`. A later declaration in the
+ * translation unit wins; two aliases at the same position with different targets are ambiguous.
+ */
+function cppNamespaceScopeAliasTarget(
+  files: readonly CppAliasFile[],
+  enclosing: readonly string[],
+  name: string,
+): readonly string[] | null | undefined {
+  let best: { position: number; tie: number; target: readonly string[] } | undefined;
+  let ambiguous = false;
+  for (const file of files) {
+    for (const alias of file.aliases) {
+      if (!alias.namespaceScope || alias.name !== name || !sameNamespacePath(alias.enclosing, enclosing)) continue;
+      const position = file.positionOf(alias.startIndex);
+      if (position === undefined) continue;
+      if (!best || position > best.position || (position === best.position && alias.startIndex > best.tie)) {
+        best = { position, tie: alias.startIndex, target: alias.target };
+        ambiguous = false;
+      } else if (
+        position === best.position &&
+        alias.startIndex === best.tie &&
+        alias.target.join("::") !== best.target.join("::")
+      ) {
+        ambiguous = true;
+      }
+    }
+  }
+  if (ambiguous) return null;
+  return best?.target;
+}
+
+/** A namespace or type declared in this scope hides names in every outer namespace. */
+function cppNamespaceScopeOwnerPath(
+  files: readonly CppAliasFile[],
+  enclosing: readonly string[],
+  name: string,
+): readonly string[] | undefined {
+  const path = [...enclosing, name];
+  const qualified = path.join("::");
+  for (const file of files) {
+    for (const entry of file.module.exports) {
+      if (entry.type !== "local" || entry.exportedAs !== qualified) continue;
+      if (entry.target.kind !== SymbolKind.Class && entry.target.kind !== SymbolKind.TypeAlias) continue;
+      const start = entry.target.range.start.index;
+      if (start !== undefined && file.positionOf(start) !== undefined) return path;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Find the first qualifier where it is used: a block alias, then namespace aliases,
+ * nested namespaces, and type names in the enclosing namespaces, innermost first.
+ * Undefined means no binding was found; null means an ambiguous or cyclic alias.
+ */
+export function cppQualifiedNameThroughVisiblePrefix(
+  index: ProjectIndex,
+  sourceModule: ModuleIndex,
+  name: string,
+  node: SyntaxNodeLike,
+  source: string,
+  tree: SyntaxTreeLike,
+  loadParsedFile: (file: string) => CppParsedFile | null,
+): string | null | undefined {
+  if (!name.includes("::")) return undefined;
+  let qualifiedNode = node;
+  while (qualifiedNode.parent?.type === "qualified_identifier") qualifiedNode = qualifiedNode.parent;
+  const absolute =
+    name.startsWith("::") ||
+    (qualifiedNode.type === "qualified_identifier" && source.startsWith("::", qualifiedNode.startIndex));
+  const segments = name.split("::").filter(Boolean);
+  if (segments.length < 2) return undefined;
+
+  const useFileKey = fileIdentityKey(sourceModule.file);
+  const useStart = node.startIndex;
+  const useNamespace = cppEnclosingNamespace(node, source, useFileKey);
+  const files: CppAliasFile[] = [
+    {
+      module: sourceModule,
+      aliases: cppNamespaceAliasesForTree(tree, source, useFileKey),
+      positionOf: (startIndex) => (startIndex < useStart ? startIndex : undefined),
+    },
+  ];
+  let entryOffsets: ReadonlyMap<string, number> | undefined;
+  for (const moduleEntry of cppStarImportClosure(index, sourceModule)) {
+    const fileKey = fileIdentityKey(moduleEntry.file);
+    if (fileKey === useFileKey) continue;
+    const parsed = loadParsedFile(moduleEntry.file);
+    if (!parsed?.tree) continue;
+    entryOffsets ??= cppIncludeEntryOffsets(index, sourceModule, node);
+    const entry = entryOffsets.get(fileKey);
+    files.push({
+      module: moduleEntry,
+      aliases: cppNamespaceAliasesForTree(parsed.tree, parsed.source, fileKey),
+      positionOf: () => (entry !== undefined && entry < useStart ? entry : undefined),
+    });
+  }
+
+  const firstBinding = (segment: string): { path: readonly string[]; alias: boolean } | null | undefined => {
+    if (!absolute) {
+      const block = cppBlockNamespaceAliasTarget(node, source, segment, useStart);
+      if (block) return { path: block, alias: true };
+    }
+    for (let length = absolute ? 0 : useNamespace.length; length >= 0; length -= 1) {
+      const enclosing = useNamespace.slice(0, length);
+      const alias = cppNamespaceScopeAliasTarget(files, enclosing, segment);
+      if (alias === null) return null;
+      if (alias) return { path: alias, alias: true };
+      const owner = cppNamespaceScopeOwnerPath(files, enclosing, segment);
+      if (owner) return { path: owner, alias: false };
+    }
+    return undefined;
+  };
+
+  const expandPrefix = (prefix: readonly string[], seen: Set<string>): readonly string[] | null | undefined => {
+    let resolved: string[] = [];
+    let bound = false;
+    for (const segment of prefix) {
+      let alias: readonly string[] | null | undefined;
+      if (!resolved.length) {
+        const first = firstBinding(segment);
+        if (first === null) return null;
+        if (first && !first.alias) {
+          resolved = [...first.path];
+          bound = true;
+          continue;
+        }
+        alias = first?.path;
+      } else {
+        alias = cppNamespaceScopeAliasTarget(files, resolved, segment);
+      }
+      if (alias === null) return null;
+      if (!alias) {
+        resolved.push(segment);
+        continue;
+      }
+      const key = `${resolved.join("::")}\0${segment}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      bound = true;
+      const nested = expandPrefix(alias, seen);
+      if (nested === null) return null;
+      resolved = [...(nested ?? alias)];
+    }
+    return bound ? resolved : undefined;
+  };
+
+  const expanded = expandPrefix(segments.slice(0, -1), new Set());
+  if (expanded === null) return null;
+  if (!expanded) return undefined;
+  return [...expanded, segments[segments.length - 1]!].join("::");
+}
+
 /**
  * Bare lookup through `using namespace`. Undefined means no directive nominates
  * this name. Null means more than one viable candidate, or the candidate could
@@ -686,6 +939,60 @@ export function resolveCppQualifiedMemberContainer(
 
 function hasStaticStorageClass(node: SyntaxNodeLike): boolean {
   return node.namedChildren.some((child) => child.type === "storage_class_specifier" && child.text === "static");
+}
+
+/** Select a proven static class member named through a namespace-qualified type. */
+export function resolveCppVisibleStaticCallableName(
+  index: ProjectIndex,
+  sourceModule: ModuleIndex,
+  qualifiedName: string,
+  node: SyntaxNodeLike,
+  source: string,
+  loadParsedFile: (file: string) => CppParsedFile | null,
+): SymbolDef | null | undefined {
+  const separator = qualifiedName.lastIndexOf("::");
+  if (separator < 0) return undefined;
+  const owner = qualifiedName.slice(0, separator);
+  const member = qualifiedName.slice(separator + 2);
+  const ownerPath = owner.split("::");
+  const useFileKey = fileIdentityKey(sourceModule.file);
+  let entryOffsets: ReadonlyMap<string, number> | undefined;
+  const defs: SymbolDef[] = [];
+  for (const moduleEntry of cppStarImportClosure(index, sourceModule)) {
+    const fileKey = fileIdentityKey(moduleEntry.file);
+    let parsed: CppParsedFile | null | undefined;
+    let includeVisible: boolean | undefined;
+    for (const def of moduleEntry.locals) {
+      if (def.kind !== SymbolKind.Function || def.localName !== member || def.callable?.owner !== owner) continue;
+      if (fileKey !== useFileKey) {
+        if (includeVisible === undefined) {
+          entryOffsets ??= cppIncludeEntryOffsets(index, sourceModule, node);
+          const entry = entryOffsets.get(fileKey);
+          includeVisible = entry !== undefined && entry < node.startIndex;
+        }
+        if (!includeVisible) break;
+      }
+      const start = def.range.start.index;
+      if (start === undefined || (fileKey === useFileKey && start >= node.startIndex)) continue;
+      if (parsed === undefined) parsed = loadParsedFile(moduleEntry.file);
+      if (!parsed) break;
+      const position = { row: def.range.start.line - 1, column: def.range.start.column - 1 };
+      let current: SyntaxNodeLike | null = parsed.tree.rootNode.descendantForPosition(position, position);
+      let staticMember = false;
+      while (current && !CPP_MEMBER_CONTAINER_TYPES.has(current.type)) {
+        if (current.type === "function_definition" || current.type === "declaration") {
+          staticMember = hasStaticStorageClass(current);
+          break;
+        }
+        current = current.parent;
+      }
+      if (!staticMember) continue;
+      while (current && !CPP_MEMBER_CONTAINER_TYPES.has(current.type)) current = current.parent;
+      if (current && sameCppPath(cppMemberContainerPath(current, parsed.source), ownerPath)) defs.push(def);
+    }
+  }
+  if (!defs.length) return undefined;
+  return resolveCppExportedCallables(index, defs, node, source, loadParsedFile, () => qualifiedName);
 }
 
 /** The name a member declarator declares: `f` in `int f(int)`, `int A::f(int)`, or `int* f()`. */

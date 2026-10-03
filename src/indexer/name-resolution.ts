@@ -47,6 +47,8 @@ export type {
 } from "./name-resolution-types.js";
 
 import { type GoToResult, type ImportBinding, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
+import type { Binding, ScopeIndex } from "./scope.js";
+
 import { importBindingReferenceSites } from "./navigation-references.js";
 
 import { rangeContains } from "./reference-context.js";
@@ -117,6 +119,24 @@ export async function withParsedFiles<T>(files: LoadingParsedFileProvider, step:
   return result;
 }
 
+/** A closer lexical binding hides a file alias unless that local holds the same module. */
+export function fileBindingIsUnshadowed(scopeIndex: ScopeIndex, binding: Binding | null, aliasFrom?: string): boolean {
+  return (
+    !binding ||
+    (!!binding.import && scopeIndex.allScopes[0]?.map.get(binding.canonicalName) === binding) ||
+    (binding.kind === "local" && aliasFrom !== undefined && binding.heldModuleSpecifier === aliasFrom)
+  );
+}
+
+/** File import aliases yield to closer lexical bindings unless a language policy says otherwise. */
+export function moduleAliasIsUnshadowed(use: BareNameUse, aliasFrom?: string): boolean {
+  const policy = nameLookupPolicyFor(use.parsed.sup.id);
+  const closestBinding = findClosestScopeBinding(use.scopeIndex, use.name, use.node, use.parsed.sup);
+  if (policy.moduleAliasIsUnshadowed) {
+    return policy.moduleAliasIsUnshadowed({ use, lookupName: use.name, closestBinding });
+  }
+  return fileBindingIsUnshadowed(use.scopeIndex, closestBinding, aliasFrom);
+}
 /**
  * Resolves a bare (unqualified or C++-qualified) name at a use site. Returns `null` when no
  * lookup step answers; go-to-definition then tries a declaration at the position.
@@ -166,6 +186,7 @@ export function resolveBareName(use: BareNameUse): NameResolution | null {
       policy.crossModuleName?.(state) ?? lookupName,
       policy.cNamespace?.(node),
       node.startIndex,
+      { node, source },
     );
     const adjusted = policy.afterCrossModule?.(state, resolved);
     return adjusted !== undefined ? adjusted : resolved;
@@ -216,7 +237,7 @@ export async function settleNameResolution(
       if (
         member &&
         options.requireAcceptedArity &&
-        !(await memberAcceptsCallAt(index, member, node, parsed.source, parsed.sup.id))
+        !memberAcceptsCallAt(index, member, node, parsed.source, parsed.sup.id)
       ) {
         return null;
       }

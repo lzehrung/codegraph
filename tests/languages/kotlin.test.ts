@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
+import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { finalizeLanguageSpecificImports } from "../../src/indexer/imports/language-specific.js";
@@ -445,6 +446,62 @@ describe("Kotlin .ktm script files", () => {
   });
 });
 
+describe("Kotlin imports with a same-named package", () => {
+  it("binds an imported class to its declaration and a star import to the package", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-package-class-import-"));
+    try {
+      const useLines = ["package client", "import p.C", "fun make(): C = C()"];
+      const paths = await writeFixtureFiles(root, {
+        "p/C.kt": "package p\nclass C\n",
+        "p/C/Decoy.kt": "package p.C\nclass Decoy\n",
+        "Use.kt": useLines.join("\n") + "\n",
+        "UseStar.kt": "package client\nimport p.C.*\nfun make(): Decoy = Decoy()\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = paths["Use.kt"]!;
+      const declaration = paths["p/C.kt"]!;
+      const decoy = paths["p/C/Decoy.kt"]!;
+      const binding = index.byFile.get(fileIdentityKey(use))?.imports.find((entry) => entry.from === "p.C");
+      expect(binding?.resolved).toBe(declaration);
+      expect(binding?.resolved).not.toBe(decoy);
+
+      const importsFrom = (file: string) =>
+        index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(importsFrom(use)).toEqual([declaration]);
+      expect(importsFrom(use)).not.toContain(decoy);
+      expect(importsFrom(paths["UseStar.kt"]!)).toEqual([decoy]);
+      const starBinding = index.byFile
+        .get(fileIdentityKey(paths["UseStar.kt"]!))
+        ?.imports.find((entry) => entry.from === "p.C");
+      expect(starBinding?.resolved).toBe(decoy);
+
+      const reduced = await buildProjectIndex(root, { cache: "off", native: "off" });
+      const reducedBinding = reduced.byFile.get(fileIdentityKey(use))?.imports.find((entry) => entry.from === "p.C");
+      const reducedStar = reduced.byFile
+        .get(fileIdentityKey(paths["UseStar.kt"]!))
+        ?.imports.find((entry) => entry.from === "p.C");
+      const reducedTargets = (file: string) =>
+        reduced.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(reducedBinding?.resolved).toBe(declaration);
+      expect(reducedTargets(use)).toEqual([declaration]);
+      expect(reducedTargets(use)).not.toContain(decoy);
+      expect(reducedStar?.resolved).toBe(decoy);
+      expect(reducedTargets(paths["UseStar.kt"]!)).toEqual([decoy]);
+      const goto = await goToDefinition(index, { file: use, line: 3, column: columnInLines(useLines, 3, "C()") });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected imported class C");
+      expect(normalizePath(goto.definition.file)).toBe(declaration);
+      expect(normalizePath(goto.definition.file)).not.toBe(decoy);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Kotlin receiver member navigation", () => {
   it("resolves property and method navigation to the proven receiver, not a local or decoy member", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-receiver-nav-"));
@@ -727,6 +784,201 @@ describe("Kotlin implicit-receiver precedence", () => {
         .filter((edge) => edge.label === "calls")
         .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.site?.range.start.line}`);
       expect(calls).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an imported overload by argument count and leaves a shared count unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-import-overload-"));
+    const calc = [
+      "package calc2",
+      "",
+      "fun add(a: Int, b: Int): Int = a + b",
+      "fun add(a: Int, b: Int, c: Int): Int = a + b + c",
+      "",
+    ].join("\n");
+    const overlap = [
+      "package overlap",
+      "",
+      "fun add(a: Int, b: Int): Int = a + b",
+      "fun add(a: Int, b: Int, c: Int = 0): Int = a + b + c",
+      "",
+    ].join("\n");
+    const decoy = ["package decoy", "", "fun add(a: Int, b: Int, c: Int): Int = -1", ""].join("\n");
+    const use = [
+      "package use",
+      "",
+      "import calc2.add",
+      "",
+      "fun two(): Int = add(1, 2)",
+      "fun three(): Int = add(1, 2, 3)",
+      "",
+    ].join("\n");
+    const overlapUse = [
+      "package use2",
+      "",
+      "import overlap.add",
+      "",
+      "fun both(): Int = add(1, 2)",
+      "fun onlyThree(): Int = add(1, 2, 3)",
+      "",
+    ].join("\n");
+    const calcFile = path.join(root, "calc2.kt");
+    const overlapFile = path.join(root, "overlap.kt");
+    const decoyFile = path.join(root, "decoy.kt");
+    const useFile = path.join(root, "use.kt");
+    const overlapUseFile = path.join(root, "overlap-use.kt");
+    const columnOf = (source: string, line: number, token = "add"): number => {
+      const index = source.split("\n")[line - 1]?.lastIndexOf(token) ?? -1;
+      if (index < 0) throw new Error(`missing ${token} on line ${line}`);
+      return index + 1;
+    };
+    try {
+      await fsp.writeFile(calcFile, calc);
+      await fsp.writeFile(overlapFile, overlap);
+      await fsp.writeFile(decoyFile, decoy);
+      await fsp.writeFile(useFile, use);
+      await fsp.writeFile(overlapUseFile, overlapUse);
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const at = async (file: string, source: string, line: number) =>
+        goToDefinition(index, { file, line, column: columnOf(source, line) });
+      const two = await at(useFile, use, 5);
+      const three = await at(useFile, use, 6);
+      const both = await at(overlapUseFile, overlapUse, 5);
+      const onlyThree = await at(overlapUseFile, overlapUse, 6);
+      const decoyDef = await at(decoyFile, decoy, 3);
+      expect(two.status).toBe("ok");
+      expect(three.status).toBe("ok");
+      expect(onlyThree.status).toBe("ok");
+      expect(both.status).toBe("not_found");
+      expect(decoyDef.status).toBe("ok");
+      if (two.status !== "ok" || three.status !== "ok" || onlyThree.status !== "ok" || decoyDef.status !== "ok") {
+        throw new Error("expected the overload declarations");
+      }
+      expect(two.definition.range.start.line).toBe(3);
+      expect(normalizePath(two.definition.file)).toBe(normalizePath(calcFile));
+      expect(three.definition.range.start.line).toBe(4);
+      expect(normalizePath(three.definition.file)).toBe(normalizePath(calcFile));
+      expect(onlyThree.definition.range.start.line).toBe(4);
+      expect(normalizePath(onlyThree.definition.file)).toBe(normalizePath(overlapFile));
+      expect(normalizePath(two.definition.file)).not.toBe(normalizePath(decoyFile));
+      expect(normalizePath(three.definition.file)).not.toBe(normalizePath(decoyFile));
+
+      const useLines = async (file: string, source: string, line: number) => {
+        const refs = await findReferences(index, { file, line, column: columnOf(source, line) });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("expected references");
+        return refs.references
+          .filter(
+            (ref) =>
+              fileIdentityKey(ref.file) === fileIdentityKey(useFile) ||
+              fileIdentityKey(ref.file) === fileIdentityKey(overlapUseFile),
+          )
+          .map((ref) => `${fileIdentityKey(ref.file)}:${ref.range.start.line}`);
+      };
+      const twoRefs = await useLines(two.definition.file, calc, 3);
+      const threeRefs = await useLines(three.definition.file, calc, 4);
+      const decoyRefs = await useLines(decoyFile, decoy, 3);
+      const useKey = fileIdentityKey(useFile);
+      const overlapKey = fileIdentityKey(overlapUseFile);
+      expect(twoRefs).toContain(`${useKey}:5`);
+      expect(twoRefs).not.toContain(`${useKey}:6`);
+      expect(threeRefs).toContain(`${useKey}:6`);
+      expect(threeRefs).not.toContain(`${useKey}:5`);
+      expect(decoyRefs).not.toContain(`${useKey}:5`);
+      expect(decoyRefs).not.toContain(`${useKey}:6`);
+      expect(decoyRefs).not.toContain(`${overlapKey}:5`);
+      expect(decoyRefs).not.toContain(`${overlapKey}:6`);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callsFrom = (name: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === name)
+          .map((edge) => edge.to);
+      expect(callsFrom("two")).toEqual([defNodeId(two.definition)]);
+      expect(callsFrom("three")).toEqual([defNodeId(three.definition)]);
+      expect(callsFrom("onlyThree")).toEqual([defNodeId(onlyThree.definition)]);
+      expect(callsFrom("both")).toEqual([]);
+      expect(callsFrom("two")).not.toContain(defNodeId(decoyDef.definition));
+      expect(callsFrom("three")).not.toContain(defNodeId(decoyDef.definition));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin package-qualified top-level calls", () => {
+  it("follows a package path without an import while excluding another package", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-qualified-call-"));
+    try {
+      const useLines = ["package client", "fun call(): Int = org.math.sum(1, 2)"];
+      const paths = await writeFixtureFiles(root, {
+        "org/math/Calc.kt": "package org.math\nfun sum(a: Int, b: Int): Int = a + b",
+        "org/other/Calc.kt": "package org.other\nfun sum(a: Int, b: Int): Int = -1",
+        "client/Use.kt": useLines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["client/Use.kt"]!,
+        line: 2,
+        column: columnInLines(useLines, 2, "sum"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected package-qualified function");
+      expect(normalizePath(result.definition.file)).toBe(paths["org/math/Calc.kt"]);
+      const references = await findReferences(index, {
+        file: result.definition.file,
+        line: result.definition.range.start.line,
+        column: result.definition.range.start.column,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected function references");
+      expect(new Set(references.references.map((ref) => normalizePath(ref.file)))).toEqual(
+        new Set([paths["org/math/Calc.kt"], paths["client/Use.kt"]]),
+      );
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["org/math/Calc.kt"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin inherited member lookup", () => {
+  it("reaches a grandparent through empty classes but not an unrelated owner", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-grandparent-"));
+    try {
+      const lines = ["package p", "fun call(): Int = Derived().run()"];
+      const paths = await writeFixtureFiles(root, {
+        "Grand.kt": "package p\nopen class Grand { fun run(): Int = 1 }",
+        "Base.kt": "package p\nopen class Base : Grand()",
+        "Derived.kt": "package p\nclass Derived : Base()",
+        "Decoy.kt": "package p\nclass Decoy { fun run(): Int = -1 }",
+        "Use.kt": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["Use.kt"]!,
+        line: 2,
+        column: columnInLines(lines, 2, "run"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected inherited Kotlin function");
+      expect(normalizePath(result.definition.file)).toBe(paths["Grand.kt"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter(
+          (edge) =>
+            edge.label === "calls" &&
+            graph.nodes.get(edge.from)?.name === "call" &&
+            graph.nodes.get(edge.to)?.name === "run",
+        )
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["Grand.kt"]]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

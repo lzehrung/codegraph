@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
+import { isRubyLoadForm } from "../../util/specifiers.js";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import path from "node:path";
 import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
@@ -13,6 +14,7 @@ import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normal
 import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import { logWithLevel } from "../../logging.js";
 import { SymbolKind } from "../types.js";
+import { callableIdentityWithFile, isCallableIdentity } from "../callable-identity.js";
 import { importNodeId } from "../import-types.js";
 import type {
   BackendReport,
@@ -48,7 +50,7 @@ import type { ManifestFileEntry } from "./manifest.js";
 import { expandStarImports } from "../expand-star-imports.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-export const PROJECT_SNAPSHOT_VERSION = 11;
+export const PROJECT_SNAPSHOT_VERSION = 13;
 const LEGACY_EMBEDDED_MODULE_SNAPSHOT_VERSION = 10;
 export const BLOOM_FILTER_SNAPSHOT_VERSION = 4;
 export const BLOOM_FILTER_SNAPSHOT_FILENAME = "bloom-filters.json";
@@ -90,7 +92,8 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // namespace, and same-unit peer edges, and drop invalid cross-file, unexported, and ambiguous ones.
 // v27: C# type aliases in a multi-file namespace can add call edges, or drop a guessed one.
 // A same-named type in another namespace is not the alias target.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 27;
+// v28: JVM type-on-demand imports only bind direct nested classifiers.
+export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 28;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
@@ -259,13 +262,21 @@ function transformHandle(root: string, value: string, toRelative: boolean): stri
 
 function transformModule(root: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
   const file = (value: string): string => transformPath(root, value, toRelative);
+  const symbol = (local: SymbolDef): SymbolDef => {
+    const nextFile = file(local.file);
+    return {
+      ...local,
+      file: nextFile,
+      ...(local.callable ? { callable: callableIdentityWithFile(local.callable, local.file, nextFile) } : {}),
+    };
+  };
   return {
     ...module,
     file: file(module.file),
-    locals: module.locals.map((local) => ({ ...local, file: file(local.file) })),
+    locals: module.locals.map(symbol),
     exports: module.exports.map((entry) => {
       if (entry.type === "local") {
-        return { ...entry, target: { ...entry.target, file: file(entry.target.file) } };
+        return { ...entry, target: symbol(entry.target) };
       }
       const copy = { ...entry };
       transformPersistedExportFromModule(root, copy, toRelative);
@@ -274,6 +285,9 @@ function transformModule(root: string, module: ModuleIndex, toRelative: boolean)
     imports: module.imports.map((binding) => ({
       ...binding,
       ...(typeof binding.resolved === "string" ? { resolved: file(binding.resolved) } : {}),
+      ...(binding.kind === "star" && binding.jvmPackageFiles
+        ? { jvmPackageFiles: binding.jvmPackageFiles.map(file) }
+        : {}),
     })),
   };
 }
@@ -1888,10 +1902,17 @@ function isSymbolDef(value: unknown): value is SymbolDef {
     typeof symbol.localName === "string" &&
     isSymbolKind(symbol.kind) &&
     isRange(symbol.range) &&
+    (symbol.kind === SymbolKind.Function
+      ? isCallableIdentity(symbol.callable)
+      : symbol.callable === undefined || isCallableIdentity(symbol.callable)) &&
     (symbol.cTag === undefined ||
       symbol.cTag === "declaration" ||
       symbol.cTag === "forward" ||
       symbol.cTag === "reference") &&
+    isOptionalBoolean(symbol.javaPackagePrivate) &&
+    isOptionalBoolean(symbol.javaProtectedMember) &&
+    (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number") &&
+    isOptionalBoolean(symbol.jvmStaticMember) &&
     (symbol.docstring === undefined || typeof symbol.docstring === "string") &&
     (symbol.lineSpan === undefined || typeof symbol.lineSpan === "number") &&
     (symbol.complexity === undefined || typeof symbol.complexity === "number")
@@ -1921,6 +1942,9 @@ function isImportBinding(value: unknown): value is ImportBinding {
       isOptionalBoolean(binding.explicitAlias) &&
       isOptionalRange(binding.importedRange) &&
       isOptionalRange(binding.localRange) &&
+      (binding.jvmTypeOwnerStartIndex === undefined || typeof binding.jvmTypeOwnerStartIndex === "number") &&
+      (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&
+      isOptionalBoolean(binding.jvmSamePackage) &&
       (binding.cNamespace === undefined || binding.cNamespace === "tag" || binding.cNamespace === "ordinary") &&
       (binding.phpImportType === undefined ||
         binding.phpImportType === "class" ||
@@ -1932,7 +1956,17 @@ function isImportBinding(value: unknown): value is ImportBinding {
     return typeof binding.localNS === "string" && isOptionalRange(binding.localRange);
   }
   return (
-    binding.kind === "star" && (binding.staticMembersOf === undefined || typeof binding.staticMembersOf === "string")
+    binding.kind === "star" &&
+    (binding.staticMembersOf === undefined || typeof binding.staticMembersOf === "string") &&
+    (binding.jvmTypeWildcardName === undefined || typeof binding.jvmTypeWildcardName === "string") &&
+    (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&
+    (binding.jvmPackageFiles === undefined ||
+      (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string"))) &&
+    (binding.jvmPackageLanguageId === undefined ||
+      binding.jvmPackageLanguageId === "java" ||
+      binding.jvmPackageLanguageId === "kotlin") &&
+    isOptionalBoolean(binding.jvmSamePackage) &&
+    (binding.rubyLoadForm === undefined || isRubyLoadForm(binding.rubyLoadForm))
   );
 }
 

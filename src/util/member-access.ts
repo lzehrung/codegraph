@@ -187,11 +187,15 @@ export function collectMemberAccessChain(args: {
     if (args.sup.id === "csharp" && nameNode.type === "generic_name") {
       nameNode = nameNode.childForFieldName("name") ?? nameNode.namedChildren[0] ?? nameNode;
     }
-    if (nameNode.type !== "identifier") return;
+    if (nameNode.type !== "identifier" && !(args.sup.id === "java" && nameNode.type === "type_identifier")) return;
     const keyName = sliceText(nameNode, args.source);
     const value = args.constStringOf?.get(keyName);
     if (typeof value === "string") names.push(value);
-    else if (args.sup.id === "csharp") names.push(keyName);
+    // C#/Java qualified names, Rust's `mod::item` path, and Ruby's `receiver.method` call node
+    // all spell every segment as a plain `identifier`, with no dedicated property-identifier
+    // node type to tell a name from a value.
+    else if (args.sup.id === "csharp" || args.sup.id === "java" || args.sup.id === "rust" || args.sup.id === "ruby")
+      names.push(keyName);
   };
 
   while (current && traversalTypes.has(current.type)) {

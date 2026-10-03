@@ -4,7 +4,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
-import { cppBindingCallableShape, cppSelectCallableBinding } from "./cpp-callables.js";
+import { cppSelectCallableBinding } from "./cpp-callables.js";
 import { typescriptCallableCandidatesInContainer, typescriptSelectOverloadCandidate } from "./ts-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import {
@@ -169,7 +169,7 @@ export function getOrBuildScopeIndex(
   const fileKey = fileIdentityKey(file);
   let scopeIndex = index.scopeCache.get(fileKey);
   if (scopeIndex) return scopeIndex;
-  scopeIndex = buildScopeIndexFromSource(file, source, sup, mod.imports, { tree });
+  scopeIndex = buildScopeIndexFromSource(file, source, sup, mod.imports, { tree, locals: mod.locals });
   index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;
 }
@@ -313,35 +313,20 @@ export function laterLocalShadowsUse(
 
 function selectTypeScriptOverloadBinding(
   binding: Binding,
-  file: FileId,
   currentNode: SyntaxNodeLike,
   source: string,
-  tree: SyntaxTreeLike,
   languageId: string,
 ): Binding | null {
   const call = currentNode.parent;
   if (!call || call.type !== "call_expression") return binding;
-  const start = binding.def!.start.index ?? 0;
-  const end = binding.def!.end.index ?? start;
   const candidates = typescriptCallableCandidatesInContainer(
     binding.sameScopeFunctionBindings ?? [binding],
-    tree,
-    (candidate) => candidate.def!,
-    start,
-    end,
+    (candidate) => candidate.callable,
+    binding.callable?.key,
   );
   const selected = typescriptSelectOverloadCandidate({
     group: candidates,
-    tree,
-    definitionOf: (candidate) => ({
-      file,
-      localName: candidate.name,
-      kind: SymbolKind.Function,
-      range: candidate.def!,
-    }),
-    declarationOf: (candidate) => candidate.node?.parent,
-    source,
-    languageId,
+    identityOf: (candidate) => candidate.callable,
     argumentCount: getCallArgumentCount({ languageId, source, call }),
   });
   return selected ?? null;
@@ -373,7 +358,7 @@ export function definitionForBinding(
   if (!binding.def) return null;
   if (support.id === "cpp" && binding.kind === "function" && source) {
     const collisions = binding.sameScopeFunctionBindings ?? [binding];
-    if (collisions.length > 1 || cppBindingCallableShape(binding)) {
+    if (collisions.length > 1 || binding.callable?.signature) {
       const selected = cppSelectCallableBinding(collisions, currentNode, source, file, file);
       if (!selected?.def) return null;
       return {
@@ -381,11 +366,12 @@ export function definitionForBinding(
         localName: selected.name,
         kind: SymbolKind.Function,
         range: selected.def,
+        ...(selected.callable ? { callable: selected.callable } : {}),
       };
     }
   }
   if ((support.id === "ts" || support.id === "tsx") && binding.kind === "function" && source && tree) {
-    const selected = selectTypeScriptOverloadBinding(binding, file, currentNode, source, tree, support.id);
+    const selected = selectTypeScriptOverloadBinding(binding, currentNode, source, support.id);
     if (!selected?.def) return null;
     binding = selected;
   }
@@ -405,6 +391,7 @@ export function definitionForBinding(
     localName: binding.name,
     kind,
     range,
+    ...(binding.callable ? { callable: binding.callable } : {}),
     ...(tagRole ? { cTag: tagRole } : {}),
   };
 }
@@ -438,6 +425,25 @@ function starImportGoTo(index: ProjectIndex, imp: ImportBinding, def: SymbolDef,
   });
 }
 
+const CALL_ARGUMENT_PARENT_TYPES: ReadonlySet<string> = new Set([
+  "call",
+  "call_expression",
+  "function_call_expression",
+  "invocation_expression",
+  "method_invocation",
+  "scoped_call_expression",
+]);
+
+/** Argument count when `node` is the callee of a call; undefined for every other use. */
+function explicitCallArgumentCount(languageId: string, source: string, node: SyntaxNodeLike): number | undefined {
+  const call = node.parent;
+  if (!call || !CALL_ARGUMENT_PARENT_TYPES.has(call.type)) return undefined;
+  const callee = call.childForFieldName("name") ?? call.childForFieldName("function") ?? call.namedChildren[0] ?? null;
+  if (!callee || node.startIndex < callee.startIndex || node.endIndex > callee.endIndex) return undefined;
+  const count = getCallArgumentCount({ languageId, source, call });
+  return count === null ? undefined : count;
+}
+
 export function resolveNamedDefinition(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -446,7 +452,10 @@ export function resolveNamedDefinition(
   name: string,
   cNamespace?: "tag" | "ordinary",
   referenceIndex?: number,
+  callSite?: { node: SyntaxNodeLike; source: string },
 ): GoToResult | null {
+  const argumentCount = callSite ? explicitCallArgumentCount(support.id, callSite.source, callSite.node) : undefined;
+  const arityOptions = argumentCount === undefined ? {} : { argumentCount };
   const normalizedName = support.normalizeIdentifier(name);
   const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
   const directExport =
@@ -480,6 +489,7 @@ export function resolveNamedDefinition(
         allowLocalFallback: support.membersAreImplicitlyInScope,
         ...(cNamespace ? { cNamespace } : {}),
         ...(support.id === "csharp" && referenceIndex !== undefined ? { referenceIndex } : {}),
+        ...arityOptions,
       });
     }
   }
@@ -556,7 +566,7 @@ export function resolveNamedDefinition(
 
     let matched: GoToResult | null = null;
     if (imp.kind === "default" && support.normalizeIdentifier(imp.local) === normalizedName) {
-      const result = resolveImported(index, imp, "default");
+      const result = resolveImported(index, imp, "default", arityOptions);
       if (result && !("namespace" in result)) {
         matched = okGoToResult(index, result, {
           via: {
@@ -585,7 +595,10 @@ export function resolveNamedDefinition(
           result = resolvePhpExplicitImport(index, imp, phpRole);
         }
       } else {
-        result = resolveImported(index, imp, imp.imported, cNamespace ? { cNamespace } : undefined);
+        result = resolveImported(index, imp, imp.imported, {
+          ...(cNamespace ? { cNamespace } : {}),
+          ...arityOptions,
+        });
       }
       if (result && !("namespace" in result)) {
         matched = okGoToResult(index, result, {
@@ -598,7 +611,7 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "star") {
-      const def = resolveStarImportedDefinition(index, imp, name, support.id, cNamespace);
+      const def = resolveStarImportedDefinition(index, imp, name, support.id, cNamespace, argumentCount);
       if (def) {
         const starResult = starImportGoTo(index, imp, def, name);
         if (precedence === "last-wins") {
@@ -669,7 +682,10 @@ export function resolveNamedDefinition(
       ) {
         continue;
       }
-      const result = resolveImported(index, imp, imp.imported, cNamespace ? { cNamespace } : undefined);
+      const result = resolveImported(index, imp, imp.imported, {
+        ...(cNamespace ? { cNamespace } : {}),
+        ...arityOptions,
+      });
       if (result && !("namespace" in result)) {
         return okGoToResult(index, result, {
           via: {
@@ -689,6 +705,7 @@ export function resolveNamedDefinition(
     if (deferCompilationUnitPeers) {
       const unitHit = resolveExport(index, file, name, {
         allowLocalFallback: support.membersAreImplicitlyInScope,
+        ...arityOptions,
       });
       if (unitHit?.kind === "resolved" && (!requiresExplicitReceiver || !unitHit.def.isMember)) {
         return okGoToResult(index, unitHit.def, {

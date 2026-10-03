@@ -1,5 +1,5 @@
 import type { ImportBinding } from "../types.js";
-import type { CFamilyIncludeForm, ModuleSpecifierResolutionKind } from "../../util/specifiers.js";
+import type { CFamilyIncludeForm, ModuleSpecifierResolutionKind, RubyLoadForm } from "../../util/specifiers.js";
 
 export type ResolvedImportTarget = Exclude<ImportBinding["resolved"], undefined>;
 
@@ -10,7 +10,12 @@ export type ResolvedImportTarget = Exclude<ImportBinding["resolved"], undefined>
  */
 export type ImportResolverOptions = {
   includeForm?: CFamilyIncludeForm;
+  rubyLoadForm?: RubyLoadForm;
   resolutionKind?: ModuleSpecifierResolutionKind;
+  jvmPackageWildcard?: true;
+  /** Rust `#[path = "..."]` on this module item. Resolved only inside the project root. */
+  pathAttribute?: string;
+  statementStartIndex?: number;
 };
 
 export type ImportResolver = (

@@ -1,5 +1,6 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { fileIdentityKey } from "../util/paths.js";
+import { SymbolKind, type SymbolDef } from "./types.js";
 
 /**
  * Per-language declaration visibility for module exports and Swift shared-owner member lookup.
@@ -268,6 +269,32 @@ export function isExportedDeclaration(languageId: string, node: SyntaxNodeLike):
   const declaration = findVisibilityDeclaration(node, row);
   if (!declaration) return true;
   return isExportedByRow(declaration, row);
+}
+
+/** Java top-level types without public access stay within their declared package. */
+export function isJavaPublicDeclaration(node: SyntaxNodeLike): boolean {
+  const declaration = findVisibilityDeclaration(node, JAVA_ROW);
+  return !!declaration && modifierTokens(collectModifierTexts(declaration, JAVA_ROW)).includes("public");
+}
+/** Protected Java members remain visible to subclasses outside their package. */
+export function isJavaProtectedDeclaration(node: SyntaxNodeLike): boolean {
+  const declaration = findVisibilityDeclaration(node, JAVA_ROW);
+  return !!declaration && modifierTokens(collectModifierTexts(declaration, JAVA_ROW)).includes("protected");
+}
+
+/** Package-qualified JVM types follow the same visibility rule as package wildcard imports. */
+export function isJvmPackageSymbolVisible(
+  target: SymbolDef,
+  targetLanguage: "java" | "kotlin",
+  consumerLanguage: "java" | "kotlin",
+  samePackage: boolean,
+): boolean {
+  if (target.javaPackagePrivate && !samePackage) return false;
+  if (target.isMember) return true;
+  if (consumerLanguage === "java" && targetLanguage === "kotlin") {
+    return target.kind === SymbolKind.Class || target.kind === SymbolKind.Interface;
+  }
+  return true;
 }
 
 const CSHARP_ACCESS_MODIFIERS = new Set(["public", "protected", "internal", "private"]);

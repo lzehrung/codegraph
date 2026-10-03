@@ -138,13 +138,15 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
     const languageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
     const allowLocalFallback = languageId !== "c" && languageId !== "cpp";
     const roleSegment = imp ? importIdRoleSegment(imp) : undefined;
-    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}::${roleSegment ?? ""}::${allowLocalFallback ? "local" : "export"}`;
+    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}::${roleSegment ?? ""}::${allowLocalFallback ? "local" : "export"}::${imp?.jvmTypeOwnerStartIndex ?? ""}::${imp?.jvmStaticWildcardName ?? ""}::${imp?.jvmSamePackage ? "same-jvm-package" : "other-jvm-package"}`;
     let def: SymbolDef | null;
     if (exportResolutions.has(resolutionKey)) {
       def = exportResolutions.get(resolutionKey)!;
-    } else if (imp && phpNamedImportRole(imp) !== undefined) {
-      // PHP class, function, and constant imports resolve through separate namespaces, so the
-      // role decides which same-spelled declaration this alias names.
+    } else if (
+      imp &&
+      (phpNamedImportRole(imp) !== undefined || imp.jvmTypeOwnerStartIndex !== undefined || languageId === "java")
+    ) {
+      // Import resolution also enforces Java member visibility.
       const resolved = resolveImported(index, imp, exportedName, { allowLocalFallback });
       def = resolved && !("namespace" in resolved) ? resolved : null;
       exportResolutions.set(resolutionKey, def);

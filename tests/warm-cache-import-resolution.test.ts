@@ -1506,3 +1506,57 @@ describe("warm module-cache builds never reuse import bindings resolved against 
     }
   });
 });
+
+describe("mixed JVM wildcard cache invalidation", () => {
+  const fixtures = [
+    {
+      importer: "Java",
+      existing: { path: "java/p/Mode.java", source: "package p; public enum Mode { FAST }" },
+      added: { path: "kotlin/p/Widget.kt", source: "package p\nclass Widget\n" },
+      consumer: "java/client/Use.java",
+      lines: ["package client;", "import p.*;", "class Use { Widget widget; Mode mode; }"],
+      queryLine: 3,
+      queryName: "Widget",
+    },
+    {
+      importer: "Kotlin",
+      existing: { path: "kotlin/p/Widget.kt", source: "package p\nclass Widget\n" },
+      added: { path: "java/p/Mode.java", source: "package p; public enum Mode { FAST }" },
+      consumer: "kotlin/app/Use.kt",
+      lines: ["package app", "import p.*", "fun choose(): Mode = Mode.FAST", "fun create(): Widget = Widget()"],
+      queryLine: 3,
+      queryName: "Mode",
+    },
+  ] as const;
+  for (const fixture of fixtures) {
+    for (const cache of ["disk", "memory"] as const) {
+      it(`rebinds ${fixture.importer} package imports after adding a file in the other JVM language (${cache} cache)`, async () => {
+        const root = await mkTmpDir("cg-cross-jvm-");
+        try {
+          const existing = await writeFixtureFile(root, fixture.existing.path, fixture.existing.source);
+          const consumer = await writeFixtureFile(root, fixture.consumer, fixture.lines.join("\n"));
+          const query = {
+            file: consumer,
+            line: fixture.queryLine,
+            column: columnOf(fixture.lines, fixture.queryLine, fixture.queryName),
+          };
+          const initial = await buildProjectIndex(root, { cache });
+          const before = await goToDefinition(initial, query);
+          expect(before.status).toBe("not_found");
+          expect(edgeTargets(initial, consumer)).toContain("file:" + normalizePath(existing));
+
+          const added = await writeFixtureFile(root, fixture.added.path, fixture.added.source);
+          const warm = await buildProjectIndex(root, { cache });
+          const targets = await expectWarmMatchesCold(root, consumer, warm);
+          expect(targets).toContain("file:" + normalizePath(existing));
+          expect(targets).toContain("file:" + normalizePath(added));
+          const after = await goToDefinition(warm, query);
+          expect(after.status).toBe("ok");
+          if (after.status === "ok") expect(after.definition.file).toBe(normalizePath(added));
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+});

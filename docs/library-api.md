@@ -761,8 +761,23 @@ C symbol lookup keeps tag and ordinary identifier namespaces separate:
 
 - `goToDefinition` and `findReferences` select the namespace from source syntax, including uses through header includes.
 - Lower-level `resolveExport(index, file, name, options)` and `resolveImported(index, importBinding, name, options)` accept `cNamespace: "tag" | "ordinary"`. `preferredKind` alone cannot distinguish an enum tag from a same-spelled typedef.
+- `SymbolDef.javaPackagePrivate` is `true` for non-public Java top-level types and members. `SymbolDef.javaProtectedMember` distinguishes protected members that remain inheritable across packages; consumers must still apply Java private, package, and protected access rules when interpreting these index facts.
 - `SymbolDef.cTag` records `"declaration"`, `"forward"`, or `"reference"` for C tags. A bodyless tag use can introduce an incomplete tag when no visible tag exists. A file-scope forward declaration reuses an included tag; a block-scope forward declaration can hide an outer tag.
 - Expanded named C imports retain `ImportBinding.cNamespace`. Symbol lists and compact and detailed symbol graphs keep separate import identities for tag and ordinary namespaces.
+
+Function symbols carry `SymbolDef.callable`, computed when the file is indexed:
+
+- `key`: declarations with the same key are one callable.
+  - C++: a prototype and its definition with the same owner path and normalized signature share a key, also across files. A function with internal linkage (`static` at file scope, or in an anonymous namespace) has a key per file.
+  - C: declarations of one name in one file share a key. A header prototype and a definition in another file have different keys; navigation joins them through includes.
+  - TypeScript: overload signatures and their implementation in one container of one file share a key.
+  - Other declarations have their own key.
+- `owner`: an opaque grouping value. Do not parse it as a source-level path.
+- `kind`: `"function"`, `"instance-method"`, `"class-method"`, or `"static-method"`.
+- `arity`: the accepted explicit-argument range `{ minArgs, maxArgs }` (`maxArgs: null` means variadic), or `null` when it is unknown. `unboundArity` is the range when the receiver is passed as the first argument.
+- `signature` (C and C++), `role` (TypeScript: `"signature"`, `"implementation"`, or `"other"`), and `definition` (C and C++) are present only for those languages.
+
+Treat `callable` as read-only facts for grouping and arity checks. Keys are stable within one index, but their text is not a public format.
 
 ## Incremental indexing
 

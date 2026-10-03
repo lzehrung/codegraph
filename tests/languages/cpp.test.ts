@@ -11,6 +11,7 @@ import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { C_SUPPORT, CPP_SUPPORT, supportForFile, supportForFileWithSource } from "../../src/languages.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { parseSyntaxTree, runQuery } from "@lzehrung/codegraph-native";
+import { closeDiskCacheDatabase } from "../../src/indexer/build-cache/module-cache.js";
 import { cppSelectCallableBinding } from "../../src/indexer/cpp-callables.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
 import { ProjectedSyntaxTree } from "../../src/native/projected-tree.js";
@@ -18,6 +19,7 @@ import { getNativeQueryExecution, getNativeSyntaxTreeExecution } from "../../src
 import type { LanguageSupport } from "../../src/languages.js";
 import {
   buildProjectIndex,
+  type BuildReport,
   buildProjectIndexIncremental,
   buildScopeIndexFromSource,
   buildSymbolGraph,
@@ -503,6 +505,115 @@ describe("C++ classification and same-file navigation", () => {
         ["use_pointer", "pointer"],
         ["via_alias", "run"],
       ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps internal-linkage callable keys file-local and external declarations equivalent", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-internal-keys-"));
+    const movedRoot = `${root}-moved`;
+    const sources = {
+      "api.hpp": "int run();\n",
+      "a.cpp": [
+        '#include "api.hpp"',
+        "int run() { return 1; }",
+        "static int local() { return 2; }",
+        "namespace { int hidden() { return 3; } }",
+        "namespace tools { namespace { int nested() { return 4; } } }",
+        "namespace tools { static int scoped() { return 5; } }",
+      ].join("\n"),
+      "b.cpp": [
+        "static int run() { return 10; }",
+        "static int local() { return 20; }",
+        "namespace { int hidden() { return 30; } }",
+        "namespace tools { namespace { int nested() { return 40; } } }",
+        "namespace tools { static int scoped() { return 50; } }",
+      ].join("\n"),
+    };
+    try {
+      for (const [name, source] of Object.entries(sources)) {
+        await fs.writeFile(path.join(root, name), source, "utf8");
+      }
+      const index = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const key = (name: keyof typeof sources, symbol: string, projectIndex = index, projectRoot = root): string => {
+        const callable = projectIndex.byFile
+          .get(fileIdentityKey(path.join(projectRoot, name)))
+          ?.locals.find((local) => local.localName === symbol && local.callable?.signature)?.callable;
+        expect(callable).toBeDefined();
+        return callable!.key;
+      };
+      expect(key("api.hpp", "run")).toBe(key("a.cpp", "run"));
+      expect(key("api.hpp", "run")).not.toBe(key("b.cpp", "run"));
+      for (const name of ["local", "hidden", "nested", "scoped"] as const) {
+        expect(key("a.cpp", name)).not.toBe(key("b.cpp", name));
+      }
+      closeDiskCacheDatabase(root, { cache: "disk" });
+      await fs.cp(root, movedRoot, { recursive: true });
+      const report: BuildReport = { timings: {} };
+      const warm = await buildProjectIndexIncremental(movedRoot, { cache: "disk", native: "on", report });
+      expect(report.cache?.misses ?? 0).toBe(0);
+      expect(key("api.hpp", "run", warm, movedRoot)).toBe(key("a.cpp", "run", warm, movedRoot));
+      for (const name of ["run", "local", "hidden", "nested", "scoped"] as const) {
+        const warmKey = key("b.cpp", name, warm, movedRoot);
+        expect(warmKey).not.toBe(key("a.cpp", name, warm, movedRoot));
+        expect(warmKey).not.toContain(normalizePath(root) + "/");
+      }
+    } finally {
+      closeDiskCacheDatabase(root, { cache: "disk" });
+      closeDiskCacheDatabase(movedRoot, { cache: "disk" });
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(movedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a static prototype and its definition without static as one internal callable", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-static-prototype-"));
+    const lines = ["static int run();", "int run() { return 1; }", "int use() { return run(); }"];
+    const decoy = "int run() { return 2; }\n";
+    try {
+      const file = path.join(root, "a.cpp");
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      await fs.writeFile(path.join(root, "b.cpp"), decoy, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const keys = (name: string) =>
+        index.byFile
+          .get(fileIdentityKey(path.join(root, name)))
+          ?.locals.filter((local) => local.localName === "run" && local.callable?.signature)
+          .map((local) => local.callable!.key) ?? [];
+      const [prototypeKey, definitionKey] = keys("a.cpp");
+      expect(keys("a.cpp")).toHaveLength(2);
+      expect(prototypeKey).toBe(definitionKey);
+      expect(keys("b.cpp")).not.toContain(prototypeKey);
+
+      // References first: the scope it caches must carry the same propagated keys navigation uses.
+      const references = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("run") + 1 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.map((ref) => [path.basename(ref.file), ref.range.start.line])).toEqual([
+          ["a.cpp", 1],
+          ["a.cpp", 2],
+          ["a.cpp", 3],
+        ]);
+      }
+      const navigation = await goToDefinition(index, { file, line: 3, column: lines[2]!.lastIndexOf("run") + 1 });
+      expect(navigation.status).toBe("ok");
+      if (navigation.status !== "ok") throw new Error("Expected the internal definition");
+      expect([fileIdentityKey(navigation.definition.file), navigation.definition.range.start.line]).toEqual([
+        fileIdentityKey(file),
+        2,
+      ]);
+      // Equivalent declarations share one graph node: the prototype, which the definition aliases.
+      const graph = await buildSymbolGraphDetailed(index);
+      const runNodes = [...graph.nodes.values()].filter(
+        (node) => node.name === "run" && fileIdentityKey(node.file) === fileIdentityKey(file),
+      );
+      expect(runNodes).toHaveLength(1);
+      expect(runNodes[0]!.id.endsWith(`::run::${lines[0]!.indexOf("run")}`)).toBe(true);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "use")
+          .map((edge) => edge.to),
+      ).toEqual([runNodes[0]!.id]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -1981,6 +2092,258 @@ describe("C++ implicit this in qualified and bare member calls", () => {
       expect(callees("f")).toEqual([]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C++ namespace aliases", () => {
+  it("prefers the visible namespace or type prefix over an unrelated global namespace", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-prefix-"));
+    const file = path.join(root, "probe.cpp");
+    const lines = [
+      "namespace target { int add() { return 1; } }",
+      "namespace dm { int add() { return 2; } int onlyGlobal() { return 3; } }",
+      "namespace client { namespace dm = target; int f() { return dm::add(); } int bad() { return dm::onlyGlobal(); } }",
+      "int g() { return dm::add(); }",
+      "namespace outer { namespace dm { int add() { return 4; } } namespace inner { int nested() { return dm::add(); } int nestedBad() { return dm::onlyGlobal(); } } }",
+      "namespace types { struct dm { static int add() { return 5; } }; namespace inner { int typed() { return dm::add(); } int typeBad() { return dm::onlyGlobal(); } } }",
+      "namespace client { int explicitGlobal() { return ::dm::add(); } }",
+    ];
+    try {
+      await fs.writeFile(file, lines.join("\n") + "\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const at = async (line: number, name: string, use = false) => {
+        const source = lines[line - 1]!;
+        const column = (use ? source.lastIndexOf(name) : source.indexOf(name)) + 1;
+        return goToDefinition(index, { file, line, column });
+      };
+      const target = await at(1, "add");
+      const global = await at(2, "add");
+      const nested = await at(5, "add");
+      const typed = await at(6, "add");
+      for (const result of [target, global, nested, typed]) expect(result.status).toBe("ok");
+      if (target.status !== "ok" || global.status !== "ok" || nested.status !== "ok" || typed.status !== "ok") {
+        throw new Error("expected C++ declarations");
+      }
+      for (const [line, expected] of [
+        [3, 1],
+        [4, 2],
+        [5, 5],
+        [6, 6],
+        [7, 2],
+      ] as const) {
+        const result = await at(line, "add", true);
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("expected qualified C++ call");
+        expect(result.definition.range.start.line).toBe(expected);
+      }
+      expect((await at(3, "onlyGlobal", true)).status).toBe("not_found");
+      expect((await at(5, "onlyGlobal", true)).status).toBe("not_found");
+      expect((await at(6, "onlyGlobal", true)).status).toBe("not_found");
+
+      const referencesAt = async (line: number) => {
+        const refs = await findReferences(index, { file, line, column: lines[line - 1]!.indexOf("add") + 1 });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("expected C++ references");
+        return refs.references.map((ref) => ref.range.start.line);
+      };
+      expect(await referencesAt(1)).toContain(3);
+      expect(await referencesAt(1)).not.toContain(4);
+      expect(await referencesAt(1)).not.toContain(7);
+      expect(await referencesAt(2)).toContain(4);
+      expect(await referencesAt(2)).toContain(7);
+      expect(await referencesAt(2)).not.toContain(3);
+      expect(await referencesAt(2)).not.toContain(5);
+      expect(await referencesAt(5)).toContain(5);
+      expect(await referencesAt(6)).toContain(6);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callsFrom = (name: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === name)
+          .map((edge) => edge.to);
+      expect(callsFrom("f")).toEqual([defNodeId(target.definition)]);
+      expect(callsFrom("f")).not.toContain(defNodeId(global.definition));
+      expect(callsFrom("g")).toEqual([defNodeId(global.definition)]);
+      expect(callsFrom("explicitGlobal")).toEqual([defNodeId(global.definition)]);
+      expect(callsFrom("nested")).toEqual([defNodeId(nested.definition)]);
+      expect(callsFrom("typed")).toEqual([defNodeId(typed.definition)]);
+      expect(callsFrom("bad")).toEqual([]);
+      expect(callsFrom("nestedBad")).toEqual([]);
+      expect(callsFrom("typeBad")).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("follows a namespace alias in goto, references, and calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-namespace-alias-"));
+    const header = path.join(root, "math.hpp");
+    const file = path.join(root, "use.cpp");
+    const headerLines = [
+      "namespace detailed_math {",
+      "  int add(int a, int b) { return a + b; }",
+      "}",
+      "namespace a {",
+      "  namespace b {",
+      "    int add(int a, int b) { return a + b; }",
+      "  }",
+      "}",
+      "namespace decoy_ns {",
+      "  int add(int a, int b) { return -1; }",
+      "}",
+    ];
+    const lines = [
+      '#include "math.hpp"',
+      "namespace dm = decoy_ns;",
+      "namespace nested = a::b;",
+      "namespace outer {",
+      "  namespace dm = detailed_math;",
+      "  int inside() { return dm::add(1, 2); }",
+      "}",
+      "int nestedSum() { return nested::add(1, 2); }",
+      "int fileScope() { return dm::add(1, 2); }",
+      "int qualifiedAlias() { return outer::dm::add(1, 2); }",
+    ];
+    const columnOf = (sourceLines: string[], line: number): number => sourceLines[line - 1]!.lastIndexOf("add") + 1;
+    try {
+      await fs.writeFile(header, headerLines.join("\n") + "\n");
+      await fs.writeFile(file, lines.join("\n") + "\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const at = async (target: string, sourceLines: string[], line: number) =>
+        goToDefinition(index, { file: target, line, column: columnOf(sourceLines, line) });
+      const inside = await at(file, lines, 6);
+      const nestedSum = await at(file, lines, 8);
+      const fileScope = await at(file, lines, 9);
+      const qualifiedAlias = await at(file, lines, 10);
+      const decoy = await at(header, headerLines, 10);
+      for (const result of [inside, nestedSum, fileScope, qualifiedAlias, decoy]) {
+        expect(result.status).toBe("ok");
+      }
+      if (
+        inside.status !== "ok" ||
+        nestedSum.status !== "ok" ||
+        fileScope.status !== "ok" ||
+        qualifiedAlias.status !== "ok" ||
+        decoy.status !== "ok"
+      ) {
+        throw new Error("expected namespace alias targets");
+      }
+      expect(normalizePath(inside.definition.file)).toBe(normalizePath(header));
+      expect(inside.definition.range.start.line).toBe(2);
+      expect(nestedSum.definition.range.start.line).toBe(6);
+      expect(qualifiedAlias.definition.range.start.line).toBe(2);
+      expect(fileScope.definition.range.start.line).toBe(10);
+      expect(inside.definition.range.start.line).not.toBe(decoy.definition.range.start.line);
+      expect(nestedSum.definition.range.start.line).not.toBe(decoy.definition.range.start.line);
+
+      const useLines = async (target: string, sourceLines: string[], line: number) => {
+        const refs = await findReferences(index, { file: target, line, column: columnOf(sourceLines, line) });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("expected references");
+        return refs.references
+          .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(file))
+          .map((ref) => ref.range.start.line);
+      };
+      const detailedRefs = await useLines(header, headerLines, 2);
+      const nestedRefs = await useLines(header, headerLines, 6);
+      const decoyRefs = await useLines(header, headerLines, 10);
+      expect(detailedRefs).toEqual(expect.arrayContaining([6, 10]));
+      expect(detailedRefs).not.toContain(8);
+      expect(detailedRefs).not.toContain(9);
+      expect(nestedRefs).toContain(8);
+      expect(nestedRefs).not.toContain(6);
+      expect(decoyRefs).toContain(9);
+      expect(decoyRefs).not.toContain(6);
+      expect(decoyRefs).not.toContain(8);
+      expect(decoyRefs).not.toContain(10);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callsFrom = (name: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === name)
+          .map((edge) => edge.to);
+      expect(callsFrom("inside")).toEqual([defNodeId(inside.definition)]);
+      expect(callsFrom("nestedSum")).toEqual([defNodeId(nestedSum.definition)]);
+      expect(callsFrom("qualifiedAlias")).toEqual([defNodeId(qualifiedAlias.definition)]);
+      expect(callsFrom("fileScope")).toEqual([defNodeId(fileScope.definition)]);
+      expect(callsFrom("inside")).not.toContain(defNodeId(decoy.definition));
+      expect(callsFrom("nestedSum")).not.toContain(defNodeId(decoy.definition));
+      expect(callsFrom("qualifiedAlias")).not.toContain(defNodeId(decoy.definition));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C++ qualified base calls", () => {
+  it("resolves Base::run inside an overriding run to the base and not Decoy", async () => {
+    // The temp fixture sits outside the indexed root; only shapes.hpp is a source.
+    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-base-call-"));
+    const root = path.join(fixture, "indexed");
+    const file = normalizePath(path.join(root, "shapes.hpp"));
+    const lines = [
+      "class Base {",
+      "public:",
+      "  virtual int run() { return 1; }",
+      "};",
+      "class Decoy {",
+      "public:",
+      "  int run() { return -1; }",
+      "};",
+      "class Derived : public Base {",
+      "public:",
+      "  int run() override { return Base::run() + 1; }",
+      "};",
+      "",
+    ];
+    const callLine = 11;
+    const baseLine = 3;
+    const decoyLine = 7;
+    try {
+      await fs.mkdir(root);
+      await fs.writeFile(file, lines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const callColumn = lines[callLine - 1]!.indexOf("Base::run") + "Base::".length + 1;
+      const baseColumn = lines[baseLine - 1]!.indexOf("run") + 1;
+      const decoyColumn = lines[decoyLine - 1]!.indexOf("run") + 1;
+      const derivedColumn = lines[callLine - 1]!.indexOf("run") + 1;
+
+      const use = await goToDefinition(index, { file, line: callLine, column: callColumn });
+      expect(use.status).toBe("ok");
+      if (use.status !== "ok") throw new Error("Expected Base::run");
+      expect(normalizePath(use.definition.file)).toBe(file);
+      expect(use.definition.range.start.line).toBe(baseLine);
+
+      const baseRefs = await findReferences(index, { file, line: baseLine, column: baseColumn });
+      expect(baseRefs.status).toBe("ok");
+      if (baseRefs.status !== "ok") throw new Error("Expected Base::run references");
+      const baseRefLines = baseRefs.references.map((ref) => ref.range.start.line);
+      expect(baseRefLines).toContain(callLine);
+      expect(baseRefLines).not.toContain(decoyLine);
+
+      const decoyRefs = await findReferences(index, { file, line: decoyLine, column: decoyColumn });
+      expect(decoyRefs.status).toBe("ok");
+      if (decoyRefs.status !== "ok") throw new Error("Expected Decoy::run references");
+      expect(decoyRefs.references.map((ref) => ref.range.start.line)).not.toContain(callLine);
+
+      const derived = await goToDefinition(index, { file, line: callLine, column: derivedColumn });
+      expect(derived.status).toBe("ok");
+      if (derived.status !== "ok") throw new Error("Expected Derived::run");
+      expect(derived.definition.range.start.line).toBe(callLine);
+      const decoy = await goToDefinition(index, { file, line: decoyLine, column: decoyColumn });
+      expect(decoy.status).toBe("ok");
+      if (decoy.status !== "ok") throw new Error("Expected Decoy::run");
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const baseId = defNodeId(use.definition);
+      const decoyId = defNodeId(decoy.definition);
+      const callsFromDerived = graph.edges.filter(
+        (edge) => edge.label === "calls" && edge.from === defNodeId(derived.definition),
+      );
+      expect(callsFromDerived.map((edge) => edge.to)).toEqual([baseId]);
+      expect(graph.edges.some((edge) => edge.label === "calls" && edge.to === decoyId)).toBe(false);
+    } finally {
+      await fs.rm(fixture, { recursive: true, force: true });
     }
   });
 });

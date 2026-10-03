@@ -11,6 +11,7 @@ import {
 } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
+import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
 import type { ProjectIndex } from "./types.js";
 
 /**
@@ -60,13 +61,11 @@ export type CompilationUnitPeers = {
 };
 
 /** Languages whose files can name each other's top-level declarations without an import. */
-export const IMPLICIT_UNIT_LANGUAGES: Readonly<Record<string, true>> = {
-  go: true,
-  java: true,
-  kotlin: true,
-  csharp: true,
-  swift: true,
-};
+export const IMPLICIT_UNIT_LANGUAGES: Readonly<Record<string, true>> = Object.fromEntries(
+  Object.entries(IMPORT_RESOLUTION_ROWS).flatMap(([languageId, row]) =>
+    row.implicitCompilationUnit ? [[languageId, true] as const] : [],
+  ),
+);
 
 /**
  * Languages where the file itself is the whole unit: every cross-file reference must arrive
@@ -84,13 +83,17 @@ const SINGLE_FILE_UNIT_LANGUAGES: Readonly<Record<string, true>> = {
   zig: true,
 };
 
+/** Go, Java, and Kotlin read a package clause. Other package-kind languages are not parsed here. */
+function packageClauseLanguage(languageId: string | undefined): languageId is "go" | "java" | "kotlin" {
+  return languageId === "go" || languageId === "java" || languageId === "kotlin";
+}
+
 /**
  * Languages that share one unit identity namespace. Java and Kotlin share the JVM package
  * namespace, so a Kotlin sibling in the same package is as visible as a Java one.
  */
 function unitLanguageGroup(languageId: string): string {
-  if (languageId === "java" || languageId === "kotlin") return "jvm";
-  return languageId;
+  return IMPORT_RESOLUTION_ROWS[languageId]?.implicitCompilationUnitGroup ?? languageId;
 }
 
 const GO_PACKAGE_PATTERN = new RegExp(String.raw`^\s*package\s+(${GO_IDENTIFIER_SOURCE})`, "mu");
@@ -102,6 +105,12 @@ const KOTLIN_PACKAGE_NAME_PATTERN = new RegExp(
   String.raw`^\s*package\s+(${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*)`,
   "mu",
 );
+
+/** Read a JVM package clause from the same trivia-masked source used for unit peers. */
+export function jvmPackageNameFromSource(source: string, languageId: "java" | "kotlin"): string | null {
+  const pattern = languageId === "kotlin" ? KOTLIN_PACKAGE_NAME_PATTERN : JAVA_PACKAGE_NAME_PATTERN;
+  return pattern.exec(maskTrivia(source, languageId))?.[1] ?? null;
+}
 
 /**
  * A C# namespace declaration and the source span it governs. A block-scoped namespace spans
@@ -243,12 +252,10 @@ function packageDeclarationFor(
   const source = unitDeclarationSource(index, filePath, fileKey);
   let packageName: string | null = null;
   if (source !== null) {
-    const masked = maskTrivia(source, languageId);
     if (languageId === "go") {
-      packageName = GO_PACKAGE_PATTERN.exec(masked)?.[1] ?? null;
+      packageName = GO_PACKAGE_PATTERN.exec(maskTrivia(source, "go"))?.[1] ?? null;
     } else {
-      const pattern = languageId === "kotlin" ? KOTLIN_PACKAGE_NAME_PATTERN : JAVA_PACKAGE_NAME_PATTERN;
-      packageName = pattern.exec(masked)?.[1] ?? null;
+      packageName = jvmPackageNameFromSource(source, languageId);
     }
   }
   const declaration = { name: packageName, readable: source !== null };
@@ -313,14 +320,16 @@ function unitFactFor(index: ProjectIndex, file: FileId): UnitFact {
   const cached = cache.get(fileKey);
   if (cached) return cached;
 
-  const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
+  const support = supportForFileWithoutHeaderSample(file, index.languageExtensions);
+  const languageId = support?.id;
+  const unitKind = languageId === undefined ? undefined : IMPORT_RESOLUTION_ROWS[languageId]?.implicitCompilationUnit;
   let identity: UnitIdentity;
-  if (languageId === "go" || languageId === "java" || languageId === "kotlin") {
+  if (unitKind === "package" && packageClauseLanguage(languageId)) {
     const declaration = packageDeclarationFor(index, file, languageId);
     identity = { kind: "package", name: declaration.name, readable: declaration.readable };
-  } else if (languageId === "csharp") {
+  } else if (unitKind === "namespace") {
     identity = { kind: "namespaces", regions: getCsharpNamespaceRegions(index, file) };
-  } else if (languageId === "swift") {
+  } else if (unitKind === "module") {
     identity = { kind: "directory" };
   } else if (languageId !== undefined && SINGLE_FILE_UNIT_LANGUAGES[languageId]) {
     identity = { kind: "single-file" };

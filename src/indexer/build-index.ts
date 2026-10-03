@@ -9,6 +9,7 @@ import {
   supportForFileWithoutHeaderSample,
   type LanguageSupport,
 } from "../languages.js";
+import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "./import-resolution-tables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage, type WorkspaceConfig } from "../util/workspace.js";
 import {
@@ -28,6 +29,7 @@ import {
   type MatchPathFn,
 } from "../util/resolution.js";
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
+import { resolveJvmPackageImportPaths } from "../util/resolution/jvm.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
 import {
@@ -1370,19 +1372,51 @@ async function collectStaleCachedModules(args: {
       }
     }
   }
+  // A package star depends on every package file, not just its representative edge. A type
+  // wildcard (`import p.C.*` naming class `p.C`) turns into a package star once package `p.C` exists.
+  const isJvmFile = (file: string): boolean => {
+    const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id;
+    return languageId === "java" || languageId === "kotlin";
+  };
+  const dependsOnJvmPackage = (imp: ImportBinding): boolean =>
+    imp.kind === "star" && (!!imp.jvmPackageFiles || !!imp.jvmTypeWildcardName || typeof imp.resolved !== "string");
+  if (args.cacheMisses.added.some(isJvmFile) || args.cacheMisses.changed.some(isJvmFile)) {
+    const packageImporters: Array<readonly [string, ModuleIndex]> = [];
+    for (const [file, cached] of cachedModules) {
+      if (stale.has(file) || !isJvmFile(file)) continue;
+      if (cached.mod.imports.some(dependsOnJvmPackage)) packageImporters.push([file, cached.mod]);
+    }
+    const changed = await mapLimit(packageImporters, args.concurrency, async ([file, mod]) => {
+      for (const imp of mod.imports) {
+        if (imp.kind !== "star" || !dependsOnJvmPackage(imp)) continue;
+        const current = await resolveJvmPackageImportPaths(args.projectRoot, imp.from, file);
+        const previous = imp.jvmPackageFiles ?? [];
+        if (
+          current.length !== previous.length ||
+          current.some((target, index) => fileIdentityKey(target) !== fileIdentityKey(previous[index]!))
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
+    packageImporters.forEach(([file], index) => {
+      if (changed[index]) stale.add(file);
+    });
+  }
   return { stale, deletedDeclarationFiles };
 }
 
-/**
- * Languages that resolve imports through the declarations of other files
- * (C# namespaces, JVM packages, PHP namespaces, C++ named modules).
- * A content change in a dependency can move the target.
- */
-const DECLARATION_RESOLVED_IMPORT_LANGUAGES: ReadonlySet<string> = new Set(["cpp", "csharp", "java", "kotlin", "php"]);
-
-/** Files a cached module resolved: import targets and re-export sources. */
+/** Files a cached module depends on, including every JVM wildcard package file. */
 function cachedModuleTargets(mod: ModuleIndex): string[] {
-  const targets = mod.imports.flatMap((binding) => (typeof binding.resolved === "string" ? [binding.resolved] : []));
+  const targets: string[] = [];
+  for (const binding of mod.imports) {
+    if (typeof binding.resolved === "string") targets.push(binding.resolved);
+    if (binding.kind !== "star" || !binding.jvmPackageFiles) continue;
+    for (const file of binding.jvmPackageFiles) {
+      if (file !== binding.resolved) targets.push(file);
+    }
+  }
   for (const entry of mod.exports) {
     if (entry.type === "local" || !entry.moduleSpecifier || entry.fromModule === entry.moduleSpecifier) continue;
     targets.push(entry.fromModule);

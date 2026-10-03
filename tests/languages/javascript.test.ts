@@ -231,6 +231,29 @@ describe("JavaScript variable_declarator initializer references", () => {
 });
 
 describe("JavaScript class field navigation", () => {
+  it("resolves an inherited receiver method rather than a sibling decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-inherited-member-"));
+    const shapes = path.join(root, "shapes.js");
+    const decoy = path.join(root, "decoy.js");
+    const use = path.join(root, "use.js");
+    try {
+      await Promise.all([
+        writeFile(shapes, "export class Base { run() { return 1; } }\nexport class Derived extends Base {}\n"),
+        writeFile(decoy, "export class Other { run() { return 2; } }\n"),
+        writeFile(use, 'import { Derived } from "./shapes.js";\nconst d = new Derived();\nd.run();\n'),
+      ]);
+      const index = await createTestIndexFromFiles(root, [shapes, decoy, use]);
+      const result = await goToDefinition(index, { file: use, line: 3, column: 3 });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") {
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(shapes));
+        expect(result.definition.range.start.line).toBe(1);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves class fields and keeps initializer reads as references", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-field-"));
     const apiFile = path.join(root, "api.js").replace(/\\/g, "/");

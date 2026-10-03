@@ -126,11 +126,11 @@ nativeDescribe("native parser ownership", () => {
       ),
       sampleCase(
         "java",
-        ["WildcardImports.java", "pkg/PackageTypes.java"],
+        ["WildcardImports.java", "pkg/PackageTypes.java", "pkg/ServiceContract.java"],
         { file: "WildcardImports.java", line: 6, column: 16, expectedStatus: "ok" },
-        { file: "pkg/PackageTypes.java", line: 7, column: 11, expectedStatus: "ok" },
+        { file: "pkg/ServiceContract.java", line: 3, column: 18, expectedStatus: "ok" },
         "pkg/PackageTypes.java",
-        ["PackageTypes", "NestedValue", "ServiceContract"],
+        ["PackageTypes", "NestedValue"],
       ),
       sampleCase(
         "csharp",

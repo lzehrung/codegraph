@@ -1,6 +1,7 @@
 import { type LanguageSupport } from "../languages.js";
 import {
   parseCsharpUsingDirective,
+  parseJavaImportStatement,
   parseKotlinImportStatement,
   parsePhpImportStatement,
   parseRustImportStatements,
@@ -34,10 +35,12 @@ import {
   collectTextImportSpecifiers,
   rustSpecifierForParsedImport,
 } from "../indexer/imports/text-import-extractors.js";
+import { maskImportBindingTrivia } from "../indexer/imports/binding-ranges.js";
 import {
   cFamilyImportFormFromText,
   extractJsTsSpecifiers,
   isJsTsTypeOnlySpecifierStatement,
+  isRubyLoadForm,
   type ModuleSpecifier,
 } from "../util/specifiers.js";
 
@@ -126,6 +129,7 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
       : {
           spec: entry.spec,
           ...(entry.raw !== undefined ? { raw: entry.raw } : {}),
+          ...(entry.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
           ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
           ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
           ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
@@ -135,6 +139,7 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
           ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
           ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
           ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
+          ...(entry.rubyLoadForm ? { rubyLoadForm: entry.rubyLoadForm } : {}),
         },
   );
 }
@@ -142,7 +147,9 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
 function moduleSpecifierKey(entry: ModuleSpecifier): string {
   return `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.phpImportType ?? ""}::${
     entry.exportCondition ?? ""
-  }::${entry.pathAttribute ?? ""}::${entry.includeForm ?? ""}`;
+  }::${entry.pathAttribute ?? ""}::${entry.includeForm ?? ""}::${entry.rubyLoadForm ?? ""}::${entry.jvmPackageWildcard ? 1 : 0}::${
+    entry.resolutionKind ?? ""
+  }`;
 }
 
 function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpecifier[], seen: Set<string>): void {
@@ -372,7 +379,13 @@ export function collectModuleSpecifiersFromSource(
             : support.isTypeOnly(stmtText);
         if (support.id === "kotlin") {
           const parsed = parseKotlinImportStatement(stmtText);
-          if (parsed) out.push({ spec: parsed.from, typeOnly: false });
+          if (parsed) {
+            out.push({
+              spec: parsed.from,
+              typeOnly: false,
+              ...(parsed.kind === "star" ? { jvmPackageWildcard: true } : {}),
+            });
+          }
           continue;
         }
         if (support.id === "rust") {
@@ -430,15 +443,23 @@ export function collectModuleSpecifiersFromSource(
         const isCFamily = support.id === "c" || support.id === "cpp";
         // CommonJS require() and TS `import x = require(...)` both use the require condition.
         const exportCondition = isJsFamily && /\brequire\s*\(/.test(stmtText) ? ("require" as const) : undefined;
+        const javaImport =
+          support.id === "java"
+            ? parseJavaImportStatement(maskImportBindingTrivia(stmtText, "java").replace(/\s*\.\s*/gu, "."))
+            : null;
+        const methodText = match.captures.find((capture) => capture.name === "method")?.text;
+        const rubyLoadForm = support.id === "ruby" && isRubyLoadForm(methodText) ? methodText : undefined;
         for (const capture of match.captures) {
           if (capture.name !== "from") continue;
           const includeForm = isCFamily ? cFamilyImportFormFromText(stmtText, capture.text) : undefined;
           out.push({
             spec: unquote(capture.text),
             typeOnly,
+            ...(javaImport?.kind === "star" && !javaImport.isStatic ? { jvmPackageWildcard: true } : {}),
             ...(stylesheetImport ? { resolutionKind: "stylesheet" } : {}),
             ...(exportCondition ? { exportCondition } : {}),
             ...(includeForm ? { includeForm } : {}),
+            ...(rubyLoadForm ? { rubyLoadForm } : {}),
           });
         }
       }

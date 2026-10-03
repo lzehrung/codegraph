@@ -93,6 +93,8 @@ export type NameLookupPolicy = {
   cNamespace?(node: SyntaxNodeLike): "tag" | "ordinary" | undefined;
   /** Adjusts the cross-module result (arity, roles, member precedence, deferred recovery). */
   afterCrossModule?(state: NameLookupState, resolved: GoToResult | null): NameResolution | null | undefined;
+  /** Whether a file import alias remains visible at this use, after lexical shadowing. */
+  moduleAliasIsUnshadowed?(state: NameLookupState): boolean;
   /** Files a synchronous consumer loads before resolving names in a module of this language. */
   preloadFiles?(index: ProjectIndex, mod: ModuleIndex): Iterable<FileId>;
 };

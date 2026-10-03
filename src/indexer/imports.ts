@@ -1,5 +1,6 @@
 import { prepareSourceInput } from "../languages/file-prep.js";
-import { loadNearestTsconfigFor, resolveImportSpecifier, type MatchPathFn } from "../util/resolution.js";
+import { loadNearestTsconfigFor, type MatchPathFn } from "../util/resolution.js";
+import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
 import { loadWorkspaceConfig, type WorkspaceConfig } from "../util/workspace.js";
 import type { LogLevel } from "../logging.js";
 import {
@@ -33,6 +34,7 @@ import {
 import { collectNativeCaptureImportBindings } from "./imports/native-captures.js";
 import { collectPythonImportsFromNativeMatches, collectPythonImportsFromSource } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
+import { jvmPackageNameFromSource } from "./compilation-units.js";
 import type { ImportBinding } from "./types.js";
 import { collectTextImportSpecifiers } from "./imports/text-import-extractors.js";
 
@@ -130,6 +132,8 @@ export async function collectImportsForFile(
   }
   const workspaceConfig = opts?.workspaceConfig ?? (await loadWorkspaceConfig(projectRoot));
   const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();
+  const jvmPackageFiles = new Map<string, string[]>();
+  let jvmDeclaredPackage: string | null | undefined;
 
   const stylesheetLanguage = ["css", "scss", "less"].includes(resolvedSup.id);
   const resolveFrom = async (
@@ -139,22 +143,45 @@ export async function collectImportsForFile(
   ): Promise<ResolvedImportTarget> => {
     const resolutionKind = resolverOpts?.resolutionKind;
     const includeForm = resolverOpts?.includeForm;
-    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}\0${includeForm ?? ""}`;
+    const rubyLoadForm = resolverOpts?.rubyLoadForm;
+    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}\0${includeForm ?? ""}\0${rubyLoadForm ?? ""}\0${resolverOpts?.jvmPackageWildcard ? "package" : "symbol"}\0${resolverOpts?.pathAttribute ?? ""}\0${resolverOpts?.statementStartIndex ?? ""}`;
     const cached = resolvedImportCache.get(cacheKey);
     if (cached) return await cached;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
     const resolved = (async (): Promise<ResolvedImportTarget> => {
-      const result = await resolveImportSpecifier(projectRoot, file, from, resolvedSup.id, {
+      const result = await resolveSpecifierTargets(file, from, resolvedSup.id, {
+        projectRoot,
         ...(matchPath ? { matchPath } : {}),
         ...(workspaceConfig ? { workspaceConfig } : {}),
         resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
         ...(resolutionHints ? { resolutionHints } : {}),
+        ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+        ...(resolverOpts?.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
         ...(phpImportType ? { phpImportType } : {}),
         ...(resolutionKind ? { resolutionKind } : {}),
         ...(includeForm ? { includeForm } : {}),
-        ...(resolvedSup.id === "scss" && resolutionKind === "stylesheet" ? { allowScssPartialResolution: true } : {}),
+        ...(rubyLoadForm ? { rubyLoadForm } : {}),
+        ...(resolverOpts?.pathAttribute ? { pathAttribute: resolverOpts.pathAttribute } : {}),
+        ...(resolverOpts?.statementStartIndex !== undefined
+          ? { statementStartIndex: resolverOpts.statementStartIndex }
+          : {}),
       });
-      return typeof result === "string" ? result.replace(/\\/g, "/") : result;
+      if (result.jvmPackageMatched) {
+        jvmPackageFiles.set(
+          from,
+          result.files.map((target) => target.replace(/\\/g, "/")),
+        );
+      }
+      // JVM package files remain on the star binding; C# namespaces retain a representative.
+      if (
+        result.files.length > 1 &&
+        (resolvedSup.id === "java" || resolvedSup.id === "kotlin" || resolvedSup.id === "csharp")
+      ) {
+        return result.files[0]!.replace(/\\/g, "/");
+      }
+      const resolvedFile = result.files[0];
+      if (result.files.length === 1 && resolvedFile) return resolvedFile.replace(/\\/g, "/");
+      return { external: result.externalName };
     })();
     resolvedImportCache.set(cacheKey, resolved);
     return await resolved;
@@ -178,6 +205,53 @@ export async function collectImportsForFile(
 
   const finalizeImports = async (): Promise<void> => {
     await finalizeLanguageSpecificImports(languageContext);
+    for (const binding of imports) {
+      if (
+        binding.kind === "named" &&
+        typeof binding.resolved === "string" &&
+        (resolvedSup.id === "java" || resolvedSup.id === "kotlin")
+      ) {
+        if (jvmDeclaredPackage === undefined) {
+          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
+        }
+        if (jvmDeclaredPackage === binding.from.slice(0, binding.from.lastIndexOf("."))) {
+          binding.jvmSamePackage = true;
+        }
+      }
+      if (binding.kind !== "star" || typeof binding.resolved !== "string") continue;
+      const files = jvmPackageFiles.get(binding.from);
+      // A static class wildcard can spell the same name as a package wildcard.
+      if (
+        binding.jvmTypeWildcardName &&
+        files?.includes(binding.resolved) &&
+        (resolvedSup.id === "java" || resolvedSup.id === "kotlin")
+      ) {
+        binding.jvmPackageFiles = files;
+        binding.jvmPackageLanguageId = resolvedSup.id;
+        if (jvmDeclaredPackage === undefined) {
+          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
+        }
+        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === binding.from) binding.jvmSamePackage = true;
+      }
+      if (
+        binding.jvmTypeWildcardName &&
+        !binding.jvmPackageFiles &&
+        (resolvedSup.id === "java" || resolvedSup.id === "kotlin")
+      ) {
+        if (jvmDeclaredPackage === undefined) {
+          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
+        }
+        const typePackage = binding.from.slice(0, -(binding.jvmTypeWildcardName.length + 1));
+        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === typePackage) binding.jvmSamePackage = true;
+      }
+      if (binding.jvmStaticWildcardName && resolvedSup.id === "java") {
+        if (jvmDeclaredPackage === undefined) {
+          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
+        }
+        const typePackage = binding.from.slice(0, -(binding.jvmStaticWildcardName.length + 1));
+        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === typePackage) binding.jvmSamePackage = true;
+      }
+    }
   };
 
   const applyStatementOverride = async (

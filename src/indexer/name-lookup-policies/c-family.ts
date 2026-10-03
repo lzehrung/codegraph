@@ -6,15 +6,16 @@ import {
   AMBIGUOUS_CPP_USING_DIRECTIVE_REASON,
   AMBIGUOUS_STAR_IMPORT_REASON,
 } from "../ambiguous-resolution.js";
-import { cppBindingCallableShape } from "../cpp-callables.js";
 import { cppOutOfLineOwnerPath } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
+  cppQualifiedNameThroughVisiblePrefix,
   cppStarImportClosure,
   cppUsingDeclarationTarget,
   resolveCppCallableBindings,
   resolveCppCollidingBinding,
   resolveCppUsingDirectiveName,
   resolveVisibleCppCallableName,
+  resolveCppVisibleStaticCallableName,
 } from "../navigation-cpp.js";
 import { resolveNamedDefinition } from "../navigation-local.js";
 import { okGoToResult } from "../navigation-provenance.js";
@@ -49,22 +50,60 @@ export const cLookupPolicy: NameLookupPolicy = {
   afterCrossModule: (state, resolved) => deferIncludedStarRecovery(state, resolved, cNamespaceOf(state.use.node)),
 };
 
+const AMBIGUOUS_CPP_NAMESPACE_ALIAS_REASON = "Ambiguous C++ namespace alias";
+
 /** A qualified name (`ns::f`, `Box::make`) names a namespace or static member directly. */
-export function resolveCppQualifiedName(use: BareNameUse): GoToResult | undefined {
-  const { index, mod, file, node, name, scopeIndex, parsed } = use;
-  if (!name.includes("::")) return undefined;
-  const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(name);
+function lookupCppQualifiedName(use: BareNameUse, qualifiedName: string): GoToResult | undefined {
+  const { index, mod, file, node, scopeIndex, parsed } = use;
+  const qualifiedBindings = scopeIndex.cppQualifiedFunctionBindings.get(qualifiedName);
   if (qualifiedBindings) {
     const selected = resolveCppCallableBindings(file, qualifiedBindings, node, parsed.source);
     if (!selected) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
     return okGoToResult(index, selected, { resolution: "exact", confidence: "high" });
   }
-  const visible = resolveVisibleCppCallableName(index, mod, name, node, parsed.source, loadParsed(use));
+  const visible = resolveVisibleCppCallableName(index, mod, qualifiedName, node, parsed.source, loadParsed(use));
   if (visible !== undefined) {
     if (!visible) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
     return okGoToResult(index, visible, { resolution: "exact", confidence: "high" });
   }
-  return resolveNamedDefinition(index, mod, file, parsed.sup, name) ?? undefined;
+  const staticMember = resolveCppVisibleStaticCallableName(
+    index,
+    mod,
+    qualifiedName,
+    node,
+    parsed.source,
+    loadParsed(use),
+  );
+  if (staticMember !== undefined) {
+    if (!staticMember) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
+    return okGoToResult(index, staticMember, { resolution: "exact", confidence: "high" });
+  }
+  return resolveNamedDefinition(index, mod, file, parsed.sup, qualifiedName) ?? undefined;
+}
+
+/** Qualifier lookup is lexical before the direct textual path can name a global declaration. */
+export function resolveCppQualifiedName(use: BareNameUse): GoToResult | undefined {
+  const { name } = use;
+  if (!name.includes("::")) return undefined;
+  const rewritten = cppQualifiedNameThroughVisiblePrefix(
+    use.index,
+    use.mod,
+    name,
+    use.node,
+    use.parsed.source,
+    use.parsed.tree,
+    loadParsed(use),
+  );
+  if (rewritten === null) return { status: "not_found", reason: AMBIGUOUS_CPP_NAMESPACE_ALIAS_REASON };
+  if (rewritten !== undefined) {
+    return (
+      lookupCppQualifiedName(use, rewritten) ?? {
+        status: "not_found",
+        reason: "No matching C++ declaration in the visible qualifier",
+      }
+    );
+  }
+  return lookupCppQualifiedName(use, name);
 }
 
 export const cppLookupPolicy: NameLookupPolicy = {
@@ -111,7 +150,7 @@ export const cppLookupPolicy: NameLookupPolicy = {
 
   beforeCrossModule({ use, closestBinding }) {
     const { index, mod, node, name, parsed } = use;
-    if (closestBinding?.kind === "function" && cppBindingCallableShape(closestBinding)) {
+    if (closestBinding?.kind === "function" && closestBinding.callable?.signature) {
       return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
     }
     const visible = resolveVisibleCppCallableName(index, mod, name, node, parsed.source, loadParsed(use));

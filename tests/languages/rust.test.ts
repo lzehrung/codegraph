@@ -471,6 +471,70 @@ describe("Rust macro_rules! structure", () => {
 });
 
 describe("Rust explicit method receivers", () => {
+  it("resolves trait default methods after inherent implementations, not decoy methods", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-trait-default-"));
+    const file = path.join(root, "main.rs");
+    const source = [
+      "trait Greet { fn run(&self) -> i32 { 1 } }",
+      "struct Decoy; impl Decoy { fn run(&self) -> i32 { -1 } }",
+      "struct Derived; impl Greet for Derived {}",
+      "fn call_derived() -> i32 { let d = Derived; d.run() }",
+      "fn main() {}",
+    ].join("\n");
+    try {
+      await writeFile(file, source);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, { file, line: 4, column: source.split("\n")[3]!.indexOf("run") + 1 });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") {
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(file));
+        expect(result.definition.range.start.line).toBe(1);
+        expect(result.definition.range.start.line).not.toBe(2);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a qualified call through an imported module without selecting another module", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-module-call-"));
+    const src = path.join(root, "src");
+    const use = path.join(src, "consumer.rs");
+    const calc = path.join(src, "calc.rs");
+    const decoy = path.join(src, "decoy.rs");
+    try {
+      await mkdir(src, { recursive: true });
+      await Promise.all([
+        writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "module-call"\nversion = "0.1.0"\n'),
+        writeFile(path.join(src, "main.rs"), "fn main() {}\n"),
+        writeFile(path.join(src, "lib.rs"), "pub mod calc; pub mod decoy; pub mod consumer;\n"),
+        writeFile(calc, "pub fn add(a: i32, b: i32) -> i32 { a + b }\n"),
+        writeFile(decoy, "pub fn add(a: i32, b: i32) -> i32 { -1 }\n"),
+        writeFile(use, "use crate::calc;\npub fn sum_pair() -> i32 { calc::add(1, 2) }\n"),
+      ]);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, { file: use, line: 2, column: 35 });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") {
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(calc));
+        expect(fileIdentityKey(result.definition.file)).not.toBe(fileIdentityKey(decoy));
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const caller = [...graph.nodes.values()].find(
+        (node) => node.name === "sum_pair" && fileIdentityKey(node.file) === fileIdentityKey(use),
+      );
+      const targets = graph.edges
+        .filter((edge) => edge.from === caller?.id && edge.label === "calls")
+        .map((edge) => graph.nodes.get(edge.to));
+      expect(
+        targets.some((target) => target?.name === "add" && fileIdentityKey(target.file) === fileIdentityKey(calc)),
+      ).toBe(true);
+      expect(targets.some((target) => target && fileIdentityKey(target.file) === fileIdentityKey(decoy))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves self and Self calls without lexically resolving a bare impl method", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-member-navigation-"));
     const file = path.join(root, "example.rs");
@@ -1270,6 +1334,36 @@ describe("Rust nested grouped use and path attributes", () => {
       if (typeof leaked?.resolved === "string") {
         expect(leaked.resolved.replace(/\\/g, "/")).not.toContain("outside.rs");
       }
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a #[path] module outside the project root external", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "cg-rust-path-root-outside-"));
+    const root = path.join(sandbox, "project");
+    await mkdir(root, { recursive: true });
+    const outside = path.join(sandbox, "outside.rs");
+    await writeFile(outside, "pub fn leaked() {}\n");
+    await writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "path-outside"\nversion = "0.1.0"\n');
+    const lib = path.join(root, "lib.rs");
+    await writeFile(lib, '#[path = "../outside.rs"]\nmod leaked;\n');
+    try {
+      const imports = await collectImportsForFile(lib, root);
+      const leaked = imports.find((entry) => entry.kind === "namespace" && entry.localNS === "leaked");
+      const graph = await collectGraph(root, [lib]);
+      const edgeTargets = graph.edges
+        .filter((edge) => path.basename(edge.from) === "lib.rs")
+        .map((edge) => (edge.to.type === "file" ? edge.to.path.replace(/\\/g, "/") : `external:${edge.to.name}`));
+      const outsidePath = outside.replace(/\\/g, "/");
+
+      expect(leaked).toBeDefined();
+      expect(leaked?.resolved).toEqual({ external: "leaked" });
+      if (typeof leaked?.resolved === "string") {
+        expect(leaked.resolved.replace(/\\/g, "/")).not.toBe(outsidePath);
+      }
+      expect(edgeTargets).toContain("external:leaked");
+      expect(edgeTargets).not.toContain(outsidePath);
     } finally {
       await rm(sandbox, { recursive: true, force: true });
     }

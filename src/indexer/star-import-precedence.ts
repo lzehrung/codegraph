@@ -3,7 +3,7 @@ import { fileIdentityKey } from "../util/paths.js";
 import type { ImportBinding } from "./import-types.js";
 import { resolveImported } from "./navigation-resolve.js";
 import { sameDef } from "./reference-context.js";
-import type { ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
+import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 
 /**
  * What a language does when more than one star import can see the same simple name.
@@ -74,11 +74,10 @@ function resolvedImportKey(resolved: ImportBinding["resolved"]): string {
 }
 
 /**
- * `expandStarImports` copies each star import into a named or namespace binding with the
- * same `from` and resolved file, and without a source range. Those copies are the star
- * import, not an explicit one. An explicit binding (Java `import pkg.Type`, Python
- * `from a import name`, Rust `use a::Name`) keeps the range the statement attributed,
- * or an alias flag star expansion never sets.
+ * expandStarImports copies each star import into a named or namespace binding with the
+ * same source specifier and one of its resolved target files, without a source range.
+ * These copies remain star imports. Explicit bindings retain their source ranges or
+ * an alias flag that star expansion never adds.
  */
 export function isExpandedStarBinding(binding: ImportBinding, imports: readonly ImportBinding[]): boolean {
   if (binding.kind !== "named" && binding.kind !== "namespace") return false;
@@ -87,12 +86,13 @@ export function isExpandedStarBinding(binding: ImportBinding, imports: readonly 
   if (binding.kind === "namespace" && binding.localRange) return false;
   const resolved = resolvedImportKey(binding.resolved);
   if (!resolved) return false;
-  return imports.some(
-    (candidate) =>
-      candidate.kind === "star" &&
-      candidate.from === binding.from &&
-      resolvedImportKey(candidate.resolved) === resolved,
-  );
+  return imports.some((candidate) => {
+    if (candidate.kind !== "star" || candidate.from !== binding.from) return false;
+    if (candidate.jvmPackageFiles) {
+      return candidate.jvmPackageFiles.some((file) => resolvedImportKey(file) === resolved);
+    }
+    return resolvedImportKey(candidate.resolved) === resolved;
+  });
 }
 
 function explicitBindingStartIndex(binding: ImportBinding): number | undefined {
@@ -158,15 +158,17 @@ export function resolveStarImportedDefinition(
   name: string,
   languageId: string,
   cNamespace?: "tag" | "ordinary",
+  argumentCount?: number,
 ): SymbolDef | null {
   if (imp.kind !== "star" || imp.staticMembersOf) return null;
   const result = resolveImported(index, imp, name, {
     ...(cNamespace ? { cNamespace } : {}),
+    ...(argumentCount !== undefined ? { argumentCount } : {}),
     // Ruby star expansion already publishes exported constants. Local fallback would
     // resurrect a nested class as a bare name the exports query omitted.
     ...(languageId === "ruby" ? { allowLocalFallback: false } : {}),
   });
-  if (!result || "namespace" in result) return null;
+  if (!result || "namespace" in result || (languageId === "ruby" && result.isMember)) return null;
   return result;
 }
 
@@ -286,7 +288,7 @@ function rubyLoadOrderDeclaration(
  * includes every part in that load component.
  */
 function sameReopenedRubyConstant(index: ProjectIndex, left: SymbolDef, right: SymbolDef): boolean {
-  if (left.kind !== right.kind) return false;
+  if (left.kind !== SymbolKind.Class || right.kind !== SymbolKind.Class) return false;
   const leftName = exportedNameForDef(index, left);
   const rightName = exportedNameForDef(index, right);
   return !!leftName && leftName === rightName;
@@ -458,7 +460,7 @@ export type RubyReopenedConstant = {
 export function findRubyReopenedConstantParts(index: ProjectIndex, def: SymbolDef): RubyReopenedConstant {
   const empty: RubyReopenedConstant = { parts: [], incomplete: false };
   const languageId = supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.id;
-  if (languageId !== "ruby") return empty;
+  if (languageId !== "ruby" || def.kind !== SymbolKind.Class) return empty;
   const exported = exportedNameForDef(index, def);
   if (!exported) return empty;
   const component = rubyLoadComponent(index, def.file);

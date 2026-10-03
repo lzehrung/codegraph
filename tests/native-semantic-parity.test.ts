@@ -1041,13 +1041,14 @@ nativeDescribe("native semantic coverage", () => {
       ),
       sampleExpectation(
         "java",
-        ["WildcardImports.java", "pkg/PackageTypes.java", "pkg/PackageService.java"],
+        ["WildcardImports.java", "pkg/PackageTypes.java", "pkg/PackageService.java", "pkg/ServiceContract.java"],
         [
-          { file: "pkg/PackageTypes.java", names: ["PackageTypes", "NestedValue", "ServiceContract"] },
+          { file: "pkg/PackageTypes.java", names: ["PackageTypes", "NestedValue"] },
+          { file: "pkg/ServiceContract.java", names: ["ServiceContract"] },
           { file: "pkg/PackageService.java", names: ["PackageService"] },
         ],
         { file: "WildcardImports.java", line: 8, column: 3, expectedStatus: "ok" },
-        { file: "pkg/PackageTypes.java", line: 7, column: 11, expectedStatus: "ok" },
+        { file: "pkg/ServiceContract.java", line: 3, column: 18, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "java",

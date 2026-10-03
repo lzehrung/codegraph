@@ -6,6 +6,7 @@
 import { getCallArgumentCount } from "../../languages/callable-arity.js";
 import { rustTokenTreeNameFollowsSeparator } from "../../util/member-access.js";
 import { fileIdentityKey } from "../../util/paths.js";
+import { okGoToResult } from "../navigation-provenance.js";
 import { resolveImported } from "../navigation-resolve.js";
 import { typescriptOverloadImplementationAcceptsCount } from "../ts-callables.js";
 import { type ModuleIndex, type SymbolDef, SymbolKind } from "../types.js";
@@ -44,9 +45,6 @@ const typescriptLookupPolicy: NameLookupPolicy = {
     const accepted = typescriptOverloadImplementationAcceptsCount({
       implementation: target,
       locals: targetModule.locals,
-      tree: targetContext.tree,
-      source: targetContext.source,
-      languageId: targetContext.sup.id,
       argumentCount,
     });
     return accepted ? undefined : { status: "not_found", reason: "No matching TypeScript overload signature" };
@@ -84,6 +82,34 @@ const rustLookupPolicy: NameLookupPolicy = {
   },
 };
 
+/** Go package aliases yield to closer local bindings. */
+const goLookupPolicy: NameLookupPolicy = {
+  moduleAliasIsUnshadowed: ({ use, closestBinding }) =>
+    !closestBinding || use.scopeIndex.allScopes[0]?.map.get(closestBinding.canonicalName) === closestBinding,
+};
+/** A Zig declaration initialized from an imported member names the source symbol. */
+const zigLookupPolicy: NameLookupPolicy = {
+  onLocal({ use, lookupName }, local) {
+    const binding = use.mod.imports.find(
+      (candidate) =>
+        candidate.kind === "named" &&
+        candidate.local === lookupName &&
+        candidate.localRange?.start.index === local.range.start.index &&
+        fileIdentityKey(local.file) === fileIdentityKey(use.file),
+    );
+    if (!binding || binding.kind !== "named") return undefined;
+    const target = resolveImported(use.index, binding, binding.imported);
+    if (!target || "namespace" in target) return { status: "not_found", reason: "Unresolved Zig symbol import" };
+    return okGoToResult(use.index, target, {
+      via: {
+        ...(typeof binding.resolved === "string" ? { importedFrom: binding.resolved } : {}),
+        exportedName: binding.imported,
+      },
+      resolution: "import",
+      confidence: "high",
+    });
+  },
+};
 const NO_POLICY: NameLookupPolicy = {};
 
 const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
@@ -91,6 +117,7 @@ const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
   cpp: cppLookupPolicy,
   csharp: csharpLookupPolicy,
   java: jvmLookupPolicy,
+  go: goLookupPolicy,
   kotlin: jvmLookupPolicy,
   php: phpLookupPolicy,
   python: pythonLookupPolicy,
@@ -98,6 +125,7 @@ const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
   swift: swiftLookupPolicy,
   ts: typescriptLookupPolicy,
   tsx: typescriptLookupPolicy,
+  zig: zigLookupPolicy,
 };
 
 export function nameLookupPolicyFor(languageId: string): NameLookupPolicy {

@@ -185,6 +185,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   hbs: { omittedReason: "Handlebars document format; embedded scripts parse as their own language." },
   html: { omittedReason: "Document format; embedded scripts parse as their own language." },
   java: {
+    extraTraversalTypes: ["field_access", "scoped_identifier", "scoped_type_identifier"],
     memberAccessShapes: [
       {
         nodeTypes: ["method_invocation"],
@@ -293,6 +294,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     memberCallNamesFreeFunctionOmittedReason: "A call with a receiver names a method, not a free function.",
   },
   rust: {
+    extraTraversalTypes: ["scoped_identifier"],
     memberAccessShapes: [
       {
         nodeTypes: ["scoped_identifier"],

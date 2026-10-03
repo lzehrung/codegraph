@@ -2327,6 +2327,36 @@ describe("C# inherited overloads", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves an explicit this call to a grandparent overload instead of a nearer wrong-arity method", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-this-grand-overload-"));
+    try {
+      const lines = ["namespace P;", "public class Derived : Base {", "  public int Call() => this.Hit(1);", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "GrandBase.cs": "namespace P;\npublic class GrandBase { public int Hit(int value) => value; }\n",
+        "Base.cs": "namespace P;\npublic class Base : GrandBase { public int Hit() => 0; }\n",
+        "Derived.cs": lines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const goto = await goToDefinition(index, {
+        file: paths["Derived.cs"]!,
+        line: 3,
+        column: columnOf(lines, 3, "Hit"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected GrandBase.Hit(int)");
+      expect(normalizePath(goto.definition.file)).toBe(paths["GrandBase.cs"]);
+      expect(normalizePath(goto.definition.file)).not.toBe(paths["Base.cs"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "Call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(targets).toEqual([paths["GrandBase.cs"]]);
+      expect(targets).not.toContain(paths["Base.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("C# inherited member accessibility", () => {
@@ -2910,6 +2940,162 @@ describe("C# using namespace across files", () => {
         .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
         .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
       expect(targets).toEqual(["PType.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# plain dotted using targets", () => {
+  it("binds a plain using of a dotted type to the declaring file, not a path-like decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-dotted-using-"));
+    try {
+      await mkdir(path.join(root, "N"), { recursive: true });
+      const real = path.join(root, "Real.cs");
+      const decoy = path.join(root, "N", "T.cs");
+      const use = path.join(root, "Use.cs");
+      await writeFile(real, "namespace N {\n  public class T { public static int M() => 1; }\n}\n");
+      await writeFile(decoy, "namespace Other {\n  public class Decoy { public static int M() => 2; }\n}\n");
+      await writeFile(use, "using N.T;\nnamespace Q { public class Use {} }\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const binding = index.byFile
+        .get(fileIdentityKey(use))
+        ?.imports.find((entry) => entry.kind === "star" && entry.from === "N.T");
+      const fileEdges = index.graph.edges.filter(
+        (edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file",
+      );
+      const edgePaths = fileEdges.map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : ""));
+
+      expect(typeof binding?.resolved).toBe("string");
+      if (typeof binding?.resolved === "string") {
+        expect(fileIdentityKey(binding.resolved)).toBe(fileIdentityKey(real));
+        expect(fileIdentityKey(binding.resolved)).not.toBe(fileIdentityKey(decoy));
+      }
+      expect(edgePaths).toEqual([fileIdentityKey(real)]);
+      expect(edgePaths).not.toContain(fileIdentityKey(decoy));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an ambiguous plain using of a dotted type external instead of a path-like file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-dotted-ambiguous-"));
+    try {
+      await mkdir(path.join(root, "N"), { recursive: true });
+      const pathLike = path.join(root, "N", "T.cs");
+      const extra = path.join(root, "Extra.cs");
+      const use = path.join(root, "Use.cs");
+      await writeFile(pathLike, "namespace N {\n  public class T { public static int Left() => 1; }\n}\n");
+      await writeFile(extra, "namespace N {\n  public class T { public static int Right() => 2; }\n}\n");
+      await writeFile(use, "using N.T;\nclass Use {}\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const binding = index.byFile
+        .get(fileIdentityKey(use))
+        ?.imports.find((entry) => entry.kind === "star" && entry.from === "N.T");
+      const fileEdges = index.graph.edges.filter(
+        (edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file",
+      );
+      const externalNames = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "external")
+        .map((edge) => (edge.to.type === "external" ? edge.to.name : ""));
+
+      expect(binding?.resolved).toEqual({ external: "N.T" });
+      expect(typeof binding?.resolved === "string" ? path.basename(binding.resolved) : null).not.toBe("T.cs");
+      expect(fileEdges).toEqual([]);
+      expect(externalNames).toContain("N.T");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers a path-like C# file over a workspace package for a bare using", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-path-before-workspace-"));
+    try {
+      await mkdir(path.join(root, "pkgs", "foo"), { recursive: true });
+      const csharpFile = path.join(root, "Foo.cs");
+      const packageFile = path.join(root, "pkgs", "foo", "index.ts");
+      const use = path.join(root, "Use.cs");
+      await writeFile(path.join(root, "package.json"), '{"name":"root","private":true,"workspaces":["pkgs/*"]}\n');
+      await writeFile(path.join(root, "pkgs", "foo", "package.json"), '{"name":"Foo","main":"index.ts"}\n');
+      await writeFile(packageFile, "export const x = 1;\n");
+      await writeFile(csharpFile, "namespace Other { public class Foo {} }\n");
+      await writeFile(use, "using Foo;\nnamespace Q { public class Use {} }\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const binding = index.byFile
+        .get(fileIdentityKey(use))
+        ?.imports.find((entry) => entry.kind === "star" && entry.from === "Foo");
+      const fileEdges = index.graph.edges.filter(
+        (edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file",
+      );
+      const edgeBases = fileEdges.map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : ""));
+
+      expect(typeof binding?.resolved).toBe("string");
+      if (typeof binding?.resolved === "string") {
+        expect(path.basename(binding.resolved)).toBe("Foo.cs");
+        expect(path.basename(binding.resolved)).not.toBe("index.ts");
+      }
+      expect(edgeBases).toEqual(["Foo.cs"]);
+      expect(edgeBases).not.toContain("index.ts");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not bind an unparsed C# using capture to a non-C# file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-unparsed-using-"));
+    try {
+      const script = path.join(root, "Something.ts");
+      const use = path.join(root, "Use.cs");
+      await writeFile(script, "export const x = 1;\n");
+      await writeFile(use, "using Something.Foo<int>;\n");
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const binding = index.byFile
+        .get(fileIdentityKey(use))
+        ?.imports.find((entry) => entry.from === "Something.Foo<int>");
+      const fileEdges = index.graph.edges.filter(
+        (edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file",
+      );
+      const externalNames = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "external")
+        .map((edge) => (edge.to.type === "external" ? edge.to.name : ""));
+      const resolvedBase = typeof binding?.resolved === "string" ? path.basename(binding.resolved) : null;
+
+      expect(binding?.resolved).toEqual({ external: "Something.Foo<int>" });
+      expect(resolvedBase).not.toBe("Something.ts");
+      expect(fileEdges).toEqual([]);
+      expect(externalNames).toContain("Something.Foo<int>");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# inherited member lookup", () => {
+  it("reaches a grandparent method through two empty derived classes but not an unrelated owner", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-grandparent-"));
+    try {
+      const lines = ["namespace P;", "public class Use {", "  public int Call() { return new Derived().Run(); }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "Grand.cs": "namespace P; public class Grand { public int Run() => 1; }",
+        "Base.cs": "namespace P; public class Base : Grand {}",
+        "Derived.cs": "namespace P; public class Derived : Base {}",
+        "Decoy.cs": "namespace P; public class Decoy { public int Run() => -1; }",
+        "Use.cs": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line: 3,
+        column: columnOf(lines, 3, "Run"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected inherited C# method");
+      expect(normalizePath(result.definition.file)).toBe(paths["Grand.cs"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "Call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["Grand.cs"]]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

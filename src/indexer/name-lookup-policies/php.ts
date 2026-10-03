@@ -3,13 +3,18 @@
  * separate namespaces, so the syntactic role of the use selects which one a name can bind.
  */
 import { findClosestBinding } from "../navigation-local.js";
-import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../navigation-php.js";
+import {
+  findPhpImportAlias,
+  getPhpQualifiedReference,
+  inferPhpQualifiedReferenceImportType,
+} from "../navigation-php.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import {
   phpClassReferenceMatchesDefinition,
   phpReferenceRoleMatchesKind,
   resolveIndexedPhpClassReference,
   resolvePhpExplicitImport,
+  resolvePhpNamespaceSymbol,
   resolvePhpSameScopeRoleDefinition,
 } from "../php-namespace-symbols.js";
 import { scopeNodesFor } from "../scope-nodes.js";
@@ -53,6 +58,20 @@ export const phpLookupPolicy: NameLookupPolicy = {
         resolution: "import",
         confidence: "high",
       });
+    }
+    const qualified = getPhpQualifiedReference(node, parsed.source);
+    if (qualified?.includes("\\") && inferPhpQualifiedReferenceImportType(node) === "function") {
+      const target = resolvePhpNamespaceSymbol(
+        index,
+        parsed.source,
+        parsed.tree,
+        node,
+        qualified,
+        mod.imports,
+        "function",
+      );
+      if (target) return okGoToResult(index, target, { resolution: "php-qualified", confidence: "high" });
+      return { status: "not_found", reason: "No matching PHP qualified function" };
     }
     if (!isClassReference(use)) return undefined;
     const phpClass = resolveIndexedPhpClassReference(index, parsed.source, parsed.tree, node, lookupName, mod.imports);

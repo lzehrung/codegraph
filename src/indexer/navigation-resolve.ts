@@ -1,6 +1,7 @@
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
-import { languageHasDeclarationVisibility } from "./declaration-visibility.js";
+import { isJvmPackageSymbolVisible, languageHasDeclarationVisibility } from "./declaration-visibility.js";
+import { isJvmStaticWildcardMember, isJvmTypeWildcardMember, jvmWildcardTypeOwner } from "./expand-star-imports.js";
 import type { FileId } from "../types.js";
 import { foldPhpIdentifierCase, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -38,6 +39,11 @@ export type ResolveExportOptions = {
   cNamespace?: "tag" | "ordinary";
   /** Source position for implicit C# namespace lookup in the initial file. */
   referenceIndex?: number;
+  /**
+   * Explicit argument count at a call. Java and Kotlin overload sets (several functions
+   * exported under one name) are chosen by indexed `callable.arity`; other languages ignore it.
+   */
+  argumentCount?: number;
 };
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
@@ -230,6 +236,43 @@ function declaresMemberKind(def: SymbolDef): boolean {
 }
 
 /**
+ * One function from an overload set, or null when the count is not accepted by exactly one.
+ * Only indexed `callable.arity` is consulted: a missing arity does not accept, and a count
+ * two overloads both accept stays unresolved.
+ */
+function selectFunctionOverloadByArity(candidates: readonly SymbolDef[], argumentCount: number): SymbolDef | null {
+  if (candidates.length < 2 || candidates.some((candidate) => candidate.kind !== SymbolKind.Function)) return null;
+  const accepting = candidates.filter((candidate) => {
+    const arity = candidate.callable?.arity;
+    return !!arity && argumentCount >= arity.minArgs && (arity.maxArgs === null || argumentCount <= arity.maxArgs);
+  });
+  return accepting.length === 1 ? (accepting[0] ?? null) : null;
+}
+
+/**
+ * `def` is one function of a Java or Kotlin overload set exported as `exportedName`.
+ * A call chooses among them by argument count; the import itself names the whole set, so
+ * reference search must still treat the import as able to reach each overload.
+ */
+export function javaKotlinFunctionOverloadIncludes(
+  index: ProjectIndex,
+  file: FileId,
+  exportedName: string,
+  def: SymbolDef,
+): boolean {
+  if (def.kind !== SymbolKind.Function) return false;
+  const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
+  if (languageId !== "java" && languageId !== "kotlin") return false;
+  const moduleEntry = moduleFor(index, file);
+  if (!moduleEntry) return false;
+  const names = moduleNameLookup(index, moduleEntry.file);
+  if (!names) return false;
+  const exported = names.localExports.get(names.normalizeIdentifier(exportedName)) ?? [];
+  if (exported.length < 2 || exported.some((candidate) => candidate.kind !== SymbolKind.Function)) return false;
+  return exported.some((candidate) => sameSymbolDef(index, candidate, def));
+}
+
+/**
  * A default-export wrapper keeps `SymbolKind.Default` so the export name stays `default`.
  * Member lookup needs the class, interface, or type alias that wrapper was copied from.
  */
@@ -330,7 +373,8 @@ export function resolveExport(
     if (!names) return null;
     const normalizedFile = normalizePath(moduleEntry.file);
     const referenceIndex = fileIdentityKey(fileInner) === fileIdentityKey(file) ? opts?.referenceIndex : undefined;
-    const csharpFile = supportForFileWithoutHeaderSample(normalizedFile, index.languageExtensions)?.id === "csharp";
+    const languageId = supportForFileWithoutHeaderSample(normalizedFile, index.languageExtensions)?.id;
+    const csharpFile = languageId === "csharp";
     // A dotted name is a namespace path even when the caller has no source position
     // (`using PT = N.Inner.Point` resolves through the bound file, not a use site).
     // A bare name still needs a source position before namespace visibility applies.
@@ -348,7 +392,8 @@ export function resolveExport(
       unqualifiedName = name.slice("global::".length);
     }
     const canonicalName = names.normalizeIdentifier(unqualifiedName);
-    const key = `${cacheKey(normalizedFile, names.normalizeIdentifier(name))}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}::${referenceIndex ?? ""}`;
+    const argumentCountKey = opts?.argumentCount === undefined ? "" : String(opts.argumentCount);
+    const key = `${cacheKey(normalizedFile, names.normalizeIdentifier(name))}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}::${referenceIndex ?? ""}::${argumentCountKey}`;
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
     const cycleKey = `${cacheKey(normalizedFile, canonicalName)}::${namespace ?? ""}`;
@@ -420,6 +465,17 @@ export function resolveExport(
       return result;
     }
     if (localCandidates.length) {
+      // Several same-named functions are an overload set, not a failed lookup. Java static
+      // imports and Kotlin package imports both land here; arity picks the unique acceptor.
+      const selected =
+        opts?.argumentCount !== undefined && (languageId === "java" || languageId === "kotlin")
+          ? selectFunctionOverloadByArity(localCandidates, opts.argumentCount)
+          : null;
+      if (selected) {
+        const result: ResolvedExport = { kind: "resolved", def: selected };
+        index.exportCache.set(key, result);
+        return result;
+      }
       index.exportCache.set(key, null);
       return null;
     }
@@ -773,6 +829,55 @@ export function resolveCsharpQualifiedName(
   return null;
 }
 
+/** Select from the entire wildcard package before any representative file can win. */
+function resolveJvmPackageExport(
+  index: ProjectIndex,
+  files: readonly FileId[],
+  name: string,
+  argumentCount?: number,
+  importerLanguageId?: "java" | "kotlin",
+  samePackage?: boolean,
+): SymbolDef | null {
+  const candidates: SymbolDef[] = [];
+  for (const file of files) {
+    const targetLanguage = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
+    if (targetLanguage !== "java" && targetLanguage !== "kotlin") continue;
+    const names = moduleNameLookup(index, file);
+    if (!names) continue;
+    for (const target of names.localExports.get(names.normalizeIdentifier(name)) ?? []) {
+      if (
+        target.isMember ||
+        !isJvmPackageSymbolVisible(target, targetLanguage, importerLanguageId ?? targetLanguage, !!samePackage) ||
+        candidates.some((candidate) => sameSymbolDef(index, candidate, target))
+      )
+        continue;
+      candidates.push(target);
+    }
+  }
+  if (candidates.length === 1) return candidates[0]!;
+  return argumentCount === undefined ? null : selectFunctionOverloadByArity(candidates, argumentCount);
+}
+/** Whether a Java named static import can expose this exact direct member. */
+export function javaStaticNamedImportIncludes(index: ProjectIndex, imp: ImportBinding, def: SymbolDef): boolean {
+  if (imp.kind !== "named" || !imp.jvmStaticWildcardName) return false;
+  const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
+  if (!targetFile || fileIdentityKey(targetFile) !== fileIdentityKey(def.file)) return false;
+  const target = moduleFor(index, targetFile);
+  if (!target) return false;
+  const owner = jvmWildcardTypeOwner(target, imp.jvmStaticWildcardName, "java");
+  if (!owner || owner.range.start.index === undefined || (owner.javaPackagePrivate && !imp.jvmSamePackage))
+    return false;
+  if (!isJvmStaticWildcardMember(def, owner.range.start.index) || (def.javaPackagePrivate && !imp.jvmSamePackage))
+    return false;
+  const names = moduleNameLookup(index, targetFile);
+  if (!names || names.normalizeIdentifier(imp.imported) !== names.normalizeIdentifier(def.localName)) return false;
+  return (
+    names.localExports
+      .get(names.normalizeIdentifier(imp.imported))
+      ?.some((candidate) => sameSymbolDef(index, candidate, def)) ?? false
+  );
+}
+
 export function resolveImported(
   index: ProjectIndex,
   imp: ImportBinding,
@@ -781,6 +886,66 @@ export function resolveImported(
 ): SymbolDef | { namespace: FileId } | null {
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
+  if (imp.kind === "star" && imp.jvmPackageFiles) {
+    return resolveJvmPackageExport(
+      index,
+      imp.jvmPackageFiles,
+      exportedName,
+      opts?.argumentCount,
+      imp.jvmPackageLanguageId,
+      imp.jvmSamePackage,
+    );
+  }
+  if (
+    (imp.kind === "star" && (imp.jvmTypeWildcardName || imp.jvmStaticWildcardName)) ||
+    (imp.kind === "named" && (imp.jvmTypeOwnerStartIndex !== undefined || imp.jvmStaticWildcardName !== undefined))
+  ) {
+    const target = moduleFor(index, targetFile);
+    if (!target) return null;
+    const targetLanguageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
+    let ownerStartIndex: number | undefined;
+    if (imp.kind === "star" || imp.jvmTypeOwnerStartIndex === undefined) {
+      const ownerName =
+        imp.kind === "star" ? (imp.jvmTypeWildcardName ?? imp.jvmStaticWildcardName) : imp.jvmStaticWildcardName;
+      const owner = ownerName && jvmWildcardTypeOwner(target, ownerName, targetLanguageId);
+      if (!owner || (owner.javaPackagePrivate && !imp.jvmSamePackage)) return null;
+      ownerStartIndex = owner.range.start.index;
+    } else {
+      ownerStartIndex = imp.jvmTypeOwnerStartIndex;
+    }
+    if (ownerStartIndex === undefined) return null;
+    const names = moduleNameLookup(index, targetFile);
+    if (!names) return null;
+    let match: SymbolDef | undefined;
+    let overloads: SymbolDef[] | undefined;
+    for (const candidate of names.localExports.get(names.normalizeIdentifier(exportedName)) ?? []) {
+      if (
+        (imp.jvmStaticWildcardName
+          ? !isJvmStaticWildcardMember(candidate, ownerStartIndex)
+          : !isJvmTypeWildcardMember(candidate, ownerStartIndex, targetLanguageId)) ||
+        (candidate.javaPackagePrivate && !imp.jvmSamePackage)
+      )
+        continue;
+      if (match && !sameSymbolDef(index, candidate, match)) {
+        if (imp.kind !== "named" || !imp.jvmStaticWildcardName || opts?.argumentCount === undefined) return null;
+        if (!overloads) overloads = [match];
+        overloads.push(candidate);
+      } else {
+        match = candidate;
+      }
+    }
+    if (overloads && opts?.argumentCount !== undefined)
+      return selectFunctionOverloadByArity(overloads, opts.argumentCount);
+    if (match && imp.kind === "named" && imp.jvmStaticWildcardName && opts?.argumentCount !== undefined) {
+      const arity = match.callable?.arity;
+      if (
+        arity &&
+        (opts.argumentCount < arity.minArgs || (arity.maxArgs !== null && opts.argumentCount > arity.maxArgs))
+      )
+        return null;
+    }
+    return match ?? null;
+  }
   const namespace = opts?.cNamespace ?? (imp.kind === "named" ? imp.cNamespace : undefined);
   if (opts?.cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== opts.cNamespace) return null;
 
@@ -803,7 +968,10 @@ export function resolveImported(
         ...opts,
         ...(namespace ? { cNamespace: namespace } : {}),
       });
-  if (hit?.kind === "resolved") return hit.def;
+  if (hit?.kind === "resolved") {
+    if (imp.kind === "named" && hit.def.javaPackagePrivate && !imp.jvmSamePackage) return null;
+    return hit.def;
+  }
   if (hit?.kind === "namespace") return { namespace: hit.file };
 
   if (imp.kind === "default" && exportedName === "default") {
@@ -815,7 +983,10 @@ export function resolveImported(
   // Only Java, Kotlin, and Python matter below, so a `.h` target never needs its sample read.
   if (support?.id === "java" || support?.id === "kotlin") {
     const siblingHit = resolveSiblingPackageExport(index, targetFile, exportedName);
-    if (siblingHit?.kind === "resolved") return siblingHit.def;
+    if (siblingHit?.kind === "resolved") {
+      if (imp.kind === "named" && siblingHit.def.javaPackagePrivate && !imp.jvmSamePackage) return null;
+      return siblingHit.def;
+    }
     if (siblingHit?.kind === "namespace") {
       return { namespace: siblingHit.file };
     }

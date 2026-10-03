@@ -9,6 +9,34 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Members inherited through a type that declares none of its own now resolve in go-to-definition, references, and call graphs: `Derived d; d.run();` finds `Base.run` in C++, C#, Java, Kotlin, PHP, Swift, TypeScript, JavaScript, and Ruby. Rust finds a trait's default method through a type that implements the trait, and Go finds a promoted method through an embedded struct, including when the method, the type, and the call are in different files of the package.
+- Go: a method declared in another file of the package resolves on a local of that type, and `d.Base.Run()` through an embedded field resolves.
+- Fully qualified calls resolve without an import: `com.example.Util.add(1, 2)` in Java, `calc.add(1, 2)` in Kotlin, `calc::add(1, 2)` in Rust, and `\App\add()` in PHP, which before had no call-graph edge. In mixed Java and Kotlin code, a package-qualified name also reaches a type in the other language. Java sees Kotlin types but not Kotlin top-level functions, and a Java type without `public` stays in its package.
+- C++: a namespace alias such as `namespace dm = a::b;` is followed, and `Base::run()` called from an override now has a call-graph edge.
+- Kotlin and Java: an imported function or static method with several overloads goes to the overload that accepts the call's argument count. Before, none of the calls resolved. A count that two overloads accept stays unresolved.
+- Swift: a call through a `typealias` of a type, such as `Fast.add()`, resolves.
+- JavaScript and TypeScript: `new Derived().run()` goes to the inherited instance method when `Derived` declares only a `static run()`. In C++, Java, C#, PHP, and Python, a static member with that name still hides the inherited one, as in those languages.
+- TypeScript, JavaScript, Python, and Rust: a parameter or local that shadows a module import alias (`import * as api`, then `function f(api) { api.run(); }`) is no longer a reference to, or a call of, the imported module's `run`. A local that holds the same module, such as `let api: typeof import("./api")` assigned `await import("./api")`, does not shadow it.
+- TypeScript: a function declared inside a method body, such as a local `function helper() {}`, no longer joins the class member `helper` as one overload set. `this.helper()` keeps its edge to the class member in the call graph instead of moving to the local function.
+- C++: a qualified call such as `dm::add()` resolves through the closest visible `dm`, including a namespace alias or nested namespace in the enclosing namespace, instead of an unrelated global `dm`.
+- Kotlin: with `import calc.*`, a call goes to the overload that accepts its argument count even when the overloads are in different files of the package. Java and Kotlin package wildcards include types from both languages' files in the package; Kotlin also imports top-level Kotlin functions, while Java does not. Java `import p.*` does not import class methods, enum constants, or nested types, and Kotlin package wildcards exclude class and companion members. Disk and memory caches also pick up files added to or deleted from an imported package, in either language. A Java type without `public` is not imported from another package. When `p.C` is a class, `import p.C.*` imports its nested types, including enums, not its methods. A Java enum can also be the owner `C`. A named import such as Java `import p.KotlinType;` resolves a type declared in the other JVM language; Java still does not import Kotlin top-level functions. Java `import static p.Util.*` imports only the static members and nested types of `Util`, not its instance methods or other types in the same file. From another package, it also skips package-private and protected static members. A named `import static p.Util.hit;` binds only the static `hit` members of `Util`. A package-private Java method is not inherited by a subclass in another package, so `hit()` there does not resolve to it.
+- C# and Java: when a derived method overrides a base method with the same parameters, a call that only the base method's defaults accept no longer goes to the hidden base method.
+- Ruby: `require_relative "foo"` resolves next to the requiring file. Before, it was looked up from the project root, so in a subdirectory it stayed unresolved or picked a same-named file at the root. `require "foo"` keeps its rule.
+- Java and Kotlin: `import p.C` binds class `C` even when a package `p.C` also exists, and `import p.C.*` names the package. Import bindings, file-graph edges, and go-to-definition now agree on the target.
+- Java and C#: a call that only an inherited overload accepts, such as `this.hit(1)` with `Base.hit()` and `GrandBase.hit(int)`, now has a call-graph edge to `GrandBase.hit`, as go-to-definition already found. An override with the same parameters still hides the ancestor method.
+- Ruby: `Calc.add` and `Counter.zero` calls through a module or class name have call-graph edges. `require_relative` no longer makes instance methods importable names, so references of a method no longer list same-named methods of unrelated classes.
+- Zig: `const area = @import("shapes.zig").area;` goes to `area` in `shapes.zig`. Calls and construction through a type in another file (`box.Box{}`, `counter.Counter.zero()`) have call-graph edges, and struct literals record `instantiates` edges. A bare `@import("api.zig")` is now a file-graph dependency on `api.zig` instead of an external name.
+- C# `using N.T` binds the file that declares type `T` when `N.T` is not a namespace. An ambiguous or unreadable match stays unresolved instead of a same-shaped path. A bare C# `using` or Ruby `require` prefers a same-named project file over an npm workspace package, and a C# import no longer binds a file of another language.
+- A failed Python relative import such as `from .missing import x` is reported as `.missing`, including by `getUnresolvedImports`.
+- An SCSS partial resolves for a source specifier. A `url()` document specifier still does not. A file with both `@use "icons"` and `url("icons")` keeps both dependencies; before, the second one was dropped.
+
+### Changed
+
+- Detailed call graphs build faster: callable facts (identity and accepted argument counts) are computed once when a file is indexed and stored in the cache, instead of being parsed again for each call.
+- Existing caches are rebuilt on the first run after upgrading, so that run takes longer than usual.
+
 ### Security
 
 - The production audit accepts `braces` advisory [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) until 2026-12-31. No patched `braces` release exists. Glob patterns from an indexed repository can reach it through `fast-glob`, so a hostile repository can make an index run fail with stack exhaustion. Tracked in [#394](https://github.com/lzehrung/codegraph/issues/394).

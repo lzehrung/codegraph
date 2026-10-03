@@ -4,7 +4,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
-import { normalizePath } from "../../src/util/paths.js";
+import { defNodeId } from "../../src/graphs/symbol-graph.js";
+import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
 
@@ -73,6 +74,10 @@ const definition: LanguageTestDefinition = {
         },
         {
           from: "WildcardImports.java",
+          to: { type: "file", path: "pkg/ServiceContract.java" },
+        },
+        {
+          from: "WildcardImports.java",
           to: { type: "file", path: "pkg/ScopedEnums.java" },
         },
         {
@@ -120,6 +125,11 @@ const definition: LanguageTestDefinition = {
           symbols: [
             { name: "PackageTypes", kind: "class" },
             { name: "NestedValue", kind: "class" },
+          ],
+        },
+        {
+          file: "pkg/ServiceContract.java",
+          symbols: [
             { name: "ServiceContract", kind: "interface" },
             { name: "serve", kind: "function" },
           ],
@@ -187,11 +197,11 @@ const definition: LanguageTestDefinition = {
         },
         {
           name: "find references for wildcard-imported interface",
-          file: "pkg/PackageTypes.java",
-          line: 7,
-          column: 11,
+          file: "pkg/ServiceContract.java",
+          line: 3,
+          column: 18,
           references: [
-            { file: "pkg/PackageTypes.java", line: 7 },
+            { file: "pkg/ServiceContract.java", line: 3 },
             { file: "WildcardImports.java", line: 7 },
           ],
         },
@@ -398,6 +408,649 @@ describe("Java Unicode symbol ranges (C11)", () => {
       source: "// café ☕ prüfung\n/* über */ public class Widget {\n\tpublic int créer() {\n\t\treturn 1;\n\t}\n}\n",
       symbolName: "créer",
     });
+  });
+});
+
+describe("Java imports with a same-named package", () => {
+  it("binds a class import and its edge to the class, not a same-named package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-package-class-import-"));
+    try {
+      const useLines = ["package client;", "import p.C;", "class Use { C make() { return new C(); } }"];
+      const paths = await writeFixtureFiles(root, {
+        "p/C.java": "package p;\npublic class C {}\n",
+        "p/C/Decoy.java": "package p.C;\npublic class Decoy {}\n",
+        "Use.java": useLines.join("\n") + "\n",
+        "UseStar.java": "package client;\nimport p.C.*;\nclass UseStar { Decoy make() { return new Decoy(); } }\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = paths["Use.java"]!;
+      const declaration = paths["p/C.java"]!;
+      const decoy = paths["p/C/Decoy.java"]!;
+      const binding = index.byFile.get(fileIdentityKey(use))?.imports.find((entry) => entry.from === "p.C");
+      expect(binding?.resolved).toBe(declaration);
+      expect(binding?.resolved).not.toBe(decoy);
+
+      const importsFrom = (file: string) =>
+        index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(importsFrom(use)).toEqual([declaration]);
+      expect(importsFrom(use)).not.toContain(decoy);
+      expect(importsFrom(paths["UseStar.java"]!)).toEqual([decoy]);
+      const starBinding = index.byFile
+        .get(fileIdentityKey(paths["UseStar.java"]!))
+        ?.imports.find((entry) => entry.from === "p.C");
+      expect(starBinding?.resolved).toBe(decoy);
+
+      const reduced = await buildProjectIndex(root, { cache: "off", native: "off" });
+      const reducedBinding = reduced.byFile.get(fileIdentityKey(use))?.imports.find((entry) => entry.from === "p.C");
+      const reducedStar = reduced.byFile
+        .get(fileIdentityKey(paths["UseStar.java"]!))
+        ?.imports.find((entry) => entry.from === "p.C");
+      const reducedTargets = (file: string) =>
+        reduced.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(reducedBinding?.resolved).toBe(declaration);
+      expect(reducedTargets(use)).toEqual([declaration]);
+      expect(reducedTargets(use)).not.toContain(decoy);
+      expect(reducedStar?.resolved).toBe(decoy);
+      expect(reducedTargets(paths["UseStar.java"]!)).toEqual([decoy]);
+      const goto = await goToDefinition(index, { file: use, line: 3, column: columnOf(useLines, 3, "C make") });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected imported class C");
+      expect(normalizePath(goto.definition.file)).toBe(declaration);
+      expect(normalizePath(goto.definition.file)).not.toBe(decoy);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("does not import static members through a package wildcard", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-package-static-star-"));
+    try {
+      const packageSource = "package client; import p.*; class PackageUse { int cannot() { return hit(); } }";
+      const staticSource = "package client; import static p.Util.*; class StaticUse { int can() { return hit(); } }";
+      const paths = await writeFixtureFiles(root, {
+        "p/Util.java": "package p; public class Util { public static int hit() { return 1; } }",
+        "p/Decoy.java": "package p; public class Decoy { public static int hit() { return -1; } }",
+        "client/PackageUse.java": packageSource,
+        "client/StaticUse.java": staticSource,
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const fromPackage = await goToDefinition(index, {
+        file: paths["client/PackageUse.java"]!,
+        line: 1,
+        column: packageSource.lastIndexOf("hit") + 1,
+      });
+      const fromStatic = await goToDefinition(index, {
+        file: paths["client/StaticUse.java"]!,
+        line: 1,
+        column: staticSource.lastIndexOf("hit") + 1,
+      });
+      expect(fromPackage.status).toBe("not_found");
+      expect(fromStatic.status).toBe("ok");
+      if (fromStatic.status === "ok") expect(normalizePath(fromStatic.definition.file)).toBe(paths["p/Util.java"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targetFiles = (caller: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => graph.nodes.get(edge.to)?.file);
+      expect(targetFiles("cannot")).not.toContain(paths["p/Util.java"]);
+      expect(targetFiles("cannot")).not.toContain(paths["p/Decoy.java"]);
+      expect(targetFiles("can")).toContain(paths["p/Util.java"]);
+      expect(targetFiles("can")).not.toContain(paths["p/Decoy.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps colliding package and static wildcard imports distinct", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-dual-star-"));
+    try {
+      const classLines = ["package p;", "public class C { public static int util() { return 1; } }"];
+      const packageLines = ["package p.C;", "public class Pkg {}"];
+      const decoyLines = ["package p.C;", "public class Decoy { public static int util() { return -1; } }"];
+      const useLines = [
+        "package client;",
+        "import p.C.*;",
+        "import static p.C.*;",
+        "class Use {",
+        "  Pkg value;",
+        "  int run() { return util(); }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "p/C.java": classLines.join("\n"),
+        "p/C/Pkg.java": packageLines.join("\n"),
+        "p/C/Decoy.java": decoyLines.join("\n"),
+        "client/Use.java": useLines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const use = paths["client/Use.java"]!;
+      const target = paths["p/C.java"]!;
+      const pkg = paths["p/C/Pkg.java"]!;
+      const decoy = paths["p/C/Decoy.java"]!;
+      const utilGoto = await goToDefinition(index, { file: use, line: 6, column: columnOf(useLines, 6, "util") });
+      const pkgGoto = await goToDefinition(index, { file: use, line: 5, column: columnOf(useLines, 5, "Pkg") });
+      expect(utilGoto.status).toBe("ok");
+      expect(pkgGoto.status).toBe("ok");
+      if (utilGoto.status === "ok") expect(normalizePath(utilGoto.definition.file)).toBe(target);
+      if (pkgGoto.status === "ok") expect(normalizePath(pkgGoto.definition.file)).toBe(pkg);
+
+      const utilRefs = await findReferences(index, { file: target, line: 2, column: columnOf(classLines, 2, "util") });
+      const pkgRefs = await findReferences(index, { file: pkg, line: 2, column: columnOf(packageLines, 2, "Pkg") });
+      const decoyRefs = await findReferences(index, { file: decoy, line: 2, column: columnOf(decoyLines, 2, "util") });
+      expect(utilRefs.status).toBe("ok");
+      expect(pkgRefs.status).toBe("ok");
+      expect(decoyRefs.status).toBe("ok");
+      if (utilRefs.status === "ok") {
+        const lines = utilRefs.references.filter((reference) => normalizePath(reference.file) === use);
+        expect(lines.map((reference) => reference.range.start.line)).toContain(6);
+      }
+      if (pkgRefs.status === "ok") {
+        const lines = pkgRefs.references.filter((reference) => normalizePath(reference.file) === use);
+        expect(lines.map((reference) => reference.range.start.line)).toContain(5);
+      }
+      if (decoyRefs.status === "ok") {
+        expect(decoyRefs.references.some((reference) => normalizePath(reference.file) === use)).toBe(false);
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(calls).toContain(target);
+      expect(calls).not.toContain(decoy);
+      const pkgImport = [...graph.nodes.values()].find(
+        (node) => node.file === use && node.name === "Pkg" && node.kind === "import",
+      );
+      const pkgDef = [...graph.nodes.values()].find((node) => node.file === pkg && node.name === "Pkg");
+      expect(pkgImport).toBeDefined();
+      expect(pkgDef).toBeDefined();
+      expect(graph.edges.some((edge) => edge.from === pkgImport?.id && edge.to === pkgDef?.id)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("limits Java static wildcards to the declared type's static members and nested classifiers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-static-owner-"));
+    const util = [
+      "package p;",
+      "public class Util {",
+      "  public static int helper() { return 1; }",
+      "  public int instanceOnly() { return 2; }",
+      "  public static class Inner {}",
+      "  public enum Mode { FAST }",
+      "  public static final int FLAG = 7;",
+      "  public int instanceField = 8;",
+      "  private static int hidden() { return 9; }",
+      "  public class NonStatic {}",
+      "}",
+      "class Other { static int sibling() { return 3; } }",
+    ];
+    const consumer = [
+      "package client;",
+      "import static p.Util.*;",
+      "class StaticUse {",
+      "  int yes() { return helper(); }",
+      "  int no() { return instanceOnly(); }",
+      "  int alsoNo() { return sibling(); }",
+      "  Other wrong;",
+      "  Inner nested;",
+      "  Mode mode;",
+      "  int flag() { return FLAG; }",
+      "  int notField() { return instanceField; }",
+      "  int notHidden() { return hidden(); }",
+      "  NonStatic wrongNested;",
+      "}",
+    ];
+    const kotlin = ["package client", "import p.*", "fun use(): Int = kotlinHelper()"];
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "p/Util.java": util.join("\n"),
+        "client/StaticUse.java": consumer.join("\n"),
+        "p/Helper.kt": "package p\nfun kotlinHelper(): Int = 42",
+        "client/Use.kt": kotlin.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const lookup = (file: string, lines: string[], line: number, name: string) =>
+        goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
+      for (const [line, name] of [
+        [4, "helper"],
+        [8, "Inner"],
+        [9, "Mode"],
+        [10, "FLAG"],
+      ] as const) {
+        const result = await lookup(paths["client/StaticUse.java"]!, consumer, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(normalizePath(result.definition.file)).toBe(paths["p/Util.java"]);
+      }
+      for (const [line, name] of [
+        [5, "instanceOnly"],
+        [6, "sibling"],
+        [7, "Other"],
+        [11, "instanceField"],
+        [12, "hidden"],
+        [13, "NonStatic"],
+      ] as const) {
+        expect((await lookup(paths["client/StaticUse.java"]!, consumer, line, name)).status).toBe("not_found");
+      }
+      const kotlinResult = await lookup(paths["client/Use.kt"]!, kotlin, 3, "kotlinHelper");
+      expect(kotlinResult.status).toBe("ok");
+      if (kotlinResult.status === "ok") expect(normalizePath(kotlinResult.definition.file)).toBe(paths["p/Helper.kt"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: string, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) => entry.file === file && entry.name === name && (!kind || entry.kind === kind),
+        );
+      const utilFile = paths["p/Util.java"]!;
+      const consumerFile = paths["client/StaticUse.java"]!;
+      const callTargets = (caller: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && edge.from === node(consumerFile, caller)?.id)
+          .map((edge) => edge.to);
+      expect(callTargets("yes")).toContain(node(utilFile, "helper")?.id);
+      expect(callTargets("no")).not.toContain(node(utilFile, "instanceOnly")?.id);
+      expect(callTargets("notHidden")).not.toContain(node(utilFile, "hidden")?.id);
+      expect(callTargets("alsoNo")).not.toContain(node(utilFile, "sibling")?.id);
+      const importEdge = (name: string, target: string) =>
+        graph.edges.some(
+          (edge) => edge.from === node(consumerFile, name, "import")?.id && edge.to === node(utilFile, target)?.id,
+        );
+      expect(importEdge("helper", "helper")).toBe(true);
+      expect(importEdge("Inner", "Inner")).toBe(true);
+      expect(importEdge("Mode", "Mode")).toBe(true);
+      expect(importEdge("FLAG", "FLAG")).toBe(true);
+      expect(importEdge("instanceOnly", "instanceOnly")).toBe(false);
+      expect(importEdge("sibling", "sibling")).toBe(false);
+      expect(importEdge("Other", "Other")).toBe(false);
+      expect(importEdge("instanceField", "instanceField")).toBe(false);
+      expect(importEdge("hidden", "hidden")).toBe(false);
+      expect(importEdge("NonStatic", "NonStatic")).toBe(false);
+      const helperRefs = await findReferences(index, {
+        file: utilFile,
+        line: 3,
+        column: columnOf(util, 3, "helper"),
+      });
+      expect(helperRefs.status).toBe("ok");
+      if (helperRefs.status === "ok") {
+        expect(helperRefs.references.some((ref) => ref.file === consumerFile && ref.range.start.line === 4)).toBe(true);
+      }
+      const instanceRefs = await findReferences(index, {
+        file: utilFile,
+        line: 4,
+        column: columnOf(util, 4, "instanceOnly"),
+      });
+      expect(instanceRefs.status).toBe("ok");
+      if (instanceRefs.status === "ok") {
+        expect(instanceRefs.references.some((ref) => ref.file === consumerFile && ref.range.start.line === 5)).toBe(
+          false,
+        );
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("limits non-public Java static imports to the declaring package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-static-access-"));
+    const util = [
+      "package p;",
+      "public class Util {",
+      "  public static int shown() { return 1; }",
+      "  static int hidden() { return 2; }",
+      "  protected static int shielded() { return 3; }",
+      "  private static int secret() { return 4; }",
+      "}",
+    ];
+    const outside = [
+      "package client;",
+      "import static p.Util.*;",
+      "class Outside {",
+      "  int useShown() { return shown(); }",
+      "  int useHidden() { return hidden(); }",
+      "  int useShielded() { return shielded(); }",
+      "}",
+    ];
+    const explicit = [
+      "package client;",
+      "import static p.Util.hidden;",
+      "import static p.Util.shielded;",
+      "import static p.Util.shown;",
+      "class Explicit {",
+      "  int useShown() { return shown(); }",
+      "  int useHidden() { return hidden(); }",
+      "  int useShielded() { return shielded(); }",
+      "}",
+    ];
+    const inside = [
+      "package p;",
+      "import static p.Util.*;",
+      "class Inside {",
+      "  int useShown() { return shown(); }",
+      "  int useHidden() { return hidden(); }",
+      "  int useShielded() { return shielded(); }",
+      "  int useSecret() { return secret(); }",
+      "}",
+    ];
+    const samePackageNamed = [
+      "package p;",
+      "import static p.Util.hidden;",
+      "import static p.Util.shielded;",
+      "class NamedInside {",
+      "  int useHidden() { return hidden(); }",
+      "  int useShielded() { return shielded(); }",
+      "}",
+    ];
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "p/Util.java": util.join("\n"),
+        "p/Inside.java": inside.join("\n"),
+        "p/NamedInside.java": samePackageNamed.join("\n"),
+        "client/Outside.java": outside.join("\n"),
+        "client/Explicit.java": explicit.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const goto = (file: string, lines: string[], line: number, name: string) =>
+        goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
+      for (const [file, lines, line, name] of [
+        [paths["client/Outside.java"]!, outside, 4, "shown"],
+        [paths["client/Explicit.java"]!, explicit, 6, "shown"],
+        [paths["p/Inside.java"]!, inside, 5, "hidden"],
+        [paths["p/Inside.java"]!, inside, 6, "shielded"],
+        [paths["p/NamedInside.java"]!, samePackageNamed, 5, "hidden"],
+        [paths["p/NamedInside.java"]!, samePackageNamed, 6, "shielded"],
+      ] as const) {
+        const result = await goto(file, lines, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(normalizePath(result.definition.file)).toBe(paths["p/Util.java"]);
+      }
+      for (const [file, lines, line, name] of [
+        [paths["client/Outside.java"]!, outside, 5, "hidden"],
+        [paths["client/Outside.java"]!, outside, 6, "shielded"],
+        [paths["client/Explicit.java"]!, explicit, 7, "hidden"],
+        [paths["client/Explicit.java"]!, explicit, 8, "shielded"],
+        [paths["p/Inside.java"]!, inside, 7, "secret"],
+      ] as const) {
+        expect((await goto(file, lines, line, name)).status).toBe("not_found");
+      }
+      for (const [line, name, insideLine, outsideLine, explicitLine] of [
+        [4, "hidden", 5, 5, 7],
+        [5, "shielded", 6, 6, 8],
+      ] as const) {
+        const refs = await findReferences(index, {
+          file: paths["p/Util.java"]!,
+          line,
+          column: columnOf(util, line, name),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(
+            refs.references.some((ref) => ref.file === paths["p/Inside.java"] && ref.range.start.line === insideLine),
+          ).toBe(true);
+          expect(
+            refs.references.some(
+              (ref) => ref.file === paths["p/NamedInside.java"] && ref.range.start.line === insideLine,
+            ),
+          ).toBe(true);
+          expect(
+            refs.references.some(
+              (ref) => ref.file === paths["client/Outside.java"] && ref.range.start.line === outsideLine,
+            ),
+          ).toBe(false);
+          expect(
+            refs.references.some(
+              (ref) => ref.file === paths["client/Explicit.java"] && ref.range.start.line === explicitLine,
+            ),
+          ).toBe(false);
+        }
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: string, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) => entry.file === file && entry.name === name && (!kind || entry.kind === kind),
+        );
+      const target = (name: string) => node(paths["p/Util.java"]!, name)?.id;
+      for (const name of ["shown", "hidden", "shielded"]) expect(target(name)).toBeDefined();
+      const edge = (file: string, name: string, targetName: string, label: "calls" | "imports") =>
+        graph.edges.some(
+          (entry) =>
+            entry.from === node(file, name, label === "imports" ? "import" : undefined)?.id &&
+            entry.to === target(targetName) &&
+            (label === "imports" || entry.label === label),
+        );
+      for (const file of [paths["client/Outside.java"]!, paths["client/Explicit.java"]!]) {
+        expect(edge(file, "useShown", "shown", "calls")).toBe(true);
+        expect(edge(file, "useHidden", "hidden", "calls")).toBe(false);
+        expect(edge(file, "useShielded", "shielded", "calls")).toBe(false);
+        expect(edge(file, "shown", "shown", "imports")).toBe(true);
+        expect(edge(file, "hidden", "hidden", "imports")).toBe(false);
+        expect(edge(file, "shielded", "shielded", "imports")).toBe(false);
+      }
+      expect(edge(paths["p/Inside.java"]!, "useHidden", "hidden", "calls")).toBe(true);
+      expect(edge(paths["p/Inside.java"]!, "useShielded", "shielded", "calls")).toBe(true);
+      expect(edge(paths["p/Inside.java"]!, "useSecret", "secret", "calls")).toBe(false);
+      for (const [name, caller] of [
+        ["hidden", "useHidden"],
+        ["shielded", "useShielded"],
+      ] as const) {
+        expect(edge(paths["p/NamedInside.java"]!, caller, name, "calls")).toBe(true);
+        expect(edge(paths["p/NamedInside.java"]!, name, name, "imports")).toBe(true);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("binds named Java static imports only to the declared owner's visible static members", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-named-static-owner-"));
+    const util = [
+      "package p;",
+      "public class Util {",
+      "  public static int hit(int a) { return a; }",
+      "  public int other() { return 0; }",
+      "  static int hidden() { return 3; }",
+      "}",
+      "class Other { public static int hit(int a, int b) { return a + b; } }",
+    ];
+    const consumer = [
+      "package client;",
+      "import static p.Util.hit;",
+      "import static p.Util.other;",
+      "class Use {",
+      "  int yes() { return hit(1); }",
+      "  int noInstance() { return other(); }",
+      "  int noSibling() { return hit(1, 2); }",
+      "}",
+    ];
+    const samePackage = [
+      "package p;",
+      "import static p.Util.hidden;",
+      "class Same { int call() { return hidden(); } }",
+    ];
+    const outside = [
+      "package client;",
+      "import static p.Util.hidden;",
+      "class Outside { int call() { return hidden(); } }",
+    ];
+    try {
+      const files = await writeFixtureFiles(root, {
+        "p/Util.java": util.join("\n"),
+        "p/Same.java": samePackage.join("\n"),
+        "client/Use.java": consumer.join("\n"),
+        "client/Outside.java": outside.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const go = (file: string, lines: string[], line: number, name: string) =>
+        goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
+      const hit = await go(files["client/Use.java"]!, consumer, 5, "hit");
+      const local = await go(files["p/Same.java"]!, samePackage, 3, "hidden");
+      expect(hit.status).toBe("ok");
+      if (hit.status === "ok") expect(hit.definition.range.start.line).toBe(3);
+      expect(local.status).toBe("ok");
+      if (local.status === "ok") expect(local.definition.file).toBe(files["p/Util.java"]);
+      expect((await go(files["client/Use.java"]!, consumer, 6, "other")).status).toBe("not_found");
+      expect((await go(files["client/Use.java"]!, consumer, 7, "hit")).status).toBe("not_found");
+      expect((await go(files["client/Outside.java"]!, outside, 3, "hidden")).status).toBe("not_found");
+      const ref = (line: number, name: string) =>
+        findReferences(index, { file: files["p/Util.java"]!, line, column: columnOf(util, line, name) });
+      for (const [line, name, included, excluded] of [
+        [3, "hit", files["client/Use.java"]!, files["client/Outside.java"]!],
+        [5, "hidden", files["p/Same.java"]!, files["client/Outside.java"]!],
+      ] as const) {
+        const result = await ref(line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.references.some((site) => site.file === included)).toBe(true);
+          expect(result.references.some((site) => site.file === excluded)).toBe(false);
+        }
+      }
+      const siblingRefs = await ref(7, "hit");
+      expect(siblingRefs.status).toBe("ok");
+      if (siblingRefs.status === "ok")
+        expect(siblingRefs.references.some((site) => site.file === files["client/Use.java"])).toBe(false);
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: string, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) => entry.file === file && entry.name === name && (!kind || entry.kind === kind),
+        );
+      const utilDefs = index.byFile.get(fileIdentityKey(files["p/Util.java"]!))!.locals;
+      const target = (name: string, line: number) =>
+        defNodeId(utilDefs.find((def) => def.localName === name && def.range.start.line === line)!);
+      const edge = (from: string | undefined, to: string | undefined, label?: string) =>
+        graph.edges.some((entry) => entry.from === from && entry.to === to && (!label || entry.label === label));
+      const use = files["client/Use.java"]!;
+      expect(edge(node(use, "yes")?.id, target("hit", 3), "calls")).toBe(true);
+      expect(edge(node(use, "noSibling")?.id, target("hit", 7), "calls")).toBe(false);
+      expect(edge(node(use, "noSibling")?.id, target("hit", 3), "calls")).toBe(false);
+      expect(edge(node(use, "noInstance")?.id, target("other", 4), "calls")).toBe(false);
+      expect(edge(node(use, "hit", "import")?.id, target("hit", 3))).toBe(true);
+      expect(edge(node(use, "hit", "import")?.id, target("hit", 7))).toBe(false);
+      expect(edge(node(use, "other", "import")?.id, target("other", 4))).toBe(false);
+      expect(edge(node(files["p/Same.java"]!, "hidden", "import")?.id, target("hidden", 5))).toBe(true);
+      expect(edge(node(files["client/Outside.java"]!, "hidden", "import")?.id, target("hidden", 5))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("Java inherited package access", () => {
+  it("does not inherit package-private methods across packages or hide a named static import", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-inherited-package-"));
+    const base = [
+      "package a;",
+      "public class Base {",
+      "  void hit() {}",
+      "  public void open() {}",
+      "  protected void guard() {}",
+      "}",
+    ];
+    const same = [
+      "package a;",
+      "class Same extends Base {",
+      "  void qualified() { this.hit(); }",
+      "  void bare() { hit(); }",
+      "}",
+    ];
+    const derived = [
+      "package b;",
+      "import a.Base;",
+      "import static q.Tools.hit;",
+      "class Derived extends Base {",
+      "  void qualified() { this.hit(); }",
+      "  void bare() { hit(); }",
+      "  void publicCall() { open(); }",
+      "  void protectedCall() { guard(); }",
+      "}",
+    ];
+    const plain = [
+      "package b;",
+      "import a.Base;",
+      "class Plain extends Base {",
+      "  void qualified() { this.hit(); }",
+      "  void bare() { hit(); }",
+      "}",
+    ];
+    const tools = "package q; public class Tools { public static void hit() {} }";
+    try {
+      const files = await writeFixtureFiles(root, {
+        "a/Base.java": base.join("\n"),
+        "a/Same.java": same.join("\n"),
+        "b/Derived.java": derived.join("\n"),
+        "b/Plain.java": plain.join("\n"),
+        "q/Tools.java": tools,
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const go = (file: string, lines: string[], line: number, name: string) =>
+        goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
+      for (const [file, lines, line, name, target] of [
+        [files["a/Same.java"]!, same, 3, "hit", files["a/Base.java"]!],
+        [files["a/Same.java"]!, same, 4, "hit", files["a/Base.java"]!],
+        [files["b/Derived.java"]!, derived, 6, "hit", files["q/Tools.java"]!],
+        [files["b/Derived.java"]!, derived, 7, "open", files["a/Base.java"]!],
+        [files["b/Derived.java"]!, derived, 8, "guard", files["a/Base.java"]!],
+      ] as const) {
+        const result = await go(file, lines, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(target);
+      }
+      for (const [file, lines, line] of [
+        [files["b/Derived.java"]!, derived, 5],
+        [files["b/Plain.java"]!, plain, 4],
+        [files["b/Plain.java"]!, plain, 5],
+      ] as const) {
+        expect((await go(file, lines, line, "hit")).status).toBe("not_found");
+      }
+      const refs = (file: string, lines: string[], line: number, name: string) =>
+        findReferences(index, { file, line, column: columnOf(lines, line, name) });
+      const inheritedRefs = await refs(files["a/Base.java"]!, base, 3, "hit");
+      expect(inheritedRefs.status).toBe("ok");
+      if (inheritedRefs.status === "ok") {
+        const sites = inheritedRefs.references;
+        expect(sites.some((site) => site.file === files["a/Same.java"] && site.range.start.line === 3)).toBe(true);
+        expect(sites.some((site) => site.file === files["a/Same.java"] && site.range.start.line === 4)).toBe(true);
+        expect(sites.some((site) => site.file === files["b/Derived.java"] || site.file === files["b/Plain.java"])).toBe(
+          false,
+        );
+      }
+      const toolsRefs = await refs(files["q/Tools.java"]!, [tools], 1, "hit");
+      expect(toolsRefs.status).toBe("ok");
+      if (toolsRefs.status === "ok")
+        expect(
+          toolsRefs.references.some((site) => site.file === files["b/Derived.java"] && site.range.start.line === 6),
+        ).toBe(true);
+      for (const [line, name, useLine] of [
+        [4, "open", 7],
+        [5, "guard", 8],
+      ] as const) {
+        const result = await refs(files["a/Base.java"]!, base, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok")
+          expect(
+            result.references.some(
+              (site) => site.file === files["b/Derived.java"] && site.range.start.line === useLine,
+            ),
+          ).toBe(true);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: string, name: string) =>
+        [...graph.nodes.values()].find((entry) => entry.file === file && entry.name === name)?.id;
+      const calls = (file: string, caller: string, target: string, name: string) =>
+        graph.edges.some(
+          (edge) => edge.from === node(file, caller) && edge.to === node(target, name) && edge.label === "calls",
+        );
+      const baseFile = files["a/Base.java"]!;
+      const toolsFile = files["q/Tools.java"]!;
+      const derivedFile = files["b/Derived.java"]!;
+      expect(calls(files["a/Same.java"]!, "qualified", baseFile, "hit")).toBe(true);
+      expect(calls(files["a/Same.java"]!, "bare", baseFile, "hit")).toBe(true);
+      expect(calls(derivedFile, "qualified", baseFile, "hit")).toBe(false);
+      expect(calls(derivedFile, "bare", baseFile, "hit")).toBe(false);
+      expect(calls(derivedFile, "bare", toolsFile, "hit")).toBe(true);
+      expect(calls(files["b/Plain.java"]!, "qualified", baseFile, "hit")).toBe(false);
+      expect(calls(files["b/Plain.java"]!, "bare", baseFile, "hit")).toBe(false);
+      expect(calls(derivedFile, "publicCall", baseFile, "open")).toBe(true);
+      expect(calls(derivedFile, "protectedCall", baseFile, "guard")).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -724,6 +1377,36 @@ describe("Java implicit-receiver precedence", () => {
     }
   });
 
+  it("resolves an explicit this call to a grandparent overload instead of a nearer wrong-arity method", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-this-grand-overload-"));
+    try {
+      const lines = ["package p;", "class Derived extends Base {", "  int call() { return this.hit(1); }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "p/GrandBase.java": "package p;\nclass GrandBase { int hit(int value) { return value; } }\n",
+        "p/Base.java": "package p;\nclass Base extends GrandBase { int hit() { return 0; } }\n",
+        "p/Derived.java": lines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const goto = await goToDefinition(index, {
+        file: paths["p/Derived.java"]!,
+        line: 3,
+        column: columnOf(lines, 3, "hit"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected GrandBase.hit(int)");
+      expect(normalizePath(goto.definition.file)).toBe(paths["p/GrandBase.java"]);
+      expect(normalizePath(goto.definition.file)).not.toBe(paths["p/Base.java"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(targets).toEqual([paths["p/GrandBase.java"]]);
+      expect(targets).not.toContain(paths["p/Base.java"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("treats same-arity inherited overloads as ambiguous and skips a private middle declaration", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-overload-ambiguity-"));
     try {
@@ -1036,6 +1719,85 @@ describe("Java type-qualified overloads", () => {
         .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
         .map((edge) => graph.nodes.get(edge.from)?.name);
       expect(callers).toEqual(["a"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Java package-qualified method calls", () => {
+  it("selects the declared package type without an import or same-name decoys", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-qualified-member-"));
+    try {
+      const useLines = [
+        "package client;",
+        "public class Use {",
+        "  public int call() { return org.math.Util.sum(1, 2); }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "org/math/Util.java":
+          "package org.math; public class Util { public static int sum(int a, int b) { return a + b; } }",
+        "org/other/Util.java":
+          "package org.other; public class Util { public static int sum(int a, int b) { return -1; } }",
+        "client/Use.java": useLines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["client/Use.java"]!,
+        line: 3,
+        column: columnOf(useLines, 3, "sum"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected package-qualified method");
+      expect(normalizePath(result.definition.file)).toBe(paths["org/math/Util.java"]);
+      const references = await findReferences(index, {
+        file: result.definition.file,
+        line: result.definition.range.start.line,
+        column: result.definition.range.start.column,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected method references");
+      expect(new Set(references.references.map((ref) => normalizePath(ref.file)))).toEqual(
+        new Set([paths["org/math/Util.java"], paths["client/Use.java"]]),
+      );
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["org/math/Util.java"]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Java inherited member lookup", () => {
+  it("reaches a grandparent through two empty derived classes without selecting an unrelated owner", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-grandparent-"));
+    try {
+      const lines = ["package p;", "public class Use {", "  public int call() { return new Derived().run(); }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "p/Grand.java": "package p; public class Grand { public int run() { return 1; } }",
+        "p/Base.java": "package p; public class Base extends Grand {}",
+        "p/Derived.java": "package p; public class Derived extends Base {}",
+        "p/Decoy.java": "package p; public class Decoy { public int run() { return -1; } }",
+        "p/Use.java": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["p/Use.java"]!,
+        line: 3,
+        column: columnOf(lines, 3, "run"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected inherited Java method");
+      expect(normalizePath(result.definition.file)).toBe(paths["p/Grand.java"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "call")
+        .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
+      expect(targets).toEqual([paths["p/Grand.java"]]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -1,5 +1,5 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { getCallableArity } from "../languages/callable-arity.js";
+import type { CallableIdentity } from "../languages/callable-arity.js";
 import type { SymbolDef } from "./types.js";
 
 const OVERLOAD_SIGNATURE_NODE_TYPES: Record<string, true> = {
@@ -36,10 +36,6 @@ export function typescriptCallableRole(node: SyntaxNodeLike | null | undefined):
   return "other";
 }
 
-export function typescriptCallableRoleAt(tree: SyntaxTreeLike, start: number, end: number): TypeScriptCallableRole {
-  return typescriptCallableRole(tree.rootNode.descendantForIndex(start, end));
-}
-
 const TYPESCRIPT_MEMBER_CONTAINER_TYPES = new Set([
   "class_body",
   "interface_body",
@@ -51,22 +47,31 @@ const TYPESCRIPT_MEMBER_CONTAINER_TYPES = new Set([
 /**
  * Class, interface, enum, type-literal, object-literal, and namespace/module bodies each own
  * their callables, so a type literal's `m(): void` signature and an object literal's `m() {}`
- * are never one overload set. "ambient_declaration" is a declaration wrapper, not a callable
- * container: nested "internal_module"/"module" nodes are found first, while standalone ambient
- * signatures remain in the file-level group.
+ * are never one overload set. A function or other block body is its own lexical scope: a local
+ * `function helper() {}` inside a method never joins the class member `helper`. Namespace and
+ * `declare global` bodies are statement blocks too, but they belong to their declaration.
+ * "ambient_declaration" is a declaration wrapper, not a callable container: nested
+ * "internal_module"/"module" nodes are found first, while standalone ambient signatures remain
+ * in the file-level group.
  */
-export function typescriptCallableContainerKey(tree: SyntaxTreeLike, start: number, end: number): string {
-  let current: SyntaxNodeLike | null = tree.rootNode.descendantForIndex(start, end);
+export function typescriptCallableContainerKeyForNode(node: SyntaxNodeLike): string {
+  let current: SyntaxNodeLike | null = node;
   while (current) {
-    if (TYPESCRIPT_MEMBER_CONTAINER_TYPES.has(current.type)) {
-      return "type:" + current.startIndex;
-    }
-    if (current.type === "internal_module" || current.type === "module") {
-      return "namespace:" + current.startIndex;
-    }
+    if (TYPESCRIPT_MEMBER_CONTAINER_TYPES.has(current.type)) return "type:" + current.startIndex;
+    if (current.type === "internal_module" || current.type === "module") return "namespace:" + current.startIndex;
+    if (current.type === "statement_block" && !isDeclarationBody(current)) return "block:" + current.startIndex;
     current = current.parent;
   }
   return "module";
+}
+
+function isDeclarationBody(block: SyntaxNodeLike): boolean {
+  const owner = block.parent?.type;
+  return owner === "internal_module" || owner === "module" || owner === "ambient_declaration";
+}
+
+export function typescriptCallableContainerKey(tree: SyntaxTreeLike, start: number, end: number): string {
+  return typescriptCallableContainerKeyForNode(tree.rootNode.descendantForIndex(start, end));
 }
 
 function typescriptNamespaceForDefinition(tree: SyntaxTreeLike, def: SymbolDef): SyntaxNodeLike | null {
@@ -128,23 +133,17 @@ export function typescriptMergedNamespaceContainers(
   return containers;
 }
 
-/** Keep only candidates whose declaration belongs to the requested callable container. */
+/** Keep only declarations with the same indexed callable group. */
 export function typescriptCallableCandidatesInContainer<T>(
   group: readonly T[],
-  tree: SyntaxTreeLike,
-  rangeOf: (entry: T) => SymbolDef["range"],
-  start: number,
-  end: number,
+  identityOf: (entry: T) => CallableIdentity | undefined,
+  key: string | undefined,
 ): readonly T[] {
-  if (!group.length) return group;
-  const containerKey = typescriptCallableContainerKey(tree, start, end);
+  if (!group.length || key === undefined) return group;
   let matching: T[] | undefined;
   for (let index = 0; index < group.length; index += 1) {
     const entry = group[index]!;
-    const range = rangeOf(entry);
-    const candidateStart = range.start.index ?? 0;
-    const candidateEnd = range.end.index ?? candidateStart;
-    if (typescriptCallableContainerKey(tree, candidateStart, candidateEnd) === containerKey) {
+    if (identityOf(entry)?.key === key) {
       if (matching) matching.push(entry);
     } else if (!matching) {
       matching = group.slice(0, index);
@@ -156,102 +155,66 @@ export function typescriptCallableCandidatesInContainer<T>(
 /** Only a single implementation can stand in for every signature of an overload group. */
 export function typescriptCollapsedOverloadTarget<T>(
   group: readonly T[],
-  tree: SyntaxTreeLike,
-  definitionOf: (entry: T) => SymbolDef,
+  identityOf: (entry: T) => CallableIdentity | undefined,
 ): T | undefined {
   const first = group[0];
   if (!first) return undefined;
-  const firstDefinition = definitionOf(first);
-  const start = firstDefinition.range.start.index ?? 0;
-  const end = firstDefinition.range.end.index ?? start;
-  const candidates = typescriptCallableCandidatesInContainer(
-    group,
-    tree,
-    (entry) => definitionOf(entry).range,
-    start,
-    end,
-  );
-  if (candidates.length !== group.length) return undefined;
-
+  const key = identityOf(first)?.key;
+  if (!key || group.some((entry) => identityOf(entry)?.key !== key)) return undefined;
   let implementation: T | undefined;
-  for (const entry of candidates) {
-    const def = definitionOf(entry);
-    const entryStart = def.range.start.index ?? 0;
-    const entryEnd = def.range.end.index ?? entryStart;
-    if (typescriptCallableRoleAt(tree, entryStart, entryEnd) !== "implementation") continue;
+  for (const entry of group) {
+    if (identityOf(entry)?.role !== "implementation") continue;
     if (implementation) return undefined;
     implementation = entry;
   }
   return implementation;
 }
 
-/**
- * Collapse an overload group only when one implementation is proven. Otherwise each
- * declaration remains an arity candidate.
- */
+/** Signature-only and multiply implemented groups remain separate arity candidates. */
 export function typescriptCollapsedOverloadCandidates<T>(
   group: readonly T[],
-  tree: SyntaxTreeLike,
-  definitionOf: (entry: T) => SymbolDef,
+  identityOf: (entry: T) => CallableIdentity | undefined,
 ): readonly T[] {
   if (group.length < 2) return group;
-  const implementation = typescriptCollapsedOverloadTarget(group, tree, definitionOf);
+  const implementation = typescriptCollapsedOverloadTarget(group, identityOf);
   return implementation ? [implementation] : group;
 }
 
-/**
- * Select the canonical implementation only when a declared overload accepts a known count.
- * Unknown counts retain the implementation; signature-only groups need one matching declaration.
- */
+/** Select the implementation only if a declared overload accepts a known count. */
 export function typescriptSelectOverloadCandidate<T>(params: {
   group: readonly T[];
-  tree: SyntaxTreeLike;
-  definitionOf: (entry: T) => SymbolDef;
-  declarationOf: (entry: T) => SyntaxNodeLike | null | undefined;
-  source: string;
-  languageId: string;
+  identityOf: (entry: T) => CallableIdentity | undefined;
   argumentCount: number | null;
 }): T | undefined {
-  const candidates = typescriptCollapsedOverloadCandidates(params.group, params.tree, params.definitionOf);
+  const candidates = typescriptCollapsedOverloadCandidates(params.group, params.identityOf);
   if (candidates.length === 1) {
     const implementation = candidates[0]!;
     if (params.argumentCount === null || params.group.length === 1) return implementation;
     let hasSignature = false;
     for (const candidate of params.group) {
       if (candidate === implementation) continue;
-      const def = params.definitionOf(candidate);
-      const start = def.range.start.index ?? 0;
-      const end = def.range.end.index ?? start;
-      if (typescriptCallableRoleAt(params.tree, start, end) !== "signature") continue;
+      const identity = params.identityOf(candidate);
+      if (identity?.role !== "signature") continue;
       hasSignature = true;
-      const declaration = params.declarationOf(candidate);
-      const arity = declaration
-        ? getCallableArity({ languageId: params.languageId, source: params.source, declaration })
-        : null;
+      const arity = identity.arity;
       if (
         arity &&
         params.argumentCount >= arity.minArgs &&
         (arity.maxArgs === null || params.argumentCount <= arity.maxArgs)
-      ) {
+      )
         return implementation;
-      }
     }
     return hasSignature ? undefined : implementation;
   }
   if (params.argumentCount === null) return undefined;
-
   let selected: T | undefined;
   for (const candidate of candidates) {
-    const declaration = params.declarationOf(candidate);
-    const arity = declaration
-      ? getCallableArity({ languageId: params.languageId, source: params.source, declaration })
-      : null;
+    const arity = params.identityOf(candidate)?.arity;
     if (
       arity &&
       (params.argumentCount < arity.minArgs || (arity.maxArgs !== null && params.argumentCount > arity.maxArgs))
-    ) {
+    )
       continue;
-    }
     if (selected) return undefined;
     selected = candidate;
   }
@@ -262,13 +225,10 @@ export function typescriptSelectOverloadCandidate<T>(params: {
 export function typescriptOverloadImplementationAcceptsCount(params: {
   implementation: SymbolDef;
   locals: readonly SymbolDef[];
-  tree: SyntaxTreeLike;
-  source: string;
-  languageId: string;
   argumentCount: number | null;
 }): boolean {
   if (params.argumentCount === null) return true;
-  const { implementation, tree } = params;
+  const { implementation } = params;
   let first: SymbolDef | undefined;
   let sameName: SymbolDef[] | undefined;
   for (const candidate of params.locals) {
@@ -278,28 +238,21 @@ export function typescriptOverloadImplementationAcceptsCount(params: {
     else first = candidate;
   }
   if (!sameName) return true;
-  const start = implementation.range.start.index ?? 0;
-  const end = implementation.range.end.index ?? start;
-  const group = typescriptCallableCandidatesInContainer(sameName, tree, (candidate) => candidate.range, start, end);
-  const canonical = typescriptCollapsedOverloadTarget(group, tree, (candidate) => candidate);
+  const group = typescriptCallableCandidatesInContainer(
+    sameName,
+    (candidate) => candidate.callable,
+    implementation.callable?.key,
+  );
+  const canonical = typescriptCollapsedOverloadTarget(group, (candidate) => candidate.callable);
   if (
     !canonical ||
     canonical.range.start.index !== implementation.range.start.index ||
     canonical.range.end.index !== implementation.range.end.index
-  ) {
+  )
     return true;
-  }
   return !!typescriptSelectOverloadCandidate({
     group,
-    tree,
-    definitionOf: (candidate) => candidate,
-    declarationOf: (candidate) => {
-      const candidateStart = candidate.range.start.index ?? 0;
-      const candidateEnd = candidate.range.end.index ?? candidateStart;
-      return tree.rootNode.descendantForIndex(candidateStart, candidateEnd)?.parent;
-    },
-    source: params.source,
-    languageId: params.languageId,
+    identityOf: (candidate) => candidate.callable,
     argumentCount: params.argumentCount,
   });
 }

@@ -24,8 +24,18 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * same-named local, and records synthetic definitions at their export properties.
  * Epoch 75 re-resolves warm-cache import bindings after declaration-language files are added,
  * changed, or deleted. Older rows can keep bindings from an old file set.
+ * Epoch 76 stores canonical callable identities and their call-form arities in module rows.
+ * Epoch 77 updates Ruby relative imports, JVM reference candidates, and inherited member selection.
+ * Epoch 78 gives TypeScript functions declared in a block body their own callable key scope.
+ * Epoch 79 gives a C++ declaration without `static` the file-scoped key of a same-file `static` one.
+ * Epoch 80 indexes Java static members by their declaring type and keeps static wildcards distinct
+ * from JVM package and type-on-demand imports.
+ * Epoch 81 ignores nested JVM declarations when resolving package-qualified named imports.
+ * Epoch 82 marks non-public Java static members package-restricted for static imports.
+ * Epoch 83 stores Java package-private instance and protected member visibility.
+ * Epoch 84 resolves the visible first segment of a C++ qualified name before the direct path.
  */
-export const CORE_ALGORITHM_EPOCH = 75;
+export const CORE_ALGORITHM_EPOCH = 84;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

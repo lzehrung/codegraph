@@ -57,6 +57,18 @@ export function memberLookupBinding(languageId: string): CallableBinding {
  */
 export type CallableDeclarationKind = "function" | "instance-method" | "class-method" | "static-method";
 
+/** The stable declaration group and call-form facts stored with each indexed callable. */
+export type CallableIdentity = {
+  key: string;
+  owner: string;
+  kind: CallableDeclarationKind;
+  arity: CallableArity | null;
+  unboundArity?: CallableArity;
+  signature?: string;
+  role?: "signature" | "implementation" | "other";
+  definition?: boolean;
+};
+
 /** Node types that anchor a callable declaration when scanning up from a symbol position. */
 export const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
   arrow_function: true,
@@ -1226,6 +1238,24 @@ export function getCallableArity(args: {
   }
   const kind = kindFor(profile, args.declaration, enumeration.parameters);
   return arityOfParameters(profile, enumeration.parameters, enumeration.hasRest, args.binding ?? "bound", kind);
+}
+/** Compute the receiver kind and both call-form ranges in one parameter scan. */
+export function getCallableDeclarationFacts(args: {
+  languageId: string;
+  source: string;
+  declaration: SyntaxNodeLike;
+}): { kind: CallableDeclarationKind; arity: CallableArity; unboundArity?: CallableArity } | null {
+  const profile = getCallableArityProfile(args.languageId);
+  if (!profile) return null;
+  const enumeration = enumerateParameters(profile, args.declaration, args.source);
+  if (!enumeration) return null;
+  const kind = kindFor(profile, args.declaration, enumeration.parameters);
+  const arity = arityOfParameters(profile, enumeration.parameters, enumeration.hasRest, "bound", kind);
+  if (kind === "function" || kind === "static-method") return { kind, arity };
+  const unboundArity = arityOfParameters(profile, enumeration.parameters, enumeration.hasRest, "unbound", kind);
+  return unboundArity.minArgs !== arity.minArgs || unboundArity.maxArgs !== arity.maxArgs
+    ? { kind, arity, unboundArity }
+    : { kind, arity };
 }
 
 /**

@@ -1,0 +1,232 @@
+/**
+ * Zig call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). `zigOmissions`
+ * below states why three forms have no cell.
+ */
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+const NO_INHERITANCE =
+  "Zig has no inheritance or struct-embedding promotion mechanism; a struct that merely contains a " +
+  "field of another struct type does not gain its methods, and there is no base-type keyword.";
+
+export const zigOmissions: readonly CallFormOmission[] = [
+  {
+    callForm: "overload-arity",
+    reason:
+      "Zig rejects two declarations with the same name in one container, so argument-count overloading is not expressible.",
+  },
+  { callForm: "inherited-member", reason: NO_INHERITANCE },
+  { callForm: "super-call", reason: NO_INHERITANCE },
+];
+
+export const zigCells: MatrixCell[] = [
+  {
+    id: "zig/bare-call",
+    language: "zig",
+    callForm: "bare-call",
+    files: {
+      "calc.zig": [
+        "pub fn add(a: i32, b: i32) i32 {",
+        "    return a + b;",
+        "}",
+        "",
+        "pub fn sumPair() i32 {",
+        "    return add(1, 2);",
+        "}",
+        "",
+      ].join("\n"),
+      "decoy.zig": ["fn add(a: i32, b: i32) i32 {", "    return -1;", "}", ""].join("\n"),
+    },
+    use: { file: "calc.zig", line: 6, token: "add" },
+    expected: { file: "calc.zig", line: 1, token: "add" },
+    decoy: { file: "decoy.zig", line: 1, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "calc.zig", fromName: "sumPair" },
+  },
+  {
+    id: "zig/qualified-call",
+    language: "zig",
+    callForm: "qualified-call",
+    files: {
+      "calc.zig": ["pub fn add(a: i32, b: i32) i32 {", "    return a + b;", "}", ""].join("\n"),
+      "decoy.zig": ["pub fn add(a: i32, b: i32) i32 {", "    return -1;", "}", ""].join("\n"),
+      "use.zig": [
+        'const calc = @import("calc.zig");',
+        "",
+        "pub fn sumPair() i32 {",
+        "    return calc.add(1, 2);",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.zig", line: 4, token: "add" },
+    expected: { file: "calc.zig", line: 1, token: "add" },
+    decoy: { file: "decoy.zig", line: 1, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.zig", fromName: "sumPair" },
+    // Moved: calc.zig relocates under lib/, and use.zig's @import path updates to match -- @import
+    // names a file path, not a declaration in another file (`import-resolution-tables.ts`).
+    moved: {
+      files: {
+        "lib/calc.zig": ["pub fn add(a: i32, b: i32) i32 {", "    return a + b;", "}", ""].join("\n"),
+        "decoy.zig": ["pub fn add(a: i32, b: i32) i32 {", "    return -1;", "}", ""].join("\n"),
+        "use.zig": [
+          'const calc = @import("lib/calc.zig");',
+          "",
+          "pub fn sumPair() i32 {",
+          "    return calc.add(1, 2);",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      expected: { file: "lib/calc.zig", line: 1, token: "add" },
+    },
+  },
+  {
+    id: "zig/self-member-call",
+    language: "zig",
+    callForm: "self-member-call",
+    files: {
+      "widget.zig": [
+        "pub const Widget = struct {",
+        "    pub fn run(self: Widget) i32 {",
+        "        return self.helper();",
+        "    }",
+        "    pub fn helper(self: Widget) i32 {",
+        "        return 1;",
+        "    }",
+        "};",
+        "",
+      ].join("\n"),
+      "decoy.zig": [
+        "pub const Other = struct {",
+        "    pub fn helper(self: Other) i32 {",
+        "        return -1;",
+        "    }",
+        "};",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "widget.zig", line: 3, token: "helper" },
+    expected: { file: "widget.zig", line: 5, token: "helper" },
+    decoy: { file: "decoy.zig", line: 2, token: "helper" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "widget.zig", fromName: "run" },
+  },
+  {
+    id: "zig/typed-local-receiver",
+    language: "zig",
+    callForm: "typed-local-receiver",
+    files: {
+      "box.zig": [
+        "pub const Box = struct {",
+        "    pub fn run(self: Box) i32 {",
+        "        return 1;",
+        "    }",
+        "};",
+        "",
+      ].join("\n"),
+      "widget2.zig": [
+        "pub const Widget2 = struct {",
+        "    pub fn run(self: Widget2) i32 {",
+        "        return -1;",
+        "    }",
+        "};",
+        "",
+      ].join("\n"),
+      "use.zig": [
+        'const box = @import("box.zig");',
+        "",
+        "pub fn callWithLocal() i32 {",
+        "    const b: box.Box = box.Box{};",
+        "    return b.run();",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.zig", line: 5, token: "run" },
+    expected: { file: "box.zig", line: 2, token: "run" },
+    decoy: { file: "widget2.zig", line: 2, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.zig", fromName: "callWithLocal" },
+  },
+  {
+    id: "zig/static-receiver",
+    language: "zig",
+    callForm: "static-receiver",
+    files: {
+      "counter.zig": [
+        "pub const Counter = struct {",
+        "    pub fn zero() i32 {",
+        "        return 0;",
+        "    }",
+        "};",
+        "",
+      ].join("\n"),
+      "gauge.zig": [
+        "pub const Gauge = struct {",
+        "    pub fn zero() i32 {",
+        "        return -1;",
+        "    }",
+        "};",
+        "",
+      ].join("\n"),
+      "use.zig": [
+        'const counter = @import("counter.zig");',
+        "",
+        "pub fn makeCounter() i32 {",
+        "    return counter.Counter.zero();",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.zig", line: 4, token: "zero" },
+    expected: { file: "counter.zig", line: 2, token: "zero" },
+    decoy: { file: "gauge.zig", line: 2, token: "zero" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.zig", fromName: "makeCounter" },
+  },
+  {
+    id: "zig/construction",
+    language: "zig",
+    callForm: "construction",
+    files: {
+      "widget3.zig": ["pub const Widget3 = struct {", "    value: i32 = 0,", "};", ""].join("\n"),
+      "decoy3.zig": ["pub const Decoy3 = struct {", "    value: i32 = 0,", "};", ""].join("\n"),
+      "use.zig": [
+        'const widget3 = @import("widget3.zig");',
+        "",
+        "pub fn makeWidget() widget3.Widget3 {",
+        "    return widget3.Widget3{};",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.zig", line: 4, token: "Widget3" },
+    expected: { file: "widget3.zig", line: 1, token: "Widget3" },
+    decoy: { file: "decoy3.zig", line: 1, token: "Decoy3" },
+    decoyKind: "type",
+    edge: { label: "instantiates", fromFile: "use.zig", fromName: "makeWidget" },
+  },
+  {
+    id: "zig/imported-alias",
+    language: "zig",
+    callForm: "imported-alias",
+    files: {
+      "shapes.zig": ["pub fn area(radius: f64) f64 {", "    return radius * radius;", "}", ""].join("\n"),
+      "decoy.zig": ["pub fn area(radius: f64) f64 {", "    return -1.0;", "}", ""].join("\n"),
+      "use.zig": [
+        'const circleArea = @import("shapes.zig").area;',
+        "",
+        "pub fn computeArea() f64 {",
+        "    return circleArea(2.0);",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.zig", line: 4, token: "circleArea" },
+    expected: { file: "shapes.zig", line: 1, token: "area" },
+    decoy: { file: "decoy.zig", line: 1, token: "area" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.zig", fromName: "computeArea" },
+  },
+];

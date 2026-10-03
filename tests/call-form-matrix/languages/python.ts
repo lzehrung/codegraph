@@ -1,0 +1,217 @@
+/**
+ * Python call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1).
+ * `pythonOmissions` below states why one form has no cell.
+ */
+import type { CallFormOmission, MatrixCell } from "../types.js";
+
+export const pythonOmissions: readonly CallFormOmission[] = [
+  {
+    callForm: "overload-arity",
+    reason:
+      "Python has no argument-count-based overload dispatch, so the call form cannot be expressed (a " +
+      "later `def` of the same name simply replaces the earlier one).",
+  },
+];
+
+export const pythonCells: MatrixCell[] = [
+  {
+    id: "python/bare-call",
+    language: "python",
+    callForm: "bare-call",
+    files: {
+      "calc.py": ["def add(a, b):", "    return a + b", ""].join("\n"),
+      "decoy.py": ["def add(a, b):", "    return -1", ""].join("\n"),
+      "use.py": ["from calc import add", "", "", "def sum_pair():", "    return add(1, 2)", ""].join("\n"),
+    },
+    use: { file: "use.py", line: 5, token: "add" },
+    expected: { file: "calc.py", line: 1, token: "add" },
+    decoy: { file: "decoy.py", line: 1, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.py", fromName: "sum_pair" },
+    // Moved: calc.py relocates under lib/, and use.py's import path updates to match -- Python's
+    // import names a module path, not a declaration that can move to another file
+    // (`import-resolution-tables.ts`), so this is the only way to keep the import working.
+    moved: {
+      files: {
+        "lib/calc.py": ["def add(a, b):", "    return a + b", ""].join("\n"),
+        "decoy.py": ["def add(a, b):", "    return -1", ""].join("\n"),
+        "use.py": ["from lib.calc import add", "", "", "def sum_pair():", "    return add(1, 2)", ""].join("\n"),
+      },
+      expected: { file: "lib/calc.py", line: 1, token: "add" },
+    },
+  },
+  {
+    id: "python/qualified-call",
+    language: "python",
+    callForm: "qualified-call",
+    files: {
+      "calc.py": ["def add(a, b):", "    return a + b", ""].join("\n"),
+      "decoy.py": ["def add(a, b):", "    return -1", ""].join("\n"),
+      "use.py": ["import calc", "", "", "def sum_pair():", "    return calc.add(1, 2)", ""].join("\n"),
+    },
+    use: { file: "use.py", line: 5, token: "add" },
+    expected: { file: "calc.py", line: 1, token: "add" },
+    decoy: { file: "decoy.py", line: 1, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.py", fromName: "sum_pair" },
+  },
+  {
+    id: "python/self-member-call",
+    language: "python",
+    callForm: "self-member-call",
+    files: {
+      "widget.py": [
+        "class Widget:",
+        "    def run(self):",
+        "        return self.helper()",
+        "",
+        "    def helper(self):",
+        "        return 1",
+        "",
+      ].join("\n"),
+      "decoy.py": ["class Other:", "    def helper(self):", "        return -1", ""].join("\n"),
+    },
+    use: { file: "widget.py", line: 3, token: "helper" },
+    expected: { file: "widget.py", line: 5, token: "helper" },
+    decoy: { file: "decoy.py", line: 2, token: "helper" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "widget.py", fromName: "run" },
+  },
+  {
+    id: "python/typed-local-receiver",
+    language: "python",
+    callForm: "typed-local-receiver",
+    files: {
+      "box.py": ["class Box:", "    def run(self):", "        return 1", ""].join("\n"),
+      "decoy.py": ["class Widget:", "    def run(self):", "        return -1", ""].join("\n"),
+      "use.py": [
+        "from box import Box",
+        "",
+        "",
+        "def call_with_local():",
+        "    b: Box = Box()",
+        "    return b.run()",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.py", line: 6, token: "run" },
+    expected: { file: "box.py", line: 2, token: "run" },
+    decoy: { file: "decoy.py", line: 2, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.py", fromName: "call_with_local" },
+  },
+  {
+    id: "python/static-receiver",
+    language: "python",
+    callForm: "static-receiver",
+    files: {
+      "counter.py": ["class Counter:", "    @staticmethod", "    def zero():", "        return 0", ""].join("\n"),
+      "decoy.py": ["class Gauge:", "    @staticmethod", "    def zero():", "        return -1", ""].join("\n"),
+      "use.py": ["from counter import Counter", "", "", "def make_counter():", "    return Counter.zero()", ""].join(
+        "\n",
+      ),
+    },
+    use: { file: "use.py", line: 5, token: "zero" },
+    expected: { file: "counter.py", line: 3, token: "zero" },
+    decoy: { file: "decoy.py", line: 3, token: "zero" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.py", fromName: "make_counter" },
+  },
+  {
+    id: "python/construction",
+    language: "python",
+    callForm: "construction",
+    files: {
+      "widget.py": ["class Widget:", "    pass", ""].join("\n"),
+      "decoy.py": ["class Decoy:", "    pass", ""].join("\n"),
+      "use.py": ["from widget import Widget", "", "", "def make_widget():", "    return Widget()", ""].join("\n"),
+    },
+    use: { file: "use.py", line: 5, token: "Widget" },
+    expected: { file: "widget.py", line: 1, token: "Widget" },
+    decoy: { file: "decoy.py", line: 1, token: "Decoy" },
+    decoyKind: "type",
+    edge: { label: "calls", fromFile: "use.py", fromName: "make_widget" },
+  },
+  {
+    id: "python/imported-alias",
+    language: "python",
+    callForm: "imported-alias",
+    files: {
+      "shapes.py": ["def area(radius):", "    return radius * radius * 3.14", ""].join("\n"),
+      "decoy.py": ["def area(radius):", "    return -1", ""].join("\n"),
+      "use.py": [
+        "from shapes import area as circle_area",
+        "",
+        "",
+        "def compute_area():",
+        "    return circle_area(2)",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.py", line: 5, token: "circle_area" },
+    expected: { file: "shapes.py", line: 1, token: "area" },
+    decoy: { file: "decoy.py", line: 1, token: "area" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.py", fromName: "compute_area" },
+  },
+  {
+    id: "python/inherited-member",
+    language: "python",
+    callForm: "inherited-member",
+    files: {
+      "shapes.py": [
+        "class Base:",
+        "    def run(self):",
+        "        return 1",
+        "",
+        "",
+        "class Derived(Base):",
+        "    pass",
+        "",
+      ].join("\n"),
+      "decoy.py": ["class Decoy:", "    def run(self):", "        return -1", ""].join("\n"),
+      "use.py": [
+        "from shapes import Derived",
+        "",
+        "",
+        "def call_derived():",
+        "    d = Derived()",
+        "    return d.run()",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.py", line: 6, token: "run" },
+    expected: { file: "shapes.py", line: 2, token: "run" },
+    decoy: { file: "decoy.py", line: 2, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.py", fromName: "call_derived" },
+  },
+  {
+    id: "python/super-call",
+    language: "python",
+    callForm: "super-call",
+    files: {
+      "shapes.py": [
+        "class Base:",
+        "    def run(self):",
+        "        return 1",
+        "",
+        "",
+        "class Decoy:",
+        "    def run(self):",
+        "        return -1",
+        "",
+        "",
+        "class Derived(Base):",
+        "    def call_base(self):",
+        "        return super().run() + 1",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "shapes.py", line: 13, token: "run" },
+    expected: { file: "shapes.py", line: 2, token: "run" },
+    decoy: { file: "shapes.py", line: 7, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "shapes.py", fromName: "call_base" },
+  },
+];
