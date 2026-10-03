@@ -1,13 +1,4 @@
 {
   "schemaVersion": 1,
-  "exceptions": [
-    {
-      "advisory": "GHSA-VFJ7-8CJW-P6XM",
-      "package": "braces",
-      "reason": "No patched braces release exists (<= 3.0.3 affected). Reached through fast-glob and micromatch with glob patterns that can come from an indexed repository; impact is a stack-exhaustion denial of service of one index run, with no data access.",
-      "owner": "lzehrung",
-      "expires": "2026-12-31",
-      "trackingIssue": "https://github.com/lzehrung/codegraph/issues/394"
-    }
-  ]
+  "exceptions": []
 }

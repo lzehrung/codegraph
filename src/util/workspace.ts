@@ -3,7 +3,7 @@ const directoryExistsCache = new Map<string, boolean>();
 
 import fsp from "node:fs/promises";
 import path from "node:path";
-import fg from "fast-glob";
+import { globPaths } from "./glob.js";
 import { stripHashInlineComment } from "./comments.js";
 import { resolvePackageExportTargets, type PackageExportConditionMode } from "./package-exports.js";
 import { listResolutionCandidates } from "./resolution-candidates.js";
@@ -224,9 +224,8 @@ export async function loadWorkspaceConfig(projectRoot: string): Promise<Workspac
   if (include.length) {
     const patterns = include.map(toPackageJsonGlob).filter(Boolean);
     const ignorePatterns = ignore.map(toPackageJsonGlob).filter(Boolean);
-    const found = await fg(patterns, {
+    const found = await globPaths(patterns, {
       cwd: root,
-      absolute: true,
       dot: true,
       ignore: ["**/node_modules/**", ...ignorePatterns],
     });

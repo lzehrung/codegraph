@@ -79,7 +79,7 @@ describe("computeConfigHash shared discovery", () => {
     const result = await computeConfigHash(root);
 
     expect(result.error).toBeUndefined();
-    // Count both Node APIs so a direct fast-glob scan cannot bypass the guard.
+    // Count both Node APIs so a direct glob scan cannot bypass the guard.
     expect(readdirSpy.mock.calls.length + callbackReaddirSpy.mock.calls.length).toBe(1);
   });
 

@@ -806,7 +806,7 @@ describe("project file discovery", () => {
     expect(discovered.has(normalize(ignoredFile))).toBe(false);
   });
 
-  it("translates project-root ignore globs for child-root fast-glob pruning", () => {
+  it("translates project-root ignore globs for child-root scan pruning", () => {
     const projectRoot = path.resolve("repo");
     const testsRoot = path.join(projectRoot, "tests");
 
