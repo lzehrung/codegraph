@@ -4,6 +4,7 @@ const directoryExistsCache = new Map<string, boolean>();
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { globPaths } from "./glob.js";
+import { fileIdentityKey } from "./paths.js";
 import { stripHashInlineComment } from "./comments.js";
 import { resolvePackageExportTargets, type PackageExportConditionMode } from "./package-exports.js";
 import { listResolutionCandidates } from "./resolution-candidates.js";
@@ -229,11 +230,26 @@ export async function loadWorkspaceConfig(projectRoot: string): Promise<Workspac
       dot: true,
       ignore: ["**/node_modules/**", ...ignorePatterns],
     });
-    for (const pkgPath of found) {
+    // A directory link can reach one package by several paths (a link cycle repeats it). Visit
+    // shorter paths first and register each real package directory once, so the package keeps
+    // the path a reader would write rather than an alias through the link.
+    const seenPackageDirectories = new Set<string>();
+    const byDepth = (left: string, right: string): number =>
+      left.split("/").length - right.split("/").length || left.localeCompare(right);
+    for (const pkgPath of [...found].sort(byDepth)) {
+      const dir = path.dirname(pkgPath);
+      let realDirectory: string;
+      try {
+        realDirectory = await fsp.realpath(dir);
+      } catch {
+        continue;
+      }
+      const realKey = fileIdentityKey(realDirectory);
+      if (seenPackageDirectories.has(realKey)) continue;
+      seenPackageDirectories.add(realKey);
       const info = await loadJSON<MinimalPackageJson>(pkgPath);
       if (!info || !info.name) continue;
       const name = info.name;
-      const dir = path.dirname(pkgPath);
       packages.set(name, {
         name,
         path: dir,

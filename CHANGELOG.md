@@ -39,7 +39,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Security
 
-- File discovery uses `tinyglobby` instead of `fast-glob`, so `braces` ([GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm), no patched release) is no longer a production dependency, and the temporary audit exception is removed ([#394](https://github.com/lzehrung/codegraph/issues/394)). Discovered files are unchanged. A workspace glob such as `packages/**/package.json` no longer repeats packages through a symbolic link cycle.
+- File discovery uses `tinyglobby` instead of `fast-glob`, so `braces` ([GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm), no patched release) is no longer a production dependency, and the temporary audit exception is removed ([#394](https://github.com/lzehrung/codegraph/issues/394)). Discovered files are unchanged. When a directory link reaches a workspace package by more than one path (for example a link cycle), the package keeps its own directory instead of an alias through the link; 2.4.0 could record a path dozens of levels deep.
 - `piscina` now requires 4.9.4 or later, which fixes a prototype-pollution issue in its pool options ([GHSA-67c8-pqhq-4rmx](https://github.com/advisories/GHSA-67c8-pqhq-4rmx)).
 
 ## [2.4.0] - 2026-09-30

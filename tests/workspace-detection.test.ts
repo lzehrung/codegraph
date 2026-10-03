@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { buildProjectIndex } from "../src/index.js";
 import { clearWorkspaceCaches, loadWorkspaceConfig, resolveWorkspacePackage } from "../src/util/workspace.js";
-import { readOnlySamplePath, withCopiedFixture } from "./helpers/filesystem.js";
+import { globPaths } from "../src/util/glob.js";
+import { isSymlinkUnavailable, readOnlySamplePath, withCopiedFixture } from "./helpers/filesystem.js";
 
 const monorepoFixture = readOnlySamplePath("monorepo");
 
@@ -96,5 +98,49 @@ describe("Workspace detection modes", () => {
       },
       { prefix: "dg-ws-" },
     );
+  });
+
+  it("keeps each workspace package at its own path when a directory link forms a cycle", async () => {
+    const root = (await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ws-cycle-")))).replace(/\\/g, "/");
+    try {
+      for (const name of ["a", "b"]) {
+        await fsp.mkdir(path.join(root, "packages", name), { recursive: true });
+        await fsp.writeFile(path.join(root, "packages", name, "package.json"), JSON.stringify({ name }));
+      }
+      await fsp.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "root", workspaces: ["packages/**"] }),
+      );
+      try {
+        await fsp.symlink(path.join(root, "packages"), path.join(root, "packages", "a", "loop"), "junction");
+      } catch (error) {
+        if (isSymlinkUnavailable(error)) return;
+        throw error;
+      }
+
+      // The crawl stops at the cycle: one aliased level, not unbounded repetition.
+      const found = await globPaths(["packages/**/package.json"], { cwd: root, dot: true });
+      expect(found.map((file) => file.slice(root.length)).sort()).toEqual([
+        "/packages/a/loop/a/package.json",
+        "/packages/a/loop/b/package.json",
+        "/packages/a/package.json",
+        "/packages/b/package.json",
+      ]);
+
+      clearWorkspaceCaches();
+      const workspace = await loadWorkspaceConfig(root);
+      if (!workspace) throw new Error("expected a workspace config");
+      const packagePaths = [...workspace.packages].map(([name, entry]) => [
+        name,
+        entry.path.replace(/\\/g, "/").slice(root.length),
+      ]);
+      expect(packagePaths.sort()).toEqual([
+        ["a", "/packages/a"],
+        ["b", "/packages/b"],
+      ]);
+    } finally {
+      clearWorkspaceCaches();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
