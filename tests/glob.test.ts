@@ -60,4 +60,25 @@ describe("glob scans", () => {
     expect((await globPaths(["pkg"], { ...options, markDirectories: true })).sort()).toEqual([`${root}/pkg/`]);
     expect((await globPaths(["pkg"], options)).sort()).toEqual([`${root}/pkg`]);
   });
+
+  it("scans a filesystem root itself rather than the working directory", async () => {
+    const listing = await tree(["file.ts"]);
+    await fsp.writeFile(path.join(listing, "target.ts"), "x");
+    try {
+      await fsp.symlink(path.join(listing, "target.ts"), path.join(listing, "link.ts"), "file");
+    } catch {
+      return;
+    }
+    const root = path.parse(process.cwd()).root;
+    const requested: string[] = [];
+    // Serve the temp listing for the filesystem root, so no real root directory is walked.
+    const readdir: DirentReaddir = (directory, options, callback) => {
+      requested.push(directory);
+      if (path.resolve(directory) === path.resolve(root)) fs.readdir(listing, options, callback);
+      else callback(null, []);
+    };
+    const rootPrefix = root.replace(/\\/g, "/");
+    expect(await findSymbolicLinks(root, { readdir })).toEqual([`${rootPrefix}link.ts`]);
+    expect(path.resolve(requested[0]!)).toBe(path.resolve(root));
+  });
 });

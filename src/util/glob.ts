@@ -100,8 +100,25 @@ export async function globPaths(patterns: readonly string[], options: GlobOption
   });
   const failure = filesystem.firstError();
   if (failure) throw failure;
+  if (options.onlyFiles === false && options.followSymbolicLinks === false) {
+    // The crawler drops links it does not follow; entry listings still return a matching link
+    // itself (for example a `package.json` link) for the caller's own confinement checks.
+    const base = directoryPrefix(options.cwd);
+    const matches = picomatch([...patterns], { dot: !!options.dot });
+    const links = await findSymbolicLinks(options.cwd, {
+      ...(options.ignore ? { ignore: options.ignore } : {}),
+      ...(options.readdir ? { readdir: options.readdir } : {}),
+    });
+    for (const link of links) if (matches(link.slice(base.length))) paths.push(link);
+  }
   if (options.markDirectories) return paths;
   return paths.map((filePath) => (filePath.endsWith("/") ? filePath.slice(0, -1) : filePath));
+}
+
+/** `root` with `/` separators and exactly one trailing `/`, so `/` and `C:/` stay roots. */
+function directoryPrefix(root: string): string {
+  const normalized = root.replace(/\\/g, "/");
+  return normalized.endsWith("/") ? normalized : normalized + "/";
 }
 
 /**
@@ -115,7 +132,7 @@ export async function findSymbolicLinks(
   const readdir = options.readdir ?? nativeDirentReaddir;
   const ignorePatterns = scanIgnorePatterns(options.ignore);
   const isIgnored = ignorePatterns.length ? picomatch(ignorePatterns, { dot: true }) : () => false;
-  const rootPath = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  const base = directoryPrefix(root);
   const links: string[] = [];
   let pending = [""];
   while (pending.length) {
@@ -124,7 +141,7 @@ export async function findSymbolicLinks(
       pending.map(
         (relativeDirectory) =>
           new Promise<void>((resolve, reject) => {
-            const directory = relativeDirectory ? `${rootPath}/${relativeDirectory}` : rootPath;
+            const directory = base + relativeDirectory;
             readdir(path.resolve(directory), { withFileTypes: true }, (error, entries) => {
               if (error) {
                 if (error.code === "ENOENT") resolve();
@@ -134,7 +151,7 @@ export async function findSymbolicLinks(
               for (const entry of entries) {
                 const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
                 if (isIgnored(relativePath)) continue;
-                if (entry.isSymbolicLink()) links.push(`${rootPath}/${relativePath}`);
+                if (entry.isSymbolicLink()) links.push(base + relativePath);
                 else if (entry.isDirectory()) next.push(relativePath);
               }
               resolve();
