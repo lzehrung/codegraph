@@ -27,10 +27,10 @@ import {
 import { isKeywordReceiver, memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
 import { getCompilationUnitPeers, getPackageDeclarationName } from "./compilation-units.js";
 import { isJvmPackageSymbolVisible } from "./declaration-visibility.js";
-import { findClosestScopeBinding } from "./navigation-local.js";
+import { findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
 import { scopeNodesFor } from "./scope-nodes.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
-import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
+import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { javaKotlinFunctionOverloadIncludes, resolveExport, resolveImported } from "./navigation-resolve.js";
 import { isAmbiguousResolutionReason } from "./ambiguous-resolution.js";
@@ -181,21 +181,11 @@ export function getCachedScope(
     const node = parsedCtx.tree.rootNode.descendantForIndex(start, start);
     return phpReferenceRoleMatchesKind(node, kind);
   };
-  const fileKey = fileIdentityKey(fileId);
-  const cachedScope = index.scopeCache.get(fileKey);
-  if (cachedScope) {
-    for (const binding of cachedScope.all) {
-      binding.occurrences = binding.occurrences.filter((occurrence) => keepOccurrence(binding, occurrence));
-    }
-    return cachedScope;
-  }
-  const scopeIndex = buildScopeIndexFromSource(fileId, parsedCtx.source, parsedCtx.sup, moduleIndex.imports, {
-    tree: parsedCtx.tree,
-  });
+  // One builder for the shared scope cache: it reuses the module's indexed callables.
+  const scopeIndex = getOrBuildScopeIndex(index, fileId, parsedCtx.source, parsedCtx.sup, moduleIndex, parsedCtx.tree);
   for (const binding of scopeIndex.all) {
     binding.occurrences = binding.occurrences.filter((occurrence) => keepOccurrence(binding, occurrence));
   }
-  index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;
 }
 /**

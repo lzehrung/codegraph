@@ -585,13 +585,7 @@ describe("C++ classification and same-file navigation", () => {
       expect(prototypeKey).toBe(definitionKey);
       expect(keys("b.cpp")).not.toContain(prototypeKey);
 
-      const navigation = await goToDefinition(index, { file, line: 3, column: lines[2]!.lastIndexOf("run") + 1 });
-      expect(navigation.status).toBe("ok");
-      if (navigation.status !== "ok") throw new Error("Expected the internal definition");
-      expect([fileIdentityKey(navigation.definition.file), navigation.definition.range.start.line]).toEqual([
-        fileIdentityKey(file),
-        2,
-      ]);
+      // References first: the scope it caches must carry the same propagated keys navigation uses.
       const references = await findReferences(index, { file, line: 1, column: lines[0]!.indexOf("run") + 1 });
       expect(references.status).toBe("ok");
       if (references.status === "ok") {
@@ -601,6 +595,13 @@ describe("C++ classification and same-file navigation", () => {
           ["a.cpp", 3],
         ]);
       }
+      const navigation = await goToDefinition(index, { file, line: 3, column: lines[2]!.lastIndexOf("run") + 1 });
+      expect(navigation.status).toBe("ok");
+      if (navigation.status !== "ok") throw new Error("Expected the internal definition");
+      expect([fileIdentityKey(navigation.definition.file), navigation.definition.range.start.line]).toEqual([
+        fileIdentityKey(file),
+        2,
+      ]);
       // Equivalent declarations share one graph node: the prototype, which the definition aliases.
       const graph = await buildSymbolGraphDetailed(index);
       const runNodes = [...graph.nodes.values()].filter(
