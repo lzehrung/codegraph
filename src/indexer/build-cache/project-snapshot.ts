@@ -1911,6 +1911,7 @@ function isSymbolDef(value: unknown): value is SymbolDef {
       symbol.cTag === "reference") &&
     isOptionalBoolean(symbol.javaPackagePrivate) &&
     (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number") &&
+    isOptionalBoolean(symbol.jvmStaticMember) &&
     (symbol.docstring === undefined || typeof symbol.docstring === "string") &&
     (symbol.lineSpan === undefined || typeof symbol.lineSpan === "number") &&
     (symbol.complexity === undefined || typeof symbol.complexity === "number")
@@ -1941,6 +1942,7 @@ function isImportBinding(value: unknown): value is ImportBinding {
       isOptionalRange(binding.importedRange) &&
       isOptionalRange(binding.localRange) &&
       (binding.jvmTypeOwnerStartIndex === undefined || typeof binding.jvmTypeOwnerStartIndex === "number") &&
+      (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&
       isOptionalBoolean(binding.jvmSamePackage) &&
       (binding.cNamespace === undefined || binding.cNamespace === "tag" || binding.cNamespace === "ordinary") &&
       (binding.phpImportType === undefined ||
@@ -1956,6 +1958,7 @@ function isImportBinding(value: unknown): value is ImportBinding {
     binding.kind === "star" &&
     (binding.staticMembersOf === undefined || typeof binding.staticMembersOf === "string") &&
     (binding.jvmTypeWildcardName === undefined || typeof binding.jvmTypeWildcardName === "string") &&
+    (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&
     (binding.jvmPackageFiles === undefined ||
       (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string"))) &&
     (binding.jvmPackageLanguageId === undefined ||

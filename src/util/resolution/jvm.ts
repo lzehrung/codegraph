@@ -15,7 +15,7 @@ const KOTLIN_PACKAGE_PATTERN = new RegExp(
   "mu",
 );
 const KOTLIN_DECLARATION_PATTERN = new RegExp(
-  String.raw`\b(?:class|object|fun|typealias|interface)\s+(${KOTLIN_IDENTIFIER_SOURCE})`,
+  String.raw`\b(class|object|fun|typealias|interface)\s+(${KOTLIN_IDENTIFIER_SOURCE})`,
   "gu",
 );
 const JAVA_PACKAGE_PATTERN = new RegExp(
@@ -31,12 +31,15 @@ const JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORAB
 type JvmSymbolIndexEntry = {
   packageName: string | null;
   symbols: Set<string>;
+  javaImportableTypes?: Set<string>;
 };
 
 type JvmSymbolIndexReaderOptions = {
   packagePattern: RegExp;
   declarationPattern: RegExp;
   normalizeSymbol?: (symbol: string) => string;
+  declarationNameGroup?: 1 | 2;
+  javaImportableTypes?: boolean;
 };
 
 type JvmImportResolutionOptions = {
@@ -63,17 +66,21 @@ async function readJvmSymbolIndex(
 
   const source = await readUtf8WithoutBom(filePath);
   const packageName = source.match(options.packagePattern)?.[1] ?? null;
+  const javaImportableTypes = options.javaImportableTypes ? new Set<string>() : undefined;
   const symbols = new Set<string>();
   for (const match of source.matchAll(options.declarationPattern)) {
-    const symbolName = match[1];
+    const symbolName = match[options.declarationNameGroup ?? 1];
     if (symbolName) {
+      if (javaImportableTypes && (match[1] === "class" || match[1] === "object" || match[1] === "interface")) {
+        javaImportableTypes.add(symbolName);
+      }
       symbols.add(symbolName);
       const normalizedSymbol = options.normalizeSymbol?.(symbolName);
       if (normalizedSymbol) symbols.add(normalizedSymbol);
     }
   }
 
-  const entry = { packageName, symbols };
+  const entry = { packageName, symbols, ...(javaImportableTypes ? { javaImportableTypes } : {}) };
   cache.set(filePath, entry);
   return entry;
 }
@@ -82,6 +89,8 @@ async function readKotlinSymbolIndex(filePath: string): Promise<JvmSymbolIndexEn
   return await readJvmSymbolIndex(filePath, kotlinSymbolIndexCache, {
     packagePattern: KOTLIN_PACKAGE_PATTERN,
     declarationPattern: KOTLIN_DECLARATION_PATTERN,
+    declarationNameGroup: 2,
+    javaImportableTypes: true,
   });
 }
 
@@ -207,11 +216,23 @@ async function resolveJvmImportPath(
     cache.set(cacheKey, resolved);
     return resolved;
   }
+  const otherIndex = await getJvmProjectSymbolIndex(indexRoot, options.languageId === "java" ? "kotlin" : "java");
 
-  const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
-  const filenameMatched = options.filenameFallback
-    ? packageCandidates.filter((candidate) => path.parse(candidate).name === importedName)
-    : [];
+  const ownFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
+  const otherFiles = otherIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
+  const sharedFiles =
+    options.languageId === "java"
+      ? await Promise.all(
+          otherFiles.map(async (file) =>
+            (await readKotlinSymbolIndex(file)).javaImportableTypes?.has(importedName) ? file : null,
+          ),
+        )
+      : otherFiles;
+  const symbolFiles = [...ownFiles, ...sharedFiles.filter((file): file is string => file !== null)];
+  const filenameMatched =
+    options.filenameFallback && !symbolFiles.length
+      ? packageCandidates.filter((candidate) => path.parse(candidate).name === importedName)
+      : [];
   const candidates = symbolFiles.length ? symbolFiles : filenameMatched;
   const resolved =
     candidates.length === 1 ? await confineJvmResolvedPath(projectRoot, path.resolve(candidates[0]!)) : null;

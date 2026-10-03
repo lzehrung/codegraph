@@ -30,6 +30,7 @@ function symbolsForStarImport(
   packageOnly: boolean,
   typeOwnerStartIndex?: number,
   typeOwnerLanguageId?: string,
+  staticOnly = false,
 ): StarImportSymbol[] {
   const localExports: StarImportSymbol[] = [];
   for (const entry of target.exports) {
@@ -37,7 +38,9 @@ function symbolsForStarImport(
       entry.type === "local" &&
       (!(isRuby || packageOnly) || !entry.target.isMember) &&
       (typeOwnerStartIndex === undefined ||
-        isJvmTypeWildcardMember(entry.target, typeOwnerStartIndex, typeOwnerLanguageId))
+        (staticOnly
+          ? isJvmStaticWildcardMember(entry.target, typeOwnerStartIndex)
+          : isJvmTypeWildcardMember(entry.target, typeOwnerStartIndex, typeOwnerLanguageId)))
     ) {
       localExports.push({ name: entry.exportedAs, symbol: entry.target });
     }
@@ -87,6 +90,10 @@ export function isJvmTypeWildcardMember(
 ): boolean {
   return isJvmClassifier(symbol, languageId) && symbol.jvmTypeOwnerStartIndex === ownerStartIndex;
 }
+/** A Java static import admits only direct static members of its declared owner. */
+export function isJvmStaticWildcardMember(symbol: SymbolDef, ownerStartIndex: number): boolean {
+  return !!symbol.isMember && !!symbol.jvmStaticMember && symbol.jvmTypeOwnerStartIndex === ownerStartIndex;
+}
 
 /**
  * Expand `kind: "star"` import bindings into named or namespace imports so
@@ -111,6 +118,8 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
         binding.local,
         binding.imported,
         binding.cNamespace,
+        binding.jvmTypeOwnerStartIndex,
+        binding.jvmStaticWildcardName,
       ]);
     }
     if (binding.kind === "namespace") {
@@ -141,12 +150,15 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
           !packageFiles &&
           !!imp.jvmTypeWildcardName &&
           (targetSupport?.id === "java" || targetSupport?.id === "kotlin");
-        const typeOwner = typeOnDemand
-          ? jvmWildcardTypeOwner(target, imp.jvmTypeWildcardName!, targetSupport?.id)
-          : undefined;
+        const staticOnDemand = !packageFiles && !!imp.jvmStaticWildcardName && targetSupport?.id === "java";
+        const ownerName = imp.jvmTypeWildcardName ?? imp.jvmStaticWildcardName;
+        const typeOwner =
+          (typeOnDemand || staticOnDemand) && ownerName
+            ? jvmWildcardTypeOwner(target, ownerName, targetSupport?.id)
+            : undefined;
         const typeOwnerStartIndex = typeOwner?.range.start.index;
         if (
-          typeOnDemand &&
+          (typeOnDemand || staticOnDemand) &&
           (typeOwnerStartIndex === undefined || (typeOwner?.javaPackagePrivate && !imp.jvmSamePackage))
         )
           continue;
@@ -157,6 +169,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
           !!packageFiles,
           typeOwnerStartIndex,
           targetSupport?.id,
+          staticOnDemand,
         );
         const javaImportsKotlinTypes = imp.jvmPackageLanguageId === "java" && targetSupport?.id === "kotlin";
         // Header files default to C in filename-only lookup. Only extracted C tags prove the namespace split.
@@ -167,7 +180,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
             continue;
           }
           if (packageFiles && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
-          if (typeOnDemand && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
+          if ((typeOnDemand || staticOnDemand) && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
           let namespace: "tag" | "ordinary" | undefined;
           if (symbol.cTag) namespace = "tag";
           else if (hasCTagExports) namespace = "ordinary";
@@ -192,10 +205,15 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
                 resolved: targetFile,
                 ...(namespace ? { cNamespace: namespace } : {}),
                 ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
-                ...(typeOnDemand && typeOwnerStartIndex !== undefined
+                ...((typeOnDemand || staticOnDemand) && typeOwnerStartIndex !== undefined
                   ? { jvmTypeOwnerStartIndex: typeOwnerStartIndex }
                   : {}),
-                ...(typeOnDemand && imp.jvmSamePackage !== undefined ? { jvmSamePackage: imp.jvmSamePackage } : {}),
+                ...(staticOnDemand && imp.jvmStaticWildcardName
+                  ? { jvmStaticWildcardName: imp.jvmStaticWildcardName }
+                  : {}),
+                ...((typeOnDemand || staticOnDemand) && imp.jvmSamePackage !== undefined
+                  ? { jvmSamePackage: imp.jvmSamePackage }
+                  : {}),
                 ...(imp.includeForm ? { includeForm: imp.includeForm } : {}),
               };
           const expandedImportKeyValue = expandedImportKey(expandedImport);

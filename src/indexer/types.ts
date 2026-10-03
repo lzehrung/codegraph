@@ -35,8 +35,10 @@ export type SymbolDef = {
   /** Indexed callable facts; absent for symbols that are not callable. */
   callable?: CallableIdentity;
   isMember?: boolean;
-  /** Name-token start of the directly enclosing JVM type. */
+  /** Direct JVM type owner for nested classifiers and Java members. */
   jvmTypeOwnerStartIndex?: number;
+  /** Java member with static syntax, or an implicitly static nested classifier. */
+  jvmStaticMember?: boolean;
   /** Java type without public access, visible only in its package. */
   javaPackagePrivate?: boolean;
   /** C tag identity; a reference can introduce an incomplete tag if no visible tag exists. */

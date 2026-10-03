@@ -28,8 +28,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 77 updates Ruby relative imports, JVM reference candidates, and inherited member selection.
  * Epoch 78 gives TypeScript functions declared in a block body their own callable key scope.
  * Epoch 79 gives a C++ declaration without `static` the file-scoped key of a same-file `static` one.
+ * Epoch 80 indexes Java static members by their declaring type and keeps static wildcards distinct
+ * from JVM package and type-on-demand imports.
  */
-export const CORE_ALGORITHM_EPOCH = 79;
+export const CORE_ALGORITHM_EPOCH = 80;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

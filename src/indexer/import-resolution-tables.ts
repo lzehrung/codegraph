@@ -80,6 +80,8 @@ const ECMASCRIPT_ROW: ImportResolutionRow = {
   externalSpecifierResolutionOmittedReason: ECMASCRIPT_SPECIFIER_OMITTED,
 };
 
+const JVM_DECLARATION_EXTENSIONS = [".java", ".kt", ".kts", ".ktm"];
+
 export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
   adoc: { omittedReason: "AsciiDoc document format; embedded code blocks parse as their own language." },
   astro: { omittedReason: "Astro document format; scripts parse as js/ts and templates as html." },
@@ -123,7 +125,7 @@ export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
     implicitCompilationUnitGroup: "jvm",
     externalSpecifierResolution: {
       separator: "dot",
-      reResolveAnyAddedExtensions: [".java"],
+      reResolveAnyAddedExtensions: JVM_DECLARATION_EXTENSIONS,
     },
   },
   js: ECMASCRIPT_ROW,
@@ -133,7 +135,7 @@ export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
     implicitCompilationUnitGroup: "jvm",
     externalSpecifierResolution: {
       separator: "dot",
-      reResolveAnyAddedExtensions: [".kt", ".kts", ".ktm"],
+      reResolveAnyAddedExtensions: JVM_DECLARATION_EXTENSIONS,
     },
   },
   less: { omittedReason: STYLESHEET_OMITTED },

@@ -206,6 +206,18 @@ export async function collectImportsForFile(
   const finalizeImports = async (): Promise<void> => {
     await finalizeLanguageSpecificImports(languageContext);
     for (const binding of imports) {
+      if (
+        binding.kind === "named" &&
+        typeof binding.resolved === "string" &&
+        (resolvedSup.id === "java" || resolvedSup.id === "kotlin")
+      ) {
+        if (jvmDeclaredPackage === undefined) {
+          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
+        }
+        if (jvmDeclaredPackage === binding.from.slice(0, binding.from.lastIndexOf("."))) {
+          binding.jvmSamePackage = true;
+        }
+      }
       if (binding.kind !== "star" || typeof binding.resolved !== "string") continue;
       const files = jvmPackageFiles.get(binding.from);
       // A static class wildcard can spell the same name as a package wildcard.
@@ -230,6 +242,13 @@ export async function collectImportsForFile(
           jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
         }
         const typePackage = binding.from.slice(0, -(binding.jvmTypeWildcardName.length + 1));
+        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === typePackage) binding.jvmSamePackage = true;
+      }
+      if (binding.jvmStaticWildcardName && resolvedSup.id === "java") {
+        if (jvmDeclaredPackage === undefined) {
+          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
+        }
+        const typePackage = binding.from.slice(0, -(binding.jvmStaticWildcardName.length + 1));
         if (jvmDeclaredPackage !== null && jvmDeclaredPackage === typePackage) binding.jvmSamePackage = true;
       }
     }

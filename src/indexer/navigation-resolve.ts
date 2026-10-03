@@ -1,7 +1,7 @@
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isJvmPackageSymbolVisible, languageHasDeclarationVisibility } from "./declaration-visibility.js";
-import { isJvmTypeWildcardMember, jvmWildcardTypeOwner } from "./expand-star-imports.js";
+import { isJvmStaticWildcardMember, isJvmTypeWildcardMember, jvmWildcardTypeOwner } from "./expand-star-imports.js";
 import type { FileId } from "../types.js";
 import { foldPhpIdentifierCase, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -877,7 +877,7 @@ export function resolveImported(
     );
   }
   if (
-    (imp.kind === "star" && imp.jvmTypeWildcardName) ||
+    (imp.kind === "star" && (imp.jvmTypeWildcardName || imp.jvmStaticWildcardName)) ||
     (imp.kind === "named" && imp.jvmTypeOwnerStartIndex !== undefined)
   ) {
     const target = moduleFor(index, targetFile);
@@ -885,7 +885,8 @@ export function resolveImported(
     const targetLanguageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
     let ownerStartIndex: number | undefined;
     if (imp.kind === "star") {
-      const owner = jvmWildcardTypeOwner(target, imp.jvmTypeWildcardName!, targetLanguageId);
+      const ownerName = imp.jvmTypeWildcardName ?? imp.jvmStaticWildcardName;
+      const owner = ownerName && jvmWildcardTypeOwner(target, ownerName, targetLanguageId);
       if (!owner || (owner.javaPackagePrivate && !imp.jvmSamePackage)) return null;
       ownerStartIndex = owner.range.start.index;
     } else {
@@ -897,7 +898,9 @@ export function resolveImported(
     let match: SymbolDef | undefined;
     for (const candidate of names.localExports.get(names.normalizeIdentifier(exportedName)) ?? []) {
       if (
-        !isJvmTypeWildcardMember(candidate, ownerStartIndex, targetLanguageId) ||
+        (imp.jvmStaticWildcardName
+          ? !isJvmStaticWildcardMember(candidate, ownerStartIndex)
+          : !isJvmTypeWildcardMember(candidate, ownerStartIndex, targetLanguageId)) ||
         (candidate.javaPackagePrivate && !imp.jvmSamePackage)
       )
         continue;
@@ -928,7 +931,10 @@ export function resolveImported(
         ...opts,
         ...(namespace ? { cNamespace: namespace } : {}),
       });
-  if (hit?.kind === "resolved") return hit.def;
+  if (hit?.kind === "resolved") {
+    if (imp.kind === "named" && hit.def.javaPackagePrivate && !imp.jvmSamePackage) return null;
+    return hit.def;
+  }
   if (hit?.kind === "namespace") return { namespace: hit.file };
 
   if (imp.kind === "default" && exportedName === "default") {
@@ -940,7 +946,10 @@ export function resolveImported(
   // Only Java, Kotlin, and Python matter below, so a `.h` target never needs its sample read.
   if (support?.id === "java" || support?.id === "kotlin") {
     const siblingHit = resolveSiblingPackageExport(index, targetFile, exportedName);
-    if (siblingHit?.kind === "resolved") return siblingHit.def;
+    if (siblingHit?.kind === "resolved") {
+      if (imp.kind === "named" && siblingHit.def.javaPackagePrivate && !imp.jvmSamePackage) return null;
+      return siblingHit.def;
+    }
     if (siblingHit?.kind === "namespace") {
       return { namespace: siblingHit.file };
     }

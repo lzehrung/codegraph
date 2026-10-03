@@ -826,11 +826,25 @@ export function collectLocalsAndExportsFromSource(
       (support.id === "java" || support.id === "kotlin") &&
       (kind === SymbolKind.Class ||
         kind === SymbolKind.Interface ||
-        (support.id === "java" && kind === SymbolKind.TypeAlias))
+        (support.id === "java" && (kind === SymbolKind.TypeAlias || base.isMember)))
         ? enclosingJvmTypeDeclaration(node)
         : undefined;
     const jvmOwnerStartIndex = jvmOwner?.childForFieldName("name")?.startIndex;
     if (jvmOwnerStartIndex !== undefined) base.jvmTypeOwnerStartIndex = jvmOwnerStartIndex;
+    if (support.id === "java" && node && jvmOwner && base.isMember) {
+      const declaration = node.parent?.type === "variable_declarator" ? node.parent.parent : node.parent;
+      const implicitStatic =
+        declaration?.type === "enum_declaration" ||
+        declaration?.type === "interface_declaration" ||
+        declaration?.type === "annotation_type_declaration" ||
+        declaration?.type === "enum_constant" ||
+        jvmOwner.type === "interface_declaration" ||
+        jvmOwner.type === "annotation_type_declaration";
+      const explicitStatic = declaration?.namedChildren.some(
+        (child) => child.type === "modifiers" && /\bstatic\b/u.test(child.text),
+      );
+      if (implicitStatic || explicitStatic) base.jvmStaticMember = true;
+    }
     if (
       support.id === "java" &&
       node &&

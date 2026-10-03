@@ -570,6 +570,125 @@ describe("Java imports with a same-named package", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("limits Java static wildcards to the declared type's static members and nested classifiers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-static-owner-"));
+    const util = [
+      "package p;",
+      "public class Util {",
+      "  public static int helper() { return 1; }",
+      "  public int instanceOnly() { return 2; }",
+      "  public static class Inner {}",
+      "  public enum Mode { FAST }",
+      "  public static final int FLAG = 7;",
+      "  public int instanceField = 8;",
+      "  private static int hidden() { return 9; }",
+      "  public class NonStatic {}",
+      "}",
+      "class Other { static int sibling() { return 3; } }",
+    ];
+    const consumer = [
+      "package client;",
+      "import static p.Util.*;",
+      "class StaticUse {",
+      "  int yes() { return helper(); }",
+      "  int no() { return instanceOnly(); }",
+      "  int alsoNo() { return sibling(); }",
+      "  Other wrong;",
+      "  Inner nested;",
+      "  Mode mode;",
+      "  int flag() { return FLAG; }",
+      "  int notField() { return instanceField; }",
+      "  int notHidden() { return hidden(); }",
+      "  NonStatic wrongNested;",
+      "}",
+    ];
+    const kotlin = ["package client", "import p.*", "fun use(): Int = kotlinHelper()"];
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "p/Util.java": util.join("\n"),
+        "client/StaticUse.java": consumer.join("\n"),
+        "p/Helper.kt": "package p\nfun kotlinHelper(): Int = 42",
+        "client/Use.kt": kotlin.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const lookup = (file: string, lines: string[], line: number, name: string) =>
+        goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
+      for (const [line, name] of [
+        [4, "helper"],
+        [8, "Inner"],
+        [9, "Mode"],
+        [10, "FLAG"],
+      ] as const) {
+        const result = await lookup(paths["client/StaticUse.java"]!, consumer, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(normalizePath(result.definition.file)).toBe(paths["p/Util.java"]);
+      }
+      for (const [line, name] of [
+        [5, "instanceOnly"],
+        [6, "sibling"],
+        [7, "Other"],
+        [11, "instanceField"],
+        [12, "hidden"],
+        [13, "NonStatic"],
+      ] as const) {
+        expect((await lookup(paths["client/StaticUse.java"]!, consumer, line, name)).status).toBe("not_found");
+      }
+      const kotlinResult = await lookup(paths["client/Use.kt"]!, kotlin, 3, "kotlinHelper");
+      expect(kotlinResult.status).toBe("ok");
+      if (kotlinResult.status === "ok") expect(normalizePath(kotlinResult.definition.file)).toBe(paths["p/Helper.kt"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: string, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) => entry.file === file && entry.name === name && (!kind || entry.kind === kind),
+        );
+      const utilFile = paths["p/Util.java"]!;
+      const consumerFile = paths["client/StaticUse.java"]!;
+      const callTargets = (caller: string) =>
+        graph.edges
+          .filter((edge) => edge.label === "calls" && edge.from === node(consumerFile, caller)?.id)
+          .map((edge) => edge.to);
+      expect(callTargets("yes")).toContain(node(utilFile, "helper")?.id);
+      expect(callTargets("no")).not.toContain(node(utilFile, "instanceOnly")?.id);
+      expect(callTargets("notHidden")).not.toContain(node(utilFile, "hidden")?.id);
+      expect(callTargets("alsoNo")).not.toContain(node(utilFile, "sibling")?.id);
+      const importEdge = (name: string, target: string) =>
+        graph.edges.some(
+          (edge) => edge.from === node(consumerFile, name, "import")?.id && edge.to === node(utilFile, target)?.id,
+        );
+      expect(importEdge("helper", "helper")).toBe(true);
+      expect(importEdge("Inner", "Inner")).toBe(true);
+      expect(importEdge("Mode", "Mode")).toBe(true);
+      expect(importEdge("FLAG", "FLAG")).toBe(true);
+      expect(importEdge("instanceOnly", "instanceOnly")).toBe(false);
+      expect(importEdge("sibling", "sibling")).toBe(false);
+      expect(importEdge("Other", "Other")).toBe(false);
+      expect(importEdge("instanceField", "instanceField")).toBe(false);
+      expect(importEdge("hidden", "hidden")).toBe(false);
+      expect(importEdge("NonStatic", "NonStatic")).toBe(false);
+      const helperRefs = await findReferences(index, {
+        file: utilFile,
+        line: 3,
+        column: columnOf(util, 3, "helper"),
+      });
+      expect(helperRefs.status).toBe("ok");
+      if (helperRefs.status === "ok") {
+        expect(helperRefs.references.some((ref) => ref.file === consumerFile && ref.range.start.line === 4)).toBe(true);
+      }
+      const instanceRefs = await findReferences(index, {
+        file: utilFile,
+        line: 4,
+        column: columnOf(util, 4, "instanceOnly"),
+      });
+      expect(instanceRefs.status).toBe("ok");
+      if (instanceRefs.status === "ok") {
+        expect(instanceRefs.references.some((ref) => ref.file === consumerFile && ref.range.start.line === 5)).toBe(
+          false,
+        );
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Java lowercase class import bindings", () => {

@@ -1011,4 +1011,154 @@ describe("JVM package wildcard graph edges", () => {
       }
     });
   }
+  it("resolves Java and Kotlin named package imports to cross-language types, not foreign functions or packages", async () => {
+    const root = await mkTmpDir("cg-jvm-named-shared-");
+    const sources = {
+      "p/JavaType.java": "package p;\npublic class JavaType {}",
+      "q/JavaType.java": "package q;\npublic class JavaType {}",
+      "p/KotlinType.kt": "package p\nclass KotlinType",
+      "q/KotlinType.kt": "package q\nclass KotlinType",
+      "p/Top.kt": "package p\nfun topLevelKotlinFun(): Int = 1",
+      "client/Use.java": ["package client;", "import p.KotlinType;", "class Use { KotlinType value; }"].join("\n"),
+      "client/Invalid.java": [
+        "package client;",
+        "import p.topLevelKotlinFun;",
+        "class Invalid { int call() { return topLevelKotlinFun(); } }",
+      ].join("\n"),
+      "client/Use.kt": ["package client", "import p.JavaType", "class Use(val value: JavaType)"].join("\n"),
+    };
+    try {
+      for (const [name, source] of Object.entries(sources)) {
+        const file = path.join(root, name);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, source);
+      }
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const lookup = (file: keyof typeof sources, line: number, name: string) =>
+        goToDefinition(index, {
+          file: path.join(root, file),
+          line,
+          column: sources[file].split("\n")[line - 1]!.indexOf(name) + 1,
+        });
+      const javaUse = "client/Use.java";
+      const kotlinUse = "client/Use.kt";
+      for (const [file, line, name, target] of [
+        [javaUse, 2, "KotlinType", "p/KotlinType.kt"],
+        [javaUse, 3, "KotlinType", "p/KotlinType.kt"],
+        [kotlinUse, 2, "JavaType", "p/JavaType.java"],
+        [kotlinUse, 3, "JavaType", "p/JavaType.java"],
+      ] as const) {
+        const result = await lookup(file, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(normalizePath(path.join(root, target)));
+      }
+      expect((await lookup("client/Invalid.java", 3, "topLevelKotlinFun")).status).toBe("not_found");
+      for (const [file, imported, target] of [
+        [javaUse, "KotlinType", "p/KotlinType.kt"],
+        [kotlinUse, "JavaType", "p/JavaType.java"],
+      ] as const) {
+        const binding = index.byFile
+          .get(fileIdentityKey(path.join(root, file)))
+          ?.imports.find((candidate) => candidate.kind === "named" && candidate.imported === imported);
+        expect(typeof binding?.resolved === "string" ? normalizePath(binding.resolved) : null).toBe(
+          normalizePath(path.join(root, target)),
+        );
+        const edges = index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(path.join(root, file)))
+          .flatMap((edge) => (edge.to.type === "file" ? [normalizePath(edge.to.path)] : []));
+        expect(edges).toContain(normalizePath(path.join(root, target)));
+        expect(edges).not.toContain(normalizePath(path.join(root, target.replace("p/", "q/"))));
+      }
+      expect(
+        index.graph.edges.some(
+          (edge) =>
+            fileIdentityKey(edge.from) === fileIdentityKey(path.join(root, "client/Invalid.java")) &&
+            edge.to.type === "file" &&
+            edge.to.path === normalizePath(path.join(root, "p/Top.kt")),
+        ),
+      ).toBe(false);
+      const references = (file: keyof typeof sources, line: number, name: string) =>
+        findReferences(index, {
+          file: path.join(root, file),
+          line,
+          column: sources[file].split("\n")[line - 1]!.indexOf(name) + 1,
+        });
+      for (const [definition, line, name, consumer] of [
+        ["p/KotlinType.kt", 2, "KotlinType", javaUse],
+        ["p/JavaType.java", 2, "JavaType", kotlinUse],
+      ] as const) {
+        const result = await references(definition, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.referenceCoverage.state).toBe("complete");
+          expect(result.references.some((ref) => ref.file === normalizePath(path.join(root, consumer)))).toBe(true);
+        }
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: keyof typeof sources, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) =>
+            entry.file === normalizePath(path.join(root, file)) &&
+            entry.name === name &&
+            (!kind || entry.kind === kind),
+        );
+      for (const [consumer, imported, target, decoy] of [
+        [javaUse, "KotlinType", "p/KotlinType.kt", "q/KotlinType.kt"],
+        [kotlinUse, "JavaType", "p/JavaType.java", "q/JavaType.java"],
+      ] as const) {
+        const importId = node(consumer, imported, "import")?.id;
+        expect(importId).toBeDefined();
+        expect(graph.edges.some((edge) => edge.from === importId && edge.to === node(target, imported)?.id)).toBe(true);
+        expect(graph.edges.some((edge) => edge.from === importId && edge.to === node(decoy, imported)?.id)).toBe(false);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  for (const cache of ["memory", "disk"] as const) {
+    it(`re-resolves a warm Java named import when a Kotlin file declares its class (${cache})`, async () => {
+      const root = await mkTmpDir("cg-jvm-named-added-");
+      const java = path.join(root, "java/client/Use.java");
+      const q = path.join(root, "kotlin/q/KotlinType.kt");
+      const p = path.join(root, "kotlin/p/Models.kt");
+      const lines = ["package client;", "import p.KotlinType;", "class Use { KotlinType value; }"];
+      try {
+        await fs.mkdir(path.dirname(java), { recursive: true });
+        await fs.mkdir(path.dirname(q), { recursive: true });
+        await fs.writeFile(java, lines.join("\n"));
+        await fs.writeFile(q, "package q\nclass KotlinType");
+        const lookup = { file: java, line: 3, column: lines[2]!.indexOf("KotlinType") + 1 };
+        const bindingTarget = (index: ProjectIndex) => {
+          const binding = index.byFile
+            .get(fileIdentityKey(java))
+            ?.imports.find((candidate) => candidate.kind === "named" && candidate.imported === "KotlinType");
+          return typeof binding?.resolved === "string" ? normalizePath(binding.resolved) : null;
+        };
+        const initial = await buildProjectIndexFromFiles(root, [java, q], { cache });
+        expect(bindingTarget(initial)).toBeNull();
+        expect((await goToDefinition(initial, lookup)).status).toBe("not_found");
+
+        await fs.mkdir(path.dirname(p), { recursive: true });
+        await fs.writeFile(p, "package p\nclass KotlinType");
+        const warm = await buildProjectIndexFromFiles(root, [java, q, p], { cache });
+        const cold = await buildProjectIndexFromFiles(root, [java, q, p], { cache: "off" });
+        expect(bindingTarget(warm)).toBe(bindingTarget(cold));
+        expect(bindingTarget(warm)).toBe(normalizePath(p));
+        const warmGoto = await goToDefinition(warm, lookup);
+        const coldGoto = await goToDefinition(cold, lookup);
+        expect(warmGoto.status).toBe(coldGoto.status);
+        expect(warmGoto.status).toBe("ok");
+        if (warmGoto.status === "ok") expect(warmGoto.definition.file).toBe(normalizePath(p));
+        const importTargets = (index: ProjectIndex) =>
+          index.graph.edges
+            .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(java) && edge.to.type === "file")
+            .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+        expect(importTargets(warm)).toEqual(importTargets(cold));
+        expect(importTargets(warm)).toContain(normalizePath(p));
+        expect(importTargets(warm)).not.toContain(normalizePath(q));
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
 });
