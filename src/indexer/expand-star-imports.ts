@@ -211,9 +211,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
                 ...(staticOnDemand && imp.jvmStaticWildcardName
                   ? { jvmStaticWildcardName: imp.jvmStaticWildcardName }
                   : {}),
-                ...((typeOnDemand || staticOnDemand) && imp.jvmSamePackage !== undefined
-                  ? { jvmSamePackage: imp.jvmSamePackage }
-                  : {}),
+                ...(imp.jvmSamePackage !== undefined ? { jvmSamePackage: imp.jvmSamePackage } : {}),
                 ...(imp.includeForm ? { includeForm: imp.includeForm } : {}),
               };
           const expandedImportKeyValue = expandedImportKey(expandedImport);

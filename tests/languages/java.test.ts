@@ -689,6 +689,155 @@ describe("Java imports with a same-named package", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("limits non-public Java static imports to the declaring package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-static-access-"));
+    const util = [
+      "package p;",
+      "public class Util {",
+      "  public static int shown() { return 1; }",
+      "  static int hidden() { return 2; }",
+      "  protected static int shielded() { return 3; }",
+      "  private static int secret() { return 4; }",
+      "}",
+    ];
+    const outside = [
+      "package client;",
+      "import static p.Util.*;",
+      "class Outside {",
+      "  int useShown() { return shown(); }",
+      "  int useHidden() { return hidden(); }",
+      "  int useShielded() { return shielded(); }",
+      "}",
+    ];
+    const explicit = [
+      "package client;",
+      "import static p.Util.hidden;",
+      "import static p.Util.shielded;",
+      "import static p.Util.shown;",
+      "class Explicit {",
+      "  int useShown() { return shown(); }",
+      "  int useHidden() { return hidden(); }",
+      "  int useShielded() { return shielded(); }",
+      "}",
+    ];
+    const inside = [
+      "package p;",
+      "import static p.Util.*;",
+      "class Inside {",
+      "  int useShown() { return shown(); }",
+      "  int useHidden() { return hidden(); }",
+      "  int useShielded() { return shielded(); }",
+      "  int useSecret() { return secret(); }",
+      "}",
+    ];
+    const samePackageNamed = [
+      "package p;",
+      "import static p.Util.hidden;",
+      "import static p.Util.shielded;",
+      "class NamedInside {",
+      "  int useHidden() { return hidden(); }",
+      "  int useShielded() { return shielded(); }",
+      "}",
+    ];
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "p/Util.java": util.join("\n"),
+        "p/Inside.java": inside.join("\n"),
+        "p/NamedInside.java": samePackageNamed.join("\n"),
+        "client/Outside.java": outside.join("\n"),
+        "client/Explicit.java": explicit.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const goto = (file: string, lines: string[], line: number, name: string) =>
+        goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
+      for (const [file, lines, line, name] of [
+        [paths["client/Outside.java"]!, outside, 4, "shown"],
+        [paths["client/Explicit.java"]!, explicit, 6, "shown"],
+        [paths["p/Inside.java"]!, inside, 5, "hidden"],
+        [paths["p/Inside.java"]!, inside, 6, "shielded"],
+        [paths["p/NamedInside.java"]!, samePackageNamed, 5, "hidden"],
+        [paths["p/NamedInside.java"]!, samePackageNamed, 6, "shielded"],
+      ] as const) {
+        const result = await goto(file, lines, line, name);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(normalizePath(result.definition.file)).toBe(paths["p/Util.java"]);
+      }
+      for (const [file, lines, line, name] of [
+        [paths["client/Outside.java"]!, outside, 5, "hidden"],
+        [paths["client/Outside.java"]!, outside, 6, "shielded"],
+        [paths["client/Explicit.java"]!, explicit, 7, "hidden"],
+        [paths["client/Explicit.java"]!, explicit, 8, "shielded"],
+        [paths["p/Inside.java"]!, inside, 7, "secret"],
+      ] as const) {
+        expect((await goto(file, lines, line, name)).status).toBe("not_found");
+      }
+      for (const [line, name, insideLine, outsideLine, explicitLine] of [
+        [4, "hidden", 5, 5, 7],
+        [5, "shielded", 6, 6, 8],
+      ] as const) {
+        const refs = await findReferences(index, {
+          file: paths["p/Util.java"]!,
+          line,
+          column: columnOf(util, line, name),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(
+            refs.references.some((ref) => ref.file === paths["p/Inside.java"] && ref.range.start.line === insideLine),
+          ).toBe(true);
+          expect(
+            refs.references.some(
+              (ref) => ref.file === paths["p/NamedInside.java"] && ref.range.start.line === insideLine,
+            ),
+          ).toBe(true);
+          expect(
+            refs.references.some(
+              (ref) => ref.file === paths["client/Outside.java"] && ref.range.start.line === outsideLine,
+            ),
+          ).toBe(false);
+          expect(
+            refs.references.some(
+              (ref) => ref.file === paths["client/Explicit.java"] && ref.range.start.line === explicitLine,
+            ),
+          ).toBe(false);
+        }
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: string, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) => entry.file === file && entry.name === name && (!kind || entry.kind === kind),
+        );
+      const target = (name: string) => node(paths["p/Util.java"]!, name)?.id;
+      for (const name of ["shown", "hidden", "shielded"]) expect(target(name)).toBeDefined();
+      const edge = (file: string, name: string, targetName: string, label: "calls" | "imports") =>
+        graph.edges.some(
+          (entry) =>
+            entry.from === node(file, name, label === "imports" ? "import" : undefined)?.id &&
+            entry.to === target(targetName) &&
+            (label === "imports" || entry.label === label),
+        );
+      for (const file of [paths["client/Outside.java"]!, paths["client/Explicit.java"]!]) {
+        expect(edge(file, "useShown", "shown", "calls")).toBe(true);
+        expect(edge(file, "useHidden", "hidden", "calls")).toBe(false);
+        expect(edge(file, "useShielded", "shielded", "calls")).toBe(false);
+        expect(edge(file, "shown", "shown", "imports")).toBe(true);
+        expect(edge(file, "hidden", "hidden", "imports")).toBe(false);
+        expect(edge(file, "shielded", "shielded", "imports")).toBe(false);
+      }
+      expect(edge(paths["p/Inside.java"]!, "useHidden", "hidden", "calls")).toBe(true);
+      expect(edge(paths["p/Inside.java"]!, "useShielded", "shielded", "calls")).toBe(true);
+      expect(edge(paths["p/Inside.java"]!, "useSecret", "secret", "calls")).toBe(false);
+      for (const [name, caller] of [
+        ["hidden", "useHidden"],
+        ["shielded", "useShielded"],
+      ] as const) {
+        expect(edge(paths["p/NamedInside.java"]!, caller, name, "calls")).toBe(true);
+        expect(edge(paths["p/NamedInside.java"]!, name, name, "imports")).toBe(true);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Java lowercase class import bindings", () => {

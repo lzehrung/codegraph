@@ -848,7 +848,10 @@ export function collectLocalsAndExportsFromSource(
     if (
       support.id === "java" &&
       node &&
-      (kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias)
+      (kind === SymbolKind.Class ||
+        kind === SymbolKind.Interface ||
+        kind === SymbolKind.TypeAlias ||
+        (base.isMember && base.jvmStaticMember))
     ) {
       if (
         !isJavaPublicDeclaration(node) &&

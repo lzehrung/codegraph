@@ -903,14 +903,16 @@ describe("JVM package wildcard graph edges", () => {
             entry.file === normalizePath(path.join(root, "java/q/Use.java")),
         ),
       ).toBe(false);
-      expect(
-        warmNodes.some(
-          (entry) =>
-            entry.name === "Hidden" &&
-            entry.kind === "import" &&
-            entry.file === normalizePath(path.join(root, "java/p/Peer.java")),
-        ),
-      ).toBe(true);
+      const warmHiddenImport = warmNodes.find(
+        (entry) =>
+          entry.name === "Hidden" &&
+          entry.kind === "import" &&
+          entry.file === normalizePath(path.join(root, "java/p/Peer.java")),
+      );
+      expect(warmHiddenImport).toBeDefined();
+      expect(warmGraph.edges.some((entry) => entry.from === warmHiddenImport?.id && entry.to === hidden?.id)).toBe(
+        true,
+      );
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -1235,6 +1237,83 @@ describe("JVM package wildcard graph edges", () => {
             edge.to === node("java/other/NestedOnly.java", "NestedOnly")?.id,
         ),
       ).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("imports only top-level Kotlin classifiers into Java, not nested or trivia-only names", async () => {
+    const root = await mkTmpDir("cg-jvm-java-kotlin-top-level-");
+    const sources = {
+      "kotlin/p/Outer.kt": [
+        "package p",
+        "// class Widget",
+        'val words = "class Widget"',
+        "class Outer { class Inner }",
+      ].join("\n"),
+      "kotlin/p/Widget.kt": "package p\nclass Widget",
+      "java/client/Use.java": [
+        "package client;",
+        "import p.Widget;",
+        "import p.Inner;",
+        "class Use { Widget good; Inner wrong; }",
+      ].join("\n"),
+    };
+    try {
+      for (const [name, source] of Object.entries(sources)) {
+        const file = path.join(root, name);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, source);
+      }
+      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const consumer = "java/client/Use.java";
+      const goto = (line: number, token: string) =>
+        goToDefinition(index, {
+          file: path.join(root, consumer),
+          line,
+          column: sources[consumer].split("\n")[line - 1]!.indexOf(token) + 1,
+        });
+      for (const line of [2, 4]) {
+        const result = await goto(line, "Widget");
+        expect(result.status).toBe("ok");
+        if (result.status === "ok")
+          expect(result.definition.file).toBe(normalizePath(path.join(root, "kotlin/p/Widget.kt")));
+      }
+      expect((await goto(4, "Inner")).status).toBe("not_found");
+      const binding = index.byFile
+        .get(fileIdentityKey(path.join(root, consumer)))
+        ?.imports.find((entry) => entry.kind === "named" && entry.imported === "Widget");
+      expect(typeof binding?.resolved === "string" ? normalizePath(binding.resolved) : null).toBe(
+        normalizePath(path.join(root, "kotlin/p/Widget.kt")),
+      );
+      const refs = await findReferences(index, {
+        file: path.join(root, "kotlin/p/Widget.kt"),
+        line: 2,
+        column: sources["kotlin/p/Widget.kt"].split("\n")[1]!.indexOf("Widget") + 1,
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.some((ref) => ref.file === normalizePath(path.join(root, consumer)))).toBe(true);
+        expect(refs.references.some((ref) => ref.file === normalizePath(path.join(root, "kotlin/p/Outer.kt")))).toBe(
+          false,
+        );
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const node = (file: keyof typeof sources, name: string, kind?: string) =>
+        [...graph.nodes.values()].find(
+          (entry) =>
+            entry.file === normalizePath(path.join(root, file)) &&
+            entry.name === name &&
+            (!kind || entry.kind === kind),
+        );
+      const imported = node(consumer, "Widget", "import")?.id;
+      const wrongImport = node(consumer, "Inner", "import")?.id;
+      const widget = node("kotlin/p/Widget.kt", "Widget")?.id;
+      const inner = node("kotlin/p/Outer.kt", "Inner")?.id;
+      expect(widget).toBeDefined();
+      expect(inner).toBeDefined();
+      expect(graph.edges.some((edge) => edge.from === imported && edge.to === widget)).toBe(true);
+      expect(graph.edges.some((edge) => edge.from === imported && edge.to === inner)).toBe(false);
+      expect(graph.edges.some((edge) => edge.from === wrongImport && edge.to === inner)).toBe(false);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

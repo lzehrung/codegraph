@@ -39,7 +39,7 @@ export type SymbolDef = {
   jvmTypeOwnerStartIndex?: number;
   /** Java member with static syntax, or an implicitly static nested classifier. */
   jvmStaticMember?: boolean;
-  /** Java type without public access, visible only in its package. */
+  /** Non-public Java type or static member; imported only within its package. */
   javaPackagePrivate?: boolean;
   /** C tag identity; a reference can introduce an incomplete tag if no visible tag exists. */
   cTag?: "declaration" | "forward" | "reference";
