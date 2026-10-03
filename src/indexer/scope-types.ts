@@ -40,6 +40,8 @@ export type Binding = {
    * compare source indexes instead of walking the declaration's ancestors.
    */
   coversEnclosingScope?: boolean;
+  /** Same-file module specifier proven by a JS/TS local declaration or its assignments; null if invalidated. */
+  heldModuleSpecifier?: string | null;
   import?: ScopeImportBinding;
 };
 

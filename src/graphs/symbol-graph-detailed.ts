@@ -397,6 +397,16 @@ export async function buildSymbolGraphDetailed(
         resolveExportFrom,
         scopeIndex,
       );
+      const aliasToSpecifier = new Map<string, string>();
+      if (isJsTsLanguage(sup.id)) {
+        for (const imp of moduleEntry.imports) {
+          if (imp.kind !== "namespace" || typeof imp.resolved !== "string") continue;
+          const target = aliasToTargetModule.get(imp.localNS);
+          if (target && fileIdentityKey(imp.resolved) === fileIdentityKey(target)) {
+            aliasToSpecifier.set(imp.localNS, imp.from);
+          }
+        }
+      }
       if (sup.id === "c" || sup.id === "cpp") {
         for (const [alias, def] of [...aliasToTargetDef]) {
           const exported = resolveExport(index, def.file, alias, {
@@ -421,9 +431,14 @@ export async function buildSymbolGraphDetailed(
         aliasToTargetModule,
         resolveMemberPathFromModule,
         resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
-          if (!moduleAliasIsUnshadowed(bareNameUse(alias, useNode))) return undefined;
+          const imported =
+            sup.id === "zig" || sup.id === "csharp" || isJsTsLanguage(sup.id)
+              ? innermostNamespaceImport(moduleEntry.imports, alias, useNode, sup.normalizeIdentifier)
+              : undefined;
+          if (!moduleAliasIsUnshadowed(bareNameUse(alias, useNode), imported?.from ?? aliasToSpecifier.get(alias))) {
+            return undefined;
+          }
           if (sup.id === "zig" || sup.id === "csharp" || isJsTsLanguage(sup.id)) {
-            const imported = innermostNamespaceImport(moduleEntry.imports, alias, useNode, sup.normalizeIdentifier);
             if (
               isJsTsLanguage(sup.id) &&
               imported?.mechanism === "cjs" &&
@@ -514,7 +529,7 @@ export async function buildSymbolGraphDetailed(
         resolveName,
         settleName,
         moduleAliasIsUnshadowed: (name: string, node: SyntaxNodeLike): boolean =>
-          moduleAliasIsUnshadowed(bareNameUse(name, node)),
+          moduleAliasIsUnshadowed(bareNameUse(name, node), aliasToSpecifier.get(name)),
         resolveExportFrom,
         resolveMemberChainTarget,
         cppDeclaresClass: (def: SymbolDef): boolean => {

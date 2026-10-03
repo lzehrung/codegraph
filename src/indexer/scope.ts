@@ -6,7 +6,11 @@ import { declarationKindToBindingKind } from "./declarations.js";
 import { callableIdentityForDeclaration } from "./callable-identity.js";
 import { cppSelectCallableBinding } from "./cpp-callables.js";
 import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
-import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import {
+  cppQualifiedNameSegments,
+  importTypeQuerySpecifier,
+  typescriptImportTypeQuery,
+} from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
@@ -19,6 +23,7 @@ import {
   scopeNodesFor,
   type ScopeNodeRow,
 } from "./scope-nodes.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { SymbolKind, type ImportBinding, type SymbolDef } from "./types.js";
@@ -148,12 +153,15 @@ export function buildScopeIndexFromSource(
         ? (indexedCallables?.get(`${nameNode.startIndex}:${nameNode.endIndex}`) ??
           callableIdentityForDeclaration({ file, name, range: def, languageId: support.id, source, node: nameNode }))
         : undefined;
+    const heldModuleSpecifier =
+      kind === "local" && isJsTsLanguage(support.id) ? heldModuleSpecifierForDeclaration(nameNode) : undefined;
     return {
       name,
       canonicalName: scopeIdentifierKey(row, name, nameNode, normalizeIdentifier),
       kind,
       def,
       ...(callable ? { callable } : {}),
+      ...(heldModuleSpecifier !== undefined ? { heldModuleSpecifier } : {}),
       node: nameNode,
       occurrences: [],
     };
@@ -599,6 +607,40 @@ export function buildScopeIndexFromSource(
     return !!args && requireCall.argumentsPattern.test(sliceText(args, source));
   };
 
+  const moduleSpecifierFromCall = (call: SyntaxNodeLike | null): string | null => {
+    const args = call?.childForFieldName("arguments");
+    if (args?.namedChildren.length !== 1) return null;
+    const literal = args.namedChildren[0];
+    if (literal?.type !== "string" || literal.namedChildren.length !== 1) return null;
+    const fragment = literal.namedChildren[0];
+    return fragment?.type === "string_fragment" ? sliceText(fragment, source) : null;
+  };
+
+  const moduleSpecifierFromValue = (value: SyntaxNodeLike | null): string | null => {
+    let current = value;
+    while (current?.type === "parenthesized_expression") current = current.namedChildren[0] ?? null;
+    if (isAwaitedDynamicImport(current)) {
+      const call = current!.namedChildren.find((child) => child.type === "call_expression") ?? null;
+      return moduleSpecifierFromCall(call);
+    }
+    return isStaticRequireCall(current) ? moduleSpecifierFromCall(current) : null;
+  };
+
+  const heldModuleSpecifierForDeclaration = (nameNode: SyntaxNodeLike): string | null | undefined => {
+    const declaration = nameNode.parent;
+    const declaredName = declaration?.childForFieldName("name");
+    if (declaration?.type !== "variable_declarator" || declaredName?.startIndex !== nameNode.startIndex) {
+      return undefined;
+    }
+    const annotation = declaration.childForFieldName("type");
+    const query = annotation ? typescriptImportTypeQuery(annotation) : null;
+    const typedSpecifier = query ? importTypeQuerySpecifier(query) : null;
+    const value = declaration.childForFieldName("value");
+    if (!value) return typedSpecifier ?? undefined;
+    const initializedSpecifier = moduleSpecifierFromValue(value);
+    if (!initializedSpecifier || (typedSpecifier && typedSpecifier !== initializedSpecifier)) return null;
+    return initializedSpecifier;
+  };
   const hasImportBinding = (nameNode: SyntaxNodeLike): boolean => {
     const name = normalizeIdentifier(sliceText(nameNode, source));
     const binding = rootScope.map.get(name);
@@ -1091,6 +1133,25 @@ export function buildScopeIndexFromSource(
         node,
         row.hoistedVariableDeclarationTypes?.has(node.type) ? addHoistedDecl : addVariableDecl,
       );
+    }
+
+    if (
+      isJsTsLanguage(support.id) &&
+      (node.type === "assignment_expression" || node.type === "augmented_assignment_expression")
+    ) {
+      const left = node.childForFieldName("left");
+      if (left && idSet.has(left.type)) {
+        const binding = lookup(sliceText(left, source), left);
+        if (binding?.kind === "local" && binding.heldModuleSpecifier !== null) {
+          const assigned =
+            node.type === "assignment_expression" ? moduleSpecifierFromValue(node.childForFieldName("right")) : null;
+          if (!assigned || (binding.heldModuleSpecifier && binding.heldModuleSpecifier !== assigned)) {
+            binding.heldModuleSpecifier = null;
+          } else {
+            binding.heldModuleSpecifier = assigned;
+          }
+        }
+      }
     }
 
     if (row.declarationPatternTypes?.has(node.type)) {

@@ -2069,7 +2069,7 @@ export async function collectNamespaceMemberRefs(
             scopeIndex && isMemberObjectIdentifier(receiver.type)
               ? findClosestScopeBinding(scopeIndex, sliceText(receiver, source), receiver, sup)
               : null;
-          const inFileScope = !scopeIndex || fileBindingIsUnshadowed(scopeIndex, closest);
+          const inFileScope = !scopeIndex || fileBindingIsUnshadowed(scopeIndex, closest, importBinding?.from);
           const inPythonBindingScope =
             sup.id !== "python" || !effectivePythonBinding || effectivePythonBinding === importBinding;
           const inAliasScope =

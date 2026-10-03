@@ -207,4 +207,150 @@ describe("module import alias shadowing", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("TypeScript keeps same-module locals visible without treating parameters or other modules as aliases", async () => {
+    const root = await mkTmpDir("cg-dynamic-module-shadow-");
+    try {
+      const libSource = [
+        'export function make(): string { return "v"; }',
+        "export function check(v: string): boolean { return !!v; }",
+        "",
+      ].join("\n");
+      const useSource = [
+        "export async function lazy(flag: boolean): Promise<boolean> {",
+        '  let lib: typeof import("./lib.js") | undefined;',
+        "  if (flag) {",
+        '    lib = await import("./lib.js");',
+        "    lib.make();",
+        "  }",
+        '  return !!lib && lib.check("v");',
+        "}",
+        "export async function eager(): Promise<string> {",
+        '  const lib = await import("./lib.js");',
+        "  return lib.make();",
+        "}",
+        "export function shadow(lib: { make(): string }): string {",
+        "  return lib.make();",
+        "}",
+        "export async function wrong(flag: boolean): Promise<string | undefined> {",
+        '  let lib: typeof import("./other.js") | undefined;',
+        '  if (flag) lib = await import("./other.js");',
+        "  return lib?.make();",
+        "}",
+        "export async function reassigned(): Promise<string> {",
+        "  let lib;",
+        '  lib = await import("./lib.js");',
+        '  lib = { make: () => "other" };',
+        "  return lib.make();",
+        "}",
+        "",
+      ].join("\n");
+      await Promise.all([
+        fs.writeFile(path.join(root, "lib.ts"), libSource),
+        fs.writeFile(path.join(root, "other.ts"), 'export function make(): string { return "other"; }\n'),
+        fs.writeFile(path.join(root, "use.ts"), useSource),
+      ]);
+      const lib = path.join(root, "lib.ts").split(path.sep).join("/");
+      const use = path.join(root, "use.ts").split(path.sep).join("/");
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      const members = nodes.filter((node) => node.file === lib && ["make", "check"].includes(node.name));
+      const callers = nodes.filter(
+        (node) => node.file === use && ["lazy", "eager", "shadow", "wrong", "reassigned"].includes(node.name),
+      );
+      const make = await findReferences(index, { file: lib, line: 1, column: libSource.indexOf("make") + 1 });
+      const check = await findReferences(index, {
+        file: lib,
+        line: 2,
+        column: libSource.split("\n")[1]!.indexOf("check") + 1,
+      });
+      const sites = (result: typeof make) =>
+        result.status === "ok"
+          ? result.references.map((site) => `${path.basename(site.file)}:${site.range.start.line}`).sort()
+          : result.status;
+      expect.soft(sites(make)).toEqual(["lib.ts:1", "use.ts:11", "use.ts:5"]);
+      expect.soft(sites(check)).toEqual(["lib.ts:2", "use.ts:7"]);
+      const graphEdges = graph.edges
+        .flatMap((edge) => {
+          const from = callers.find((node) => node.id === edge.from);
+          const to = members.find((node) => node.id === edge.to);
+          return from && to && (edge.label === "uses" || edge.label === "calls")
+            ? [`${from.name} ${edge.label} ${to.name}`]
+            : [];
+        })
+        .sort();
+      expect
+        .soft(graphEdges)
+        .toEqual([
+          "eager calls make",
+          "eager uses make",
+          "lazy calls check",
+          "lazy calls make",
+          "lazy uses check",
+          "lazy uses make",
+        ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("JavaScript preserves an alias assigned from require but not a parameter or different module", async () => {
+    const root = await mkTmpDir("cg-require-module-shadow-");
+    try {
+      const useSource = [
+        "export async function eager() {",
+        '  const lib = await import("./lib.js");',
+        "  return lib.make();",
+        "}",
+        "export function assigned() {",
+        "  let lib;",
+        '  lib = require("./lib.js");',
+        "  return lib.make();",
+        "}",
+        "export function shadow(lib) {",
+        "  return lib.make();",
+        "}",
+        "export function other() {",
+        "  let lib;",
+        '  lib = require("./other.js");',
+        "  return lib.make();",
+        "}",
+        "",
+      ].join("\n");
+      await Promise.all([
+        fs.writeFile(path.join(root, "lib.js"), 'export function make() { return "lib"; }\n'),
+        fs.writeFile(path.join(root, "other.js"), 'export function make() { return "other"; }\n'),
+        fs.writeFile(path.join(root, "use.js"), useSource),
+      ]);
+      const lib = path.join(root, "lib.js").split(path.sep).join("/");
+      const use = path.join(root, "use.js").split(path.sep).join("/");
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      const references = await findReferences(index, { file: lib, line: 1, column: 17 });
+      expect
+        .soft(
+          references.status === "ok"
+            ? references.references.map((site) => `${path.basename(site.file)}:${site.range.start.line}`).sort()
+            : references.status,
+        )
+        .toEqual(["lib.js:1", "use.js:3", "use.js:8"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      const member = nodes.find((node) => node.file === lib && node.name === "make");
+      const callers = nodes.filter(
+        (node) => node.file === use && ["eager", "assigned", "shadow", "other"].includes(node.name),
+      );
+      const edges = graph.edges
+        .flatMap((edge) => {
+          const from = callers.find((node) => node.id === edge.from);
+          return from && edge.to === member?.id && (edge.label === "calls" || edge.label === "uses")
+            ? [`${from.name} ${edge.label} make`]
+            : [];
+        })
+        .sort();
+      expect.soft(edges).toEqual(["assigned calls make", "assigned uses make", "eager calls make", "eager uses make"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

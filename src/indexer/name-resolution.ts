@@ -119,19 +119,23 @@ export async function withParsedFiles<T>(files: LoadingParsedFileProvider, step:
   return result;
 }
 
-/** A closer lexical binding hides an imported file alias. */
-export function fileBindingIsUnshadowed(scopeIndex: ScopeIndex, binding: Binding | null): boolean {
-  return !binding || (!!binding.import && scopeIndex.allScopes[0]?.map.get(binding.canonicalName) === binding);
+/** A closer lexical binding hides a file alias unless that local holds the same module. */
+export function fileBindingIsUnshadowed(scopeIndex: ScopeIndex, binding: Binding | null, aliasFrom?: string): boolean {
+  return (
+    !binding ||
+    (!!binding.import && scopeIndex.allScopes[0]?.map.get(binding.canonicalName) === binding) ||
+    (binding.kind === "local" && aliasFrom !== undefined && binding.heldModuleSpecifier === aliasFrom)
+  );
 }
 
 /** File import aliases yield to closer lexical bindings unless a language policy says otherwise. */
-export function moduleAliasIsUnshadowed(use: BareNameUse): boolean {
+export function moduleAliasIsUnshadowed(use: BareNameUse, aliasFrom?: string): boolean {
   const policy = nameLookupPolicyFor(use.parsed.sup.id);
   const closestBinding = findClosestScopeBinding(use.scopeIndex, use.name, use.node, use.parsed.sup);
   if (policy.moduleAliasIsUnshadowed) {
     return policy.moduleAliasIsUnshadowed({ use, lookupName: use.name, closestBinding });
   }
-  return fileBindingIsUnshadowed(use.scopeIndex, closestBinding);
+  return fileBindingIsUnshadowed(use.scopeIndex, closestBinding, aliasFrom);
 }
 /**
  * Resolves a bare (unqualified or C++-qualified) name at a use site. Returns `null` when no
