@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import picomatch from "picomatch";
 import { glob as crawlGlob } from "tinyglobby";
+import { mapLimit } from "./concurrency.js";
+
+/** Directory listings in flight at once during a symlink scan. */
+const SYMLINK_SCAN_CONCURRENCY = 64;
 
 /** The `readdir` form every crawl here uses: directory entries with their types. */
 export type DirentReaddir = (
@@ -137,27 +141,27 @@ export async function findSymbolicLinks(
   let pending = [""];
   while (pending.length) {
     const next: string[] = [];
-    await Promise.all(
-      pending.map(
-        (relativeDirectory) =>
-          new Promise<void>((resolve, reject) => {
-            const directory = base + relativeDirectory;
-            readdir(path.resolve(directory), { withFileTypes: true }, (error, entries) => {
-              if (error) {
-                if (error.code === "ENOENT") resolve();
-                else reject(error);
-                return;
-              }
-              for (const entry of entries) {
-                const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
-                if (isIgnored(relativePath)) continue;
-                if (entry.isSymbolicLink()) links.push(base + relativePath);
-                else if (entry.isDirectory()) next.push(relativePath);
-              }
-              resolve();
-            });
-          }),
-      ),
+    await mapLimit(
+      pending,
+      SYMLINK_SCAN_CONCURRENCY,
+      (relativeDirectory) =>
+        new Promise<void>((resolve, reject) => {
+          const directory = base + relativeDirectory;
+          readdir(path.resolve(directory), { withFileTypes: true }, (error, entries) => {
+            if (error) {
+              if (error.code === "ENOENT") resolve();
+              else reject(error);
+              return;
+            }
+            for (const entry of entries) {
+              const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+              if (isIgnored(relativePath)) continue;
+              if (entry.isSymbolicLink()) links.push(base + relativePath);
+              else if (entry.isDirectory()) next.push(relativePath);
+            }
+            resolve();
+          });
+        }),
     );
     pending = next;
   }

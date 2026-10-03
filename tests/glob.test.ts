@@ -41,11 +41,31 @@ describe("glob scans", () => {
   });
 
   it("treats a missing directory as empty", async () => {
-    const root = await tree(["keep.ts"]);
+    const root = await tree(["keep.ts", "gone/lost.ts"]);
     expect(await globPaths(["**/*.ts"], { cwd: `${root}/missing` })).toEqual([]);
-    expect(await globPaths(["**/*.ts"], { cwd: root, readdir: failingReaddir("keep", "ENOENT") })).toEqual([
+    // A child directory that disappears mid-scan drops only its own entries.
+    expect(await globPaths(["**/*.ts"], { cwd: root, readdir: failingReaddir("gone", "ENOENT") })).toEqual([
       `${root}/keep.ts`,
     ]);
+  });
+
+  it("bounds the number of directory listings in flight during a symlink scan", async () => {
+    const root = await tree(Array.from({ length: 200 }, (_, index) => `d${index}/f.ts`));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const readdir: DirentReaddir = (directory, options, callback) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      setImmediate(() =>
+        fs.readdir(directory, options, (error, entries) => {
+          inFlight -= 1;
+          callback(error, entries);
+        }),
+      );
+    };
+    expect(await findSymbolicLinks(root, { readdir })).toEqual([]);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(64);
   });
 
   it("prunes an ignored directory but keeps files below a trailing-slash ignore", async () => {
