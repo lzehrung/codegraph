@@ -761,7 +761,9 @@ C symbol lookup keeps tag and ordinary identifier namespaces separate:
 
 - `goToDefinition` and `findReferences` select the namespace from source syntax, including uses through header includes.
 - Lower-level `resolveExport(index, file, name, options)` and `resolveImported(index, importBinding, name, options)` accept `cNamespace: "tag" | "ordinary"`. `preferredKind` alone cannot distinguish an enum tag from a same-spelled typedef.
-- `SymbolDef.javaPackagePrivate` is `true` for non-public Java top-level types and members. `SymbolDef.javaProtectedMember` distinguishes protected members that remain inheritable across packages; consumers must still apply Java private, package, and protected access rules when interpreting these index facts.
+- `SymbolDef.javaPackagePrivate` is `true` for a Java declaration visible only in its own package: a top-level type without `public`, or a member without `public`, `protected`, or `private`, and also a non-public static member. From another package, a wildcard or static import does not bind it, and a subclass does not inherit it.
+- `SymbolDef.jvmStaticMember` is `true` for a Java member declared `static`, or a nested type that is implicitly static. Only these members are bound by `import static`.
+- `SymbolDef.javaProtectedMember` is `true` for a Java `protected` member. A subclass in another package inherits it, but a static import from another package does not bind it.
 - `SymbolDef.cTag` records `"declaration"`, `"forward"`, or `"reference"` for C tags. A bodyless tag use can introduce an incomplete tag when no visible tag exists. A file-scope forward declaration reuses an included tag; a block-scope forward declaration can hide an outer tag.
 - Expanded named C imports retain `ImportBinding.cNamespace`. Symbol lists and compact and detailed symbol graphs keep separate import identities for tag and ordinary namespaces.
 
