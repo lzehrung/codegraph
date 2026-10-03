@@ -1,0 +1,104 @@
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { findSymbolicLinks, globPaths, type DirentReaddir } from "../src/util/glob.js";
+import { mkTmpDir } from "./helpers/filesystem.js";
+
+const roots: string[] = [];
+
+async function tree(files: readonly string[]): Promise<string> {
+  const root = (await mkTmpDir("cg-glob-")).replace(/\\/g, "/");
+  roots.push(root);
+  for (const file of files) {
+    await fsp.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await fsp.writeFile(path.join(root, file), "x");
+  }
+  return root;
+}
+
+/** Fails one directory's listing with `code`, like an unreadable directory on disk. */
+function failingReaddir(directoryName: string, code: string): DirentReaddir {
+  return (directory, options, callback) => {
+    if (path.basename(directory.replace(/[\\/]+$/, "")) === directoryName) {
+      callback(Object.assign(new Error(`${code}: ${directory}`), { code }), []);
+      return;
+    }
+    fs.readdir(directory, options, callback);
+  };
+}
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => fsp.rm(root, { recursive: true, force: true })));
+});
+
+describe("glob scans", () => {
+  it("fails instead of returning a partial file set when a directory cannot be read", async () => {
+    const root = await tree(["keep.ts", "locked/hidden.ts"]);
+    const readdir = failingReaddir("locked", "EACCES");
+    await expect(globPaths(["**/*.ts"], { cwd: root, readdir })).rejects.toMatchObject({ code: "EACCES" });
+    await expect(findSymbolicLinks(root, { readdir })).rejects.toMatchObject({ code: "EACCES" });
+  });
+
+  it("treats a missing directory as empty", async () => {
+    const root = await tree(["keep.ts", "gone/lost.ts"]);
+    expect(await globPaths(["**/*.ts"], { cwd: `${root}/missing` })).toEqual([]);
+    // A child directory that disappears mid-scan drops only its own entries.
+    expect(await globPaths(["**/*.ts"], { cwd: root, readdir: failingReaddir("gone", "ENOENT") })).toEqual([
+      `${root}/keep.ts`,
+    ]);
+  });
+
+  it("bounds the number of directory listings in flight during a symlink scan", async () => {
+    const root = await tree(Array.from({ length: 200 }, (_, index) => `d${index}/f.ts`));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const readdir: DirentReaddir = (directory, options, callback) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      setImmediate(() =>
+        fs.readdir(directory, options, (error, entries) => {
+          inFlight -= 1;
+          callback(error, entries);
+        }),
+      );
+    };
+    expect(await findSymbolicLinks(root, { readdir })).toEqual([]);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(64);
+  });
+
+  it("prunes an ignored directory but keeps files below a trailing-slash ignore", async () => {
+    const root = await tree(["src/a.ts", "src/deep/b.ts", "out/c.ts"]);
+    const files = await globPaths(["**/*.ts"], { cwd: root, ignore: ["out", "src/deep/"] });
+    expect(files.sort()).toEqual([`${root}/src/a.ts`, `${root}/src/deep/b.ts`]);
+  });
+
+  it("reports directories with a trailing slash only when asked", async () => {
+    const root = await tree(["pkg/package.json"]);
+    const options = { cwd: root, onlyFiles: false } as const;
+    expect((await globPaths(["pkg"], { ...options, markDirectories: true })).sort()).toEqual([`${root}/pkg/`]);
+    expect((await globPaths(["pkg"], options)).sort()).toEqual([`${root}/pkg`]);
+  });
+
+  it("scans a filesystem root itself rather than the working directory", async () => {
+    const listing = await tree(["file.ts"]);
+    await fsp.writeFile(path.join(listing, "target.ts"), "x");
+    try {
+      await fsp.symlink(path.join(listing, "target.ts"), path.join(listing, "link.ts"), "file");
+    } catch {
+      return;
+    }
+    const root = path.parse(process.cwd()).root;
+    const requested: string[] = [];
+    // Serve the temp listing for the filesystem root, so no real root directory is walked.
+    const readdir: DirentReaddir = (directory, options, callback) => {
+      requested.push(directory);
+      if (path.resolve(directory) === path.resolve(root)) fs.readdir(listing, options, callback);
+      else callback(null, []);
+    };
+    const rootPrefix = root.replace(/\\/g, "/");
+    expect(await findSymbolicLinks(root, { readdir })).toEqual([`${rootPrefix}link.ts`]);
+    expect(path.resolve(requested[0]!)).toBe(path.resolve(root));
+  });
+});

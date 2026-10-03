@@ -117,7 +117,7 @@ describe("codegraph-core package surface", () => {
       "./indexer",
       "./languages",
     ]);
-    expect(corePackage.dependencies["fast-glob"]).toBeTruthy();
+    expect(corePackage.dependencies.tinyglobby).toBeTruthy();
     expect(corePackage.dependencies.zod).toBeTruthy();
     expect(corePackage.dependencies["@modelcontextprotocol/server"]).toBeUndefined();
     expect(corePackage.dependencies["@modelcontextprotocol/node"]).toBeUndefined();

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import fg from "fast-glob";
+import { findSymbolicLinks, globPaths, type DirentReaddir } from "./glob.js";
 import picomatch from "picomatch";
 import { performance } from "node:perf_hooks";
 import { logWithLevel, type LogLevel } from "../logging.js";
@@ -221,26 +221,6 @@ type GitignoreRule = {
   matches: (relativePath: string) => boolean;
 };
 
-type FastGlobEntry = {
-  path: string;
-  dirent: {
-    isSymbolicLink: () => boolean;
-  };
-};
-
-type SharedGlobReaddir = {
-  (
-    directory: string,
-    options: { withFileTypes: true },
-    callback: (error: NodeJS.ErrnoException | null, files: fs.Dirent[]) => void,
-  ): void;
-  (directory: string, callback: (error: NodeJS.ErrnoException | null, files: string[]) => void): void;
-};
-
-type SharedGlobFilesystem = {
-  readdir: SharedGlobReaddir;
-};
-
 type SafeSymlinkDirectoryCrawlOptions = {
   globRoot?: string;
   filterIgnoreGlobs?: string[];
@@ -251,7 +231,7 @@ type SafeSymlinkDirectoryCrawlOptions = {
   resolvedSafeSymlinkDirectories?: readonly string[];
   onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
   onPathCheckProgress?: (current: number, total: number) => void;
-  globFilesystem?: SharedGlobFilesystem;
+  globReaddir?: DirentReaddir;
 };
 
 type RootSafePath = {
@@ -500,55 +480,28 @@ class DiscoveryContext {
   readonly ignoreIndexByKey = new Map<string, Promise<GitignoreIndex>>();
   readonly fileTextByPath = new Map<string, Promise<FileTextResult>>();
   readonly readdirCache = new Map<string, Promise<fs.Dirent[]>>();
-  readonly globFilesystem: SharedGlobFilesystem;
+  readonly globReaddir: DirentReaddir;
 
   constructor(projectRoot: string) {
     this.projectRoot = projectRoot;
     this.git = createGitDiscoveryCache();
-    this.globFilesystem = { readdir: createSharedReaddir(this) };
-  }
-}
-
-function createSharedReaddir(state: DiscoveryContext): SharedGlobReaddir {
-  function readdir(
-    directory: string,
-    options: { withFileTypes: true },
-    callback: (error: NodeJS.ErrnoException | null, files: fs.Dirent[]) => void,
-  ): void;
-  function readdir(directory: string, callback: (error: NodeJS.ErrnoException | null, files: string[]) => void): void;
-  function readdir(
-    directory: string,
-    optionsOrCallback: { withFileTypes: true } | ((error: NodeJS.ErrnoException | null, files: string[]) => void),
-    callback?: (error: NodeJS.ErrnoException | null, files: fs.Dirent[]) => void,
-  ): void {
-    const listing = readDirectoryWithFileTypes(directory, state);
-    if (typeof optionsOrCallback === "function") {
-      listing.then(
-        (entries) =>
-          optionsOrCallback(
-            null,
-            entries.map((entry) => entry.name),
-          ),
-        (error: NodeJS.ErrnoException) => optionsOrCallback(error, []),
-      );
-    } else if (callback) {
-      listing.then(
+    this.globReaddir = (directory, _options, callback) => {
+      readDirectoryWithFileTypes(directory, this).then(
         (entries) => callback(null, entries),
         (error: NodeJS.ErrnoException) => callback(error, []),
       );
-    }
+    };
   }
-  return readdir;
 }
 
-function globFilesystemOption(state: DiscoveryContext | undefined): { fs?: SharedGlobFilesystem } {
+function globReaddirOption(state: DiscoveryContext | undefined): { readdir?: DirentReaddir } {
   if (!state) return {};
-  return { fs: state.globFilesystem };
+  return { readdir: state.globReaddir };
 }
 
-function globFilesystemField(state: DiscoveryContext | undefined): { globFilesystem?: SharedGlobFilesystem } {
+function globReaddirField(state: DiscoveryContext | undefined): { globReaddir?: DirentReaddir } {
   if (!state) return {};
-  return { globFilesystem: state.globFilesystem };
+  return { globReaddir: state.globReaddir };
 }
 
 async function readDirectoryWithFileTypes(
@@ -726,13 +679,12 @@ async function buildGitignoreIndex(
 }
 
 async function findGitignoreFiles(projectRoot: string, state?: DiscoveryContext): Promise<string[]> {
-  return await fg(["**/.gitignore"], {
+  return await globPaths(["**/.gitignore"], {
     cwd: projectRoot,
-    absolute: true,
     dot: true,
     followSymbolicLinks: false,
     ignore: DEFAULT_PROJECT_FILE_IGNORES,
-    ...globFilesystemOption(state),
+    ...globReaddirOption(state),
   });
 }
 
@@ -1215,13 +1167,12 @@ async function listProjectFilesInternal(
     } else {
       emitDiscoveryActivity(options?.onDiscoveryProgress, "Scanning project files");
       const scanStart = performance.now();
-      files = await fg(patterns, {
+      files = await globPaths(patterns, {
         cwd: root,
-        absolute: true,
         dot: true,
         followSymbolicLinks: false,
         ignore: fastGlobIgnoreGlobs,
-        ...globFilesystemOption(discovery),
+        ...globReaddirOption(discovery),
       });
       emitDiscoveryTiming(options?.onDiscoveryTiming, "filesystem-scan", scanStart);
       emitDiscoveryActivity(options?.onDiscoveryProgress, "Scanning project files", files.length, files.length);
@@ -1236,13 +1187,12 @@ async function listProjectFilesInternal(
     // exclude files, contradicting the rule that Git's ignores still win here.
     const includedOverrideFiles =
       includeGlobs.length && !gitCandidates
-        ? await fg(translateGlobRootIgnoreGlobsForScanRoot(root, globRoot, includeGlobs), {
+        ? await globPaths(translateGlobRootIgnoreGlobsForScanRoot(root, globRoot, includeGlobs), {
             cwd: root,
-            absolute: true,
             dot: true,
             followSymbolicLinks: false,
             ignore: translatedUserIgnoreGlobs,
-            ...globFilesystemOption(discovery),
+            ...globReaddirOption(discovery),
           })
         : [];
     const reportSourceSymlinkChecks = options?.onDiscoveryProgress
@@ -1263,7 +1213,7 @@ async function listProjectFilesInternal(
         ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
         : {}),
       ...(reportSourceSymlinkChecks ? { onPathCheckProgress: reportSourceSymlinkChecks } : {}),
-      ...globFilesystemField(discovery),
+      ...globReaddirField(discovery),
     };
     const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(
       root,
@@ -1283,7 +1233,7 @@ async function listProjectFilesInternal(
             globRoot,
             filterIgnoreGlobs: userIgnoreGlobs,
             resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
-            ...globFilesystemField(discovery),
+            ...globReaddirField(discovery),
           });
     // Cheap path predicates run before the realpath confinement probe. Git enumerates
     // every tracked and untracked file it knows about, including trees this project
@@ -1418,8 +1368,8 @@ async function verifySafeSymlinkDirectories(
  * separate full-tree scan: Git already enumerated every tracked and non-ignored
  * untracked entry, including symlinks. Callers pass `symlinkCandidatePaths` so ordinary
  * data files are not lstat'd, while Git mode 120000 still screens extension-bearing
- * directory links. Non-Git discovery retains the existing
- * `fg(["**\/*"])` fallback. Every path still passes the same lstat, target-directory,
+ * directory links. Non-Git discovery walks the tree for symbolic links
+ * (`findSymbolicLinks`). Every path still passes the same lstat, target-directory,
  * and realpath-confinement checks before it can be crawled.
  */
 async function resolveSafeSymlinkDirectories(
@@ -1453,20 +1403,13 @@ async function resolveSafeSymlinkDirectories(
     options.onSymlinkDirectoriesDiscovered?.(discovered, "git-candidates");
     return discovered;
   }
-  const entries = (await fg(["**/*"], {
-    cwd: root,
-    absolute: true,
-    dot: true,
-    onlyFiles: false,
-    followSymbolicLinks: false,
-    objectMode: true,
-    ignore,
-    ...(options.globFilesystem ? { fs: options.globFilesystem } : {}),
-  })) as FastGlobEntry[];
   const discovered = await verifySafeSymlinkDirectories(
     root,
     realRoot,
-    entries.filter((entry) => entry.dirent.isSymbolicLink()).map((entry) => entry.path),
+    await findSymbolicLinks(root, {
+      ignore,
+      ...(options.globReaddir ? { readdir: options.globReaddir } : {}),
+    }),
     options.onPathCheckProgress,
   );
   options.onSymlinkDirectoriesDiscovered?.(discovered, "filesystem");
@@ -1496,16 +1439,15 @@ async function listEntriesFromSafeSymlinkDirectories(
     REALPATH_FILTER_CONCURRENCY,
     async (directory) =>
       (
-        (await fg(patterns, {
+        await globPaths(patterns, {
           cwd: directory,
-          absolute: true,
           dot: true,
           followSymbolicLinks: false,
           ignore: locationIndependentIgnores,
           ...(options.onlyFiles !== undefined ? { onlyFiles: options.onlyFiles } : {}),
           ...(options.markDirectories !== undefined ? { markDirectories: options.markDirectories } : {}),
-          ...(options.globFilesystem ? { fs: options.globFilesystem } : {}),
-        })) as string[]
+          ...(options.globReaddir ? { readdir: options.globReaddir } : {}),
+        })
       ).filter((filePath) => {
         const cleanPath = filePath.endsWith("/") ? filePath.slice(0, -1) : filePath;
         return !rootRelativeIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(cleanPath, globRoot, matcher));
@@ -1680,7 +1622,7 @@ async function discoverProjectFilesInternal(
           ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
           : {}),
         ...(reportMetadataSymlinkChecks ? { onPathCheckProgress: reportMetadataSymlinkChecks } : {}),
-        ...globFilesystemField(discovery),
+        ...globReaddirField(discovery),
       };
       const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(
         root,
@@ -1698,7 +1640,7 @@ async function discoverProjectFilesInternal(
           markDirectories: true,
           onlyFiles: false,
           resolvedSafeSymlinkDirectories: safeSymlinkDirectories,
-          ...globFilesystemField(discovery),
+          ...globReaddirField(discovery),
         },
       );
       const candidateFiles = Array.from(new Set(gitCandidates.files.map(normalizePath)));
@@ -1752,15 +1694,14 @@ async function discoverProjectFilesInternal(
       rootSafeMatches = [...fileMatches, ...directoryMatches, ...rootSafeLinked];
     } else {
       const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((definition) => definition.patterns.map(toProjectGlob));
-      const matches = await fg(allPatterns, {
+      const matches = await globPaths(allPatterns, {
         cwd: root,
-        absolute: true,
         dot: true,
         followSymbolicLinks: false,
         ignore: DEFAULT_PROJECT_FILE_IGNORES,
         markDirectories: true,
         onlyFiles: false,
-        ...globFilesystemOption(discovery),
+        ...globReaddirOption(discovery),
       });
       const linkedMatches = await listEntriesFromSafeSymlinkDirectories(
         root,
@@ -1777,7 +1718,7 @@ async function discoverProjectFilesInternal(
             ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
             : {}),
           ...(reportMetadataSymlinkChecks ? { onPathCheckProgress: reportMetadataSymlinkChecks } : {}),
-          ...globFilesystemField(discovery),
+          ...globReaddirField(discovery),
         },
       );
       rootSafeMatches = await filterRealPathsWithinRoot(

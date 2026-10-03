@@ -381,6 +381,31 @@ describe("project file discovery", () => {
     expect(discoveredPaths.has(normalize(path.join(linkedOutside, "package.json")))).toBe(false);
   });
 
+  it("discovers a metadata file that is a symlink to a file inside the project root only", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-file-link-manifest-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-file-link-outside-"));
+    const insideTarget = path.join(tempDir, "shared", "app.json");
+    const insideLink = path.join(tempDir, "apps", "web", "package.json");
+    const outsideLink = path.join(tempDir, "apps", "leak", "package.json");
+    await createFile(insideTarget, JSON.stringify({ name: "web" }, null, 2));
+    await createFile(path.join(outsideDir, "package.json"), JSON.stringify({ name: "outside" }, null, 2));
+    await fs.mkdir(path.dirname(insideLink), { recursive: true });
+    await fs.mkdir(path.dirname(outsideLink), { recursive: true });
+
+    try {
+      await fs.symlink(insideTarget, insideLink, "file");
+      await fs.symlink(path.join(outsideDir, "package.json"), outsideLink, "file");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discoveredPaths = new Set((await discoverProjectFiles(tempDir)).map((entry) => normalize(entry.path)));
+
+    expect(discoveredPaths.has(normalize(insideLink))).toBe(true);
+    expect(discoveredPaths.has(normalize(outsideLink))).toBe(false);
+  });
+
   it("extracts project names from common manifests", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-meta-"));
     const nodeDir = path.join(tempDir, "node");
@@ -806,7 +831,7 @@ describe("project file discovery", () => {
     expect(discovered.has(normalize(ignoredFile))).toBe(false);
   });
 
-  it("translates project-root ignore globs for child-root fast-glob pruning", () => {
+  it("translates project-root ignore globs for child-root scan pruning", () => {
     const projectRoot = path.resolve("repo");
     const testsRoot = path.join(projectRoot, "tests");
 
