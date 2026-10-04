@@ -16,6 +16,7 @@ import { collectGraph, findReferences, goToDefinition } from "../../src/index.js
 import { PY_SUPPORT } from "../../src/languages.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
+import { collectModuleSpecifiersFromSource } from "../../src/graphs/specifiers.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 
 const definition: LanguageTestDefinition = {
@@ -720,6 +721,64 @@ describe("Python declaration-name field identity", () => {
 });
 
 describe("Python native import bindings", () => {
+  it("marks only imports inside TYPE_CHECKING suites as type-only in native and reduced modes", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-type-checking-"));
+    const consumer = path.join(root, "consumer.py");
+    const source = [
+      "from typing import TYPE_CHECKING",
+      "import typing",
+      "if TYPE_CHECKING:",
+      "    from .models import User",
+      "    if condition:",
+      "        import nested_type",
+      "else:",
+      "    import runtime_else",
+      "if typing.TYPE_CHECKING:",
+      "    import qualified_type",
+      "if not TYPE_CHECKING:",
+      "    import runtime_negated",
+      "if OTHER:",
+      "    import runtime_other",
+      "if TYPE_CHECKING: import inline_type",
+      "import runtime_plain",
+      "",
+    ].join("\n");
+    const typeSpecs = [".models", "nested_type", "qualified_type", "inline_type"];
+    const runtimeSpecs = ["typing", "runtime_else", "runtime_negated", "runtime_other", "runtime_plain"];
+    await Promise.all([
+      fsp.writeFile(consumer, source),
+      ...["models", ...typeSpecs.slice(1), ...runtimeSpecs.slice(1)].map((name) =>
+        fsp.writeFile(path.join(root, `${name}.py`), "value = 1\n"),
+      ),
+    ]);
+    try {
+      for (const native of ["auto", "off"] as const) {
+        const imports = await collectImportsForFile(consumer, root, { source, native });
+        const specs = collectModuleSpecifiersFromSource(PY_SUPPORT, source, { native });
+        for (const spec of typeSpecs) {
+          expect(imports.find((binding) => binding.from === spec)?.typeOnly).toBe(true);
+          expect(specs.find((entry) => entry.spec === spec)?.typeOnly).toBe(true);
+        }
+        for (const spec of runtimeSpecs) {
+          expect(imports.find((binding) => binding.from === spec)).toBeDefined();
+          expect(imports.find((binding) => binding.from === spec)?.typeOnly).not.toBe(true);
+          expect(specs.find((entry) => entry.spec === spec)).toBeDefined();
+          expect(specs.find((entry) => entry.spec === spec)?.typeOnly).not.toBe(true);
+        }
+      }
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const fromConsumer = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer));
+      for (const spec of typeSpecs) {
+        expect(fromConsumer.find((edge) => edge.raw === spec)?.typeOnly).toBe(true);
+      }
+      for (const spec of runtimeSpecs) {
+        expect(fromConsumer.find((edge) => edge.raw === spec)?.typeOnly).not.toBe(true);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("binds multiline, comma-separated, continued, relative, star, and future imports", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-native-imports-"));
     const packageDir = path.join(root, "pkg");

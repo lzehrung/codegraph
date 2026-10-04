@@ -28,6 +28,7 @@ import {
   cppQualifiedNameSegments,
   declarationIsStaticEquivalent,
   declarationNodeIsStatic,
+  declaredTypeNameNode,
   declaresMembers,
   hasStaticMemberDistinction,
   memberContainerDef,
@@ -97,6 +98,16 @@ import {
   type SymbolDef,
 } from "./types.js";
 
+const DECLARED_FIELD_CHAIN_LANGUAGES: Readonly<Record<string, true>> = {
+  ts: true,
+  tsx: true,
+  java: true,
+  csharp: true,
+  kotlin: true,
+};
+export function supportsDeclaredFieldChains(languageId: string): boolean {
+  return !!DECLARED_FIELD_CHAIN_LANGUAGES[languageId];
+}
 function noLexicalBinding(): boolean {
   return false;
 }
@@ -2374,6 +2385,47 @@ async function resolveReceiverDefinition(
       return null;
     });
   if (receiver.kind === "module-import") return null;
+  if (supportsDeclaredFieldChains(sup.id) && isMemberAccessNode(sup, obj)) {
+    const directType = direct?.kind === "resolved" ? asMemberContainer(index, direct.def) : undefined;
+    if (!directType) {
+      const { object, property } = getMemberAccessParts(sup, obj);
+      if (!object || !property) return null;
+      const owner = await resolveReceiverDefinition(index, object, source, sup, resolveExpression, mod);
+      if (!owner || owner.runtimeTypeOnly) return null;
+      const field = await resolveKeywordReceiverMember(
+        index,
+        mod,
+        property,
+        sliceText(property, source),
+        owner.memberScope,
+        false,
+        undefined,
+        owner.def,
+      );
+      if (!field || field.kind !== SymbolKind.Variable || !field.isMember) return null;
+      const fieldContext = await ensureParsedContext(field.file, undefined, index.languageExtensions);
+      const name = nameNodeForDef(fieldContext, field);
+      let declaration = name?.parent ?? null;
+      if (declaration?.type === "variable_declarator") declaration = declaration.parent;
+      if (!declaration) return null;
+      const annotatedType = declaredTypeNameNode(declaration, fieldContext.sup);
+      if (!annotatedType) return null;
+      const fieldModule = index.byFile.get(fileIdentityKey(field.file));
+      if (!fieldModule) return null;
+      const type = await resolveReceiverTypeName(
+        index,
+        fieldModule,
+        fieldContext.sup,
+        sliceText(annotatedType, fieldContext.source),
+      );
+      return type ? { def: type, memberScope: "instance" } : null;
+    }
+  }
+  if (receiver.kind === "own-type") {
+    const container = nearestMemberContainer(obj);
+    const owner = container ? definitionForContainer(mod, container) : undefined;
+    return owner ? { def: owner, memberScope: receiver.memberScope } : null;
+  }
   const constructor = receiver.kind === "named-type" && receiver.proof !== "static-type" ? receiver.typeNode : null;
   if (constructor) {
     if (sup.id === "cpp") {

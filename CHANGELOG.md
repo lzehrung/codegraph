@@ -11,6 +11,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
+- Python imports in a `TYPE_CHECKING` guard are type-only bindings and file dependencies, not runtime imports, in native and reduced mode.
+- TypeScript, Java, C#, and Kotlin resolve calls through chains of declared-typed fields (such as `this.repo.find()`), while unannotated fields remain unresolved and unrelated same-named methods are excluded.
 - Members inherited through a type that declares none of its own now resolve in go-to-definition, references, and call graphs: `Derived d; d.run();` finds `Base.run` in C++, C#, Java, Kotlin, PHP, Swift, TypeScript, JavaScript, and Ruby. Rust finds a trait's default method through a type that implements the trait, and Go finds a promoted method through an embedded struct, including when the method, the type, and the call are in different files of the package.
 - Go: a method declared in another file of the package resolves on a local of that type, and `d.Base.Run()` through an embedded field resolves.
 - Fully qualified calls resolve without an import: `com.example.Util.add(1, 2)` in Java, `calc.add(1, 2)` in Kotlin, `calc::add(1, 2)` in Rust, and `\App\add()` in PHP, which before had no call-graph edge. In mixed Java and Kotlin code, a package-qualified name also reaches a type in the other language. Java sees Kotlin types but not Kotlin top-level functions, and a Java type without `public` stays in its package.

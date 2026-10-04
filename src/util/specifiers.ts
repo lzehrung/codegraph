@@ -1,5 +1,10 @@
 import path from "node:path";
-import { buildJsLikeLiteralMask, stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
+import {
+  buildJsLikeLiteralMask,
+  maskPythonCommentsAndStrings,
+  stripJsLikeComments,
+  stripPythonCommentsAndStrings,
+} from "./comments.js";
 import {
   createDynamicImportEntries,
   type DynamicBase,
@@ -586,17 +591,22 @@ export function extractDynamicImportSpecifiers(
   return out;
 }
 
-export function extractPythonSpecifiers(source: string): string[] {
-  const out: string[] = [];
+export function extractPythonSpecifiers(source: string): Array<{ spec: string; start: number }> {
+  const out: Array<{ spec: string; start: number }> = [];
   try {
-    const cleaned = stripPythonCommentsAndStrings(source);
-    const reImport = new RegExp(String.raw`^\s*import\s+(${PYTHON_DOTTED_NAME_SOURCE})`, "gmu");
-    for (const match of cleaned.matchAll(reImport)) out.push(match[1]!);
+    const cleaned = maskPythonCommentsAndStrings(source);
+    const prefix = String.raw`(^[\t ]*|^[\t ]*if[\t ]+(?:TYPE_CHECKING|typing\.TYPE_CHECKING)[\t ]*:[\t ]*)`;
+    const reImport = new RegExp(String.raw`${prefix}import\s+(${PYTHON_DOTTED_NAME_SOURCE})`, "gmu");
+    for (const match of cleaned.matchAll(reImport)) {
+      out.push({ spec: match[2]!, start: match.index + match[1]!.length });
+    }
     const reFrom = new RegExp(
-      String.raw`^\s*from\s+(\.+(?:${PYTHON_DOTTED_NAME_SOURCE})?|${PYTHON_DOTTED_NAME_SOURCE})\s+import`,
+      String.raw`${prefix}from\s+(\.+(?:${PYTHON_DOTTED_NAME_SOURCE})?|${PYTHON_DOTTED_NAME_SOURCE})\s+import`,
       "gmu",
     );
-    for (const match of cleaned.matchAll(reFrom)) out.push(match[1]!);
+    for (const match of cleaned.matchAll(reFrom)) {
+      out.push({ spec: match[2]!, start: match.index + match[1]!.length });
+    }
   } catch {
     /* parse fallback: ignore */
   }

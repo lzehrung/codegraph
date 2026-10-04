@@ -31,6 +31,7 @@ import {
 import { sliceText, unquote } from "../util/ast.js";
 import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rust-test-modules.js";
 import { rustStatementStartIndex } from "../util/resolution/rust.js";
+import { pythonTypeCheckingContext } from "../util/python-type-checking.js";
 import {
   collectTextImportSpecifiers,
   rustSpecifierForParsedImport,
@@ -358,6 +359,7 @@ export function collectModuleSpecifiersFromSource(
   const nativeImportsArray = resolvedNativeImports;
   const hasNativeImports = !!nativeImportsArray;
   const nativeImportsToProcess = htmlLikeLanguage ? [] : (nativeImportsArray ?? []);
+  const isPythonTypeOnly = support.id === "python" ? pythonTypeCheckingContext(source) : undefined;
 
   let queryFailed = false;
   // Current native add-ons retain capture offsets. Older add-ons use ordered source lookup.
@@ -373,10 +375,14 @@ export function collectModuleSpecifiersFromSource(
         // TypeScript and TSX keep the dedicated statement parser (`declare module` and
         // clause-shape rules the shared hook does not model); every other language decides
         // through its `isTypeOnly` hook, so a new language needs no edit here.
-        const typeOnly =
+        let typeOnly =
           support.id === "ts" || support.id === "tsx"
             ? isJsTsTypeOnlySpecifierStatement(stmtText)
             : support.isTypeOnly(stmtText);
+        if (!typeOnly && isPythonTypeOnly) {
+          const start = nativeCaptureStartIndex(source, capMap["stmt"]);
+          typeOnly = start !== undefined && isPythonTypeOnly(start);
+        }
         if (support.id === "kotlin") {
           const parsed = parseKotlinImportStatement(stmtText);
           if (parsed) {

@@ -172,16 +172,16 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
     expect(parseCsharpUsingDirective("using \u203fname = Some.Namespace;")).toBeNull();
   });
   it("Python fallback module-specifier extraction: import/from with Unicode module names", () => {
-    expect(extractPythonSpecifiers("import créer\n")).toEqual(["créer"]);
-    expect(extractPythonSpecifiers("from créer import x\n")).toContain("créer");
+    expect(extractPythonSpecifiers("import créer\n").map(({ spec }) => spec)).toEqual(["créer"]);
+    expect(extractPythonSpecifiers("from créer import x\n").map(({ spec }) => spec)).toContain("créer");
     // PEP 3131 XID_Continue includes combining marks; a per-code-point \p{L}/\p{N} class
     // stops before the trailing combining acute accent, silently dropping it from the
     // captured module name.
-    expect(extractPythonSpecifiers("import café\u0301\n")).toEqual(["café\u0301"]);
+    expect(extractPythonSpecifiers("import café\u0301\n").map(({ spec }) => spec)).toEqual(["café\u0301"]);
     // A dotted segment must itself start with an identifier character: matching the whole
     // continuation class (letters/digits/dots) across the separator let a digit immediately
     // follow a `.`, which Python's grammar never allows.
-    expect(extractPythonSpecifiers("import pkg.2mod\n")).toEqual(["pkg"]);
+    expect(extractPythonSpecifiers("import pkg.2mod\n").map(({ spec }) => spec)).toEqual(["pkg"]);
   });
 
   it("Python import bindings accept combining-mark continuations", async () => {

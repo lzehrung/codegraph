@@ -61,8 +61,7 @@ import {
   emitFunctionBodyEdges,
   emitMemberOwnershipEdges,
   emitMemberImplementationEdges,
-  emitPythonDecoratorEdges,
-  emitRustImplEdges,
+  SPECIALIZED_EDGE_PASSES,
   type SharedOwnerPeer,
 } from "./symbol-graph-detailed/edge-passes.js";
 import { buildImportAliasMaps } from "./symbol-graph-detailed/import-aliases.js";
@@ -570,11 +569,11 @@ export async function buildSymbolGraphDetailed(
         noteCallableName,
         loadParsedFile,
       };
-      emitPythonDecoratorEdges(edgePassContext, tree.rootNode);
+      SPECIALIZED_EDGE_PASSES[sup.id]?.beforeModule?.(edgePassContext, tree.rootNode);
       await emitFunctionBodyEdges(edgePassContext, functionNodes);
       await emitMemberOwnershipEdges(edgePassContext, functionNodes, classNodes);
       await emitClassInheritanceEdges(edgePassContext, classNodes);
-      emitRustImplEdges(edgePassContext, tree.rootNode);
+      SPECIALIZED_EDGE_PASSES[sup.id]?.afterModule?.(edgePassContext, tree.rootNode);
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) {
         throw error;

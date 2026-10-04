@@ -15,7 +15,7 @@ import {
   resolveWorkspacePackage,
   type WorkspaceConfig,
 } from "./workspace.js";
-import { clearJvmResolutionCaches, resolveJavaImportPath, resolveKotlinImportPath } from "./resolution/jvm.js";
+import { clearJvmResolutionCaches, resolveJvmImportPath } from "./resolution/jvm.js";
 import { clearCsharpResolutionCaches } from "./resolution/csharp.js";
 import { clearCppResolutionCaches, isCppNamedModuleSpecifier, resolveCppImportPath } from "./resolution/cpp.js";
 import { findFirstExistingResolutionCandidate } from "./resolution/find-first-existing.js";
@@ -247,21 +247,13 @@ export async function resolveImportSpecifier(
     const goHit = await confineLanguageHit(projectRoot, await resolveGoImportPath(projectRoot, fromFile, spec), spec);
     if (goHit) return goHit;
   }
-  if (languageId === "kotlin") {
-    const kotlinHit = await confineLanguageHit(
+  if (languageId === "kotlin" || languageId === "java") {
+    const jvmHit = await confineLanguageHit(
       projectRoot,
-      await resolveKotlinImportPath(projectRoot, spec, fromFile),
+      await resolveJvmImportPath(projectRoot, spec, { languageId, fromFile }),
       spec,
     );
-    if (kotlinHit) return kotlinHit;
-  }
-  if (languageId === "java") {
-    const javaHit = await confineLanguageHit(
-      projectRoot,
-      await resolveJavaImportPath(projectRoot, spec, fromFile),
-      spec,
-    );
-    if (javaHit) return javaHit;
+    if (jvmHit) return jvmHit;
   }
   if (languageId === "php") {
     const phpHit = await confineLanguageHit(

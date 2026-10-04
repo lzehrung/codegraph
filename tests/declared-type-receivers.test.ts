@@ -464,4 +464,126 @@ describe("declared-type receiver proof", () => {
       if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
     });
   });
+  describe("declared field chains", () => {
+    const cases = [
+      {
+        language: "ts",
+        extension: "ts",
+        member: "find",
+        source: [
+          "class Repo { find(): number { return 1; } }",
+          "class Other { find(): number { return -1; } }",
+          "class Middle { repo: Repo; }",
+          "class Host { repo: Repo; middle: Middle; raw = new Repo(); run(a: Middle) {",
+          "  this.repo.find();",
+          "  this.middle.repo.find();",
+          "  a.repo.find();",
+          "  this.raw.find();",
+          "} }",
+        ].join("\n"),
+      },
+      {
+        language: "java",
+        extension: "java",
+        member: "find",
+        source: [
+          "class Repo { int find() { return 1; } }",
+          "class Other { int find() { return -1; } }",
+          "class Middle { Repo repo; }",
+          "class Host { Repo repo; Middle middle; Object raw; int run(Middle a) {",
+          "  this.repo.find();",
+          "  this.middle.repo.find();",
+          "  a.repo.find();",
+          "  return this.raw.find();",
+          "} }",
+        ].join("\n"),
+      },
+      {
+        language: "csharp",
+        extension: "cs",
+        member: "Find",
+        source: [
+          "class Repo { public int Find() { return 1; } }",
+          "class Other { public int Find() { return -1; } }",
+          "class Middle { public Repo repo; }",
+          "class Host { public Repo repo; public Middle middle; public object raw; public int Run(Middle a) {",
+          "  this.repo.Find();",
+          "  this.middle.repo.Find();",
+          "  a.repo.Find();",
+          "  return this.raw.Find();",
+          "} }",
+        ].join("\n"),
+      },
+      {
+        language: "kotlin",
+        extension: "kt",
+        member: "find",
+        source: [
+          "class Repo {",
+          "  fun find(): Int = 1",
+          "}",
+          "class Other {",
+          "  fun find(): Int = -1",
+          "}",
+          "class Middle { val repo: Repo = Repo() }",
+          "class Host {",
+          "  val repo: Repo = Repo()",
+          "  val middle: Middle = Middle()",
+          "  val raw = Repo()",
+          "  fun run(a: Middle): Int {",
+          "    this.repo.find()",
+          "    this.middle.repo.find()",
+          "    a.repo.find()",
+          "    return this.raw.find()",
+          "  }",
+          "}",
+        ].join("\n"),
+      },
+    ];
+
+    for (const { language, extension, member, source } of cases) {
+      it(`resolves ${language} typed field hops without attributing unannotated or unrelated members`, async () => {
+        const filename = `fields.${extension}`;
+        const p = await fixture(`cg-field-chain-${language}-`, { [filename]: source });
+        const file = p.f(filename);
+        const declaration = locate(source, `${member}(`);
+        const decoy = locate(source, `${member}(`, 1);
+        const expectedUses = [2, 3, 4].map((occurrence) => locate(source, `${member}(`, occurrence));
+        for (const use of expectedUses) {
+          const result = await goToDefinition(p.index, { file, ...use });
+          expect(result.status, `${language} receiver call at line ${use.line}`).toBe("ok");
+          if (result.status === "ok") expect(result.definition.range.start.line).toBe(declaration.line);
+        }
+        const unannotated = locate(source, `${member}(`, 5);
+        expect((await goToDefinition(p.index, { file, ...unannotated })).status).toBe("not_found");
+
+        const refs = await findReferences(p.index, { file, ...declaration });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          for (const use of expectedUses) {
+            expect(refs.references.some((ref) => ref.range.start.line === use.line)).toBe(true);
+          }
+          expect(refs.references.some((ref) => ref.range.start.line === decoy.line)).toBe(false);
+          expect(refs.references.some((ref) => ref.range.start.line === unannotated.line)).toBe(false);
+        }
+        const graph = await buildSymbolGraphDetailed(p.index);
+        const calls = graph.edges.filter(
+          (edge) =>
+            edge.label === "calls" && graph.nodes.get(edge.from)?.name === (language === "csharp" ? "Run" : "run"),
+        );
+        expect(
+          calls
+            .filter((edge) => edge.to.endsWith(`::${member}::${source.indexOf(`${member}(`)}`))
+            .map((edge) => edge.site?.range.start.line)
+            .sort(),
+        ).toEqual(expectedUses.map((use) => use.line));
+        expect(
+          calls.some((edge) =>
+            edge.to.endsWith(`::${member}::${source.indexOf(`${member}(`, source.indexOf(`${member}(`) + 1)}`),
+          ),
+        ).toBe(false);
+        expect(calls.some((edge) => edge.site?.range.start.line === unannotated.line)).toBe(false);
+      });
+    }
+  });
 });

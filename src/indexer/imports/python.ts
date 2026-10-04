@@ -10,6 +10,7 @@ import { fileIdentityKey } from "../../util/paths.js";
 import { resolveSpecifierTargets } from "../../util/resolution/specifier-targets.js";
 import { resolvePythonSubmoduleExact } from "../../util/resolution/python.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
+import { pythonTypeCheckingContext } from "../../util/python-type-checking.js";
 import { buildScopeIndexFromSource } from "../scope.js";
 import type { ImportBinding } from "../types.js";
 import { attributeNamedBindingRanges } from "./binding-ranges.js";
@@ -40,6 +41,7 @@ async function pushStarImport(
   context: PythonImportExtractionContext,
   moduleSpec: string,
   moduleLevel: boolean,
+  typeOnly: boolean,
 ): Promise<void> {
   const resolved = await resolvePythonImportTarget(context.projectRoot, context.file, moduleSpec);
   context.pushBinding({
@@ -48,6 +50,7 @@ async function pushStarImport(
     resolved,
     mechanism: "python",
     moduleLevel,
+    ...(typeOnly ? { typeOnly: true } : {}),
   });
 }
 
@@ -131,6 +134,7 @@ async function pushNamedImport(
   local: string,
   moduleLevel: boolean,
   explicitAlias: boolean,
+  typeOnly: boolean,
 ): Promise<void> {
   const resolved = await resolvePythonImportTarget(context.projectRoot, context.file, moduleSpec);
   const submodule = resolvePythonSubmoduleExact(resolved, imported);
@@ -143,6 +147,7 @@ async function pushNamedImport(
       resolved: submodule,
       mechanism: "python",
       moduleLevel,
+      ...(typeOnly ? { typeOnly: true } : {}),
     });
     return;
   }
@@ -156,6 +161,7 @@ async function pushNamedImport(
     resolved,
     mechanism: "python",
     moduleLevel,
+    ...(typeOnly ? { typeOnly: true } : {}),
   });
 }
 
@@ -165,6 +171,7 @@ async function pushDefaultImport(
   local: string,
   moduleLevel: boolean,
   explicitAlias: boolean,
+  typeOnly: boolean,
 ): Promise<void> {
   const resolved = await resolvePythonImportTarget(context.projectRoot, context.file, dotted);
   context.pushBinding({
@@ -175,6 +182,7 @@ async function pushDefaultImport(
     resolved,
     mechanism: "python",
     moduleLevel,
+    ...(typeOnly ? { typeOnly: true } : {}),
   });
 }
 
@@ -182,12 +190,10 @@ const PYTHON_NAMED_IMPORT_PATTERN = new RegExp(
   String.raw`^(${PYTHON_IDENTIFIER_SOURCE})(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
   "u",
 );
-// Matches at a physical line start (capturing its indentation) or immediately after a `;`
-// that ends a preceding simple statement on the same line, so `x = 1; import os` and a
-// multi-line parenthesized statement's trailing `; import os` are both recognized. A
-// compound-suite header's `:` is deliberately excluded, so `if x: import os` still is not.
+// Recognize ordinary statement starts and the exact TYPE_CHECKING one-line suite;
+// unrelated compound-suite headers remain excluded in reduced mode.
 const PYTHON_MODULE_IMPORT_PATTERN = new RegExp(
-  String.raw`(^[\t ]*|;[\t ]*)import\s+(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)\s*(?:as\s+(${PYTHON_IDENTIFIER_SOURCE}))?`,
+  String.raw`(^[\t ]*|;[\t ]*|^[\t ]*if[\t ]+(?:TYPE_CHECKING|typing\.TYPE_CHECKING)[\t ]*:[\t ]*)import\s+(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)\s*(?:as\s+(${PYTHON_IDENTIFIER_SOURCE}))?`,
   "gmu",
 );
 const PYTHON_MODULE_LIST_ITEM_PATTERN = new RegExp(
@@ -238,6 +244,7 @@ async function collectPythonImportStatement(
   context: PythonImportExtractionContext,
   statement: string,
   moduleLevel: boolean,
+  typeOnly: boolean,
   statementStartIndex?: number,
 ): Promise<boolean> {
   const normalized = normalizePythonImportStatement(statement);
@@ -252,7 +259,7 @@ async function collectPythonImportStatement(
       .map((x) => x.trim())
       .filter(Boolean)) {
       if (item === "*") {
-        await pushStarImport(context, moduleSpec, moduleLevel);
+        await pushStarImport(context, moduleSpec, moduleLevel, typeOnly);
         continue;
       }
       const aliasMatch = item.match(PYTHON_NAMED_IMPORT_PATTERN);
@@ -265,6 +272,7 @@ async function collectPythonImportStatement(
         aliasMatch[2] ?? imported,
         moduleLevel,
         aliasMatch[2] !== undefined,
+        typeOnly,
       );
     }
     if (statementStartIndex !== undefined) {
@@ -298,6 +306,7 @@ async function collectPythonImportStatement(
       aliasMatch[2] ?? dotted.split(".")[0]!,
       moduleLevel,
       aliasMatch[2] !== undefined,
+      typeOnly,
     );
   }
   return true;
@@ -307,6 +316,7 @@ export async function collectPythonImportsFromNativeMatches(
   context: PythonImportExtractionContext,
   matches: readonly NativeMatch[],
 ): Promise<void> {
+  const isTypeOnly = pythonTypeCheckingContext(context.source);
   for (const match of matches) {
     const statementCapture = match.captures.find((capture) => capture.name === "stmt");
     if (!statementCapture) continue;
@@ -314,7 +324,7 @@ export async function collectPythonImportsFromNativeMatches(
     const lineStart = context.source.lastIndexOf("\n", startIndex - 1) + 1;
     const prefix = context.source.slice(lineStart, startIndex);
     const moduleLevel = isPythonModuleLevelImportPrefix(prefix);
-    await collectPythonImportStatement(context, statementCapture.text, moduleLevel, startIndex);
+    await collectPythonImportStatement(context, statementCapture.text, moduleLevel, isTypeOnly(startIndex), startIndex);
   }
 }
 
@@ -324,11 +334,10 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
   // `context.source` and named bindings can be range-attributed the same way the native
   // match path is.
   const pySrc = maskPythonCommentsAndStrings(context.source);
-  // Boundary group 1 captures either the line's leading indentation or the `;` (plus any
-  // following tabs/spaces) that separates this import from a completed simple statement on
-  // the same physical line; a compound-suite header's `:` is not part of this alternation, so
-  // `if x: import os` still is not recognized as a statement start here.
-  const fromLinePattern = /(^[\t ]*|;[\t ]*)from\s+([^\s]+)\s+import\s+(\([\s\S]*?\)|[^\n;#]+)/gm;
+  const isTypeOnly = pythonTypeCheckingContext(context.source);
+  // Boundary group 1 also accepts an exact TYPE_CHECKING one-line suite, not arbitrary if suites.
+  const fromLinePattern =
+    /(^[\t ]*|;[\t ]*|^[\t ]*if[\t ]+(?:TYPE_CHECKING|typing\.TYPE_CHECKING)[\t ]*:[\t ]*)from\s+([^\s]+)\s+import\s+(\([\s\S]*?\)|[^\n;#]+)/gm;
   for (const match of pySrc.matchAll(fromLinePattern)) {
     const keywordStart = match.index + match[1]!.length;
     const mod = match[2]!.trim();
@@ -342,7 +351,7 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
       .map((item) => item.trim());
     for (const item of items) {
       if (item === "*") {
-        await pushStarImport(context, mod, moduleLevel);
+        await pushStarImport(context, mod, moduleLevel, isTypeOnly(keywordStart));
         continue;
       }
       // PEP 3131 permits Unicode identifiers (XID_Start/XID_Continue); an ASCII-only
@@ -351,7 +360,15 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
       if (!aliasMatch) continue;
       const imported = aliasMatch[1]!;
       const local = aliasMatch[2] ?? imported;
-      await pushNamedImport(context, mod, imported, local, moduleLevel, aliasMatch[2] !== undefined);
+      await pushNamedImport(
+        context,
+        mod,
+        imported,
+        local,
+        moduleLevel,
+        aliasMatch[2] !== undefined,
+        isTypeOnly(keywordStart),
+      );
     }
     // `listText` (group 3) always ends at the same position as `match[0]`, so its own start
     // is a fixed offset back from the full match's end -- no extra re-scan needed.
@@ -371,6 +388,6 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
     const dotted = match[2]!;
     const local = match[3] ?? dotted.split(".")[0]!;
     const moduleLevel = isModuleLevelKeywordInStrippedSource(pySrc, keywordStart);
-    await pushDefaultImport(context, dotted, local, moduleLevel, match[3] !== undefined);
+    await pushDefaultImport(context, dotted, local, moduleLevel, match[3] !== undefined, isTypeOnly(keywordStart));
   }
 }

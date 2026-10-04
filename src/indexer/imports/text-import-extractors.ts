@@ -14,6 +14,7 @@ import {
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { extractRustModPathAttribute, rustGraphModuleSpecifier } from "../../util/resolution/rust.js";
 import { extractPythonSpecifiers, isRubyLoadForm, type ModuleSpecifier } from "../../util/specifiers.js";
+import { pythonTypeCheckingContext } from "../../util/python-type-checking.js";
 import { maskTrivia } from "../../util/trivia.js";
 import { maskImportBindingTrivia } from "./binding-ranges.js";
 
@@ -262,7 +263,10 @@ function extractRustImports(source: string, sink: TextImportSink): void {
 
 function extractPythonImports(source: string, sink: TextImportSink): void {
   if (!source.includes("import")) return;
-  for (const spec of extractPythonSpecifiers(source)) sink.specifier({ spec });
+  const isTypeOnly = pythonTypeCheckingContext(source);
+  for (const { spec, start } of extractPythonSpecifiers(source)) {
+    sink.specifier({ spec, typeOnly: isTypeOnly(start) });
+  }
 }
 
 const GO_IMPORT_KEYWORD_PATTERN = /^[\t ]*import\b/gmu;

@@ -18,6 +18,7 @@ import {
   resolvePhpObjectCreationTarget,
   resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
+  supportsDeclaredFieldChains,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
 import { findClosestScopeBinding } from "../../indexer/navigation-local.js";
@@ -65,7 +66,6 @@ import {
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberDeclarationNode,
   cppQualifiedNameSegments,
-  csharpDottedNameRoot,
   declaresMembers,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
@@ -274,7 +274,7 @@ function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: 
  * navigation's refusals inside token trees.
  */
 function recordRustMacroArgumentCalls(context: EdgePassContext, tokenTree: SyntaxNodeLike, fromId: string): void {
-  if (context.sup.id !== "rust" || !rustTokenTreeHoldsExpressions(tokenTree)) return;
+  if (!rustTokenTreeHoldsExpressions(tokenTree)) return;
   const children = tokenTree.namedChildren;
   for (let index = 0; index + 1 < children.length; index += 1) {
     const name = children[index]!;
@@ -323,8 +323,6 @@ function getNewTarget(node: SyntaxNodeLike): SyntaxNodeLike | null {
 }
 
 export function emitPythonDecoratorEdges(context: EdgePassContext, rootNode: SyntaxNodeLike): void {
-  if (context.sup.id !== "python") return;
-
   const addDecoratorUses = (node: SyntaxNodeLike): void => {
     if (node.type === "decorated_definition") {
       const fn = node.namedChildren.find((child) => child.type === "function_definition");
@@ -926,7 +924,6 @@ function recordImportTypeCall(
 
 /** Swift `Foo()` / `Worker(name:)` is construction. Record `instantiates` and skip the call path. */
 function recordSwiftCapitalizedConstruction(context: EdgePassContext, node: SyntaxNodeLike, fromId: string): boolean {
-  if (context.sup.id !== "swift") return false;
   const constructed = constructionTypeName(node, context.source, context.sup);
   if (!constructed) return false;
   const name = sliceText(constructed, context.source);
@@ -938,10 +935,138 @@ function recordSwiftCapitalizedConstruction(context: EdgePassContext, node: Synt
   return true;
 }
 
+function recordGoBuiltinConstruction(
+  context: EdgePassContext,
+  node: SyntaxNodeLike,
+  fromId: string,
+): boolean | undefined {
+  const callTarget = getCallTarget(node);
+  const calleeName =
+    callTarget && isIdentifierType(context.sup, callTarget.type) ? sliceText(callTarget, context.source) : null;
+  if (calleeName !== "new" && calleeName !== "make") return undefined;
+  const argList = node.childForFieldName("arguments") ?? node.childForFieldName("argument_list");
+  const typeNode = argList?.namedChildren?.find((child) => child.type === "type_identifier") ?? null;
+  if (typeNode) tryResolveNode(context, typeNode, fromId, "instantiates");
+  return false;
+}
+
+function recordRubySuper(
+  context: EdgePassContext,
+  fn: DetailedFunctionNode,
+  superNode: SyntaxNodeLike,
+  fromId: string,
+): void {
+  const container = nearestMemberContainer(fn.node);
+  if (!container || container.type !== "class") return;
+  const owner = memberContainerDef(context.moduleEntry, container);
+  if (!owner) return;
+  context.receiverCalls.push({
+    callerId: fromId,
+    ownerId: ensureNode(context, owner),
+    viaSupertypes: true,
+    memberName: fn.def.localName,
+    argumentCount: null,
+    site: { file: context.moduleEntry.file, range: toRange(superNode) },
+    memberScope: "any",
+  });
+}
+
+function recordRubyCall(
+  context: EdgePassContext,
+  node: SyntaxNodeLike,
+  fromId: string,
+  resolveCallTarget: (node: SyntaxNodeLike, callee: SyntaxNodeLike | null) => void,
+): boolean | undefined {
+  if (node.type !== "call") return undefined;
+  const methodNode = node.childForFieldName("method");
+  const receiverNode = node.childForFieldName("receiver");
+  const methodName = methodNode ? sliceText(methodNode, context.source) : null;
+  if (methodName === "new" && receiverNode) {
+    const recorded = tryResolveNode(context, receiverNode, fromId, "instantiates");
+    if (!recorded) {
+      const rubyType = resolveRubyVisibleConstant(
+        context.index,
+        context.moduleEntry,
+        context.sup,
+        sliceText(receiverNode, context.source),
+      );
+      if (rubyType) recordDefEdge(context, fromId, rubyType, "instantiates", receiverNode);
+    }
+    return false;
+  }
+  if (methodNode?.type === "super") return true;
+  if (methodNode) {
+    resolveCallTarget(node, methodNode);
+    return false;
+  }
+  const callee = getCallTarget(node);
+  if (callee?.type === "super") return true;
+  resolveCallTarget(node, callee);
+  return false;
+}
+
+type SpecializedEdgePassRow = {
+  beforeModule?: (context: EdgePassContext, rootNode: SyntaxNodeLike) => void;
+  afterModule?: (context: EdgePassContext, rootNode: SyntaxNodeLike) => void;
+  onNode?: (
+    context: EdgePassContext,
+    fn: DetailedFunctionNode,
+    node: SyntaxNodeLike,
+    fromId: string,
+  ) => boolean | undefined;
+  onReceiverCall?: (
+    context: EdgePassContext,
+    access: ReceiverCallAccess,
+    fromId: string,
+    hasLexicalBinding: (callee: SyntaxNodeLike) => boolean,
+  ) => boolean;
+  onCall?: (
+    context: EdgePassContext,
+    node: SyntaxNodeLike,
+    fromId: string,
+    resolveCallTarget: (node: SyntaxNodeLike, callee: SyntaxNodeLike | null) => void,
+  ) => boolean | undefined;
+};
+
+/** Specialized syntax stays with its language; the common walker only dispatches these hooks. */
+export const SPECIALIZED_EDGE_PASSES: Readonly<Record<string, SpecializedEdgePassRow>> = {
+  python: { beforeModule: emitPythonDecoratorEdges },
+  rust: {
+    afterModule: emitRustImplEdges,
+    onNode(context, _fn, node, fromId) {
+      if (node.type === "token_tree") recordRustMacroArgumentCalls(context, node, fromId);
+      return undefined;
+    },
+  },
+  go: {
+    onReceiverCall(context, access, fromId, hasLexicalBinding) {
+      return (
+        context.optionalMemberTypes.has(access.receiver.type) &&
+        recordGoEmbeddedFieldReceiverCall(context, access, fromId, hasLexicalBinding)
+      );
+    },
+    onCall: recordGoBuiltinConstruction,
+  },
+  ruby: {
+    onNode(context, fn, node, fromId) {
+      if (node.type !== "super") return undefined;
+      recordRubySuper(context, fn, node, fromId);
+      return true;
+    },
+    onCall: recordRubyCall,
+  },
+  swift: {
+    onCall(context, node, fromId) {
+      return recordSwiftCapitalizedConstruction(context, node, fromId) ? true : undefined;
+    },
+  },
+};
+
 export async function emitFunctionBodyEdges(
   context: EdgePassContext,
   functionNodes: DetailedFunctionNode[],
 ): Promise<void> {
+  const specialized = SPECIALIZED_EDGE_PASSES[context.sup.id];
   const qualifiedConstructionTargets: Array<{
     fromId: string;
     member: SyntaxNodeLike;
@@ -1276,6 +1401,10 @@ export async function emitFunctionBodyEdges(
           classifyImport,
         );
         if (recordImportTypeCall(context, access, fromId, receiverProof)) return;
+        if (supportsDeclaredFieldChains(context.sup.id) && isMemberAccessNode(context.sup, access.receiver)) {
+          dottedReceiverCalls.push({ fromId, access });
+          return;
+        }
         if (receiverProof.kind === "own-type" || receiverProof.kind === "supertype") {
           recordReceiverCall(node, access, undefined, receiverProof);
           return;
@@ -1297,24 +1426,15 @@ export async function emitFunctionBodyEdges(
         ) {
           return;
         }
-        if (
-          context.sup.id === "go" &&
-          context.optionalMemberTypes.has(access.receiver.type) &&
-          recordGoEmbeddedFieldReceiverCall(context, access, fromId, hasLexicalBinding)
-        ) {
-          return;
-        }
+        if (specialized?.onReceiverCall?.(context, access, fromId, hasLexicalBinding)) return;
         const javaConstructionType =
           context.sup.id === "java" && access.receiver.type === "object_creation_expression"
             ? constructionTypeName(access.receiver, context.source, context.sup)
             : null;
         if (
-          (context.sup.id === "csharp" &&
-            access.receiver.type === "member_access_expression" &&
-            csharpDottedNameRoot(access.receiver)) ||
-          (context.sup.id === "java" &&
-            (access.receiver.type === "field_access" ||
-              (javaConstructionType && isMemberAccessNode(context.sup, javaConstructionType))))
+          context.sup.id === "java" &&
+          javaConstructionType &&
+          isMemberAccessNode(context.sup, javaConstructionType)
         ) {
           dottedReceiverCalls.push({ fromId, access });
           return;
@@ -1344,70 +1464,12 @@ export async function emitFunctionBodyEdges(
       if (!tryResolveNode(context, callee, fromId, "calls")) recordImplicitSelfMemberCall(node, callee);
     };
 
-    const recordRubySuper = (superNode: SyntaxNodeLike): void => {
-      const container = nearestMemberContainer(fn.node);
-      if (!container || container.type !== "class") return;
-      const owner = memberContainerDef(context.moduleEntry, container);
-      if (!owner) return;
-      context.receiverCalls.push({
-        callerId: fromId,
-        ownerId: ensureNode(context, owner),
-        viaSupertypes: true,
-        memberName: fn.def.localName,
-        argumentCount: null,
-        site: { file: context.moduleEntry.file, range: toRange(superNode) },
-        memberScope: "any",
-      });
-    };
-
     const recordCallOrInstantiation = (node: SyntaxNodeLike): boolean => {
-      if (context.sup.id === "ruby" && node.type === "super") {
-        recordRubySuper(node);
-        return true;
-      }
-      if (node.type === "token_tree") recordRustMacroArgumentCalls(context, node, fromId);
+      const nodeResult = specialized?.onNode?.(context, fn, node, fromId);
+      if (nodeResult !== undefined) return nodeResult;
       if (callNodeTypes.has(node.type)) {
-        if (context.sup.id === "go") {
-          const callTarget = getCallTarget(node);
-          const calleeName =
-            callTarget && isIdentifierType(context.sup, callTarget.type) ? sliceText(callTarget, context.source) : null;
-          if (calleeName === "new" || calleeName === "make") {
-            const argList = node.childForFieldName("arguments") ?? node.childForFieldName("argument_list");
-            const typeNode = argList?.namedChildren?.find((child) => child.type === "type_identifier") ?? null;
-            if (typeNode) {
-              tryResolveNode(context, typeNode, fromId, "instantiates");
-            }
-            return false;
-          }
-        }
-        if (context.sup.id === "ruby" && node.type === "call") {
-          const methodNode = node.childForFieldName("method");
-          const receiverNode = node.childForFieldName("receiver");
-          const methodName = methodNode ? sliceText(methodNode, context.source) : null;
-          if (methodName === "new" && receiverNode) {
-            const recorded = tryResolveNode(context, receiverNode, fromId, "instantiates");
-            if (!recorded) {
-              const rubyType = resolveRubyVisibleConstant(
-                context.index,
-                context.moduleEntry,
-                context.sup,
-                sliceText(receiverNode, context.source),
-              );
-              if (rubyType) recordDefEdge(context, fromId, rubyType, "instantiates", receiverNode);
-            }
-            return false;
-          }
-          if (methodNode?.type === "super") return true;
-          if (methodNode) {
-            resolveCallTarget(node, methodNode);
-            return false;
-          }
-          const callee = getCallTarget(node);
-          if (callee?.type === "super") return true;
-          resolveCallTarget(node, callee);
-          return false;
-        }
-        if (recordSwiftCapitalizedConstruction(context, node, fromId)) return true;
+        const callResult = specialized?.onCall?.(context, node, fromId, resolveCallTarget);
+        if (callResult !== undefined) return callResult;
         resolveCallTarget(node, getCallTarget(node));
       }
       if (newNodeTypes[node.type]) {
@@ -1776,8 +1838,6 @@ export async function emitClassInheritanceEdges(
 }
 
 export function emitRustImplEdges(context: EdgePassContext, rootNode: SyntaxNodeLike): void {
-  if (context.sup.id !== "rust") return;
-
   const walkImpls = (node: SyntaxNodeLike): void => {
     if (node.type === "impl_item") {
       const typeIdentifiers = node.namedChildren?.filter((child) => child.type === "type_identifier") ?? [];
