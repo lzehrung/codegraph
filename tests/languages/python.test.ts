@@ -821,12 +821,50 @@ describe("Python native import bindings", () => {
                   { name: "from", text: "runtime_plain" },
                 ],
               },
+              // One match per name of a guarded `import a, b as c`, then a runtime list.
+              ...["list_first", "list_second"].map((name) => ({
+                patternIndex: 0,
+                captures: [
+                  { name: "stmt", text: "import list_first, list_second as second" },
+                  { name: "from", text: name },
+                ],
+              })),
+              ...["runtime_list_a", "runtime_list_b"].map((name) => ({
+                patternIndex: 0,
+                captures: [
+                  { name: "stmt", text: "import runtime_list_a, runtime_list_b" },
+                  { name: "from", text: name },
+                ],
+              })),
             ],
           },
         });
         expect(legacy.find((entry) => entry.spec === "nested_type")?.typeOnly).toBe(true);
         expect(legacy.find((entry) => entry.spec === "runtime_plain")).toBeDefined();
         expect(legacy.find((entry) => entry.spec === "runtime_plain")?.typeOnly).not.toBe(true);
+        for (const spec of ["list_first", "list_second"]) {
+          expect(legacy.find((entry) => entry.spec === spec)?.typeOnly).toBe(true);
+        }
+        for (const spec of ["runtime_list_a", "runtime_list_b"]) {
+          expect(legacy.find((entry) => entry.spec === spec)).toBeDefined();
+          expect(legacy.find((entry) => entry.spec === spec)?.typeOnly).not.toBe(true);
+        }
+        // Identical statements: the guarded one stays type-only and the later one runtime.
+        const repeated = ["if TYPE_CHECKING:", "    import twice", "import twice", ""].join(newline);
+        const repeatedCapture = {
+          patternIndex: 0,
+          captures: [
+            { name: "stmt", text: "import twice" },
+            { name: "from", text: "twice" },
+          ],
+        };
+        const repeatedLegacy = collectModuleSpecifiersFromSource(PY_SUPPORT, repeated, {
+          compactNativeImports: { imports: [repeatedCapture, repeatedCapture] },
+        });
+        expect(repeatedLegacy.filter((entry) => entry.spec === "twice").map((entry) => !!entry.typeOnly)).toEqual([
+          true,
+          false,
+        ]);
         // Quoted import text in a guarded suite must not be taken for the later real statement.
         const quoted = ["if TYPE_CHECKING:", '    marker = "import runtime_dep"', "import runtime_dep", ""].join(
           newline,

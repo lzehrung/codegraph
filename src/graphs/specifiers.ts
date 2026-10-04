@@ -369,7 +369,19 @@ export function collectModuleSpecifiersFromSource(
   // match text quoted earlier in the file.
   let pythonStatementStarts: number[] | undefined;
   let pythonStatementCursor = 0;
-  const locatePythonStatement = (text: string): number => {
+  // The graph query emits one match per name of `import a, b`; later matches of the same
+  // statement name a module not seen yet, so they reuse its start instead of consuming the next.
+  let lastPythonStatement: { text: string; start: number; names: Set<string> } | undefined;
+  const locatePythonStatement = (text: string, name: string): number => {
+    if (lastPythonStatement?.text === text && !lastPythonStatement.names.has(name)) {
+      lastPythonStatement.names.add(name);
+      return lastPythonStatement.start;
+    }
+    const start = nextPythonStatement(text);
+    lastPythonStatement = start >= 0 ? { text, start, names: new Set([name]) } : undefined;
+    return start;
+  };
+  const nextPythonStatement = (text: string): number => {
     pythonStatementStarts ??= pythonStatements(maskPythonCommentsAndStrings(source)).map((entry) => entry.start);
     while (pythonStatementCursor < pythonStatementStarts.length) {
       const start = pythonStatementStarts[pythonStatementCursor]!;
@@ -397,7 +409,8 @@ export function collectModuleSpecifiersFromSource(
           // Captures arrive in source order, so an older add-on without offsets is located by text.
           const trimmed = stmtText.trim();
           const start =
-            nativeCaptureStartIndex(source, capMap["stmt"]) ?? (trimmed ? locatePythonStatement(trimmed) : -1);
+            nativeCaptureStartIndex(source, capMap["stmt"]) ??
+            (trimmed ? locatePythonStatement(trimmed, capMap["from"]?.text ?? "") : -1);
           if (start >= 0) typeOnly = isPythonTypeOnly(start);
         }
         if (support.id === "kotlin") {

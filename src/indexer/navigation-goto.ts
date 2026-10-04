@@ -105,6 +105,33 @@ const DECLARED_FIELD_CHAIN_LANGUAGES: Readonly<Record<string, true>> = {
   csharp: true,
   kotlin: true,
 };
+/** Type-syntax nodes that wrap a declared type name together with its qualifier. */
+const QUALIFIED_TYPE_NODE_TYPES: Readonly<Record<string, true>> = {
+  qualified_name: true,
+  scoped_type_identifier: true,
+  nested_type_identifier: true,
+  user_type: true,
+  generic_name: true,
+  generic_type: true,
+};
+
+/**
+ * The full spelling of a declared type, e.g. `B.Repo` for `B.Repo<T>`: the last segment alone
+ * would resolve to a same-named type of another namespace.
+ */
+function qualifiedDeclaredTypeText(typeName: SyntaxNodeLike, source: string): string {
+  let top = typeName;
+  for (let parent = typeName.parent; parent && QUALIFIED_TYPE_NODE_TYPES[parent.type]; parent = parent.parent) {
+    top = parent;
+  }
+  let text = sliceText(top, source).replace(/\s+/g, "");
+  for (let previous = ""; previous !== text; ) {
+    previous = text;
+    text = text.replace(/<[^<>]*>/g, "");
+  }
+  return text;
+}
+
 export function supportsDeclaredFieldChains(languageId: string): boolean {
   return !!DECLARED_FIELD_CHAIN_LANGUAGES[languageId];
 }
@@ -2416,7 +2443,7 @@ async function resolveReceiverDefinition(
         index,
         fieldModule,
         fieldContext.sup,
-        sliceText(annotatedType, fieldContext.source),
+        qualifiedDeclaredTypeText(annotatedType, fieldContext.source),
       );
       return type ? { def: type, memberScope: "instance" } : null;
     }

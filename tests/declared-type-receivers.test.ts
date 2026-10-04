@@ -585,5 +585,42 @@ describe("declared-type receiver proof", () => {
         expect(calls.some((edge) => edge.site?.range.start.line === unannotated.line)).toBe(false);
       });
     }
+
+    it("never resolves a C# qualified field type to a same-named type of the current namespace", async () => {
+      const other = "namespace B { public class Repo { public int Find() { return 1; } } }\n";
+      const source = [
+        "namespace A {",
+        "  public class Repo { public int Find() { return -1; } }",
+        "  public class Host {",
+        "    public B.Repo repo = new B.Repo();",
+        "    public int Run() { return this.repo.Find(); }",
+        "  }",
+        "}",
+        "",
+      ].join("\n");
+      const p = await fixture("cg-field-chain-qualified-cs-", { "B.cs": other, "Host.cs": source });
+      const file = p.f("Host.cs");
+      // `B.Repo` names namespace B; the last segment alone named the local decoy `A.Repo`.
+      const result = await goToDefinition(p.index, { file, ...locate(source, "Find(", 1) });
+      if (result.status === "ok") expect(path.basename(result.definition.file)).toBe("B.cs");
+      const decoyLine = locate(source, "Find(").line;
+      const refs = await findReferences(p.index, { file, ...locate(source, "Find(") });
+      if (refs.status === "ok") {
+        expect(
+          refs.references.filter((ref) => ref.range.start.line !== decoyLine).map((ref) => ref.range.start.line),
+        ).toEqual([]);
+      }
+      const graph = await buildSymbolGraphDetailed(p.index);
+      const decoyId = `::Find::${source.indexOf("Find(")}`;
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.label === "calls" &&
+            graph.nodes.get(edge.from)?.name === "Run" &&
+            edge.to.endsWith(decoyId) &&
+            edge.to.includes("Host.cs"),
+        ),
+      ).toBe(false);
+    });
   });
 });
