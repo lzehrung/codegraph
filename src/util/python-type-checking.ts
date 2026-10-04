@@ -68,6 +68,21 @@ function statementSpans(masked: string, start: number, end: number): Array<{ sta
   return spans;
 }
 
+/** Keywords that open a compound statement, whose header ends at a top-level `:`. */
+const COMPOUND_HEADER = /^(?:async[\t ]+)?(?:if|elif|else|while|for|with|try|except|finally|def|class)\b/;
+
+/** Index of the `:` ending a compound header in `[start, end)`, ignoring brackets and `:=`; -1 if none. */
+function compoundHeaderColon(masked: string, start: number, end: number): number {
+  let depth = 0;
+  for (let index = start; index < end; index += 1) {
+    const char = masked[index];
+    if (char === "(" || char === "[" || char === "{") depth += 1;
+    else if ((char === ")" || char === "]" || char === "}") && depth) depth -= 1;
+    else if (char === ":" && !depth && masked[index + 1] !== "=") return index;
+  }
+  return -1;
+}
+
 function indentWidth(leading: string): number {
   let indent = 0;
   for (const char of leading) indent = char === "\t" ? indent + (8 - (indent % 8)) : indent + 1;
@@ -95,14 +110,15 @@ export function pythonStatements(masked: string): PythonStatement[] {
     if (previousIndent >= 0 && indent > previousIndent)
       guards.push({ indent: previousIndent, guarded: previousOpensGuard });
     const enclosingGuarded = guards.some((guard) => guard.guarded);
-    const header = TYPE_CHECKING_HEADER.exec(content);
     const contentStart = line.start + leading.length;
-    if (header) {
-      // `if TYPE_CHECKING: a; b` puts every statement after the colon in the guarded suite.
-      statements.push({ start: contentStart, end: contentStart + header[0].length, guarded: enclosingGuarded });
-      const suiteStart = contentStart + header[0].length;
-      for (const span of statementSpans(masked, suiteStart, line.end)) statements.push({ ...span, guarded: true });
-      previousOpensGuard = !masked.slice(suiteStart, line.end).trim();
+    const headerEnd = COMPOUND_HEADER.test(content) ? compoundHeaderColon(masked, contentStart, line.end) : -1;
+    if (headerEnd >= 0) {
+      // `if c: a; b` puts every statement after the colon in that suite; a TYPE_CHECKING header guards it.
+      const guardsSuite = enclosingGuarded || TYPE_CHECKING_HEADER.test(content);
+      statements.push({ start: contentStart, end: headerEnd, guarded: enclosingGuarded });
+      for (const span of statementSpans(masked, headerEnd + 1, line.end))
+        statements.push({ ...span, guarded: guardsSuite });
+      previousOpensGuard = TYPE_CHECKING_HEADER.test(content) && !masked.slice(headerEnd + 1, line.end).trim();
     } else {
       for (const span of statementSpans(masked, contentStart, line.end)) {
         statements.push({ ...span, guarded: enclosingGuarded });

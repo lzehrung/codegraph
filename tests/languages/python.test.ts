@@ -751,6 +751,11 @@ describe("Python native import bindings", () => {
         "    import after_continuation",
         "import runtime_plain; import runtime_second",
         "if TYPE_CHECKING: import list_first, list_second as second",
+        // tree-sitter-python drops a nested one-line suite in a lone-CR file, so native mode
+        // cannot be compared there; the reduced scanner handles both line endings.
+        ...(newline === "\n"
+          ? ["if TYPE_CHECKING:", "    if enabled: import inline_nested", "if enabled: import runtime_inline"]
+          : []),
         "import runtime_list_a, runtime_list_b",
         "",
       ].join(newline);
@@ -763,6 +768,7 @@ describe("Python native import bindings", () => {
         "after_continuation",
         "list_first",
         "list_second",
+        ...(newline === "\n" ? ["inline_nested"] : []),
       ];
       const runtimeSpecs = [
         "typing",
@@ -773,6 +779,7 @@ describe("Python native import bindings", () => {
         "runtime_second",
         "runtime_list_a",
         "runtime_list_b",
+        ...(newline === "\n" ? ["runtime_inline"] : []),
       ];
       await Promise.all([
         fsp.writeFile(consumer, source),
@@ -1113,13 +1120,13 @@ describe("Python native import bindings", () => {
         );
       }
 
-      // Exclusion case: `if enabled: import feature` never becomes a module-level export in
-      // either mode. Native still records the binding (with moduleLevel: false); reduced mode
-      // records no binding for it at all, but neither publishes it as a re-export.
-      expect(nativeImports).toEqual(
-        expect.arrayContaining([expect.objectContaining({ from: "feature", moduleLevel: false })]),
-      );
-      expect(reducedImports.some((binding) => binding.from === "feature")).toBe(false);
+      // Exclusion case: `if enabled: import feature` is a binding in both modes, but not a
+      // module-level one, so neither publishes it as a re-export.
+      for (const imports of [nativeImports, reducedImports]) {
+        expect(imports).toEqual(
+          expect.arrayContaining([expect.objectContaining({ from: "feature", moduleLevel: false })]),
+        );
+      }
 
       for (const [imports, nativeMode] of [
         [nativeImports, "auto"],
