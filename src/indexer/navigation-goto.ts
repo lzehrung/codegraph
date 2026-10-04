@@ -132,6 +132,29 @@ function qualifiedDeclaredTypeText(typeName: SyntaxNodeLike, source: string): st
   return text;
 }
 
+/** Type-parameter list nodes across the TypeScript, Java, C#, and Kotlin grammars. */
+const TYPE_PARAMETER_LIST_TYPES: Readonly<Record<string, true>> = {
+  type_parameters: true,
+  type_parameter_list: true,
+};
+
+/** Names of the generic type parameters declared by `node` and its enclosing declarations. */
+function typeParameterNamesInScope(node: SyntaxNodeLike, source: string): Set<string> {
+  const names = new Set<string>();
+  for (let current: SyntaxNodeLike | null = node; current; current = current.parent) {
+    for (const list of current.namedChildren) {
+      if (!TYPE_PARAMETER_LIST_TYPES[list.type]) continue;
+      for (const parameter of list.namedChildren) {
+        const name =
+          parameter.childForFieldName("name") ??
+          parameter.namedChildren.find((child) => child.type === "identifier" || child.type === "type_identifier");
+        if (name) names.add(sliceText(name, source));
+      }
+    }
+  }
+  return names;
+}
+
 export function supportsDeclaredFieldChains(languageId: string): boolean {
   return !!DECLARED_FIELD_CHAIN_LANGUAGES[languageId];
 }
@@ -2439,12 +2462,10 @@ async function resolveReceiverDefinition(
       if (!annotatedType) return null;
       const fieldModule = index.byFile.get(fileIdentityKey(field.file));
       if (!fieldModule) return null;
-      const type = await resolveReceiverTypeName(
-        index,
-        fieldModule,
-        fieldContext.sup,
-        qualifiedDeclaredTypeText(annotatedType, fieldContext.source),
-      );
+      const typeText = qualifiedDeclaredTypeText(annotatedType, fieldContext.source);
+      // A type parameter in scope (`class Host<Repo>`) is not a nominal type; bounds are not solved.
+      if (typeParameterNamesInScope(declaration, fieldContext.source).has(typeText.split(/[.:]/)[0]!)) return null;
+      const type = await resolveReceiverTypeName(index, fieldModule, fieldContext.sup, typeText);
       return type ? { def: type, memberScope: "instance" } : null;
     }
   }

@@ -622,5 +622,75 @@ describe("declared-type receiver proof", () => {
         ),
       ).toBe(false);
     });
+
+    const shadowCases = [
+      {
+        language: "Java",
+        files: {
+          "decoy/Repo.java": "package decoy;\npublic class Repo { public int find() { return -1; } }\n",
+          "app/Host.java": [
+            "package app;",
+            "import decoy.Repo;",
+            "class Host<Repo> {",
+            "  Repo repo;",
+            "  int run() { return this.repo.find(); }",
+            "}",
+            "",
+          ].join("\n"),
+        },
+        use: "app/Host.java",
+        member: "find(",
+      },
+      {
+        language: "TypeScript",
+        files: {
+          "host.ts": [
+            "class Repo { find(): number { return -1; } }",
+            "class Host<Repo> {",
+            "  repo!: Repo;",
+            "  run(): number { return this.repo.find(); }",
+            "}",
+            "",
+          ].join("\n"),
+        },
+        use: "host.ts",
+        member: "find(",
+      },
+      {
+        language: "C#",
+        files: {
+          "Host.cs": [
+            "public class Repo { public int Find() { return -1; } }",
+            "public class Host<Repo> {",
+            "  public Repo repo;",
+            "  public int Run() { return this.repo.Find(); }",
+            "}",
+            "",
+          ].join("\n"),
+        },
+        use: "Host.cs",
+        member: "Find(",
+      },
+    ];
+    for (const { language, files, use, member } of shadowCases) {
+      it(`leaves a ${language} field typed by a shadowing type parameter unresolved`, async () => {
+        const p = await fixture(`cg-field-chain-type-param-${language}-`, files);
+        const source = files[use as keyof typeof files]!;
+        const file = p.f(use);
+        const result = await goToDefinition(p.index, {
+          file,
+          ...locate(source, member, source.split(member).length - 2),
+        });
+        expect(result.status).toBe("not_found");
+        const graph = await buildSymbolGraphDetailed(p.index);
+        const decoyCalls = graph.edges.filter(
+          (edge) =>
+            edge.label === "calls" &&
+            ["run", "Run"].includes(graph.nodes.get(edge.from)?.name ?? "") &&
+            graph.nodes.get(edge.to)?.name === member.slice(0, -1),
+        );
+        expect(decoyCalls).toEqual([]);
+      });
+    }
   });
 });
