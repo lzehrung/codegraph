@@ -180,8 +180,9 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
     expect(extractPythonSpecifiers("import café\u0301\n").map(({ spec }) => spec)).toEqual(["café\u0301"]);
     // A dotted segment must itself start with an identifier character: matching the whole
     // continuation class (letters/digits/dots) across the separator let a digit immediately
-    // follow a `.`, which Python's grammar never allows.
-    expect(extractPythonSpecifiers("import pkg.2mod\n").map(({ spec }) => spec)).toEqual(["pkg"]);
+    // follow a `.`, which Python's grammar never allows. The list item is not a dotted name,
+    // so no specifier is extracted from it.
+    expect(extractPythonSpecifiers("import pkg.2mod\n").map(({ spec }) => spec)).toEqual([]);
   });
 
   it("Python import bindings accept combining-mark continuations", async () => {

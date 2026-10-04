@@ -364,6 +364,7 @@ export function collectModuleSpecifiersFromSource(
   let queryFailed = false;
   // Current native add-ons retain capture offsets. Older add-ons use ordered source lookup.
   let rustStatementSearchIndex = 0;
+  let pythonStatementSearchIndex = 0;
   if (hasNativeImports) {
     try {
       for (const match of nativeImportsToProcess) {
@@ -380,8 +381,15 @@ export function collectModuleSpecifiersFromSource(
             ? isJsTsTypeOnlySpecifierStatement(stmtText)
             : support.isTypeOnly(stmtText);
         if (!typeOnly && isPythonTypeOnly) {
-          const start = nativeCaptureStartIndex(source, capMap["stmt"]);
-          typeOnly = start !== undefined && isPythonTypeOnly(start);
+          // Captures arrive in source order, so an older add-on without offsets is located by text.
+          const trimmed = stmtText.trim();
+          const start =
+            nativeCaptureStartIndex(source, capMap["stmt"]) ??
+            (trimmed ? source.indexOf(trimmed, pythonStatementSearchIndex) : -1);
+          if (start !== undefined && start >= 0) {
+            pythonStatementSearchIndex = start + trimmed.length;
+            typeOnly = isPythonTypeOnly(start);
+          }
         }
         if (support.id === "kotlin") {
           const parsed = parseKotlinImportStatement(stmtText);

@@ -2,7 +2,8 @@ import { maskPythonCommentsAndStrings } from "./comments.js";
 
 const TYPE_CHECKING_HEADER = /^if[\t ]+(?:TYPE_CHECKING|typing\.TYPE_CHECKING)[\t ]*:/;
 
-export type PythonStatement = { start: number; guarded: boolean };
+/** One simple statement: `[start, end)` with surrounding whitespace excluded. */
+export type PythonStatement = { start: number; end: number; guarded: boolean };
 
 /** One logical line: physical lines joined by open brackets or a trailing backslash. */
 type LogicalLine = { start: number; end: number };
@@ -42,27 +43,29 @@ function logicalLines(masked: string): LogicalLine[] {
   return lines;
 }
 
-/** Starts of the `;`-separated statements in `[start, end)`, skipping leading whitespace. */
-function statementStarts(masked: string, start: number, end: number): number[] {
-  const starts: number[] = [];
+/** The `;`-separated statements in `[start, end)`, trimmed of surrounding whitespace. */
+function statementSpans(masked: string, start: number, end: number): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
   let depth = 0;
   let segment = start;
-  const push = (from: number): void => {
-    let index = from;
-    while (index < end && /\s/.test(masked[index]!)) index += 1;
-    if (index < end) starts.push(index);
+  const push = (from: number, to: number): void => {
+    let first = from;
+    let last = to;
+    while (first < last && /\s/.test(masked[first]!)) first += 1;
+    while (last > first && /\s/.test(masked[last - 1]!)) last -= 1;
+    if (first < last) spans.push({ start: first, end: last });
   };
   for (let index = start; index < end; index += 1) {
     const char = masked[index];
     if (char === "(" || char === "[" || char === "{") depth += 1;
     else if ((char === ")" || char === "]" || char === "}") && depth) depth -= 1;
     else if (char === ";" && !depth) {
-      push(segment);
+      push(segment, index);
       segment = index + 1;
     }
   }
-  push(segment);
-  return starts;
+  push(segment, end);
+  return spans;
 }
 
 function indentWidth(leading: string): number {
@@ -96,13 +99,13 @@ export function pythonStatements(masked: string): PythonStatement[] {
     const contentStart = line.start + leading.length;
     if (header) {
       // `if TYPE_CHECKING: a; b` puts every statement after the colon in the guarded suite.
-      statements.push({ start: contentStart, guarded: enclosingGuarded });
+      statements.push({ start: contentStart, end: contentStart + header[0].length, guarded: enclosingGuarded });
       const suiteStart = contentStart + header[0].length;
-      for (const start of statementStarts(masked, suiteStart, line.end)) statements.push({ start, guarded: true });
+      for (const span of statementSpans(masked, suiteStart, line.end)) statements.push({ ...span, guarded: true });
       previousOpensGuard = !masked.slice(suiteStart, line.end).trim();
     } else {
-      for (const start of statementStarts(masked, contentStart, line.end)) {
-        statements.push({ start, guarded: enclosingGuarded });
+      for (const span of statementSpans(masked, contentStart, line.end)) {
+        statements.push({ ...span, guarded: enclosingGuarded });
       }
       previousOpensGuard = false;
     }

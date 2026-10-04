@@ -10,7 +10,7 @@ import { fileIdentityKey } from "../../util/paths.js";
 import { resolveSpecifierTargets } from "../../util/resolution/specifier-targets.js";
 import { resolvePythonSubmoduleExact } from "../../util/resolution/python.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
-import { pythonTypeCheckingContext } from "../../util/python-type-checking.js";
+import { pythonStatements, pythonTypeCheckingContext } from "../../util/python-type-checking.js";
 import { buildScopeIndexFromSource } from "../scope.js";
 import type { ImportBinding } from "../types.js";
 import { attributeNamedBindingRanges } from "./binding-ranges.js";
@@ -189,12 +189,6 @@ async function pushDefaultImport(
 const PYTHON_NAMED_IMPORT_PATTERN = new RegExp(
   String.raw`^(${PYTHON_IDENTIFIER_SOURCE})(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
   "u",
-);
-// Recognize ordinary statement starts and the exact TYPE_CHECKING one-line suite;
-// unrelated compound-suite headers remain excluded in reduced mode.
-const PYTHON_MODULE_IMPORT_PATTERN = new RegExp(
-  String.raw`(^[\t ]*|;[\t ]*|^[\t ]*if[\t ]+(?:TYPE_CHECKING|typing\.TYPE_CHECKING)[\t ]*:[\t ]*)import\s+(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)\s*(?:as\s+(${PYTHON_IDENTIFIER_SOURCE}))?`,
-  "gmu",
 );
 const PYTHON_MODULE_LIST_ITEM_PATTERN = new RegExp(
   String.raw`^(${PYTHON_IDENTIFIER_SOURCE}(?:\.${PYTHON_IDENTIFIER_SOURCE})*)(?:\s+as\s+(${PYTHON_IDENTIFIER_SOURCE}))?$`,
@@ -387,12 +381,16 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
     });
   }
 
-  const importPattern = PYTHON_MODULE_IMPORT_PATTERN;
-  for (const match of pySrc.matchAll(importPattern)) {
-    const keywordStart = match.index + match[1]!.length;
-    const dotted = match[2]!;
-    const local = match[3] ?? dotted.split(".")[0]!;
-    const moduleLevel = isModuleLevelKeywordInStrippedSource(pySrc, keywordStart);
-    await pushDefaultImport(context, dotted, local, moduleLevel, match[3] !== undefined, isTypeOnly(keywordStart));
+  // `import a, b as c` binds every module in its list, as the native path does.
+  for (const { start, end } of pythonStatements(pySrc)) {
+    if (!/^import\s/u.test(pySrc.slice(start, end))) continue;
+    const moduleLevel = isModuleLevelKeywordInStrippedSource(pySrc, start);
+    await collectPythonImportStatement(
+      context,
+      context.source.slice(start, end),
+      moduleLevel,
+      isTypeOnly(start),
+      start,
+    );
   }
 }

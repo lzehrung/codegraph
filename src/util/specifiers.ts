@@ -597,18 +597,28 @@ export function extractPythonSpecifiers(source: string): Array<{ spec: string; s
   try {
     const cleaned = maskPythonCommentsAndStrings(source);
     // Match only at statement starts, so `a; import b` and one-line suites are found.
-    const starts = pythonStatements(cleaned).map((statement) => statement.start);
-    const reImport = new RegExp(String.raw`import\s+(${PYTHON_DOTTED_NAME_SOURCE})`, "uy");
+    const statements = pythonStatements(cleaned);
+    const importItem = new RegExp(
+      String.raw`^(${PYTHON_DOTTED_NAME_SOURCE})(?:\s+as\s+${PYTHON_IDENTIFIER_SOURCE})?$`,
+      "u",
+    );
     const reFrom = new RegExp(
       String.raw`from\s+(\.+(?:${PYTHON_DOTTED_NAME_SOURCE})?|${PYTHON_DOTTED_NAME_SOURCE})\s+import\b`,
       "uy",
     );
-    for (const pattern of [reImport, reFrom]) {
-      for (const start of starts) {
-        pattern.lastIndex = start;
-        const match = pattern.exec(cleaned);
-        if (match) out.push({ spec: match[1]!, start });
+    // `import a, b as c` names every module in its list.
+    for (const { start, end } of statements) {
+      const list = /^import\s+([\s\S]+)$/u.exec(cleaned.slice(start, end).replace(/\\(?:\r\n|\r|\n)/g, " "));
+      if (!list) continue;
+      for (const item of list[1]!.split(",")) {
+        const spec = importItem.exec(item.trim())?.[1];
+        if (spec) out.push({ spec, start });
       }
+    }
+    for (const { start } of statements) {
+      reFrom.lastIndex = start;
+      const match = reFrom.exec(cleaned);
+      if (match) out.push({ spec: match[1]!, start });
     }
   } catch {
     /* parse fallback: ignore */

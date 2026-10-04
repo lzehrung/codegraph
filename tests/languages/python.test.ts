@@ -750,6 +750,8 @@ describe("Python native import bindings", () => {
         ")",
         "    import after_continuation",
         "import runtime_plain; import runtime_second",
+        "if TYPE_CHECKING: import list_first, list_second as second",
+        "import runtime_list_a, runtime_list_b",
         "",
       ].join(newline);
       const typeSpecs = [
@@ -759,6 +761,8 @@ describe("Python native import bindings", () => {
         "inline_type",
         "inline_second",
         "after_continuation",
+        "list_first",
+        "list_second",
       ];
       const runtimeSpecs = [
         "typing",
@@ -767,6 +771,8 @@ describe("Python native import bindings", () => {
         "runtime_other",
         "runtime_plain",
         "runtime_second",
+        "runtime_list_a",
+        "runtime_list_b",
       ];
       await Promise.all([
         fsp.writeFile(consumer, source),
@@ -789,6 +795,19 @@ describe("Python native import bindings", () => {
             expect(specs.find((entry) => entry.spec === spec)?.typeOnly).not.toBe(true);
           }
         }
+        // An older native add-on returns compact captures without offsets; captures are
+        // located in source order instead, so guarded imports keep their classification.
+        const legacy = collectModuleSpecifiersFromSource(PY_SUPPORT, source, {
+          compactNativeImports: {
+            imports: [
+              { patternIndex: 0, captures: [{ name: "stmt", text: "import nested_type" }] },
+              { patternIndex: 0, captures: [{ name: "stmt", text: "import runtime_plain" }] },
+            ],
+          },
+        });
+        expect(legacy.find((entry) => entry.spec === "nested_type")?.typeOnly).toBe(true);
+        expect(legacy.find((entry) => entry.spec === "runtime_plain")).toBeDefined();
+        expect(legacy.find((entry) => entry.spec === "runtime_plain")?.typeOnly).not.toBe(true);
         const index = await buildProjectIndex(root, { cache: "off" });
         const fromConsumer = index.graph.edges.filter(
           (edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer),
