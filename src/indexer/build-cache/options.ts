@@ -37,8 +37,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 85 classifies Python TYPE_CHECKING imports as type-only and resolves declared-typed field chains.
  * Epoch 86 removes the reduced-mode import recovery and native runtime option from persisted
  * cache identity; stale modules and graph edges must be rebuilt with required native parsing.
+ * Epoch 87 removes obsolete graph and incremental options from persisted cache identity.
  */
-export const CORE_ALGORITHM_EPOCH = 86;
+export const CORE_ALGORITHM_EPOCH = 87;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -53,7 +54,6 @@ export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
   cacheStrict?: boolean;
   useBloomFilters?: boolean;
-  incrementalStrict?: boolean;
   nativeRuntimeFingerprint?: string;
   implementationFingerprint?: string;
   coreAlgorithmEpoch?: number;
@@ -192,7 +192,6 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
     cache: opts?.cache ?? "off",
     cacheStrict: opts?.cacheStrict ?? true,
     useBloomFilters: opts?.useBloomFilters ?? true,
-    incrementalStrict: opts?.incrementalStrict ?? false,
     ...(opts?.nativeRuntimeFingerprint ? { nativeRuntimeFingerprint: opts.nativeRuntimeFingerprint } : {}),
     ...(opts?.implementationFingerprint ? { implementationFingerprint: opts.implementationFingerprint } : {}),
     coreAlgorithmEpoch: opts?.coreAlgorithmEpoch ?? 1,
@@ -228,7 +227,6 @@ function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
     cache: opts?.cache ?? "off",
     cacheStrict: opts?.cacheStrict ?? true,
     useBloomFilters: opts?.useBloomFilters ?? true,
-    incrementalStrict: opts?.incrementalStrict ?? false,
     nativeRuntimeFingerprint: getNativeRuntimeFingerprint(),
     implementationFingerprint: getImplementationFingerprint(),
     coreAlgorithmEpoch: CORE_ALGORITHM_EPOCH,
@@ -291,9 +289,6 @@ export function diffBuildOptions(
   if (normalizedManifest.useBloomFilters !== normalizedCurrent.useBloomFilters) {
     diffs.push("useBloomFilters");
   }
-  if (normalizedManifest.incrementalStrict !== normalizedCurrent.incrementalStrict) {
-    diffs.push("incrementalStrict");
-  }
   if (normalizedManifest.nativeRuntimeFingerprint !== normalizedCurrent.nativeRuntimeFingerprint) {
     diffs.push("native");
   }
@@ -315,7 +310,6 @@ export function diffBuildOptions(
 export function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptions {
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
   return {
-    fast: !!opts?.fast,
     resolveNodeModules: !!opts?.resolveNodeModules,
     dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
     ...(resolutionHints.length ? { resolutionHints } : {}),
@@ -327,7 +321,6 @@ export function graphOptionsEqual(a?: GraphBuildOptions, b?: GraphBuildOptions):
   if (!a || !b) return false;
   const normalizedA = normalizeGraphOptions(a);
   const normalizedB = normalizeGraphOptions(b);
-  if (!!normalizedA.fast !== !!normalizedB.fast) return false;
   if (!!normalizedA.resolveNodeModules !== !!normalizedB.resolveNodeModules) {
     return false;
   }

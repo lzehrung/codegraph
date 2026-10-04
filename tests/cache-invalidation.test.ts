@@ -938,14 +938,6 @@ describe("Cache invalidation and strict hashing", () => {
     expect(afterChangeUpdatedAt).toBeGreaterThan(beforeChangeUpdatedAt);
     const modB = idxChanged.byFile.get(fileIdentityKey(fileId))!;
     expect(modB.locals.some((l) => l.localName === "b")).toBe(true);
-
-    await buildProjectIndexIncremental(root, {
-      threads: 2,
-      cache: "disk",
-      graph: { fast: true },
-    });
-    const manifest = await readManifest(root);
-    expect(manifest.graphOptions!.fast).toBe(true);
   });
 
   it("rebuilds incremental indexes when discovery globRoot changes", async () => {
@@ -1490,22 +1482,6 @@ describe("Cache invalidation and strict hashing", () => {
     expect(idx.byFile.has(fileIdentityKey(normalize(ghostPath)))).toBe(true);
 
     warnSpy.mockRestore();
-  });
-
-  it("forces full parsing when incremental strict mode is enabled", async () => {
-    const root = await mkTmpDir("dg-incremental-strict-");
-    const filePath = path.join(root, "strict.ts");
-    await fsp.writeFile(filePath, `export const a = 1;\n`, "utf8");
-
-    await buildProjectIndex(root, { threads: 2, cache: "disk" });
-    await buildProjectIndexIncremental(root, {
-      threads: 2,
-      cache: "disk",
-      graph: { fast: true },
-      incrementalStrict: true,
-    });
-    const manifest = await readManifest(root);
-    expect(manifest.graphOptions!.fast).toBe(false);
   });
 
   it("keeps unchanged graph edges and refreshes changed ones during incremental builds", async () => {
@@ -2591,7 +2567,7 @@ describe("Cache invalidation and strict hashing", () => {
     await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: "disk",
-      graph: { fast: true },
+      graph: { resolveNodeModules: true },
     });
 
     expect(prepSpy).toHaveBeenCalled();

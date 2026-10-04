@@ -93,7 +93,6 @@ export async function collectEdgesForFile(
       nativeQueries?: NativeQueryResults | null;
       embeddedBlocks?: PreparedSFCEmbeddedBlock[];
     };
-    fast?: boolean;
     resolveNodeModules?: boolean;
     dynamicImportHeuristics?: boolean;
     resolutionHints?: string[];
@@ -166,7 +165,6 @@ export async function collectEdgesForFile(
     return [];
   }
   if (!parsed && !graphOnlyLanguage) {
-    // Fast graph and regular graph both use the compact native import query.
     const compactExecution = getCompactImportsExecution(src, sup);
     compactNativeImports = compactExecution.results;
     recordNativeExecutionOutcome(opts.report, {
@@ -187,12 +185,10 @@ export async function collectEdgesForFile(
     return sqlEdges;
   }
 
-  const fast = !!opts.fast;
   const specs = collectModuleSpecifiersFromSource(sup, src, {
     ...(parsed?.tree ? { tree: parsed.tree } : {}),
     ...(parsed && parsed.nativeQueries !== undefined ? { nativeQueries: parsed.nativeQueries } : {}),
     ...(!parsed && !graphOnlyLanguage ? { compactNativeImports } : {}),
-    fast,
     file: normalizedFile,
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
     ...(opts.report ? { report: opts.report } : {}),
@@ -205,7 +201,6 @@ export async function collectEdgesForFile(
   const specSources = specs.map((entry) => ({ entry, support: sup }));
   for (const block of embeddedBlocks) {
     const blockSpecs = collectModuleSpecifiersFromSource(block.sup, block.source, {
-      fast,
       file: normalizedFile,
       ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(opts.report ? { report: opts.report } : {}),

@@ -1,7 +1,6 @@
 import type { Edge } from "../types.js";
 
 export type GraphBuildOptions = {
-  fast?: boolean;
   resolveNodeModules?: boolean;
   dynamicImportHeuristics?: boolean;
   resolutionHints?: string[];

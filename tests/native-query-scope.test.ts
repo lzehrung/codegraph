@@ -201,13 +201,6 @@ describe("authoritative empty native results", () => {
     });
     expect(specs).toContainEqual(expect.objectContaining({ spec: "./globals.d.ts", typeOnly: true }));
   });
-
-  it("extracts triple-slash reference specifiers in fast mode", () => {
-    const support = supportById("ts")!;
-    const source = '/// <reference path="./globals.d.ts" />\nexport const x = 1;\n';
-    const specs = collectModuleSpecifiersFromSource(support, source, { fast: true });
-    expect(specs).toContainEqual(expect.objectContaining({ spec: "./globals.d.ts", typeOnly: true }));
-  });
 });
 
 nativeDescribe("compact imports execution", () => {

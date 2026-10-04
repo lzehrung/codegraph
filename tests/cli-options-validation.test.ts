@@ -75,7 +75,16 @@ describe("CLI command option validation", () => {
 
     expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --compact-json`);
   });
-
+  it.each([
+    ["graph", "--fast-graph"],
+    ["index", "--fast-graph"],
+    ["review", "--incremental-strict"],
+    ["graph-delta", "--incremental-strict"],
+  ])("rejects removed %s option %s", (command, flag) => {
+    expect(() => validateCliArgs(command, parseCliArgs(command, [flag]))).toThrow(
+      `Unknown option for ${command}: ${flag}`,
+    );
+  });
   it("rejects the removed --summary flag because review is compact by default", () => {
     const parsed = parseCliArgs("review", ["--summary"]);
 
@@ -277,7 +286,7 @@ describe("graph/index schema split (C3)", () => {
   });
 
   it("both graph and index still accept every shared build flag/option", () => {
-    const shared = ["--cache-strict", "--cache-verify", "--no-gitignore", "--fast-graph"];
+    const shared = ["--cache-strict", "--cache-verify", "--no-gitignore"];
     for (const flag of shared) {
       expect(() => validateCliArgs("graph", parseCliArgs("graph", [flag]))).not.toThrow();
       expect(() => validateCliArgs("index", parseCliArgs("index", [flag]))).not.toThrow();

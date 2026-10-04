@@ -1662,7 +1662,7 @@ describe("SessionManager", () => {
     await manager.getOrCreateSession("shared", {
       root: sampleRoot,
       buildOptions: sampleBuildOptions({
-        graph: { fast: true, logLevel: "warn" },
+        graph: { resolveNodeModules: true, logLevel: "warn" },
       }),
     });
 
@@ -1670,7 +1670,7 @@ describe("SessionManager", () => {
       manager.getOrCreateSession("shared", {
         root: sampleRoot,
         buildOptions: sampleBuildOptions({
-          graph: { fast: true, logLevel: "debug" },
+          graph: { resolveNodeModules: true, logLevel: "debug" },
         }),
       }),
     ).rejects.toThrow(/different configuration/);

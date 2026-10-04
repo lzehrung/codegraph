@@ -533,7 +533,6 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         workerOpts: ctx.workerOpts,
         graphOptions: ctx.hasGraphOverrides
           ? {
-              fast: ctx.graphFlags.fast,
               resolveNodeModules: ctx.graphFlags.resolveNodeModules,
               dynamicImportHeuristics: ctx.graphFlags.dynamicImportHeuristics,
               ...(ctx.graphFlags.resolutionHints.length ? { resolutionHints: ctx.graphFlags.resolutionHints } : {}),

@@ -57,14 +57,12 @@ export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext)
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const cacheStrict = context.hasFlag("--cache-strict");
   const cacheVerify = context.hasFlag("--cache-verify");
-  const incrementalStrict = context.hasFlag("--incremental-strict");
   const outputArg = context.getOpt("--output");
   const deltaOptions: IncrementalBuildOptions = {
     threads,
     ...context.workerOpts,
     cacheStrict,
     cacheVerify,
-    incrementalStrict,
     files: context.files,
     ...(context.progressHandler ? { onProgress: context.progressHandler } : {}),
   };

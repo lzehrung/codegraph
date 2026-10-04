@@ -14,6 +14,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Remove the `native` build option and `--native` CLI flag. The native addon is required; a missing addon is an error. Use `codegraph doctor` to diagnose installation problems.
 - Remove reduced mode and regex fallback when native parsing or queries fail. Files over the native size limit are skipped with a `sourceTooLarge` report; native query failures are reported as `queryFailure`.
 - Make `@lzehrung/codegraph-native` a required dependency. Remove the `fallbackImportExtraction` report field and the `reduced` and `mixed` analysis modes. Graph-only document and stylesheet extraction remains supported.
+- Remove `--fast-graph`, `graph.fast`, and `--incremental-strict`. Every file uses the native import query.
 
 ### Fixed
 

@@ -68,7 +68,6 @@ export type GraphCommandContext = {
   progressHandler: BuildOptions["onProgress"];
   cacheLocation: CacheLocation | undefined;
   graphFlags: {
-    fast: boolean;
     resolveNodeModules: boolean;
     dynamicImportHeuristics: boolean;
     resolutionHints: string[];
@@ -264,7 +263,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   } else if (context.hasFlag("--pretty") || context.hasFlag("--mermaid")) {
     format = "mermaid";
   }
-  const fast = context.graphFlags.fast;
   const resolveNodeModules = context.graphFlags.resolveNodeModules;
   const dynamicImportHeuristics = context.graphFlags.dynamicImportHeuristics;
   const resolutionHints = context.graphFlags.resolutionHints;
@@ -306,7 +304,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   if (sqliteFile) {
     const changedSet = await context.resolveChangedFilesWithDeletes();
     const graphOptions = {
-      fast,
       resolveNodeModules,
       dynamicImportHeuristics,
       ...(resolutionHints.length ? { resolutionHints } : {}),
@@ -386,7 +383,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       cacheStrict,
       cacheVerify,
       graph: {
-        fast,
         resolveNodeModules,
         dynamicImportHeuristics,
         ...(resolutionHints.length ? { resolutionHints } : {}),
@@ -446,7 +442,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       cacheStrict,
       cacheVerify,
       graph: {
-        fast,
         resolveNodeModules,
         dynamicImportHeuristics,
         ...(resolutionHints.length ? { resolutionHints } : {}),
@@ -456,7 +451,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     graph = index.graph;
   } else {
     graph = await collectGraph(context.projectRootFs, files, {
-      fast,
       threads,
       resolveNodeModules,
       dynamicImportHeuristics,

@@ -33,9 +33,7 @@ describe("Pathological Test Cases", () => {
 
     it("should build graph without stack overflow", async () => {
       const files = await listProjectFiles(projectRoot);
-      const graph = await collectGraph(projectRoot, files, {
-        fast: false,
-      });
+      const graph = await collectGraph(projectRoot, files);
 
       expect(graph.nodes.size).toBeGreaterThanOrEqual(5);
       expect(graph.edges.length).toBeGreaterThan(0);
@@ -47,9 +45,7 @@ describe("Pathological Test Cases", () => {
 
     it("should detect circular dependencies", async () => {
       const files = await listProjectFiles(projectRoot);
-      const graph = await collectGraph(projectRoot, files, {
-        fast: false,
-      });
+      const graph = await collectGraph(projectRoot, files);
 
       const cycles = findCycles(graph);
       expect(cycles.length).toBeGreaterThan(0);

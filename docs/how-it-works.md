@@ -10,7 +10,7 @@ codegraph turns source files into a resolved dependency graph and a semantic ind
 4. Use the same indexed symbols, scopes, and edges for navigation, impact analysis, review, and agent queries.
 5. Reuse compatible parsed files and graph edges when caching or a long-lived session is enabled.
 
-The native addon is required for Tree-sitter parsing and queries. TypeScript code owns discovery, normalization, resolution, graph assembly, semantic operations, and output. `--fast-graph` is a narrower, opt-in shortcut for plain `.js` and `.ts` import specifiers, not a switch that disables all AST work.
+The native addon is required for Tree-sitter parsing and queries. TypeScript code owns discovery, normalization, resolution, graph assembly, semantic operations, and output.
 
 The first index-backed question, such as `codegraph explore "..." --root .`, may discover, parse, resolve, and persist a cold index. Interactive progress goes to stderr; later compatible queries reuse the project-root cache and only rebuild or update work invalidated by file, configuration, or option changes.
 
@@ -40,15 +40,9 @@ After a verified load, a source-keyed identity record stores the source and cach
 
 The loader requires the cached path and records both the package-owned source and loaded origin. Local workspace builds bypass this cache so rebuilding `packages/codegraph-native` still takes effect immediately, while non-Windows installed packages keep their existing package loader.
 
-### Opt-in: `--fast-graph`
-
-`--fast-graph` bypasses native import queries only for plain `.js` and `.ts` files and extracts their module specifiers with a lightweight text matcher instead. TSX and other parser-backed languages keep their normal extraction path, and other analysis work can still require parsed syntax.
-
-The shortcut recognizes common `import`, `export ... from`, `require()`, and `import()` forms. It can miss multiline or complex patterns, so use it for a quick dependency overview when that accuracy tradeoff is acceptable. Rerun without it when edges from `.js` or `.ts` files look incomplete or when review accuracy matters.
-
 ### Native failures and skipped files
 
-The native addon is required. If it cannot load, Codegraph returns an error; run `codegraph doctor` to diagnose the installation. A file over the native size limit is skipped with `sourceTooLarge` in the backend report. A failed native query reports `queryFailure` and does not trigger regex recovery. A valid empty query result stays empty. Graph-only document and stylesheet extraction is unchanged; `--fast-graph` remains a separate, explicit shortcut for plain `.js` and `.ts` dependencies.
+The native addon is required. If it cannot load, Codegraph returns an error; run `codegraph doctor` to diagnose the installation. A file over the native size limit is skipped with `sourceTooLarge` in the backend report. A failed native query reports `queryFailure` and does not trigger regex recovery. A valid empty query result stays empty. Graph-only document and stylesheet extraction is unchanged.
 
 ## Resolution and graph construction
 
@@ -130,7 +124,6 @@ Choose the least lossy option that solves the actual bottleneck:
 2. **Use disk cache for repeated CLI or agent work.** Use memory cache for repeated operations in one process and cache-off for controlled cold runs.
 3. **Use `--threads N` for file-level indexing and I/O concurrency.** Start near the available CPU count, then measure; excessive concurrency can become I/O-bound.
 4. **Use `--workers` for CPU-parallel native extraction on larger index-building workloads.** It requires the native addon; direct file-only graph output does not use this pool. Single-threaded extraction remains the fallback if a worker pool cannot start, and preprocessed single-file component formats stay on the main thread.
-5. **Use `--fast-graph` only for a quick plain-JavaScript or plain-TypeScript dependency pass.** It trades import-specifier completeness for less native query work on `.js` and `.ts` files; TSX and other languages keep their normal extraction path.
 
 Use `--report` to inspect cache, backend, and worker-pool behavior instead of assuming a tuning flag helped. For controlled evidence about agent-oriented discovery, see the [benchmark methodology and checked results](./benchmarks/README.md); those fixtures do not establish universal speedups.
 

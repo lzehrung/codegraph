@@ -296,7 +296,6 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const cacheStrict = context.hasFlag("--cache-strict");
   const cacheVerify = context.hasFlag("--cache-verify");
-  const incrementalStrict = context.hasFlag("--incremental-strict");
   const includeSymbolDetails = context.hasFlag("--include-symbol-details");
   const maxCallsitesRaw = context.getOpt("--max-callsites");
   const maxCallsites = parseOptionalNonNegativeIntegerOption(maxCallsitesRaw, "--max-callsites");
@@ -316,7 +315,6 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   const cacheDir = context.getOpt("--cache-dir");
   if (cacheDir) reviewOpts.cacheDir = cacheDir;
   if (context.cacheLocation) reviewOpts.cacheLocation = context.cacheLocation;
-  if (incrementalStrict) reviewOpts.incrementalStrict = true;
   if (context.graphOptions) reviewOpts.graph = context.graphOptions;
   if (context.progressHandler) reviewOpts.onProgress = context.progressHandler;
   if (includeSymbolDetails) {

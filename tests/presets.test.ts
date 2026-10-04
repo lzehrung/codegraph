@@ -23,7 +23,6 @@ describe("Presets", () => {
         useBloomFilters: true,
         threads: 8,
         graph: {
-          fast: false,
           resolveNodeModules: false,
         },
       });
@@ -41,7 +40,6 @@ describe("Presets", () => {
         useBloomFilters: true,
         threads: 4,
         graph: {
-          fast: true,
           resolveNodeModules: false,
         },
       });
@@ -77,13 +75,13 @@ describe("Presets", () => {
       const preset = getSessionBuildOptions("code-review");
       const custom = {
         graph: {
-          fast: true,
+          dynamicImportHeuristics: true,
         },
       };
 
       const merged = mergePreset(preset, custom);
 
-      expect(merged.graph?.fast).toBe(true);
+      expect(merged.graph?.dynamicImportHeuristics).toBe(true);
       expect(merged.graph?.resolveNodeModules).toBe(preset.graph?.resolveNodeModules);
     });
 
@@ -127,8 +125,6 @@ describe("Presets", () => {
       const production = getSessionBuildOptions("production");
 
       expect(ciFast.threads).toBeLessThan(production.threads!);
-      expect(ciFast.graph?.fast).toBe(true);
-      expect(production.graph?.fast).toBe(false);
       expect(ciFast.cacheStrict).toBe(false);
       expect(production.cacheStrict).toBe(true);
     });

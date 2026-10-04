@@ -122,14 +122,8 @@ codegraph graph ./
 # Explicit structured graph output
 codegraph graph ./ --json
 
-# Opt-in text specifier shortcut for plain .js and .ts files
-codegraph graph ./src --fast-graph
-
 # Add best-effort Python importlib and __import__ edges
 codegraph graph ./src --dynamic-import-heuristics
-
-# Default extraction (Tree-sitter for supported source languages)
-codegraph graph ./src
 
 # Build a dependency graph from multiple roots
 codegraph graph ./src ./packages/app ./packages/lib --mermaid > graph.mmd
@@ -718,9 +712,6 @@ codegraph review --base origin/main --head HEAD --duplicates impacted
 
 # File-level graph delta between revisions
 codegraph graph-delta --git-base origin/main --git-head HEAD --json > graph-delta.json
-
-# Disable fast graph extraction for changed files while keeping incremental selection
-codegraph graph-delta --git-base origin/main --git-head HEAD --incremental-strict --json
 ```
 
 ```bash
@@ -968,12 +959,10 @@ Important review-bundle details:
 - Changed symbol details may include `callCompatibility` for high-confidence provider-backed callsite arity mismatches after signature changes. Agents should inspect the code before treating these leads as defects.
 - When diff data is available, `symbols` and `summary.symbolsChanged` include only symbols and re-exports touched by diff hunks. Unchanged re-exports may appear in `changedFiles[].apiContext`, never as changed symbols.
 - `--review-depth minimal|standard|deep` applies preset bundles:
-  - `minimal`: fast graph, no symbol snippets, `maxCallsites=0`, `maxCandidates=10`
+  - `minimal`: no symbol snippets, `maxCallsites=0`, `maxCandidates=10`
   - `standard`: symbol snippets plus up to 2 callsites, `maxCandidates=25`
   - `deep`: symbol snippets plus up to 10 callsites, `maxCandidates=50`
-- Explicit flags like `--include-symbol-details`, `--max-callsites`, `--max-tests`, or `--fast-graph` override preset defaults.
-- For review accuracy, keep the default Tree-sitter import extraction unless you intentionally accept less complete JavaScript or TypeScript edges.
-- `--incremental-strict` disables fast graph extraction for changed files while still using incremental file selection.
+- Explicit flags like `--include-symbol-details`, `--max-callsites`, or `--max-tests` override preset defaults.
 - `--cache-verify` validates the manifest before reuse and falls back to a full rebuild if mismatches are detected.
 
 ## Local development
@@ -982,7 +971,6 @@ If you are working on this package itself, use `tsx` to run the source entrypoin
 
 ```bash
 npx tsx src/cli.ts graph
-npx tsx src/cli.ts graph --fast-graph
 npx tsx src/cli.ts goto <file> <line> <column>
 ```
 
@@ -1027,7 +1015,6 @@ Format notes:
 - Use `--mermaid` for a Mermaid flowchart.
 - Use `--dot` for Graphviz DOT.
 - In DOT output, type-only edges are dotted and external nodes are dashed ellipses.
-- `--fast-graph` bypasses native import queries only for plain `.js` and `.ts` files, using lightweight text extraction that may miss multiline or complex patterns. TSX and other languages keep their normal extraction path.
 
 When using `--symbols`:
 

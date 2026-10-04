@@ -2253,7 +2253,7 @@ function initGitRepo(root: string): void {
 
 describe("CLI flows", () => {
   it("emits a structured file graph with --json", async () => {
-    const stdout = await runCliCommand(["graph", "--json", "--stdout", "--fast-graph", sampleRoot]);
+    const stdout = await runCliCommand(["graph", "--json", "--stdout", sampleRoot]);
     const graph = JSON.parse(stdout);
 
     expect(graph.files).toBeInstanceOf(Array);

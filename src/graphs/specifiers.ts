@@ -44,7 +44,6 @@ export type CollectModuleSpecifiersOptions = {
   tree?: SyntaxTreeLike;
   nativeQueries?: NativeQueryResults | null;
   compactNativeImports?: CompactQueryResults | null;
-  fast?: boolean;
   file?: string;
   logLevel?: LogLevel;
   report?: BuildReport;

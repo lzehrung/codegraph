@@ -643,8 +643,8 @@ describe("project lifecycle commands", () => {
     const cases: { name: string; initial: BuildOptions; current: BuildOptions }[] = [
       {
         name: "graph options",
-        initial: { graph: { fast: true } },
-        current: { graph: { fast: false } },
+        initial: { graph: { resolveNodeModules: true } },
+        current: { graph: { resolveNodeModules: false } },
       },
     ];
 
@@ -677,7 +677,7 @@ describe("project lifecycle commands", () => {
 
   it("status treats omitted and explicit default-equivalent graph options as current", async () => {
     const explicitDefaultGraphOptions: BuildOptions = {
-      graph: { fast: false, resolveNodeModules: false, dynamicImportHeuristics: false },
+      graph: { resolveNodeModules: false, dynamicImportHeuristics: false },
     };
     const cases: { name: string; initial?: BuildOptions; current?: BuildOptions }[] = [
       {

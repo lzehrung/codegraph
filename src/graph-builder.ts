@@ -37,7 +37,6 @@ export async function collectGraph(
   files: string[],
   opts?: {
     parsed?: Map<string, ParsedFileContext>;
-    fast?: boolean;
     threads?: number;
     resolveNodeModules?: boolean;
     dynamicImportHeuristics?: boolean;
@@ -130,7 +129,6 @@ export async function collectGraph(
       const parsedEntry = opts?.parsed?.get(fileIdentityKey(file));
       const edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
         ...(parsedEntry ? { parsed: parsedEntry } : {}),
-        fast: !!opts?.fast,
         resolveNodeModules: !!opts?.resolveNodeModules,
         dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
         resolutionHints,

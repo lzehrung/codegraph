@@ -201,7 +201,7 @@ describe("resolveIncrementalFileList", () => {
   });
 
   it("returns null when --cache-strict is requested", async () => {
-    const root = await mkTmpDir("codegraph-resolve-incremental-strict-");
+    const root = await mkTmpDir("codegraph-resolve-cache-strict-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);

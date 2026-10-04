@@ -21,13 +21,13 @@ describe("logging behavior", () => {
       const report: BuildReport = { timings: {} };
       await buildProjectIndexIncremental(root, {
         cache: "disk",
-        incrementalStrict: true,
+        cacheStrict: false,
         logLevel: "silent",
         report,
       });
 
       expect(warnSpy).not.toHaveBeenCalled();
-      expect(report.manifest?.optionsMismatch).toContain("incrementalStrict");
+      expect(report.manifest?.optionsMismatch).toContain("cacheStrict");
     } finally {
       warnSpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });

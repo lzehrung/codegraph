@@ -94,7 +94,6 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
     useBloomFilters: options.useBloomFilters,
     graph: options.graph
       ? {
-          fast: options.graph.fast,
           resolveNodeModules: options.graph.resolveNodeModules,
           dynamicImportHeuristics: options.graph.dynamicImportHeuristics,
           logLevel: options.graph.logLevel,
@@ -102,7 +101,6 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
         }
       : undefined,
     cacheVerify: options.cacheVerify,
-    incrementalStrict: options.incrementalStrict,
     parsedCacheMaxEntries: options.parsedCacheMaxEntries,
     logLevel: options.logLevel,
     keepParsed: options.keepParsed,

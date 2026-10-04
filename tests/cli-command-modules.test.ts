@@ -169,7 +169,6 @@ function createGraphContext(overrides: Partial<GraphCommandContext>): GraphComma
     cacheLocation: undefined,
     progressHandler: undefined,
     graphFlags: {
-      fast: false,
       resolveNodeModules: false,
       dynamicImportHeuristics: false,
       resolutionHints: [],

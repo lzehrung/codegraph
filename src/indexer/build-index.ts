@@ -1754,7 +1754,6 @@ async function buildIndexFromFileListShared(
         let edges: Edge[] = [];
         if (mod && edgesCached) {
           edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
-            fast: !!graphOptions.fast,
             resolveNodeModules: !!graphOptions.resolveNodeModules,
             dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
             ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
@@ -1814,7 +1813,6 @@ async function buildIndexFromFileListShared(
         }
         edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
           ...(graphContext ? { parsed: graphContext } : {}),
-          fast: !!graphOptions.fast,
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
@@ -2250,8 +2248,6 @@ export async function buildProjectIndexIncremental(
     clearResolutionCaches();
   });
   const graphOptions = normalizeGraphOptions(opts?.graph);
-  const strictIncremental = opts?.incrementalStrict ?? false;
-  if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
   const { normalizedProjectRoot, report, timings, totalStart, cacheMode, cacheEnabled } = createIndexBuildRunState(
     projectRoot,
     opts,
@@ -3021,7 +3017,6 @@ export async function buildProjectIndexIncremental(
           ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
           : await collectGraph(projectRoot, filesList, {
               parsed: parsedMap,
-              fast: !!graphOptions.fast,
               resolveNodeModules: !!graphOptions.resolveNodeModules,
               dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
               ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
@@ -3159,8 +3154,6 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     : false;
   const languageSupportChangedForFile = (file: string): boolean =>
     supportForFile(file, previousLanguageExtensions)?.id !== supportForFile(file, currentLanguageExtensions)?.id;
-  const strictIncremental = opts?.incrementalStrict ?? false;
-  if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
   const explicitFiles = await normalizeIndexedFileInputsWithinRoot(projectRoot, opts?.files ?? [], "Graph delta file");
   const additionalFiles = await normalizeIndexedFileInputsWithinRoot(
     projectRoot,

@@ -192,7 +192,6 @@ export type BuildOptions = {
   useBloomFilters?: boolean;
   graph?: GraphBuildOptions;
   cacheVerify?: boolean;
-  incrementalStrict?: boolean;
   report?: BuildReport;
   parsedCacheMaxEntries?: number;
   logLevel?: LogLevel;

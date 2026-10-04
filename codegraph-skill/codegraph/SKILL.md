@@ -102,7 +102,7 @@ Filename results are suggestions only.
 - Duplicate cleanup: `codegraph duplicates --root . ./src --profile cleanup`. It excludes imports from every supported import syntax. Local Markdown links: `codegraph links --json`.
 - Specialized reads: `codegraph grep --query` for syntax trees, `codegraph chunk` for embeddings, and `codegraph dumpmod` for indexed module data.
 - Compare architecture across revisions: `codegraph drift` or `codegraph graph-delta`.
-- Export graphs with `codegraph graph --json`; `codegraph viewer` is for people. Create bundles with `codegraph artifact build` / MCP `artifact_build`; query SQLite exports with `codegraph sql` / MCP `query_sqlite`.
+- Export graphs with `codegraph graph --json`, which uses native import queries for source languages; `codegraph viewer` is for people. Create bundles with `codegraph artifact build` / MCP `artifact_build`; query SQLite exports with `codegraph sql` / MCP `query_sqlite`.
 - If MCP startup or transport fails, do not keep retrying that server. Run `codegraph doctor` to check the required native addon, then use the CLI if it is available. Doctor separates loaded grammars from graph-only languages.
 - First CLI queries may build an index; progress goes to stderr. Use `codegraph orient --report` to diagnose index costs.
 - After a Codegraph update, restart or reload the owning MCP client. `refresh_index` refreshes project state, not running tool code.

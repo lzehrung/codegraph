@@ -197,11 +197,9 @@ describe("codegraph config", () => {
     expect(config.graph?.resolutionHints).toEqual(["Source/Gunship/Private"]);
     expect(
       mergeGraphOptions(config.graph, {
-        fast: true,
         resolutionHints: ["Source/Gunship/Public", "Source\\Gunship\\Private"],
       }),
     ).toEqual({
-      fast: true,
       resolutionHints: ["Source/Gunship/Private", "Source/Gunship/Public"],
     });
   });

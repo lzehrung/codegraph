@@ -120,7 +120,6 @@ const SHARED_BUILD_FLAGS = [
   "--no-progress",
   "--workers",
   "--no-gitignore",
-  "--fast-graph",
   "--resolve-node-modules",
   "--dynamic-import-heuristics",
 ];
@@ -363,7 +362,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "graph-delta",
     commandSchema(
-      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--incremental-strict"],
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS],
       [...SHARED_BUILD_OPTIONS, "--changed-since", "--git-base", "--git-head", "--output"],
       {
         kind: "max",
@@ -589,13 +588,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "review",
     commandSchema(
-      [
-        ...SHARED_BUILD_FLAGS,
-        ...JSON_OUTPUT_FLAGS,
-        ...REPORT_FLAGS,
-        "--include-symbol-details",
-        "--incremental-strict",
-      ],
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, ...REPORT_FLAGS, "--include-symbol-details"],
       [
         ...SHARED_BUILD_OPTIONS,
         ...REPORT_OPTIONS,

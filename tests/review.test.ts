@@ -2633,7 +2633,7 @@ describe("Review report", () => {
     }
   });
 
-  it("applies review depth presets to symbol details and graph options", async () => {
+  it("applies review depth presets to symbol details", async () => {
     const root = await mkTmpDir("dg-review-presets-");
     const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
@@ -2664,46 +2664,36 @@ describe("Review report", () => {
 
     await buildProjectIndex(root);
 
-    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
-    try {
-      const minimal = await buildReviewReport(root, {
-        files: [featureFile],
-        reviewDepth: "minimal",
-      });
-      const standard = await buildReviewReport(root, {
-        files: [featureFile],
-        reviewDepth: "standard",
-      });
-      const deep = await buildReviewReport(root, {
-        files: [featureFile],
-        reviewDepth: "deep",
-      });
+    const minimal = await buildReviewReport(root, {
+      files: [featureFile],
+      reviewDepth: "minimal",
+    });
+    const standard = await buildReviewReport(root, {
+      files: [featureFile],
+      reviewDepth: "standard",
+    });
+    const deep = await buildReviewReport(root, {
+      files: [featureFile],
+      reviewDepth: "deep",
+    });
 
-      const findGreet = (report: Awaited<typeof minimal>) =>
-        report.changedFiles
-          .find((entry) => entry.file === "src/feature.ts")
-          ?.symbols.find((symbol) => symbol.name === "greet");
+    const findGreet = (report: Awaited<typeof minimal>) =>
+      report.changedFiles
+        .find((entry) => entry.file === "src/feature.ts")
+        ?.symbols.find((symbol) => symbol.name === "greet");
 
-      const minimalGreet = findGreet(minimal);
-      expect(minimalGreet).toBeDefined();
-      expect(minimalGreet?.definitionSnippet).toBeUndefined();
-      expect(minimalGreet?.callsites).toBeUndefined();
+    const minimalGreet = findGreet(minimal);
+    expect(minimalGreet).toBeDefined();
+    expect(minimalGreet?.definitionSnippet).toBeUndefined();
+    expect(minimalGreet?.callsites).toBeUndefined();
 
-      const standardGreet = findGreet(standard);
-      expect(standardGreet?.definitionSnippet).toContain("function greet");
-      expect(standardGreet?.callsites?.length).toBeGreaterThan(0);
-      expect(standardGreet?.callsites?.length).toBeLessThanOrEqual(2);
+    const standardGreet = findGreet(standard);
+    expect(standardGreet?.definitionSnippet).toContain("function greet");
+    expect(standardGreet?.callsites?.length).toBeGreaterThan(0);
+    expect(standardGreet?.callsites?.length).toBeLessThanOrEqual(2);
 
-      const deepGreet = findGreet(deep);
-      expect(deepGreet?.callsites?.length).toBe(3);
-
-      const fastFlags = buildSpy.mock.calls.map((call) => call[1]?.graph?.fast);
-      expect(fastFlags[0]).toBe(true);
-      expect(fastFlags[1]).toBe(false);
-      expect(fastFlags[2]).toBe(false);
-    } finally {
-      buildSpy.mockRestore();
-    }
+    const deepGreet = findGreet(deep);
+    expect(deepGreet?.callsites?.length).toBe(3);
   });
 
   it("adds duplicate sibling review tasks for changed duplicate implementations", async () => {

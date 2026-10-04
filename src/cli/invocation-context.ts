@@ -65,7 +65,6 @@ async function getDuplicateProjectPatterns(): Promise<string[]> {
 }
 
 export type CliGraphFlags = {
-  fast: boolean;
   resolveNodeModules: boolean;
   dynamicImportHeuristics: boolean;
   resolutionHints: string[];
@@ -155,19 +154,14 @@ export function createCliBaseContext(command: string, parsed: ParsedCliArgs): Cl
   const showBuildDiagnostics = hasFlag("--progress");
   const progressHandler = createCliProgressHandler(progressPolicy);
   const graphFlags: CliGraphFlags = {
-    fast: hasFlag("--fast-graph"),
     resolveNodeModules: hasFlag("--resolve-node-modules"),
     dynamicImportHeuristics: hasFlag("--dynamic-import-heuristics"),
     resolutionHints: parsed.options.get("--resolution-hint") ?? [],
   };
   const computeHasGraphOverrides = (): boolean =>
-    graphFlags.fast ||
-    graphFlags.resolveNodeModules ||
-    graphFlags.dynamicImportHeuristics ||
-    !!graphFlags.resolutionHints.length;
+    graphFlags.resolveNodeModules || graphFlags.dynamicImportHeuristics || !!graphFlags.resolutionHints.length;
   const hasGraphOverrides = computeHasGraphOverrides();
   const buildGraphOptions = (): GraphBuildOptions => ({
-    fast: graphFlags.fast,
     resolveNodeModules: graphFlags.resolveNodeModules,
     dynamicImportHeuristics: graphFlags.dynamicImportHeuristics,
     ...(graphFlags.resolutionHints.length ? { resolutionHints: graphFlags.resolutionHints } : {}),
@@ -234,10 +228,7 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
     ...graphFlags.resolutionHints,
   ]);
   const hasGraphOverrides =
-    graphFlags.fast ||
-    graphFlags.resolveNodeModules ||
-    graphFlags.dynamicImportHeuristics ||
-    !!graphFlags.resolutionHints.length;
+    graphFlags.resolveNodeModules || graphFlags.dynamicImportHeuristics || !!graphFlags.resolutionHints.length;
   const baseDiscoveryOptions = mergeDiscoveryOptions(config.discovery, cliGitignoreDiscoveryOptions);
   const mergedDiscoveryOptions = mergeDiscoveryOptions(config.discovery, explicitDiscoveryOptions);
   const rootFilteredDiscoveryOptions = mergeDiscoveryOptions(baseDiscoveryOptions, activeCliRootGlobDiscoveryOptions);

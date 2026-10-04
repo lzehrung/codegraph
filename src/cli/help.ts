@@ -30,9 +30,6 @@ ${renderCliCommandList()}
 For the complete catalog, run: codegraph help advanced
 
 Graph Options:
-  --fast-graph                Use text import extraction for plain .js and .ts
-                              files. May miss multiline or complex patterns;
-                              TSX and other languages keep normal extraction.
   --resolve-node-modules      Include node_modules in resolution
   --dynamic-import-heuristics Attempt to resolve dynamic imports
   --resolution-hint <hint>    Custom resolution hint (e.g., tsconfig:path)
@@ -106,7 +103,6 @@ Examples:
   codegraph inspect ./src --limit 20 --duplicates
   codegraph duplicates ./src --min-confidence medium
   codegraph graph ./src
-  codegraph graph --fast-graph --mermaid ./src
   codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
   codegraph skill install --agent agents
   codegraph skill install --agent codex
@@ -585,7 +581,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const GRAPH_HELP_TEXT = `codegraph graph - Build a dependency graph
 
-Usage: codegraph graph [roots...] [--root <path>] [--json | --pretty | --mermaid | --dot] [--sqlite <path>] [--output <path> | --stdout] [--sql-artifacts] [--fast-graph] [--resolve-node-modules] [--dynamic-import-heuristics]
+Usage: codegraph graph [roots...] [--root <path>] [--json | --pretty | --mermaid | --dot] [--sqlite <path>] [--output <path> | --stdout] [--sql-artifacts] [--resolve-node-modules] [--dynamic-import-heuristics]
 
 Output:
   Emits a file dependency graph for the selected roots. Use --json/--pretty/--mermaid/--dot/--sqlite for machine-readable or explicit human formats.

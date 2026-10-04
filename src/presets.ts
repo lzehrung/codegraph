@@ -30,7 +30,6 @@ const SESSION_BUILD_PRESETS: Record<PresetName, BuildOptions> = {
     useBloomFilters: true,
     threads: 8,
     graph: {
-      fast: false,
       resolveNodeModules: false,
     },
   },
@@ -41,7 +40,6 @@ const SESSION_BUILD_PRESETS: Record<PresetName, BuildOptions> = {
     useBloomFilters: true,
     threads: 4,
     graph: {
-      fast: true,
       resolveNodeModules: false,
     },
   },
@@ -52,7 +50,6 @@ const SESSION_BUILD_PRESETS: Record<PresetName, BuildOptions> = {
     useBloomFilters: true,
     threads: 8,
     graph: {
-      fast: false,
       resolveNodeModules: false,
     },
   },
@@ -63,7 +60,6 @@ const SESSION_BUILD_PRESETS: Record<PresetName, BuildOptions> = {
     useBloomFilters: true,
     threads: 16,
     graph: {
-      fast: false,
       resolveNodeModules: false,
       dynamicImportHeuristics: false,
     },

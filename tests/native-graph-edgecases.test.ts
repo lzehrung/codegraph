@@ -3,32 +3,12 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import { collectGraph } from "../src/index.js";
 import { extractDynamicImportSpecifiers } from "../src/util/specifiers.js";
-import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
+import { mkTmpDir, normalizeTestPath, readOnlySamplePath } from "./helpers/filesystem.js";
 import { edgeFrom } from "./helpers/graph.js";
 
-describe("Fast graph edge cases", () => {
-  it("detects type-only import with typeOnly=true (TS)", async () => {
-    const root = await mkTmpDir("dg-fast-typeonly-");
-    const util = `export type T = { n: number };\nexport function f(){ return 1 }\n`;
-    const main = `import type { T } from './util';\nimport { f } from './util';\nconst x: T = { n: f() };\n`;
-    const utilPath = path.join(root, "util.ts");
-    const mainPath = path.join(root, "main.ts");
-    await fsp.writeFile(utilPath, util, "utf8");
-    await fsp.writeFile(mainPath, main, "utf8");
-    const files = [normalizeTestPath(mainPath), normalizeTestPath(utilPath)];
-
-    const gNormal = await collectGraph(root, files);
-    const gFast = await (await import("../src/graphs.js")).collectGraph(root, files, { fast: true });
-
-    const fromMainNormal = gNormal.edges.filter(edgeFrom(mainPath));
-    const fromMainFast = gFast.edges.filter(edgeFrom(mainPath));
-    // At least one edge from main.ts should be marked typeOnly in both modes
-    expect(fromMainNormal.some((e) => e.typeOnly === true)).toBe(true);
-    expect(fromMainFast.some((e) => e.typeOnly === true)).toBe(true);
-  });
-
+describe("Native graph edge cases", () => {
   it("keeps both a runtime and a type-only edge to the same target (C3)", async () => {
-    const root = await mkTmpDir("dg-fast-typeonly-both-");
+    const root = await mkTmpDir("dg-typeonly-both-");
     const util = `export type T = { n: number };\nexport function f(){ return 1 }\n`;
     const main = `import type { T } from './util';\nimport { f } from './util';\nconst x: T = { n: f() };\n`;
     const utilPath = path.join(root, "util.ts");
@@ -49,20 +29,17 @@ describe("Fast graph edge cases", () => {
     expect(toUtil.some((edge) => !edge.typeOnly)).toBe(true);
   });
 
-  it("ignores commented-out imports in fast mode", async () => {
-    const root = await mkTmpDir("dg-fast-comments-");
+  it("ignores commented-out imports", async () => {
+    const root = await mkTmpDir("dg-comments-");
     const commented = `// import x from './x'\n/* import y from './y' */\n/*\nimport z from './z'\n*/\n`;
     const file = path.join(root, "commented.ts");
     await fsp.writeFile(file, commented, "utf8");
-    const gFast = await (
-      await import("../src/graphs.js")
-    ).collectGraph(root, [file.replace(/\\/g, "/")], { fast: true });
-    const edgesFrom = gFast.edges.filter(edgeFrom(file));
-    expect(edgesFrom.length).toBe(0);
+    const graph = await collectGraph(root, [normalizeTestPath(file)]);
+    expect(graph.edges.filter(edgeFrom(file))).toHaveLength(0);
   });
 
   it("marks inline-only named type imports as typeOnly and mixed clauses as runtime", async () => {
-    const rootDir = await mkTmpDir("dg-fast-inline-type-");
+    const rootDir = await mkTmpDir("dg-inline-type-");
     const util = "export type T = { n: number };\nexport const v = 1;\n";
     const main = [
       'import { /* erased */ type T } from "./util";',
@@ -94,27 +71,80 @@ describe("Fast graph edge cases", () => {
       "exp-stmt.ts",
     ].map((fileName) => path.join(rootDir, fileName).replace(/\\/g, "/"));
 
-    const graphs = [
-      await collectGraph(rootDir, files),
-      await (await import("../src/graphs.js")).collectGraph(rootDir, files, { fast: true }),
-    ];
-    const mainPath = path.join(rootDir, "main.ts").replace(/\\/g, "/");
-    const typeOnlyOf = (graph: Awaited<ReturnType<typeof collectGraph>>, fileName: string) => {
-      const target = path.join(rootDir, fileName).replace(/\\/g, "/");
+    const graph = await collectGraph(rootDir, files);
+    const mainPath = normalizeTestPath(path.join(rootDir, "main.ts"));
+    const typeOnlyOf = (fileName: string) => {
+      const target = normalizeTestPath(path.join(rootDir, fileName));
       const edges = graph.edges.filter(
         (edge) => edge.from === mainPath && edge.to.type === "file" && edge.to.path === target,
       );
       return edges.map((edge) => Boolean(edge.typeOnly));
     };
-    for (const graph of graphs) {
-      expect(typeOnlyOf(graph, "util.ts").sort()).toEqual([false, true].sort());
-      expect(typeOnlyOf(graph, "all.ts")).toEqual([true]);
-      expect(typeOnlyOf(graph, "side.ts")).toEqual([false]);
-      expect(typeOnlyOf(graph, "empty.ts")).toEqual([false]);
-      expect(typeOnlyOf(graph, "exp-only.ts")).toEqual([true]);
-      expect(typeOnlyOf(graph, "exp-mixed.ts")).toEqual([false]);
-      expect(typeOnlyOf(graph, "exp-stmt.ts")).toEqual([true]);
-    }
+    expect(typeOnlyOf("util.ts").sort()).toEqual([false, true]);
+    expect(typeOnlyOf("all.ts")).toEqual([true]);
+    expect(typeOnlyOf("side.ts")).toEqual([false]);
+    expect(typeOnlyOf("empty.ts")).toEqual([false]);
+    expect(typeOnlyOf("exp-only.ts")).toEqual([true]);
+    expect(typeOnlyOf("exp-mixed.ts")).toEqual([false]);
+    expect(typeOnlyOf("exp-stmt.ts")).toEqual([true]);
+  });
+
+  it("resolves multiline TypeScript imports", async () => {
+    const root = await mkTmpDir("dg-multiline-import-");
+    const entry = normalizeTestPath(path.join(root, "entry.ts"));
+    const target = normalizeTestPath(path.join(root, "dep.ts"));
+    await fsp.writeFile(entry, "import {\n  value\n} from './dep';\nconsole.log(value);\n", "utf8");
+    await fsp.writeFile(target, "export const value = 42;\n", "utf8");
+    const graph = await collectGraph(root, [entry, target]);
+    expect(graph.edges.some((edge) => edge.from === entry && edge.to.type === "file" && edge.to.path === target)).toBe(
+      true,
+    );
+  });
+
+  it("ignores require() and import() inside strings and templates", async () => {
+    const root = await mkTmpDir("dg-string-imports-");
+    const file = normalizeTestPath(path.join(root, "entry.ts"));
+    await fsp.writeFile(file, "const a = 'require(\"x\")';\nconst b = `import('y')`;\n", "utf8");
+    const graph = await collectGraph(root, [file]);
+    expect(graph.edges.filter(edgeFrom(file))).toHaveLength(0);
+  });
+
+  it("resolves CommonJS named destructuring with an alias", async () => {
+    const root = await mkTmpDir("dg-cjs-import-");
+    const dependency = normalizeTestPath(path.join(root, "a.js"));
+    const main = normalizeTestPath(path.join(root, "main.js"));
+    await fsp.writeFile(dependency, "exports.helper = () => 1;\n", "utf8");
+    await fsp.writeFile(main, "const { helper: h } = require('./a');\n", "utf8");
+    const graph = await collectGraph(root, [main, dependency]);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === main && edge.raw === "./a" && edge.to.type === "file" && edge.to.path === dependency,
+      ),
+    ).toBe(true);
+  });
+
+  it("resolves dynamic import edges", async () => {
+    const root = await mkTmpDir("dg-dynamic-import-");
+    const dependency = normalizeTestPath(path.join(root, "a.js"));
+    const main = normalizeTestPath(path.join(root, "main.js"));
+    await fsp.writeFile(dependency, "export const x = 1;\n", "utf8");
+    await fsp.writeFile(main, "async function run() { await import('./a.js'); }\n", "utf8");
+    const graph = await collectGraph(root, [main, dependency]);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === main && edge.raw === "./a.js" && edge.to.type === "file" && edge.to.path === dependency,
+      ),
+    ).toBe(true);
+  });
+
+  it("resolves workspace package imports", async () => {
+    const root = readOnlySamplePath("monorepo");
+    const files = [
+      normalizeTestPath(path.join(root, "packages", "pkg-a", "src", "index.ts")),
+      normalizeTestPath(path.join(root, "packages", "pkg-b", "src", "index.js")),
+    ];
+    const graph = await collectGraph(root, files);
+    expect(graph.edges.some((edge) => edge.raw === "@acme/pkg-a" && edge.to.type === "file")).toBe(true);
   });
 });
 

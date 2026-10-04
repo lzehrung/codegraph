@@ -316,7 +316,6 @@ The honest boundaries matter:
 - Precise navigation depends on successful native parsing and language queries. A missing native addon is an error; run `codegraph doctor` to diagnose it. Files over the native size limit are skipped with a `sourceTooLarge` report, and failed native queries are reported as `queryFailure` without regex recovery. Document and stylesheet graph-only extraction remains supported.
 - Call-compatibility findings are conservative review leads, not compiler diagnostics.
 - Duplicate matches and candidate tests are ranked leads that still require human or agent judgment.
-- `--fast-graph` is an explicit speed/accuracy tradeoff for plain JavaScript and TypeScript import extraction.
 - The checked `explore` benchmark is a bounded evidence-retrieval benchmark, not a universal performance claim.
 - The fixture test matrix and language parity docs show what codegraph has actually been tested against by language and operation; absence there means untested, not guaranteed.
 
