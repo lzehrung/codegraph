@@ -229,14 +229,19 @@ function isPythonModuleLevelImportPrefix(prefix: string): boolean {
 // `keywordStart` and every position derived from it line up with the real source.
 // `isPythonModuleLevelImportPrefix` re-strips its input, which is a harmless no-op here
 // since `maskedSrc` is already comment/string-free content-wise.
+/** Start of the line holding `index`; Python ends lines with LF, CRLF, or a lone CR. */
+function pythonLineStart(text: string, index: number): number {
+  return Math.max(text.lastIndexOf("\n", index - 1), text.lastIndexOf("\r", index - 1)) + 1;
+}
+
 function isModuleLevelKeywordInStrippedSource(maskedSrc: string, keywordStart: number): boolean {
-  const lineStart = maskedSrc.lastIndexOf("\n", keywordStart - 1) + 1;
+  const lineStart = pythonLineStart(maskedSrc, keywordStart);
   return isPythonModuleLevelImportPrefix(maskedSrc.slice(lineStart, keywordStart));
 }
 
 function normalizePythonImportStatement(statement: string): string {
   return stripPythonCommentsAndStrings(statement)
-    .replace(/\\\r?\n[\t ]*/g, " ")
+    .replace(/\\(?:\r\n|\r|\n)[\t ]*/g, " ")
     .trim();
 }
 
@@ -321,7 +326,7 @@ export async function collectPythonImportsFromNativeMatches(
     const statementCapture = match.captures.find((capture) => capture.name === "stmt");
     if (!statementCapture) continue;
     const startIndex = utf8ByteOffsetToStringIndex(context.source, statementCapture.start.index);
-    const lineStart = context.source.lastIndexOf("\n", startIndex - 1) + 1;
+    const lineStart = pythonLineStart(context.source, startIndex);
     const prefix = context.source.slice(lineStart, startIndex);
     const moduleLevel = isPythonModuleLevelImportPrefix(prefix);
     await collectPythonImportStatement(context, statementCapture.text, moduleLevel, isTypeOnly(startIndex), startIndex);
@@ -337,7 +342,7 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
   const isTypeOnly = pythonTypeCheckingContext(context.source);
   // Boundary group 1 also accepts an exact TYPE_CHECKING one-line suite, not arbitrary if suites.
   const fromLinePattern =
-    /(^[\t ]*|;[\t ]*|^[\t ]*if[\t ]+(?:TYPE_CHECKING|typing\.TYPE_CHECKING)[\t ]*:[\t ]*)from\s+([^\s]+)\s+import\s+(\([\s\S]*?\)|[^\n;#]+)/gm;
+    /(^[\t ]*|;[\t ]*|^[\t ]*if[\t ]+(?:TYPE_CHECKING|typing\.TYPE_CHECKING)[\t ]*:[\t ]*)from\s+([^\s]+)\s+import\s+(\([\s\S]*?\)|[^\r\n;#]+)/gm;
   for (const match of pySrc.matchAll(fromLinePattern)) {
     const keywordStart = match.index + match[1]!.length;
     const mod = match[2]!.trim();

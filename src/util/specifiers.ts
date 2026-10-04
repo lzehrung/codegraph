@@ -15,6 +15,7 @@ import {
 } from "./dynamic-import-tables.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, PYTHON_IDENTIFIER_SOURCE } from "./identifiers.js";
 import { normalizePath } from "./paths.js";
+import { pythonStatements } from "./python-type-checking.js";
 
 export type ModuleSpecifierResolutionKind = "document" | "source" | "stylesheet";
 
@@ -595,17 +596,19 @@ export function extractPythonSpecifiers(source: string): Array<{ spec: string; s
   const out: Array<{ spec: string; start: number }> = [];
   try {
     const cleaned = maskPythonCommentsAndStrings(source);
-    const prefix = String.raw`(^[\t ]*|^[\t ]*if[\t ]+(?:TYPE_CHECKING|typing\.TYPE_CHECKING)[\t ]*:[\t ]*)`;
-    const reImport = new RegExp(String.raw`${prefix}import\s+(${PYTHON_DOTTED_NAME_SOURCE})`, "gmu");
-    for (const match of cleaned.matchAll(reImport)) {
-      out.push({ spec: match[2]!, start: match.index + match[1]!.length });
-    }
+    // Match only at statement starts, so `a; import b` and one-line suites are found.
+    const starts = pythonStatements(cleaned).map((statement) => statement.start);
+    const reImport = new RegExp(String.raw`import\s+(${PYTHON_DOTTED_NAME_SOURCE})`, "uy");
     const reFrom = new RegExp(
-      String.raw`${prefix}from\s+(\.+(?:${PYTHON_DOTTED_NAME_SOURCE})?|${PYTHON_DOTTED_NAME_SOURCE})\s+import`,
-      "gmu",
+      String.raw`from\s+(\.+(?:${PYTHON_DOTTED_NAME_SOURCE})?|${PYTHON_DOTTED_NAME_SOURCE})\s+import\b`,
+      "uy",
     );
-    for (const match of cleaned.matchAll(reFrom)) {
-      out.push({ spec: match[2]!, start: match.index + match[1]!.length });
+    for (const pattern of [reImport, reFrom]) {
+      for (const start of starts) {
+        pattern.lastIndex = start;
+        const match = pattern.exec(cleaned);
+        if (match) out.push({ spec: match[1]!, start });
+      }
     }
   } catch {
     /* parse fallback: ignore */
