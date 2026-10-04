@@ -244,21 +244,21 @@ function formatNativeBackendStatus(report: BuildReport | undefined): string | un
   if (!native) return undefined;
   const affected = native.filesFellBack > 0 ? formatNativeBackendAffectedLanguages(report) : undefined;
   const affectedSuffix = affected ? `; ${affected}` : "";
+  // With native required, files that native did not process are skipped (for example
+  // `sourceTooLarge` or `queryFailure`), never parsed another way.
   if (native.filesUsed > 0) {
     if (native.filesFellBack > 0) {
-      return `Backend: native tree-sitter used for ${native.filesUsed} file(s); fallback for ${native.filesFellBack} file(s)${affectedSuffix}`;
+      return `Backend: native tree-sitter used for ${native.filesUsed} file(s); skipped ${native.filesFellBack} file(s)${affectedSuffix}`;
     }
     return `Backend: native tree-sitter used for ${native.filesUsed} file(s)`;
   }
-  const fallbackTotal = native.filesFellBack;
   if (native.available) {
-    if (fallbackTotal > 0) {
-      return `Backend: reduced graph/regex mode for ${fallbackTotal} file(s)${affectedSuffix}`;
-    }
+    if (native.filesFellBack > 0)
+      return `Backend: native tree-sitter skipped ${native.filesFellBack} file(s)${affectedSuffix}`;
     return "Backend: native tree-sitter available";
   }
   const reason = native.loadError ? ` (${native.loadError})` : "";
-  return `Backend: reduced graph/regex mode; native addon unavailable${reason}${affectedSuffix}`;
+  return `Backend: native addon unavailable${reason}; run codegraph doctor`;
 }
 
 function formatNativeBackendFallbackSummary(report: BuildReport | undefined): string | undefined {
@@ -275,7 +275,7 @@ function formatNativeBackendFallbackSummary(report: BuildReport | undefined): st
       return reasonSummary.length ? `${languageId}(${reasonSummary})` : `${languageId}(${entry.filesFellBack})`;
     });
   if (!parts.length) return undefined;
-  return `Native fallback summary: ${parts.join(", ")}`;
+  return `Native skipped files: ${parts.join(", ")}`;
 }
 
 function formatParserBackendSummary(report: BuildReport | undefined): string | undefined {
@@ -305,9 +305,9 @@ function isNativeBackendDegraded(report: BuildReport | undefined): boolean {
 }
 
 export function maybeWriteNativeBackendStatus(report: BuildReport | undefined, showProgress: boolean): void {
-  // Degradation is signaled unconditionally so a plain `graph`/`index` run
-  // (no --progress, no --report) still tells the user their results are
-  // reduced-accuracy instead of silently returning them. Healthy runs stay
+  // Skipped files are signaled unconditionally so a plain `graph`/`index` run
+  // (no --progress, no --report) still tells the user some files were not
+  // analyzed instead of silently returning partial results. Healthy runs stay
   // quiet unless --progress was requested, matching prior behavior.
   if (showProgress || isNativeBackendDegraded(report)) {
     const message = formatNativeBackendStatus(report);

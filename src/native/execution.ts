@@ -1,5 +1,4 @@
 import type { LanguageSupport } from "../languages.js";
-import { stringifyUnknown } from "../util/ast.js";
 import { errorMessage } from "../util/errors.js";
 import type {
   CompactImportsExecution,
@@ -9,36 +8,31 @@ import type {
   NativeExtractionExecution,
   NativeQueryResults,
   NativeQueryScope,
-  NativeRuntimeMode,
   NativeSingleQueryExecution,
   NativeSyntaxTreeExecution,
 } from "./contracts.js";
 import { getCachedNormalizedQuery, normalizeNativeQueryForSupport } from "./queries.js";
-import { loadBinding, resolveNativeBindingState, throwIfNativeRequiredUnavailable } from "./runtime.js";
+import { assertNativeRequiredAvailable, loadBinding } from "./runtime.js";
 import { isColumnarSyntaxTree, nativeShapeMismatchMessage, REQUIRED_NATIVE_EXTRACTION_VERSION } from "./tree-shape.js";
 
-export function isNativeDuplicateTokenizationAvailable(mode?: NativeRuntimeMode): boolean {
-  const state = resolveNativeBindingState(mode);
-  throwIfNativeRequiredUnavailable(mode, state);
-  return state.loaded && typeof state.binding.tokenizeDuplicateSource === "function";
+export function isNativeDuplicateTokenizationAvailable(): boolean {
+  const state = loadBinding();
+  assertNativeRequiredAvailable(state);
+  return typeof state.binding.tokenizeDuplicateSource === "function";
 }
 
-export function getNativeDuplicateTokens(source: string, mode?: NativeRuntimeMode): NativeDuplicateTokens | null {
-  const state = resolveNativeBindingState(mode);
-  throwIfNativeRequiredUnavailable(mode, state);
-  if (!state.loaded || !state.binding.tokenizeDuplicateSource) return null;
+export function getNativeDuplicateTokens(source: string): NativeDuplicateTokens | null {
+  const state = loadBinding();
+  assertNativeRequiredAvailable(state);
+  if (!state.binding.tokenizeDuplicateSource) return null;
   try {
     return state.binding.tokenizeDuplicateSource(source);
   } catch {
     return null;
   }
 }
-export function runNativeLanguageQueries(
-  source: string,
-  support: LanguageSupport,
-  mode?: NativeRuntimeMode,
-): NativeQueryResults | null {
-  return getNativeQueryExecution(source, support, mode).results;
+export function runNativeLanguageQueries(source: string, support: LanguageSupport): NativeQueryResults | null {
+  return getNativeQueryExecution(source, support).results;
 }
 
 export function getNativeQueryExecutionForState(
@@ -47,9 +41,7 @@ export function getNativeQueryExecutionForState(
   state: NativeBindingState = loadBinding(),
   scope: NativeQueryScope = "full",
 ): NativeQueryExecution {
-  if (!state.loaded) {
-    return unavailableQueryExecution(state);
-  }
+  assertNativeRequiredAvailable(state);
   if (!state.supportedLanguageIds.has(support.id)) {
     return { results: null, fallbackReason: "unsupportedLanguage" };
   }
@@ -77,11 +69,10 @@ export function getNativeQueryExecutionForState(
 export function getNativeQueryExecution(
   source: string,
   support: LanguageSupport,
-  mode?: NativeRuntimeMode,
   scope: NativeQueryScope = "full",
 ): NativeQueryExecution {
-  const state = resolveNativeBindingState(mode);
-  throwIfNativeRequiredUnavailable(mode, state);
+  const state = loadBinding();
+  assertNativeRequiredAvailable(state);
   return getNativeQueryExecutionForState(source, support, state, scope);
 }
 
@@ -90,16 +81,9 @@ export function getNativeQueryExecution(
  * Falls back to the full execution path if the compact entrypoint is not
  * available in the native binding.
  */
-export function getCompactImportsExecution(
-  source: string,
-  support: LanguageSupport,
-  mode?: NativeRuntimeMode,
-): CompactImportsExecution {
-  const state = resolveNativeBindingState(mode);
-  throwIfNativeRequiredUnavailable(mode, state);
-  if (!state.loaded) {
-    return unavailableCompactExecution(state);
-  }
+export function getCompactImportsExecution(source: string, support: LanguageSupport): CompactImportsExecution {
+  const state = loadBinding();
+  assertNativeRequiredAvailable(state);
   if (!state.supportedLanguageIds.has(support.id)) {
     return { results: null, fallbackReason: "unsupportedLanguage" };
   }
@@ -111,12 +95,21 @@ export function getCompactImportsExecution(
       };
     }
     const full = getNativeQueryExecutionForState(source, support, state, "imports");
-    if (!full.results) return full;
+    if (!full.results)
+      return {
+        results: null,
+        ...(full.fallbackReason ? { fallbackReason: full.fallbackReason } : {}),
+        ...(full.error ? { error: full.error } : {}),
+      };
     return {
       results: {
         imports: full.results.imports.map((match) => ({
           patternIndex: match.patternIndex,
-          captures: match.captures.map((capture) => ({ name: capture.name, text: capture.text })),
+          captures: match.captures.map((capture) => ({
+            name: capture.name,
+            text: capture.text,
+            startIndex: capture.start.index,
+          })),
         })),
       },
     };
@@ -133,13 +126,9 @@ export function getNativeSingleQueryExecution(
   source: string,
   support: LanguageSupport,
   queryText: string,
-  mode?: NativeRuntimeMode,
 ): NativeSingleQueryExecution {
-  const state = resolveNativeBindingState(mode);
-  throwIfNativeRequiredUnavailable(mode, state);
-  if (!state.loaded) {
-    return unavailableSingleQueryExecution(state);
-  }
+  const state = loadBinding();
+  assertNativeRequiredAvailable(state);
   if (!state.supportedLanguageIds.has(support.id)) {
     return { matches: null, fallbackReason: "unsupportedLanguage" };
   }
@@ -172,16 +161,9 @@ export function getNativeSingleQueryExecution(
  * pool already uses (`extractLanguage`, one parse per file); this is the same call for
  * callers that need both results outside a worker.
  */
-export function getNativeExtractionExecution(
-  source: string,
-  support: LanguageSupport,
-  mode?: NativeRuntimeMode,
-): NativeExtractionExecution {
-  const state = resolveNativeBindingState(mode);
-  throwIfNativeRequiredUnavailable(mode, state);
-  if (!state.loaded) {
-    return { results: null, tree: null, ...unavailableNativeFailure(state) };
-  }
+export function getNativeExtractionExecution(source: string, support: LanguageSupport): NativeExtractionExecution {
+  const state = loadBinding();
+  assertNativeRequiredAvailable(state);
   if (!state.supportedLanguageIds.has(support.id)) {
     return { results: null, tree: null, fallbackReason: "unsupportedLanguage" };
   }
@@ -227,16 +209,9 @@ export function getNativeExtractionExecution(
   }
 }
 
-export function getNativeSyntaxTreeExecution(
-  source: string,
-  support: LanguageSupport,
-  mode?: NativeRuntimeMode,
-): NativeSyntaxTreeExecution {
-  const state = resolveNativeBindingState(mode);
-  throwIfNativeRequiredUnavailable(mode, state);
-  if (!state.loaded) {
-    return unavailableSyntaxTreeExecution(state);
-  }
+export function getNativeSyntaxTreeExecution(source: string, support: LanguageSupport): NativeSyntaxTreeExecution {
+  const state = loadBinding();
+  assertNativeRequiredAvailable(state);
   if (!state.supportedLanguageIds.has(support.id)) {
     return { tree: null, fallbackReason: "unsupportedLanguage" };
   }
@@ -262,49 +237,4 @@ export function getNativeSyntaxTreeExecution(
       error: errorMessage(error),
     };
   }
-}
-
-function unavailableQueryExecution(state: Extract<NativeBindingState, { loaded: false }>): NativeQueryExecution {
-  return {
-    results: null,
-    ...unavailableNativeFailure(state),
-  };
-}
-
-function unavailableCompactExecution(state: Extract<NativeBindingState, { loaded: false }>): CompactImportsExecution {
-  return {
-    results: null,
-    ...unavailableNativeFailure(state),
-  };
-}
-
-function unavailableSingleQueryExecution(
-  state: Extract<NativeBindingState, { loaded: false }>,
-): NativeSingleQueryExecution {
-  return {
-    matches: null,
-    ...unavailableNativeFailure(state),
-  };
-}
-
-function unavailableSyntaxTreeExecution(
-  state: Extract<NativeBindingState, { loaded: false }>,
-): NativeSyntaxTreeExecution {
-  return {
-    tree: null,
-    ...unavailableNativeFailure(state),
-  };
-}
-
-function unavailableNativeFailure(state: Extract<NativeBindingState, { loaded: false }>): {
-  fallbackReason: "unavailable";
-  error?: string;
-} {
-  if (!state.error) {
-    return { fallbackReason: "unavailable" };
-  }
-  if (state.error instanceof Error) {
-    return { fallbackReason: "unavailable", error: state.error.message };
-  }
-  return { fallbackReason: "unavailable", error: stringifyUnknown(state.error) };
 }

@@ -12,7 +12,6 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--out",
   "--stderr-file",
   "--threads",
-  "--native",
   "--cache",
   "--cache-dir",
   "--changed-since",
@@ -128,7 +127,6 @@ const SHARED_BUILD_FLAGS = [
 const SHARED_BUILD_OPTIONS = [
   "--root",
   "--threads",
-  "--native",
   "--cache",
   "--cache-dir",
   "--include-glob",
@@ -523,7 +521,6 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         "--host",
         "--ignore-glob",
         "--include-glob",
-        "--native",
         "--port",
         "--resolution-hint",
         "--root",

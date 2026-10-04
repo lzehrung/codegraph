@@ -3,12 +3,10 @@ import { loadNearestTsconfigFor, type MatchPathFn } from "../util/resolution.js"
 import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
 import { loadWorkspaceConfig, type WorkspaceConfig } from "../util/workspace.js";
 import type { LogLevel } from "../logging.js";
-import {
-  collectModuleSpecifiersFromSource,
-  mapNativeExecutionFallbackReason,
-  type FallbackImportExtractionEvent,
-  type FallbackImportExtractionReason,
-} from "../graphs/specifiers.js";
+import { errorMessage } from "../util/errors.js";
+import { recordNativeExecutionOutcome } from "../native/native-backend-report.js";
+import type { BuildReport } from "./types.js";
+import { collectModuleSpecifiersFromSource } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
@@ -16,27 +14,24 @@ import { stripJsLikeComments } from "../util/comments.js";
 import {
   assertNativeRequiredAvailable,
   getNativeQueryExecution,
-  isNativeBindingLoadedForLanguage,
   isNativeRequiredUnavailableError,
-  isNativeQueryAuthoritative,
 } from "../native/tree-sitter-native.js";
-import type { NativeQueryExecution, NativeQueryResults, NativeRuntimeMode } from "../native/tree-sitter-native.js";
+import type { NativeQueryExecution, NativeQueryResults } from "../native/tree-sitter-native.js";
 import type { ImportResolverOptions, ResolvedImportTarget } from "./imports/context.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./imports/binding-ranges.js";
 import { IMPORT_BINDING_ROWS } from "./imports/import-binding-tables.js";
 import { collectGraphOnlyImports } from "./imports/graph-only.js";
-import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/js-text-imports.js";
+import { collectJsTextValueRequireImports } from "./imports/js-text-imports.js";
 import {
   applyStatementImportOverride,
   createStatementImportOverrideState,
   finalizeLanguageSpecificImports,
 } from "./imports/language-specific.js";
 import { collectNativeCaptureImportBindings } from "./imports/native-captures.js";
-import { collectPythonImportsFromNativeMatches, collectPythonImportsFromSource } from "./imports/python.js";
+import { collectPythonImportsFromNativeMatches } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
 import { jvmPackageNameFromSource } from "./compilation-units.js";
 import type { ImportBinding } from "./types.js";
-import { collectTextImportSpecifiers } from "./imports/text-import-extractors.js";
 
 export async function collectImportsForFile(
   file: string,
@@ -46,11 +41,10 @@ export async function collectImportsForFile(
     sup?: LanguageSupport;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
-    native?: NativeRuntimeMode;
-    onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     logLevel?: LogLevel;
     languageExtensions?: LanguageExtensionMap;
     workspaceConfig?: WorkspaceConfig;
+    report?: BuildReport;
     matchPath?: MatchPathFn;
   },
 ): Promise<ImportBinding[]> {
@@ -83,31 +77,23 @@ export async function collectImportsForFile(
   }
 
   const imports: ImportBinding[] = [];
-  const reportFallback = (reason: FallbackImportExtractionReason) => {
-    opts?.onFallbackImportExtraction?.({
-      file: file.replace(/\\/g, "/"),
-      language: resolvedSup.id,
-      reason,
-    });
-  };
-  const nativeMode = opts?.native ?? opts?.graphOptions?.native;
-  assertNativeRequiredAvailable(nativeMode);
+  assertNativeRequiredAvailable();
   let nativeExecution: NativeQueryExecution | null = null;
   let resolvedNativeQueries: NativeQueryResults | null = opts?.nativeQueries ?? null;
   if (opts?.nativeQueries === undefined) {
-    nativeExecution = getNativeQueryExecution(resolvedSource, resolvedSup, nativeMode);
+    nativeExecution = getNativeQueryExecution(resolvedSource, resolvedSup);
     resolvedNativeQueries = nativeExecution.results;
   }
-  // The graph and binding consumers must agree on why extraction fell back, so both map the
-  // native execution reason with the same rule instead of labelling it per call site.
-  const nativeExecutionFallbackReason = nativeExecution?.fallbackReason
-    ? mapNativeExecutionFallbackReason(
-        resolvedSup.id,
-        nativeExecution.fallbackReason,
-        false,
-        resolvedNativeQueries !== null,
-      )
-    : null;
+  if (nativeExecution?.fallbackReason) {
+    recordNativeExecutionOutcome(opts?.report, {
+      file: file.replace(/\\/g, "/"),
+      support: resolvedSup,
+      results: null,
+      fallbackReason: nativeExecution.fallbackReason,
+      ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
+    });
+  }
+  if (!resolvedNativeQueries) return imports;
 
   if (resolvedSup.id === "python") {
     const context = {
@@ -117,12 +103,7 @@ export async function collectImportsForFile(
       pushBinding: (binding: ImportBinding) => imports.push(binding),
       getBindings: () => imports,
     };
-    if (resolvedNativeQueries) {
-      await collectPythonImportsFromNativeMatches(context, resolvedNativeQueries.importBindings);
-    } else {
-      await collectPythonImportsFromSource(context);
-      if (nativeExecutionFallbackReason) reportFallback(nativeExecutionFallbackReason);
-    }
+    await collectPythonImportsFromNativeMatches(context, resolvedNativeQueries.importBindings);
     return imports;
   }
 
@@ -280,30 +261,6 @@ export async function collectImportsForFile(
     return handled;
   };
 
-  const runFallback = async () => {
-    await collectJsTextImports({
-      source: resolvedSource,
-      languageId: resolvedSup.id,
-      resolveFrom,
-      pushBinding: (binding) => imports.push(binding),
-    });
-    if (resolvedSup.id === "c" || resolvedSup.id === "cpp") {
-      for (const specifier of collectTextImportSpecifiers(resolvedSup.id, resolvedSource, { file })) {
-        imports.push({
-          kind: "star",
-          from: specifier.spec,
-          resolved: await resolveFrom(
-            specifier.spec,
-            undefined,
-            specifier.includeForm ? { includeForm: specifier.includeForm } : undefined,
-          ),
-          typeOnly: !!specifier.typeOnly,
-          ...(specifier.includeForm ? { includeForm: specifier.includeForm } : {}),
-        });
-      }
-    }
-  };
-
   const runValueRequireFallback = async () => {
     await collectJsTextValueRequireImports({
       source: resolvedSource,
@@ -312,9 +269,6 @@ export async function collectImportsForFile(
       pushBinding: (binding) => imports.push(binding),
     });
   };
-
-  const nativeLanguageAvailable = isNativeBindingLoadedForLanguage(resolvedSup.id, nativeMode);
-  let nativeFallbackReason: FallbackImportExtractionReason | null = nativeExecutionFallbackReason;
 
   if (resolvedNativeQueries) {
     try {
@@ -331,10 +285,8 @@ export async function collectImportsForFile(
         resolvedNativeQueries.importBindings,
       );
       await finalizeImports();
-      // Native succeeded -- treat the result as authoritative even if empty,
-      // but only when the importBindings query was not modified by
-      // normalization. Languages whose importBindings query is normalized
-      // or blanked (e.g. Kotlin) may need the JS/text fallback.
+      // Native capture results are valid even when no bindings match. The CommonJS
+      // require supplement below remains native-owned for TS/TSX.
       if (
         (resolvedSup.id === "ts" || resolvedSup.id === "tsx") &&
         /\brequire\s*\(/.test(stripJsLikeComments(resolvedSource))
@@ -342,39 +294,24 @@ export async function collectImportsForFile(
         await runValueRequireFallback();
         await finalizeImports();
       }
-      if (imports.length) {
-        return imports;
-      }
-      if (
-        isNativeQueryAuthoritative(resolvedSup, "importBindings") &&
-        resolvedSup.id !== "html" &&
-        resolvedSup.id !== "css" &&
-        resolvedSup.id !== "scss" &&
-        resolvedSup.id !== "less"
-      ) {
-        return imports;
-      }
-      nativeFallbackReason = "query-empty";
+      if (imports.length || !["html", "css", "scss", "less"].includes(resolvedSup.id)) return imports;
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
-      imports.length = 0;
-      nativeFallbackReason = "query-error";
+      recordNativeExecutionOutcome(opts?.report, {
+        file: file.replace(/\\/g, "/"),
+        support: resolvedSup,
+        results: null,
+        fallbackReason: "queryFailure",
+        error: errorMessage(error),
+      });
+      return [];
     }
   }
 
-  if (nativeFallbackReason) {
-    reportFallback(nativeFallbackReason);
-  }
-
-  await runFallback();
-  await finalizeImports();
-  if (
-    !imports.length &&
-    (resolvedSup.id === "html" || resolvedSup.id === "css" || resolvedSup.id === "scss" || resolvedSup.id === "less")
-  ) {
+  if (!imports.length && ["html", "css", "scss", "less"].includes(resolvedSup.id)) {
     const specifiers = collectModuleSpecifiersFromSource(resolvedSup, resolvedSource, {
       file,
-      ...(opts?.native ? { native: opts.native } : {}),
+      nativeQueries: resolvedNativeQueries,
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
     });
     for (const specifier of specifiers) {
@@ -389,9 +326,6 @@ export async function collectImportsForFile(
         ...(specifier.typeOnly ? { typeOnly: true } : {}),
       });
     }
-  }
-  if (!nativeFallbackReason && !nativeLanguageAvailable && imports.length) {
-    reportFallback("reduced-mode");
   }
   return imports;
 }

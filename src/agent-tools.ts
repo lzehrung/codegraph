@@ -17,7 +17,6 @@ import type { Edge, Range } from "./types.js";
 import { collectGraph } from "./graph-builder.js";
 import { getDependencies, getReverseDependencies, type DependencyNode } from "./graphs/queries.js";
 import { getHotspots } from "./graphs/hotspots.js";
-import type { NativeRuntimeMode } from "./native/tree-sitter-native.js";
 import { fileExists } from "./util/workspace.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot } from "./util/paths.js";
 import { errorMessage } from "./util/errors.js";
@@ -65,7 +64,6 @@ import {
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
-  native?: NativeRuntimeMode;
 };
 
 /** Import entry rendered for agent tool responses. */
@@ -483,7 +481,6 @@ export async function tool_findSymbol(
   options: {
     maxResults?: number;
     index?: ProjectIndex;
-    native?: NativeRuntimeMode;
   } = {},
 ): Promise<{
   status: "ok" | "error";
@@ -585,7 +582,7 @@ export async function tool_getGraph(
   error?: string;
 }> {
   try {
-    const graph = runtimeOptions.index?.graph ?? (await collectToolGraph(root, runtimeOptions));
+    const graph = runtimeOptions.index?.graph ?? (await collectToolGraph(root));
     return {
       status: "ok",
       graph: normalizeToolGraph(root, {
@@ -701,7 +698,6 @@ export async function tool_getHotspots(
     limit?: number;
     includeRoots?: string[];
     index?: ProjectIndex;
-    native?: NativeRuntimeMode;
   } = {},
 ): Promise<{ status: "ok" | "error"; hotspots?: ToolHotspotEntry[]; error?: string }> {
   try {
@@ -743,20 +739,14 @@ async function getToolIndex(root: string, options: ToolRuntimeOptions): Promise<
         keepParsed: true,
         useBloomFilters: true,
         logLevel: "error",
-        ...(options.native ? { native: options.native } : {}),
       },
     }))
   );
 }
 
-async function collectToolGraph(
-  root: string,
-  options: ToolRuntimeOptions,
-): Promise<Awaited<ReturnType<typeof collectGraph>>> {
+async function collectToolGraph(root: string): Promise<Awaited<ReturnType<typeof collectGraph>>> {
   const files = await listProjectFiles(root);
-  return await collectGraph(root, files, {
-    ...(options.native ? { native: options.native } : {}),
-  });
+  return await collectGraph(root, files);
 }
 
 function getToolLimit(limit: number | undefined): number | undefined {

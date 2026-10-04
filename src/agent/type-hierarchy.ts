@@ -168,12 +168,10 @@ async function checkFreshness(session: AgentSession): Promise<AgentFreshnessResu
 }
 
 function relationshipProvenance(snapshot: AgentProjectSnapshot): SemanticProvenance {
-  const reduced = snapshot.analysis.mode === "reduced";
   return {
-    capability: reduced ? "graph" : "semantic",
+    capability: "semantic",
     backend: snapshot.analysis.backend,
-    confidence: reduced ? "medium" : "high",
-    ...(reduced ? { reason: snapshot.analysis.label } : {}),
+    confidence: "high",
   };
 }
 

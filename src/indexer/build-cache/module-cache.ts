@@ -404,17 +404,13 @@ export function fileSignatureFromSource(source: string, gitSig?: string): FileSi
   return { sig, cacheSig, contentHash, ...(gitSig ? { gitSig } : {}) };
 }
 
-export async function cacheSignatureForFile(
-  file: string,
-  sigInfo: FileSignature,
-  opts?: BuildOptions,
-): Promise<string> {
+export async function cacheSignatureForFile(file: string, sigInfo: FileSignature): Promise<string> {
   let contentSignature = sigInfo.gitSig ?? sigInfo.contentHash;
   if (!contentSignature) {
     contentSignature = await fileContentHash(file);
     sigInfo.contentHash = contentSignature;
   }
-  const runtimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
+  const runtimeFingerprint = getNativeRuntimeFingerprint();
   const implementationFingerprint = getImplementationFingerprint();
   const executionFingerprint = `${runtimeFingerprint}\0${implementationFingerprint}`;
   if (executionFingerprint !== cachedExecutionFingerprint || !cachedExecutionHash) {

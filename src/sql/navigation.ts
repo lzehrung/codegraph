@@ -465,7 +465,7 @@ export async function findSqlReferences(
     status: "ok",
     definition,
     references,
-    provenance: createNavigationProvenance(index, "exact", "high"),
+    provenance: createNavigationProvenance("exact", "high"),
     referenceCoverage: buildIndexedCandidateCoverage({
       index,
       def: definition,

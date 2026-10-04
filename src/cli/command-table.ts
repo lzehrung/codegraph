@@ -45,7 +45,7 @@ const agentIoWriters = {
 } as const;
 
 function graphQueryArgs(ctx: CliProjectContext) {
-  const graphOptions = ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined;
+  const graphOptions = ctx.hasGraphOverrides ? ctx.buildGraphOptions() : undefined;
   return { ctx, graphOptions };
 }
 
@@ -112,11 +112,9 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
     stage: "base",
     run: async (ctx) => {
       const { buildDoctorReport, formatDoctorSummary } = await import("./doctor.js");
-      writeCliOutput(
-        { hasFlag: ctx.hasFlag, writeJSONLine, writeStdoutLine },
-        buildDoctorReport(ctx.parsed.positionals.at(-1)),
-        formatDoctorSummary,
-      );
+      const report = buildDoctorReport(ctx.parsed.positionals.at(-1));
+      writeCliOutput({ hasFlag: ctx.hasFlag, writeJSONLine, writeStdoutLine }, report, formatDoctorSummary);
+      if (!report.native.available) exitCli(1);
     },
   },
   skill: {
@@ -359,7 +357,6 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,
         cwd: getCwd,
-        nativeMode: ctx.nativeMode,
         workerOpts: ctx.workerOpts,
         graphOptions: ctx.hasGraphOverrides ? ctx.buildGraphOptions() : undefined,
         gitBase: ctx.gitBase,
@@ -388,7 +385,6 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         projectRootFs: ctx.projectRootFs,
         discoveryOptions: ctx.discoveryOptions,
         cacheLocation: ctx.config.cache?.location,
-        nativeMode: ctx.nativeMode,
         workerOpts: ctx.workerOpts,
         progressHandler: ctx.progressHandler,
         graphFlags: ctx.graphFlags,
@@ -420,12 +416,11 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         gitBase: ctx.gitBase,
         changedSince: ctx.changedSince,
         discoveryOptions: ctx.discoveryOptions,
-        nativeMode: ctx.nativeMode,
         workerOpts: ctx.workerOpts,
         languageExtensions: ctx.config.languages?.extensions,
         cacheLocation: ctx.config.cache?.location,
         progressHandler: ctx.progressHandler,
-        graphOptions: ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined,
+        graphOptions: ctx.hasGraphOverrides ? ctx.buildGraphOptions() : undefined,
         reportEnabled: ctx.reportEnabled,
         reportFile: ctx.reportFile,
         getOpt: ctx.getOpt,
@@ -443,8 +438,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
   drift: {
     stage: "project",
     run: async (ctx) => {
-      const driftGraphOptions =
-        ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined;
+      const driftGraphOptions = ctx.hasGraphOverrides ? ctx.buildGraphOptions() : undefined;
       const driftCacheDir = ctx.getOpt("--cache-dir");
       const { handleDriftCommand } = await import("./drift.js");
       await handleDriftCommand({
@@ -452,12 +446,10 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         positionals: ctx.includeRoots,
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,
-        nativeMode: ctx.nativeMode,
         ...(driftGraphOptions ? { graphOptions: driftGraphOptions } : {}),
         indexOptions: {
           onProgress: ctx.progressHandler,
           discovery: ctx.discoveryOptions,
-          ...(ctx.nativeMode !== "auto" ? { native: ctx.nativeMode } : {}),
           ...(ctx.config.languages?.extensions ? { languageExtensions: ctx.config.languages.extensions } : {}),
           ...ctx.workerOpts,
           ...(driftCacheDir ? { cacheDir: driftCacheDir } : {}),
@@ -538,7 +530,6 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,
         parsedOptions: ctx.parsed.options,
-        nativeMode: ctx.nativeMode,
         workerOpts: ctx.workerOpts,
         graphOptions: ctx.hasGraphOverrides
           ? {
@@ -592,7 +583,6 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         commandReport,
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,
-        nativeMode: ctx.nativeMode,
         useNativeWorkers: ctx.useNativeWorkers,
         graphOptions: ctx.hasGraphOverrides ? ctx.buildGraphOptions() : undefined,
         progressHandler: ctx.progressHandler,
@@ -688,8 +678,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         discoveryOptions: ctx.discoveryOptions,
         languageExtensions: ctx.config.languages?.extensions,
         cacheLocation: ctx.config.cache?.location,
-        graphOptions: ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined,
-        nativeMode: ctx.nativeMode,
+        graphOptions: ctx.hasGraphOverrides ? ctx.buildGraphOptions() : undefined,
         workerOpts: ctx.workerOpts,
         progressHandler: ctx.progressHandler,
         reportFile: ctx.reportFile,
@@ -714,8 +703,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         discoveryOptions: ctx.discoveryOptions,
         languageExtensions: ctx.config.languages?.extensions,
         cacheLocation: ctx.config.cache?.location,
-        graphOptions: ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined,
-        nativeMode: ctx.nativeMode,
+        graphOptions: ctx.hasGraphOverrides ? ctx.buildGraphOptions() : undefined,
         workerOpts: ctx.workerOpts,
         progressHandler: ctx.progressHandler,
         getOpt: ctx.getOpt,
@@ -756,7 +744,6 @@ function navigationArgs(ctx: CliProjectContext) {
     positionals: ctx.parsed.positionals,
     getOpt: ctx.getOpt,
     hasFlag: ctx.hasFlag,
-    nativeMode: ctx.nativeMode,
     workerOpts: ctx.workerOpts,
     progressHandler: ctx.progressHandler,
     cacheLocation: ctx.config.cache?.location,

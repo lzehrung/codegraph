@@ -45,7 +45,6 @@ import { logWithLevel } from "../logging.js";
 import { collectGraph } from "../graph-builder.js";
 import { collectEdgesForFile } from "../graph-edge-collector.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
-import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
 import type { GraphBuildOptions, GraphCacheEntry } from "../graphs/types.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
 import { attemptParsePreparedFileContext, type ParsedFileContext } from "./parse-context.js";
@@ -57,7 +56,7 @@ import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
 import { BloomFilter, buildBloomFilterFromSource } from "../util/bloom-filter.js";
 import { initNativeBackendReport } from "../native/native-backend-report.js";
 import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
-import { isNativeRequiredUnavailableError } from "../native/tree-sitter-native.js";
+import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from "../native/tree-sitter-native.js";
 import { isNodeSqliteUnavailableError } from "../sqlite-driver.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
 import type { Edge, FileId, Graph } from "../types.js";
@@ -68,7 +67,6 @@ import {
   diskModuleCacheExists,
   collectWorkspaceManifestDependencyEdges,
   computeConfigHash,
-  createFallbackImportExtractionHandler,
   diffBuildOptions,
   fileSignature,
   fileSignatureFromSource,
@@ -471,7 +469,6 @@ async function buildIndexedModuleForFile(args: {
   parsedCacheMaxEntries: number;
   jsonDependencies: Map<string, string>;
   bloomFilterCache: import("../util/bloom-filter.js").BloomFilterCache | undefined;
-  onFallbackImportExtraction: ((event: FallbackImportExtractionEvent) => void) | undefined;
   fileSignatures: Map<string, FileSignature>;
   cacheEnabled: boolean;
   resolverEnvironmentFingerprint?: string | null;
@@ -492,7 +489,7 @@ async function buildIndexedModuleForFile(args: {
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let tree: SyntaxTreeLike | undefined;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id),
-    nativeSourceLimitFallback = prepared.nativeFallbackReason === "sourceTooLarge";
+    nativeSourceLimitSkip = prepared.nativeFallbackReason === "sourceTooLarge";
 
   if (prepared.syntaxTree) {
     const parsedTree = new ProjectedSyntaxTree(source, prepared.syntaxTree);
@@ -509,7 +506,7 @@ async function buildIndexedModuleForFile(args: {
       },
       args.parsedCacheMaxEntries,
     );
-  } else if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql" && !nativeSourceLimitFallback) {
+  } else if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql" && !nativeSourceLimitSkip) {
     const parseAttempt = attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
     if (parsed) {
@@ -525,7 +522,7 @@ async function buildIndexedModuleForFile(args: {
       });
     }
   } else if (nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
-    // Worker returned queries without a tree (older path/fallback): reconstruct once.
+    // A native query without a transferred tree can still use the native syntax tree.
     const parseAttempt = attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
     if (parsed) {
@@ -533,9 +530,9 @@ async function buildIndexedModuleForFile(args: {
       setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     }
   }
-  const lacksParserContext = !nativeQueries && !tree;
+  const lacksParserContext = !graphOnlyLanguage && !nativeQueries;
 
-  if (args.bloomFilterCache && !nativeSourceLimitFallback) {
+  if (args.bloomFilterCache && !nativeSourceLimitSkip) {
     const filter = prepared.workerBloomFilter
       ? BloomFilter.fromBuffer(
           Buffer.from(prepared.workerBloomFilter.bits),
@@ -553,13 +550,12 @@ async function buildIndexedModuleForFile(args: {
     graphOptions: args.graphOptions,
     ...(args.workspaceConfig ? { workspaceConfig: args.workspaceConfig } : {}),
     ...(args.matchPath ? { matchPath: args.matchPath } : {}),
-    ...(args.opts?.native ? { native: args.opts.native } : {}),
     ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
     ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
-    ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
+    ...(args.report ? { report: args.report } : {}),
   };
   const imports =
-    nativeSourceLimitFallback || sup.id === "sql"
+    nativeSourceLimitSkip || sup.id === "sql"
       ? []
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,
@@ -567,14 +563,16 @@ async function buildIndexedModuleForFile(args: {
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
           ...sharedImportOptions,
         });
-  for (const block of embeddedBlocks ?? []) {
-    imports.push(
-      ...(await collectImportsForFile(args.file, args.projectRoot, {
-        source: block.source,
-        sup: block.sup,
-        ...sharedImportOptions,
-      })),
-    );
+  if (!nativeSourceLimitSkip) {
+    for (const block of embeddedBlocks ?? []) {
+      imports.push(
+        ...(await collectImportsForFile(args.file, args.projectRoot, {
+          source: block.source,
+          sup: block.sup,
+          ...sharedImportOptions,
+        })),
+      );
+    }
   }
   collectJsonDependencies(imports, args.jsonDependencies);
   let mod: ModuleIndex;
@@ -586,7 +584,6 @@ async function buildIndexedModuleForFile(args: {
     mod = collectLocalsAndExportsFromSource(args.file, source, sup, imports, {
       ...(tree ? { tree } : {}),
       ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-      ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
       ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
     });
   }
@@ -787,7 +784,7 @@ async function moduleCacheSignatureForFile(
   opts?: BuildOptions,
   resolverEnvironmentFingerprint?: string | null,
 ): Promise<string> {
-  const baseSignature = await cacheSignatureForFile(file, sigInfo, opts);
+  const baseSignature = await cacheSignatureForFile(file, sigInfo);
   const normalizedExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   const normalizedGraphOptions = normalizeGraphOptions(opts?.graph);
   const resolveNodeModules = normalizedGraphOptions.resolveNodeModules;
@@ -871,7 +868,6 @@ type IndexBuildRunState = {
   cacheMode: NonNullable<BuildOptions["cache"]>;
   cacheEnabled: boolean;
   graphOptions: GraphBuildOptions;
-  onFallbackImportExtraction: ((event: FallbackImportExtractionEvent) => void) | undefined;
 };
 
 function createIndexBuildRunState(
@@ -892,7 +888,6 @@ function createIndexBuildRunState(
     cacheMode,
     cacheEnabled: cacheMode !== "off",
     graphOptions,
-    onFallbackImportExtraction: createFallbackImportExtractionHandler(report, opts),
   };
 }
 
@@ -1457,10 +1452,13 @@ async function buildIndexFromFileListShared(
   opts?: BuildOptions,
   helperOpts?: BuildIndexHelperOptions,
 ): Promise<ProjectIndex> {
+  assertNativeRequiredAvailable();
   clearResolutionCaches();
   await initializeFileIdentityCaseSensitivity(projectRoot);
-  const { normalizedProjectRoot, report, timings, totalStart, cacheEnabled, graphOptions, onFallbackImportExtraction } =
-    createIndexBuildRunState(projectRoot, opts);
+  const { normalizedProjectRoot, report, timings, totalStart, cacheEnabled, graphOptions } = createIndexBuildRunState(
+    projectRoot,
+    opts,
+  );
   const manifestMode: ManifestMode = helperOpts?.manifestMode ?? "off";
   const useManifest = manifestMode !== "off";
   const shouldWriteManifest = manifestMode === "read-write";
@@ -1757,12 +1755,8 @@ async function buildIndexFromFileListShared(
         if (mod && edgesCached) {
           edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
             fast: !!graphOptions.fast,
-            ...(graphOptions.fastRegexDisabledLanguages
-              ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
-              : {}),
             resolveNodeModules: !!graphOptions.resolveNodeModules,
             dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-            ...(opts?.native ? { native: opts.native } : {}),
             ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
             ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
@@ -1771,7 +1765,6 @@ async function buildIndexFromFileListShared(
             ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
             ...(manifest?.projectRoot ? { cachedFileEdgesProjectRoot: manifest.projectRoot } : {}),
             ...(onFileEdges ? { onFileEdges } : {}),
-            ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
             allFiles: normalizedFiles,
             ...(sqlFactCache ? { sqlFactCache } : {}),
           });
@@ -1809,7 +1802,6 @@ async function buildIndexFromFileListShared(
             parsedCacheMaxEntries: parsedCacheMaxEntries(opts),
             jsonDependencies,
             bloomFilterCache,
-            onFallbackImportExtraction,
             fileSignatures,
             cacheEnabled,
             ...(confinedRoot ? { confinedRoot, trustedSource: trustedSources?.get(file) } : {}),
@@ -1823,12 +1815,8 @@ async function buildIndexFromFileListShared(
         edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
           ...(graphContext ? { parsed: graphContext } : {}),
           fast: !!graphOptions.fast,
-          ...(graphOptions.fastRegexDisabledLanguages
-            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
-            : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-          ...(opts?.native ? { native: opts.native } : {}),
           ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
@@ -1837,7 +1825,6 @@ async function buildIndexFromFileListShared(
           ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
           ...(manifest?.projectRoot ? { cachedFileEdgesProjectRoot: manifest.projectRoot } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
-          ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
           allFiles: normalizedFiles,
           ...(sqlFactCache ? { sqlFactCache } : {}),
         });
@@ -2044,6 +2031,7 @@ async function buildProjectIndexWithManifestOptions(
     "ignoreExistingManifest" | "reportDiscoveryProgress" | "configHash" | "discoveryContext"
   >,
 ): Promise<ProjectIndex> {
+  assertNativeRequiredAvailable();
   const timings = opts?.report ? (opts.report.timings ??= {}) : undefined;
   const discoveryContext = helperOpts?.discoveryContext;
   await initializeFileIdentityCaseSensitivity(projectRoot);
@@ -2182,6 +2170,7 @@ export async function buildProjectIndexFromFiles(
   inputFiles: string[],
   rawOpts?: BuildOptions,
 ): Promise<ProjectIndex> {
+  assertNativeRequiredAvailable();
   // Discovery, manifest loading, and cache checks all precede file processing, so stamp the
   // operation origin here and let the completion event report the caller's whole wait.
   const opts: BuildOptions = { ...rawOpts, progressStartedAt: rawOpts?.progressStartedAt ?? performance.now() };
@@ -2246,6 +2235,7 @@ export async function buildProjectIndexIncremental(
   projectRoot: string,
   rawOpts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
+  assertNativeRequiredAvailable();
   const opts: IncrementalBuildOptions = {
     ...rawOpts,
     progressStartedAt: rawOpts?.progressStartedAt ?? performance.now(),
@@ -2262,8 +2252,11 @@ export async function buildProjectIndexIncremental(
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
-  const { normalizedProjectRoot, report, timings, totalStart, cacheMode, cacheEnabled, onFallbackImportExtraction } =
-    createIndexBuildRunState(projectRoot, opts, graphOptions);
+  const { normalizedProjectRoot, report, timings, totalStart, cacheMode, cacheEnabled } = createIndexBuildRunState(
+    projectRoot,
+    opts,
+    graphOptions,
+  );
   let checkProgressActive = false;
   const startCheckProgress = (): void => {
     if (checkProgressActive) return;
@@ -2632,7 +2625,6 @@ export async function buildProjectIndexIncremental(
         modules: new Map(),
         byFile: new Map(),
         projectRoot: normalizedProjectRoot,
-        ...(opts?.native ? { nativeMode: opts.native } : {}),
         exportCache: new Map(),
         scopeCache: new Map(),
         parsed: new Map(),
@@ -2697,7 +2689,6 @@ export async function buildProjectIndexIncremental(
       if (timings) timings.graphMs = 0;
       if (report) {
         if (snapshotLoad.analysisReport?.backend) report.backend = snapshotLoad.analysisReport.backend;
-        if (snapshotLoad.analysisReport?.graph) report.graph = snapshotLoad.analysisReport.graph;
         if (!report.backend) initNativeBackendReport(report);
         snapshot.buildReport = report;
       }
@@ -2948,7 +2939,6 @@ export async function buildProjectIndexIncremental(
               parsedCacheMaxEntries: parsedCacheMaxEntries(opts),
               jsonDependencies,
               bloomFilterCache,
-              onFallbackImportExtraction,
               fileSignatures,
               cacheEnabled,
               ...(resolverEnvironmentFingerprint !== undefined ? { resolverEnvironmentFingerprint } : {}),
@@ -3032,12 +3022,8 @@ export async function buildProjectIndexIncremental(
           : await collectGraph(projectRoot, filesList, {
               parsed: parsedMap,
               fast: !!graphOptions.fast,
-              ...(graphOptions.fastRegexDisabledLanguages
-                ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
-                : {}),
               resolveNodeModules: !!graphOptions.resolveNodeModules,
               dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-              ...(opts?.native ? { native: opts.native } : {}),
               ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
               threads: conc,
               ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
@@ -3045,7 +3031,6 @@ export async function buildProjectIndexIncremental(
               allFiles: Array.from(allFiles),
               fileSignatures,
               cachedFileEdges: cachedGraphEntries,
-              ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
               ...(baseGraph ? { baseGraph } : {}),
               replaceFiles: new Set<string>(changedFiles),
               onFileEdges: (file, entry) => {
@@ -3163,6 +3148,7 @@ export async function buildProjectIndexIncremental(
 }
 
 export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBuildOptions): Promise<GraphDeltaReport> {
+  assertNativeRequiredAvailable();
   const manifest = await loadManifest(projectRoot, opts);
   const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest?.files);
   const graphOptions = normalizeGraphOptions(opts?.graph);

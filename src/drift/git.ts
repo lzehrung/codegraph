@@ -18,7 +18,6 @@ function snapshotOptions(options: ArchitectureDriftOptions): ArchitectureSnapsho
     ...(options.discovery ? { discovery: options.discovery } : {}),
     ...(options.graph ? { graph: options.graph } : {}),
     ...(options.index ? { index: options.index } : {}),
-    ...(options.native !== undefined ? { native: options.native } : {}),
     ...(options.duplicateLimit !== undefined ? { duplicateLimit: options.duplicateLimit } : {}),
   };
 }

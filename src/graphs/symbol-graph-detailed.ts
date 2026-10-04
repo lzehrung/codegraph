@@ -193,7 +193,7 @@ export async function buildSymbolGraphDetailed(
   index: ProjectIndex,
   opts?: BuildDetailedSymbolGraphOptions,
 ): Promise<DetailedSymbolGraph> {
-  assertNativeRequiredAvailable(index.nativeMode);
+  assertNativeRequiredAvailable();
   await ensurePhpNamespaceSymbolIndex(index);
   const base = await buildSymbolGraph(index, opts?.files ? { files: opts.files } : undefined);
   const configuredMaxEdges =
@@ -376,7 +376,7 @@ export async function buildSymbolGraphDetailed(
         continue;
       }
       if (sup && src !== undefined && !tree) {
-        const nativeTreeExecution = getNativeSyntaxTreeExecution(src, sup, index.nativeMode);
+        const nativeTreeExecution = getNativeSyntaxTreeExecution(src, sup);
         if (nativeTreeExecution.tree) {
           tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
         } else {

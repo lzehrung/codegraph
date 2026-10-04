@@ -12,7 +12,6 @@ import {
   type ProjectIndex,
   type SymbolDef,
 } from "../indexer/types.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import {
@@ -32,7 +31,6 @@ export type NavigationCommandContext = {
   positionals: string[];
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
-  nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
   cacheLocation: CacheLocation | undefined;
@@ -55,7 +53,6 @@ function indexOptions(context: NavigationCommandContext): LoadCurrentProjectInde
     ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),
     ...(context.hasFlag("--cache-strict") ? { cacheStrict: true } : {}),
     ...(context.hasFlag("--cache-verify") ? { cacheVerify: true } : {}),
-    ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
   };
 }

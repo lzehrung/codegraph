@@ -7,10 +7,10 @@ import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import {
   assertNativeRequiredAvailable,
   getNativeSyntaxTreeExecution,
+  getNativeQueryExecution,
   isNativeRequiredUnavailableError,
   type NativeCapture,
   type NativeQueryResults,
-  type NativeRuntimeMode,
 } from "../native/tree-sitter-native.js";
 import { maskJsLikeCommentsAndStrings, maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
@@ -697,15 +697,17 @@ export function collectLocalsAndExportsFromSource(
   opts?: {
     tree?: SyntaxTreeLike;
     nativeQueries?: NativeQueryResults | null;
-    nativeMode?: NativeRuntimeMode;
     logLevel?: LogLevel;
   },
 ): ModuleIndex {
   if (isGraphOnlyLanguage(support.id)) {
     return { file, exports: [], imports, locals: [] };
   }
-  assertNativeRequiredAvailable(opts?.nativeMode);
+  assertNativeRequiredAvailable();
 
+  const nativeQueries =
+    opts?.nativeQueries === undefined ? getNativeQueryExecution(source, support).results : opts.nativeQueries;
+  if (!nativeQueries) return { file, exports: [], imports, locals: [] };
   const normalizeDocstringLine = (line: string) => line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
 
   const extractLeadingDocstring = (node: SyntaxNodeLike | null): string | undefined => {
@@ -873,25 +875,15 @@ export function collectLocalsAndExportsFromSource(
     return base;
   };
 
-  const nativeQueries = opts?.nativeQueries ?? null;
   let tree: SyntaxTreeLike | null = opts?.tree ?? null;
   let treeAttempted = !!tree;
 
-  // Lazily parse a native-projected tree on first access. In zero-native mode
-  // there is no grammar fallback; callers get reduced locals/exports instead.
+  // Syntax trees enrich successful native captures with declaration context and docstrings.
   const ensureTree = (): SyntaxTreeLike | null => {
     if (tree || treeAttempted) return tree;
     treeAttempted = true;
-    try {
-      const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support, opts?.nativeMode);
-      if (nativeTreeExecution.tree) {
-        tree = new ProjectedSyntaxTree(source, nativeTreeExecution.tree);
-        return tree;
-      }
-    } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
-      /* reduced mode: ignore */
-    }
+    const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support);
+    if (nativeTreeExecution.tree) tree = new ProjectedSyntaxTree(source, nativeTreeExecution.tree);
     return tree;
   };
 
@@ -1724,7 +1716,7 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  // Regex fallback can create CommonJS callables after native local collection.
+  // Complete CommonJS callables discovered after native local collection.
   if (isJsLike) {
     for (const local of locals) {
       if (local.kind !== SymbolKind.Function || local.callable) continue;

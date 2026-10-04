@@ -170,7 +170,6 @@ export async function buildArchitectureSnapshot(
     ...options.index,
     ...(options.discovery !== undefined ? { discovery: options.discovery } : {}),
     ...(options.graph !== undefined ? { graph: options.graph } : {}),
-    ...(options.native !== undefined ? { native: options.native } : {}),
   };
   const index = files
     ? await buildProjectIndexFromFiles(root, files, indexOptions)

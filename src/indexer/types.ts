@@ -1,8 +1,7 @@
-import type { FallbackImportExtractionReason } from "../graphs/specifiers.js";
 import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LogLevel } from "../logging.js";
-import type { NativeFallbackReason, NativeRuntimeMode } from "../native/contracts.js";
+import type { NativeFallbackReason } from "../native/contracts.js";
 import type { ScopeIndex } from "./scope-types.js";
 import type { ReferenceCandidateIndex } from "./reference-candidate-types.js";
 import type { ParsedFileContext } from "./parse-context.js";
@@ -127,10 +126,9 @@ export type SqlNavigationCache = {
   };
 };
 export type CachedAnalysisSummary = {
-  mode: "semantic" | "mixed" | "reduced";
-  backend: "native" | "mixed" | "graph-only" | "unknown";
+  mode: "semantic";
+  backend: "native" | "unknown";
   parserDegradedFiles: number;
-  fallbackImportExtractionFiles: number;
   nativeFilesUsed: number;
   nativeFilesFellBack: number;
   label: string;
@@ -143,7 +141,6 @@ export type ProjectIndex = {
   byFile: Map<FileId, ModuleIndex>;
   projectRoot?: string;
   languageExtensions?: LanguageExtensionMap;
-  nativeMode?: NativeRuntimeMode;
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;
   parsed?: Map<string, ParsedFileContext> | undefined;
@@ -165,9 +162,9 @@ export type ProjectIndex = {
 /**
  * Options for full index construction.
  *
- * For deterministic agent packs, the most common choices are `native: "auto"`,
- * optional `discovery` globs, and a `report` object when the caller wants
- * timings/backend diagnostics alongside the resulting index.
+ * For deterministic agent packs, the most common choices are optional `discovery` globs
+ * and a `report` object when the caller wants timings/backend diagnostics alongside the
+ * resulting index.
  */
 export type LanguageExtensionMap = import("../languages.js").LanguageExtensionMap;
 
@@ -194,7 +191,6 @@ export type BuildOptions = {
   cacheStrict?: boolean;
   useBloomFilters?: boolean;
   graph?: GraphBuildOptions;
-  native?: NativeRuntimeMode;
   cacheVerify?: boolean;
   incrementalStrict?: boolean;
   report?: BuildReport;
@@ -286,23 +282,6 @@ export type BuildFileReport = {
   errors?: Array<{ file: string; message: string }>;
 };
 
-export type FallbackImportExtractionReport = {
-  total: number;
-  byLanguage: Record<string, number>;
-  files: Record<
-    string,
-    {
-      language: string;
-      reason: FallbackImportExtractionReason;
-    }
-  >;
-  byReason?: Record<FallbackImportExtractionReason, number>;
-};
-
-export type GraphReport = {
-  fallbackImportExtraction: FallbackImportExtractionReport;
-};
-
 export type ManifestReport = {
   used: boolean;
   reused: boolean;
@@ -391,7 +370,6 @@ export type BuildReport = {
   timings: BuildTimingReport;
   cache?: CacheReport;
   files?: BuildFileReport;
-  graph?: GraphReport;
   manifest?: ManifestReport;
   backend?: BackendReport;
   workerPool?: WorkerPoolReport;
@@ -446,7 +424,7 @@ export type UndocumentedApiSurface = {
 export type GoToRequest = { file: FileId; line: number; column: number };
 
 export type ResolutionProvenance = {
-  backend?: "native" | "graph-only" | "heuristic";
+  backend?: "native" | "heuristic";
   resolution?: "exact" | "import" | "import-star" | "namespace" | "reexport" | "php-qualified" | "member-access";
   confidence?: "high" | "medium" | "low";
 };

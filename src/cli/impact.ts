@@ -21,7 +21,6 @@ import {
   parseDuplicateLeadScope,
   type DuplicateLeadSummary,
 } from "../duplicates-leads.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { Graph } from "../types.js";
 import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import {
@@ -56,7 +55,6 @@ export type ImpactCommandContext = {
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
   parsedOptions: ReadonlyMap<string, readonly string[]>;
-  nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   graphOptions: GraphBuildOptions | undefined;
   progressHandler: BuildOptions["onProgress"];
@@ -441,7 +439,6 @@ function buildIndexOptions(
     onProgress: context.progressHandler,
     ...(explicitCache ? { cache: explicitCache } : {}),
     ...(keepParsed ? { keepParsed } : {}),
-    ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
     ...(options.cacheDir ? { cacheDir: options.cacheDir } : {}),
     ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),

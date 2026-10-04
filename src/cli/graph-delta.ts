@@ -2,7 +2,6 @@ import fsp from "node:fs/promises";
 import { buildGraphDelta } from "../indexer/build-index.js";
 import { type CacheLocation, type IncrementalBuildOptions } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { parseCacheModeOption, parseNonNegativeIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
@@ -14,7 +13,6 @@ export type GraphDeltaCommandContext = {
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
   cwd: () => string;
-  nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   graphOptions: GraphBuildOptions | undefined;
   languageExtensions: IncrementalBuildOptions["languageExtensions"];
@@ -71,7 +69,6 @@ export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext)
     ...(context.progressHandler ? { onProgress: context.progressHandler } : {}),
   };
   if (context.languageExtensions) deltaOptions.languageExtensions = context.languageExtensions;
-  if (context.nativeMode !== "auto") deltaOptions.native = context.nativeMode;
   if (cache !== undefined) deltaOptions.cache = cache;
   const cacheDir = context.getOpt("--cache-dir");
   if (cacheDir) deltaOptions.cacheDir = cacheDir;

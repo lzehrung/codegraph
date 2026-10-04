@@ -592,7 +592,7 @@ async function findReferencesInternal(
   let provenance: ResolutionProvenance | undefined;
   if ("def" in req) {
     def = req.def;
-    provenance = createNavigationProvenance(index, "exact", "high");
+    provenance = createNavigationProvenance("exact", "high");
   } else {
     const module = index.byFile.get(fileIdentityKey(req.file));
     const localAtPosition = module?.locals.find((local) =>
@@ -603,7 +603,7 @@ async function findReferencesInternal(
     );
     if (localAtPosition) {
       def = localAtPosition;
-      provenance = createNavigationProvenance(index, "exact", "high");
+      provenance = createNavigationProvenance("exact", "high");
     } else {
       const gotoResult = await goToDefinition(index, req);
       if (gotoResult.status === "ok") {

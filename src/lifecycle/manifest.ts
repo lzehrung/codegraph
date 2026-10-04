@@ -527,7 +527,6 @@ function summarizeLifecycleBuildOptions(buildOptions: BuildOptions | undefined) 
   return {
     ...summarizeBuildOptions(buildOptions),
     graph: normalizeGraphOptions(buildOptions?.graph),
-    native: buildOptions?.native ?? "auto",
   };
 }
 

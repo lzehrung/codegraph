@@ -135,40 +135,11 @@ export const duplicateImportStatementQueries: Readonly<Record<string, string>> =
   `,
 };
 
-const duplicateImportStatementFallbackPatterns: Readonly<Partial<Record<string, RegExp>>> = {
-  // astro/mdx have no native grammar, so duplicateImportStatementQueries omits them
-  // and import masking uses these regexes only.
+const graphOnlyImportStatementPatterns: Readonly<Partial<Record<string, RegExp>>> = {
   astro: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
-  c: /^[\t ]*#\s*include(?:[^\r\n\\]|\\(?:\r?\n|.))*$/gmu,
-  cpp: /^[\t ]*#\s*include(?:[^\r\n\\]|\\(?:\r?\n|.))*$/gmu,
-  csharp: /^[\t ]*(?:global[\t ]+)?using\b(?![\t ]*(?:var\b|\())[\s\S]*?;/gmu,
-  css: /^[\t ]*@import\b[\s\S]*?;/gmu,
-  go: /^[\t ]*import\b(?:[\t ]*\([\s\S]*?\)|[^\r\n]*)/gmu,
-  java: /^[\t ]*import[\t ]+(?:static[\t ]+)?[^\r\n;]+;/gmu,
-  js: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
-  kotlin: /^[\t ]*import[\t ]+[^\r\n]*/gmu,
-  less: /^[\t ]*@import\b[\s\S]*?;/gmu,
   mdx: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
-  php: /^[\t ]*(?:require(?:_once)?|include(?:_once)?|use)\b(?![\t ]*\()[\s\S]*?;/gmu,
-  python:
-    /^[\t ]*(?:from[\t ]+[^\r\n]+?[\t ]+import(?:[\t ]*\([\s\S]*?\)|[^\r\n]*(?:\\\r?\n[^\r\n]*)*)|import[\t ]+[^\r\n]*(?:\\\r?\n[^\r\n]*)*)/gmu,
-  ruby: /^[\t ]*(?:require(?:_relative)?\b[^\r\n]*|(?:load|autoload)\b[^\r\n;]*)/gmu,
-  rust: /^[\t ]*(?:extern[\t ]+crate|use)\b[\s\S]*?;|^[\t ]*mod\b[^\r\n;]*;/gmu,
-  scss: /^[\t ]*@(import|use|forward)\b[\s\S]*?;/gmu,
-  swift: /^[\t ]*import[\t ]+[^\r\n]*/gmu,
-  ts: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
-  tsx: /^[\t ]*import\b(?![\t ]*\()(?:[\t ]*["'][^"']*["']|[\s\S]*?\bfrom[\t ]*["'][^"']*["']|[\s\S]*?;)/gmu,
-  zig: /^[\t ]*(?:pub[\t ]+)?const\b(?:[^\r\n;]*@import[\t ]*\([^;\r\n]*\)[\t ]*;|[^\r\n;]*@cImport\s*\()/gmu,
 };
 
-const RUBY_IMPORT_STRING = String.raw`(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')`;
-const RUBY_AUTOLOAD_NAME = String.raw`(?::[^\s,()]+|${RUBY_IMPORT_STRING})`;
-const RUBY_LOAD_TRAILING_ARGS = String.raw`(?:\s*,\s*[^)\r\n]*)?`;
-const RUBY_LINE_COMMENT = String.raw`(?:\s*#.*)?`;
-const RUBY_STATIC_LOAD = new RegExp(
-  String.raw`^(?:load\s*\(\s*${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS}\s*\)|load\s+${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS}|autoload\s*\(\s*${RUBY_AUTOLOAD_NAME}\s*,\s*${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS}\s*\)|autoload\s+${RUBY_AUTOLOAD_NAME}\s*,\s*${RUBY_IMPORT_STRING}${RUBY_LOAD_TRAILING_ARGS})${RUBY_LINE_COMMENT}\s*$`,
-  "u",
-);
 function hashText(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -228,60 +199,24 @@ function languageForFile(filePath: string, source: string): LanguageForFileResul
   return undefined;
 }
 
-// Called just after "(" in source whose comments and strings are already masked.
-function balancedImportCallEnd(maskedSource: string, start: number): number | undefined {
-  let depth = 1;
-  for (let index = start; index < maskedSource.length; index += 1) {
-    if (maskedSource[index] === "(") depth += 1;
-    else if (maskedSource[index] === ")") {
-      depth -= 1;
-      if (!depth) return index + 1;
-    }
-  }
-  return undefined;
-}
-
-function fallbackImportStatementRanges(source: string, languageId: string): SourceRange[] {
-  const pattern = duplicateImportStatementFallbackPatterns[languageId];
+function graphOnlyImportStatementRanges(source: string, languageId: string): SourceRange[] {
+  const pattern = graphOnlyImportStatementPatterns[languageId];
   if (!pattern) return [];
-
   const ranges: SourceRange[] = [];
   const maskedSource = maskJsLikeCommentsStringsAndRegex(source);
   for (const match of maskedSource.matchAll(pattern)) {
     if (match.index === undefined) continue;
-    let end = match.index + match[0].length;
-    if (languageId === "ruby" && /^\s*(?:load|autoload)\b/.test(match[0])) {
-      const callOpen = /^\s*(?:load|autoload)\s*\(/.exec(match[0]);
-      if (callOpen) {
-        const close = balancedImportCallEnd(maskedSource, match.index + callOpen[0].length);
-        if (close === undefined) continue;
-        end = close;
-      }
-      if (!RUBY_STATIC_LOAD.test(source.slice(match.index, end).trim())) continue;
-    } else if (languageId === "zig" && match[0].includes("@cImport")) {
-      const close = balancedImportCallEnd(maskedSource, end);
-      if (close === undefined) continue;
-      end = close;
-      while (/\s/.test(maskedSource[end] ?? "") && end < maskedSource.length) end += 1;
-      if (maskedSource[end] !== ";") continue;
-      end += 1;
-    }
-    ranges.push({ start: match.index, end });
+    ranges.push({ start: match.index, end: match.index + match[0].length });
   }
   return ranges;
 }
 
-function importStatementRanges(
-  source: string,
-  languageId: string,
-  nativeMode?: ProjectIndex["nativeMode"],
-): SourceRange[] {
+function importStatementRanges(source: string, languageId: string): SourceRange[] {
   const query = duplicateImportStatementQueries[languageId];
   const support = supportById(languageId);
-  if (!query || !support) return fallbackImportStatementRanges(source, languageId);
-  const execution = getNativeSingleQueryExecution(source, support, query, nativeMode);
-  if (execution.matches === null) return fallbackImportStatementRanges(source, languageId);
-
+  if (!query || !support) return graphOnlyImportStatementRanges(source, languageId);
+  const execution = getNativeSingleQueryExecution(source, support, query);
+  if (execution.matches === null) return [];
   const ranges: SourceRange[] = [];
   const byteIndexMap = buildByteToStringIndexMap(source);
   for (const match of execution.matches) {
@@ -322,33 +257,25 @@ function maskSourceRanges(source: string, ranges: readonly SourceRange[]): strin
   return pieces.join("");
 }
 
-function sfcImportStatementRanges(source: string, nativeMode?: ProjectIndex["nativeMode"]): SourceRange[] {
+function sfcImportStatementRanges(source: string): SourceRange[] {
   const ranges: SourceRange[] = [];
   for (const block of parseSFC(source)) {
     if (block.type === "script") {
-      ranges.push(
-        ...importStatementRanges(prepareSFCBlockSource(source, block), scriptLanguageIdForBlock(block), nativeMode),
-      );
+      ranges.push(...importStatementRanges(prepareSFCBlockSource(source, block), scriptLanguageIdForBlock(block)));
     } else if (block.type === "style") {
       const languageId = styleLanguageKey(block);
-      if (languageId)
-        ranges.push(...importStatementRanges(prepareSFCBlockSource(source, block), languageId, nativeMode));
+      if (languageId) ranges.push(...importStatementRanges(prepareSFCBlockSource(source, block), languageId));
     }
   }
   return ranges;
 }
 
 /** Removes import declarations and directives before duplicate units are tokenized. */
-export function maskDuplicateImportStatements(
-  source: string,
-  filePath: string,
-  languageId: string,
-  nativeMode?: ProjectIndex["nativeMode"],
-): string {
+export function maskDuplicateImportStatements(source: string, filePath: string, languageId: string): string {
   const hasEmbeddedImportLanguages = Boolean(detectSFCFramework(filePath)) || languageId === "html";
   const ranges = hasEmbeddedImportLanguages
-    ? sfcImportStatementRanges(source, nativeMode)
-    : importStatementRanges(source, languageId, nativeMode);
+    ? sfcImportStatementRanges(source)
+    : importStatementRanges(source, languageId);
   return maskSourceRanges(source, ranges);
 }
 
@@ -388,11 +315,11 @@ function internalUnitId(unit: DuplicateUnitDraft, absoluteFile: string): string 
   return `${normalizePath(absoluteFile)}:${unit.startLine}:${unit.endLine}:${unit.kind}:${unit.name ?? ""}`;
 }
 
-export function normalizedDuplicateTokens(text: string, nativeMode: ProjectIndex["nativeMode"] | undefined): string[] {
+export function normalizedDuplicateTokens(text: string): string[] {
   if (hasUnterminatedQuotedLiteral(text)) {
     return normalizeDuplicateSourceTokens(text);
   }
-  return getNativeDuplicateTokens(text, nativeMode)?.normalizedTokens ?? normalizeDuplicateSourceTokens(text);
+  return getNativeDuplicateTokens(text)?.normalizedTokens ?? normalizeDuplicateSourceTokens(text);
 }
 
 export function duplicateTextLines(text: string): string[] {
@@ -444,12 +371,11 @@ export function buildInternalUnit(
   text: string,
   shingleSize: number,
   windowSize: number,
-  nativeMode: ProjectIndex["nativeMode"] | undefined,
   handles: { symbolHandle?: string; sqlHandle?: string } = {},
   astShapeHash?: string,
 ): DuplicateInternalUnit {
   const rawHash = hashText(text);
-  const normalizedTokens = normalizedDuplicateTokens(text, nativeMode);
+  const normalizedTokens = normalizedDuplicateTokens(text);
   const signatures = winnowShingles(makeShingles(normalizedTokens, shingleSize), windowSize, DEFAULT_MAX_FINGERPRINTS);
   const fileHandle = formatDuplicateFileHandle(unit.file);
   const chunkHandle = formatDuplicateChunkHandle(unit.file, unit.startLine);
@@ -479,7 +405,6 @@ export function makeSymbolUnit(
   symbol: SymbolDef,
   chunk: Chunk,
   projectRoot: string | undefined,
-  nativeMode: ProjectIndex["nativeMode"] | undefined,
   shingleSize: number,
   windowSize: number,
   astContext: DuplicateAstContext | undefined,
@@ -507,7 +432,6 @@ export function makeSymbolUnit(
     chunk.text,
     shingleSize,
     windowSize,
-    nativeMode,
     {
       ...(sqlHandle !== undefined ? { sqlHandle } : {}),
       ...(symbolHandle !== undefined ? { symbolHandle } : {}),
@@ -601,7 +525,6 @@ export async function getDuplicateAstContext(
       file,
       source: prepared.source,
       sup: prepared.sup,
-      ...(index.nativeMode !== undefined ? { nativeMode: index.nativeMode } : {}),
       nativeQueries: null,
     });
     if (!attempt.parsed) {
@@ -714,7 +637,6 @@ export function makeChunkUnits(
   filePath: string,
   chunks: readonly Chunk[],
   projectRoot: string | undefined,
-  nativeMode: ProjectIndex["nativeMode"] | undefined,
   shingleSize: number,
   windowSize: number,
   astContext: DuplicateAstContext | undefined,
@@ -735,7 +657,6 @@ export function makeChunkUnits(
       chunk.text,
       shingleSize,
       windowSize,
-      nativeMode,
       {},
       astShapeHashForRange(astContext, chunk.startLine, chunk.endLine),
     );
@@ -856,7 +777,7 @@ export async function buildDuplicateUnitsForFile(
   const language = languageForFile(file, source);
   if (!language) return [];
 
-  const sourceWithoutImports = maskDuplicateImportStatements(source, file, language.id, index.nativeMode);
+  const sourceWithoutImports = maskDuplicateImportStatements(source, file, language.id);
   const astContext = language.textOnly
     ? undefined
     : await getDuplicateAstContext(index, file, sourceWithoutImports, astContextCache);
@@ -872,9 +793,9 @@ export async function buildDuplicateUnitsForFile(
     .map((symbol) => {
       const chunk = findChunkForSymbol(symbol, symbolChunks);
       if (!chunk) return undefined;
-      return makeSymbolUnit(symbol, chunk, projectRoot, index.nativeMode, shingleSize, windowSize, astContext);
+      return makeSymbolUnit(symbol, chunk, projectRoot, shingleSize, windowSize, astContext);
     })
     .filter((unit): unit is DuplicateInternalUnit => unit !== undefined);
-  const chunkUnits = makeChunkUnits(file, chunks, projectRoot, index.nativeMode, shingleSize, windowSize, astContext);
+  const chunkUnits = makeChunkUnits(file, chunks, projectRoot, shingleSize, windowSize, astContext);
   return [...symbolUnits, ...chunkUnits];
 }

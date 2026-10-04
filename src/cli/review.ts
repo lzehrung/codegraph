@@ -13,7 +13,6 @@ import {
   type DuplicateLeadScope,
   type DuplicateLeadSummary,
 } from "../duplicates-leads.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import {
   REVIEW_SUMMARY_CANDIDATES_PER_CONFIDENCE_LIMIT,
   REVIEW_SUMMARY_CHANGED_FILE_LIMIT,
@@ -45,7 +44,6 @@ export type ReviewCommandContext = {
   commandReport: ReviewCommandReport | undefined;
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
-  nativeMode: NativeRuntimeMode;
   useNativeWorkers: boolean;
   graphOptions: GraphBuildOptions | undefined;
   progressHandler: BuildOptions["onProgress"];
@@ -312,7 +310,6 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   if (changedSince !== undefined) reviewOpts.changedSince = changedSince;
   if (threads !== undefined) reviewOpts.threads = threads;
   reviewOpts.cache = cache ?? "disk";
-  if (context.nativeMode !== "auto") reviewOpts.native = context.nativeMode;
   if (context.useNativeWorkers) reviewOpts.useNativeWorkers = true;
   if (cacheStrict) reviewOpts.cacheStrict = true;
   if (cacheVerify) reviewOpts.cacheVerify = true;

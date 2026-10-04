@@ -24,12 +24,12 @@ export function rangeFromNativeCapture(capture: NativeCapture, byteIndexMap: Byt
   const endPosition = stringPositionForBytePoint(byteIndexMap, capture.end);
   return {
     start: {
-      line: capture.start.row + 1,
+      line: startPosition.row + 1,
       column: startPosition.column + 1,
       index: stringIndexForByte(byteIndexMap, capture.start.index),
     },
     end: {
-      line: capture.end.row + 1,
+      line: endPosition.row + 1,
       column: endPosition.column + 1,
       index: stringIndexForByte(byteIndexMap, capture.end.index),
     },

@@ -10,7 +10,6 @@ import type {
 } from "../drift/types.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { BuildOptions } from "../indexer/types.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import { parseNonNegativeIntegerOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
 import { exitWithError } from "./context.js";
 
@@ -19,7 +18,6 @@ export interface DriftCommandContext {
   positionals: string[];
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
-  nativeMode: NativeRuntimeMode;
   graphOptions?: GraphBuildOptions;
   indexOptions?: BuildOptions;
   writeJSONLine: (value: unknown) => void;
@@ -112,7 +110,6 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
       ...(effectivePublicApi !== undefined ? { publicApi: effectivePublicApi } : {}),
       ...(context.graphOptions ? { graph: context.graphOptions } : {}),
       ...(context.indexOptions ? { index: context.indexOptions } : {}),
-      ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     });
   } catch (error) {
     exitWithError(context, error, 1);

@@ -35,8 +35,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 83 stores Java package-private instance and protected member visibility.
  * Epoch 84 resolves the visible first segment of a C++ qualified name before the direct path.
  * Epoch 85 classifies Python TYPE_CHECKING imports as type-only and resolves declared-typed field chains.
+ * Epoch 86 removes the reduced-mode import recovery and native runtime option from persisted
+ * cache identity; stale modules and graph edges must be rebuilt with required native parsing.
  */
-export const CORE_ALGORITHM_EPOCH = 85;
+export const CORE_ALGORITHM_EPOCH = 86;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -227,7 +229,7 @@ function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
     cacheStrict: opts?.cacheStrict ?? true,
     useBloomFilters: opts?.useBloomFilters ?? true,
     incrementalStrict: opts?.incrementalStrict ?? false,
-    nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
+    nativeRuntimeFingerprint: getNativeRuntimeFingerprint(),
     implementationFingerprint: getImplementationFingerprint(),
     coreAlgorithmEpoch: CORE_ALGORITHM_EPOCH,
     ...(discovery ? { discovery } : {}),
@@ -237,19 +239,6 @@ function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
 
 export function summarizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
   return normalizeBuildOptions(opts);
-}
-
-function normalizeLanguageList(list?: string[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of list ?? []) {
-    const normalized = entry.trim().toLowerCase();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  out.sort();
-  return out;
 }
 
 function orderedListsEqual(a: readonly string[], b: readonly string[]): boolean {
@@ -291,7 +280,7 @@ export function diffBuildOptions(
   manifestOpts: ManifestBuildOptions | undefined,
   currentOpts: BuildOptions | undefined,
 ): string[] {
-  if (!manifestOpts) return ["native"];
+  if (!manifestOpts) return ["manifest"];
   const normalizedManifest = normalizeManifestBuildOptions(manifestOpts);
   const normalizedCurrent = normalizeBuildOptions(currentOpts);
   const diffs: string[] = [];
@@ -325,10 +314,8 @@ export function diffBuildOptions(
 
 export function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptions {
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
-  const fastRegexDisabledLanguages = normalizeLanguageList(opts?.fastRegexDisabledLanguages);
   return {
     fast: !!opts?.fast,
-    ...(fastRegexDisabledLanguages.length ? { fastRegexDisabledLanguages } : {}),
     resolveNodeModules: !!opts?.resolveNodeModules,
     dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
     ...(resolutionHints.length ? { resolutionHints } : {}),
@@ -345,9 +332,6 @@ export function graphOptionsEqual(a?: GraphBuildOptions, b?: GraphBuildOptions):
     return false;
   }
   if (!!normalizedA.dynamicImportHeuristics !== !!normalizedB.dynamicImportHeuristics) {
-    return false;
-  }
-  if (!orderedListsEqual(normalizedA.fastRegexDisabledLanguages ?? [], normalizedB.fastRegexDisabledLanguages ?? [])) {
     return false;
   }
   if (!orderedListsEqual(normalizedA.resolutionHints ?? [], normalizedB.resolutionHints ?? [])) {

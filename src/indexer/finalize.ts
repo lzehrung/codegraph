@@ -60,7 +60,6 @@ export async function finalizeProjectIndex(args: {
     ...(languageExtensions ? { languageExtensions } : {}),
     exportCache: new Map(),
     scopeCache: new Map(),
-    ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
     ...(parsed ? { parsed } : {}),
     ...(args.bloomFilterCache ? { bloomFilters: args.bloomFilterCache } : {}),
     projectFiles,

@@ -245,19 +245,6 @@ export function rustGraphModuleSpecifier(source: string, moduleName: string, sta
   return found?.join("::") ?? moduleName;
 }
 
-export function rustStatementStartIndex(
-  source: string,
-  statementText: string,
-  statementStartIndex?: number,
-  searchFrom = 0,
-): number | undefined {
-  if (statementStartIndex !== undefined) return statementStartIndex;
-  const normalized = statementText.trim();
-  if (!normalized) return undefined;
-  const index = source.indexOf(normalized, searchFrom);
-  return index >= 0 ? index : undefined;
-}
-
 function rustOuterAttributeStartEndingAt(source: string, end: number): number | null {
   for (let start = end - 2; start >= 0; start -= 1) {
     if (source[start] !== "#") continue;
