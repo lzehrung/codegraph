@@ -13,9 +13,21 @@ export type AnalysisSummary = {
   label: string;
 };
 
+type AnalysisCoverage = Pick<AnalysisSummary, "parserDegradedFiles" | "nativeFilesFellBack">;
+
+/** Files the native parser skipped (for example `sourceTooLarge` or `queryFailure`). */
+export function analysisSkippedFileCount(summary: AnalysisCoverage): number {
+  return Math.max(summary.parserDegradedFiles, summary.nativeFilesFellBack);
+}
+
+/** True when no file was skipped, so reference and rename evidence covers the whole index. */
+export function isAnalysisComplete(summary: AnalysisCoverage): boolean {
+  return !analysisSkippedFileCount(summary);
+}
+
 export function formatAnalysisSummaryLabel(summary: AnalysisSummary): string {
   const backend = summary.backend === "native" ? "native semantic" : "semantic";
-  const skipped = Math.max(summary.parserDegradedFiles, summary.nativeFilesFellBack);
+  const skipped = analysisSkippedFileCount(summary);
   return skipped ? `${backend} (${skipped} file(s) skipped)` : backend;
 }
 

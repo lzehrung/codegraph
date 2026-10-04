@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { type BuildOptions, type BuildReport, type CacheLocation } from "../indexer/types.js";
-import { summarizeAnalysis, type AnalysisSummary } from "../analysis-summary.js";
+import { isAnalysisComplete, summarizeAnalysis, type AnalysisSummary } from "../analysis-summary.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
@@ -34,7 +34,7 @@ type IndexPrettyOutput = {
 
 function formatIndexOutput(output: IndexPrettyOutput): string {
   const lines = [`Indexed ${output.files} file(s) with ${output.edges} edge(s).`];
-  if (output.analysis.mode !== "semantic") {
+  if (!isAnalysisComplete(output.analysis)) {
     lines.push(`Analysis: ${output.analysis.label}.`);
   }
   if (!output.modules) {

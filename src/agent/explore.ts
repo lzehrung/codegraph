@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AnalysisSummary } from "../analysis-summary.js";
+import { isAnalysisComplete, type AnalysisSummary } from "../analysis-summary.js";
 import { getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/traversal.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { boundList, countOmitted } from "../presentation/bounds.js";
@@ -585,13 +585,13 @@ function buildSummary(
       `No anchors matched "${search.query}".`,
       "Use follow-ups to broaden the search or orient the repository.",
     ];
-    if (search.analysis.mode !== "semantic") {
+    if (!isAnalysisComplete(search.analysis)) {
       summary.push(`Backend: ${search.analysis.label}. Run codegraph doctor for runtime diagnostics.`);
     }
     return summary;
   }
   const summary = [`Found ${search.results.length} anchor(s) for "${search.query}".`];
-  if (search.analysis.mode !== "semantic") {
+  if (!isAnalysisComplete(search.analysis)) {
     summary.push(`Backend: ${search.analysis.label}. Run codegraph doctor for runtime diagnostics.`);
   }
   if (fileView) {
