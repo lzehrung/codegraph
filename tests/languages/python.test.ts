@@ -800,14 +800,45 @@ describe("Python native import bindings", () => {
         const legacy = collectModuleSpecifiersFromSource(PY_SUPPORT, source, {
           compactNativeImports: {
             imports: [
-              { patternIndex: 0, captures: [{ name: "stmt", text: "import nested_type" }] },
-              { patternIndex: 0, captures: [{ name: "stmt", text: "import runtime_plain" }] },
+              {
+                patternIndex: 0,
+                captures: [
+                  { name: "stmt", text: "import nested_type" },
+                  { name: "from", text: "nested_type" },
+                ],
+              },
+              {
+                patternIndex: 0,
+                captures: [
+                  { name: "stmt", text: "import runtime_plain" },
+                  { name: "from", text: "runtime_plain" },
+                ],
+              },
             ],
           },
         });
         expect(legacy.find((entry) => entry.spec === "nested_type")?.typeOnly).toBe(true);
         expect(legacy.find((entry) => entry.spec === "runtime_plain")).toBeDefined();
         expect(legacy.find((entry) => entry.spec === "runtime_plain")?.typeOnly).not.toBe(true);
+        // Quoted import text in a guarded suite must not be taken for the later real statement.
+        const quoted = ["if TYPE_CHECKING:", '    marker = "import runtime_dep"', "import runtime_dep", ""].join(
+          newline,
+        );
+        const quotedLegacy = collectModuleSpecifiersFromSource(PY_SUPPORT, quoted, {
+          compactNativeImports: {
+            imports: [
+              {
+                patternIndex: 0,
+                captures: [
+                  { name: "stmt", text: "import runtime_dep" },
+                  { name: "from", text: "runtime_dep" },
+                ],
+              },
+            ],
+          },
+        });
+        expect(quotedLegacy.find((entry) => entry.spec === "runtime_dep")).toBeDefined();
+        expect(quotedLegacy.find((entry) => entry.spec === "runtime_dep")?.typeOnly).not.toBe(true);
         const index = await buildProjectIndex(root, { cache: "off" });
         const fromConsumer = index.graph.edges.filter(
           (edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer),
