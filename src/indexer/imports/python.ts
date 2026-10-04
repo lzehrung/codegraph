@@ -10,7 +10,11 @@ import { fileIdentityKey } from "../../util/paths.js";
 import { resolveSpecifierTargets } from "../../util/resolution/specifier-targets.js";
 import { resolvePythonSubmoduleExact } from "../../util/resolution/python.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
-import { pythonStatements, pythonTypeCheckingContext } from "../../util/python-type-checking.js";
+import {
+  pythonStatements,
+  pythonTypeCheckingContext,
+  startsPythonCompoundHeader,
+} from "../../util/python-type-checking.js";
 import { buildScopeIndexFromSource } from "../scope.js";
 import type { ImportBinding } from "../types.js";
 import { attributeNamedBindingRanges } from "./binding-ranges.js";
@@ -200,9 +204,7 @@ function isPythonModuleLevelImportPrefix(prefix: string): boolean {
   const cleaned = stripPythonCommentsAndStrings(prefix).trim();
   if (!cleaned) return true;
   // A same-line suite belongs to its compound statement, not the module.
-  if (/^(?:async\s+)?(?:if|elif|else|for|while|try|except|finally|with|def|class)\b/.test(cleaned)) {
-    return false;
-  }
+  if (startsPythonCompoundHeader(cleaned)) return false;
   const delimiters: string[] = [];
   for (const char of cleaned) {
     if (char === "(") delimiters.push(")");

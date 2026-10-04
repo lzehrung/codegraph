@@ -754,7 +754,13 @@ describe("Python native import bindings", () => {
         // tree-sitter-python drops a nested one-line suite in a lone-CR file, so native mode
         // cannot be compared there; the reduced scanner handles both line endings.
         ...(newline === "\n"
-          ? ["if TYPE_CHECKING:", "    if enabled: import inline_nested", "if enabled: import runtime_inline"]
+          ? [
+              "if TYPE_CHECKING:",
+              "    if enabled: import inline_nested",
+              "    match mode:",
+              "        case 1: import case_guarded",
+              "if enabled: import runtime_inline",
+            ]
           : []),
         "import runtime_list_a, runtime_list_b",
         "",
@@ -768,7 +774,7 @@ describe("Python native import bindings", () => {
         "after_continuation",
         "list_first",
         "list_second",
-        ...(newline === "\n" ? ["inline_nested"] : []),
+        ...(newline === "\n" ? ["inline_nested", "case_guarded"] : []),
       ];
       const runtimeSpecs = [
         "typing",
@@ -1142,6 +1148,8 @@ describe("Python native import bindings", () => {
       "); import pkg",
       "if enabled: import feature",
       "if enabled: from models import User",
+      "match value:",
+      "    case 1: import case_first; import case_second",
       "import kept",
     ].join("\n");
     await Promise.all([
@@ -1149,6 +1157,8 @@ describe("Python native import bindings", () => {
       fsp.writeFile(path.join(root, "feature.py"), "value = 1\n"),
       fsp.writeFile(path.join(root, "kept.py"), "value = 1\n"),
       fsp.writeFile(path.join(root, "models.py"), "class User: pass\n"),
+      fsp.writeFile(path.join(root, "case_first.py"), "value = 1\n"),
+      fsp.writeFile(path.join(root, "case_second.py"), "value = 1\n"),
       fsp.writeFile(consumer, source),
     ]);
     try {
@@ -1173,6 +1183,8 @@ describe("Python native import bindings", () => {
           expect.arrayContaining([
             expect.objectContaining({ from: "feature", moduleLevel: false }),
             expect.objectContaining({ kind: "named", from: "models", imported: "User", moduleLevel: false }),
+            expect.objectContaining({ from: "case_first", moduleLevel: false }),
+            expect.objectContaining({ from: "case_second", moduleLevel: false }),
           ]),
         );
       }

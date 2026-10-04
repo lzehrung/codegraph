@@ -70,6 +70,16 @@ function statementSpans(masked: string, start: number, end: number): Array<{ sta
 
 /** Keywords that open a compound statement, whose header ends at a top-level `:`. */
 const COMPOUND_HEADER = /^(?:async[\t ]+)?(?:if|elif|else|while|for|with|try|except|finally|def|class)\b/;
+/**
+ * `match` and `case` are soft keywords: they open a header only when an expression follows,
+ * so `match = 1`, `match: int = 1`, and `match.group()` stay simple statements.
+ */
+const SOFT_COMPOUND_HEADER = /^(?:match|case)[\t ]+(?![\t ]*[=:.,;)\]}])/;
+
+/** True when `statement` (comment- and string-masked) starts a compound statement header. */
+export function startsPythonCompoundHeader(statement: string): boolean {
+  return COMPOUND_HEADER.test(statement) || SOFT_COMPOUND_HEADER.test(statement);
+}
 
 /** Index of the `:` ending a compound header in `[start, end)`, ignoring brackets and `:=`; -1 if none. */
 function compoundHeaderColon(masked: string, start: number, end: number): number {
@@ -111,7 +121,7 @@ export function pythonStatements(masked: string): PythonStatement[] {
       guards.push({ indent: previousIndent, guarded: previousOpensGuard });
     const enclosingGuarded = guards.some((guard) => guard.guarded);
     const contentStart = line.start + leading.length;
-    const headerEnd = COMPOUND_HEADER.test(content) ? compoundHeaderColon(masked, contentStart, line.end) : -1;
+    const headerEnd = startsPythonCompoundHeader(content) ? compoundHeaderColon(masked, contentStart, line.end) : -1;
     if (headerEnd >= 0) {
       // `if c: a; b` puts every statement after the colon in that suite; a TYPE_CHECKING header guards it.
       const guardsSuite = enclosingGuarded || TYPE_CHECKING_HEADER.test(content);
