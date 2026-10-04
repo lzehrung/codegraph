@@ -9,9 +9,15 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Breaking
+
+- Remove the `native` build option and `--native` CLI flag. The native addon is required; a missing addon is an error. Use `codegraph doctor` to diagnose installation problems.
+- Remove reduced mode and regex fallback when native parsing or queries fail. Files over the native size limit are skipped with a `sourceTooLarge` report; native query failures are reported as `queryFailure`.
+- Make `@lzehrung/codegraph-native` a required dependency. Remove the `fallbackImportExtraction` report field and the `reduced` and `mixed` analysis modes. Graph-only document and stylesheet extraction remains supported.
+
 ### Fixed
 
-- Python imports in a `TYPE_CHECKING` guard are type-only bindings and file dependencies, not runtime imports, in native and reduced mode. Without the native addon, `import a, b` now records every module in the list, not only the first. An import in a one-line compound suite, such as `if enabled: import feature` or `if enabled: from models import User`, is now recorded as a non-module-level binding, as native mode already did.
+- Python imports in a `TYPE_CHECKING` guard are type-only bindings and file dependencies, not runtime imports. Native extraction records every module in `import a, b` and records an import in a one-line compound suite, such as `if enabled: import feature` or `if enabled: from models import User`, as a non-module-level binding.
 - TypeScript, Java, C#, and Kotlin resolve calls through chains of declared-typed fields (such as `this.repo.find()`), while unannotated fields remain unresolved and unrelated same-named methods are excluded. A qualified field type such as `B.Repo` in C# is never resolved to a same-named type of the current namespace.
 - Members inherited through a type that declares none of its own now resolve in go-to-definition, references, and call graphs: `Derived d; d.run();` finds `Base.run` in C++, C#, Java, Kotlin, PHP, Swift, TypeScript, JavaScript, and Ruby. Rust finds a trait's default method through a type that implements the trait, and Go finds a promoted method through an embedded struct, including when the method, the type, and the call are in different files of the package.
 - Go: a method declared in another file of the package resolves on a local of that type, and `d.Base.Run()` through an embedded field resolves.

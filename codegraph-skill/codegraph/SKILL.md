@@ -83,7 +83,7 @@ Filename results are suggestions only.
 - Dependency, call, and type hierarchy queries default to depth 1. Increase depth for transitive results.
 - For `file` / `get_file`, offsets are 1-based; continue at `page.nextOffset`. Request indexed context with `--include-graph-context` / `includeGraphContext: true`.
 - Calls and type relationships are proven indexed edges, not complete runtime coverage. Missing edges do not prove absence.
-- Check backend warnings and `analysis` when present. `mixed` or `reduced` analysis has weaker symbol coverage.
+- Check `analysis` and backend reports when present. Skipped oversized files (`sourceTooLarge`) and failed native queries (`queryFailure`) limit coverage; do not infer that missing symbols are absent.
 - Duplicate matches, candidate tests, and compatibility hints are leads. Verify behavior with focused tests or execution.
 
 ## Scope, freshness, and sensitive files
@@ -103,7 +103,7 @@ Filename results are suggestions only.
 - Specialized reads: `codegraph grep --query` for syntax trees, `codegraph chunk` for embeddings, and `codegraph dumpmod` for indexed module data.
 - Compare architecture across revisions: `codegraph drift` or `codegraph graph-delta`.
 - Export graphs with `codegraph graph --json`; `codegraph viewer` is for people. Create bundles with `codegraph artifact build` / MCP `artifact_build`; query SQLite exports with `codegraph sql` / MCP `query_sqlite`.
-- If MCP startup or transport fails, do not keep retrying that server. Run `codegraph doctor` and use the CLI for the session. Doctor separates loaded grammars from graph-only languages; `Backend:` warnings name languages using fallback extraction.
+- If MCP startup or transport fails, do not keep retrying that server. Run `codegraph doctor` to check the required native addon, then use the CLI if it is available. Doctor separates loaded grammars from graph-only languages.
 - First CLI queries may build an index; progress goes to stderr. Use `codegraph orient --report` to diagnose index costs.
 - After a Codegraph update, restart or reload the owning MCP client. `refresh_index` refreshes project state, not running tool code.
 - CLI exit `1` can mean findings, no target, or a runtime failure: read the output. Exit `2` means invalid usage or input.

@@ -15,8 +15,8 @@
   outcome.
 - Verify a change through its consumers, not only at the seam you edited. A correct extractor does
   not prove correct discovery, resolution, navigation, or reporting. Keep a shared rule consistent
-  across every consumer and fallback path, and keep a valid empty result distinct from unsupported,
-  unavailable, or failed work.
+  across every consumer. Native is required; there is no reduced mode. Keep a valid empty result
+  distinct from unsupported, unavailable, or failed work.
 - Always keep documentation updated and accurate while being minimal and concise.
 - Add a concise `[Unreleased]` entry for user-visible behavior, CLI output, support, compatibility, or user-facing fixes. Skip test-only, internal refactoring, and formatting-only changes; state why in the PR when omitted.
 - Keep paragraphs to no more than 4 concise sentences. Prefer bullets for dense details.
@@ -25,7 +25,7 @@
 - Public PR titles, bodies, comments, and release notes MUST NOT include local paths, machine names, usernames, shell prompts, worktree details, or session details. Describe portable commands and observed behavior instead.
 - For repo-understanding flows, start with `node ./dist/cli.js doctor` and `node ./dist/cli.js orient --root . --budget small --json` when `dist` is built; build first if validating the working tree from a fresh checkout.
 - For source-checkout validation and contributor examples, prefer `node ./dist/cli.js ...`; reserve bare `codegraph ...` for published/global install guidance.
-- When package metadata, install scripts, optional native dependencies, or the resolved npm graph changes, update `package-lock.json` in the same change and verify with `npm ci --ignore-scripts --dry-run` unless lifecycle scripts are part of the behavior under test. Release-candidate package installs MUST also disable lifecycle scripts unless those scripts are under test.
+- When package metadata, install scripts, native dependencies, or the resolved npm graph changes, update `package-lock.json` in the same change and verify with `npm ci --ignore-scripts --dry-run` unless lifecycle scripts are part of the behavior under test. Release-candidate package installs MUST also disable lifecycle scripts unless those scripts are under test.
 - Treat `--root` as the project boundary for config lookup, path confinement, and output normalization. Cache/manifests may use the resolved cache anchor (`--cache-dir`/`CODEGRAPH_CACHE_DIR`, repository metadata, or project root); cached contents remain project-relative.
 - Keep discovery glob guidance accurate: `codegraph.config.json` globs are project-root-relative, while CLI `--include-glob`/`--ignore-glob` values are one-off filters relative to each active scan root.
 - Within any claimed cross-language capability, behavior should stay consistent across all supported languages for that capability. Avoid language-subset branches; if a limitation is intentional, document it in the parity docs and cover it with explicit tests in the same change.

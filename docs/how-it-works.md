@@ -10,7 +10,7 @@ codegraph turns source files into a resolved dependency graph and a semantic ind
 4. Use the same indexed symbols, scopes, and edges for navigation, impact analysis, review, and agent queries.
 5. Reuse compatible parsed files and graph edges when caching or a long-lived session is enabled.
 
-The normal supported-language path is Tree-sitter. The native addon accelerates the shared parse and query path; it is not a separate analysis model. `--fast-graph` is a narrower, opt-in shortcut for plain `.js` and `.ts` import specifiers, not a switch that disables all AST work.
+The native addon is required for Tree-sitter parsing and queries. TypeScript code owns discovery, normalization, resolution, graph assembly, semantic operations, and output. `--fast-graph` is a narrower, opt-in shortcut for plain `.js` and `.ts` import specifiers, not a switch that disables all AST work.
 
 The first index-backed question, such as `codegraph explore "..." --root .`, may discover, parse, resolve, and persist a cold index. Interactive progress goes to stderr; later compatible queries reuse the project-root cache and only rebuild or update work invalidated by file, configuration, or option changes.
 
@@ -30,7 +30,7 @@ See [CLI scan and root behavior](./cli.md#project-config) for the distinction be
 
 For supported source languages, language definitions provide a Tree-sitter grammar plus queries and classification rules. The indexer parses each file and normalizes query captures into common records for module specifiers, exports, local definitions, import bindings, and scopes. Later stages therefore consume the same shapes across languages.
 
-In the normal `auto` runtime mode, the native addon performs this Tree-sitter parse and query work when available. TypeScript code owns discovery, normalization, resolution, graph assembly, semantic operations, and output formatting, so native acceleration does not change the public result contract.
+The native addon performs Tree-sitter parse and query work for supported source languages. Source discovery, normalization, resolution, graph assembly, semantic operations, and output formatting remain in TypeScript.
 
 ### Windows installed-runtime cache
 
@@ -46,11 +46,9 @@ The loader requires the cached path and records both the package-owned source an
 
 The shortcut recognizes common `import`, `export ... from`, `require()`, and `import()` forms. It can miss multiline or complex patterns, so use it for a quick dependency overview when that accuracy tradeoff is acceptable. Rerun without it when edges from `.js` or `.ts` files look incomplete or when review accuracy matters.
 
-### Recovery when parsing is unavailable
+### Native failures and skipped files
 
-Recovery is separate from `--fast-graph`. If the native addon is unavailable in `auto` mode, codegraph continues in a reduced graph-only mode and uses the available regex or graph-first recovery extractors. It does not load a second JavaScript grammar backend. Semantic features that need definitions, scopes, or precise syntax may be unavailable or less complete in this mode.
-
-A failed or empty import query can also trigger a language-specific recovery extractor for that file. This is resilience behavior, not the normal architecture. Use `--report` or `codegraph doctor` when you need to confirm which backend ran. `--native on` makes a missing native addon an error; `--native off` explicitly selects reduced behavior.
+The native addon is required. If it cannot load, Codegraph returns an error; run `codegraph doctor` to diagnose the installation. A file over the native size limit is skipped with `sourceTooLarge` in the backend report. A failed native query reports `queryFailure` and does not trigger regex recovery. A valid empty query result stays empty. Graph-only document and stylesheet extraction is unchanged; `--fast-graph` remains a separate, explicit shortcut for plain `.js` and `.ts` dependencies.
 
 ## Resolution and graph construction
 
@@ -148,7 +146,7 @@ An adapter supplies only its call shapes: the runner owns the trivia mask, the s
 - [Language parity](./language-parity.md) records the public capability matrix.
 - [Scenario catalog](./scenario-catalog.md) links claimed behavior to fixtures and regression coverage.
 
-Test the smallest layer that owns a change, then add a small end-to-end fixture when discovery, resolution, or CLI output is part of the contract. Native-required suites verify the normal Tree-sitter path; native-fallback suites verify reduced recovery without presenting it as parity.
+Test the smallest layer that owns a change, then add a small end-to-end fixture when discovery, resolution, or CLI output is part of the contract. Native suites verify extraction, error reporting, and skipped-file behavior without a reduced-mode comparison.
 
 ## Related docs
 

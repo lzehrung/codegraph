@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 42324 | 46112 |   91.79% |
-| Functions |  6672 |  7075 |   94.30% |
-| Branches  | 34850 | 42949 |   81.14% |
+| Lines     | 41649 | 45807 |   90.92% |
+| Functions |  6598 |  7042 |   93.69% |
+| Branches  | 34055 | 42446 |   80.23% |
 
 ## Least-covered Files
 
@@ -17,23 +17,23 @@ Source: `coverage/js/lcov.info`
 | `src/cli/server.ts`                             |  0.00% |     0.00% |    0.00% |
 | `src/mcp/server.ts`                             |  0.00% |     0.00% |    0.00% |
 | `src/sqlite/raw-query-worker.ts`                |  0.00% |     0.00% |    0.00% |
+| `src/indexer/imports/js-text-imports.ts`        | 23.67% |    33.33% |   13.33% |
+| `src/indexer/imports/text-import-extractors.ts` | 35.00% |    40.00% |   28.33% |
 | `src/mcp/lifecycle-health.ts`                   | 37.50% |    16.67% |   33.33% |
 | `src/languages/graph-captures.ts`               | 45.45% |    50.00% |    0.00% |
+| `src/native/backend-report-format.ts`           | 50.00% |    25.00% |   50.00% |
 | `src/cli/explore.ts`                            | 62.50% |   100.00% |   50.00% |
 | `src/impact/call-compatibility/text-scanner.ts` | 65.81% |   100.00% |   70.47% |
 | `src/cli/bootstrap.ts`                          | 66.67% |    50.00% |      n/a |
 | `src/cli/artifact.ts`                           | 70.00% |   100.00% |   72.22% |
-| `src/cli/context.ts`                            | 73.17% |    62.75% |   77.57% |
+| `src/cli/context.ts`                            | 71.78% |    62.75% |   74.77% |
+| `src/native/execution.ts`                       | 72.86% |    81.82% |   59.57% |
 | `src/cli/rename-preview.ts`                     | 73.81% |   100.00% |   62.50% |
 | `src/agent/follow-ups.ts`                       | 74.42% |    81.82% |   54.70% |
 | `src/cli/location.ts`                           | 75.00% |   100.00% |   50.00% |
+| `src/native/js-bridge.ts`                       | 75.00% |   100.00% |   16.67% |
 | `src/frameworks/angularjs.ts`                   | 75.64% |    88.46% |   57.27% |
 | `src/cli/install.ts`                            | 75.71% |    76.00% |   72.09% |
-| `src/cli/mcp.ts`                                | 75.86% |    66.67% |   78.13% |
-| `src/cli/packet.ts`                             | 76.47% |    50.00% |   62.96% |
-| `src/cli.ts`                                    | 77.91% |    71.43% |   82.76% |
-| `src/native/execution.ts`                       | 78.16% |    87.50% |   75.41% |
-| `src/impact/report-shared.ts`                   | 78.95% |    82.76% |   50.00% |
 
 ## Type-Only Or Re-Export Files
 

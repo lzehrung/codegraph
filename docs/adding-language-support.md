@@ -22,7 +22,7 @@ Checklist for landing a new first-class source language without drifting from re
 - Add the native grammar dependency in `packages/codegraph-native/Cargo.toml`.
 - Register the native language id in `packages/codegraph-native/src/languages.rs` (the registry); `packages/codegraph-native/src/lib.rs` only delegates. Add smoke coverage alongside that registration.
 - Rebuild the native addon before trusting any native parity failures.
-- If reduced-mode recovery needs language-specific heuristics, register a text import extractor in `src/indexer/imports/text-import-extractors.ts` rather than adding a second grammar backend or a new call site. The registry owns the entry shape (source, sink, context) and the graph and indexer paths both run it.
+- Use native captures for source-language imports. Add statement-text parsing only to interpret a proven native capture or to support graph-only document and stylesheet formats; do not add regex recovery for missing or failed native queries.
 
 ## 4. Implement the language definition cleanly
 
@@ -69,7 +69,7 @@ Checklist for landing a new first-class source language without drifting from re
 - Add shared references coverage in `tests/references.test.ts`.
 - Add native semantic coverage in `tests/native-semantic-parity.test.ts`.
 - Add native parser ownership coverage in `tests/native-parser-ownership.test.ts` when the language uses the native runtime.
-- Add reduced-mode safety or recovery coverage when the language has graph-only or regex fallback behavior.
+- Cover missing-addon errors, `sourceTooLarge` skips, and `queryFailure` reports where the new language changes those paths. Graph-only formats need their own dependency-edge tests.
 - Use one fixture to check that extraction, `goToDefinition`, `findReferences`, and `buildSymbolGraphDetailed` agree on symbol identity. Include a same-spelled declaration that must not match, plus cold and persisted-cache results when derived data changes.
 - Check the native grammar's actual child fields and tokens before writing a language rule. Named-child walks omit operators; a valid parse can still classify a declaration as a different construct.
 - For a shared type declared across files, include every enclosing type's generic arity in its owner identity. Check access modifiers on both members and enclosing declarations before cross-file navigation or graph edges; keep legal same-file uses. Test a same-named owner that must stay separate.
