@@ -17,7 +17,6 @@ const nativeRequiredSuites = [
   "tests/type-hierarchy-language-parity.test.ts",
   "tests/native-combined-extraction.test.ts",
   "tests/cache-path-confinement.test.ts",
-  "tests/fallback-import-extraction.test.ts",
   "tests/duplicates.test.ts",
 ];
 
@@ -43,8 +42,8 @@ if (distState.needsBuild) {
 }
 
 const availability = await import("../dist/native/tree-sitter-native.js");
-if (!availability.isNativeTreeSitterAvailable("on")) {
-  const loadError = availability.getNativeTreeSitterLoadError("on");
+if (!availability.isNativeTreeSitterAvailable()) {
+  const loadError = availability.getNativeTreeSitterLoadError();
   console.error("[codegraph] Native-required tests need @lzehrung/codegraph-native to load successfully.");
   if (loadError) {
     console.error(`[codegraph] Native load error: ${loadError.message}`);

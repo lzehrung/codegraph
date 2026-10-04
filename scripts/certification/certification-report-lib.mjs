@@ -225,12 +225,7 @@ export async function assembleCertificationReport(options) {
   if (manifest) {
     try {
       const reportEntries = await readPackageSmokeReports(options.packageReportDirectory);
-      validatePackageSmokeReportSet({
-        manifest,
-        manifestSha256,
-        reports: reportEntries,
-        requireReduced: true,
-      });
+      validatePackageSmokeReportSet({ manifest, manifestSha256, reports: reportEntries });
       packages = reportEntries.map((entry) => entry.report);
     } catch (error) {
       failures.push(failureFromError(error, "report-incomplete", "packages"));

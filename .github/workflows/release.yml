@@ -493,47 +493,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  package-smoke-reduced:
-    name: Package smoke reduced mode without native package
-    needs:
-      - plan-release
-      - assemble-release-candidates
-      - security-production
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout planned source
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.plan-release.outputs.source_revision }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.10.0
-          cache: npm
-
-      - name: Download release candidates
-        uses: ./.github/actions/download-artifact-retry
-        with:
-          name: release-candidates
-          path: temp/release-candidates
-
-      - name: Run reduced package smoke
-        run: >-
-          node ./scripts/certification/run-package-smoke.mjs
-          --manifest temp/release-candidates/release-candidate-manifest.json
-          --mode reduced
-          --install-dir "${{ runner.temp }}/codegraph-package-smoke"
-          --output temp/certification/package-smoke-reduced.json
-
-      - name: Upload reduced package smoke report
-        if: always()
-        uses: ./.github/actions/upload-artifact-retry
-        with:
-          name: package-smoke-reduced
-          path: temp/certification/package-smoke-reduced.json
-          if-no-files-found: error
-
   tests-release:
     name: Run full test suite for release candidate
     needs:
@@ -616,7 +575,6 @@ jobs:
       - security-production
       - fixture-hermeticity
       - package-smoke
-      - package-smoke-reduced
       - tests-release
       - package-funnel
     runs-on: ubuntu-latest
@@ -667,7 +625,6 @@ jobs:
           node ./scripts/certification/run-package-smoke.mjs
           --manifest temp/release-candidates/release-candidate-manifest.json
           --verify-reports temp/package-smoke-reports
-          --require-reduced
           --expected-source-revision ${{ needs.plan-release.outputs.source_revision }}
           --expected-root-version ${{ needs.plan-release.outputs.root_version }}
           --expected-native-version ${{ needs.plan-release.outputs.native_version }}

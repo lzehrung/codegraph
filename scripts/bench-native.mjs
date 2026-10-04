@@ -25,6 +25,15 @@ const DEFAULT_RUNS = 3;
 const DEFAULT_WORKLOADS = ["full", "graph"];
 const DEFAULT_TEMPERATURES = ["cold", "warm"];
 
+function usage() {
+  return [
+    "Usage: node ./scripts/bench-native.mjs [--runs <count>] [--fixtures <names>]",
+    "  [--workloads full,graph] [--temperatures cold,warm] [--workers] [--json]",
+    "  [--save-baseline <name>] [--compare-baseline <name>]",
+    "  --workers compares worker execution against native execution.",
+  ].join("\n");
+}
+
 function parseArgs(argv) {
   const options = {
     child: false,
@@ -35,7 +44,7 @@ function parseArgs(argv) {
     workloads: [...DEFAULT_WORKLOADS],
     temperatures: [...DEFAULT_TEMPERATURES],
     json: false,
-    maxSlowdown: 0,
+    help: false,
     saveBaseline: "",
     compareBaseline: "",
     includeWorkers: false,
@@ -44,6 +53,10 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (!arg) continue;
+    if (arg === "--help") {
+      options.help = true;
+      continue;
+    }
     if (arg === "--child") {
       options.child = true;
       continue;
@@ -85,15 +98,6 @@ function parseArgs(argv) {
         .split(",")
         .map((value) => value.trim())
         .filter((value) => value.length);
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--max-slowdown=")) {
-      options.maxSlowdown = Number(arg.slice("--max-slowdown=".length));
-      continue;
-    }
-    if (arg === "--max-slowdown") {
-      options.maxSlowdown = Number(argv[index + 1] ?? options.maxSlowdown);
       index += 1;
       continue;
     }
@@ -158,13 +162,16 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    throw new Error(`Unknown option ${arg}.\n${usage()}`);
   }
+
+  if (options.help) return options;
 
   if (!Number.isFinite(options.runs) || options.runs < 1) {
     throw new Error(`Invalid --runs value: ${String(options.runs)}`);
   }
-  if (!Number.isFinite(options.maxSlowdown) || options.maxSlowdown < 0) {
-    throw new Error(`Invalid --max-slowdown value: ${String(options.maxSlowdown)}`);
+  if (options.mode !== "native" && options.mode !== "workers") {
+    throw new Error(`Unknown benchmark mode '${options.mode}'. Expected native or workers.`);
   }
   for (const workload of options.workloads) {
     if (workload !== "full" && workload !== "graph") {
@@ -231,7 +238,6 @@ async function runChildBenchmark(fixture, workload, temperature, mode) {
         cwd: rootDir,
         env: {
           ...process.env,
-          CODEGRAPH_DISABLE_NATIVE: mode === "js" ? "1" : "0",
           CODEGRAPH_USE_WORKERS: mode === "workers" ? "1" : "0",
         },
         stdio: ["ignore", "pipe", "pipe"],
@@ -297,9 +303,9 @@ function summarizeRuns(runs) {
   };
 }
 
-function formatSpeedup(nativeMs, jsMs) {
-  if (jsMs <= 0 || nativeMs <= 0) return "n/a";
-  const ratio = nativeMs / jsMs;
+function formatSpeedup(workerMs, nativeMs) {
+  if (nativeMs <= 0 || workerMs <= 0) return "n/a";
+  const ratio = workerMs / nativeMs;
   if (ratio < 1) {
     return `${(1 / ratio).toFixed(2)}x faster`;
   }
@@ -307,10 +313,10 @@ function formatSpeedup(nativeMs, jsMs) {
 }
 
 function formatSummary(results, { includeWorkers = false } = {}) {
-  const modes = includeWorkers ? ["native", "js", "workers"] : ["native", "js"];
+  const modes = includeWorkers ? ["native", "workers"] : ["native"];
   const header = includeWorkers
-    ? "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  vs JS          vs Native"
-    : "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  vs JS";
+    ? "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  vs Native"
+    : "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb";
   const lines = ["", header, "-".repeat(header.length)];
   for (const result of results) {
     for (const workload of Object.keys(result.workloads)) {
@@ -319,15 +325,12 @@ function formatSummary(results, { includeWorkers = false } = {}) {
       for (const temperature of Object.keys(workloadResult)) {
         const temperatureResult = workloadResult[temperature];
         if (!temperatureResult) continue;
-        const jsSummary = temperatureResult.js;
         const nativeSummary = temperatureResult.native;
         for (const mode of modes) {
           const summary = temperatureResult[mode];
           if (!summary) continue;
           const backend = summary.backend;
           const backendSummary = backend ? `${backend.filesUsed}/${backend.filesFellBack}` : "n/a";
-          const vsJs =
-            mode !== "js" && jsSummary ? formatSpeedup(summary.averageElapsedMs, jsSummary.averageElapsedMs) : "";
           const cols = [
             result.fixture.padEnd(12),
             workload.padEnd(8),
@@ -341,7 +344,6 @@ function formatSummary(results, { includeWorkers = false } = {}) {
             String(summary.graphNodeCount ?? summary.filesIndexed).padStart(6),
             String(summary.filesPerSecond.toFixed(1)).padStart(8),
             backendSummary.padStart(15),
-            vsJs.padStart(14),
           ];
           if (includeWorkers) {
             const vsNative =
@@ -374,7 +376,7 @@ function formatBaselineComparison(current, baseline) {
   for (const result of baseline.results ?? []) {
     for (const workload of Object.keys(result.workloads ?? {})) {
       for (const temperature of Object.keys(result.workloads[workload] ?? {})) {
-        for (const mode of ["native", "js", "workers"]) {
+        for (const mode of ["native", "workers"]) {
           const summary = result.workloads[workload]?.[temperature]?.[mode];
           if (!summary) continue;
           baselineByKey.set(`${result.fixture}/${workload}/${temperature}/${mode}`, summary);
@@ -386,7 +388,7 @@ function formatBaselineComparison(current, baseline) {
   for (const result of current) {
     for (const workload of Object.keys(result.workloads)) {
       for (const temperature of Object.keys(result.workloads[workload] ?? {})) {
-        for (const mode of ["native", "js", "workers"]) {
+        for (const mode of ["native", "workers"]) {
           const summary = result.workloads[workload]?.[temperature]?.[mode];
           if (!summary) continue;
           const key = `${result.fixture}/${workload}/${temperature}/${mode}`;
@@ -479,7 +481,7 @@ async function runParentBenchmark(options) {
       fixtureResult.workloads[workload] = {};
       for (const temperature of options.temperatures) {
         fixtureResult.workloads[workload][temperature] = {};
-        const modes = options.includeWorkers ? ["native", "js", "workers"] : ["native", "js"];
+        const modes = options.includeWorkers ? ["native", "workers"] : ["native"];
         for (const mode of modes) {
           const runs = [];
           for (let runIndex = 0; runIndex < options.runs; runIndex += 1) {
@@ -490,32 +492,6 @@ async function runParentBenchmark(options) {
       }
     }
     results.push(fixtureResult);
-  }
-
-  if (options.maxSlowdown > 0) {
-    for (const result of results) {
-      for (const workload of Object.keys(result.workloads)) {
-        for (const temperature of Object.keys(result.workloads[workload] ?? {})) {
-          const nativeSummary = result.workloads[workload]?.[temperature]?.native;
-          const jsSummary = result.workloads[workload]?.[temperature]?.js;
-          if (!nativeSummary || !jsSummary) continue;
-          if (nativeSummary.filesIndexed !== jsSummary.filesIndexed) {
-            throw new Error(
-              `Benchmark mismatch for ${result.fixture}/${workload}/${temperature}: native indexed ${nativeSummary.filesIndexed} files but JS indexed ${jsSummary.filesIndexed}`,
-            );
-          }
-          if (jsSummary.medianElapsedMs <= 0) {
-            continue;
-          }
-          const slowdown = nativeSummary.medianElapsedMs / jsSummary.medianElapsedMs;
-          if (slowdown > options.maxSlowdown) {
-            throw new Error(
-              `Benchmark slowdown for ${result.fixture}/${workload}/${temperature}: native median ${nativeSummary.medianElapsedMs.toFixed(2)}ms vs JS median ${jsSummary.medianElapsedMs.toFixed(2)}ms exceeds max slowdown ${options.maxSlowdown}x`,
-            );
-          }
-        }
-      }
-    }
   }
 
   if (options.saveBaseline) {
@@ -618,7 +594,9 @@ async function runSingleBenchmarkChild(options) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-if (options.child) {
+if (options.help) {
+  process.stdout.write(`${usage()}\n`);
+} else if (options.child) {
   runSingleBenchmarkChild(options).catch((error) => {
     process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
     process.exitCode = 1;
