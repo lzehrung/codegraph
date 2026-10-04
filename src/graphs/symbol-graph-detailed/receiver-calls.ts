@@ -817,7 +817,7 @@ function bindingValueExpression(node: SyntaxNodeLike): SyntaxNodeLike | null {
   return node.namedChildren.find((child) => expressionTypes.has(child.type)) ?? null;
 }
 
-function declaredTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+export function declaredTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   const typeField = node.childForFieldName("type");
   if (typeField) return unwrapNamedType(typeField, sup) ?? typeField;
   const typedChild = node.namedChildren.find(

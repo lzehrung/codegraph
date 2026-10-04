@@ -34,8 +34,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 82 marks non-public Java static members package-restricted for static imports.
  * Epoch 83 stores Java package-private instance and protected member visibility.
  * Epoch 84 resolves the visible first segment of a C++ qualified name before the direct path.
+ * Epoch 85 classifies Python TYPE_CHECKING imports as type-only and resolves declared-typed field chains.
  */
-export const CORE_ALGORITHM_EPOCH = 84;
+export const CORE_ALGORITHM_EPOCH = 85;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

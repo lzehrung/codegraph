@@ -46,8 +46,6 @@ type JvmSymbolIndexReaderOptions = {
 
 type JvmImportResolutionOptions = {
   languageId: "java" | "kotlin";
-  allowBarePackage: boolean;
-  filenameFallback: boolean;
   fromFile: string;
 };
 
@@ -191,7 +189,7 @@ export async function resolveJvmPackageImportPaths(
   return confined;
 }
 
-async function resolveJvmImportPath(
+export async function resolveJvmImportPath(
   projectRoot: string,
   spec: string,
   options: JvmImportResolutionOptions,
@@ -205,7 +203,8 @@ async function resolveJvmImportPath(
   const parts = spec.split(".").filter(Boolean);
   const projectIndex = await getJvmProjectSymbolIndex(indexRoot, options.languageId);
   if (parts.length < 2) {
-    if (!options.allowBarePackage) {
+    // Kotlin can import a top-level declaration of the default package; Java cannot.
+    if (options.languageId !== "kotlin") {
       cache.set(cacheKey, null);
       return null;
     }
@@ -244,7 +243,8 @@ async function resolveJvmImportPath(
       : otherFiles;
   const symbolFiles = [...ownFiles, ...sharedFiles.filter((file): file is string => file !== null)];
   const filenameMatched: string[] = [];
-  if (options.filenameFallback && !symbolFiles.length) {
+  // Java alone falls back to the file named after the imported type.
+  if (options.languageId === "java" && !symbolFiles.length) {
     for (const candidate of packageCandidates) {
       if (path.parse(candidate).name !== importedName) continue;
       const entry = await readJavaSymbolIndex(candidate);
@@ -256,32 +256,6 @@ async function resolveJvmImportPath(
     candidates.length === 1 ? await confineJvmResolvedPath(projectRoot, path.resolve(candidates[0]!)) : null;
   cache.set(cacheKey, resolved);
   return resolved;
-}
-
-export async function resolveKotlinImportPath(
-  projectRoot: string,
-  spec: string,
-  fromFile: string,
-): Promise<string | null> {
-  return await resolveJvmImportPath(projectRoot, spec, {
-    languageId: "kotlin",
-    allowBarePackage: true,
-    filenameFallback: false,
-    fromFile,
-  });
-}
-
-export async function resolveJavaImportPath(
-  projectRoot: string,
-  spec: string,
-  fromFile: string,
-): Promise<string | null> {
-  return await resolveJvmImportPath(projectRoot, spec, {
-    languageId: "java",
-    allowBarePackage: false,
-    filenameFallback: true,
-    fromFile,
-  });
 }
 
 export function clearJvmResolutionCaches(): void {

@@ -31,6 +31,8 @@ import {
 import { sliceText, unquote } from "../util/ast.js";
 import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rust-test-modules.js";
 import { rustStatementStartIndex } from "../util/resolution/rust.js";
+import { pythonStatements, pythonTypeCheckingContext } from "../util/python-type-checking.js";
+import { maskPythonCommentsAndStrings } from "../util/comments.js";
 import {
   collectTextImportSpecifiers,
   rustSpecifierForParsedImport,
@@ -358,10 +360,36 @@ export function collectModuleSpecifiersFromSource(
   const nativeImportsArray = resolvedNativeImports;
   const hasNativeImports = !!nativeImportsArray;
   const nativeImportsToProcess = htmlLikeLanguage ? [] : (nativeImportsArray ?? []);
+  const isPythonTypeOnly = support.id === "python" ? pythonTypeCheckingContext(source) : undefined;
 
   let queryFailed = false;
   // Current native add-ons retain capture offsets. Older add-ons use ordered source lookup.
   let rustStatementSearchIndex = 0;
+  // Statement starts are never inside a string or comment, so an offsetless capture cannot
+  // match text quoted earlier in the file.
+  let pythonStatementStarts: number[] | undefined;
+  let pythonStatementCursor = 0;
+  // The graph query emits one match per name of `import a, b`; later matches of the same
+  // statement name a module not seen yet, so they reuse its start instead of consuming the next.
+  let lastPythonStatement: { text: string; start: number; names: Set<string> } | undefined;
+  const locatePythonStatement = (text: string, name: string): number => {
+    if (lastPythonStatement?.text === text && !lastPythonStatement.names.has(name)) {
+      lastPythonStatement.names.add(name);
+      return lastPythonStatement.start;
+    }
+    const start = nextPythonStatement(text);
+    lastPythonStatement = start >= 0 ? { text, start, names: new Set([name]) } : undefined;
+    return start;
+  };
+  const nextPythonStatement = (text: string): number => {
+    pythonStatementStarts ??= pythonStatements(maskPythonCommentsAndStrings(source)).map((entry) => entry.start);
+    while (pythonStatementCursor < pythonStatementStarts.length) {
+      const start = pythonStatementStarts[pythonStatementCursor]!;
+      pythonStatementCursor += 1;
+      if (source.startsWith(text, start)) return start;
+    }
+    return -1;
+  };
   if (hasNativeImports) {
     try {
       for (const match of nativeImportsToProcess) {
@@ -373,10 +401,18 @@ export function collectModuleSpecifiersFromSource(
         // TypeScript and TSX keep the dedicated statement parser (`declare module` and
         // clause-shape rules the shared hook does not model); every other language decides
         // through its `isTypeOnly` hook, so a new language needs no edit here.
-        const typeOnly =
+        let typeOnly =
           support.id === "ts" || support.id === "tsx"
             ? isJsTsTypeOnlySpecifierStatement(stmtText)
             : support.isTypeOnly(stmtText);
+        if (!typeOnly && isPythonTypeOnly) {
+          // Captures arrive in source order, so an older add-on without offsets is located by text.
+          const trimmed = stmtText.trim();
+          const start =
+            nativeCaptureStartIndex(source, capMap["stmt"]) ??
+            (trimmed ? locatePythonStatement(trimmed, capMap["from"]?.text ?? "") : -1);
+          if (start >= 0) typeOnly = isPythonTypeOnly(start);
+        }
         if (support.id === "kotlin") {
           const parsed = parseKotlinImportStatement(stmtText);
           if (parsed) {

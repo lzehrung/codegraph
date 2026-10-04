@@ -10,7 +10,7 @@ import {
   findNearestManifest,
   resolveNearestManifestRoot,
 } from "../src/util/resolution/files.js";
-import { resolveJavaImportPath, resolveKotlinImportPath } from "../src/util/resolution/jvm.js";
+import { resolveJvmImportPath } from "../src/util/resolution/jvm.js";
 import { resolvePhpImportPath } from "../src/util/resolution/php.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 import { buildProjectIndex, goToDefinition } from "../src/index.js";
@@ -47,7 +47,10 @@ describe("monorepo resolution boundaries", () => {
     await writeFile(serviceB, 'package com.example;\npublic class Service { public static String id = "b"; }\n');
     await writeFile(appA, "package com.example;\nimport com.example.Service;\npublic class App { Service s; }\n");
 
-    const local = await resolveJavaImportPath(root, "com.example.Service", appA);
+    const local = await resolveJvmImportPath(root, "com.example.Service", {
+      languageId: "java",
+      fromFile: appA,
+    });
     expect(posix(local ?? "")).toBe(posix(serviceA));
     expect(posix(local ?? "")).not.toBe(posix(serviceB));
 
@@ -69,7 +72,10 @@ describe("monorepo resolution boundaries", () => {
     await writeFile(serviceB, "package com.example\nclass Service\n");
     await writeFile(appA, "package com.example\nimport com.example.Service\n");
 
-    const local = await resolveKotlinImportPath(root, "com.example.Service", appA);
+    const local = await resolveJvmImportPath(root, "com.example.Service", {
+      languageId: "kotlin",
+      fromFile: appA,
+    });
     expect(posix(local ?? "")).toBe(posix(serviceA));
     expect(posix(local ?? "")).not.toBe(posix(serviceB));
   });
@@ -253,7 +259,10 @@ describe("monorepo resolution boundaries", () => {
     await writeFile(service, "package com.example;\npublic class Service {}\n");
     await writeFile(app, "package com.example;\nimport com.example.Service;\npublic class App {}\n");
 
-    const resolved = await resolveJavaImportPath(root, "com.example.Service", app);
+    const resolved = await resolveJvmImportPath(root, "com.example.Service", {
+      languageId: "java",
+      fromFile: app,
+    });
     expect(posix(resolved ?? "")).toBe(posix(service));
   });
 

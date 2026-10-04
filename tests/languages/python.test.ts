@@ -16,6 +16,7 @@ import { collectGraph, findReferences, goToDefinition } from "../../src/index.js
 import { PY_SUPPORT } from "../../src/languages.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
+import { collectModuleSpecifiersFromSource } from "../../src/graphs/specifiers.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 
 const definition: LanguageTestDefinition = {
@@ -720,6 +721,193 @@ describe("Python declaration-name field identity", () => {
 });
 
 describe("Python native import bindings", () => {
+  it.each([
+    ["LF", "\n"],
+    ["CR", "\r"],
+  ])(
+    "marks only imports inside TYPE_CHECKING suites as type-only in native and reduced modes (%s)",
+    async (_label, newline) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-type-checking-"));
+      const consumer = path.join(root, "consumer.py");
+      const source = [
+        "from typing import TYPE_CHECKING",
+        "import typing",
+        "if TYPE_CHECKING:",
+        "    from .models import User",
+        "    if condition:",
+        "        import nested_type",
+        "else:",
+        "    import runtime_else",
+        "if typing.TYPE_CHECKING:",
+        "    import qualified_type",
+        "if not TYPE_CHECKING:",
+        "    import runtime_negated",
+        "if OTHER:",
+        "    import runtime_other",
+        "if TYPE_CHECKING: import inline_type; import inline_second",
+        "if TYPE_CHECKING:",
+        "    value = call(",
+        ")",
+        "    import after_continuation",
+        "import runtime_plain; import runtime_second",
+        "if TYPE_CHECKING: import list_first, list_second as second",
+        // tree-sitter-python drops a nested one-line suite in a lone-CR file, so native mode
+        // cannot be compared there; the reduced scanner handles both line endings.
+        ...(newline === "\n"
+          ? [
+              "if TYPE_CHECKING:",
+              "    if enabled: import inline_nested",
+              "    match mode:",
+              "        case 1: import case_guarded",
+              "if enabled: import runtime_inline",
+            ]
+          : []),
+        "import runtime_list_a, runtime_list_b",
+        "",
+      ].join(newline);
+      const typeSpecs = [
+        ".models",
+        "nested_type",
+        "qualified_type",
+        "inline_type",
+        "inline_second",
+        "after_continuation",
+        "list_first",
+        "list_second",
+        ...(newline === "\n" ? ["inline_nested", "case_guarded"] : []),
+      ];
+      const runtimeSpecs = [
+        "typing",
+        "runtime_else",
+        "runtime_negated",
+        "runtime_other",
+        "runtime_plain",
+        "runtime_second",
+        "runtime_list_a",
+        "runtime_list_b",
+        ...(newline === "\n" ? ["runtime_inline"] : []),
+      ];
+      await Promise.all([
+        fsp.writeFile(consumer, source),
+        ...["models", ...typeSpecs.slice(1), ...runtimeSpecs.slice(1)].map((name) =>
+          fsp.writeFile(path.join(root, `${name}.py`), "value = 1\n"),
+        ),
+      ]);
+      try {
+        for (const native of ["auto", "off"] as const) {
+          const imports = await collectImportsForFile(consumer, root, { source, native });
+          const specs = collectModuleSpecifiersFromSource(PY_SUPPORT, source, { native });
+          for (const spec of typeSpecs) {
+            expect(imports.find((binding) => binding.from === spec)?.typeOnly).toBe(true);
+            expect(specs.find((entry) => entry.spec === spec)?.typeOnly).toBe(true);
+          }
+          for (const spec of runtimeSpecs) {
+            expect(imports.find((binding) => binding.from === spec)).toBeDefined();
+            expect(imports.find((binding) => binding.from === spec)?.typeOnly).not.toBe(true);
+            expect(specs.find((entry) => entry.spec === spec)).toBeDefined();
+            expect(specs.find((entry) => entry.spec === spec)?.typeOnly).not.toBe(true);
+          }
+        }
+        // An older native add-on returns compact captures without offsets; captures are
+        // located in source order instead, so guarded imports keep their classification.
+        const legacy = collectModuleSpecifiersFromSource(PY_SUPPORT, source, {
+          compactNativeImports: {
+            imports: [
+              {
+                patternIndex: 0,
+                captures: [
+                  { name: "stmt", text: "import nested_type" },
+                  { name: "from", text: "nested_type" },
+                ],
+              },
+              {
+                patternIndex: 0,
+                captures: [
+                  { name: "stmt", text: "import runtime_plain" },
+                  { name: "from", text: "runtime_plain" },
+                ],
+              },
+              // One match per name of a guarded `import a, b as c`, then a runtime list.
+              ...["list_first", "list_second"].map((name) => ({
+                patternIndex: 0,
+                captures: [
+                  { name: "stmt", text: "import list_first, list_second as second" },
+                  { name: "from", text: name },
+                ],
+              })),
+              ...["runtime_list_a", "runtime_list_b"].map((name) => ({
+                patternIndex: 0,
+                captures: [
+                  { name: "stmt", text: "import runtime_list_a, runtime_list_b" },
+                  { name: "from", text: name },
+                ],
+              })),
+            ],
+          },
+        });
+        expect(legacy.find((entry) => entry.spec === "nested_type")?.typeOnly).toBe(true);
+        expect(legacy.find((entry) => entry.spec === "runtime_plain")).toBeDefined();
+        expect(legacy.find((entry) => entry.spec === "runtime_plain")?.typeOnly).not.toBe(true);
+        for (const spec of ["list_first", "list_second"]) {
+          expect(legacy.find((entry) => entry.spec === spec)?.typeOnly).toBe(true);
+        }
+        for (const spec of ["runtime_list_a", "runtime_list_b"]) {
+          expect(legacy.find((entry) => entry.spec === spec)).toBeDefined();
+          expect(legacy.find((entry) => entry.spec === spec)?.typeOnly).not.toBe(true);
+        }
+        // Identical statements: the guarded one stays type-only and the later one runtime.
+        const repeated = ["if TYPE_CHECKING:", "    import twice", "import twice", ""].join(newline);
+        const repeatedCapture = {
+          patternIndex: 0,
+          captures: [
+            { name: "stmt", text: "import twice" },
+            { name: "from", text: "twice" },
+          ],
+        };
+        const repeatedLegacy = collectModuleSpecifiersFromSource(PY_SUPPORT, repeated, {
+          compactNativeImports: { imports: [repeatedCapture, repeatedCapture] },
+        });
+        expect(repeatedLegacy.filter((entry) => entry.spec === "twice").map((entry) => !!entry.typeOnly)).toEqual([
+          true,
+          false,
+        ]);
+        // Quoted import text in a guarded suite must not be taken for the later real statement.
+        const quoted = ["if TYPE_CHECKING:", '    marker = "import runtime_dep"', "import runtime_dep", ""].join(
+          newline,
+        );
+        const quotedLegacy = collectModuleSpecifiersFromSource(PY_SUPPORT, quoted, {
+          compactNativeImports: {
+            imports: [
+              {
+                patternIndex: 0,
+                captures: [
+                  { name: "stmt", text: "import runtime_dep" },
+                  { name: "from", text: "runtime_dep" },
+                ],
+              },
+            ],
+          },
+        });
+        expect(quotedLegacy.find((entry) => entry.spec === "runtime_dep")).toBeDefined();
+        expect(quotedLegacy.find((entry) => entry.spec === "runtime_dep")?.typeOnly).not.toBe(true);
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const fromConsumer = index.graph.edges.filter(
+          (edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer),
+        );
+        for (const spec of typeSpecs) {
+          expect(fromConsumer.find((edge) => edge.raw === spec)?.typeOnly).toBe(true);
+        }
+        for (const spec of runtimeSpecs) {
+          const edge = fromConsumer.find((candidate) => candidate.raw === spec);
+          expect(edge).toBeDefined();
+          expect(edge?.typeOnly).not.toBe(true);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("binds multiline, comma-separated, continued, relative, star, and future imports", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-native-imports-"));
     const packageDir = path.join(root, "pkg");
@@ -954,11 +1142,23 @@ describe("Python native import bindings", () => {
   it("agrees between native and reduced-mode import extraction for the same source, including a compound-suite exclusion", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-mode-agreement-"));
     const consumer = path.join(root, "consumer.py");
-    const source = ["value = (", "    1", "); import pkg", "if enabled: import feature", "import kept"].join("\n");
+    const source = [
+      "value = (",
+      "    1",
+      "); import pkg",
+      "if enabled: import feature",
+      "if enabled: from models import User",
+      "match value:",
+      "    case 1: import case_first; import case_second",
+      "import kept",
+    ].join("\n");
     await Promise.all([
       fsp.writeFile(path.join(root, "pkg.py"), "value = 1\n"),
       fsp.writeFile(path.join(root, "feature.py"), "value = 1\n"),
       fsp.writeFile(path.join(root, "kept.py"), "value = 1\n"),
+      fsp.writeFile(path.join(root, "models.py"), "class User: pass\n"),
+      fsp.writeFile(path.join(root, "case_first.py"), "value = 1\n"),
+      fsp.writeFile(path.join(root, "case_second.py"), "value = 1\n"),
       fsp.writeFile(consumer, source),
     ]);
     try {
@@ -976,13 +1176,18 @@ describe("Python native import bindings", () => {
         );
       }
 
-      // Exclusion case: `if enabled: import feature` never becomes a module-level export in
-      // either mode. Native still records the binding (with moduleLevel: false); reduced mode
-      // records no binding for it at all, but neither publishes it as a re-export.
-      expect(nativeImports).toEqual(
-        expect.arrayContaining([expect.objectContaining({ from: "feature", moduleLevel: false })]),
-      );
-      expect(reducedImports.some((binding) => binding.from === "feature")).toBe(false);
+      // Exclusion case: `if enabled: import feature` is a binding in both modes, but not a
+      // module-level one, so neither publishes it as a re-export.
+      for (const imports of [nativeImports, reducedImports]) {
+        expect(imports).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ from: "feature", moduleLevel: false }),
+            expect.objectContaining({ kind: "named", from: "models", imported: "User", moduleLevel: false }),
+            expect.objectContaining({ from: "case_first", moduleLevel: false }),
+            expect.objectContaining({ from: "case_second", moduleLevel: false }),
+          ]),
+        );
+      }
 
       for (const [imports, nativeMode] of [
         [nativeImports, "auto"],

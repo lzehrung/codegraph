@@ -1,5 +1,10 @@
 import path from "node:path";
-import { buildJsLikeLiteralMask, stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
+import {
+  buildJsLikeLiteralMask,
+  maskPythonCommentsAndStrings,
+  stripJsLikeComments,
+  stripPythonCommentsAndStrings,
+} from "./comments.js";
 import {
   createDynamicImportEntries,
   type DynamicBase,
@@ -10,6 +15,7 @@ import {
 } from "./dynamic-import-tables.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, PYTHON_IDENTIFIER_SOURCE } from "./identifiers.js";
 import { normalizePath } from "./paths.js";
+import { pythonStatements } from "./python-type-checking.js";
 
 export type ModuleSpecifierResolutionKind = "document" | "source" | "stylesheet";
 
@@ -586,17 +592,34 @@ export function extractDynamicImportSpecifiers(
   return out;
 }
 
-export function extractPythonSpecifiers(source: string): string[] {
-  const out: string[] = [];
+export function extractPythonSpecifiers(source: string): Array<{ spec: string; start: number }> {
+  const out: Array<{ spec: string; start: number }> = [];
   try {
-    const cleaned = stripPythonCommentsAndStrings(source);
-    const reImport = new RegExp(String.raw`^\s*import\s+(${PYTHON_DOTTED_NAME_SOURCE})`, "gmu");
-    for (const match of cleaned.matchAll(reImport)) out.push(match[1]!);
-    const reFrom = new RegExp(
-      String.raw`^\s*from\s+(\.+(?:${PYTHON_DOTTED_NAME_SOURCE})?|${PYTHON_DOTTED_NAME_SOURCE})\s+import`,
-      "gmu",
+    const cleaned = maskPythonCommentsAndStrings(source);
+    // Match only at statement starts, so `a; import b` and one-line suites are found.
+    const statements = pythonStatements(cleaned);
+    const importItem = new RegExp(
+      String.raw`^(${PYTHON_DOTTED_NAME_SOURCE})(?:\s+as\s+${PYTHON_IDENTIFIER_SOURCE})?$`,
+      "u",
     );
-    for (const match of cleaned.matchAll(reFrom)) out.push(match[1]!);
+    const reFrom = new RegExp(
+      String.raw`from\s+(\.+(?:${PYTHON_DOTTED_NAME_SOURCE})?|${PYTHON_DOTTED_NAME_SOURCE})\s+import\b`,
+      "uy",
+    );
+    // `import a, b as c` names every module in its list.
+    for (const { start, end } of statements) {
+      const list = /^import\s+([\s\S]+)$/u.exec(cleaned.slice(start, end).replace(/\\(?:\r\n|\r|\n)/g, " "));
+      if (!list) continue;
+      for (const item of list[1]!.split(",")) {
+        const spec = importItem.exec(item.trim())?.[1];
+        if (spec) out.push({ spec, start });
+      }
+    }
+    for (const { start } of statements) {
+      reFrom.lastIndex = start;
+      const match = reFrom.exec(cleaned);
+      if (match) out.push({ spec: match[1]!, start });
+    }
   } catch {
     /* parse fallback: ignore */
   }

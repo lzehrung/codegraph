@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 42174 | 45965 |   91.75% |
-| Functions |  6647 |  7051 |   94.27% |
-| Branches  | 34702 | 42789 |   81.10% |
+| Lines     | 42324 | 46112 |   91.79% |
+| Functions |  6672 |  7075 |   94.30% |
+| Branches  | 34850 | 42949 |   81.14% |
 
 ## Least-covered Files
 

@@ -28,6 +28,7 @@ import {
   cppQualifiedNameSegments,
   declarationIsStaticEquivalent,
   declarationNodeIsStatic,
+  declaredTypeNameNode,
   declaresMembers,
   hasStaticMemberDistinction,
   memberContainerDef,
@@ -97,6 +98,66 @@ import {
   type SymbolDef,
 } from "./types.js";
 
+const DECLARED_FIELD_CHAIN_LANGUAGES: Readonly<Record<string, true>> = {
+  ts: true,
+  tsx: true,
+  java: true,
+  csharp: true,
+  kotlin: true,
+};
+/** Type-syntax nodes that wrap a declared type name together with its qualifier. */
+const QUALIFIED_TYPE_NODE_TYPES: Readonly<Record<string, true>> = {
+  qualified_name: true,
+  scoped_type_identifier: true,
+  nested_type_identifier: true,
+  user_type: true,
+  generic_name: true,
+  generic_type: true,
+};
+
+/**
+ * The full spelling of a declared type, e.g. `B.Repo` for `B.Repo<T>`: the last segment alone
+ * would resolve to a same-named type of another namespace.
+ */
+function qualifiedDeclaredTypeText(typeName: SyntaxNodeLike, source: string): string {
+  let top = typeName;
+  for (let parent = typeName.parent; parent && QUALIFIED_TYPE_NODE_TYPES[parent.type]; parent = parent.parent) {
+    top = parent;
+  }
+  let text = sliceText(top, source).replace(/\s+/g, "");
+  for (let previous = ""; previous !== text; ) {
+    previous = text;
+    text = text.replace(/<[^<>]*>/g, "");
+  }
+  return text;
+}
+
+/** Type-parameter list nodes across the TypeScript, Java, C#, and Kotlin grammars. */
+const TYPE_PARAMETER_LIST_TYPES: Readonly<Record<string, true>> = {
+  type_parameters: true,
+  type_parameter_list: true,
+};
+
+/** Names of the generic type parameters declared by `node` and its enclosing declarations. */
+function typeParameterNamesInScope(node: SyntaxNodeLike, source: string): Set<string> {
+  const names = new Set<string>();
+  for (let current: SyntaxNodeLike | null = node; current; current = current.parent) {
+    for (const list of current.namedChildren) {
+      if (!TYPE_PARAMETER_LIST_TYPES[list.type]) continue;
+      for (const parameter of list.namedChildren) {
+        const name =
+          parameter.childForFieldName("name") ??
+          parameter.namedChildren.find((child) => child.type === "identifier" || child.type === "type_identifier");
+        if (name) names.add(sliceText(name, source));
+      }
+    }
+  }
+  return names;
+}
+
+export function supportsDeclaredFieldChains(languageId: string): boolean {
+  return !!DECLARED_FIELD_CHAIN_LANGUAGES[languageId];
+}
 function noLexicalBinding(): boolean {
   return false;
 }
@@ -2374,6 +2435,45 @@ async function resolveReceiverDefinition(
       return null;
     });
   if (receiver.kind === "module-import") return null;
+  if (supportsDeclaredFieldChains(sup.id) && isMemberAccessNode(sup, obj)) {
+    const directType = direct?.kind === "resolved" ? asMemberContainer(index, direct.def) : undefined;
+    if (!directType) {
+      const { object, property } = getMemberAccessParts(sup, obj);
+      if (!object || !property) return null;
+      const owner = await resolveReceiverDefinition(index, object, source, sup, resolveExpression, mod);
+      if (!owner || owner.runtimeTypeOnly) return null;
+      const field = await resolveKeywordReceiverMember(
+        index,
+        mod,
+        property,
+        sliceText(property, source),
+        owner.memberScope,
+        false,
+        undefined,
+        owner.def,
+      );
+      if (!field || field.kind !== SymbolKind.Variable || !field.isMember) return null;
+      const fieldContext = await ensureParsedContext(field.file, undefined, index.languageExtensions);
+      const name = nameNodeForDef(fieldContext, field);
+      let declaration = name?.parent ?? null;
+      if (declaration?.type === "variable_declarator") declaration = declaration.parent;
+      if (!declaration) return null;
+      const annotatedType = declaredTypeNameNode(declaration, fieldContext.sup);
+      if (!annotatedType) return null;
+      const fieldModule = index.byFile.get(fileIdentityKey(field.file));
+      if (!fieldModule) return null;
+      const typeText = qualifiedDeclaredTypeText(annotatedType, fieldContext.source);
+      // A type parameter in scope (`class Host<Repo>`) is not a nominal type; bounds are not solved.
+      if (typeParameterNamesInScope(declaration, fieldContext.source).has(typeText.split(/[.:]/)[0]!)) return null;
+      const type = await resolveReceiverTypeName(index, fieldModule, fieldContext.sup, typeText);
+      return type ? { def: type, memberScope: "instance" } : null;
+    }
+  }
+  if (receiver.kind === "own-type") {
+    const container = nearestMemberContainer(obj);
+    const owner = container ? definitionForContainer(mod, container) : undefined;
+    return owner ? { def: owner, memberScope: receiver.memberScope } : null;
+  }
   const constructor = receiver.kind === "named-type" && receiver.proof !== "static-type" ? receiver.typeNode : null;
   if (constructor) {
     if (sup.id === "cpp") {
