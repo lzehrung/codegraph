@@ -37,12 +37,25 @@ export function maskTrivia(source: string, languageId: string, options?: TriviaM
     maskStrings: options?.maskStrings ?? true,
     mode: "render",
   });
-  const chars = source.split("");
-  for (let i = 0; i < chars.length; i += 1) {
-    const ch = chars[i];
-    if (mask[i] && ch !== "\n" && ch !== "\r") chars[i] = " ";
+  // Copy unmasked runs as slices and masked runs as space runs that keep `\r` and `\n`; a
+  // per-character array costs one string allocation per UTF-16 unit.
+  let out = "";
+  let runStart = 0;
+  for (let start = mask.indexOf(1); start !== -1; start = mask.indexOf(1, runStart)) {
+    out += source.slice(runStart, start);
+    let end = start;
+    while (end < mask.length && mask[end]) end += 1;
+    let spaces = start;
+    for (let index = start; index < end; index += 1) {
+      const unit = source.charCodeAt(index);
+      if (unit !== 10 && unit !== 13) continue;
+      out += " ".repeat(index - spaces) + source[index];
+      spaces = index + 1;
+    }
+    out += " ".repeat(end - spaces);
+    runStart = end;
   }
-  return chars.join("");
+  return runStart ? out + source.slice(runStart) : source;
 }
 
 /** Deletes comments and string literals outright (delimiters included); the output is NOT
@@ -53,16 +66,13 @@ export function stripTrivia(source: string, languageId: string, options?: Trivia
     mode: "full",
   });
   let out = "";
-  let index = 0;
-  while (index < source.length) {
-    if (mask[index]) {
-      while (index < source.length && mask[index]) index += 1;
-      continue;
-    }
-    out += source[index];
-    index += 1;
+  let runStart = 0;
+  for (let start = mask.indexOf(1); start !== -1; start = mask.indexOf(1, runStart)) {
+    out += source.slice(runStart, start);
+    runStart = mask.indexOf(0, start);
+    if (runStart === -1) return out;
   }
-  return out;
+  return out + source.slice(runStart);
 }
 
 type TriviaMarkMode = "render" | "full" | "holes";
@@ -74,10 +84,11 @@ function buildMarkedMask(
 ): Uint8Array {
   const row = triviaRowFor(languageId);
   const mask = new Uint8Array(source.length);
-  const starters = rowStarters(row);
+  const starters = rowStarterCodes(row);
+  const length = source.length;
   let index = 0;
-  while (index < source.length) {
-    if (!starters.has(source[index] ?? "")) {
+  while (index < length) {
+    if (!starters[source.charCodeAt(index)]) {
       index += 1;
       continue;
     }
@@ -119,29 +130,35 @@ function constructSpans(construct: TriviaConstruct, mode: TriviaMarkMode): Trivi
 
 type TriviaSpan = [start: number, end: number];
 
-const starterCache = new WeakMap<TriviaRow, Set<string>>();
+const starterCache = new WeakMap<TriviaRow, Uint8Array>();
 const prefixRegexCache = new WeakMap<TriviaStringForm, RegExp>();
 const openerRegexCache = new WeakMap<TriviaHeredocForm, RegExp>();
 
-/** Characters that can begin a trivia span for `row`; a cheap per-position rejection filter. */
-function rowStarters(row: TriviaRow): Set<string> {
+/**
+ * UTF-16 code units that can begin a trivia span for `row`, as a lookup table indexed by code
+ * unit: a cheap per-position rejection filter that allocates nothing per character.
+ */
+function rowStarterCodes(row: TriviaRow): Uint8Array {
   const cached = starterCache.get(row);
   if (cached) return cached;
-  const starters = new Set<string>();
-  for (const prefix of row.lineComments) starters.add(prefix[0] ?? "");
-  for (const comment of row.blockComments) starters.add(comment.open[0] ?? "");
+  const starters = new Uint8Array(0x10000);
+  const add = (text: string | undefined): void => {
+    if (text) starters[text.charCodeAt(0)] = 1;
+  };
+  for (const prefix of row.lineComments) add(prefix);
+  for (const comment of row.blockComments) add(comment.open);
   for (const form of row.strings) {
     if (form.prefix) {
-      for (const ch of literalCharsInRegexSource(form.prefix)) starters.add(ch);
+      for (const ch of literalCharsInRegexSource(form.prefix)) add(ch);
     }
-    if (form.hashes) starters.add("#");
-    starters.add(form.open[0] ?? "");
+    if (form.hashes) add("#");
+    add(form.open);
   }
   if (row.heredocs) {
-    for (const heredoc of row.heredocs) starters.add(heredoc.opener[0] ?? "");
+    for (const heredoc of row.heredocs) add(heredoc.opener);
   }
-  if (row.percentLiterals) starters.add("%");
-  if (row.zigMultiline) starters.add("\\");
+  if (row.percentLiterals) add("%");
+  if (row.zigMultiline) add("\\");
   starterCache.set(row, starters);
   return starters;
 }

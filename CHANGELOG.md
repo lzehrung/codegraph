@@ -34,6 +34,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Changed
 
+- Indexing is about 13% faster than 2.4.0, and detailed call graphs about 7% faster, on the codegraph `src/` tree with default threads. Comment and string masking no longer copies each file one character at a time, and a JavaScript or TypeScript file is masked once for export extraction instead of twice. Results are unchanged.
 - Detailed call graphs build faster: callable facts (identity and accepted argument counts) are computed once when a file is indexed and stored in the cache, instead of being parsed again for each call.
 - Existing caches are rebuilt on the first run after upgrading, so that run takes longer than usual.
 

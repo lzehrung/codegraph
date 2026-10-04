@@ -415,8 +415,8 @@ function appendJsLikeRegexFallbackExports(
   exports: ExportEntry[],
   leadingDocstringAt: (index: number) => string | undefined,
   tree: SyntaxTreeLike | null,
+  maskedSource: string,
 ): void {
-  const maskedSource = maskJsLikeCommentsAndStrings(source);
   JS_FALLBACK_DECLARATION_PATTERN.lastIndex = 0;
   JS_FALLBACK_DEFAULT_PATTERN.lastIndex = 0;
   JS_FALLBACK_EXPORT_ASSIGN_PATTERN.lastIndex = 0;
@@ -1633,8 +1633,11 @@ export function collectLocalsAndExportsFromSource(
   // re-export forms. Always run the deduplicating fallback for JS-like files:
   // source-form probes are too error-prone to risk silently dropping exports.
   const isJsLike = support.id === "ts" || support.id === "tsx" || support.id === "js";
+  // Comment- and string-masked JS-like source, shared by the export fallbacks below.
+  let jsMaskedSource: string | undefined;
+  const maskedJsSource = (): string => (jsMaskedSource ??= maskJsLikeCommentsAndStrings(source));
   if (isJsLike) {
-    appendJsLikeRegexFallbackExports(file, source, locals, exports, leadingDocstringAt, ensureTree());
+    appendJsLikeRegexFallbackExports(file, source, locals, exports, leadingDocstringAt, ensureTree(), maskedJsSource());
   }
 
   if (support.id === "python") {
@@ -1689,7 +1692,7 @@ export function collectLocalsAndExportsFromSource(
     (support.id === "ts" || support.id === "tsx" || support.id === "js") &&
     !exports.some((e) => e.type === "local" && e.exportedAs === "default")
   ) {
-    const maskedSource = maskJsLikeCommentsAndStrings(source);
+    const maskedSource = maskedJsSource();
     const defFn = JS_DEFAULT_FUNCTION_PATTERN.exec(maskedSource);
     const defCls = JS_DEFAULT_CLASS_PATTERN.exec(maskedSource);
     const defIdent = JS_DEFAULT_IDENTIFIER_PATTERN.exec(maskedSource);
