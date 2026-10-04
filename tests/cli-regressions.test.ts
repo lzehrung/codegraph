@@ -799,39 +799,6 @@ describe("CLI regressions", () => {
     expect(payload.reason).toBe("file_not_indexed");
   });
 
-  it("graph --native off disables native backend reporting explicitly", async () => {
-    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-native-off-"));
-    const reportPath = path.join(tmpDir, "graph-report.json");
-    await runCliCommandDetailed([
-      "graph",
-      "--json",
-      "--stdout",
-      "--native",
-      "off",
-      "--report",
-      "--report-file",
-      reportPath,
-      tsRoot,
-    ]);
-
-    const rawReport = await fsp.readFile(reportPath, "utf8");
-    const report = JSON.parse(rawReport) as {
-      index?: {
-        backend?: {
-          native?: {
-            enabled: boolean;
-            filesUsed: number;
-            fallbackReasons: { unavailable?: number };
-          };
-        };
-      };
-    };
-
-    expect(report.index?.backend?.native?.enabled).toBe(false);
-    expect(report.index?.backend?.native?.filesUsed).toBe(0);
-    expect(report.index?.backend?.native?.fallbackReasons.unavailable).toBeGreaterThan(0);
-  });
-
   it("sql runs raw queries against the SQLite graph export", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-sql-"));
     await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");

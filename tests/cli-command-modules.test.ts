@@ -120,7 +120,6 @@ function createNavigationContext(overrides: Partial<NavigationCommandContext>): 
     positionals: [],
     getOpt: () => undefined,
     hasFlag: (name) => name === "--json",
-    nativeMode: "auto",
     workerOpts: {},
     cacheLocation: undefined,
     progressHandler: undefined,
@@ -148,7 +147,6 @@ function createInspectContext(overrides: Partial<InspectCommandContext>): Inspec
     includeRootsAbs: [projectRoot],
     discoveryOptions: {},
     graphOptions: undefined,
-    nativeMode: "auto",
     workerOpts: {},
     cacheLocation: undefined,
     progressHandler: undefined,
@@ -167,7 +165,6 @@ function createGraphContext(overrides: Partial<GraphCommandContext>): GraphComma
   return {
     projectRootFs: projectRoot,
     discoveryOptions: {},
-    nativeMode: "auto",
     workerOpts: {},
     cacheLocation: undefined,
     progressHandler: undefined,
@@ -207,7 +204,6 @@ function createIndexContext(overrides: Partial<IndexCommandContext>): IndexComma
     gitBase: undefined,
     changedSince: undefined,
     discoveryOptions: {},
-    nativeMode: "auto",
     workerOpts: {},
     cacheLocation: undefined,
     progressHandler: undefined,
@@ -292,7 +288,6 @@ function createImpactContext(overrides: Partial<ImpactCommandContext>): ImpactCo
     getOpt: (name) => (name === "--provider" ? "raw" : undefined),
     hasFlag: (name) => name === "--json",
     parsedOptions: new Map(),
-    nativeMode: "auto",
     workerOpts: {},
     cacheLocation: undefined,
     graphOptions: undefined,
@@ -986,7 +981,7 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("graph --json carries analysis metadata and wires the backend warning independent of progress", async () => {
+  test("graph --json carries native analysis metadata and backend reporting independent of progress", async () => {
     const root = await mkTmpDir("codegraph-graph-analysis-");
     const entryFile = path.join(root, "entry.ts");
     await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
@@ -997,7 +992,6 @@ describe("CLI command modules", () => {
       createGraphContext({
         projectRootFs: root,
         cwd: () => root,
-        nativeMode: "off",
         resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
         hasFlag: (name) => name === "--stdout" || name === "--json",
         writeStdoutLine: (message) => stdout.push(message),
@@ -1009,15 +1003,15 @@ describe("CLI command modules", () => {
 
     const graph = readJsonRecord(JSON.parse(stdout[0] ?? "{}"));
     const analysis = readJsonRecord(graph.analysis);
-    expect(analysis.mode).toBe("reduced");
-    expect(analysis.backend).toBe("graph-only");
+    expect(analysis.mode).toBe("semantic");
+    expect(analysis.backend).toBe("native");
     expect(typeof analysis.label).toBe("string");
     expect(backendCalls).toHaveLength(1);
     expect(backendCalls[0]?.showProgress).toBe(false);
     expect(backendCalls[0]?.report).toBeDefined();
   });
 
-  test("graph human output keeps the mermaid contract and still wires the backend warning without progress", async () => {
+  test("graph human output keeps the mermaid contract and backend reporting without progress", async () => {
     const root = await mkTmpDir("codegraph-graph-analysis-human-");
     const entryFile = path.join(root, "entry.ts");
     await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
@@ -1028,7 +1022,6 @@ describe("CLI command modules", () => {
       createGraphContext({
         projectRootFs: root,
         cwd: () => root,
-        nativeMode: "off",
         resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
         hasFlag: () => false,
         writeStdoutLine: (message) => stdout.push(message),
@@ -1038,16 +1031,14 @@ describe("CLI command modules", () => {
       }),
     );
 
-    // Human graph output stays mermaid; the degradation signal for this mode is the
-    // stderr warning emitted through the backend-status hook, which must fire even
-    // though --progress was not requested.
+    // Human graph output stays mermaid and the backend-status hook runs without --progress.
     expect(stdout[0]).toContain("flowchart");
     expect(backendCalls).toHaveLength(1);
     expect(backendCalls[0]?.showProgress).toBe(false);
-    expect(backendCalls[0]?.report?.backend?.native.filesFellBack).toBeGreaterThan(0);
+    expect(backendCalls[0]?.report?.backend?.native.filesFellBack).toBe(0);
   });
 
-  test("index pretty and JSON output advertise reduced analysis when native parsing is off", async () => {
+  test("index pretty and JSON output advertise native semantic analysis", async () => {
     const root = await mkTmpDir("codegraph-index-analysis-");
     const entryFile = path.join(root, "entry.ts");
     await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
@@ -1063,21 +1054,19 @@ describe("CLI command modules", () => {
         createIndexContext({
           projectRootFs: root,
           includeRootsAbs: [root],
-          nativeMode: "off",
           resolveFiles: async () => resolvedFiles,
           writeStdoutLine: (message) => prettyLines.push(message),
           maybeWriteNativeBackendStatus: recordBackendCall,
         }),
       );
       expect(prettyLines[0]).toContain("Indexed 1 file(s)");
-      expect(prettyLines[0]).toContain("Analysis: reduced graph-only.");
+      expect(prettyLines[0]).not.toContain("Analysis:");
 
       const jsonLines: unknown[] = [];
       await handleIndexCommand(
         createIndexContext({
           projectRootFs: root,
           includeRootsAbs: [root],
-          nativeMode: "off",
           resolveFiles: async () => resolvedFiles,
           hasFlag: (name) => name === "--json",
           writeJSONLine: (value) => jsonLines.push(value),
@@ -1086,11 +1075,10 @@ describe("CLI command modules", () => {
       );
       const output = readJsonRecord(jsonLines[0]);
       const analysis = readJsonRecord(output.analysis);
-      expect(analysis.mode).toBe("reduced");
-      expect(analysis.backend).toBe("graph-only");
+      expect(analysis.mode).toBe("semantic");
+      expect(analysis.backend).toBe("native");
 
-      // Both runs consulted the backend-status hook with showProgress off, so the
-      // degradation warning decision never depends on progress rendering.
+      // Both runs consult backend status with progress disabled.
       expect(backendCalls).toHaveLength(2);
       expect(backendCalls.every((call) => !call.showProgress && call.report !== undefined)).toBe(true);
     } finally {
@@ -1098,7 +1086,7 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("index pretty output only prints an Analysis line when the JSON analysis mode is reduced or mixed", async () => {
+  test("index pretty output omits an Analysis line for a healthy native index", async () => {
     const root = await mkTmpDir("codegraph-index-analysis-normal-");
     const entryFile = path.join(root, "entry.ts");
     await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
@@ -1116,7 +1104,7 @@ describe("CLI command modules", () => {
         }),
       );
       const analysis = readJsonRecord(readJsonRecord(jsonLines[0]).analysis);
-      expect(["semantic", "mixed", "reduced"]).toContain(analysis.mode);
+      expect(analysis.mode).toBe("semantic");
 
       const prettyLines: string[] = [];
       await handleIndexCommand(
@@ -1128,12 +1116,7 @@ describe("CLI command modules", () => {
         }),
       );
       expect(prettyLines[0]).toContain("Indexed 1 file(s)");
-      if (analysis.mode === "semantic") {
-        // Normal native runs keep the prior one-line output contract.
-        expect(prettyLines[0]).not.toContain("Analysis:");
-      } else {
-        expect(prettyLines[0]).toContain(`Analysis: ${String(analysis.label)}.`);
-      }
+      expect(prettyLines[0]).not.toContain("Analysis:");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -1170,15 +1153,16 @@ describe("CLI command modules", () => {
         reportWithNative({ available: false, enabled: false, filesUsed: 0, loadError: "MODULE_NOT_FOUND" }),
         false,
       );
-      expect(stderr).toContain("Backend: reduced graph/regex mode");
+      expect(stderr).toContain("Backend: native addon unavailable");
       expect(stderr).toContain("native addon unavailable");
       expect(stderr).toContain("MODULE_NOT_FOUND");
+      expect(stderr).toContain("run codegraph doctor");
     });
 
-    test("warns when files fell back from native parsing, even without --progress", async () => {
+    test("warns when native extraction skipped files, even without --progress", async () => {
       const stderr = await captureStderr(reportWithNative({ filesUsed: 5, filesFellBack: 2 }), false);
       expect(stderr).toContain("native tree-sitter used for 5 file(s)");
-      expect(stderr).toContain("fallback for 2 file(s)");
+      expect(stderr).toContain("skipped 2 file(s)");
     });
 
     test("stays silent for a healthy native backend without --progress", async () => {
@@ -1267,7 +1251,6 @@ describe("CLI command modules", () => {
         createGraphContext({
           projectRootFs: root,
           cwd: () => root,
-          nativeMode: "off",
           resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
           getOpt: (name) => {
             if (name === "--cache") return "memory";
@@ -1304,7 +1287,6 @@ describe("CLI command modules", () => {
         createGraphContext({
           projectRootFs: root,
           cwd: () => root,
-          nativeMode: "off",
           resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
           getOpt: (name) => (name === "--sqlite" ? sqliteFile : undefined),
           hasFlag: (name) => name === "--cache-verify",
@@ -1334,7 +1316,6 @@ describe("CLI command modules", () => {
         createGraphContext({
           projectRootFs: root,
           cwd: () => root,
-          nativeMode: "off",
           resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
           getOpt: (name) => (name === "--cache" ? "memory" : undefined),
           hasFlag: (name) => name === "--symbols" || name === "--json",
@@ -1365,7 +1346,6 @@ describe("CLI command modules", () => {
         createGraphContext({
           projectRootFs: root,
           cwd: () => root,
-          nativeMode: "off",
           resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
           hasFlag: (name) => name === "--symbols" || name === "--json",
           writeStdoutLine: () => undefined,
@@ -1395,7 +1375,6 @@ describe("CLI command modules", () => {
         createGraphContext({
           projectRootFs: root,
           cwd: () => root,
-          nativeMode: "off",
           resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
           hasFlag: (name) => name === "--cache-verify",
           writeStdoutLine: () => undefined,
@@ -1425,7 +1404,6 @@ describe("CLI command modules", () => {
         createGraphContext({
           projectRootFs: root,
           cwd: () => root,
-          nativeMode: "off",
           resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
           hasFlag: (name) => name === "--symbols" || name === "--json" || name === "--cache-verify",
           writeStdoutLine: () => undefined,
@@ -1979,7 +1957,6 @@ describe("CLI command modules", () => {
         },
         hasFlag: (name) => name === "--json",
         cwd: () => process.cwd(),
-        nativeMode: "auto",
         workerOpts: {},
         cacheLocation: undefined,
         progressHandler: undefined,
@@ -2101,37 +2078,16 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("invalidates persisted build options when the effective native runtime changes", () => {
-    const autoOptions = summarizeBuildOptions({ native: "auto" });
-    const offOptions = summarizeBuildOptions({ native: "off" });
-    expect(diffBuildOptions(offOptions, { native: "auto" })).toContain("native");
+  test("invalidates persisted build options when the native runtime fingerprint changes", () => {
+    const current = summarizeBuildOptions();
+    expect(current.nativeRuntimeFingerprint).toBe(getNativeRuntimeFingerprint());
+    expect(diffBuildOptions({ ...current, nativeRuntimeFingerprint: "stale-native-fingerprint" }, {})).toContain(
+      "native",
+    );
 
-    const enabledFingerprint = getNativeRuntimeFingerprint("auto", {});
-    const disabledFingerprint = getNativeRuntimeFingerprint("auto", { CODEGRAPH_DISABLE_NATIVE: "1" });
-    expect(enabledFingerprint).not.toBe(disabledFingerprint);
-    expect(JSON.parse(disabledFingerprint)).toMatchObject({
-      requestedMode: "auto",
-      envDisabled: true,
-      available: false,
-      supportedLanguageIds: [],
-    });
-
-    const currentFingerprint = autoOptions.nativeRuntimeFingerprint;
-    const staleFingerprint = currentFingerprint === enabledFingerprint ? disabledFingerprint : enabledFingerprint;
-    expect(
-      diffBuildOptions(
-        {
-          ...autoOptions,
-          nativeRuntimeFingerprint: staleFingerprint,
-        },
-        { native: "auto" },
-      ),
-    ).toContain("native");
-
-    const legacyOptions = { ...autoOptions };
-    delete legacyOptions.nativeRuntimeFingerprint;
-    expect(diffBuildOptions(legacyOptions, { native: "auto" })).toContain("native");
-    expect(diffBuildOptions(undefined, { native: "auto" })).toContain("native");
+    const legacy = { ...current };
+    delete legacy.nativeRuntimeFingerprint;
+    expect(diffBuildOptions(legacy, {})).toContain("native");
   });
   test("ignores the removed preset field when comparing persisted build options", () => {
     const current = summarizeBuildOptions({ cache: "disk", cacheStrict: true });
@@ -2149,7 +2105,6 @@ describe("CLI command modules", () => {
         getOpt: (name) => (name === "--cache" ? "banana" : undefined),
         hasFlag: () => false,
         cwd: () => process.cwd(),
-        nativeMode: "auto",
         workerOpts: {},
         cacheLocation: undefined,
         progressHandler: undefined,

@@ -20,7 +20,7 @@ describe("config hash cache validation", () => {
     await fs.writeFile(path.join(root, "sample.ts"), "export const answer = 42;\n", "utf8");
     await fs.writeFile(gitignorePath, ".codegraph-cache/\n", "utf8");
 
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+    await buildProjectIndexIncremental(root, { cache: "disk" });
     const originalReadFile = fs.readFile.bind(fs);
     const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (file, options) => {
       if (path.resolve(String(file)) === path.resolve(gitignorePath)) {
@@ -32,7 +32,7 @@ describe("config hash cache validation", () => {
     });
     const report: BuildReport = { timings: {} };
     try {
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      await buildProjectIndexIncremental(root, { cache: "disk", report });
     } finally {
       readFileSpy.mockRestore();
     }

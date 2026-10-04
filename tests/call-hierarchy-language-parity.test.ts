@@ -70,7 +70,7 @@ nativeDescribe("call hierarchy language parity", () => {
     };
     for (const [file, source] of Object.entries(fixtures)) await fs.writeFile(path.join(root, file), source);
 
-    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const index = await buildProjectIndex(root, { cache: "off" });
     const graph = await buildSymbolGraphDetailed(index);
     const nodesByName = new Map([...graph.nodes.values()].map((node) => [node.name, node]));
 
@@ -152,7 +152,7 @@ nativeDescribe("call hierarchy language parity", () => {
     };
     for (const [file, source] of Object.entries(fixtures)) await fs.writeFile(path.join(root, file), source);
 
-    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const index = await buildProjectIndex(root, { cache: "off" });
     const graph = await buildSymbolGraphDetailed(index);
     const nodesByName = new Map([...graph.nodes.values()].map((node) => [node.name, node]));
 

@@ -2,15 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import {
-  buildProjectIndex,
-  buildProjectIndexIncremental,
-  collectImportsForFile,
-  supportForFile,
-  type BuildReport,
-} from "../src/index.js";
-import type { FallbackImportExtractionEvent } from "../src/graphs.js";
-import { createFallbackImportExtractionHandler } from "../src/indexer/build-cache/reports.js";
+import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import { logWithLevel } from "../src/logging.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -119,58 +111,6 @@ describe("logging behavior", () => {
     } finally {
       warnSpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("uses reduced-mode regex import recovery without warning spam", async () => {
-    const root = await mkTmpDir("dg-logging-fallback-");
-    const sourceFile = path.join(root, "main.ts");
-    const dependencyFile = path.join(root, "dep.ts");
-    await fsp.writeFile(sourceFile, "import { dep } from './dep';\nconsole.log(dep);\n", "utf8");
-    await fsp.writeFile(dependencyFile, "export const dep = 1;\n", "utf8");
-
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
-    const fallbackEvents: FallbackImportExtractionEvent[] = [];
-
-    try {
-      const support = supportForFile(sourceFile);
-      if (!support) throw new Error("expected TypeScript support");
-      const imports = await collectImportsForFile(sourceFile, root, {
-        source: await fsp.readFile(sourceFile, "utf8"),
-        sup: support,
-        nativeQueries: null,
-        graphOptions: { native: "off" },
-        logLevel: "silent",
-        onFallbackImportExtraction: (event) => fallbackEvents.push(event),
-      });
-
-      expect(imports).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "named", imported: "dep" })]));
-      expect(fallbackEvents).toEqual([expect.objectContaining({ language: "ts", reason: "reduced-mode" })]);
-      expect(warnSpy).not.toHaveBeenCalled();
-      expect(debugSpy).not.toHaveBeenCalled();
-    } finally {
-      debugSpy.mockRestore();
-      warnSpy.mockRestore();
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("warns for a missing source grammar but not supported graph-only extraction", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const handler = createFallbackImportExtractionHandler(undefined, { logLevel: "warn" });
-      handler?.({ language: "markdown", reason: "unsupportedLanguage", file: "guide.md" });
-      expect(warnSpy).not.toHaveBeenCalled();
-      handler?.({ language: "python", reason: "unsupportedLanguage", file: "source.py" });
-      expect(warnSpy).toHaveBeenCalledOnce();
-      expect(warnSpy.mock.calls[0]?.[1]).toEqual({ language: "python", reason: "unsupportedLanguage" });
-      handler?.({ language: "python", reason: "unsupportedLanguage", file: "other.py" });
-      expect(warnSpy).toHaveBeenCalledOnce();
-      handler?.({ language: "ts", reason: "unsupportedLanguage", file: "source.ts" });
-      expect(warnSpy).toHaveBeenCalledTimes(2);
-    } finally {
-      warnSpy.mockRestore();
     }
   });
 });

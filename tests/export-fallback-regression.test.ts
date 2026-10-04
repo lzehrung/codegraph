@@ -37,12 +37,12 @@ describe("JS export fallback regressions", () => {
     expect(moduleIndex.exports).toHaveLength(0);
   });
 
-  it("detects anonymous async default functions in reduced mode", () => {
+  it("detects anonymous async default functions with native queries", () => {
     const file = "/virtual/module.ts";
     const source = "export default async function () {\n  return 1;\n}\n";
     const support = supportForFile(file)!;
 
-    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, [], { nativeMode: "off" });
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support);
 
     expect(moduleIndex.exports).toEqual([
       expect.objectContaining({
@@ -74,7 +74,7 @@ describe("JS export fallback regressions", () => {
     );
   });
 
-  it("ignores anonymous default syntax inside comments and strings in reduced mode", () => {
+  it("ignores anonymous default syntax inside comments and strings with native queries", () => {
     const file = "/virtual/module.ts";
     const source = [
       "// export default function () {}",
@@ -86,7 +86,7 @@ describe("JS export fallback regressions", () => {
     ].join("\n");
     const support = supportForFile(file)!;
 
-    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, [], { nativeMode: "off" });
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support);
     const defaultExports = moduleIndex.exports.filter(
       (entry) => entry.type === "local" && entry.exportedAs === "default",
     );

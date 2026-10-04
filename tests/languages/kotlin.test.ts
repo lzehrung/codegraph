@@ -457,7 +457,7 @@ describe("Kotlin imports with a same-named package", () => {
         "Use.kt": useLines.join("\n") + "\n",
         "UseStar.kt": "package client\nimport p.C.*\nfun make(): Decoy = Decoy()\n",
       });
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const use = paths["Use.kt"]!;
       const declaration = paths["p/C.kt"]!;
       const decoy = paths["p/C/Decoy.kt"]!;
@@ -477,20 +477,6 @@ describe("Kotlin imports with a same-named package", () => {
         ?.imports.find((entry) => entry.from === "p.C");
       expect(starBinding?.resolved).toBe(decoy);
 
-      const reduced = await buildProjectIndex(root, { cache: "off", native: "off" });
-      const reducedBinding = reduced.byFile.get(fileIdentityKey(use))?.imports.find((entry) => entry.from === "p.C");
-      const reducedStar = reduced.byFile
-        .get(fileIdentityKey(paths["UseStar.kt"]!))
-        ?.imports.find((entry) => entry.from === "p.C");
-      const reducedTargets = (file: string) =>
-        reduced.graph.edges
-          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "file")
-          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
-      expect(reducedBinding?.resolved).toBe(declaration);
-      expect(reducedTargets(use)).toEqual([declaration]);
-      expect(reducedTargets(use)).not.toContain(decoy);
-      expect(reducedStar?.resolved).toBe(decoy);
-      expect(reducedTargets(paths["UseStar.kt"]!)).toEqual([decoy]);
       const goto = await goToDefinition(index, { file: use, line: 3, column: columnInLines(useLines, 3, "C()") });
       expect(goto.status).toBe("ok");
       if (goto.status !== "ok") throw new Error("Expected imported class C");
@@ -672,7 +658,7 @@ describe("Kotlin implicit-receiver precedence", () => {
       ];
       const use = normalizePath(path.join(root, "p", "Use.kt"));
       await fsp.writeFile(use, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoLine = async (line: number, name: string) => {
         const result = await goToDefinition(index, { file: use, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
         return result.status === "ok"
@@ -725,7 +711,7 @@ describe("Kotlin implicit-receiver precedence", () => {
       ];
       const file = normalizePath(path.join(root, "Use.kt"));
       await fsp.writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoLine = async (line: number) => {
         const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf("hit") + 1 });
         return result.status === "ok" ? result.definition.range.start.line : null;
@@ -770,7 +756,7 @@ describe("Kotlin implicit-receiver precedence", () => {
       ];
       const file = normalizePath(path.join(root, "Use.kt"));
       await fsp.writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoLine = async (line: number) => {
         const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf("hit") + 1 });
         return result.status === "ok" ? result.definition.range.start.line : null;
@@ -840,7 +826,7 @@ describe("Kotlin implicit-receiver precedence", () => {
       await fsp.writeFile(decoyFile, decoy);
       await fsp.writeFile(useFile, use);
       await fsp.writeFile(overlapUseFile, overlapUse);
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const at = async (file: string, source: string, line: number) =>
         goToDefinition(index, { file, line, column: columnOf(source, line) });
       const two = await at(useFile, use, 5);

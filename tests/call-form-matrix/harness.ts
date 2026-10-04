@@ -64,8 +64,8 @@ const LINE_COMMENT: Readonly<Record<Language, string>> = {
   zig: "//",
 };
 
-const DISK_BUILD = { cache: "disk" as const, native: "on" as const };
-const COLD_BUILD = { cache: "off" as const, native: "on" as const };
+const DISK_BUILD = { cache: "disk" as const };
+const COLD_BUILD = { cache: "off" as const };
 
 /** A fixture-directory prefix for one phase of one cell's checks, e.g. "cgcf-cpp-bare-call-cell-". Scenario ids
  * contain characters such as "/", which Windows rejects in directory names, so this slugifies first. */

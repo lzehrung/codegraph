@@ -58,7 +58,7 @@ export async function buildConsumerAgreementFixture(
     paths[relative] = normalizePath(target);
     sources[relative] = source;
   }
-  const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+  const index = await buildProjectIndex(root, { cache: "off" });
   const graph = await buildSymbolGraphDetailed(index);
   return { root, index, graph, paths, sources };
 }

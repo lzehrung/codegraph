@@ -1588,7 +1588,7 @@ describe("public documentation benchmark summarizer contracts", () => {
 });
 
 describe("public documentation benchmark subprocess", () => {
-  it("runs one complete local scenario through all variants without native or network requirements", () => {
+  it("runs one complete local scenario through all variants without network requirements", () => {
     const result = spawnSync(
       process.execPath,
       [runnerPath, "--runs", "1", "--scenario", "repo-orientation-small-ts", "--require-complete", "--json"],
@@ -1596,7 +1596,6 @@ describe("public documentation benchmark subprocess", () => {
         cwd: rootDir,
         encoding: "utf8",
         timeout: 60_000,
-        env: { ...process.env, CODEGRAPH_DISABLE_NATIVE: "1" },
       },
     );
 

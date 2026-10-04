@@ -383,7 +383,25 @@ describe("package smoke modes", () => {
     expect(commandRunner.calls.some((call) => call[1] === "install")).toBe(true);
     expect(commandRunner.calls.find((call) => call[1] === "install")).toContain("--prefer-offline");
     expect(commandRunner.calls.filter((call) => call[0] === "tar")).toHaveLength(12);
+    const searchCall = commandRunner.calls.find((call) => call.includes("search"));
+    expect(searchCall).toBeDefined();
+    expect(searchCall).not.toContain("--native");
     expect(commandRunner.calls.some((call) => call.includes("--pack-destination"))).toBe(false);
+  });
+
+  it("rejects the removed reduced smoke mode", async () => {
+    const target = "win32-x64-msvc";
+    const candidates = await createCandidateSet(target);
+    const commandRunner = createMockCommandRunner(candidates.packages);
+    await expect(
+      runPackageSmoke({
+        manifestPath: candidates.manifestPath,
+        mode: "reduced",
+        expectedTargets: [target],
+        commandRunner: commandRunner.run,
+      }),
+    ).rejects.toMatchObject({ code: "mode-invalid" });
+    expect(commandRunner.calls).toHaveLength(0);
   });
 
   it("fails with target-mismatch when archive identity names another target", async () => {

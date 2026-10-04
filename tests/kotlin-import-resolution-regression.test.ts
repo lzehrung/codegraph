@@ -199,7 +199,7 @@ describe("Kotlin import resolution regression", () => {
       const b = path.join(root, "calc", "B.kt").replace(/\\/g, "/");
       const decoy = path.join(root, "other", "Decoy.kt").replace(/\\/g, "/");
       const appLines = files["app/Use.kt"].split("\n");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const at = async (line: number, name: string) =>
         await goToDefinition(index, { file: app, line, column: appLines[line - 1]!.indexOf(name) + 1 });
       const two = await at(4, "add");

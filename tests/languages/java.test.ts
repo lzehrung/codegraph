@@ -422,7 +422,7 @@ describe("Java imports with a same-named package", () => {
         "Use.java": useLines.join("\n") + "\n",
         "UseStar.java": "package client;\nimport p.C.*;\nclass UseStar { Decoy make() { return new Decoy(); } }\n",
       });
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const use = paths["Use.java"]!;
       const declaration = paths["p/C.java"]!;
       const decoy = paths["p/C/Decoy.java"]!;
@@ -442,20 +442,6 @@ describe("Java imports with a same-named package", () => {
         ?.imports.find((entry) => entry.from === "p.C");
       expect(starBinding?.resolved).toBe(decoy);
 
-      const reduced = await buildProjectIndex(root, { cache: "off", native: "off" });
-      const reducedBinding = reduced.byFile.get(fileIdentityKey(use))?.imports.find((entry) => entry.from === "p.C");
-      const reducedStar = reduced.byFile
-        .get(fileIdentityKey(paths["UseStar.java"]!))
-        ?.imports.find((entry) => entry.from === "p.C");
-      const reducedTargets = (file: string) =>
-        reduced.graph.edges
-          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file) && edge.to.type === "file")
-          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
-      expect(reducedBinding?.resolved).toBe(declaration);
-      expect(reducedTargets(use)).toEqual([declaration]);
-      expect(reducedTargets(use)).not.toContain(decoy);
-      expect(reducedStar?.resolved).toBe(decoy);
-      expect(reducedTargets(paths["UseStar.java"]!)).toEqual([decoy]);
       const goto = await goToDefinition(index, { file: use, line: 3, column: columnOf(useLines, 3, "C make") });
       expect(goto.status).toBe("ok");
       if (goto.status !== "ok") throw new Error("Expected imported class C");
@@ -476,7 +462,7 @@ describe("Java imports with a same-named package", () => {
         "client/PackageUse.java": packageSource,
         "client/StaticUse.java": staticSource,
       });
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const fromPackage = await goToDefinition(index, {
         file: paths["client/PackageUse.java"]!,
         line: 1,
@@ -524,7 +510,7 @@ describe("Java imports with a same-named package", () => {
         "p/C/Decoy.java": decoyLines.join("\n"),
         "client/Use.java": useLines.join("\n"),
       });
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const use = paths["client/Use.java"]!;
       const target = paths["p/C.java"]!;
       const pkg = paths["p/C/Pkg.java"]!;
@@ -611,7 +597,7 @@ describe("Java imports with a same-named package", () => {
         "p/Helper.kt": "package p\nfun kotlinHelper(): Int = 42",
         "client/Use.kt": kotlin.join("\n"),
       });
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const lookup = (file: string, lines: string[], line: number, name: string) =>
         goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
       for (const [line, name] of [
@@ -748,7 +734,7 @@ describe("Java imports with a same-named package", () => {
         "client/Outside.java": outside.join("\n"),
         "client/Explicit.java": explicit.join("\n"),
       });
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const goto = (file: string, lines: string[], line: number, name: string) =>
         goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
       for (const [file, lines, line, name] of [
@@ -877,7 +863,7 @@ describe("Java imports with a same-named package", () => {
         "client/Use.java": consumer.join("\n"),
         "client/Outside.java": outside.join("\n"),
       });
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const go = (file: string, lines: string[], line: number, name: string) =>
         goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
       const hit = await go(files["client/Use.java"]!, consumer, 5, "hit");
@@ -977,7 +963,7 @@ describe("Java inherited package access", () => {
         "b/Plain.java": plain.join("\n"),
         "q/Tools.java": tools,
       });
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const go = (file: string, lines: string[], line: number, name: string) =>
         goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
       for (const [file, lines, line, name, target] of [
@@ -1262,7 +1248,7 @@ describe("Java implicit-receiver precedence", () => {
         util,
         "package j;\n\nclass Util {\n  static int hit() { return 1; }\n  static int hidden() { return 2; }\n}\n",
       );
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoLine = async (line: number, name: string) => {
         const result = await goToDefinition(index, { file: use, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
         return result.status === "ok"
@@ -1313,7 +1299,7 @@ describe("Java implicit-receiver precedence", () => {
       ];
       const file = normalizePath(path.join(root, "C.java"));
       await writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoLine = async (line: number, name: string) => {
         const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
         return result.status === "ok" ? result.definition.range.start.line : null;
@@ -1362,7 +1348,7 @@ describe("Java implicit-receiver precedence", () => {
       ];
       const use = normalizePath(path.join(root, "Use.java"));
       await writeFile(use, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       // Base.hit() cannot take one argument; overloads span the hierarchy, so GrandBase.hit(int) wins.
       const goto = await goToDefinition(index, { file: use, line: 6, column: lines[5]!.indexOf("hit") + 1 });
       expect(goto.status).toBe("ok");
@@ -1386,7 +1372,7 @@ describe("Java implicit-receiver precedence", () => {
         "p/Base.java": "package p;\nclass Base extends GrandBase { int hit() { return 0; } }\n",
         "p/Derived.java": lines.join("\n") + "\n",
       });
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const goto = await goToDefinition(index, {
         file: paths["p/Derived.java"]!,
         line: 3,
@@ -1425,7 +1411,7 @@ describe("Java implicit-receiver precedence", () => {
           "package b;\n\nimport static b.Util.go;\n\nclass Derived extends Base {\n  int use() { return go(); }\n}\n",
       };
       for (const [relative, text] of Object.entries(files)) await writeFile(path.join(root, relative), text);
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoAt = async (relative: string, name: string) => {
         const file = normalizePath(path.join(root, relative));
         const line = files[relative]!.split("\n")[5]!;
@@ -1458,7 +1444,7 @@ describe("Java implicit-receiver precedence", () => {
           "package j;\nclass Both implements Left, Right {\n  int use() { return hit(1); }\n}\nclass Leaf extends Mid {\n  int use() { return go(1); }\n}\n",
       };
       for (const [relative, text] of Object.entries(files)) await writeFile(path.join(root, relative), text);
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const use = normalizePath(path.join(root, "Use.java"));
       const useLines = files["Use.java"]!.split("\n");
       const gotoAt = async (line: number, name: string) => {
@@ -1494,7 +1480,7 @@ describe("Java implicit-receiver precedence", () => {
           "package j;\n\nimport static j.Util.hit;\nimport static j.Util.go;\n\nclass Derived extends Base {\n  static int s1() { return hit(1); }\n  static int s2() { return go(1); }\n}\n",
       };
       for (const [relative, text] of Object.entries(files)) await writeFile(path.join(root, relative), text);
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const use = normalizePath(path.join(root, "Use.java"));
       const useLines = files["Use.java"]!.split("\n");
       for (const [line, name] of [
@@ -1537,7 +1523,7 @@ describe("Java implicit-receiver precedence", () => {
       ];
       const derived = normalizePath(path.join(root, "Derived.java"));
       await writeFile(derived, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       // Base.hit(j.a.Foo) and Derived.hit(j.b.Foo) are distinct overloads of one arity.
       const goto = await goToDefinition(index, { file: derived, line: 5, column: lines[4]!.lastIndexOf("hit") + 1 });
       expect(goto.status).toBe("not_found");
@@ -1562,7 +1548,7 @@ describe("Java implicit-receiver precedence", () => {
       const lines = ["package j;", "class Derived extends Base {", "  int one() { return hit(1); }", "}", ""];
       const use = normalizePath(path.join(root, "Derived.java"));
       await writeFile(use, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       // hit(1) calls hit(int...) in Java, but only argument types prove it: no confident target.
       const goto = await goToDefinition(index, { file: use, line: 3, column: lines[2]!.indexOf("hit") + 1 });
       expect(goto.status).toBe("not_found");
@@ -1597,7 +1583,7 @@ describe("Java implicit-receiver precedence", () => {
       ];
       const derived = normalizePath(path.join(root, "Derived.java"));
       await writeFile(derived, dLines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       // Java methods and variables are separate namespaces.
       const call = await goToDefinition(index, { file: c, line: 4, column: cLines[3]!.indexOf("hit()") + 1 });
       expect(call.status === "ok" ? call.definition.range.start.line : null).toBe(3);
@@ -1644,7 +1630,7 @@ describe("Java type-qualified overloads", () => {
       const use = normalizePath(path.join(root, "q", "Use.java"));
       await writeFile(util, utilLines.join("\n"));
       await writeFile(use, useLines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoLine = async (file: string, lines: string[], line: number) => {
         const column = lines[line - 1]!.indexOf("two") + 1;
         const result = await goToDefinition(index, { file, line, column });
@@ -1703,7 +1689,7 @@ describe("Java type-qualified overloads", () => {
       await writeFile(path.join(root, "p", "Mix.java"), utilLines.join("\n"));
       const use = normalizePath(path.join(root, "p", "Use.java"));
       await writeFile(use, useLines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoLine = async (line: number) => {
         const column = useLines[line - 1]!.lastIndexOf("m(") + 1;
         const result = await goToDefinition(index, { file: use, line, column });

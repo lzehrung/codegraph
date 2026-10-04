@@ -43,7 +43,7 @@ const CORPUS_CASES = fs.existsSync(CORPUS_ROOT)
   : [];
 
 async function mismatchesAt(root: string): Promise<GraphNavigationMismatch[]> {
-  const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+  const index = await buildProjectIndex(root, { cache: "off" });
   const graph = await buildSymbolGraphDetailed(index);
   return collectGraphNavigationMismatches(index, graph, root);
 }

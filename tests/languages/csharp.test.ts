@@ -2245,7 +2245,7 @@ describe("C# bare member calls", () => {
       ];
       const file = normalizePath(path.join(root, "C.cs"));
       await writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       // Navigation keeps the only candidate so callers of a changed signature stay visible.
       const goto = await goToDefinition(index, { file, line: 3, column: lines[2]!.indexOf("Pick") + 1 });
       expect(goto.status).toBe("ok");
@@ -2274,7 +2274,7 @@ describe("CSharp bare member overloads", () => {
       ];
       const file = normalizePath(path.join(root, "a.cs"));
       await writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const callLine = lines.findIndex((line) => line.includes("(1)")) + 1;
       const goto = await goToDefinition(index, {
         file,
@@ -2310,7 +2310,7 @@ describe("C# inherited overloads", () => {
       await writeFile(path.join(root, "Base.cs"), "public class Base {\n  public int Hit(int a, int b) => a + b;\n}\n");
       const file = normalizePath(path.join(root, "Derived.cs"));
       await writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       // C# candidates are the applicable methods first (spec, method invocations); only then are
       // base methods of an applicable derived method removed. Hit(string) cannot take two
       // arguments, so Hit(1, 2) binds to Base.Hit(int, int).
@@ -2337,7 +2337,7 @@ describe("C# inherited overloads", () => {
         "Base.cs": "namespace P;\npublic class Base : GrandBase { public int Hit() => 0; }\n",
         "Derived.cs": lines.join("\n") + "\n",
       });
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const goto = await goToDefinition(index, {
         file: paths["Derived.cs"]!,
         line: 3,
@@ -2383,7 +2383,7 @@ describe("C# inherited member accessibility", () => {
       ];
       const file = normalizePath(path.join(root, "a.cs"));
       await writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoLine = async (line: number, name: string) => {
         const result = await goToDefinition(index, { file, line, column: lines[line - 1]!.lastIndexOf(name) + 1 });
         return result.status === "ok" ? result.definition.range.start.line : null;
@@ -2431,7 +2431,7 @@ describe("C# inherited member accessibility", () => {
       ];
       const file = normalizePath(path.join(root, "a.cs"));
       await writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       // Base.Hit(A.Foo) and Derived.Hit(B.Foo) are distinct overloads of one arity.
       const goto = await goToDefinition(index, { file, line: 9, column: lines[8]!.lastIndexOf("Hit") + 1 });
       expect(goto.status).toBe("not_found");
@@ -2522,7 +2522,7 @@ describe("C# using static", () => {
       await writeFile(util, utilLines.join("\n"));
       await writeFile(use, useLines.join("\n"));
       await writeFile(useGlobal, globalLines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const lineOf = (lines: readonly string[], text: string) => lines.findIndex((line) => line.includes(text)) + 1;
       const gotoTarget = async (file: string, lines: readonly string[], text: string, name: string) => {
         const line = lineOf(lines, text);
@@ -2626,7 +2626,7 @@ describe("C# type-qualified overloads", () => {
       const use = normalizePath(path.join(root, "Use.cs"));
       await writeFile(util, utilLines.join("\n"));
       await writeFile(use, useLines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoLine = async (file: string, lines: string[], line: number) => {
         const column = lines[line - 1]!.indexOf("Two") + 1;
         const result = await goToDefinition(index, { file, line, column });
@@ -2689,7 +2689,7 @@ describe("C# type-qualified overloads", () => {
         ],
       };
       for (const [name, lines] of Object.entries(files)) await writeFile(path.join(root, name), lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const use = normalizePath(path.join(root, "Use.cs"));
       const gotoTarget = async (line: number, name: string) => {
         const column = files["Use.cs"]![line - 1]!.lastIndexOf(name) + 1;
@@ -2753,7 +2753,7 @@ describe("C# using namespace across files", () => {
         await mkdir(path.dirname(path.join(root, name)), { recursive: true });
         await writeFile(path.join(root, name), `${lines.join("\n")}\n`);
       }
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const use = normalizePath(path.join(root, "cs", "Use.cs"));
       const useLines = files["cs/Use.cs"]!;
       const gotoTarget = async (line: number, token: string) => {
@@ -2811,7 +2811,7 @@ describe("C# using namespace across files", () => {
       // It even declares a TypeScript `namespace P`, which the C# namespace scanner must not count.
       await writeFile(path.join(root, "p.cs"), "export namespace P { export const x = 1; }\n");
       await writeFile(path.join(root, "Use.csx"), "using P;\nnamespace Q;\npublic class Use { }\n");
-      const mapped = await buildProjectIndex(root, { cache: "off", native: "on", languageExtensions: { ".cs": "ts" } });
+      const mapped = await buildProjectIndex(root, { cache: "off", languageExtensions: { ".cs": "ts" } });
       const useFile = normalizePath(path.join(root, "Use.csx"));
       const targets = mapped.graph.edges
         .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(useFile))
@@ -2842,7 +2842,7 @@ describe("C# using namespace across files", () => {
       );
       const use = normalizePath(path.join(aliasRoot, "Use.cs"));
       await writeFile(use, `${useLines.join("\n")}\n`);
-      const index = await buildProjectIndex(aliasRoot, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(aliasRoot, { cache: "off" });
       // `P` is the alias for `Other`, not namespace P.
       const result = await goToDefinition(index, { file: use, line: 4, column: useLines[3]!.lastIndexOf("M(") + 1 });
       expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("Other.cs");
@@ -2877,7 +2877,7 @@ describe("C# using namespace across files", () => {
       ];
       const use = normalizePath(path.join(root, "Use.cs"));
       await writeFile(use, `${useLines.join("\n")}\n`);
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const target = async (line: number, token: string) => {
         const column = useLines[line - 1]!.lastIndexOf(token) + 1;
         const result = await goToDefinition(index, { file: use, line, column });
@@ -2899,7 +2899,7 @@ describe("C# using namespace across files", () => {
       await writeFile(path.join(root, "pkgs", "lib", "package.json"), '{"name":"Lib","main":"index.ts"}\n');
       await writeFile(path.join(root, "pkgs", "lib", "index.ts"), "export const x = 1;\n");
       await writeFile(path.join(root, "Use.cs"), "using Lib;\nnamespace Q;\npublic class Use { }\n");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const use = normalizePath(path.join(root, "Use.cs"));
       const targets = index.graph.edges
         .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use))
@@ -2932,7 +2932,7 @@ describe("C# using namespace across files", () => {
       ];
       const use = normalizePath(path.join(root, "Use.cs"));
       await writeFile(use, `${useLines.join("\n")}\n`);
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const result = await goToDefinition(index, { file: use, line: 4, column: useLines[3]!.lastIndexOf("M(") + 1 });
       expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("PType.cs");
       const graph = await buildSymbolGraphDetailed(index);
@@ -2957,7 +2957,7 @@ describe("C# plain dotted using targets", () => {
       await writeFile(real, "namespace N {\n  public class T { public static int M() => 1; }\n}\n");
       await writeFile(decoy, "namespace Other {\n  public class Decoy { public static int M() => 2; }\n}\n");
       await writeFile(use, "using N.T;\nnamespace Q { public class Use {} }\n");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const binding = index.byFile
         .get(fileIdentityKey(use))
         ?.imports.find((entry) => entry.kind === "star" && entry.from === "N.T");
@@ -2988,7 +2988,7 @@ describe("C# plain dotted using targets", () => {
       await writeFile(pathLike, "namespace N {\n  public class T { public static int Left() => 1; }\n}\n");
       await writeFile(extra, "namespace N {\n  public class T { public static int Right() => 2; }\n}\n");
       await writeFile(use, "using N.T;\nclass Use {}\n");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const binding = index.byFile
         .get(fileIdentityKey(use))
         ?.imports.find((entry) => entry.kind === "star" && entry.from === "N.T");
@@ -3020,7 +3020,7 @@ describe("C# plain dotted using targets", () => {
       await writeFile(packageFile, "export const x = 1;\n");
       await writeFile(csharpFile, "namespace Other { public class Foo {} }\n");
       await writeFile(use, "using Foo;\nnamespace Q { public class Use {} }\n");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const binding = index.byFile
         .get(fileIdentityKey(use))
         ?.imports.find((entry) => entry.kind === "star" && entry.from === "Foo");
@@ -3048,7 +3048,7 @@ describe("C# plain dotted using targets", () => {
       const use = path.join(root, "Use.cs");
       await writeFile(script, "export const x = 1;\n");
       await writeFile(use, "using Something.Foo<int>;\n");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const binding = index.byFile
         .get(fileIdentityKey(use))
         ?.imports.find((entry) => entry.from === "Something.Foo<int>");

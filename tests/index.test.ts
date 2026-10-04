@@ -115,7 +115,7 @@ describe("Project Indexing", () => {
     await fsp.writeFile(file, "export const value = 1;\n", "utf8");
 
     try {
-      await buildProjectIndex(root, { cache: "off", native: "off", onProgress: (update) => updates.push(update) });
+      await buildProjectIndex(root, { cache: "off", onProgress: (update) => updates.push(update) });
 
       expect(updates[0]).toMatchObject({
         phase: "start",
@@ -139,7 +139,6 @@ describe("Project Indexing", () => {
     try {
       await buildProjectIndexIncremental(root, {
         cache: "disk",
-        native: "off",
         report,
       });
 
@@ -159,11 +158,11 @@ describe("Project Indexing", () => {
     await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
 
     try {
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+      await buildProjectIndexIncremental(root, { cache: "disk" });
       await fsp.writeFile(path.join(root, "extra.ts"), "export const extra = 2;\n", "utf8");
       const report: BuildReport = { timings: {} };
 
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      await buildProjectIndexIncremental(root, { cache: "disk", report });
 
       expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
       expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
@@ -185,11 +184,11 @@ describe("Project Indexing", () => {
     git(root, ["commit", "-m", "initial source"]);
 
     try {
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+      await buildProjectIndexIncremental(root, { cache: "disk" });
       await fsp.writeFile(extra, "export const extra = 2;\n", "utf8");
       const report: BuildReport = { timings: {} };
 
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      await buildProjectIndexIncremental(root, { cache: "disk", report });
 
       expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
       expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
@@ -214,7 +213,6 @@ describe("Project Indexing", () => {
     try {
       await buildProjectIndexIncremental(root, {
         cache: "disk",
-        native: "off",
         report,
         onProgress: (update) => updates.push(update),
       });
@@ -237,14 +235,14 @@ describe("Project Indexing", () => {
     await fsp.writeFile(file, "export const value = 1;\n", "utf8");
 
     try {
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      await buildProjectIndexIncremental(root, { cache: "disk", report });
       expect(report.timings.steps?.filter((step) => step.name === "filesystem-scan")).toHaveLength(1);
       report.timings.gitListMs = 9999;
       report.timings.cacheProbeMs = 9999;
       (report.timings.steps ??= []).push({ name: "git-list", ms: 9999 }, { name: "cache-probe", ms: 9999 });
 
       await fsp.writeFile(extra, "export const extra = 2;\n", "utf8");
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      await buildProjectIndexIncremental(root, { cache: "disk", report });
 
       expect(report.timings.gitListMs).toBeUndefined();
       expect(report.timings.cacheProbeMs).not.toBe(9999);
@@ -263,13 +261,12 @@ describe("Project Indexing", () => {
     await fsp.writeFile(file, "export const value = 1;\n", "utf8");
 
     try {
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      await buildProjectIndexIncremental(root, { cache: "disk", report });
       expect(report.timings.sourceDiscoveryMs).toBeTypeOf("number");
       expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
 
       await buildProjectIndexIncremental(root, {
         cache: "disk",
-        native: "off",
         report,
         files: [file],
         filesAreProjectScope: true,
@@ -296,11 +293,11 @@ describe("Project Indexing", () => {
     git(root, ["commit", "-m", "initial source"]);
 
     try {
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      await buildProjectIndexIncremental(root, { cache: "disk", report });
       expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
       expect(report.timings.gitListMs).toBeTypeOf("number");
 
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+      await buildProjectIndexIncremental(root, { cache: "disk", report });
 
       expect(report.timings.filesystemScanMs).toBeUndefined();
       expect(report.timings.metadataDiscoveryMs).toBeUndefined();
@@ -320,7 +317,7 @@ describe("Project Indexing", () => {
     await fsp.writeFile(file, "export const value = 1;\n", "utf8");
 
     try {
-      await buildProjectIndexFromFiles(root, [file], { native: "off", report });
+      await buildProjectIndexFromFiles(root, [file], { report });
 
       expect(report.timings.sourceDiscoveryMs).toBeUndefined();
       expect(report.timings.metadataDiscoveryMs).toBeTypeOf("number");
@@ -337,9 +334,9 @@ describe("Project Indexing", () => {
     await fsp.writeFile(file, "export const value = 1;\n", "utf8");
 
     try {
-      await buildProjectIndexFromFiles(root, [file], { native: "off", report });
+      await buildProjectIndexFromFiles(root, [file], { report });
       (report.timings.steps ??= []).push({ name: "metadata-discovery", ms: 9999 });
-      await buildProjectIndexFromFiles(root, [file], { native: "off", report });
+      await buildProjectIndexFromFiles(root, [file], { report });
 
       const discoverySteps = (report.timings.steps ?? []).filter((step) => step.name === "metadata-discovery");
       expect(discoverySteps).toHaveLength(1);
@@ -360,7 +357,6 @@ describe("Project Indexing", () => {
         cache: "off",
         files: [file],
         filesAreProjectScope: true,
-        native: "off",
         report,
       });
 
@@ -377,8 +373,8 @@ describe("Project Indexing", () => {
     await fsp.writeFile(file, "export const value = 1;\n", "utf8");
 
     try {
-      await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
-      const index = await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+      await buildProjectIndexIncremental(root, { cache: "disk" });
+      const index = await buildProjectIndexIncremental(root, { cache: "disk" });
 
       expect(index.buildReport?.timings.sourceDiscoveryMs).toBeUndefined();
       expect(index.buildReport?.timings.metadataDiscoveryMs).toBeUndefined();

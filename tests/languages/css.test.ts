@@ -88,12 +88,9 @@ const definition: LanguageTestDefinition = {
 
 runLanguageTests(definition);
 
-it("recovers media-qualified CSS imports in reduced mode", () => {
+it("extracts media-qualified CSS imports", () => {
   const support = supportById("css")!;
-  const specifiers = collectModuleSpecifiersFromSource(support, '@import "./print.css" screen;', {
-    native: "off",
-  });
-
+  const specifiers = collectModuleSpecifiersFromSource(support, '@import "./print.css" screen;');
   expect(specifiers).toEqual([{ spec: "./print.css", resolutionKind: "stylesheet" }]);
 });
 

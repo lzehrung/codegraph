@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { searchCodegraphWithSession, type AgentSearchResponse } from "../src/agent/search.js";
+import { summarizeAnalysis } from "../src/analysis-summary.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import { disposeSessionQueryIndex, ensureSessionQueryIndex } from "../src/agent/query-index/session-store.js";
 import * as updateModule from "../src/agent/query-index/update.js";
@@ -53,7 +54,7 @@ async function createRepo(): Promise<string> {
 }
 
 function createSession(root: string, cache: "disk" | "off" = "disk"): AgentSession {
-  const session = createAgentSession({ root, buildOptions: { cache, native: "off" } });
+  const session = createAgentSession({ root, buildOptions: { cache } });
   sessions.push(session);
   return session;
 }
@@ -302,8 +303,6 @@ describe("persistent query index", () => {
       "50",
       "--cache",
       "disk",
-      "--native",
-      "off",
       "--json",
     ]);
     expect(cli.exitCode).toBeUndefined();
@@ -324,7 +323,7 @@ describe("persistent query index", () => {
     const root = await createRepo();
     const session = createAgentSession({
       root,
-      buildOptions: { cache: "disk", native: "off" },
+      buildOptions: { cache: "disk" },
       freshness: { policy: "auto" },
     });
     sessions.push(session);
@@ -379,7 +378,6 @@ describe("persistent query index", () => {
       const index = await buildProjectIndexIncremental(root, {
         files: [transient],
         cache: "disk",
-        native: "off",
       });
       expect(index.manifestEntries?.has(transient.replace(/\\/g, "/"))).toBe(true);
       const files = [...index.manifestEntries!.keys()];
@@ -389,15 +387,7 @@ describe("persistent query index", () => {
         index,
         fileGraph: index.graph,
         symbolGraph: { nodes: new Map(), edges: [] },
-        analysis: index.analysis ?? {
-          mode: "reduced",
-          backend: "unknown",
-          parserDegradedFiles: 0,
-          fallbackImportExtractionFiles: 0,
-          nativeFilesUsed: 0,
-          nativeFilesFellBack: 0,
-          label: "reduced",
-        },
+        analysis: summarizeAnalysis({ index, report: index.buildReport }),
         ...(index.buildReport ? { buildReport: index.buildReport } : {}),
       };
     };

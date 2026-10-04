@@ -22,7 +22,7 @@ async function project(prefix: string, files: Record<string, string>): Promise<{
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, source, "utf8");
   }
-  const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+  const index = await buildProjectIndex(root, { cache: "off" });
   return { root, index };
 }
 

@@ -1,6 +1,5 @@
 import type { ModuleIndex } from "../../src/index.js";
 import type { NativeSyntaxTree } from "../../src/native/contracts.js";
-import { __resetNativeTreeSitterBindingForTests } from "../../src/native/tree-sitter-native.js";
 import { normalizeTestPath } from "./filesystem.js";
 
 /**
@@ -29,51 +28,6 @@ export function createStubNativeSyntaxTree(kind: string = "program"): NativeSynt
     namedChildOffsets: Uint32Array.of(0, 0),
     namedChildIds: new Uint32Array(0),
   };
-}
-
-export type NativeRuntimeMode = "native" | "reduced";
-
-function applyNativeRuntimeMode(mode: NativeRuntimeMode): void {
-  if (mode === "reduced") {
-    process.env.CODEGRAPH_DISABLE_NATIVE = "1";
-  } else {
-    delete process.env.CODEGRAPH_DISABLE_NATIVE;
-  }
-  __resetNativeTreeSitterBindingForTests();
-}
-
-function restoreNativeRuntimeMode(previous: string | undefined): void {
-  if (previous === undefined) {
-    delete process.env.CODEGRAPH_DISABLE_NATIVE;
-  } else {
-    process.env.CODEGRAPH_DISABLE_NATIVE = previous;
-  }
-  __resetNativeTreeSitterBindingForTests();
-}
-
-export function withNativeRuntimeMode<T>(mode: NativeRuntimeMode, run: () => T): T {
-  const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
-  applyNativeRuntimeMode(mode);
-  try {
-    return run();
-  } finally {
-    restoreNativeRuntimeMode(previous);
-  }
-}
-
-export async function withNativeRuntimeModeAsync<T>(mode: NativeRuntimeMode, run: () => Promise<T>): Promise<T> {
-  const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
-  applyNativeRuntimeMode(mode);
-  try {
-    return await run();
-  } finally {
-    restoreNativeRuntimeMode(previous);
-  }
-}
-
-export function resetNativeRuntimeModeForTests(): void {
-  delete process.env.CODEGRAPH_DISABLE_NATIVE;
-  __resetNativeTreeSitterBindingForTests();
 }
 
 export function simplifyNativeTestImports(imports: ModuleIndex["imports"]): unknown[] {

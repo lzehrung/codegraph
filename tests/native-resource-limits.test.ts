@@ -156,7 +156,6 @@ describe("native extraction resource limits", () => {
 
     try {
       const index = await buildProjectIndexFromFiles(root, [file], {
-        native: "off",
         useNativeWorkers: false,
       });
       const filter = index.bloomFilters?.get(fileIdentityKey(normalizePath(file)));
@@ -274,6 +273,38 @@ describe("native extraction resource limits", () => {
 });
 
 describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache behavior", () => {
+  it("skips oversized source without extracting imports or symbols and reports sourceTooLarge", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-oversized-source-skip-"));
+    const file = path.join(root, "oversized.ts");
+    const dependency = path.join(root, "dependency.ts");
+    const source =
+      'import { target } from "./dependency";\nexport const retained = target;\n' +
+      "// filler\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 10));
+    await Promise.all([
+      fsp.writeFile(file, source, "utf8"),
+      fsp.writeFile(dependency, "export const target = 1;\n", "utf8"),
+    ]);
+
+    try {
+      const report: BuildReport = { timings: {} };
+      const index = await buildProjectIndexFromFiles(root, [file, dependency], { cache: "off", report });
+      const skipped = index.byFile.get(fileIdentityKey(normalizePath(file)));
+      const indexedDependency = index.byFile.get(fileIdentityKey(normalizePath(dependency)));
+
+      expect(skipped).toBeDefined();
+      expect(skipped?.imports).toEqual([]);
+      expect(skipped?.locals).toEqual([]);
+      expect(skipped?.exports).toEqual([]);
+      expect(indexedDependency?.locals.map((symbol) => symbol.localName)).toContain("target");
+      expect(report.backend?.native.fallbackReasons.sourceTooLarge).toBe(1);
+      expect(report.backend?.native.errors).toContainEqual(
+        expect.objectContaining({ file: normalizePath(file), reason: "sourceTooLarge" }),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("does not persist or reuse an empty module after a byte-limit fallback", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-resource-limit-cache-"));
     const file = path.join(root, "oversized.ts");
@@ -285,7 +316,6 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       const firstReport: BuildReport = { timings: {} };
       const first = await buildProjectIndex(root, {
         cache: "disk",
-        native: "on",
         nativeThreads: 1,
         useNativeWorkers: true,
         report: firstReport,
@@ -302,7 +332,6 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       const secondReport: BuildReport = { timings: {} };
       await buildProjectIndex(root, {
         cache: "disk",
-        native: "on",
         nativeThreads: 1,
         useNativeWorkers: true,
         report: secondReport,
@@ -325,7 +354,6 @@ describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache beh
       const report: BuildReport = { timings: {} };
       const index = await buildProjectIndexFromFiles(root, [file], {
         cache: "off",
-        native: "on",
         nativeThreads: 1,
         useNativeWorkers: true,
         report,
@@ -356,7 +384,7 @@ describe.runIf(isNativeTreeSitterAvailable())("module cache upgrade behavior", (
 
     try {
       const signature = await fileSignature(file, true);
-      const currentCacheSignature = await cacheSignatureForFile(file, signature, { native: "on" });
+      const currentCacheSignature = await cacheSignatureForFile(file, signature);
       const separator = currentCacheSignature.lastIndexOf(":");
       expect(separator).toBeGreaterThan(0);
       const legacyCacheSignature = `${currentCacheSignature.slice(0, separator)}:${"0".repeat(64)}`;
@@ -365,13 +393,12 @@ describe.runIf(isNativeTreeSitterAvailable())("module cache upgrade behavior", (
         normalizedFile,
         legacyCacheSignature,
         { file: normalizedFile, exports: [], imports: [], locals: [] },
-        { cache: "disk", native: "on" },
+        { cache: "disk" },
       );
 
       const report: BuildReport = { timings: {} };
       const index = await buildProjectIndexFromFiles(root, [file], {
         cache: "disk",
-        native: "on",
         nativeThreads: 1,
         useNativeWorkers: true,
         report,

@@ -8,11 +8,7 @@ import { captureCli, runCliOrThrow, stripCliProgressLines } from "./helpers/cli.
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary, collectDuplicateLeadSummary } from "../src/duplicates-leads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
-import {
-  getNativeDuplicateTokens,
-  isNativeDuplicateTokenizationAvailable,
-  isNativeTreeSitterAvailable,
-} from "../src/native/tree-sitter-native.js";
+import { getNativeDuplicateTokens, isNativeDuplicateTokenizationAvailable } from "../src/native/tree-sitter-native.js";
 import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
 import { normalizeDuplicateSourceTokens } from "../src/duplicate-token-normalization.js";
 import {
@@ -74,7 +70,7 @@ afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map(async (root) => await fsp.rm(root, { recursive: true, force: true })));
 });
 
-const duplicateTokenizerNativeAvailable = isNativeDuplicateTokenizationAvailable("auto");
+const duplicateTokenizerNativeAvailable = isNativeDuplicateTokenizationAvailable();
 // Under run-native-required-tests.mjs the native addon is already proven to load, so
 // this case must run and fail loudly rather than skip itself into looking like coverage.
 const duplicateTokenizerNativeRequired = process.env.CODEGRAPH_NATIVE_REQUIRED === "1";
@@ -91,7 +87,7 @@ function formatCodePoint(codePoint: number): string {
 }
 
 function assertDuplicateTokenizerParity(source: string, codePoint: number, position: "standalone" | "continue"): void {
-  const native = getNativeDuplicateTokens(source, "auto");
+  const native = getNativeDuplicateTokens(source);
   if (!native) {
     throw new Error("Native duplicate tokenizer became unavailable during parity test.");
   }
@@ -109,7 +105,7 @@ function assertDuplicateTokenizerClassificationParity(codePoint: number, positio
   let source = character;
   if (position === "continue") source = `if${character}else`;
 
-  const native = getNativeDuplicateTokens(source, "auto");
+  const native = getNativeDuplicateTokens(source);
   if (!native) {
     throw new Error("Native duplicate tokenizer became unavailable during parity test.");
   }
@@ -259,13 +255,10 @@ describe("duplicate detection", () => {
   test("masks import declarations and directives across supported source grammars", () => {
     for (const scenario of importStatementMaskCases) {
       const masked = maskDuplicateImportStatements(scenario.source, scenario.file, scenario.language);
-      const fallbackMasked = maskDuplicateImportStatements(scenario.source, scenario.file, scenario.language, "off");
 
-      for (const result of [masked, fallbackMasked]) {
-        expect(result, scenario.file).not.toContain("duplicateImportMarker");
-        expect(result, scenario.file).toMatch(/keep/iu);
-        expect(result, scenario.file).toHaveLength(scenario.source.length);
-      }
+      expect(masked, scenario.file).not.toContain("duplicateImportMarker");
+      expect(masked, scenario.file).toMatch(/keep/iu);
+      expect(masked, scenario.file).toHaveLength(scenario.source.length);
     }
   });
 
@@ -273,10 +266,8 @@ describe("duplicate detection", () => {
     const ruby = 'load path_var\nautoload :Lazy, path_var\nputs "hello"\nlog.info "x"\ndef keep_ruby\nend\n';
     const zig = 'const value = @intFromFloat(1.5);\nconst kind = @TypeOf("x");\npub fn keepZig() void {}\n';
 
-    for (const nativeMode of [undefined, "off"] as const) {
-      expect(maskDuplicateImportStatements(ruby, "sample.rb", "ruby", nativeMode)).toBe(ruby);
-      expect(maskDuplicateImportStatements(zig, "sample.zig", "zig", nativeMode)).toBe(zig);
-    }
+    expect(maskDuplicateImportStatements(ruby, "sample.rb", "ruby")).toBe(ruby);
+    expect(maskDuplicateImportStatements(zig, "sample.zig", "zig")).toBe(zig);
   });
 
   test("does not mask Ruby load concatenations as import statements", () => {
@@ -287,9 +278,7 @@ describe("duplicate detection", () => {
       'autoload(:Lazy, "file" + suffix)\nputs "hello"\n',
     ];
     for (const source of cases) {
-      for (const nativeMode of [undefined, "off"] as const) {
-        expect(maskDuplicateImportStatements(source, "sample.rb", "ruby", nativeMode)).toBe(source);
-      }
+      expect(maskDuplicateImportStatements(source, "sample.rb", "ruby")).toBe(source);
     }
   });
 
@@ -302,24 +291,19 @@ describe("duplicate detection", () => {
       "",
     ].join("\n");
     const masked = maskDuplicateImportStatements(source, "sample.zig", "zig");
-    const fallbackMasked = maskDuplicateImportStatements(source, "sample.zig", "zig", "off");
 
-    for (const result of [masked, fallbackMasked]) {
-      expect(result).not.toContain("duplicateImportMarker");
-      expect(result).toContain("keepZig");
-      expect(result).toHaveLength(source.length);
-    }
+    expect(masked).not.toContain("duplicateImportMarker");
+    expect(masked).toContain("keepZig");
+    expect(masked).toHaveLength(source.length);
   });
 
   test("masks static Ruby load calls without hiding the next statement", () => {
     const source = 'load(\n"one.rb"\n); keep()\nload "two.rb", true\nautoload(:Lazy, "three.rb"); keep_again()\n';
-    for (const nativeMode of [undefined, "off"] as const) {
-      const result = maskDuplicateImportStatements(source, "sample.rb", "ruby", nativeMode);
-      expect(result).not.toMatch(/one\.rb|two\.rb|three\.rb/);
-      expect(result).toContain("; keep()");
-      expect(result).toContain("; keep_again()");
-      expect(result.length).toBe(source.length);
-    }
+    const result = maskDuplicateImportStatements(source, "sample.rb", "ruby");
+    expect(result).not.toMatch(/one\.rb|two\.rb|three\.rb/);
+    expect(result).toContain("; keep()");
+    expect(result).toContain("; keep_again()");
+    expect(result.length).toBe(source.length);
   });
 
   test("duplicate units scan executable Ruby load concatenations and skip static loads", async () => {
@@ -335,42 +319,38 @@ describe("duplicate detection", () => {
       'load "file" + suffix\nautoload :Lazy, "file" + suffix\ndef keep_ruby\nend\n',
     );
 
-    for (const nativeMode of [undefined, "off"] as const) {
-      const index = await buildProjectIndex(root, nativeMode ? { native: nativeMode } : undefined);
-      const staticCollection = await collectDuplicateUnits(index, {
-        projectRoot: root,
-        files: [staticFile],
-        includeSmall: true,
-        minTokens: 1,
-        maxTokens: 400,
-        shingleSize: 3,
-        windowSize: 20,
-      });
-      const dynamicCollection = await collectDuplicateUnits(index, {
-        projectRoot: root,
-        files: [dynamicFile],
-        includeSmall: true,
-        minTokens: 1,
-        maxTokens: 400,
-        shingleSize: 3,
-        windowSize: 20,
-      });
+    const index = await buildProjectIndex(root);
+    const staticCollection = await collectDuplicateUnits(index, {
+      projectRoot: root,
+      files: [staticFile],
+      includeSmall: true,
+      minTokens: 1,
+      maxTokens: 400,
+      shingleSize: 3,
+      windowSize: 20,
+    });
+    const dynamicCollection = await collectDuplicateUnits(index, {
+      projectRoot: root,
+      files: [dynamicFile],
+      includeSmall: true,
+      minTokens: 1,
+      maxTokens: 400,
+      shingleSize: 3,
+      windowSize: 20,
+    });
 
-      expect(staticCollection.units).toEqual([]);
-      expect(dynamicCollection.units.some((unit) => unit.tokenSet.has("+"))).toBe(true);
-    }
+    expect(staticCollection.units).toEqual([]);
+    expect(dynamicCollection.units.some((unit) => unit.tokenSet.has("+"))).toBe(true);
   });
 
-  test("keeps non-import words during fallback import masking", () => {
+  test("keeps non-import words during import masking", () => {
     const cases = [
       { file: "sample.cs", language: "csharp", source: "usingSomething();\nclass KeepCsharp {}\n" },
       { file: "sample.go", language: "go", source: "important := 1\nfunc keepGo() {}\n" },
     ];
 
     for (const scenario of cases) {
-      expect(maskDuplicateImportStatements(scenario.source, scenario.file, scenario.language, "off")).toBe(
-        scenario.source,
-      );
+      expect(maskDuplicateImportStatements(scenario.source, scenario.file, scenario.language)).toBe(scenario.source);
     }
   });
 
@@ -386,15 +366,11 @@ describe("duplicate detection", () => {
       "",
     ].join("\n");
     const masked = maskDuplicateImportStatements(source, "sample.rs", "rust");
-    const fallbackMasked = maskDuplicateImportStatements(source, "sample.rs", "rust", "off");
-
-    for (const result of [masked, fallbackMasked]) {
-      expect(result).toContain("keep_wrapped");
-      expect(result).toContain("mod inner");
-      expect(result).not.toContain("duplicateImportMarker");
-      expect(result).toMatch(/keep_rust/i);
-      expect(result).toHaveLength(source.length);
-    }
+    expect(masked).toContain("keep_wrapped");
+    expect(masked).toContain("mod inner");
+    expect(masked).not.toContain("duplicateImportMarker");
+    expect(masked).toMatch(/keep_rust/i);
+    expect(masked).toHaveLength(source.length);
   });
 
   test("detects duplicates inside inline Rust modules", async () => {
@@ -454,7 +430,7 @@ describe("duplicate detection", () => {
     await writeProjectFile(root, "src/importListA.ts", importList);
     await writeProjectFile(root, "src/importListB.ts", importList);
 
-    const index = await buildProjectIndex(root, { native: "off" });
+    const index = await buildProjectIndex(root);
     const result = await findDuplicates(index, {
       projectRoot: root,
       files: ["src/importListA.ts", "src/importListB.ts"],
@@ -811,33 +787,6 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
     expect(contexts).toHaveLength(2);
     expect(contexts.every((context) => context.stats.comparedPairs <= 1)).toBe(true);
     expect(contexts.some((context) => context.groups.length > 0)).toBe(true);
-  });
-
-  test("matches duplicate groups through native duplicate tokenization", async () => {
-    if (!isNativeTreeSitterAvailable("auto")) return;
-    const root = await makeTempProject();
-    await writeProjectFile(
-      root,
-      "src/a.ts",
-      `// don't treat John's comment as a string\nexport function alpha($userName: string) {\n  const $greeting = "hello " + $userName;\n  return $greeting.toUpperCase();\n}\n`,
-    );
-    await writeProjectFile(
-      root,
-      "src/b.ts",
-      `// don't treat Jane's comment as a string\nexport function beta($accountName: string) {\n  const $greeting = "hello " + $accountName;\n  return $greeting.toUpperCase();\n}\n`,
-    );
-
-    const nativeIndex = await buildProjectIndex(root, { native: "auto" });
-    const fallbackIndex = await buildProjectIndex(root, { native: "off" });
-    const nativeResult = await findDuplicates(nativeIndex, { includeSmall: true, minConfidence: "high", limit: 5 });
-    const fallbackResult = await findDuplicates(fallbackIndex, { includeSmall: true, minConfidence: "high", limit: 5 });
-
-    expect(nativeResult.groups.map((group) => group.cloneType)).toEqual(
-      fallbackResult.groups.map((group) => group.cloneType),
-    );
-    expect(nativeResult.groups.map((group) => group.confidence)).toEqual(
-      fallbackResult.groups.map((group) => group.confidence),
-    );
   });
 
   test("generated TypeScript and Rust keyword lists stay in sync with the canonical source", async () => {

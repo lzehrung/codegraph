@@ -651,7 +651,7 @@ describe("Swift inherited methods named like types", () => {
       ];
       const file = normalizePath(path.join(root, "a.swift"));
       await writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const goto = await goToDefinition(index, { file, line: 6, column: lines[5]!.indexOf("Foo") + 1 });
       expect(goto.status).toBe("ok");
       if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
@@ -680,7 +680,7 @@ describe("Swift bare member overloads", () => {
       ];
       const file = normalizePath(path.join(root, "a.swift"));
       await writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const callLine = lines.findIndex((line) => line.includes("(1)")) + 1;
       const goto = await goToDefinition(index, {
         file,
@@ -716,7 +716,7 @@ describe("Swift overload declarations", () => {
       ];
       const file = normalizePath(path.join(root, "Box.swift"));
       await writeFile(file, lines.join("\n"));
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoLine = async (line: number) => {
         const column = lines[line - 1]!.indexOf("pick") + 1;
         const result = await goToDefinition(index, { file, line, column });

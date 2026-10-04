@@ -97,7 +97,6 @@ describe("Fast graph edge cases", () => {
     const graphs = [
       await collectGraph(rootDir, files),
       await (await import("../src/graphs.js")).collectGraph(rootDir, files, { fast: true }),
-      await collectGraph(rootDir, files, { native: "off" }),
     ];
     const mainPath = path.join(rootDir, "main.ts").replace(/\\/g, "/");
     const typeOnlyOf = (graph: Awaited<ReturnType<typeof collectGraph>>, fileName: string) => {

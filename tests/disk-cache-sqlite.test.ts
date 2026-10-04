@@ -718,7 +718,6 @@ describe("disk cache uses sqlite backend", () => {
       source,
       3,
       2,
-      index.nativeMode,
       { sqlHandle: formatDuplicateSqlHandle("schema/a.sql", "invoice_entries", 1) },
     );
     writeDuplicateUnitsToCache(index, file, "portable-sql", [unit], root);
@@ -767,7 +766,6 @@ describe("disk cache uses sqlite backend", () => {
       source,
       3,
       2,
-      index.nativeMode,
       { symbolHandle: namedHandle },
     );
     const emptyNameUnit = buildInternalUnit(
@@ -783,7 +781,6 @@ describe("disk cache uses sqlite backend", () => {
       source,
       3,
       2,
-      index.nativeMode,
       { symbolHandle: emptyNameHandle },
     );
     writeDuplicateUnitsToCache(index, file, "portable-symbol", [namedUnit, emptyNameUnit], root);
@@ -826,7 +823,6 @@ describe("disk cache uses sqlite backend", () => {
       source,
       3,
       2,
-      index.nativeMode,
       { symbolHandle: formatDuplicateSymbolHandle(file, "normalizeInvoiceRows", 1, 0) },
     );
 
@@ -858,7 +854,6 @@ describe("disk cache uses sqlite backend", () => {
       source,
       3,
       2,
-      index.nativeMode,
     );
     writeDuplicateUnitsToCache(index, file, "confinement", [unit], root);
     closeDuplicateUnitCacheDatabase(root);
@@ -900,7 +895,6 @@ describe("disk cache uses sqlite backend", () => {
       source,
       3,
       2,
-      index.nativeMode,
       {
         sqlHandle: formatDuplicateSqlHandle("src/a.ts", "normalizeInvoiceRows", 1),
         symbolHandle: formatDuplicateSymbolHandle("src/a.ts", "normalizeInvoiceRows", 1, 0),

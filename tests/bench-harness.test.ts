@@ -52,9 +52,9 @@ describe("bench-native harness", () => {
       expect(result.workloads.graph).toBeDefined();
       expect(result.workloads.graph.cold).toBeDefined();
       expect(result.workloads.graph.cold.native.averageElapsedMs).toBeGreaterThan(0);
-      expect(result.workloads.graph.cold.js.averageElapsedMs).toBeGreaterThan(0);
+      expect(result.workloads.graph.cold).not.toHaveProperty("js");
+      expect(result.workloads.graph.cold).not.toHaveProperty("workers");
       expect(result.workloads.graph.cold.native.medianElapsedMs).toBeGreaterThan(0);
-      expect(result.workloads.graph.cold.js.medianElapsedMs).toBeGreaterThan(0);
     },
     longBenchTimeoutMs,
   );
@@ -129,15 +129,16 @@ describe("bench-native harness", () => {
   });
 
   it(
-    "reports vs JS column in table output",
+    "reports only native measurements in default table output",
     () => {
       const output = runBench(
         ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold"],
         60_000,
       );
-      expect(output).toContain("vs JS");
-      // native row should have a speedup indicator
-      expect(output).toMatch(/\d+(?:\.\d+)?x (faster|slower)/);
+      expect(output).toContain("native");
+      expect(output).not.toContain("vs JS");
+      expect(output).not.toContain("vs Native");
+      expect(output).not.toMatch(/\bworkers\b/);
     },
     longBenchTimeoutMs,
   );
@@ -150,7 +151,7 @@ describe("bench-native harness", () => {
         60_000,
       );
       expect(output).toContain("vs Native");
-      // workers row should show comparison against both JS and native
+      // Workers are compared only against native execution.
       const lines = output.split("\n");
       const workersLine = lines.find((l) => /\bworkers\b/.test(l));
       expect(workersLine).toBeDefined();
@@ -171,23 +172,17 @@ describe("bench-native harness", () => {
       expect(parsed.results).toHaveLength(1);
       const result = parsed.results[0];
       expect(result.workloads.full.cold.native.averageElapsedMs).toBeGreaterThan(0);
-      expect(result.workloads.full.cold.js.averageElapsedMs).toBeGreaterThan(0);
+      expect(result.workloads.full.cold).not.toHaveProperty("js");
       expect(result.workloads.full.cold.workers.averageElapsedMs).toBeGreaterThan(0);
     },
     longBenchTimeoutMs,
   );
 
-  it(
-    "enforces --max-slowdown threshold",
-    () => {
-      // max-slowdown of 0.001 should always fail since native can't be 1000x faster
-      expect(() =>
-        runBench(
-          ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", "--max-slowdown=0.001"],
-          60_000,
-        ),
-      ).toThrow();
-    },
-    longBenchTimeoutMs,
-  );
+  it("rejects removed JS comparison options", () => {
+    for (const args of [["--mode=js", "--child"], ["--max-slowdown=0.001"]]) {
+      const result = runBenchResult(args, 10_000);
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+    }
+  });
 });

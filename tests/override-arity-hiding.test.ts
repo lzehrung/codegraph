@@ -55,7 +55,7 @@ describe("override hiding before arity", () => {
         const derivedFile = path.join(root, fixture.derived).replace(/\\/g, "/");
         await fs.writeFile(baseFile, fixture.baseSource);
         await fs.writeFile(derivedFile, fixture.derivedSource);
-        const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+        const index = await buildProjectIndex(root, { cache: "off" });
         const at = async (line: number, name: string) =>
           await goToDefinition(index, {
             file: derivedFile,
@@ -106,7 +106,7 @@ describe("override hiding before arity", () => {
           "}",
         ].join("\n"),
       );
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const graph = await buildSymbolGraphDetailed(index);
       const callees = (caller: string) =>
         graph.edges

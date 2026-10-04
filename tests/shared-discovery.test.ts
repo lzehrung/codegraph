@@ -274,7 +274,7 @@ describe("index build discovery context reuse", () => {
     git(root, ["commit", "-m", "seed"]);
 
     const trackedSpy = vi.spyOn(gitModule, "listTrackedFiles");
-    const index = await buildProjectIndex(root, { cache: "disk", native: "off" });
+    const index = await buildProjectIndex(root, { cache: "disk" });
 
     expect(index.byFile.has(fileIdentityKey(normalize(path.join(root, "src", "app.ts"))))).toBe(true);
     expect(trackedSpy).toHaveBeenCalledTimes(1);
@@ -288,12 +288,12 @@ describe("index build discovery context reuse", () => {
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "seed"]);
 
-    const initial = await buildProjectIndex(root, { cache: "disk", native: "off" });
+    const initial = await buildProjectIndex(root, { cache: "disk" });
     expect(initial.byFile.has(fileIdentityKey(normalize(first)))).toBe(true);
 
     await createFile(second, "export const second = 2;\n");
     await createFile(path.join(root, ".gitignore"), "first.ts\n");
-    const updated = await buildProjectIndex(root, { cache: "disk", native: "off" });
+    const updated = await buildProjectIndex(root, { cache: "disk" });
     expect(updated.byFile.has(fileIdentityKey(normalize(first)))).toBe(false);
     expect(updated.byFile.has(fileIdentityKey(normalize(second)))).toBe(true);
   });
@@ -306,13 +306,12 @@ describe("scoped builds do not introduce source enumeration", () => {
     await createFile(file, "export const app = 1;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "seed"]);
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+    await buildProjectIndexIncremental(root, { cache: "disk" });
 
     const listSpy = vi.spyOn(projectFilesModule, "listProjectFilesWithGitCandidates");
     const report: BuildReport = { timings: {} };
     const scoped = await buildProjectIndexIncremental(root, {
       cache: "disk",
-      native: "off",
       files: [file],
       filesAreProjectScope: true,
       report,
@@ -330,12 +329,11 @@ describe("scoped builds do not introduce source enumeration", () => {
     await createFile(path.join(root, "src", "app.ts"), "export const app = 1;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "seed"]);
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+    await buildProjectIndexIncremental(root, { cache: "disk" });
 
     const listSpy = vi.spyOn(projectFilesModule, "listProjectFilesWithGitCandidates");
     const scoped = await buildProjectIndexIncremental(root, {
       cache: "disk",
-      native: "off",
       files: [],
       filesAreProjectScope: true,
     });

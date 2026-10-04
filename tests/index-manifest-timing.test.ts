@@ -67,7 +67,7 @@ describe("index manifest config-hash reuse and timing", () => {
     const hashSpy = vi.spyOn(buildCache, "computeConfigHash");
     const report: BuildReport = { timings: {} };
 
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+    await buildProjectIndexIncremental(root, { cache: "disk", report });
 
     expect(hashSpy).toHaveBeenCalledTimes(1);
     expect(report.manifest?.reason).toBe("missing");
@@ -76,12 +76,12 @@ describe("index manifest config-hash reuse and timing", () => {
   it("computes the config hash exactly once for a warm incremental update that rewrites the manifest", async () => {
     const root = await temps.create("cg-config-hash-warm-");
     const entry = await writeEntry(root, "export const value = 1;\n");
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+    await buildProjectIndexIncremental(root, { cache: "disk" });
     await fsp.writeFile(entry, "export const value = 2;\n", "utf8");
     const hashSpy = vi.spyOn(buildCache, "computeConfigHash");
     const report: BuildReport = { timings: {} };
 
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+    await buildProjectIndexIncremental(root, { cache: "disk", report });
 
     expect(hashSpy).toHaveBeenCalledTimes(1);
     expect(report.timings?.writeManifestMs).toEqual(expect.any(Number));
@@ -92,7 +92,7 @@ describe("index manifest config-hash reuse and timing", () => {
     await writeEntry(root, "export const value = 1;\n");
     const hashSpy = vi.spyOn(buildCache, "computeConfigHash");
 
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+    await buildProjectIndexIncremental(root, { cache: "disk" });
 
     expect(hashSpy).toHaveBeenCalledTimes(1);
     const preamble = await hashSpy.mock.results[0]?.value;
@@ -108,7 +108,7 @@ describe("index manifest config-hash reuse and timing", () => {
     await writeEntry(root, "export const value = 1;\n");
     const report: BuildReport = { timings: {} };
 
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+    await buildProjectIndexIncremental(root, { cache: "disk", report });
 
     const names = stepNames(report);
     expect(names).toEqual(expect.arrayContaining(["config-hash", "manifest-write", "index-manifest"]));
@@ -119,7 +119,7 @@ describe("index manifest config-hash reuse and timing", () => {
     await writeEntry(root, "export const value = 1;\n");
     const report: BuildReport = { timings: {} };
 
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+    await buildProjectIndexIncremental(root, { cache: "disk", report });
 
     const names = new Set(stepNames(report));
     expect(names.has("file-identity")).toBe(true);
@@ -138,7 +138,7 @@ describe("index manifest config-hash reuse and timing", () => {
         await fsp.writeFile(path.join(root, `f${index}.ts`), `export const v${index} = ${index};\n`, "utf8");
       }),
     );
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off" });
+    await buildProjectIndexIncremental(root, { cache: "disk" });
     await Promise.all(
       Array.from({ length: 100 }, async (_, index) => {
         await fsp.rm(path.join(root, `f${index}.ts`));
@@ -147,7 +147,7 @@ describe("index manifest config-hash reuse and timing", () => {
     await fsp.rm(manifestPathFor(root));
     const report: BuildReport = { timings: {} };
 
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+    await buildProjectIndexIncremental(root, { cache: "disk", report });
 
     const names = stepNames(report);
     expect(names).toEqual(
@@ -171,7 +171,7 @@ describe("index manifest config-hash reuse and timing", () => {
       timings: { steps: [{ name: "cache-probe", ms: 999 }], cacheProbeMs: 999, sourceDiscoveryMs: 999 },
     };
 
-    await buildProjectIndexFromFiles(root, [entry], { cache: "off", native: "off", report });
+    await buildProjectIndexFromFiles(root, [entry], { cache: "off", report });
 
     const stale = (report.timings?.steps ?? []).filter((step) => step.name === "cache-probe" && step.ms === 999);
     expect(stale).toEqual([]);
@@ -187,7 +187,7 @@ describe("index manifest config-hash reuse and timing", () => {
     // documented contract that a step is absent when it does not run.
     const writeSpy = vi.spyOn(buildCache, "writeManifest").mockResolvedValue(false);
 
-    await buildProjectIndexIncremental(root, { cache: "disk", native: "off", report });
+    await buildProjectIndexIncremental(root, { cache: "disk", report });
 
     expect(writeSpy).toHaveBeenCalled();
     const names = stepNames(report);

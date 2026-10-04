@@ -59,7 +59,7 @@ describe("Fast graph specifier extraction (--fast-graph)", () => {
     expect(bSet).toEqual(aSet);
   });
 
-  it("can miss multiline import edges that full parsing captures", async () => {
+  it("captures multiline import edges through the native import query, like full parsing", async () => {
     const root = await mkTmpDir("dg-fast-graph-");
     const entryPath = path.join(root, "entry.ts").replace(/\\/g, "/");
     const depPath = path.join(root, "dep.ts").replace(/\\/g, "/");
@@ -74,7 +74,7 @@ describe("Fast graph specifier extraction (--fast-graph)", () => {
       edges.some((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === to);
 
     expect(hasEdge(fullGraph.edges, entryPath, depPath)).toBe(true);
-    expect(hasEdge(fastGraph.edges, entryPath, depPath)).toBe(false);
+    expect(hasEdge(fastGraph.edges, entryPath, depPath)).toBe(true);
   });
 
   it("does not invoke native query execution for JS/TS fast-graph extraction", async () => {

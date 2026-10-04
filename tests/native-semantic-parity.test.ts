@@ -18,7 +18,6 @@ import {
 } from "../src/index.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
-import { withNativeRuntimeModeAsync } from "./helpers/native.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -178,11 +177,8 @@ function stableReferencesSnapshot(
   };
 }
 
-async function buildSemanticIndex(expectation: SemanticExpectation, mode: "native" | "reduced"): Promise<ProjectIndex> {
-  return await withNativeRuntimeModeAsync(mode, async () => {
-    const files = expectation.files.map(normalizeFile);
-    return await buildProjectIndexFromFiles(expectation.root, files);
-  });
+async function buildSemanticIndex(expectation: SemanticExpectation): Promise<ProjectIndex> {
+  return await buildProjectIndexFromFiles(expectation.root, expectation.files.map(normalizeFile));
 }
 
 function sampleExpectation(
@@ -254,7 +250,7 @@ async function normalizeSqlFacts(
 }
 
 async function expectNativeSemantics(expectation: SemanticExpectation): Promise<ProjectIndex> {
-  const nativeIndex = await buildSemanticIndex(expectation, "native");
+  const nativeIndex = await buildSemanticIndex(expectation);
 
   normalizeSymbols(nativeIndex, expectation.symbols);
 
@@ -1431,7 +1427,7 @@ nativeDescribe("native semantic coverage", () => {
         "int pack_bad() { return packed(); }",
       ].join("\n"),
     );
-    await withNativeRuntimeModeAsync("native", async () => {
+    await (async () => {
       const index = await buildProjectIndexFromFiles(root, [header, consumer]);
       const graph = await buildSymbolGraphDetailed(index);
       expect(
@@ -1456,7 +1452,7 @@ nativeDescribe("native semantic coverage", () => {
         ["pack_min", "packed", header],
         ["relay", "run", header],
       ]);
-    });
+    })();
   });
 
   it("keeps C++ callable redeclarations connected across files", async () => {
@@ -1513,9 +1509,7 @@ nativeDescribe("native semantic coverage", () => {
     const consumer = normalizeFile(path.join(root, "main.c"));
     await fsp.writeFile(header, "struct Item { int value; };\ntypedef struct Item *Item;\n", "utf8");
     await fsp.writeFile(consumer, '#include "api.h"\nstruct Item item;\nItem alias;\n', "utf8");
-    const index = await withNativeRuntimeModeAsync("native", () =>
-      buildProjectIndexFromFiles(root, [header, consumer], { cache: "off" }),
-    );
+    const index = await (() => buildProjectIndexFromFiles(root, [header, consumer], { cache: "off" }))();
     for (const [kind, line] of [
       [SymbolKind.Class, 1],
       [SymbolKind.TypeAlias, 2],
@@ -1568,9 +1562,7 @@ nativeDescribe("native semantic coverage", () => {
     ];
     await fsp.writeFile(header, headerLines.join("\n"), "utf8");
     await fsp.writeFile(consumer, consumerLines.join("\n"), "utf8");
-    const index = await withNativeRuntimeModeAsync("native", () =>
-      buildProjectIndexFromFiles(root, [header, consumer], { cache: "off" }),
-    );
+    const index = await (() => buildProjectIndexFromFiles(root, [header, consumer], { cache: "off" }))();
 
     const tokenColumn = (lines: readonly string[], line: number, token: string, occurrence = 0): number => {
       const text = lines[line - 1]!;
@@ -1760,7 +1752,7 @@ nativeDescribe("native semantic coverage", () => {
       "$value->FIELD;",
     ];
     await fsp.writeFile(consumer, lines.join("\n"));
-    await withNativeRuntimeModeAsync("native", async () => {
+    await (async () => {
       const index = await buildProjectIndexFromFiles(root, [source, consumer]);
       const imports = listSymbols(index, { file: consumer, includeImports: true }).filter(
         (symbol) => symbol.kind === "import" && symbol.name === "Alias",
@@ -1816,7 +1808,7 @@ nativeDescribe("native semantic coverage", () => {
           .filter((ref) => normalizeFile(ref.file) === consumer)
           .map((ref) => ref.range.start.line),
       ).toEqual([9]);
-    });
+    })();
   });
 
   it("scss go-to-definition resolves indexed declaration locals", async () => {
@@ -1863,7 +1855,7 @@ nativeDescribe("native semantic coverage", () => {
       ["ts", tsCase],
       ["js", jsCase],
     ] as const) {
-      const nativeIndex = await buildSemanticIndex(testCase, "native");
+      const nativeIndex = await buildSemanticIndex(testCase);
       const nativeGoto = await normalizeGoto(nativeIndex, testCase.goto);
       const nativeRefs = await normalizeReferences(nativeIndex, testCase.references);
       const gotoSnapshot = stableGotoSnapshot(testCase.root, nativeGoto);

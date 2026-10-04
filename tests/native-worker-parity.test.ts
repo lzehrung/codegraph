@@ -62,12 +62,10 @@ nativeDescribe("native worker parity", () => {
       const reportWorker: BuildReport = { timings: {} };
 
       const baseline = await buildProjectIndexFromFiles(dir, files, {
-        native: "on",
         report: reportBaseline,
       });
 
       const withWorkers = await buildProjectIndexFromFiles(dir, files, {
-        native: "on",
         useNativeWorkers: true,
         nativeThreads: 2,
         report: reportWorker,
@@ -94,22 +92,6 @@ nativeDescribe("native worker parity", () => {
     }, 30_000);
   }
 
-  it("skips worker pool when native is disabled and still produces valid results", async () => {
-    const files = await listProjectFiles(path.join(sampleRoot, "typescript"));
-    expect(files.length).toBeGreaterThan(0);
-
-    const report: BuildReport = { timings: {} };
-    // useNativeWorkers + native off: pool should not be created, results still valid
-    const index = await buildProjectIndexFromFiles(path.join(sampleRoot, "typescript"), files, {
-      native: "off",
-      useNativeWorkers: true,
-      report,
-    });
-    expect(index.byFile.size).toBeGreaterThan(0);
-    // Pool should not have been enabled since native is off
-    expect(report.workerPool === undefined || report.workerPool.enabled === false).toBe(true);
-  }, 15_000);
-
   it("records worker startup failures in the build report", async () => {
     const files = await listProjectFiles(path.join(sampleRoot, "typescript"));
     expect(files.length).toBeGreaterThan(0);
@@ -121,7 +103,6 @@ nativeDescribe("native worker parity", () => {
 
     try {
       const index = await buildProjectIndexFromFiles(path.join(sampleRoot, "typescript"), files, {
-        native: "on",
         useNativeWorkers: true,
         report,
       });

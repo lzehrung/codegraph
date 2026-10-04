@@ -48,7 +48,6 @@ async function renameSnapshotForFiles(root: string, files: string[]): Promise<Ag
       mode: "semantic",
       backend: "unknown",
       parserDegradedFiles: 0,
-      fallbackImportExtractionFiles: 0,
       nativeFilesUsed: 0,
       nativeFilesFellBack: 0,
       label: "semantic",

@@ -22,7 +22,7 @@ describe("generated duplicate identifier ranges", () => {
       // when the checked-in file no longer matches the native tokenizer it was derived from.
       const regenerated = renderDuplicateIdentifierRanges(
         collectDuplicateIdentifierRanges((source: string) => {
-          const native = getNativeDuplicateTokens(source, "on");
+          const native = getNativeDuplicateTokens(source);
           if (!native) throw new Error("Native duplicate tokenizer became unavailable mid-run.");
           return native.normalizedTokens;
         }),

@@ -1743,13 +1743,11 @@ describe("Cache invalidation and strict hashing", () => {
       };
       analysisReport?: {
         backend?: unknown;
-        graph?: unknown;
       };
     };
     expect(typeof snapshot.analysis?.backend).toBe("string");
     expect(typeof snapshot.analysis?.label).toBe("string");
     expect(snapshot.analysisReport?.backend).toBeDefined();
-    expect(snapshot.analysisReport?.graph).toBeDefined();
 
     const report: BuildReport = { timings: {} };
     const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
@@ -1765,7 +1763,6 @@ describe("Cache invalidation and strict hashing", () => {
       expect(incremental.analysis?.backend).toBe(snapshot.analysis?.backend);
       expect(incremental.analysis?.label).toBe(snapshot.analysis?.label);
       expect(report.backend).toEqual(snapshot.analysisReport?.backend);
-      expect(report.graph).toEqual(snapshot.analysisReport?.graph);
       const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
       expect(moduleIndex?.locals.some((local) => local.localName === "reportedSnap")).toBe(true);
     } finally {
@@ -2396,7 +2393,6 @@ describe("Cache invalidation and strict hashing", () => {
     const snapshotPath = projectSnapshotPathFor(root);
     const snapshot = await readProjectSnapshot(snapshotPath);
     snapshot.projectRoot = 1;
-    snapshot.nativeMode = "sometimes";
     snapshot.projectFiles = [{}];
     await writeProjectSnapshot(snapshotPath, snapshot);
 
@@ -3225,7 +3221,6 @@ describe("Cache invalidation and strict hashing", () => {
       graph: unknown;
       modules: unknown;
       projectRoot?: string;
-      nativeMode?: string;
       projectFiles?: unknown;
     };
 
@@ -3235,7 +3230,6 @@ describe("Cache invalidation and strict hashing", () => {
       graph: originalSnapshot.graph,
       modules: originalSnapshot.modules,
       ...(originalSnapshot.projectRoot ? { projectRoot: originalSnapshot.projectRoot } : {}),
-      ...(originalSnapshot.nativeMode ? { nativeMode: originalSnapshot.nativeMode } : {}),
       ...(originalSnapshot.projectFiles ? { projectFiles: originalSnapshot.projectFiles } : {}),
     });
 
@@ -3988,15 +3982,6 @@ describe("Cache invalidation and strict hashing", () => {
           files: [{ file: dependencyFile, languageId: "ts", jsError: "synthetic parser failure" }],
         },
       },
-      graph: {
-        fallbackImportExtraction: {
-          total: 1,
-          byLanguage: { ts: 1 },
-          files: {
-            [entryFile]: { language: "ts", reason: "query-error" },
-          },
-        },
-      },
     };
     await rewriteProjectSnapshot(sourceRoot, initial);
 
@@ -4006,25 +3991,19 @@ describe("Cache invalidation and strict hashing", () => {
           native?: { errors?: Array<{ file?: string }> };
           parser?: { files?: Array<{ file?: string }> };
         };
-        graph?: { fallbackImportExtraction?: { files?: Record<string, unknown> } };
       };
     };
     expect(persisted.analysisReport?.backend?.native?.errors?.[0]?.file).toBe("entry.ts");
     expect(persisted.analysisReport?.backend?.parser?.files?.[0]?.file).toBe("dependency.ts");
-    expect(Object.keys(persisted.analysisReport?.graph?.fallbackImportExtraction?.files ?? {})).toEqual(["entry.ts"]);
 
     // Current-version snapshots written before this fix stored these diagnostics as absolute paths.
     const persistedNativeError = persisted.analysisReport?.backend?.native?.errors?.[0];
     const persistedParserFile = persisted.analysisReport?.backend?.parser?.files?.[0];
-    const persistedFallbackFiles = persisted.analysisReport?.graph?.fallbackImportExtraction?.files;
-    const persistedFallback = persistedFallbackFiles?.["entry.ts"];
-    if (!persistedNativeError || !persistedParserFile || !persistedFallbackFiles || !persistedFallback) {
+    if (!persistedNativeError || !persistedParserFile) {
       throw new Error("Expected persisted analysis report paths");
     }
     persistedNativeError.file = entryFile;
     persistedParserFile.file = dependencyFile;
-    delete persistedFallbackFiles["entry.ts"];
-    persistedFallbackFiles[entryFile] = persistedFallback;
     await writeProjectSnapshot(projectSnapshotPathFor(sourceRoot), persisted);
     buildCache.closeDiskCacheDatabase(sourceRoot, { cache: "disk" });
 
@@ -4034,9 +4013,6 @@ describe("Cache invalidation and strict hashing", () => {
     await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1, report });
     expect(report.backend?.native.errors[0]?.file).toBe(normalize(path.join(movedRoot, "entry.ts")));
     expect(report.backend?.parser?.files[0]?.file).toBe(normalize(path.join(movedRoot, "dependency.ts")));
-    expect(Object.keys(report.graph?.fallbackImportExtraction.files ?? {})).toEqual([
-      normalize(path.join(movedRoot, "entry.ts")),
-    ]);
   });
 
   it("reuses cached graph edges (not just modules) after moving a project tree", async () => {
@@ -4249,7 +4225,6 @@ describe("Cache invalidation and strict hashing", () => {
     const snapshotPath = projectSnapshotPathFor(root);
     const snapshot = (await readProjectSnapshot(snapshotPath)) as Record<string, unknown>;
     delete snapshot.fileSignatures;
-    delete snapshot.nativeMode;
     delete snapshot.projectFiles;
     delete snapshot.bloomFilters;
     snapshot.version = 4;

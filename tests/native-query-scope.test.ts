@@ -1,17 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { supportById } from "../src/languages.js";
-import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent } from "../src/graphs.js";
-import { collectImportsForFile } from "../src/indexer.js";
+import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import {
   getCompactImportsExecution,
   getNativeQueryExecutionForState,
   isNativeTreeSitterAvailable,
-  type NativeCapture,
-  type NativeMatch,
   type NativeQueryResults,
 } from "../src/native/tree-sitter-native.js";
-import * as nativeRuntime from "../src/native/tree-sitter-native.js";
-import type { NativeCompatibilityQueryKind } from "../src/languages/types.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -189,14 +184,6 @@ describe("authoritative empty native results", () => {
     expect(specs).toEqual([]);
   });
 
-  it("uses regex recovery when native queries are absent", () => {
-    const support = supportById("ts")!;
-    const specs = collectModuleSpecifiersFromSource(support, "import { foo } from './bar';\n");
-    // Without nativeQueries, text recovery should find the import
-    expect(specs.length).toBeGreaterThan(0);
-    expect(specs[0]!.spec).toBe("./bar");
-  });
-
   it("extracts triple-slash reference specifiers when native imports are empty", () => {
     const support = supportById("ts")!;
     const source = '/// <reference path="./globals.d.ts" />\nexport const x = 1;\n';
@@ -220,222 +207,6 @@ describe("authoritative empty native results", () => {
     const source = '/// <reference path="./globals.d.ts" />\nexport const x = 1;\n';
     const specs = collectModuleSpecifiersFromSource(support, source, { fast: true });
     expect(specs).toContainEqual(expect.objectContaining({ spec: "./globals.d.ts", typeOnly: true }));
-  });
-
-  it("reports query-empty when non-authoritative native module specifiers fall back to regex recovery", () => {
-    const tsxSupport = supportById("tsx")!;
-    const support = {
-      ...tsxSupport,
-      native: {
-        ...tsxSupport.native,
-        normalizeQuery: (kind: NativeCompatibilityQueryKind, query: string) =>
-          kind === "imports" ? `${query}\n;` : query,
-      },
-    };
-    const fallbackEvents: FallbackImportExtractionEvent[] = [];
-    const emptyNativeResults: NativeQueryResults = {
-      imports: [],
-      exports: [],
-      locals: [],
-      importBindings: [],
-    };
-
-    const specs = collectModuleSpecifiersFromSource(support, "import { foo } from './bar';\n", {
-      file: "main.tsx",
-      nativeQueries: emptyNativeResults,
-      onFallbackImportExtraction: (event) => fallbackEvents.push(event),
-    });
-
-    expect(specs).toEqual([{ spec: "./bar" }]);
-    expect(fallbackEvents).toEqual([
-      expect.objectContaining({
-        language: "tsx",
-        reason: "query-empty",
-        file: "main.tsx",
-      }),
-    ]);
-  });
-
-  it("reports query-empty when non-authoritative native import-binding results fall back to text recovery", async () => {
-    const tsSupport = supportById("ts")!;
-    const support = {
-      ...tsSupport,
-      id: "ts-query-empty-test",
-      native: {
-        ...tsSupport.native,
-        normalizeQuery: (kind: NativeCompatibilityQueryKind, query: string) =>
-          kind === "importBindings" ? `${query}\n;` : query,
-      },
-    };
-    const fallbackEvents: FallbackImportExtractionEvent[] = [];
-    const emptyNativeResults: NativeQueryResults = {
-      imports: [],
-      exports: [],
-      locals: [],
-      importBindings: [],
-    };
-
-    const imports = await collectImportsForFile("main.ts", ".", {
-      source: "import { foo } from './bar';\nconsole.log(foo);\n",
-      sup: support,
-      nativeQueries: emptyNativeResults,
-      onFallbackImportExtraction: (event) => fallbackEvents.push(event),
-    });
-
-    expect(imports).toEqual([expect.objectContaining({ kind: "named", local: "foo", imported: "foo", from: "./bar" })]);
-    expect(fallbackEvents).toEqual([
-      expect.objectContaining({
-        language: "ts-query-empty-test",
-        reason: "query-empty",
-        file: "main.ts",
-      }),
-    ]);
-  });
-
-  it("reports query-error when native import-binding collection throws before text recovery", async () => {
-    const support = supportById("ts")!;
-    const fallbackEvents: FallbackImportExtractionEvent[] = [];
-    const failingMatch: NativeMatch = {
-      patternIndex: 0,
-      get captures(): NativeCapture[] {
-        throw new Error("bad native capture");
-      },
-    };
-    const nativeResults: NativeQueryResults = {
-      imports: [],
-      exports: [],
-      locals: [],
-      importBindings: [failingMatch],
-    };
-
-    const imports = await collectImportsForFile("main.ts", ".", {
-      source: "import { foo } from './bar';\nconsole.log(foo);\n",
-      sup: support,
-      nativeQueries: nativeResults,
-      onFallbackImportExtraction: (event) => fallbackEvents.push(event),
-    });
-
-    expect(imports).toEqual([expect.objectContaining({ kind: "named", local: "foo", imported: "foo", from: "./bar" })]);
-    expect(fallbackEvents).toEqual([
-      expect.objectContaining({
-        language: "ts",
-        reason: "query-error",
-        file: "main.ts",
-      }),
-    ]);
-  });
-
-  it("reports query-error when native query execution fails before text recovery", async () => {
-    const support = supportById("ts")!;
-    const fallbackEvents: FallbackImportExtractionEvent[] = [];
-    const original = nativeRuntime.getNativeQueryExecution;
-    vi.spyOn(nativeRuntime, "getNativeQueryExecution").mockImplementation((source, nativeSupport, mode, scope) => {
-      if (nativeSupport.id === "ts" && source.includes("foo")) {
-        return {
-          results: null,
-          fallbackReason: "queryFailure",
-          error: "forced native query failure",
-        };
-      }
-      return original(source, nativeSupport, mode, scope);
-    });
-
-    const imports = await collectImportsForFile("main.ts", ".", {
-      source: "import { foo } from './bar';\nconsole.log(foo);\n",
-      sup: support,
-      onFallbackImportExtraction: (event) => fallbackEvents.push(event),
-    });
-
-    expect(imports).toEqual([expect.objectContaining({ kind: "named", local: "foo", imported: "foo", from: "./bar" })]);
-    expect(fallbackEvents).toEqual([
-      expect.objectContaining({
-        language: "ts",
-        reason: "query-error",
-        file: "main.ts",
-      }),
-    ]);
-  });
-
-  it("uses regex recovery for TypeScript without non-native parser queries", () => {
-    const support = supportById("ts")!;
-    const fallbackEvents: FallbackImportExtractionEvent[] = [];
-
-    const specs = collectModuleSpecifiersFromSource(
-      support,
-      "import { foo } from './bar';\nexport { baz } from './qux';\n",
-      {
-        file: "main.ts",
-        native: "off",
-        onFallbackImportExtraction: (event) => fallbackEvents.push(event),
-      },
-    );
-
-    expect(specs).toEqual([{ spec: "./bar" }, { spec: "./qux" }]);
-    expect(fallbackEvents).toEqual([
-      expect.objectContaining({
-        language: "ts",
-        reason: "reduced-mode",
-        file: "main.ts",
-      }),
-    ]);
-  });
-
-  it("recovers HTML specifiers without warning in reduced mode", () => {
-    const support = supportById("html")!;
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      const specs = collectModuleSpecifiersFromSource(
-        support,
-        '<script src="./app.js"></script><a href="./about.html">About</a>',
-        {
-          file: "index.html",
-          native: "off",
-        },
-      );
-
-      expect(specs).toEqual([
-        { spec: "./app.js", resolutionKind: "document" },
-        { spec: "./about.html", resolutionKind: "document" },
-      ]);
-      expect(warnSpy).not.toHaveBeenCalled();
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  it("reports query-empty when non-authoritative native HTML-like results fall back to reduced extraction", () => {
-    const vueSupport = supportById("vue")!;
-    const support = {
-      ...vueSupport,
-      native: {
-        ...vueSupport.native,
-        normalizeQuery: (kind: NativeCompatibilityQueryKind, query: string) =>
-          kind === "imports" ? `${query}\n;` : query,
-      },
-    };
-    const fallbackEvents: FallbackImportExtractionEvent[] = [];
-    const emptyNativeResults: NativeQueryResults = {
-      imports: [],
-      exports: [],
-      locals: [],
-      importBindings: [],
-    };
-
-    const specs = collectModuleSpecifiersFromSource(support, '<script src="./app.js"></script>', {
-      file: "App.vue",
-      nativeQueries: emptyNativeResults,
-      onFallbackImportExtraction: (event) => fallbackEvents.push(event),
-    });
-
-    expect(specs).toEqual([{ spec: "./app.js", resolutionKind: "document" }]);
-    expect(fallbackEvents).toEqual([
-      expect.objectContaining({
-        language: "vue",
-        reason: "query-empty",
-        file: "App.vue",
-      }),
-    ]);
   });
 });
 
@@ -473,13 +244,6 @@ nativeDescribe("compact imports execution", () => {
     expect(compactSpecs).toEqual(fullSpecs);
   });
 
-  it("returns null results when native is unavailable", () => {
-    const support = supportById("ts")!;
-    const execution = getCompactImportsExecution("import { foo } from './bar';", support, "off");
-    expect(execution.results).toBeNull();
-    expect(execution.fallbackReason).toBe("unavailable");
-  });
-
   it("does not treat arbitrary JavaScript string arguments as imports", () => {
     const support = supportById("js")!;
     const source = [
@@ -495,14 +259,5 @@ nativeDescribe("compact imports execution", () => {
     });
 
     expect(specs.map((entry) => entry.spec)).toEqual(["real-package", "required-package"]);
-  });
-
-  it("falls back to regex extraction for Python when compact native imports are empty", () => {
-    const support = supportById("python")!;
-    const specs = collectModuleSpecifiersFromSource(support, "import os\nfrom pkg import value\n", {
-      compactNativeImports: { imports: [] },
-    });
-
-    expect(specs).toEqual([{ spec: "os" }, { spec: "pkg" }]);
   });
 });

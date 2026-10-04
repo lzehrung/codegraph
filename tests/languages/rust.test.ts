@@ -363,7 +363,7 @@ describe("Rust macro_rules! structure", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-macro-invoke-"));
     try {
       await writeFile(path.join(root, "lib.rs"), source, "utf8");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       // A macro invocation names the macro, not a function call: goto answers with the
       // macro_rules! declaration, and the detailed graph records no calls edge for it.
       const goto = await goToDefinition(index, {
@@ -418,7 +418,7 @@ describe("Rust macro_rules! structure", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-macro-token-trees-"));
     try {
       await writeFile(path.join(root, "lib.rs"), source, "utf8");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const graph = await buildSymbolGraphDetailed(index);
       const run = [...graph.nodes.values()].find((node) => node.name === "run");
       const lines = graph.edges
@@ -448,7 +448,7 @@ describe("Rust macro_rules! structure", () => {
     const file = path.join(root, "lib.rs");
     try {
       await writeFile(file, source, "utf8");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const line = source.split("\n")[6]!;
       // The raw tokens cannot prove `counter`'s type or the `m::` path, so neither may fall back
       // to the free `bump`/`run`; the bare `bump()` still resolves.
@@ -720,7 +720,7 @@ describe("Rust nested grouped use and path attributes", () => {
       await writeFile(unix, "pub const UNIX: bool = true;\n");
       await writeFile(windows, "pub const WINDOWS: bool = true;\n");
 
-      const bindings = await collectImportsForFile(lib, root, { native: "off" });
+      const bindings = await collectImportsForFile(lib, root);
       expect(bindings.map((entry) => entry.resolved).sort()).toEqual(
         [unix, windows].map((file) => file.replace(/\\/g, "/")).sort(),
       );
@@ -733,7 +733,7 @@ describe("Rust nested grouped use and path attributes", () => {
       expect(targets).toEqual(["unix.rs", "windows.rs"]);
 
       await writeFile(lib, "#[my_attr(mod hidden;)] fn f() {}\n");
-      expect(await collectImportsForFile(lib, root, { native: "off" })).toEqual([]);
+      expect(await collectImportsForFile(lib, root)).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

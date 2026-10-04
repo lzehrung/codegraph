@@ -41,10 +41,10 @@ const FUNCTION_SCOPE_CANDIDATES = [
   "subscript_declaration",
 ];
 
-const NATIVE_LANGUAGE_IDS = new Set(getNativeTreeSitterSupportedLanguageIds("on"));
+const NATIVE_LANGUAGE_IDS = new Set(getNativeTreeSitterSupportedLanguageIds());
 
 function grammarQueryCompiles(support: LanguageSupport, query: string): boolean {
-  const execution = getNativeSingleQueryExecution("", support, query, "on");
+  const execution = getNativeSingleQueryExecution("", support, query);
   if (execution.matches) return true;
   if (execution.fallbackReason === "queryFailure" || execution.fallbackReason === "unsupportedLanguage") {
     return false;
@@ -166,7 +166,7 @@ function declaredNodeTypeLists(row: ScopeNodeRow): Array<{ field: string; types:
 
 function parseProbeSource(languageId: string, source: string): SyntaxNodeLike {
   const support = supportById(languageId)!;
-  const execution = getNativeSyntaxTreeExecution(source, support, "on");
+  const execution = getNativeSyntaxTreeExecution(source, support);
   if (!execution.tree) {
     throw new Error(`${languageId}: no syntax tree (${execution.fallbackReason}: ${execution.error ?? ""})`);
   }

@@ -423,7 +423,9 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
               syntaxTree: createStubNativeSyntaxTree(),
             }),
             runImportsQueryCompact: (source, languageId, importsQuery) => ({
-              imports: [{ patternIndex: 0, captures: [{ name: languageId, text: `${importsQuery}:${source}` }] }],
+              imports: [
+                { patternIndex: 0, captures: [{ name: languageId, text: `${importsQuery}:${source}`, startIndex: 0 }] },
+              ],
             }),
           },
           origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
@@ -455,7 +457,11 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
     expect(full.source).toBe("from disk");
     expect(full.nativeResults?.imports[0]?.captures[0]?.text).toBe("from disk");
     expect(compact.nativeResults).toBeNull();
-    expect(compact.compactResults?.imports[0]?.captures[0]).toEqual({ name: "ts", text: "imports:provided" });
+    expect(compact.compactResults?.imports[0]?.captures[0]).toEqual({
+      name: "ts",
+      text: "imports:provided",
+      startIndex: 0,
+    });
 
     const failingExtractor = createNativeExtractor({
       loadBinding: () => ({

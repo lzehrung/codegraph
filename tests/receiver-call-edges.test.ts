@@ -36,7 +36,7 @@ async function buildFixture(prefix: string, files: Record<string, string>): Prom
   }
   // Detailed graphs require native Tree-sitter. This helper is only called from
   // nativeDescribe suites, so it does not run when that runtime is unavailable.
-  const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+  const index = await buildProjectIndex(root, { cache: "off" });
   return await buildSymbolGraphDetailed(index);
 }
 
@@ -1016,7 +1016,7 @@ nativeDescribe("receiver method call edge language parity", () => {
     expect(callsiteTexts(graph, make, run, files)).toEqual(["make"]);
     expect(callsiteTexts(graph, nodeIn(graph, "decoy.cpp", "make"), run, files)).toBeNull();
     const root = roots.at(-1)!;
-    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const index = await buildProjectIndex(root, { cache: "off" });
     const sourceCall = files["box.cpp"]!.split("\n")[2]!;
     const navigation = await goToDefinition(index, {
       file: path.join(root, "box.cpp"),
@@ -1666,7 +1666,7 @@ nativeDescribe("receiver method call edge language parity", () => {
     const caller = nodeIn(graph, "ops.c", "go");
     const root = roots.at(-1)!;
     const file = path.join(root, "ops.c");
-    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const index = await buildProjectIndex(root, { cache: "off" });
     const call = files["ops.c"]!.split("\n")[2]!;
     const navigation = await goToDefinition(index, { file, line: 3, column: call.indexOf("run") + 1 });
     expect(navigation.status).toBe("not_found");
@@ -2602,9 +2602,9 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
       "}",
     ].join("\n");
     await fs.writeFile(path.join(root, "Local.cs"), source);
-    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const index = await buildProjectIndex(root, { cache: "off" });
     const prep = await prepareSourceInput(path.join(root, "Local.cs"), {});
-    const nativeExecution = getNativeSyntaxTreeExecution(prep.source, prep.sup, "on");
+    const nativeExecution = getNativeSyntaxTreeExecution(prep.source, prep.sup);
     expect(nativeExecution.tree).toBeDefined();
     const tree = new ProjectedSyntaxTree(prep.source, nativeExecution.tree!);
 
@@ -2636,7 +2636,7 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     roots.push(root);
     const file = path.join(root, "StaticLocal.cs");
     await fs.writeFile(file, files["StaticLocal.cs"]);
-    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const index = await buildProjectIndex(root, { cache: "off" });
     const graph = await buildSymbolGraphDetailed(index);
     const invalidCall = files["StaticLocal.cs"].split("\n")[3]!;
     const navigation = await goToDefinition(index, {
@@ -3186,7 +3186,7 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     const root = await mkTmpDir("cg-py-noncallable-goto-");
     roots.push(root);
     await fs.writeFile(path.join(root, "box.py"), source);
-    const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+    const index = await buildProjectIndex(root, { cache: "off" });
     const graph = await buildSymbolGraphDetailed(index);
     // `cls` is the classmethod parameter and `count` the class attribute: goto resolves each
     // callee name to its binding, and neither binding is callable, so the graph must not
