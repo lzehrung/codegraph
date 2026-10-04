@@ -334,63 +334,21 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
   // match path is.
   const pySrc = maskPythonCommentsAndStrings(context.source);
   const isTypeOnly = pythonTypeCheckingContext(context.source);
-  // Boundary group 1 also accepts an exact TYPE_CHECKING one-line suite, not arbitrary if suites.
-  const fromLinePattern =
-    /(^[\t ]*|;[\t ]*|^[\t ]*if[\t ]+(?:TYPE_CHECKING|typing\.TYPE_CHECKING)[\t ]*:[\t ]*)from\s+([^\s]+)\s+import\s+(\([\s\S]*?\)|[^\r\n;#]+)/gm;
-  for (const match of pySrc.matchAll(fromLinePattern)) {
-    const keywordStart = match.index + match[1]!.length;
-    const mod = match[2]!.trim();
-    const moduleLevel = isModuleLevelKeywordInStrippedSource(pySrc, keywordStart);
-    const listText = match[3]!;
-    const bindingListText = maskPythonCommentsAndStrings(listText);
-    const bindingCountBefore = context.getBindings().length;
-    const items = bindingListText
-      .replace(/^\(\s*|\s*\)$/g, "")
-      .split(",")
-      .map((item) => item.trim());
-    for (const item of items) {
-      if (item === "*") {
-        await pushStarImport(context, mod, moduleLevel, isTypeOnly(keywordStart));
-        continue;
-      }
-      // PEP 3131 permits Unicode identifiers (XID_Start/XID_Continue); an ASCII-only
-      // character class here silently drops every non-ASCII imported name's binding.
-      const aliasMatch = item.match(PYTHON_NAMED_IMPORT_PATTERN);
-      if (!aliasMatch) continue;
-      const imported = aliasMatch[1]!;
-      const local = aliasMatch[2] ?? imported;
-      await pushNamedImport(
+  // Each simple statement, including one-line suites and `a; b`, goes through the native
+  // statement parser: `from` imports first, then `import a, b as c` lists.
+  const statements = pythonStatements(pySrc);
+  for (const keyword of ["from", "import"]) {
+    const startsStatement = new RegExp(String.raw`^${keyword}\s`, "u");
+    for (const { start, end } of statements) {
+      if (!startsStatement.test(pySrc.slice(start, end))) continue;
+      const moduleLevel = isModuleLevelKeywordInStrippedSource(pySrc, start);
+      await collectPythonImportStatement(
         context,
-        mod,
-        imported,
-        local,
+        context.source.slice(start, end),
         moduleLevel,
-        aliasMatch[2] !== undefined,
-        isTypeOnly(keywordStart),
+        isTypeOnly(start),
+        start,
       );
     }
-    // `listText` (group 3) always ends at the same position as `match[0]`, so its own start
-    // is a fixed offset back from the full match's end -- no extra re-scan needed.
-    const listStart = match.index + match[0].length - listText.length;
-    attributeNamedBindingRanges({
-      bindings: context.getBindings(),
-      fromIndex: bindingCountBefore,
-      text: listText,
-      textStartIndex: listStart,
-      source: context.source,
-    });
-  }
-
-  // `import a, b as c` binds every module in its list, as the native path does.
-  for (const { start, end } of pythonStatements(pySrc)) {
-    if (!/^import\s/u.test(pySrc.slice(start, end))) continue;
-    const moduleLevel = isModuleLevelKeywordInStrippedSource(pySrc, start);
-    await collectPythonImportStatement(
-      context,
-      context.source.slice(start, end),
-      moduleLevel,
-      isTypeOnly(start),
-      start,
-    );
   }
 }

@@ -1136,11 +1136,19 @@ describe("Python native import bindings", () => {
   it("agrees between native and reduced-mode import extraction for the same source, including a compound-suite exclusion", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-mode-agreement-"));
     const consumer = path.join(root, "consumer.py");
-    const source = ["value = (", "    1", "); import pkg", "if enabled: import feature", "import kept"].join("\n");
+    const source = [
+      "value = (",
+      "    1",
+      "); import pkg",
+      "if enabled: import feature",
+      "if enabled: from models import User",
+      "import kept",
+    ].join("\n");
     await Promise.all([
       fsp.writeFile(path.join(root, "pkg.py"), "value = 1\n"),
       fsp.writeFile(path.join(root, "feature.py"), "value = 1\n"),
       fsp.writeFile(path.join(root, "kept.py"), "value = 1\n"),
+      fsp.writeFile(path.join(root, "models.py"), "class User: pass\n"),
       fsp.writeFile(consumer, source),
     ]);
     try {
@@ -1162,7 +1170,10 @@ describe("Python native import bindings", () => {
       // module-level one, so neither publishes it as a re-export.
       for (const imports of [nativeImports, reducedImports]) {
         expect(imports).toEqual(
-          expect.arrayContaining([expect.objectContaining({ from: "feature", moduleLevel: false })]),
+          expect.arrayContaining([
+            expect.objectContaining({ from: "feature", moduleLevel: false }),
+            expect.objectContaining({ kind: "named", from: "models", imported: "User", moduleLevel: false }),
+          ]),
         );
       }
 
