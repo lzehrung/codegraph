@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 41649 | 45807 |   90.92% |
-| Functions |  6598 |  7042 |   93.69% |
-| Branches  | 34055 | 42446 |   80.23% |
+| Lines     | 41639 | 45791 |   90.93% |
+| Functions |  6600 |  7043 |   93.71% |
+| Branches  | 34038 | 42414 |   80.25% |
 
 ## Least-covered Files
 
@@ -27,8 +27,8 @@ Source: `coverage/js/lcov.info`
 | `src/cli/bootstrap.ts`                          | 66.67% |    50.00% |      n/a |
 | `src/cli/artifact.ts`                           | 70.00% |   100.00% |   72.22% |
 | `src/cli/context.ts`                            | 71.78% |    62.75% |   74.77% |
-| `src/native/execution.ts`                       | 72.86% |    81.82% |   59.57% |
 | `src/cli/rename-preview.ts`                     | 73.81% |   100.00% |   62.50% |
+| `src/native/execution.ts`                       | 74.29% |    81.82% |   59.57% |
 | `src/agent/follow-ups.ts`                       | 74.42% |    81.82% |   54.70% |
 | `src/cli/location.ts`                           | 75.00% |   100.00% |   50.00% |
 | `src/native/js-bridge.ts`                       | 75.00% |   100.00% |   16.67% |
