@@ -292,7 +292,7 @@ function parsedContextForIdentity(index: ProjectIndex, file: string): ParsedFile
     cache.set(fileKey, null);
     return null;
   }
-  const execution = getNativeSyntaxTreeExecution(source, sup, index.nativeMode);
+  const execution = getNativeSyntaxTreeExecution(source, sup);
   if (!execution.tree) {
     cache.set(fileKey, null);
     return null;

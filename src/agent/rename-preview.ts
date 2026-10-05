@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isAnalysisComplete } from "../analysis-summary.js";
 import { boundList } from "../presentation/bounds.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { shapeCandidateTests, type RenameCandidateTest } from "./candidate-tests.js";
@@ -439,7 +440,7 @@ export async function previewRenameInSnapshot(
       },
     });
   }
-  if (snapshot.analysis.mode !== "semantic") {
+  if (!isAnalysisComplete(snapshot.analysis)) {
     unsafeSites.push({
       location: {
         file: normalizeAgentFilePath(snapshot.root, resolved.def.file),
@@ -480,7 +481,7 @@ export async function previewRenameInSnapshot(
     !referenceLimitExceeded &&
     !candidateLimitExceeded &&
     !omittedImplementations &&
-    snapshot.analysis.mode === "semantic" &&
+    isAnalysisComplete(snapshot.analysis) &&
     !unsafeSites.length &&
     !conflicts.length;
 
@@ -1252,7 +1253,7 @@ function buildFilenameSuggestions(
 }
 
 function semanticRenameProvenance(snapshot: AgentProjectSnapshot): SemanticProvenance {
-  const degraded = snapshot.analysis.mode !== "semantic";
+  const degraded = !isAnalysisComplete(snapshot.analysis);
   return {
     capability: degraded ? "graph" : "semantic",
     backend: snapshot.analysis.backend,

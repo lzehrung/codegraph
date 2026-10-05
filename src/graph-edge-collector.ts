@@ -13,10 +13,10 @@ import {
   isGraphOnlyLanguage,
 } from "./document-links.js";
 import { getCompactImportsExecution } from "./native/tree-sitter-native.js";
-import type { NativeRuntimeMode, CompactQueryResults, NativeQueryResults } from "./native/tree-sitter-native.js";
+import type { CompactQueryResults, NativeQueryResults } from "./native/tree-sitter-native.js";
 import { recordNativeExecutionOutcome } from "./native/native-backend-report.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "./worker/native-extract-worker.js";
 import { collectModuleSpecifiersFromSource } from "./graphs/specifiers.js";
-import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
 import { resolveModuleSpecifierEdges } from "./graphs/edge-resolution.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
@@ -93,12 +93,9 @@ export async function collectEdgesForFile(
       nativeQueries?: NativeQueryResults | null;
       embeddedBlocks?: PreparedSFCEmbeddedBlock[];
     };
-    fast?: boolean;
-    fastRegexDisabledLanguages?: string[];
     resolveNodeModules?: boolean;
     dynamicImportHeuristics?: boolean;
     resolutionHints?: string[];
-    native?: NativeRuntimeMode;
     fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
     sqlCorpusSig?: string;
     cachedFileEdges?: GraphCacheEntry;
@@ -106,7 +103,6 @@ export async function collectEdgesForFile(
     cachedFileEdgesProjectRoot?: string;
     languageExtensions?: LanguageExtensionMap;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
-    onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     report?: BuildReport;
     logLevel?: LogLevel;
     allFiles?: readonly string[];
@@ -146,7 +142,6 @@ export async function collectEdgesForFile(
   const parsed = opts.parsed;
   let sup = parsed?.sup;
   let src = parsed?.source;
-  const nativeQueries = parsed?.nativeQueries ?? null;
   let embeddedBlocks = parsed?.embeddedBlocks ?? [];
   let compactNativeImports: CompactQueryResults | null = null;
   let graphOnlyLanguage = sup ? isGraphOnlyLanguage(sup.id) : false;
@@ -156,20 +151,29 @@ export async function collectEdgesForFile(
     src = prep.source;
     embeddedBlocks = prep.embeddedBlocks ?? [];
     graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
-    const fastRegexDisabled = opts.fastRegexDisabledLanguages?.includes(sup.id);
-    const shouldSkipNativeForFastGraph = !!opts.fast && (sup.id === "ts" || sup.id === "js") && !fastRegexDisabled;
-    if (!graphOnlyLanguage && !shouldSkipNativeForFastGraph) {
-      // Use compact imports execution for graph mode -- smaller payload
-      const compactExecution = getCompactImportsExecution(src, sup, opts.native);
-      compactNativeImports = compactExecution.results;
+  }
+  if (!graphOnlyLanguage && Buffer.byteLength(src, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+    if (!parsed) {
       recordNativeExecutionOutcome(opts.report, {
         file: normalizedFile,
         support: sup,
-        results: compactExecution.results,
-        ...(compactExecution.fallbackReason ? { fallbackReason: compactExecution.fallbackReason } : {}),
-        ...(compactExecution.error ? { error: compactExecution.error } : {}),
+        results: null,
+        fallbackReason: "sourceTooLarge",
       });
     }
+    emitCacheEntry([]);
+    return [];
+  }
+  if (!parsed && !graphOnlyLanguage) {
+    const compactExecution = getCompactImportsExecution(src, sup);
+    compactNativeImports = compactExecution.results;
+    recordNativeExecutionOutcome(opts.report, {
+      file: normalizedFile,
+      support: sup,
+      results: compactExecution.results,
+      ...(compactExecution.fallbackReason ? { fallbackReason: compactExecution.fallbackReason } : {}),
+      ...(compactExecution.error ? { error: compactExecution.error } : {}),
+    });
   }
   if (sup.id === "sql") {
     const allFiles = opts.allFiles ?? [normalizedFile];
@@ -181,17 +185,13 @@ export async function collectEdgesForFile(
     return sqlEdges;
   }
 
-  const fast = !!opts.fast;
   const specs = collectModuleSpecifiersFromSource(sup, src, {
     ...(parsed?.tree ? { tree: parsed.tree } : {}),
-    ...(nativeQueries ? { nativeQueries } : {}),
-    ...(compactNativeImports ? { compactNativeImports } : {}),
-    fast,
+    ...(parsed && parsed.nativeQueries !== undefined ? { nativeQueries: parsed.nativeQueries } : {}),
+    ...(!parsed && !graphOnlyLanguage ? { compactNativeImports } : {}),
     file: normalizedFile,
-    ...(opts.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages } : {}),
-    ...(opts.onFallbackImportExtraction ? { onFallbackImportExtraction: opts.onFallbackImportExtraction } : {}),
-    ...(opts.native ? { native: opts.native } : {}),
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
+    ...(opts.report ? { report: opts.report } : {}),
   });
 
   if (opts.dynamicImportHeuristics) {
@@ -201,12 +201,9 @@ export async function collectEdgesForFile(
   const specSources = specs.map((entry) => ({ entry, support: sup }));
   for (const block of embeddedBlocks) {
     const blockSpecs = collectModuleSpecifiersFromSource(block.sup, block.source, {
-      fast,
       file: normalizedFile,
-      ...(opts.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages } : {}),
-      ...(opts.onFallbackImportExtraction ? { onFallbackImportExtraction: opts.onFallbackImportExtraction } : {}),
-      ...(opts.native ? { native: opts.native } : {}),
       ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
+      ...(opts.report ? { report: opts.report } : {}),
     });
     if (opts.dynamicImportHeuristics) {
       appendMissingSpecifiers(

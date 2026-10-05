@@ -306,23 +306,22 @@ codegraph follows a single analysis pipeline:
 4. Build forward and reverse dependency indexes plus a semantic symbol index.
 5. Reuse those indexes for navigation, exploration, impact, review, and exports.
 
-Disk caching avoids repository-wide source reads on exact warm text-search hits. [How it works](./docs/how-it-works.md#cache-and-session-behavior) covers caching, recovery, and performance choices.
+Disk caching avoids repository-wide source reads on exact warm text-search hits. [How it works](./docs/how-it-works.md#cache-and-session-behavior) covers caching, native failure reporting, and performance choices.
 
 ## Limits and tradeoffs
 
 The honest boundaries matter:
 
 - codegraph is not a compiler or type checker. Reflection, generated code, macros, overload behavior, and dynamic dispatch can be missed. When a result would need expression type inference, overload ranking beyond arity, or build-system membership, codegraph reports `not_found` or `partial` coverage rather than a guessed target.
-- Precise navigation depends on successful parsing and language queries. Without a compatible native runtime, codegraph falls back to reduced graph-only and regex recovery rather than claiming equivalent semantics.
+- Precise navigation depends on successful native parsing and language queries. A missing native addon is an error; run `codegraph doctor` to diagnose it. Files over the native size limit are skipped with a `sourceTooLarge` report, and failed native queries are reported as `queryFailure` without regex recovery. Document and stylesheet graph-only extraction remains supported.
 - Call-compatibility findings are conservative review leads, not compiler diagnostics.
 - Duplicate matches and candidate tests are ranked leads that still require human or agent judgment.
-- `--fast-graph` is an explicit speed/accuracy tradeoff for plain JavaScript and TypeScript import extraction.
 - The checked `explore` benchmark is a bounded evidence-retrieval benchmark, not a universal performance claim.
 - The fixture test matrix and language parity docs show what codegraph has actually been tested against by language and operation; absence there means untested, not guaranteed.
 
 Mitigations are explicit too:
 
-- The repository keeps real-language fixtures and parity suites for definitions, references, dependencies, chunking, MCP, and native-vs-reduced behavior.
+- The repository keeps real-language fixtures and native parity suites for definitions, references, dependencies, chunking, and MCP.
 - A generated [fixture test matrix](./docs/benchmarks/fixture-snapshot.md) shows real `tests/languages/*.test.ts` status and test counts per language, with no hand-authored goldens involved.
 - Structured output keeps freshness, confidence, and omission counts visible instead of pretending unsupported cases were resolved.
 

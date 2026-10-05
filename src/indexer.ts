@@ -1,4 +1,3 @@
-import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import { parseFile as parseFileFromModule, type ParsedFileContext } from "./indexer/parse-context.js";
 import { collectImportsForFile as collectImportsForFileFromImportsModule } from "./indexer/imports.js";
@@ -7,7 +6,7 @@ import { type ImportBinding, type ModuleIndex } from "./indexer/types.js";
 import { buildScopeIndexFromSource as buildScopeIndexFromSourceFromModule, type ScopeIndex } from "./indexer/scope.js";
 import type { LanguageSupport } from "./languages.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
-import type { NativeQueryResults, NativeRuntimeMode } from "./native/tree-sitter-native.js";
+import type { NativeQueryResults } from "./native/tree-sitter-native.js";
 
 export { SymbolKind } from "./indexer/types.js";
 export type {
@@ -22,11 +21,9 @@ export type {
   CacheReport,
   ExportEntry,
   FindReferencesResult,
-  FallbackImportExtractionReport,
   GoToRequest,
   GoToResult,
   GraphDeltaReport,
-  GraphReport,
   ImportBinding,
   ImportBindingRole,
   IncrementalBuildOptions,
@@ -106,7 +103,6 @@ export function collectLocalsAndExportsFromSource(
   opts?: {
     tree?: SyntaxTreeLike;
     nativeQueries?: NativeQueryResults | null;
-    nativeMode?: NativeRuntimeMode;
     logLevel?: import("./logging.js").LogLevel;
   },
 ): ModuleIndex {
@@ -121,8 +117,6 @@ export async function collectImportsForFile(
     sup?: LanguageSupport;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
-    native?: import("./native/tree-sitter-native.js").NativeRuntimeMode;
-    onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     logLevel?: import("./logging.js").LogLevel;
   },
 ): Promise<ImportBinding[]> {
@@ -138,7 +132,7 @@ export function buildScopeIndexFromSource(
   source: string,
   support: LanguageSupport,
   imports: ImportBinding[] = [],
-  opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
+  opts?: { tree?: SyntaxTreeLike },
 ): ScopeIndex {
   return buildScopeIndexFromSourceFromModule(file, source, support, imports, opts);
 }

@@ -437,7 +437,7 @@ function parseFixture(fileName: string, source: string): { languageId: string; t
   if (!support) {
     throw new Error(`No language support for ${fileName}`);
   }
-  const execution = getNativeSyntaxTreeExecution(source, support, "auto");
+  const execution = getNativeSyntaxTreeExecution(source, support);
   if (!execution.tree) {
     throw new Error(`Native parse failed for ${fileName}: ${execution.error ?? "unknown error"}`);
   }

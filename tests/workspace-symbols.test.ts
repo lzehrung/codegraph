@@ -18,7 +18,6 @@ const SEMANTIC_ANALYSIS = {
   mode: "semantic" as const,
   backend: "unknown" as const,
   parserDegradedFiles: 0,
-  fallbackImportExtractionFiles: 0,
   nativeFilesUsed: 0,
   nativeFilesFellBack: 0,
   label: "semantic",
@@ -370,21 +369,6 @@ describe("workspace symbol lookup", () => {
       expect(symbol.location.range.start.line).toBeGreaterThan(0);
       expect(symbol.provenance).toMatchObject({ capability: "semantic", confidence: "high" });
     }
-  });
-
-  it("labels provenance conservatively for reduced analysis", async () => {
-    const reducedSnapshot: AgentProjectSnapshot = {
-      ...snapshot,
-      analysis: { ...SEMANTIC_ANALYSIS, mode: "reduced", label: "reduced-index" },
-    };
-    const response = await workspaceSymbolsInSnapshot(reducedSnapshot, { query: "Service", limit: 1 });
-
-    expect(response.symbols[0]?.provenance).toMatchObject({
-      capability: "graph",
-      backend: "unknown",
-      confidence: "medium",
-      reason: "reduced-index",
-    });
   });
 
   it("lets the agent-tool wrapper reuse a caller-owned session", async () => {

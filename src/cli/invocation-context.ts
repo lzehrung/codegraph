@@ -5,7 +5,6 @@ import type { GraphBuildOptions } from "../graphs/types.js";
 import type { CodegraphConfig } from "../config.js";
 import { createCurrentProjectIndexLoader, type CurrentProjectIndexLoader } from "../indexer/load-current-index.js";
 import type { BuildOptions } from "../indexer/types.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import {
   normalizePath,
   normalizeResolutionHints,
@@ -18,7 +17,6 @@ import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption, type Parse
 import type { CliProgressPolicy } from "./progress.js";
 import {
   assertValidIncludeRoots,
-  parseNativeRuntimeMode,
   resolveCliDiscoveryGlobPolicy,
   resolveCliIncludeRoots,
   resolveCliRootPolicy,
@@ -67,7 +65,6 @@ async function getDuplicateProjectPatterns(): Promise<string[]> {
 }
 
 export type CliGraphFlags = {
-  fast: boolean;
   resolveNodeModules: boolean;
   dynamicImportHeuristics: boolean;
   resolutionHints: string[];
@@ -85,7 +82,6 @@ export type CliBaseContext = {
   hasFlag: (name: string) => boolean;
   reportFile: string | undefined;
   reportEnabled: boolean;
-  nativeMode: NativeRuntimeMode;
   useNativeWorkers: boolean;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
@@ -147,7 +143,6 @@ export function createCliBaseContext(command: string, parsed: ParsedCliArgs): Cl
 
   const reportFile = getOpt("--report-file");
   const reportEnabled = hasFlag("--report") || reportFile !== undefined;
-  const nativeMode = parseNativeRuntimeMode(getOpt("--native"));
   const useNativeWorkers = hasFlag("--workers");
   const workerOpts = useNativeWorkers ? ({ useNativeWorkers: true } as const) : ({} as const);
   let progressPolicy: CliProgressPolicy = "auto";
@@ -159,22 +154,16 @@ export function createCliBaseContext(command: string, parsed: ParsedCliArgs): Cl
   const showBuildDiagnostics = hasFlag("--progress");
   const progressHandler = createCliProgressHandler(progressPolicy);
   const graphFlags: CliGraphFlags = {
-    fast: hasFlag("--fast-graph"),
     resolveNodeModules: hasFlag("--resolve-node-modules"),
     dynamicImportHeuristics: hasFlag("--dynamic-import-heuristics"),
     resolutionHints: parsed.options.get("--resolution-hint") ?? [],
   };
   const computeHasGraphOverrides = (): boolean =>
-    graphFlags.fast ||
-    graphFlags.resolveNodeModules ||
-    graphFlags.dynamicImportHeuristics ||
-    !!graphFlags.resolutionHints.length;
+    graphFlags.resolveNodeModules || graphFlags.dynamicImportHeuristics || !!graphFlags.resolutionHints.length;
   const hasGraphOverrides = computeHasGraphOverrides();
   const buildGraphOptions = (): GraphBuildOptions => ({
-    fast: graphFlags.fast,
     resolveNodeModules: graphFlags.resolveNodeModules,
     dynamicImportHeuristics: graphFlags.dynamicImportHeuristics,
-    ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
     ...(graphFlags.resolutionHints.length ? { resolutionHints: graphFlags.resolutionHints } : {}),
   });
 
@@ -201,7 +190,6 @@ export function createCliBaseContext(command: string, parsed: ParsedCliArgs): Cl
     hasFlag,
     reportFile,
     reportEnabled,
-    nativeMode,
     useNativeWorkers,
     workerOpts,
     progressHandler,
@@ -240,10 +228,7 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
     ...graphFlags.resolutionHints,
   ]);
   const hasGraphOverrides =
-    graphFlags.fast ||
-    graphFlags.resolveNodeModules ||
-    graphFlags.dynamicImportHeuristics ||
-    !!graphFlags.resolutionHints.length;
+    graphFlags.resolveNodeModules || graphFlags.dynamicImportHeuristics || !!graphFlags.resolutionHints.length;
   const baseDiscoveryOptions = mergeDiscoveryOptions(config.discovery, cliGitignoreDiscoveryOptions);
   const mergedDiscoveryOptions = mergeDiscoveryOptions(config.discovery, explicitDiscoveryOptions);
   const rootFilteredDiscoveryOptions = mergeDiscoveryOptions(baseDiscoveryOptions, activeCliRootGlobDiscoveryOptions);
@@ -539,8 +524,7 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
       ...(config.cache?.location ? { cacheLocation: config.cache.location } : {}),
       ...(hasFlag("--cache-strict") ? { cacheStrict: true } : {}),
       ...(hasFlag("--cache-verify") ? { cacheVerify: true } : {}),
-      ...(hasGraphOverrides || base.nativeMode !== "auto" ? { graph: base.buildGraphOptions() } : {}),
-      ...(base.nativeMode !== "auto" ? { native: base.nativeMode } : {}),
+      ...(hasGraphOverrides ? { graph: base.buildGraphOptions() } : {}),
       ...(threads !== undefined ? { threads } : {}),
       ...base.workerOpts,
     };

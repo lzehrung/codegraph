@@ -16,7 +16,6 @@ import type {
   NativeBinding,
   NativeBindingOrigin,
   NativeBindingState,
-  NativeRuntimeMode,
   NativeWorkerBindingHandoff,
 } from "./contracts.js";
 
@@ -26,18 +25,10 @@ const localNativePackageRoot = path.resolve(
   "../../packages/codegraph-native",
 );
 
-const NATIVE_REQUIRED_ERROR_PREFIX = "native tree-sitter required by explicit option but unavailable";
+const NATIVE_REQUIRED_ERROR_PREFIX = "Required native addon @lzehrung/codegraph-native is unavailable";
 
 let bindingState: NativeBindingState | undefined;
-let loadedRuntimeFingerprint:
-  | {
-      state: NativeBindingState;
-      requestedMode: NativeRuntimeMode;
-      envDisabled: boolean;
-      value: string;
-    }
-  | undefined;
-const disabledRuntimeFingerprints = new Map<string, string>();
+let loadedRuntimeFingerprint: { state: NativeBindingState; value: string } | undefined;
 type CachedRuntimeFingerprintValidation = {
   sourcePath: string;
   sourceSize: number;
@@ -61,18 +52,10 @@ export function __resetNativeTreeSitterBindingForTests(): void {
   loadedRuntimeFingerprint = undefined;
   cachedRuntimeFingerprints.clear();
 }
-
-export function isNativeTreeSitterDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  const rawValue = env.CODEGRAPH_DISABLE_NATIVE;
-  if (typeof rawValue !== "string") {
-    return false;
-  }
-  const normalized = rawValue.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-export function normalizeNativeRuntimeMode(mode?: NativeRuntimeMode): NativeRuntimeMode {
-  return mode ?? "auto";
+/** Inject a binding load result without changing the installed package. */
+export function __setNativeTreeSitterBindingForTests(state: NativeBindingState): void {
+  __resetNativeTreeSitterBindingForTests();
+  bindingState = state;
 }
 
 export function loadBinding(): NativeBindingState {
@@ -121,25 +104,6 @@ export function loadBinding(): NativeBindingState {
   return bindingState;
 }
 
-export function resolveNativeBindingState(
-  mode?: NativeRuntimeMode,
-  env: NodeJS.ProcessEnv = process.env,
-): NativeBindingState {
-  const normalizedMode = normalizeNativeRuntimeMode(mode);
-  if (normalizedMode === "off") {
-    return {
-      loaded: false,
-      error: new Error("native tree-sitter disabled by explicit option"),
-    };
-  }
-  if (normalizedMode === "auto" && isNativeTreeSitterDisabledByEnv(env)) {
-    return {
-      loaded: false,
-      error: new Error("native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE"),
-    };
-  }
-  return loadBinding();
-}
 /**
  * The binding-derived half of the runtime fingerprint: everything the serializer reads that a
  * full addon load would otherwise be needed to obtain.
@@ -191,16 +155,10 @@ function cacheFingerprintFilesMatch(validation: CachedRuntimeFingerprintValidati
  * Takes the binding-derived facts rather than a NativeBindingState, because the cache fast path
  * below reconstructs those facts from a recorded identity and has no binding to hand.
  */
-export function serializeNativeRuntimeFingerprint(
-  requestedMode: NativeRuntimeMode,
-  envDisabled: boolean,
-  identity: NativeRuntimeIdentity,
-): string {
+export function serializeNativeRuntimeFingerprint(identity: NativeRuntimeIdentity): string {
   const { available, supportedLanguageIds, origin } = identity;
   return JSON.stringify({
     version: 1,
-    requestedMode,
-    envDisabled,
     available,
     supportedLanguageIds,
     ...(origin
@@ -294,28 +252,12 @@ export function resolveCachedRuntimeIdentity(
   }
 }
 
-export function getNativeRuntimeFingerprint(mode?: NativeRuntimeMode, env: NodeJS.ProcessEnv = process.env): string {
-  const requestedMode = normalizeNativeRuntimeMode(mode);
-  const envDisabled = isNativeTreeSitterDisabledByEnv(env);
-  const runtimeDisabled = requestedMode === "off" || (requestedMode === "auto" && envDisabled);
-  if (runtimeDisabled) {
-    const key = `${requestedMode}:${envDisabled}`;
-    const cached = disabledRuntimeFingerprints.get(key);
-    if (cached) return cached;
-    const fingerprint = serializeNativeRuntimeFingerprint(
-      requestedMode,
-      envDisabled,
-      identityFromState(resolveNativeBindingState(mode, env)),
-    );
-    disabledRuntimeFingerprints.set(key, fingerprint);
-    return fingerprint;
-  }
-
+export function getNativeRuntimeFingerprint(): string {
   // A cached identity is valid only while its current source and cache stats match and its
   // re-verification window has not elapsed. Recheck it on every fingerprint request; the probe
   // stays cheap (one directory read and two stats) and avoids extending stat-only trust.
   if (!bindingState) {
-    const cacheKey = `${requestedMode}:${envDisabled}`;
+    const cacheKey = "native";
     const now = Date.now();
     const memoized = cachedRuntimeFingerprints.get(cacheKey);
     if (memoized && now < memoized.revalidateAt && cacheFingerprintFilesMatch(memoized.validation)) {
@@ -329,7 +271,7 @@ export function getNativeRuntimeFingerprint(mode?: NativeRuntimeMode, env: NodeJ
       validation &&
       cacheFingerprintFilesMatch(validation)
     ) {
-      const value = serializeNativeRuntimeFingerprint(requestedMode, envDisabled, cachedIdentity);
+      const value = serializeNativeRuntimeFingerprint(cachedIdentity);
       cachedRuntimeFingerprints.set(cacheKey, {
         value,
         revalidateAt: cachedIdentity.cacheIdentityRevalidateAt,
@@ -341,29 +283,25 @@ export function getNativeRuntimeFingerprint(mode?: NativeRuntimeMode, env: NodeJ
   }
 
   const state = loadBinding();
-  if (
-    loadedRuntimeFingerprint?.state === state &&
-    loadedRuntimeFingerprint.requestedMode === requestedMode &&
-    loadedRuntimeFingerprint.envDisabled === envDisabled
-  ) {
+  if (loadedRuntimeFingerprint?.state === state) {
     return loadedRuntimeFingerprint.value;
   }
-  const value = serializeNativeRuntimeFingerprint(requestedMode, envDisabled, identityFromState(state));
-  loadedRuntimeFingerprint = { state, requestedMode, envDisabled, value };
+  const value = serializeNativeRuntimeFingerprint(identityFromState(state));
+  loadedRuntimeFingerprint = { state, value };
   return value;
 }
 
-export function isNativeTreeSitterAvailable(mode?: NativeRuntimeMode): boolean {
-  return resolveNativeBindingState(mode).loaded;
+export function isNativeTreeSitterAvailable(): boolean {
+  return loadBinding().loaded;
 }
 
-export function getNativeTreeSitterLoadError(mode?: NativeRuntimeMode): unknown {
-  const state = resolveNativeBindingState(mode);
+export function getNativeTreeSitterLoadError(): unknown {
+  const state = loadBinding();
   return state.loaded ? undefined : state.error;
 }
 
 export function getNativeBindingOrigin(): NativeBindingOrigin | undefined {
-  return resolveNativeBindingState().origin;
+  return loadBinding().origin;
 }
 
 export function getCurrentNativeBindingOrigin(): NativeBindingOrigin | undefined {
@@ -382,8 +320,8 @@ export function getNativeWorkerBindingHandoff(): NativeWorkerBindingHandoff | un
   return { loadedPath, origin: bindingState.origin };
 }
 
-export function getNativeTreeSitterSupportedLanguageIds(mode?: NativeRuntimeMode): string[] {
-  const state = resolveNativeBindingState(mode);
+export function getNativeTreeSitterSupportedLanguageIds(): string[] {
+  const state = loadBinding();
   return state.loaded ? Array.from(state.supportedLanguageIds).sort() : [];
 }
 
@@ -391,19 +329,17 @@ export function isNativeRequiredUnavailableError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith(NATIVE_REQUIRED_ERROR_PREFIX);
 }
 
-export function throwIfNativeRequiredUnavailable(mode: NativeRuntimeMode | undefined, state: NativeBindingState): void {
-  if (normalizeNativeRuntimeMode(mode) !== "on" || state.loaded) return;
+export function assertNativeRequiredAvailable(
+  state: NativeBindingState = loadBinding(),
+): asserts state is Extract<NativeBindingState, { loaded: true }> {
+  if (state.loaded) return;
   const suffix = state.error ? `: ${stringifyUnknown(state.error)}` : "";
-  throw new Error(`${NATIVE_REQUIRED_ERROR_PREFIX}${suffix}`);
+  throw new Error(
+    `${NATIVE_REQUIRED_ERROR_PREFIX} on ${process.platform}-${process.arch}; run codegraph doctor${suffix}`,
+  );
 }
 
-export function assertNativeRequiredAvailable(mode: NativeRuntimeMode | undefined): void {
-  if (normalizeNativeRuntimeMode(mode) !== "on") return;
-  const state = resolveNativeBindingState(mode);
-  throwIfNativeRequiredUnavailable(mode, state);
-}
-
-export function isNativeBindingLoadedForLanguage(languageId: string, mode?: NativeRuntimeMode): boolean {
-  const state = resolveNativeBindingState(mode);
+export function isNativeBindingLoadedForLanguage(languageId: string): boolean {
+  const state = loadBinding();
   return state.loaded && state.supportedLanguageIds.has(languageId);
 }

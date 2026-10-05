@@ -79,13 +79,12 @@ function lifecycleSnapshot(
     fileGraph: index.graph,
     symbolGraph: { nodes: new Map(), edges: [] },
     analysis: {
-      mode: "reduced",
-      backend: "graph-only",
+      mode: "semantic",
+      backend: "native",
       parserDegradedFiles: 0,
-      fallbackImportExtractionFiles: 0,
       nativeFilesUsed: 0,
       nativeFilesFellBack: 0,
-      label: "reduced graph-only",
+      label: "native semantic",
     },
   };
 }
@@ -643,14 +642,9 @@ describe("project lifecycle commands", () => {
   it("status detects lifecycle-relevant build option drift", async () => {
     const cases: { name: string; initial: BuildOptions; current: BuildOptions }[] = [
       {
-        name: "native mode",
-        initial: { native: "off" },
-        current: { native: "auto" },
-      },
-      {
         name: "graph options",
-        initial: { graph: { fast: true } },
-        current: { graph: { fast: false } },
+        initial: { graph: { resolveNodeModules: true } },
+        current: { graph: { resolveNodeModules: false } },
       },
     ];
 
@@ -681,19 +675,11 @@ describe("project lifecycle commands", () => {
     expect(status.suggestedNextCommand).toBe("codegraph status");
   });
 
-  it("status treats omitted and explicit default-equivalent native and graph options as current", async () => {
+  it("status treats omitted and explicit default-equivalent graph options as current", async () => {
     const explicitDefaultGraphOptions: BuildOptions = {
-      graph: { fast: false, resolveNodeModules: false, dynamicImportHeuristics: false },
+      graph: { resolveNodeModules: false, dynamicImportHeuristics: false },
     };
     const cases: { name: string; initial?: BuildOptions; current?: BuildOptions }[] = [
-      {
-        name: "omitted at init and explicit native auto at status",
-        current: { native: "auto" },
-      },
-      {
-        name: "explicit native auto at init and omitted at status",
-        initial: { native: "auto" },
-      },
       {
         name: "omitted at init and explicit graph defaults at status",
         current: explicitDefaultGraphOptions,

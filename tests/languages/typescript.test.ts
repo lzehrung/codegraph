@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
-import { buildProjectIndexFromFiles, findReferences, goToDefinition, listSymbols } from "../../src/index.js";
+import { findReferences, goToDefinition, listSymbols } from "../../src/index.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
@@ -432,28 +432,6 @@ describe("TypeScript per-specifier type-only bindings", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  it("records inline type and export type re-exports in native-off mode", () => {
-    const source = [
-      'export { type Inline, b } from "./m";',
-      'export type { Whole } from "./m";',
-      'export { Value } from "./m";',
-      'export { type as alias } from "./m2";',
-    ].join("\n");
-    const mod = collectLocalsAndExportsFromSource("consumer.ts", source, TS_SUPPORT, [], { nativeMode: "off" });
-    const reexports = mod.exports.filter((entry) => entry.type === "reexport");
-    expect(reexports).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ exportedAs: "Inline", sourceSpecifier: "Inline", typeOnly: true }),
-        expect.objectContaining({ exportedAs: "b", sourceSpecifier: "b", typeOnly: false }),
-        expect.objectContaining({ exportedAs: "Whole", sourceSpecifier: "Whole", typeOnly: true }),
-        expect.objectContaining({ exportedAs: "Value", sourceSpecifier: "Value", typeOnly: false }),
-        // A specifier literally named `type` re-aliased with `as` is a normal (non-type-only)
-        // export of the identifier `type`, not the `type` modifier followed by a dropped name.
-        expect.objectContaining({ exportedAs: "alias", sourceSpecifier: "type", typeOnly: false }),
-      ]),
-    );
-    expect(reexports).toHaveLength(5);
-  });
 
   it("keeps a default import named type as a runtime edge and binding", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-type-binding-"));
@@ -497,45 +475,7 @@ describe("TypeScript per-specifier type-only bindings", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-
-  it("classifies a default import named type as runtime without the native addon", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-type-binding-reduced-"));
-    const mod = path.join(root, "mod.ts");
-    const types = path.join(root, "types.ts");
-    const consumer = path.join(root, "consumer.ts");
-    try {
-      await writeFile(mod, "export default 1;\n", "utf8");
-      await writeFile(types, "export class Widget {}\n", "utf8");
-      await writeFile(
-        consumer,
-        [
-          'import type from "./mod";',
-          'import type { Widget } from "./types";',
-          'import foo from "import type";',
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-      const index = await buildProjectIndexFromFiles(root, [mod, types, consumer], { native: "off" });
-      const module = index.byFile.get(fileIdentityKey(consumer));
-      expect((module?.imports ?? []).filter((binding) => binding.typeOnly)).toEqual([
-        expect.objectContaining({ from: "./types", typeOnly: true }),
-      ]);
-      expect((module?.imports ?? []).filter((binding) => binding.from === "./mod")).toEqual([
-        expect.objectContaining({ from: "./mod", kind: "default", local: "type", typeOnly: false }),
-      ]);
-      const fromConsumer = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer));
-      expect(
-        fromConsumer.some(
-          (edge) => !edge.typeOnly && edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(mod),
-        ),
-      ).toBe(true);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
 });
-
 describe("TypeScript named function expression self-binding", () => {
   it("binds the function expression name inside its own body only", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-fn-expr-self-binding-"));

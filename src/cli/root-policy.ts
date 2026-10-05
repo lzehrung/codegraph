@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import { resolveFilePathFromRoot } from "../util/paths.js";
 import { getCliCommandUsage } from "./options.js";
@@ -90,14 +89,6 @@ export function assertValidIncludeRoots(command: string, baseRoot: string, inclu
   const globLikeRoot = includeRoots.find((includeRoot) => looksLikeGlobPattern(baseRoot, includeRoot));
   if (!globLikeRoot) return;
   throw new Error(invalidGlobRootMessage(command, globLikeRoot));
-}
-
-export function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
-  if (value === undefined) return "auto";
-  if (value === "auto" || value === "on" || value === "off") {
-    return value;
-  }
-  throw new Error(`Invalid --native value "${value}". Expected auto|on|off.`);
 }
 
 export type CliRootPolicyResult = { status: "ok"; projectRootFs: string } | { status: "error"; messages: string[] };

@@ -52,13 +52,12 @@ function lifecycleSnapshot(root: string, files: string[]): AgentProjectSnapshot 
     fileGraph: index.graph,
     symbolGraph: { nodes: new Map(), edges: [] },
     analysis: {
-      mode: "reduced",
-      backend: "graph-only",
+      mode: "semantic",
+      backend: "unknown",
       parserDegradedFiles: 0,
-      fallbackImportExtractionFiles: 0,
       nativeFilesUsed: 0,
       nativeFilesFellBack: 0,
-      label: "reduced graph-only",
+      label: "semantic",
     },
   };
 }

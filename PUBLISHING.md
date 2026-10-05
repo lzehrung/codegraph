@@ -4,9 +4,9 @@ codegraph publishes three top-level npm packages:
 
 - `@lzehrung/codegraph`: the product package (CLI, MCP server, installer, viewer assets) and a convenience re-export of the library surface
 - `@lzehrung/codegraph-core`: the slim TypeScript library install without MCP/CLI/viewer assets
-- `@lzehrung/codegraph-native`: the optional native Tree-sitter meta package plus per-platform binary packages
+- `@lzehrung/codegraph-native`: the required native Tree-sitter meta package plus per-platform binary packages
 
-The main package depends on the native package optionally, so installs still succeed when no matching native binary exists. When native is unavailable, codegraph degrades to reduced graph-only and regex recovery mode; there is no separate JavaScript parser fallback package.
+The main package depends on the native package as a regular dependency. When no matching native binary loads, codegraph commands fail with an error that points to `codegraph doctor`; there is no reduced or regex fallback mode.
 
 ## Local Release Commands
 
@@ -56,7 +56,7 @@ The workflow uses this immutable byte flow:
 3. Build the root package, then run `npm pack` exactly once for each target package, the native meta package, and the root package.
 4. Store those tarballs under `temp/release-candidates/packages/`.
 5. Record every relative path, package identity, target, SHA-256 digest, and size in `release-candidate-manifest.json`; write the matching `SHA256SUMS`.
-6. Run production security and fixture hermeticity from planned source in parallel with native compilation. Package smoke, reduced-mode, and checked-in release semantic gates still consume the packed candidates.
+6. Run production security and fixture hermeticity from planned source in parallel with native compilation. Package smoke and checked-in release semantic gates still consume the packed candidates.
 7. Merge the gate outputs into `CertificationReportV1`.
 8. Revalidate every candidate checksum and required report row before the first registry write.
 9. Publish the tarball paths from the manifest, without rebuilding or repacking.
@@ -97,7 +97,7 @@ Checksums prove integrity only after the release download is trusted. Until sign
 
 The package smoke runner installs local candidate tarballs into a fresh temporary directory outside the checkout. Runtime rows compare installed file paths, sizes, and SHA-256 hashes with the certified tarball contents, then verify root/native imports, `version`, `doctor`, a native symbol parse, and a stdio MCP initialize/list-tools/search exchange.
 
-Linux musl rows execute inside matching-architecture Alpine containers. A separate reduced row installs the root tarball with optional dependencies omitted and proves the packed CLI starts without native code.
+Linux musl rows execute inside matching-architecture Alpine containers.
 
 ### Native certification classes
 
@@ -124,8 +124,8 @@ After that release, configure `lzehrung/codegraph` `release.yml` as an `npm publ
 
 - `@lzehrung/codegraph`
   - Publishes `dist/`, the CLI, MCP docs/skill/viewer assets, and depends on `@lzehrung/codegraph-core`.
-  - Loads `@lzehrung/codegraph-native` when present.
-  - Drops to reduced graph-only and regex recovery mode when native is unavailable.
+  - Loads `@lzehrung/codegraph-native` (required).
+  - Fails with a `codegraph doctor` pointer when native is unavailable.
 - `@lzehrung/codegraph-core`
   - Publishes the staged library `dist/` subset (no MCP SDK, installer-only deps, or viewer/skill assets).
   - Versions with the root package and is packed/published whenever root is released.
@@ -193,7 +193,7 @@ npm run publish:native:meta
 npm publish
 ```
 
-The root package should be published last so its optional native dependency points at the final native meta version.
+The root package should be published last so its native dependency points at the final native meta version.
 
 ## Windows Native Cache Validation
 
@@ -213,4 +213,4 @@ Do not claim updates are universally lock-free. The supported claim is that code
 
 - `@lzehrung/codegraph` and `@lzehrung/codegraph-native` version independently.
 - `src/native/binding-loader.ts` loads a local workspace binary directly, caches installed Windows binaries, and uses the installed native package directly on other platforms or as a safe fallback.
-- If the cache is unavailable, codegraph records the cache error and preserves the existing native package fallback; if native loading or a query remains unavailable, it degrades to reduced graph-only and regex recovery mode.
+- If the cache is unavailable, codegraph records the cache error and preserves the existing native package fallback; if native loading still fails, commands stop with an error, and a failed native query is reported as `queryFailure`.

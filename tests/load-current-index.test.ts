@@ -217,17 +217,6 @@ describe("loadCurrentProjectIndex freshness decisions", () => {
     expect(fileNames(index)).toEqual(["a.ts", "b.ts"]);
   });
 
-  it("rebuilds safely when the native runtime option no longer matches the manifest", async () => {
-    const root = await createProject("dg-load-current-native-");
-    await loadProjectScope(root, newReport());
-    const report = newReport();
-    await loadProjectScope(root, report, { native: "off" });
-    expect(report.manifest?.reused).toBe(false);
-    expect(report.manifest?.reason).toBe("buildOptionsMismatch");
-    expect(report.manifest?.optionsMismatch).toContain("native");
-    expect(report.files?.parsed).toBe(3);
-  });
-
   it("rebuilds safely when project configuration changes", async () => {
     const root = await createProject("dg-load-current-config-");
     await loadProjectScope(root, newReport());

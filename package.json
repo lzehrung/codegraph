@@ -54,7 +54,7 @@
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
     "check": "npm run security:production && npm run typecheck && npm run lint && npm run format:check && npm run build && npm run test:native && npm run test:coverage && npm run fixtures:check-clean",
-    "build": "npm run clean && tsc -p tsconfig.json && node ./scripts/bundle-cli.mjs && node ./scripts/stage-core-package.mjs && node ./scripts/build-native-if-available.mjs",
+    "build": "npm run clean && node ./scripts/build-native-if-available.mjs && tsc -p tsconfig.json && node ./scripts/bundle-cli.mjs && node ./scripts/stage-core-package.mjs",
     "generate:duplicate-keywords": "node ./scripts/generate-duplicate-keywords.mjs",
     "generate:duplicate-identifier-ranges": "node ./scripts/generate-duplicate-identifier-ranges.mjs",
     "generate:duplicate-identifier-ranges:check": "node ./scripts/generate-duplicate-identifier-ranges.mjs --check",
@@ -68,18 +68,17 @@
     "certify:packages": "node ./scripts/certification/run-package-smoke.mjs",
     "test": "npm run test:fast",
     "test:all": "npm run test:native && npm run test:ci",
-    "test:fast": "node ./scripts/ensure-dist-for-tests.mjs && vitest run --exclude tests/bench-harness.test.ts --exclude tests/cli-regressions.test.ts --exclude tests/impact-cli.test.ts --exclude tests/esm-language-loading.test.ts --exclude tests/native-fallback-reporting.test.ts --exclude tests/native-fallback-contract.test.ts --exclude tests/native-tree-sitter.test.ts --exclude tests/native-parse-tree.test.ts --exclude tests/native-semantic-parity.test.ts --exclude tests/native-query-ownership-parity.test.ts --exclude tests/native-query-scope.test.ts --exclude tests/native-worker-parity.test.ts --exclude tests/native-parser-ownership.test.ts --exclude tests/detailed-symbol-native-only.test.ts",
-    "test:integration": "node ./scripts/ensure-dist-for-tests.mjs && vitest run tests/cli-regressions.test.ts tests/impact-cli.test.ts tests/esm-language-loading.test.ts tests/native-fallback-reporting.test.ts tests/native-fallback-contract.test.ts tests/cli-process-teardown.test.ts tests/windows-process-drain.test.ts",
+    "test:fast": "node ./scripts/ensure-dist-for-tests.mjs && vitest run --exclude tests/bench-harness.test.ts --exclude tests/cli-regressions.test.ts --exclude tests/impact-cli.test.ts --exclude tests/esm-language-loading.test.ts --exclude tests/native-tree-sitter.test.ts --exclude tests/native-parse-tree.test.ts --exclude tests/native-semantic-parity.test.ts --exclude tests/native-query-ownership-parity.test.ts --exclude tests/native-query-scope.test.ts --exclude tests/native-worker-parity.test.ts --exclude tests/native-parser-ownership.test.ts --exclude tests/detailed-symbol-native-only.test.ts",
+    "test:integration": "node ./scripts/ensure-dist-for-tests.mjs && vitest run tests/cli-regressions.test.ts tests/impact-cli.test.ts tests/esm-language-loading.test.ts tests/cli-process-teardown.test.ts tests/windows-process-drain.test.ts",
     "test:ci": "node ./scripts/ensure-dist-for-tests.mjs && node -e \"import('node:fs').then(({ mkdirSync }) => mkdirSync('.vitest', { recursive: true }))\" && vitest run --reporter=default --reporter=json --outputFile=.vitest/slow-tests.json --exclude tests/bench-harness.test.ts --exclude tests/detailed-symbol-native-only.test.ts && node ./scripts/report-slow-tests.mjs .vitest/slow-tests.json",
     "test:coverage": "node ./scripts/coverage.mjs js",
     "test:coverage:native": "node ./scripts/coverage.mjs native",
     "test:coverage:all": "node ./scripts/coverage.mjs all",
     "coverage:markdown": "node ./scripts/coverage-markdown.mjs all",
     "coverage:setup:native": "rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked",
-    "test:native": "npm run test:native:rust && npm run test:native:required && npm run test:native:fallback",
+    "test:native": "npm run test:native:rust && npm run test:native:required",
     "test:native:rust": "cargo test --manifest-path packages/codegraph-native/Cargo.toml",
     "test:native:required": "node ./scripts/run-native-required-tests.mjs",
-    "test:native:fallback": "node ./scripts/ensure-dist-for-tests.mjs && vitest run tests/native-fallback-reporting.test.ts tests/native-fallback-contract.test.ts",
     "bench:native": "node ./scripts/bench-native.mjs",
     "bench:native:smoke": "node ./scripts/bench-native.mjs --runs 3 --fixtures typescript,python,go,rust,mixed --workloads full --temperatures cold",
     "bench:native:full": "node ./scripts/bench-native.mjs --runs 1 --fixtures typescript,python,go,rust,mixed --workloads full,graph --temperatures cold",
@@ -183,6 +182,7 @@
   },
   "dependencies": {
     "@lzehrung/codegraph-core": "2.4.0",
+    "@lzehrung/codegraph-native": "^1.13.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "jsonc-parser": "^3.3.1",
@@ -197,8 +197,5 @@
     "@hono/node-server": "^2.0.5",
     "@emnapi/core": "1.11.3",
     "@emnapi/runtime": "1.11.3"
-  },
-  "optionalDependencies": {
-    "@lzehrung/codegraph-native": "^1.13.0"
   }
 }

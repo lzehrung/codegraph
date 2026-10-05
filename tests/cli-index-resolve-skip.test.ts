@@ -25,7 +25,6 @@ function createIndexContext(overrides: Partial<IndexCommandContext>): IndexComma
     gitBase: undefined,
     changedSince: undefined,
     discoveryOptions: {},
-    nativeMode: "off",
     workerOpts: {},
     cacheLocation: undefined,
     progressHandler: undefined,
@@ -178,7 +177,7 @@ describe("index resolve skip for whole-project runs", () => {
 
     try {
       const result = await captureCli(
-        ["index", "--root", ".", "--cache", "off", "--native", "off", "--include-glob", "does-not-exist/**"],
+        ["index", "--root", ".", "--cache", "off", "--include-glob", "does-not-exist/**"],
         { cwd: root },
       );
       expect(result.exitCode).toBeUndefined();

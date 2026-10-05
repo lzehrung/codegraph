@@ -13,7 +13,6 @@ import {
   type DuplicateLeadScope,
   type DuplicateLeadSummary,
 } from "../duplicates-leads.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import {
   REVIEW_SUMMARY_CANDIDATES_PER_CONFIDENCE_LIMIT,
   REVIEW_SUMMARY_CHANGED_FILE_LIMIT,
@@ -45,7 +44,6 @@ export type ReviewCommandContext = {
   commandReport: ReviewCommandReport | undefined;
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
-  nativeMode: NativeRuntimeMode;
   useNativeWorkers: boolean;
   graphOptions: GraphBuildOptions | undefined;
   progressHandler: BuildOptions["onProgress"];
@@ -298,7 +296,6 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const cacheStrict = context.hasFlag("--cache-strict");
   const cacheVerify = context.hasFlag("--cache-verify");
-  const incrementalStrict = context.hasFlag("--incremental-strict");
   const includeSymbolDetails = context.hasFlag("--include-symbol-details");
   const maxCallsitesRaw = context.getOpt("--max-callsites");
   const maxCallsites = parseOptionalNonNegativeIntegerOption(maxCallsitesRaw, "--max-callsites");
@@ -312,14 +309,12 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   if (changedSince !== undefined) reviewOpts.changedSince = changedSince;
   if (threads !== undefined) reviewOpts.threads = threads;
   reviewOpts.cache = cache ?? "disk";
-  if (context.nativeMode !== "auto") reviewOpts.native = context.nativeMode;
   if (context.useNativeWorkers) reviewOpts.useNativeWorkers = true;
   if (cacheStrict) reviewOpts.cacheStrict = true;
   if (cacheVerify) reviewOpts.cacheVerify = true;
   const cacheDir = context.getOpt("--cache-dir");
   if (cacheDir) reviewOpts.cacheDir = cacheDir;
   if (context.cacheLocation) reviewOpts.cacheLocation = context.cacheLocation;
-  if (incrementalStrict) reviewOpts.incrementalStrict = true;
   if (context.graphOptions) reviewOpts.graph = context.graphOptions;
   if (context.progressHandler) reviewOpts.onProgress = context.progressHandler;
   if (includeSymbolDetails) {

@@ -121,8 +121,6 @@ export {
   type CacheReport,
   type BuildTimingReport,
   type BuildFileReport,
-  type FallbackImportExtractionReport,
-  type GraphReport,
   type ManifestReport,
   type NativeBackendFallbackReason,
   type NativeBackendReport,
@@ -366,7 +364,6 @@ export {
 
 /** Native Tree-sitter runtime availability and language support helpers. */
 export {
-  type NativeRuntimeMode,
   type NativeQueryScope,
   isNativeTreeSitterAvailable,
   getNativeTreeSitterLoadError,

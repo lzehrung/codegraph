@@ -18,7 +18,7 @@ const defaultManifestPath = path.join(rootDirectory, "temp", "release-candidates
 const defaultExceptionsPath = path.join(rootDirectory, "scripts", "certification", "native-target-exceptions.json");
 
 function parseArgs(argv) {
-  const options = { requireReduced: false };
+  const options = {};
   const valueOptions = {
     "--manifest": true,
     "--target": true,
@@ -33,10 +33,6 @@ function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === "--require-reduced") {
-      options.requireReduced = true;
-      continue;
-    }
     if (!Object.hasOwn(valueOptions, argument)) throw new Error(`Unknown option ${argument}.`);
     const value = argv[index + 1];
     if (!value || value.startsWith("--")) throw new Error(`Missing value after ${argument}.`);
@@ -52,6 +48,9 @@ function parseArgs(argv) {
     else if (argument === "--expected-native-version") options.expectedNativeVersion = value;
     index += 1;
   }
+  if (options.mode && options.mode !== "runtime" && options.mode !== "structural") {
+    throw new PackageCertificationError("mode-invalid", `Unsupported package smoke mode ${options.mode}.`);
+  }
   return options;
 }
 
@@ -59,8 +58,8 @@ function usage() {
   return [
     "Usage:",
     "  node ./scripts/certification/run-package-smoke.mjs [--manifest <path>] [--target <suffix>]",
-    "    [--mode runtime|structural|reduced] [--output <report.json>] [--install-dir <outside-checkout>]",
-    "  node ./scripts/certification/run-package-smoke.mjs --verify-reports <dir> [--require-reduced]",
+    "    [--mode runtime|structural] [--output <report.json>] [--install-dir <outside-checkout>]",
+    "  node ./scripts/certification/run-package-smoke.mjs --verify-reports <dir>",
     "    [--expected-source-revision <sha>] [--expected-root-version <version>]",
     "    [--expected-native-version <version>] [--output <summary.json>]",
   ].join("\n");
@@ -81,12 +80,7 @@ async function verifyReportSet(options, expectedTargets, exceptions) {
   });
   const manifestSha256 = await computeFileSha256(manifestPath);
   const reports = await readPackageSmokeReports(path.resolve(options.verifyReports));
-  const summary = validatePackageSmokeReportSet({
-    manifest,
-    manifestSha256,
-    reports,
-    requireReduced: options.requireReduced,
-  });
+  const summary = validatePackageSmokeReportSet({ manifest, manifestSha256, reports });
   summary.structuralExceptions = exceptions.exceptions;
   const outputPath = path.resolve(
     options.outputPath ?? path.join(rootDirectory, "temp", "certification", "package-smoke-summary.json"),
@@ -99,13 +93,10 @@ async function verifyReportSet(options, expectedTargets, exceptions) {
 
 async function runSmoke(options, expectedTargets, exceptions) {
   const manifestPath = path.resolve(options.manifestPath ?? defaultManifestPath);
-  let target = options.target;
-  let mode = options.mode;
-  if (mode === "reduced") target = undefined;
-  if (!target && mode !== "reduced") target = currentNativeTargetSuffix() ?? undefined;
-  if (!mode && target) mode = getNativeTargetMetadata(target).certificationClass;
-  if (!mode) mode = "reduced";
-  const outputName = mode === "reduced" ? "package-smoke-reduced.json" : `package-smoke-${target}.json`;
+  const target = options.target ?? currentNativeTargetSuffix() ?? undefined;
+  const mode = options.mode ?? (target ? getNativeTargetMetadata(target).certificationClass : undefined);
+  if (!target) throw new PackageCertificationError("target-mismatch", "Package smoke requires a native target.");
+  const outputName = `package-smoke-${target}.json`;
   const outputPath = path.resolve(options.outputPath ?? path.join(rootDirectory, "temp", "certification", outputName));
   const structuralException = exceptions.exceptions.find((entry) => entry.target === target);
 

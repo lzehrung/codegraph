@@ -8,18 +8,12 @@ For sessions, streaming workflows, tool wrappers, and review-oriented recipes, s
 
 Import from `@lzehrung/codegraph-core` or one of its documented library subpaths and call the API directly.
 
-The library defaults to `native: "auto"`, which uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform and falls back automatically otherwise.
-
-Override that per call with `native: "on"` or `native: "off"`.
-
-- `native: "on"` requires the native addon and raises an error if it cannot be loaded.
-- `native: "off"` disables native explicitly and runs reduced graph-only and regex recovery mode.
+The library requires `@lzehrung/codegraph-native` for source analysis. There is no `native` build option or reduced-mode path. A missing addon raises an error; use `codegraph doctor` to diagnose the installation. Files over the native size limit are skipped with `sourceTooLarge` in the build report, and failed native queries are reported as `queryFailure` without regex recovery. Graph-only document and stylesheet formats keep their supported extraction paths.
 
 ```ts
 import { buildProjectIndex } from "@lzehrung/codegraph-core";
 
-const index = await buildProjectIndex(process.cwd(), { native: "auto" });
-const reducedIndex = await buildProjectIndex(process.cwd(), { native: "off" });
+const index = await buildProjectIndex(process.cwd());
 ```
 
 For repeated calls, prefer one warm session instead of rebuilding indexes ad hoc:
@@ -158,18 +152,9 @@ inside or outside this repository.
 This ships in a 2.x minor by explicit decision rather than waiting for a major, matching how
 2.0.0 handled export narrowing without compatibility aliases.
 
-## Import fallback events
+## Native extraction reports
 
-`collectModuleSpecifiersFromSource(support, source, opts)` from `@lzehrung/codegraph-core/graphs` accepts `opts.onFallbackImportExtraction(event)`. Each event has `language`, `reason`, and an optional `file`. `FallbackImportExtractionReason` distinguishes:
-
-- `unavailable`: the native addon could not run and the language has no reduced-mode regex recovery, so another extractor ran without a native query.
-- `unsupportedLanguage`: the addon has no grammar for this language. Graph-only languages use their supported extractor; other languages use regex recovery.
-- `query-error`: native query execution failed.
-- `query-empty`: native results did not provide imports and another extractor is used. This is not an unavailable parser.
-- `fast`: fast mode selected regex extraction.
-- `reduced-mode`: reduced extraction was selected for a language that has regex recovery (`js`, `ts`, `tsx`), including explicit `native: "off"`. Other languages report `unavailable` in that case.
-
-These events describe the extraction path, not whether it found dependencies. Both the graph and the import-binding consumers report the same reason for a file. A valid empty native result need not emit an event. Build reports omit supported graph-only extraction from degraded-file counts.
+`collectModuleSpecifiersFromSource(support, source, opts)` from `@lzehrung/codegraph-core/graphs` uses the native query path for supported source languages. It no longer accepts `onFallbackImportExtraction`, and build reports no longer contain `fallbackImportExtraction`. A failed query reports `queryFailure`; a file over the native size limit is skipped and reports `sourceTooLarge`. An empty successful query is a valid empty result, not a reason to scan source with regex. Document and stylesheet graph-only extraction remains supported.
 
 ## Symbol target resolution
 
@@ -501,7 +486,7 @@ When the entire query resolves to an indexed project-relative file path, or to o
 
 Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file path, file/chunk/graph handle, symbol handle, SQL handle, or symbol name.
 
-`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. Explanations include the same top-level `analysis` label as search so reduced or mixed runs stay visible. SQL object names resolve by exact name first; unqualified basenames resolve only when unique. File and symbol explanations also include bounded medium-or-higher duplicate context that touches the target, with stable handles and conservative repair hints. SQL related objects include a `relation` such as `incoming:reads_from`, `outgoing:writes_to`, or `same_file`. With changed context enabled, the packet includes compact review tasks and candidate tests:
+`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. Explanations include the same top-level `analysis` label as search to show backend status and skipped files. SQL object names resolve by exact name first; unqualified basenames resolve only when unique. File and symbol explanations also include bounded medium-or-higher duplicate context that touches the target, with stable handles and conservative repair hints. SQL related objects include a `relation` such as `incoming:reads_from`, `outgoing:writes_to`, or `same_file`. With changed context enabled, the packet includes compact review tasks and candidate tests:
 
 ```ts
 import { explainCodegraphTarget } from "@lzehrung/codegraph-core/agent";

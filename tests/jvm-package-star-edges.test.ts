@@ -52,7 +52,7 @@ describe("JVM package wildcard graph edges", () => {
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(file, source);
       }
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const graph = await buildSymbolGraphDetailed(index);
       const nodes = [...graph.nodes.values()];
       const node = (file: string, name: string, kind?: string) =>
@@ -111,7 +111,7 @@ describe("JVM package wildcard graph edges", () => {
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(file, source);
       }
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const graph = await buildSymbolGraphDetailed(index);
       const nodes = [...graph.nodes.values()];
       const node = (file: string, name: string, kind?: string) =>
@@ -197,7 +197,7 @@ describe("JVM package wildcard graph edges", () => {
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(file, source);
       }
-      const index = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "disk" });
       const graph = await buildSymbolGraphDetailed(index);
       const nodes = [...graph.nodes.values()];
       const node = (file: keyof typeof sources, name: string, kind?: string) =>
@@ -285,7 +285,7 @@ describe("JVM package wildcard graph edges", () => {
         expect(kotlinSites).toContain(5);
         expect(javaSites).not.toContain(6);
       }
-      const warm = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const warm = await buildProjectIndex(root, { cache: "disk" });
       const warmGraph = await buildSymbolGraphDetailed(warm);
       const warmNodes = [...warmGraph.nodes.values()];
       const warmJavaWidget = warmNodes.find(
@@ -386,7 +386,7 @@ describe("JVM package wildcard graph edges", () => {
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(file, source);
       }
-      const index = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "disk" });
       const goto = async (file: keyof typeof sources, line: number, token: string) => {
         const sourceLine = sources[file].split("\n")[line - 1]!;
         return goToDefinition(index, { file: path.join(root, file), line, column: sourceLine.indexOf(token) + 1 });
@@ -481,7 +481,7 @@ describe("JVM package wildcard graph edges", () => {
       expect(node("java/client/Use.java", "Secret", "import")).toBeUndefined();
       expect(node("kotlin/client/Use.kt", "Hidden", "import")).toBeUndefined();
       expect(node("kotlin/client/Use.kt", "run", "import")).toBeUndefined();
-      const warm = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const warm = await buildProjectIndex(root, { cache: "disk" });
       const warmType = await goToDefinition(warm, {
         file: path.join(root, "java/client/Use.java"),
         line: 4,
@@ -530,7 +530,7 @@ describe("JVM package wildcard graph edges", () => {
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(file, source);
       }
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const consumer = path.join(root, "java/client/Use.java");
       const goto = async (line: number, name: string) =>
         goToDefinition(index, {
@@ -617,7 +617,7 @@ describe("JVM package wildcard graph edges", () => {
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(file, source);
       }
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const goto = async (file: keyof typeof sources, line: number, token: string) => {
         const sourceLine = sources[file].split("\n")[line - 1]!;
         return goToDefinition(index, { file: path.join(root, file), line, column: sourceLine.lastIndexOf(token) + 1 });
@@ -809,7 +809,7 @@ describe("JVM package wildcard graph edges", () => {
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(file, source);
       }
-      const index = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "disk" });
       const graph = await buildSymbolGraphDetailed(index);
       const nodes = [...graph.nodes.values()];
       const node = (file: keyof typeof sources, name: string, kind?: string) =>
@@ -886,7 +886,7 @@ describe("JVM package wildcard graph edges", () => {
           normalizePath(path.join(root, "kotlin/q/Use.kt")),
         );
       }
-      const warm = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const warm = await buildProjectIndex(root, { cache: "disk" });
       expect((await goto("java/q/Use.java", 1, "Hidden", warm)).status).toBe("not_found");
       expect((await goto("java/q/Use.java", 1, "Open", warm)).status).toBe("ok");
       expect((await goto("java/p/Peer.java", 1, "Hidden", warm)).status).toBe("ok");
@@ -1035,7 +1035,7 @@ describe("JVM package wildcard graph edges", () => {
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(file, source);
       }
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const lookup = (file: keyof typeof sources, line: number, name: string) =>
         goToDefinition(index, {
           file: path.join(root, file),
@@ -1159,7 +1159,7 @@ describe("JVM package wildcard graph edges", () => {
         await fs.mkdir(path.dirname(destination), { recursive: true });
         await fs.writeFile(destination, source);
       }
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const definition = normalizePath(path.join(root, "kotlin/utils/Helper.kt"));
       const decoy = normalizePath(path.join(root, "java/utils/Utils.java"));
       const goto = (file: keyof typeof sources, line: number, name: string) =>
@@ -1264,7 +1264,7 @@ describe("JVM package wildcard graph edges", () => {
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(file, source);
       }
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const consumer = "java/client/Use.java";
       const goto = (line: number, token: string) =>
         goToDefinition(index, {

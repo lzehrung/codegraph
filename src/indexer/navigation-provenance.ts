@@ -4,24 +4,13 @@ type GoToVia = Extract<GoToResult, { status: "ok" }>["via"];
 type ResolutionKind = NonNullable<ResolutionProvenance["resolution"]>;
 type ResolutionConfidence = NonNullable<ResolutionProvenance["confidence"]>;
 
-function getNavigationBackend(index: ProjectIndex): ResolutionProvenance["backend"] | undefined {
-  if (index.nativeMode === "on") {
-    return "native";
-  }
-  if (index.nativeMode === "off") {
-    return "graph-only";
-  }
-  return undefined;
-}
-
 export function createNavigationProvenance(
-  index: ProjectIndex,
   resolution: ResolutionKind,
   confidence: ResolutionConfidence,
 ): ResolutionProvenance {
-  const backend = getNavigationBackend(index);
+  // Navigation always runs on the required native backend.
   return {
-    ...(backend ? { backend } : {}),
+    backend: "native",
     ...(resolution ? { resolution } : {}),
     ...(confidence ? { confidence } : {}),
   };
@@ -40,6 +29,6 @@ export function okGoToResult(
     status: "ok",
     definition,
     ...(options.via ? { via: options.via } : {}),
-    provenance: createNavigationProvenance(index, options.resolution, options.confidence),
+    provenance: createNavigationProvenance(options.resolution, options.confidence),
   };
 }

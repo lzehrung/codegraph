@@ -6,7 +6,7 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { createTestIndexFromFiles, findSymbolsByName } from "../test-utils.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
-import { buildProjectIndexFromFiles, findReferences, goToDefinition } from "../../src/index.js";
+import { findReferences, goToDefinition } from "../../src/index.js";
 import { findRenameReferences, findUsageReferences } from "../../src/indexer/navigation.js";
 
 const definition: LanguageTestDefinition = {
@@ -435,48 +435,6 @@ describe("JavaScript type-only import and export edges", () => {
         (edge) => edge.typeOnly && fileIdentityKey(edge.from) === fileIdentityKey(main),
       );
       expect(typeOnlyEdges).toHaveLength(1);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("classifies type-only imports the same way without the native addon", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-js-type-only-reduced-"));
-    const main = path.join(root, "main.js");
-    const types = path.join(root, "types.js");
-    const mod = path.join(root, "mod.js");
-    const other = path.join(root, "other.js");
-    try {
-      await writeFile(types, "export class Widget {}\n", "utf8");
-      await writeFile(mod, "export default 1;\n", "utf8");
-      await writeFile(other, "export default 2;\nexport const helper = 1;\n", "utf8");
-      await writeFile(
-        main,
-        [
-          'import type { Widget } from "./types.js";',
-          'import type from "./mod.js";',
-          'import type, { helper } from "./other.js";',
-          'import foo from "import type";',
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-      const index = await buildProjectIndexFromFiles(root, [types, mod, other, main], { native: "off" });
-      const module = index.byFile.get(fileIdentityKey(main));
-      // The reduced text extractor must agree with the native capture path: only the
-      // statement-level `import type` clause is type-only.
-      expect((module?.imports ?? []).filter((binding) => binding.typeOnly)).toEqual([
-        expect.objectContaining({ from: "./types.js", typeOnly: true }),
-      ]);
-      expect((module?.imports ?? []).filter((binding) => binding.from === "./mod.js")).toEqual([
-        expect.objectContaining({ from: "./mod.js", kind: "default", local: "type", typeOnly: false }),
-      ]);
-      const fromMain = index.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main));
-      expect(
-        fromMain.some(
-          (edge) => !edge.typeOnly && edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(mod),
-        ),
-      ).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

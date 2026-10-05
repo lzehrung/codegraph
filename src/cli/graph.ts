@@ -15,7 +15,6 @@ import {
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { type BuildOptions, type BuildReport, type CacheLocation } from "../indexer/types.js";
 import { summarizeAnalysis } from "../analysis-summary.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import { updateGraphSqlite, writeGraphSqlite } from "../sqlite.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
 import type { Edge, Graph } from "../types.js";
@@ -65,12 +64,10 @@ function resolveGraphCacheMode(cache: BuildOptions["cache"]): Exclude<BuildOptio
 export type GraphCommandContext = {
   projectRootFs: string;
   discoveryOptions: ProjectFileDiscoveryOptions;
-  nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
   cacheLocation: CacheLocation | undefined;
   graphFlags: {
-    fast: boolean;
     resolveNodeModules: boolean;
     dynamicImportHeuristics: boolean;
     resolutionHints: string[];
@@ -266,7 +263,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   } else if (context.hasFlag("--pretty") || context.hasFlag("--mermaid")) {
     format = "mermaid";
   }
-  const fast = context.graphFlags.fast;
   const resolveNodeModules = context.graphFlags.resolveNodeModules;
   const dynamicImportHeuristics = context.graphFlags.dynamicImportHeuristics;
   const resolutionHints = context.graphFlags.resolutionHints;
@@ -298,8 +294,8 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     }
   };
   // Always populated (not gated behind --report/--progress) so a normal run can
-  // detect and surface reduced-accuracy analysis (native tree-sitter unavailable
-  // or per-file regex fallback) via both the stderr warning and the --json
+  // detect and surface files native analysis skipped (for example
+  // sourceTooLarge or queryFailure) via both the stderr warning and the --json
   // `analysis` field below, per finding #43.
   const indexReport: BuildReport = { timings: {} };
   if (commandReport) {
@@ -308,7 +304,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   if (sqliteFile) {
     const changedSet = await context.resolveChangedFilesWithDeletes();
     const graphOptions = {
-      fast,
       resolveNodeModules,
       dynamicImportHeuristics,
       ...(resolutionHints.length ? { resolutionHints } : {}),
@@ -318,7 +313,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           onProgress: context.progressHandler,
           threads,
           discovery: context.discoveryOptions,
-          ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
           ...context.workerOpts,
           ...cacheDirOptions,
           cache: effectiveCache,
@@ -335,7 +329,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           onProgress: context.progressHandler,
           threads,
           discovery: context.discoveryOptions,
-          ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
           ...context.workerOpts,
           ...cacheDirOptions,
           cache: effectiveCache,
@@ -384,14 +377,12 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       onProgress: context.progressHandler,
       threads,
       discovery: context.discoveryOptions,
-      ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...context.workerOpts,
       ...cacheDirOptions,
       cache: effectiveCache,
       cacheStrict,
       cacheVerify,
       graph: {
-        fast,
         resolveNodeModules,
         dynamicImportHeuristics,
         ...(resolutionHints.length ? { resolutionHints } : {}),
@@ -399,7 +390,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       report: indexReport,
     });
     context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
-    const analysis = summarizeAnalysis({ index, nativeMode: context.nativeMode, report: indexReport });
+    const analysis = summarizeAnalysis({ index, report: indexReport });
     let sgraph: SymbolGraph;
     if (detailedSymbols) {
       const scope = parseSymbolGraphScopeOption(context.getOpt("--symbols-detailed-scope"), "--symbols-detailed-scope");
@@ -445,14 +436,12 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       onProgress: context.progressHandler,
       threads,
       discovery: context.discoveryOptions,
-      ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...context.workerOpts,
       ...cacheDirOptions,
       cache: effectiveCache,
       cacheStrict,
       cacheVerify,
       graph: {
-        fast,
         resolveNodeModules,
         dynamicImportHeuristics,
         ...(resolutionHints.length ? { resolutionHints } : {}),
@@ -462,17 +451,15 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     graph = index.graph;
   } else {
     graph = await collectGraph(context.projectRootFs, files, {
-      fast,
       threads,
       resolveNodeModules,
       dynamicImportHeuristics,
-      ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...(resolutionHints.length ? { resolutionHints } : {}),
       report: indexReport,
     });
   }
   context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
-  const analysis = summarizeAnalysis({ nativeMode: context.nativeMode, report: indexReport });
+  const analysis = summarizeAnalysis({ report: indexReport });
   const graphOut = stable ? stabilizeGraph(graph) : graph;
   if (format === "mermaid") {
     await writeOut(graphToMermaid(graphOut));

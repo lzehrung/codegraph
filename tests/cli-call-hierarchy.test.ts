@@ -136,8 +136,6 @@ describe("call hierarchy CLI", () => {
       "17",
       "--root",
       root,
-      "--native",
-      "auto",
     ]);
     const parsed: unknown = JSON.parse(refs.stdout);
     expect(refs.exitCode).toBeUndefined();

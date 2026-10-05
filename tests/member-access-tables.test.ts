@@ -18,10 +18,10 @@ import {
  * and an omission must be named with a reason or the coverage case fails.
  */
 
-const NATIVE_LANGUAGE_IDS = new Set(getNativeTreeSitterSupportedLanguageIds("on"));
+const NATIVE_LANGUAGE_IDS = new Set(getNativeTreeSitterSupportedLanguageIds());
 
 function grammarQueryCompiles(support: LanguageSupport, query: string): boolean {
-  const execution = getNativeSingleQueryExecution("", support, query, "on");
+  const execution = getNativeSingleQueryExecution("", support, query);
   if (execution.matches) return true;
   if (execution.fallbackReason === "queryFailure" || execution.fallbackReason === "unsupportedLanguage") {
     return false;

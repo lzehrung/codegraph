@@ -123,7 +123,8 @@ describe("codegraph-core package surface", () => {
     expect(corePackage.dependencies["@modelcontextprotocol/node"]).toBeUndefined();
     expect(corePackage.dependencies["jsonc-parser"]).toBeUndefined();
     expect(corePackage.dependencies["smol-toml"]).toBeUndefined();
-    expect(corePackage.optionalDependencies?.["@lzehrung/codegraph-native"]).toBeTruthy();
+    expect(corePackage.dependencies["@lzehrung/codegraph-native"]).toBeTruthy();
+    expect(corePackage.optionalDependencies?.["@lzehrung/codegraph-native"]).toBeUndefined();
     expect(rootPackage.dependencies["@lzehrung/codegraph-core"]).toBeTruthy();
     expect(rootPackage.dependencies["@modelcontextprotocol/server"]).toBeTruthy();
     expect(rootPackage.dependencies["jsonc-parser"]).toBeTruthy();

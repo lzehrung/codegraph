@@ -11,7 +11,6 @@ import {
   ROOT_PACKAGE_NAME,
   computeFileSha256,
   readReleaseCandidateManifest,
-  selectReducedReleaseCandidatePackage,
   selectReleaseCandidatePackages,
 } from "./package-contract-lib.mjs";
 import { getNativeTargetMetadata } from "../native-targets-lib.mjs";
@@ -339,7 +338,7 @@ function writeInstallManifest(installDirectory) {
   );
 }
 
-async function installPackages({ entries, manifestDirectory, installDirectory, reduced, commandRunner }) {
+async function installPackages({ entries, manifestDirectory, installDirectory, commandRunner }) {
   writeInstallManifest(installDirectory);
   const tarballs = entries.map((entry) => path.resolve(manifestDirectory, entry.file));
   const args = [
@@ -350,7 +349,6 @@ async function installPackages({ entries, manifestDirectory, installDirectory, r
     "--prefer-offline",
     "--no-fund",
     "--no-save",
-    ...(reduced ? ["--omit=optional"] : []),
     ...tarballs,
   ];
   const result = await commandRunner(npmExecutable(), args, { cwd: installDirectory, timeoutMs: 300_000 });
@@ -651,11 +649,12 @@ export async function runPackedMcpExchange({
   env = process.env,
 }) {
   const startedAt = performance.now();
-  const child = spawn(
-    nodePath,
-    [cliPath, "mcp", "serve", "--root", fixtureDirectory, "--stdio", "--native", "on", "--cache", "off"],
-    { cwd: fixtureDirectory, env, stdio: ["pipe", "pipe", "pipe"], shell: false },
-  );
+  const child = spawn(nodePath, [cliPath, "mcp", "serve", "--root", fixtureDirectory, "--stdio", "--cache", "off"], {
+    cwd: fixtureDirectory,
+    env,
+    stdio: ["pipe", "pipe", "pipe"],
+    shell: false,
+  });
   const client = createMcpLineClient(child, MCP_TIMEOUT_MS);
   try {
     const initialize = await client.request(1, "initialize", {
@@ -794,20 +793,7 @@ async function runRuntimeChecks({ installDirectory, target, manifest, commandRun
 
   const fixtureDirectory = createFixture(installDirectory);
   const search = await runNodeJson(
-    [
-      cliPath,
-      "search",
-      SMOKE_SYMBOL,
-      "--root",
-      fixtureDirectory,
-      "--mode",
-      "symbol",
-      "--native",
-      "on",
-      "--cache",
-      "off",
-      "--json",
-    ],
+    [cliPath, "search", SMOKE_SYMBOL, "--root", fixtureDirectory, "--mode", "symbol", "--cache", "off", "--json"],
     { cwd: installDirectory, timeoutMs: 180_000 },
     commandRunner,
     "native-parse-failed",
@@ -828,74 +814,6 @@ async function runRuntimeChecks({ installDirectory, target, manifest, commandRun
     stderr: boundOutput(mcp.stderr),
   });
   return nativeImportValue.resolved;
-}
-
-async function runReducedChecks({ installDirectory, manifest, commandRunner, checks }) {
-  const rootImport = await runNodeJson(
-    ["--input-type=module", "--eval", rootImportSource()],
-    { cwd: installDirectory, env: { ...process.env, CODEGRAPH_DISABLE_NATIVE: "1" } },
-    commandRunner,
-    "runtime-import-failed",
-    "Reduced root package import",
-  );
-  checks.push(commandCheck("root-import", rootImport.result));
-
-  const cliPath = packedCliPath(installDirectory);
-  const version = await runNodeJson(
-    [cliPath, "version", "--json"],
-    { cwd: installDirectory, env: { ...process.env, CODEGRAPH_DISABLE_NATIVE: "1" } },
-    commandRunner,
-    "version-smoke-failed",
-    "Reduced codegraph version",
-  );
-  checks.push(commandCheck("version", version.result));
-  const versionValue = ensurePlainRecord(version.value, "version-smoke-failed", "Version output must be an object.");
-  if (versionValue.version !== manifest.rootVersion) {
-    throw new PackageCertificationError("package-identity-mismatch", "Reduced package version output is incorrect.");
-  }
-
-  const doctor = await runNodeJson(
-    [cliPath, "doctor", "--json"],
-    { cwd: installDirectory, env: { ...process.env, CODEGRAPH_DISABLE_NATIVE: "1" } },
-    commandRunner,
-    "doctor-smoke-failed",
-    "Reduced codegraph doctor",
-  );
-  checks.push(commandCheck("doctor", doctor.result));
-  const doctorValue = ensurePlainRecord(doctor.value, "doctor-smoke-failed", "Doctor output must be an object.");
-  const native = ensurePlainRecord(doctorValue.native, "doctor-smoke-failed", "Doctor output omitted native state.");
-  if (native.available) {
-    throw new PackageCertificationError(
-      "reduced-mode-failed",
-      "Reduced package smoke unexpectedly loaded native code.",
-    );
-  }
-
-  const fixtureDirectory = createFixture(installDirectory);
-  const search = await runNodeJson(
-    [
-      cliPath,
-      "search",
-      SMOKE_SYMBOL,
-      "--root",
-      fixtureDirectory,
-      "--mode",
-      "text",
-      "--native",
-      "off",
-      "--cache",
-      "off",
-      "--json",
-    ],
-    { cwd: installDirectory, env: { ...process.env, CODEGRAPH_DISABLE_NATIVE: "1" } },
-    commandRunner,
-    "reduced-mode-failed",
-    "Reduced package search",
-  );
-  checks.push(commandCheck("reduced-search", search.result));
-  if (!JSON.stringify(search.value).includes(SMOKE_SYMBOL)) {
-    throw new PackageCertificationError("reduced-mode-failed", "Reduced package search did not return the known text.");
-  }
 }
 
 function reportBase({ manifest, manifestSha256, mode, target }) {
@@ -924,49 +842,39 @@ export async function runPackageSmoke(options) {
   const mcpRunner = options.mcpRunner ?? runPackedMcpExchange;
   const checks = [manualCheck("candidate-checksums")];
 
-  if (!["runtime", "structural", "reduced"].includes(mode)) {
+  if (mode !== "runtime" && mode !== "structural") {
     throw new PackageCertificationError("mode-invalid", `Unsupported package smoke mode ${String(mode)}.`);
   }
-  if (mode === "reduced" && target !== null) {
-    throw new PackageCertificationError("target-mismatch", "Reduced package smoke must not declare a native target.");
-  }
-  if (mode !== "reduced" && target === null) {
+  if (target === null) {
     throw new PackageCertificationError("target-mismatch", `${mode} package smoke requires a native target.`);
   }
 
-  let selection;
-  let entries;
-  if (mode === "reduced") {
-    selection = selectReducedReleaseCandidatePackage(manifest);
-    entries = [selection.core, selection.root];
-  } else {
-    const metadata = getNativeTargetMetadata(target);
-    if (metadata.certificationClass !== mode) {
-      throw new PackageCertificationError(
-        "certification-class-mismatch",
-        `Target ${target} is ${metadata.certificationClass}, not ${mode}.`,
-        { target, expected: metadata.certificationClass, actual: mode },
-      );
-    }
-    if (mode === "structural" && !options.structuralException) {
-      throw new PackageCertificationError(
-        "exception-incomplete",
-        `Structural target ${target} requires an active reviewed exception.`,
-        { target },
-      );
-    }
-    if (mode === "runtime") {
-      const runtimeTarget = options.runtimeTarget ?? currentNativeTargetSuffix();
-      if (runtimeTarget !== target) {
-        throw new PackageCertificationError("target-mismatch", `Runtime host does not match target ${target}.`, {
-          target,
-          runtimeTarget,
-        });
-      }
-    }
-    selection = selectReleaseCandidatePackages(manifest, target);
-    entries = [selection.nativeTarget, selection.native, selection.core, selection.root];
+  const metadata = getNativeTargetMetadata(target);
+  if (metadata.certificationClass !== mode) {
+    throw new PackageCertificationError(
+      "certification-class-mismatch",
+      `Target ${target} is ${metadata.certificationClass}, not ${mode}.`,
+      { target, expected: metadata.certificationClass, actual: mode },
+    );
   }
+  if (mode === "structural" && !options.structuralException) {
+    throw new PackageCertificationError(
+      "exception-incomplete",
+      `Structural target ${target} requires an active reviewed exception.`,
+      { target },
+    );
+  }
+  if (mode === "runtime") {
+    const runtimeTarget = options.runtimeTarget ?? currentNativeTargetSuffix();
+    if (runtimeTarget !== target) {
+      throw new PackageCertificationError("target-mismatch", `Runtime host does not match target ${target}.`, {
+        target,
+        runtimeTarget,
+      });
+    }
+  }
+  const selection = selectReleaseCandidatePackages(manifest, target);
+  const entries = [selection.nativeTarget, selection.native, selection.core, selection.root];
 
   const packageIdentities = [];
   const archiveFiles = new Map();
@@ -991,13 +899,11 @@ export async function runPackageSmoke(options) {
     installDirectory: options.installDirectory,
     checkoutDirectory: options.checkoutDirectory ?? process.cwd(),
   });
-  let selectedNativePath;
   try {
     const installResult = await installPackages({
       entries,
       manifestDirectory,
       installDirectory: install.installDirectory,
-      reduced: mode === "reduced",
       commandRunner,
     });
     checks.push(commandCheck("install", installResult));
@@ -1018,18 +924,14 @@ export async function runPackageSmoke(options) {
       if (packageIdentity) packageIdentity.installedPath = identity.packageDirectory;
     }
 
-    if (mode === "runtime") {
-      selectedNativePath = await runRuntimeChecks({
-        installDirectory: install.installDirectory,
-        target,
-        manifest,
-        commandRunner,
-        mcpRunner,
-        checks,
-      });
-    } else {
-      await runReducedChecks({ installDirectory: install.installDirectory, manifest, commandRunner, checks });
-    }
+    const selectedNativePath = await runRuntimeChecks({
+      installDirectory: install.installDirectory,
+      target,
+      manifest,
+      commandRunner,
+      mcpRunner,
+      checks,
+    });
 
     return {
       ...reportBase({ manifest, manifestSha256, mode, target }),

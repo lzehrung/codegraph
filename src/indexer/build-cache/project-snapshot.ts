@@ -20,7 +20,6 @@ import type {
   BackendReport,
   BuildOptions,
   ExportEntry,
-  GraphReport,
   ImportBinding,
   ModuleIndex,
   ProjectIndex,
@@ -164,7 +163,6 @@ type ProjectSnapshotModulesPayload = Pick<
   | "version"
   | "filesSignature"
   | "projectRoot"
-  | "nativeMode"
   | "nativeRuntimeFingerprint"
   | "implementationFingerprint"
   | "modules"
@@ -183,7 +181,6 @@ export type PersistedBloomFilters = {
 
 type SnapshotAnalysisReport = {
   backend?: BackendReport;
-  graph?: GraphReport;
 };
 
 export type LoadedProjectIndexSnapshot = {
@@ -201,7 +198,6 @@ type ProjectIndexSnapshotPayload = {
   modules: ModuleIndex[];
   projectRoot: string;
   languageExtensions?: ProjectIndex["languageExtensions"];
-  nativeMode?: ProjectIndex["nativeMode"];
   nativeRuntimeFingerprint: string;
   implementationFingerprint: string;
   projectFiles?: ProjectFileInfo[];
@@ -236,7 +232,7 @@ export function createProjectSnapshotIdentity(filesSignature: string, opts: Buil
   hash.update("\0");
   hash.update(JSON.stringify(normalizeGraphOptions(opts?.graph)));
   hash.update("\0");
-  hash.update(getNativeRuntimeFingerprint(opts?.native));
+  hash.update(getNativeRuntimeFingerprint());
   hash.update("\0");
   hash.update(getImplementationFingerprint());
   return hash.digest("hex");
@@ -329,17 +325,6 @@ function transformSnapshotAnalysisReport(
       };
     }
     transformed.backend = backend;
-  }
-  if (report.graph) {
-    transformed.graph = {
-      ...report.graph,
-      fallbackImportExtraction: {
-        ...report.graph.fallbackImportExtraction,
-        files: Object.fromEntries(
-          Object.entries(report.graph.fallbackImportExtraction.files).map(([file, entry]) => [reportFile(file), entry]),
-        ),
-      },
-    };
   }
   return transformed;
 }
@@ -648,7 +633,6 @@ function transformCachedProjectSnapshotModules(
     version: payload.version ?? PROJECT_SNAPSHOT_VERSION,
     filesSignature: payload.filesSignature ?? "",
     projectRoot: serializedProjectRoot(projectRoot),
-    ...(payload.nativeMode !== undefined ? { nativeMode: payload.nativeMode } : {}),
     nativeRuntimeFingerprint: payload.nativeRuntimeFingerprint ?? "",
     implementationFingerprint: payload.implementationFingerprint ?? "",
     modules,
@@ -694,7 +678,7 @@ export async function tryLoadProjectIndexSnapshot(
       parsedSnapshot.payload,
       projectRoot,
     );
-    const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
+    const nativeRuntimeFingerprint = getNativeRuntimeFingerprint();
     const implementationFingerprint = getImplementationFingerprint();
     if (!isProjectIndexSnapshotPayload(payload)) {
       recordSnapshotCorruption(
@@ -707,7 +691,6 @@ export async function tryLoadProjectIndexSnapshot(
     }
     if (
       payload.filesSignature !== filesSignature ||
-      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
       payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
       payload.implementationFingerprint !== implementationFingerprint
     ) {
@@ -735,7 +718,6 @@ export async function tryLoadProjectIndexSnapshot(
       byFile: modules,
       projectRoot: serializedProjectRoot(projectRoot),
       ...(payload.languageExtensions ? { languageExtensions: payload.languageExtensions } : {}),
-      ...(payload.nativeMode ? { nativeMode: payload.nativeMode } : {}),
       exportCache: new Map(),
       scopeCache: new Map(),
       ...(shouldHydrateBloomFilters && payload.bloomFilters
@@ -787,7 +769,7 @@ export async function tryLoadProjectSnapshotModules(
       parsedSnapshot.payload,
       projectRoot,
     );
-    const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
+    const nativeRuntimeFingerprint = getNativeRuntimeFingerprint();
     const implementationFingerprint = getImplementationFingerprint();
     if (!isProjectSnapshotModulesPayload(payload)) {
       recordSnapshotCorruption(
@@ -799,7 +781,6 @@ export async function tryLoadProjectSnapshotModules(
       return null;
     }
     if (
-      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
       payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
       payload.implementationFingerprint !== implementationFingerprint
     ) {
@@ -1080,7 +1061,7 @@ export async function writeProjectIndexSnapshot(
       version: PROJECT_SNAPSHOT_VERSION,
       filesSignature,
       projectRoot: serializedProjectRoot(projectRoot),
-      nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
+      nativeRuntimeFingerprint: getNativeRuntimeFingerprint(),
       implementationFingerprint: getImplementationFingerprint(),
       graph: {
         nodes: [...index.graph.nodes],
@@ -1089,9 +1070,6 @@ export async function writeProjectIndexSnapshot(
       modules: modulesForThinSnapshot(index, projectRoot, opts),
       fileSignatures,
       ...(index.languageExtensions ? { languageExtensions: index.languageExtensions } : {}),
-      ...(normalizedSnapshotNativeMode(index.nativeMode)
-        ? { nativeMode: normalizedSnapshotNativeMode(index.nativeMode) }
-        : {}),
       ...(index.projectFiles ? { projectFiles: index.projectFiles } : {}),
       ...(serializedBloomFilters ? { bloomFilters: serializedBloomFilters } : {}),
       ...(snapshotAnalysis ? { analysis: snapshotAnalysis } : {}),
@@ -1591,17 +1569,6 @@ function lengthPrefixedSymbolEdgeField(value: string): string {
   return `${value.length}:${value}`;
 }
 
-function normalizedSnapshotNativeMode(
-  nativeMode: ProjectIndex["nativeMode"] | undefined,
-): ProjectIndex["nativeMode"] | undefined {
-  if (nativeMode === undefined || nativeMode === "auto") return undefined;
-  return nativeMode;
-}
-
-function isSnapshotNativeMode(value: unknown): value is ProjectIndex["nativeMode"] {
-  return value === "auto" || value === "on" || value === "off";
-}
-
 function isProjectFileInfo(value: unknown): value is ProjectFileInfo {
   if (!value || typeof value !== "object") return false;
   const projectFile = value as Partial<ProjectFileInfo>;
@@ -1649,8 +1616,7 @@ function isProjectSnapshotModulesPayload(value: unknown): value is ProjectSnapsh
     /^[a-f0-9]{64}$/.test(payload.implementationFingerprint) &&
     Array.isArray(payload.modules) &&
     payload.modules.every(isModuleIndex) &&
-    isSnapshotFileSignatureRecord(payload.fileSignatures) &&
-    (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode))
+    isSnapshotFileSignatureRecord(payload.fileSignatures)
   );
 }
 
@@ -1672,7 +1638,6 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     Array.isArray(payload.modules) &&
     payload.modules.every(isModuleIndex) &&
     isSnapshotFileSignatureRecord(payload.fileSignatures) &&
-    (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode)) &&
     (payload.languageExtensions === undefined || isLanguageExtensionMap(payload.languageExtensions)) &&
     (payload.bloomFilters === undefined || isSerializedBloomFilterRecord(payload.bloomFilters)) &&
     (payload.analysis === undefined || isAnalysisSummary(payload.analysis)) &&
@@ -1683,22 +1648,18 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
 }
 
 function analysisReportFromBuildReport(report: ProjectIndex["buildReport"]): SnapshotAnalysisReport | undefined {
-  if (!report?.backend && !report?.graph) {
+  if (!report?.backend) {
     return undefined;
   }
   return {
     ...(report.backend ? { backend: report.backend } : {}),
-    ...(report.graph ? { graph: report.graph } : {}),
   };
 }
 
 function isSnapshotAnalysisReport(value: unknown): value is SnapshotAnalysisReport {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const report = value as Partial<SnapshotAnalysisReport>;
-  return (
-    (report.backend === undefined || isBackendReport(report.backend)) &&
-    (report.graph === undefined || isGraphReport(report.graph))
-  );
+  return report.backend === undefined || isBackendReport(report.backend);
 }
 
 function isBackendReport(value: unknown): value is BackendReport {
@@ -1733,23 +1694,6 @@ function isParserBackendDegradationReport(value: unknown): value is NonNullable<
   return typeof report.total === "number" && isNumberRecord(report.byLanguage) && Array.isArray(report.files);
 }
 
-function isGraphReport(value: unknown): value is GraphReport {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const report = value as Partial<GraphReport>;
-  return !!report.fallbackImportExtraction && isFallbackImportExtractionReport(report.fallbackImportExtraction);
-}
-
-function isFallbackImportExtractionReport(value: unknown): value is GraphReport["fallbackImportExtraction"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const report = value as Partial<GraphReport["fallbackImportExtraction"]>;
-  return (
-    typeof report.total === "number" &&
-    isNumberRecord(report.byLanguage) &&
-    isUnknownRecord(report.files) &&
-    (report.byReason === undefined || isNumberRecord(report.byReason))
-  );
-}
-
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -1762,13 +1706,9 @@ function isAnalysisSummary(value: unknown): value is AnalysisSummary {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const summary = value as Partial<AnalysisSummary>;
   return (
-    (summary.mode === "semantic" || summary.mode === "mixed" || summary.mode === "reduced") &&
-    (summary.backend === "native" ||
-      summary.backend === "mixed" ||
-      summary.backend === "graph-only" ||
-      summary.backend === "unknown") &&
+    summary.mode === "semantic" &&
+    (summary.backend === "native" || summary.backend === "unknown") &&
     typeof summary.parserDegradedFiles === "number" &&
-    typeof summary.fallbackImportExtractionFiles === "number" &&
     typeof summary.nativeFilesUsed === "number" &&
     typeof summary.nativeFilesFellBack === "number" &&
     typeof summary.label === "string"

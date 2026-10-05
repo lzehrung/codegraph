@@ -691,42 +691,6 @@ describe("Review report", () => {
     expect(report.head).toBe("HEAD");
   });
 
-  it("reports graph-only analysis for no-change native-off reviews", async () => {
-    const root = await mkTmpDir("dg-review-git-no-changes-native-off-");
-    runGit(root, ["init"]);
-    runGit(root, ["config", "user.email", "test@git.local"]);
-    runGit(root, ["config", "user.name", "Codegraph Bot"]);
-    await fsp.writeFile(path.join(root, "tracked.ts"), `export const value = 1;\n`, "utf8");
-    runGit(root, ["add", "."]);
-    runGit(root, ["commit", "-m", "initial"]);
-    const indexReport: BuildReport = {
-      timings: {},
-      backend: {
-        native: {
-          available: true,
-          enabled: false,
-          supportedLanguageIds: [],
-          filesUsed: 0,
-          filesFellBack: 0,
-          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0, sourceTooLarge: 0 },
-          byLanguage: {},
-          errors: [],
-        },
-      },
-    };
-
-    const report = await buildReviewReport(root, {
-      gitBase: "HEAD",
-      native: "off",
-      report: { timings: {}, indexReport },
-    });
-
-    expect(report.status).toBe("no_changes");
-    expect(report.analysis?.backend).toBe("graph-only");
-    expect(report.analysis?.mode).toBe("reduced");
-    expect(report.analysis?.label).toBe("reduced graph-only");
-  });
-
   it("applies discovery filters to changed git comparisons", async () => {
     const root = await mkTmpDir("dg-review-git-changed-discovery-");
     runGit(root, ["init"]);
@@ -1765,8 +1729,7 @@ describe("Review report", () => {
     const report = await buildReviewReport(root, {
       files: [mainFile],
       cache: "memory",
-      native: "off",
-      graph: { resolutionHints: ["src"], native: "off" },
+      graph: { resolutionHints: ["src"] },
       diffText: [
         "diff --git a/src/main.c b/src/main.c",
         "deleted file mode 100644",
@@ -1780,7 +1743,9 @@ describe("Review report", () => {
       ].join("\n"),
     });
 
-    const includeEdges = report.graphDelta.filter((edge) => edge.from === "src/main.c" && edge.raw === "x.h");
+    const includeEdges = report.graphDelta.filter(
+      (edge) => edge.from === "src/main.c" && (edge.raw === "x.h" || edge.raw === "<x.h>"),
+    );
     expect(includeEdges.map((edge) => edge.includeForm).sort()).toEqual(["angle", "literal"]);
     expect(includeEdges.map((edge) => edge.to)).toEqual([
       { type: "file", path: "src/x.h" },
@@ -1788,46 +1753,41 @@ describe("Review report", () => {
     ]);
   });
 
-  it.each(["off", "default"] as const)(
-    "keeps angle and quoted includes distinct when the included header is deleted in %s mode",
-    async (mode) => {
-      const root = await mkTmpDir(`dg-review-deleted-header-include-${mode}-`);
-      const srcDir = path.join(root, "src");
-      await fsp.mkdir(srcDir, { recursive: true });
-      const headerFile = path.join(srcDir, "x.h");
-      const mainFile = path.join(srcDir, "main.c");
-      await fsp.writeFile(headerFile, "int x(void);\n", "utf8");
-      await fsp.writeFile(mainFile, '#include <x.h>\n#include "x.h"\n', "utf8");
-      await fsp.unlink(headerFile);
+  it("keeps angle and quoted includes distinct when the included header is deleted", async () => {
+    const root = await mkTmpDir("dg-review-deleted-header-include-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const headerFile = path.join(srcDir, "x.h");
+    const mainFile = path.join(srcDir, "main.c");
+    await fsp.writeFile(headerFile, "int x(void);\n", "utf8");
+    await fsp.writeFile(mainFile, '#include <x.h>\n#include "x.h"\n', "utf8");
+    await fsp.unlink(headerFile);
 
-      const native = mode === "off" ? ({ native: "off" as const } as const) : {};
-      const report = await buildReviewReport(root, {
-        files: [headerFile],
-        cache: "memory",
-        ...native,
-        graph: { resolutionHints: ["src"], ...native },
-        diffText: [
-          "diff --git a/src/x.h b/src/x.h",
-          "deleted file mode 100644",
-          "index 1111111..0000000",
-          "--- a/src/x.h",
-          "+++ /dev/null",
-          "@@ -1 +0,0 @@",
-          "-int x(void);",
-          "",
-        ].join("\n"),
-      });
+    const report = await buildReviewReport(root, {
+      files: [headerFile],
+      cache: "memory",
+      graph: { resolutionHints: ["src"] },
+      diffText: [
+        "diff --git a/src/x.h b/src/x.h",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/x.h",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-int x(void);",
+        "",
+      ].join("\n"),
+    });
 
-      const includeEdges = report.graphDelta.filter(
-        (edge) => edge.from === "src/main.c" && (edge.raw === "x.h" || edge.raw === "<x.h>"),
-      );
-      expect(includeEdges.map((edge) => edge.includeForm).sort()).toEqual(["angle", "literal"]);
-      expect(includeEdges.map((edge) => edge.to)).toEqual([
-        { type: "file", path: "src/x.h" },
-        { type: "file", path: "src/x.h" },
-      ]);
-    },
-  );
+    const includeEdges = report.graphDelta.filter(
+      (edge) => edge.from === "src/main.c" && (edge.raw === "x.h" || edge.raw === "<x.h>"),
+    );
+    expect(includeEdges.map((edge) => edge.includeForm).sort()).toEqual(["angle", "literal"]);
+    expect(includeEdges.map((edge) => edge.to)).toEqual([
+      { type: "file", path: "src/x.h" },
+      { type: "file", path: "src/x.h" },
+    ]);
+  });
 
   it("includes deleted consumer import edges in graphDelta", async () => {
     const root = await mkTmpDir("dg-review-deleted-consumer-");
@@ -2673,7 +2633,7 @@ describe("Review report", () => {
     }
   });
 
-  it("applies review depth presets to symbol details and graph options", async () => {
+  it("applies review depth presets to symbol details", async () => {
     const root = await mkTmpDir("dg-review-presets-");
     const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
@@ -2704,46 +2664,36 @@ describe("Review report", () => {
 
     await buildProjectIndex(root);
 
-    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
-    try {
-      const minimal = await buildReviewReport(root, {
-        files: [featureFile],
-        reviewDepth: "minimal",
-      });
-      const standard = await buildReviewReport(root, {
-        files: [featureFile],
-        reviewDepth: "standard",
-      });
-      const deep = await buildReviewReport(root, {
-        files: [featureFile],
-        reviewDepth: "deep",
-      });
+    const minimal = await buildReviewReport(root, {
+      files: [featureFile],
+      reviewDepth: "minimal",
+    });
+    const standard = await buildReviewReport(root, {
+      files: [featureFile],
+      reviewDepth: "standard",
+    });
+    const deep = await buildReviewReport(root, {
+      files: [featureFile],
+      reviewDepth: "deep",
+    });
 
-      const findGreet = (report: Awaited<typeof minimal>) =>
-        report.changedFiles
-          .find((entry) => entry.file === "src/feature.ts")
-          ?.symbols.find((symbol) => symbol.name === "greet");
+    const findGreet = (report: Awaited<typeof minimal>) =>
+      report.changedFiles
+        .find((entry) => entry.file === "src/feature.ts")
+        ?.symbols.find((symbol) => symbol.name === "greet");
 
-      const minimalGreet = findGreet(minimal);
-      expect(minimalGreet).toBeDefined();
-      expect(minimalGreet?.definitionSnippet).toBeUndefined();
-      expect(minimalGreet?.callsites).toBeUndefined();
+    const minimalGreet = findGreet(minimal);
+    expect(minimalGreet).toBeDefined();
+    expect(minimalGreet?.definitionSnippet).toBeUndefined();
+    expect(minimalGreet?.callsites).toBeUndefined();
 
-      const standardGreet = findGreet(standard);
-      expect(standardGreet?.definitionSnippet).toContain("function greet");
-      expect(standardGreet?.callsites?.length).toBeGreaterThan(0);
-      expect(standardGreet?.callsites?.length).toBeLessThanOrEqual(2);
+    const standardGreet = findGreet(standard);
+    expect(standardGreet?.definitionSnippet).toContain("function greet");
+    expect(standardGreet?.callsites?.length).toBeGreaterThan(0);
+    expect(standardGreet?.callsites?.length).toBeLessThanOrEqual(2);
 
-      const deepGreet = findGreet(deep);
-      expect(deepGreet?.callsites?.length).toBe(3);
-
-      const fastFlags = buildSpy.mock.calls.map((call) => call[1]?.graph?.fast);
-      expect(fastFlags[0]).toBe(true);
-      expect(fastFlags[1]).toBe(false);
-      expect(fastFlags[2]).toBe(false);
-    } finally {
-      buildSpy.mockRestore();
-    }
+    const deepGreet = findGreet(deep);
+    expect(deepGreet?.callsites?.length).toBe(3);
   });
 
   it("adds duplicate sibling review tasks for changed duplicate implementations", async () => {

@@ -3035,7 +3035,6 @@ describe("codegraph MCP handlers", () => {
         mode: "semantic",
         backend: "unknown",
         parserDegradedFiles: 0,
-        fallbackImportExtractionFiles: 0,
         nativeFilesUsed: 0,
         nativeFilesFellBack: 0,
         label: "semantic",

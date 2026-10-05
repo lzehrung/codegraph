@@ -68,10 +68,9 @@ export async function workspaceSymbolsInSnapshot(
       location: { file, range },
       exported: symbol.exported,
       provenance: {
-        capability: snapshot.analysis.mode === "reduced" ? "graph" : "semantic",
+        capability: "semantic",
         backend: snapshot.analysis.backend,
-        confidence: snapshot.analysis.mode === "reduced" ? "medium" : "high",
-        ...(snapshot.analysis.mode === "reduced" ? { reason: snapshot.analysis.label } : {}),
+        confidence: "high",
       },
     };
   });

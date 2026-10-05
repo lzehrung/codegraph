@@ -118,7 +118,7 @@ describe("undocumented public API", () => {
     try {
       const file = path.join(root, `fixture.${extension}`);
       await writeFile(file, source, "utf8");
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [file], { cache: "off" });
       const exported = [...index.byFile.values()].flatMap((mod) =>
         mod.exports.filter((entry) => entry.type === "local"),
       );
@@ -184,25 +184,6 @@ describe("undocumented public API", () => {
     }
   });
 
-  it("excludes reduced-mode exports whose documentation cannot be checked", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-undocumented-reduced-"));
-    try {
-      const file = path.join(root, "api.ts");
-      await writeFile(
-        file,
-        "/** documented */\nexport function documented() {}\nexport function undocumented() {}\n",
-        "utf8",
-      );
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "off", cache: "off" });
-      expect(getUndocumentedApiSurface(index)).toEqual({
-        symbols: [],
-        coverage: { state: "partial", uncheckedFiles: [file.replaceAll("\\", "/")] },
-      });
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("does not mislabel Python triple-quoted docstrings", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-undocumented-python-"));
     try {
@@ -212,7 +193,7 @@ describe("undocumented public API", () => {
         'def documented():\n    """A documented function."""\n    pass\n\ndef undocumented():\n    pass\n',
         "utf8",
       );
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [file], { cache: "off" });
       expect([...index.byFile.values()].flatMap((mod) => mod.exports).length).toBeGreaterThan(0);
       expect(getUndocumentedApiSurface(index)).toEqual({
         symbols: [],
@@ -238,7 +219,7 @@ describe("undocumented public API", () => {
         ].join("\n"),
         "utf8",
       );
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [file], { cache: "off" });
       const exports = [...index.byFile.values()].flatMap((mod) =>
         mod.exports.filter((entry) => entry.type === "local"),
       );
@@ -290,7 +271,7 @@ describe("undocumented public API", () => {
         ].join("\n"),
         "utf8",
       );
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [file], { cache: "off" });
       expect(getUndocumentedApiSurface(index)).toMatchObject({
         symbols: [{ name: "undocumented", exportedAs: "undocumented" }],
         coverage: { state: "complete" },
@@ -311,7 +292,7 @@ describe("undocumented public API", () => {
         "exports.missing = () => 3;",
       ].join("\n");
       await writeFile(file, source, "utf8");
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [file], { cache: "off" });
       const mod = [...index.byFile.values()][0]!;
       const constant = mod.locals.find((def) => def.localName === "annotated" && def.kind === "variable");
       const localExports = mod.exports.filter((entry) => entry.type === "local");
@@ -329,7 +310,7 @@ describe("undocumented public API", () => {
     }
   });
 
-  it("resolves TypeScript CommonJS fallback targets by property", async () => {
+  it("resolves TypeScript CommonJS export targets by property", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-cjs-target-"));
     try {
       const file = path.join(root, "api.ts");
@@ -341,7 +322,7 @@ describe("undocumented public API", () => {
         "exports.missing = () => 3;",
       ].join("\n");
       await writeFile(file, source, "utf8");
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [file], { cache: "off" });
       const mod = [...index.byFile.values()][0]!;
       const constant = mod.locals.find((def) => def.localName === "annotated" && def.kind === "variable");
       const localExports = mod.exports.filter((entry) => entry.type === "local");
@@ -356,11 +337,6 @@ describe("undocumented public API", () => {
       expect(getUndocumentedApiSurface(index)).toMatchObject({
         symbols: [{ name: "missing", exportedAs: "missing", kind: "function" }],
         coverage: { state: "complete" },
-      });
-      const reduced = await buildProjectIndexFromFiles(root, [file], { native: "off", cache: "off" });
-      expect(getUndocumentedApiSurface(reduced)).toEqual({
-        symbols: [],
-        coverage: { state: "partial", uncheckedFiles: [file.replaceAll("\\", "/")] },
       });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -379,7 +355,7 @@ describe("undocumented public API", () => {
         "};",
       ].join("\n");
       await writeFile(file, source, "utf8");
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [file], { cache: "off" });
       const mod = [...index.byFile.values()][0]!;
       const constant = mod.locals.find((def) => def.localName === "helper" && def.kind === "variable");
       const localExports = mod.exports.filter((entry) => entry.type === "local");
@@ -404,7 +380,7 @@ describe("undocumented public API", () => {
         "module.exports = function named() { return 2; };",
       ].join("\n");
       await writeFile(file, source, "utf8");
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [file], { cache: "off" });
       const mod = [...index.byFile.values()][0]!;
       const constant = mod.locals.find((def) => def.localName === "exports" && def.kind === "variable");
       const localExports = mod.exports.filter((entry) => entry.type === "local");
@@ -424,7 +400,6 @@ describe("undocumented public API", () => {
       await writeFile(path.join(root, "api.ts"), "/** documented */\nexport function documented() {}\n", "utf8");
       await writeFile(path.join(root, "empty.php"), "<?php\n// nothing here\n", "utf8");
       const index = await buildProjectIndexFromFiles(root, [path.join(root, "api.ts"), path.join(root, "empty.php")], {
-        native: "on",
         cache: "off",
       });
       expect(getUndocumentedApiSurface(index)).toEqual({ symbols: [], coverage: { state: "complete" } });

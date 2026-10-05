@@ -475,7 +475,7 @@ const impact = await tool_impactJSON(
   },
   { index },
 );
-const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, index, { native: "on" });
+const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, index);
 const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
 ```
 

@@ -2980,7 +2980,7 @@ describe("Implicit compilation-unit peers", () => {
       await fsp.writeFile(ambFile, amb);
       await fsp.writeFile(decoyFile, decoy);
       await fsp.writeFile(useFile, use);
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const at = async (file: string, source: string, line: number, token: string) =>
         goToDefinition(index, { file, line, column: columnOf(source, line, token) });
       const two = await at(useFile, use, 7, "add");

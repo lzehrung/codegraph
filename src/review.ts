@@ -12,7 +12,6 @@ import { loadCurrentProjectIndex } from "./indexer/load-current-index.js";
 import { summarizeAnalysis } from "./analysis-summary.js";
 import { type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { symbolId } from "./indexer/symbols.js";
-import type { GraphBuildOptions } from "./graphs/types.js";
 import type { FileChange, Hunk } from "./impact/types.js";
 import { normalizePath, toProjectDisplayPath } from "./util/paths.js";
 import { fileExists } from "./util/workspace.js";
@@ -68,7 +67,6 @@ type ReviewPreset = {
   includeSymbolDetails: boolean;
   maxCallsites: number;
   maxCandidates: number;
-  graph: { fast: boolean };
 };
 
 type ReviewDuplicateTarget = {
@@ -82,44 +80,30 @@ const REVIEW_PRESETS: Record<ReviewDepth, ReviewPreset> = {
     includeSymbolDetails: false,
     maxCallsites: 0,
     maxCandidates: 10,
-    graph: { fast: true },
   },
   standard: {
     includeSymbolDetails: true,
     maxCallsites: 2,
     maxCandidates: 25,
-    graph: { fast: false },
   },
   deep: {
     includeSymbolDetails: true,
     maxCallsites: 10,
     maxCandidates: 50,
-    graph: { fast: false },
   },
 };
 
 const REVIEW_DUPLICATE_TASK_LIMIT = 5;
 const REVIEW_DUPLICATE_MAX_PAIRS = 20_000;
 
-function mergeGraphOptions(
-  base: GraphBuildOptions | undefined,
-  override: GraphBuildOptions | undefined,
-): GraphBuildOptions | undefined {
-  if (!base) return override;
-  if (!override) return base;
-  return { ...base, ...override };
-}
-
 function applyReviewPresetOptions(opts: ReviewOptions): ReviewOptions {
   if (!opts.reviewDepth) return opts;
   const preset = REVIEW_PRESETS[opts.reviewDepth];
-  const mergedGraph = mergeGraphOptions(preset.graph, opts.graph);
   return {
     ...opts,
     includeSymbolDetails: opts.includeSymbolDetails ?? preset.includeSymbolDetails,
     maxCallsites: opts.maxCallsites ?? preset.maxCallsites,
     maxCandidates: opts.maxCandidates ?? preset.maxCandidates,
-    ...(mergedGraph ? { graph: mergedGraph } : {}),
   };
 }
 
@@ -132,7 +116,6 @@ type ReviewIndexStage = {
   existenceByFile: Map<string, boolean>;
   deletedFiles: string[];
   deletedSnapshots: Map<FileId, DeletedFileSnapshot>;
-  graphOptions: GraphBuildOptions;
 };
 
 async function buildReviewIndex(input: {
@@ -161,8 +144,6 @@ async function buildReviewIndex(input: {
     providedIndex,
     loadProvidedIndex,
   } = input;
-  const fastGraphRequested = appliedOptions.graph?.fast ?? false;
-  const graphOptions = appliedOptions.graph ? { ...appliedOptions.graph, fast: fastGraphRequested } : { fast: false };
   const existenceChecks = await mapLimit(changedFileList, 8, async (file) => ({
     file,
     exists: await fileExists(file),
@@ -182,7 +163,7 @@ async function buildReviewIndex(input: {
       ? { revision: appliedOptions.gitBase ?? appliedOptions.changedSince }
       : {}),
     diffChangesByFile,
-    graphOptions,
+    ...(appliedOptions.graph ? { graphOptions: appliedOptions.graph } : {}),
   });
 
   const indexStart = performance.now();
@@ -209,7 +190,6 @@ async function buildReviewIndex(input: {
       },
       options: {
         ...appliedOptions,
-        graph: graphOptions,
         keepParsed: true,
         ...(indexReport ? { report: indexReport } : {}),
       },
@@ -231,7 +211,6 @@ async function buildReviewIndex(input: {
     existenceByFile,
     deletedFiles,
     deletedSnapshots,
-    graphOptions,
   };
 }
 
@@ -276,9 +255,7 @@ export async function buildReviewReport(
     const report: ReviewReport = {
       schemaVersion: REVIEW_SCHEMA_VERSION,
       status: "no_changes",
-      ...(reviewReport?.indexReport
-        ? { analysis: summarizeAnalysis({ nativeMode: appliedOptions.native, report: reviewReport.indexReport }) }
-        : {}),
+      ...(reviewReport?.indexReport ? { analysis: summarizeAnalysis({ report: reviewReport.indexReport }) } : {}),
       projectFiles,
       summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
       riskSummary,

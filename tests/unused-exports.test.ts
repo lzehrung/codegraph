@@ -42,7 +42,7 @@ describe("findUnusedExports", () => {
         }),
         "utf8",
       );
-      const index = await buildProjectIndexFromFiles(root, files, { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, files, { cache: "off" });
       const unusedFile = path.join(root, "unused.ts");
       const def = index.byFile.get(fileIdentityKey(unusedFile))?.locals.find((item) => item.localName === "orphan");
       expect(def).toBeDefined();
@@ -75,7 +75,7 @@ describe("findUnusedExports", () => {
       await writeFile(entryFile, "export function packageEntry() { return 1; }\n", "utf8");
       await writeFile(unusedFile, sources["unused.ts"]!, "utf8");
       await writeFile(path.join(root, "package.json"), "{}", "utf8");
-      const index = await buildProjectIndexFromFiles(root, [entryFile, unusedFile], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [entryFile, unusedFile], { cache: "off" });
       expect(await findUnusedExports(index)).toEqual([
         expect.objectContaining({ file: unusedFile.replaceAll("\\", "/"), name: "orphan" }),
       ]);
@@ -90,7 +90,7 @@ describe("findUnusedExports", () => {
       const file = path.join(root, "unused.ts");
       await writeFile(file, sources["unused.ts"]!, "utf8");
       await writeFile(path.join(root, "package.json"), "{invalid", "utf8");
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [file], { cache: "off" });
       expect(await findUnusedExports(index)).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -103,7 +103,7 @@ describe("findUnusedExports", () => {
       const file = path.join(root, "unused.ts");
       await writeFile(file, sources["unused.ts"]!, "utf8");
       await writeFile(path.join(root, "package.json"), JSON.stringify({ exports: { "./*": "./*.ts" } }), "utf8");
-      const index = await buildProjectIndexFromFiles(root, [file], { native: "on", cache: "off" });
+      const index = await buildProjectIndexFromFiles(root, [file], { cache: "off" });
       expect(await findUnusedExports(index)).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -117,7 +117,6 @@ describe("findUnusedExports", () => {
       await writeFile(file, sources["unused.ts"]!, "utf8");
       const report: BuildReport = { timings: {} };
       const index = await buildProjectIndexFromFiles(root, [file], {
-        native: "on",
         cache: "off",
         report,
       });

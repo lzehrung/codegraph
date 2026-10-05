@@ -5,7 +5,6 @@ import {
   getNativeExtractionExecution,
   getNativeSyntaxTreeExecution,
   type NativeQueryResults,
-  type NativeRuntimeMode,
   type NativeSyntaxTree,
 } from "../native/tree-sitter-native.js";
 import type { NativeFallbackReason } from "../native/contracts.js";
@@ -33,7 +32,6 @@ export type PreparedFileContext = {
   file: string;
   source: string;
   sup: LanguageSupport;
-  nativeMode?: NativeRuntimeMode;
   embeddedBlocks?: PreparedSFCEmbeddedBlock[];
   nativeQueries: NativeQueryResults | null;
   /** Transferable native tree POJO from workers; avoids a second parse on the main thread. */
@@ -68,7 +66,7 @@ function createGraphOnlySyntaxTree(): SyntaxTreeLike {
   };
 }
 export function attemptParsePreparedFileContext(context: PreparedFileContext): PreparedFileParseAttempt {
-  const { source, sup, nativeMode, nativeQueries, embeddedBlocks } = context;
+  const { source, sup, nativeQueries, embeddedBlocks } = context;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
   if (graphOnlyLanguage) {
     return {
@@ -79,7 +77,6 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
         ...(embeddedBlocks ? { embeddedBlocks } : {}),
         nativeQueries,
       },
-      nativeFallbackReason: "unsupportedLanguage",
     };
   }
   if (context.syntaxTree) {
@@ -93,14 +90,14 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
       },
     };
   }
-  if (nativeMode !== "off" && Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+  if (Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
     return {
       parsed: null,
       nativeFallbackReason: "sourceTooLarge",
       ...(context.nativeError ? { nativeError: context.nativeError } : {}),
     };
   }
-  const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup, nativeMode);
+  const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup);
   if (nativeTreeExecution.tree) {
     return {
       parsed: {
@@ -126,21 +123,13 @@ export function tryParsePreparedFileContext(context: PreparedFileContext): Parse
 export function parsePreparedFileContext(context: PreparedFileContext): ParsedFileContext {
   const attempt = attemptParsePreparedFileContext(context);
   if (attempt.parsed) return attempt.parsed;
-  if (context.nativeMode !== "on") {
-    return {
-      source: context.source,
-      tree: createGraphOnlySyntaxTree(),
-      sup: context.sup,
-      ...(context.embeddedBlocks ? { embeddedBlocks: context.embeddedBlocks } : {}),
-      nativeQueries: context.nativeQueries,
-    };
-  }
-  throw new Error(`Failed to reconstruct syntax tree for ${context.file}`);
+  throw new Error(
+    `Failed to reconstruct native syntax tree for ${context.file}: ${attempt.nativeError ?? attempt.nativeFallbackReason ?? "no tree"}`,
+  );
 }
 
 export async function prepareFileForIndexing(
   file: string,
-  native?: NativeRuntimeMode,
   languageExtensions?: LanguageExtensionMap,
   source?: string,
   support?: LanguageSupport,
@@ -156,19 +145,17 @@ export async function prepareFileForIndexing(
       source: prep.source,
       sup: prep.sup,
       ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
-      ...(native ? { nativeMode: native } : {}),
       nativeQueries: null,
     };
   }
 
   const sourceBytes = Buffer.byteLength(prep.source, "utf8");
-  if (native !== "off" && sourceBytes > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+  if (sourceBytes > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
     return {
       file,
       source: prep.source,
       sup: prep.sup,
       ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
-      ...(native ? { nativeMode: native } : {}),
       nativeQueries: null,
       nativeFallbackReason: "sourceTooLarge",
       nativeError: `source exceeds native byte limit (${sourceBytes} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`,
@@ -181,14 +168,13 @@ export async function prepareFileForIndexing(
   // SFC files, which are never routed to workers). Populating `syntaxTree` here lets
   // `attemptParsePreparedFileContext`'s existing `if (context.syntaxTree)` branch reuse it
   // instead of triggering a second parse via `getNativeSyntaxTreeExecution`.
-  const nativeExecution = getNativeExtractionExecution(prep.source, prep.sup, native);
+  const nativeExecution = getNativeExtractionExecution(prep.source, prep.sup);
 
   return {
     file,
     source: prep.source,
     sup: prep.sup,
     ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
-    ...(native ? { nativeMode: native } : {}),
     nativeQueries: nativeExecution.results,
     syntaxTree: nativeExecution.tree,
     ...(nativeExecution.fallbackReason ? { nativeFallbackReason: nativeExecution.fallbackReason } : {}),
@@ -213,5 +199,5 @@ export async function ensureParsedContext(
       nativeQueries: parsedEntry.nativeQueries ?? null,
     };
   }
-  return parsePreparedFileContext(await prepareFileForIndexing(file, undefined, languageExtensions));
+  return parsePreparedFileContext(await prepareFileForIndexing(file, languageExtensions));
 }

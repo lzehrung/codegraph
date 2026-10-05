@@ -72,8 +72,8 @@ export type NativeLanguageExtraction = {
 export type CompactCapture = {
   name: string;
   text: string;
-  /** UTF-8 byte offset of the captured node, present in current native add-ons. */
-  startIndex?: number;
+  /** UTF-8 byte offset of the captured node. */
+  startIndex: number;
 };
 
 export type CompactMatch = {
@@ -133,8 +133,6 @@ export type NativeExtractionExecution = {
   fallbackReason?: NativeFallbackReason;
   error?: string;
 };
-
-export type NativeRuntimeMode = "auto" | "on" | "off";
 
 /**
  * Controls which query kinds are executed in a native call.

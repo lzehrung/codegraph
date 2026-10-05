@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildSymbolGraphDetailed,
   buildSymbolGraph,
-  buildProjectIndex,
   buildProjectIndexIncremental,
   findReferences,
   goToDefinition,
@@ -16,8 +15,6 @@ import {
   type SymbolGraph,
 } from "../src/index.js";
 import { closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
-import { collectLocalsAndExportsFromSource } from "../src/indexer.js";
-import { supportForFile } from "../src/languages.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
@@ -145,25 +142,23 @@ describe("TypeScript and JavaScript navigation", () => {
       const file = `calls.${extension}`;
       const fixture = await project({ [file]: source, [`other.${extension}`]: "export const item = 1;\n" });
       try {
-        for (const index of [fixture.index, await buildProjectIndex(fixture.root, { cache: "off", native: "off" })]) {
-          for (const [line, token] of [
-            [2, "trim"],
-            [3, "import"],
-            [4, "test"],
-            [5, "close"],
-          ] as const) {
-            const request = { file: fixture.file(file), line, column: columnOf(source, line, token) };
-            expect((await goToDefinition(index, request)).status).toBe("not_found");
-            expect((await findReferences(index, request)).status).toBe("not_found");
-          }
-          const declaration = await goToDefinition(index, {
-            file: fixture.file(file),
-            line: 2,
-            column: columnOf(source, 2, "handle"),
-          });
-          expect(declaration.status).toBe("ok");
-          if (declaration.status === "ok") expect(declaration.definition.localName).toBe("handle");
+        for (const [line, token] of [
+          [2, "trim"],
+          [3, "import"],
+          [4, "test"],
+          [5, "close"],
+        ] as const) {
+          const request = { file: fixture.file(file), line, column: columnOf(source, line, token) };
+          expect((await goToDefinition(fixture.index, request)).status).toBe("not_found");
+          expect((await findReferences(fixture.index, request)).status).toBe("not_found");
         }
+        const declaration = await goToDefinition(fixture.index, {
+          file: fixture.file(file),
+          line: 2,
+          column: columnOf(source, 2, "handle"),
+        });
+        expect(declaration.status).toBe("ok");
+        if (declaration.status === "ok") expect(declaration.definition.localName).toBe("handle");
         const graph = await buildSymbolGraphDetailed(fixture.index);
         expect(callTargetIds(graph, "run")).toEqual([]);
       } finally {
@@ -1057,39 +1052,23 @@ describe("TypeScript and JavaScript navigation", () => {
     },
   );
 
-  it("records direct CommonJS function values in native and no-native extraction without marking ESM exports", async () => {
+  it("records direct CommonJS function values without marking ESM exports", async () => {
     const cjsSource = "module.exports = function thing() {};\n";
     const esmSource = "export function exports() {}\n";
     const fixture = await project({ "cjs.js": cjsSource, "esm.js": esmSource });
     try {
       const cjsFile = fixture.file("cjs.js");
       const esmFile = fixture.file("esm.js");
-      const support = supportForFile(cjsFile)!;
-      const modes = [
-        {
-          name: "native",
-          cjs: fixture.index.byFile.get(fileIdentityKey(cjsFile)),
-          esm: fixture.index.byFile.get(fileIdentityKey(esmFile)),
-        },
-        {
-          name: "no-native",
-          cjs: collectLocalsAndExportsFromSource(cjsFile, cjsSource, support, [], { nativeMode: "off" }),
-          esm: collectLocalsAndExportsFromSource(esmFile, esmSource, support, [], { nativeMode: "off" }),
-        },
-      ];
-      for (const { name, cjs, esm } of modes) {
-        expect(
-          cjs?.exports.some(
-            (entry) =>
-              entry.type === "local" && entry.exportedAs === "exports" && entry.mechanism === "cjs-module-value",
-          ),
-          name,
-        ).toBe(true);
-        expect(
-          esm?.exports.some((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value"),
-          name,
-        ).toBe(false);
-      }
+      const cjs = fixture.index.byFile.get(fileIdentityKey(cjsFile));
+      const esm = fixture.index.byFile.get(fileIdentityKey(esmFile));
+      expect(
+        cjs?.exports.some(
+          (entry) => entry.type === "local" && entry.exportedAs === "exports" && entry.mechanism === "cjs-module-value",
+        ),
+      ).toBe(true);
+      expect(esm?.exports.some((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value")).toBe(
+        false,
+      );
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -1250,26 +1229,18 @@ describe("TypeScript and JavaScript navigation", () => {
     }
   });
 
-  it.each(["js", "ts", "tsx"] as const)("binds fallback direct CJS identifier exports in %s", async (extension) => {
+  it.each(["js", "ts", "tsx"] as const)("binds direct CJS identifier exports in %s", async (extension) => {
     const widgetName = `widget.${extension}`;
     const fixture = await project({ [widgetName]: directCjsWidget });
     try {
       const file = fixture.file(widgetName);
-      const native = fixture.index.byFile.get(fileIdentityKey(file));
-      const fallback = collectLocalsAndExportsFromSource(file, directCjsWidget, supportForFile(file)!, [], {
-        nativeMode: "off",
-      });
-      const direct = fallback.exports.find((entry) => entry.type === "local" && entry.exportedAs === "default");
+      const direct = fixture.index.byFile
+        .get(fileIdentityKey(file))
+        ?.exports.find((entry) => entry.type === "local" && entry.exportedAs === "default");
       expect(direct?.type).toBe("local");
       if (direct?.type !== "local") return;
       expect(direct.mechanism).toBe("cjs-module-value");
       expect(direct.target.range.start.index).toBe(tokenIndex(directCjsWidget, 5, "Widget"));
-      const nativeDirect = native?.exports.find((entry) => entry.type === "local" && entry.exportedAs === "default");
-      if (nativeDirect?.type === "local") {
-        expect(direct.target.localName).toBe(nativeDirect.target.localName);
-        expect(direct.target.kind).toBe(nativeDirect.target.kind);
-        expect(direct.target.range).toEqual(nativeDirect.target.range);
-      }
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -1290,12 +1261,11 @@ describe("TypeScript and JavaScript navigation", () => {
     const fixture = await project({ [widgetName]: widget, [useName]: use });
     try {
       const file = fixture.file(widgetName);
-      const fallback = collectLocalsAndExportsFromSource(file, widget, supportForFile(file)!, [], {
-        nativeMode: "off",
-      });
-      for (const exports of [fixture.index.byFile.get(fileIdentityKey(file))?.exports, fallback.exports]) {
-        expect(exports?.some((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value")).toBe(false);
-      }
+      expect(
+        fixture.index.byFile
+          .get(fileIdentityKey(file))
+          ?.exports.some((entry) => entry.type === "local" && entry.mechanism === "cjs-module-value"),
+      ).toBe(false);
       // Node binds the last assignment; codegraph must not name the first class.
       const result = await goToDefinition(fixture.index, {
         file: fixture.file(useName),

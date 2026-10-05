@@ -13,7 +13,6 @@ export type {
   NativeQueryExecution,
   NativeQueryResults,
   NativeQueryScope,
-  NativeRuntimeMode,
   NativeSingleQueryExecution,
   NativeSyntaxTree,
   NativeSyntaxTreeExecution,
@@ -22,6 +21,7 @@ export type {
 
 export {
   __resetNativeTreeSitterBindingForTests,
+  __setNativeTreeSitterBindingForTests,
   assertNativeRequiredAvailable,
   getNativeTreeSitterLoadError,
   getNativeBindingOrigin,
@@ -31,7 +31,6 @@ export {
   isNativeBindingLoadedForLanguage,
   isNativeRequiredUnavailableError,
   isNativeTreeSitterAvailable,
-  isNativeTreeSitterDisabledByEnv,
 } from "./runtime.js";
 
 export {
@@ -55,4 +54,4 @@ export {
   runNativeLanguageQueries,
 } from "./execution.js";
 
-export { getUnifiedQueryExecution, supportsReducedModeRegexRecovery } from "./js-bridge.js";
+export { getUnifiedQueryExecution } from "./js-bridge.js";

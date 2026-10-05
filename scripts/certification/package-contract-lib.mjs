@@ -292,14 +292,6 @@ export function selectReleaseCandidatePackages(manifest, target) {
   return { root, core, native, nativeTarget };
 }
 
-export function selectReducedReleaseCandidatePackage(manifest) {
-  const root = manifest.files.find((entry) => entry.package === ROOT_PACKAGE_NAME);
-  const core = manifest.files.find((entry) => entry.package === CORE_PACKAGE_NAME);
-  if (!root) fail("manifest-incomplete", `Release candidate manifest has no ${ROOT_PACKAGE_NAME} tarball.`);
-  if (!core) fail("manifest-incomplete", `Release candidate manifest has no ${CORE_PACKAGE_NAME} tarball.`);
-  return { root, core };
-}
-
 export function releaseCandidatePublicationOrder(manifest) {
   const targets = manifest.files
     .filter((entry) => entry.target !== undefined)
@@ -412,17 +404,14 @@ export function validatePackageSmokeReport(value) {
     fail("report-invalid", `Unsupported package smoke report schemaVersion ${String(report.schemaVersion)}.`);
   }
   const mode = requireString(report.mode, "mode", "report-invalid");
-  if (!["runtime", "structural", "reduced"].includes(mode)) {
+  if (mode !== "runtime" && mode !== "structural") {
     fail("report-invalid", `Unsupported package smoke mode ${mode}.`, { mode });
   }
   const target =
     report.target === null || report.target === undefined
       ? null
       : requireString(report.target, "target", "report-invalid");
-  if (mode === "reduced" && target !== null) {
-    fail("report-invalid", "Reduced package smoke reports must not declare a target.");
-  }
-  if (mode !== "reduced" && target === null) {
+  if (target === null) {
     fail("report-invalid", `${mode} package smoke reports must declare a target.`);
   }
   const status = requireString(report.status, "status", "report-invalid");
@@ -463,21 +452,20 @@ export async function readPackageSmokeReports(reportDirectory) {
   return reports;
 }
 
-export function validatePackageSmokeReportSet({ manifest, manifestSha256, reports, requireReduced = false }) {
+export function validatePackageSmokeReportSet({ manifest, manifestSha256, reports }) {
   const expectedRows = manifest.files
     .filter((entry) => entry.target !== undefined)
     .map((entry) => {
       const metadata = getNativeTargetMetadata(entry.target);
       return { target: entry.target, mode: metadata.certificationClass };
     });
-  if (requireReduced) expectedRows.push({ target: null, mode: "reduced" });
 
   const actualRows = new Map();
   for (const reportEntry of reports) {
     const report = reportEntry.report ?? reportEntry;
-    const rowKey = `${report.target ?? "reduced"}\0${report.mode}`;
+    const rowKey = `${report.target}\0${report.mode}`;
     if (actualRows.has(rowKey)) {
-      fail("report-incomplete", `Duplicate package smoke report for ${report.target ?? "reduced"}/${report.mode}.`);
+      fail("report-incomplete", `Duplicate package smoke report for ${report.target}/${report.mode}.`);
     }
     if (
       report.manifestSha256 !== manifestSha256 ||
@@ -496,7 +484,7 @@ export function validatePackageSmokeReportSet({ manifest, manifestSha256, report
   const missingRows = [];
   const failedRows = [];
   for (const expected of expectedRows) {
-    const rowKey = `${expected.target ?? "reduced"}\0${expected.mode}`;
+    const rowKey = `${expected.target}\0${expected.mode}`;
     const report = actualRows.get(rowKey);
     if (!report) {
       missingRows.push(expected);
@@ -504,9 +492,9 @@ export function validatePackageSmokeReportSet({ manifest, manifestSha256, report
     }
     if (report.status !== "pass") failedRows.push({ target: expected.target, mode: expected.mode });
   }
-  const expectedKeys = new Set(expectedRows.map((entry) => `${entry.target ?? "reduced"}\0${entry.mode}`));
+  const expectedKeys = new Set(expectedRows.map((entry) => `${entry.target}\0${entry.mode}`));
   const unexpectedRows = [...actualRows.values()]
-    .filter((report) => !expectedKeys.has(`${report.target ?? "reduced"}\0${report.mode}`))
+    .filter((report) => !expectedKeys.has(`${report.target}\0${report.mode}`))
     .map((report) => ({ target: report.target, mode: report.mode }));
   if (missingRows.length || failedRows.length || unexpectedRows.length) {
     fail("report-incomplete", "Required package smoke report rows are incomplete.", {

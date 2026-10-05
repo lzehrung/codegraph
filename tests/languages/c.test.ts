@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { C_SUPPORT, CPP_SUPPORT, KOTLIN_SUPPORT, type LanguageSupport } from "../../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
 import {
-  buildGraphDelta,
   buildProjectIndex,
   buildProjectIndexIncremental,
   buildScopeIndexFromSource,
@@ -55,10 +54,6 @@ function collectCFamilyNames(file: string, source: string, support: LanguageSupp
     exports: module.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : [])),
     locals: module.locals.map((entry) => entry.localName),
   };
-}
-function moduleFromNativeQueriesWithoutTree(file: string, source: string, support: LanguageSupport) {
-  const nativeQueries = getNativeQueryExecution(source, support).results;
-  return collectLocalsAndExportsFromSource(file, source, support, [], { nativeQueries, nativeMode: "off" });
 }
 
 const definition: LanguageTestDefinition = {
@@ -297,18 +292,12 @@ describe("C quoted include resolution and same-file references", () => {
     }
   });
 
-  it.each([
-    ["c", "off"],
-    ["cpp", "off"],
-    ["c", "default"],
-    ["cpp", "default"],
-  ] as const)("preserves both %s include forms in %s mode across a disk-cache rebuild", async (language, mode) => {
-    const root = await mkdtemp(path.join(os.tmpdir(), `cg-${language}-${mode}-include-cache-`));
+  it.each(["c", "cpp"] as const)("preserves both %s include forms across a disk-cache rebuild", async (language) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), `cg-${language}-include-cache-`));
     const file = path.join(root, "src", `main.${language}`);
     const header = path.join(root, "src", "x.h");
     const lines = ["#include <x.h>", '#include "x.h"', "int main(void) { return x(); }", ""];
-    const nativeOptions = mode === "off" ? { native: "off" as const } : {};
-    const angleRaw = mode === "off" ? "x.h" : "<x.h>";
+    const angleRaw = "<x.h>";
     const includeEdges = (index: Awaited<ReturnType<typeof buildProjectIndex>>) =>
       index.graph.edges
         .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file))
@@ -316,20 +305,10 @@ describe("C quoted include resolution and same-file references", () => {
     try {
       await mkdir(path.dirname(file), { recursive: true });
       await writeFile(file, lines.join("\n"), "utf8");
-      const initial = await buildProjectIndexIncremental(root, { cache: "disk", ...nativeOptions });
+      const initial = await buildProjectIndexIncremental(root, { cache: "disk" });
       await writeFile(header, "int x(void);\n", "utf8");
-      if (mode === "off") {
-        const delta = await buildGraphDelta(root, { cache: "disk", native: "off", files: [file] });
-        expect(delta.added).toEqual([
-          expect.objectContaining({ includeForm: "literal", to: { type: "file", path: "src/x.h" } }),
-        ]);
-        expect(delta.removed).toEqual([
-          expect.objectContaining({ includeForm: "literal", to: { type: "external", name: "x.h" } }),
-        ]);
-      }
-      const warm = await buildProjectIndexIncremental(root, { cache: "disk", ...nativeOptions });
-      const cold = await buildProjectIndex(root, { cache: "off", ...nativeOptions });
-
+      const warm = await buildProjectIndexIncremental(root, { cache: "disk" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
       expect({ initial: includeEdges(initial), warm: includeEdges(warm) }).toEqual({
         initial: [
           { raw: angleRaw, includeForm: "angle", to: { type: "external", name: angleRaw } },
@@ -347,33 +326,28 @@ describe("C quoted include resolution and same-file references", () => {
           await goToDefinition(cold, { file, line, column }),
         );
       }
-      if (mode === "default") {
-        const column = lines[2]!.indexOf("x()") + 1;
-        expect(await goToDefinition(warm, { file, line: 3, column })).toMatchObject({
-          status: "ok",
-          definition: { file: normalizePath(header) },
-        });
-      }
+      const column = lines[2]!.indexOf("x()") + 1;
+      expect(await goToDefinition(warm, { file, line: 3, column })).toMatchObject({
+        status: "ok",
+        definition: { file: normalizePath(header) },
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it.each(["off", "default"] as const)(
-    "keeps both include forms in the collected file graph in %s mode",
-    async (mode) => {
-      const root = await mkdtemp(path.join(os.tmpdir(), `cg-c-${mode}-include-graph-`));
-      const file = normalizePath(path.join(root, "src", "main.c"));
-      try {
-        await mkdir(path.dirname(file), { recursive: true });
-        await writeFile(file, '#include <x.h>\n#include "x.h"\nint main(void) { return 0; }\n', "utf8");
-        const graph = await collectGraph(root, [file], mode === "off" ? { native: "off" } : {});
-        expect(graph.edges.map((edge) => edge.includeForm).sort()).toEqual(["angle", "literal"]);
-      } finally {
-        await rm(root, { recursive: true, force: true });
-      }
-    },
-  );
+  it("keeps both include forms in the collected file graph", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-c-include-graph-"));
+    const file = normalizePath(path.join(root, "src", "main.c"));
+    try {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, '#include <x.h>\n#include "x.h"\nint main(void) { return 0; }\n', "utf8");
+      const graph = await collectGraph(root, [file]);
+      expect(graph.edges.map((edge) => edge.includeForm).sort()).toEqual(["angle", "literal"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it("resolves an angle include through resolution hints and keeps it external without them", async () => {
     const hintRoot = await mkdtemp(path.join(os.tmpdir(), "cg-c-angle-hints-"));
@@ -838,7 +812,7 @@ describe("export de-duplication for shadowed Kotlin vals", () => {
   });
 });
 
-describe("C native queries without a projected tree", () => {
+describe("C native query exports", () => {
   it("keeps typedef and function-pointer typedef names from declarator captures", () => {
     const source = [
       "typedef int **PP;",
@@ -850,15 +824,13 @@ describe("C native queries without a projected tree", () => {
       "typedef int 名;",
       "typedef int (* /* note */ 回调)(int);",
     ].join("\n");
-    const withTree = moduleFromSource("types.h", source, C_SUPPORT);
-    const noTree = moduleFromNativeQueriesWithoutTree("types.h", source, C_SUPPORT);
+    const module = moduleFromSource("types.h", source, C_SUPPORT);
     const typeNames = (mod: ReturnType<typeof moduleFromSource>) =>
       mod.locals
         .filter((local) => local.kind === "type")
         .map((local) => `${local.localName}:${local.range.start.index}:${local.range.end.index}`)
         .sort();
-    expect(typeNames(noTree)).toEqual(typeNames(withTree));
-    expect(typeNames(noTree)).toEqual([
+    expect(typeNames(module)).toEqual([
       expect.stringMatching(/^Comparator:/),
       expect.stringMatching(/^Factory:/),
       expect.stringMatching(/^Handlers:/),
@@ -868,13 +840,10 @@ describe("C native queries without a projected tree", () => {
       expect.stringMatching(/^名:/),
       expect.stringMatching(/^回调:/),
     ]);
-    expect(noTree.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : [])).sort()).toEqual(
-      withTree.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : [])).sort(),
-    );
     expect(
       source.slice(
-        noTree.locals.find((local) => local.localName === "Comparator")!.range.start.index!,
-        noTree.locals.find((local) => local.localName === "Comparator")!.range.end.index!,
+        module.locals.find((local) => local.localName === "Comparator")!.range.start.index!,
+        module.locals.find((local) => local.localName === "Comparator")!.range.end.index!,
       ),
     ).toBe("Comparator");
   });
@@ -892,32 +861,28 @@ describe("C native queries without a projected tree", () => {
       "#endif",
       "",
     ].join("\n");
-    const withTree = moduleFromSource("probe.c", source, C_SUPPORT)
+    const exports = moduleFromSource("probe.c", source, C_SUPPORT)
       .exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []))
       .sort();
-    const noTree = moduleFromNativeQueriesWithoutTree("probe.c", source, C_SUPPORT)
-      .exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []))
-      .sort();
-    expect(noTree).toEqual(withTree);
-    expect(noTree).toEqual(["DEMO_H", "f", "ready", "static_count", "top"]);
-    expect(noTree).not.toContain("hidden");
-    expect(noTree).not.toContain("Inner");
-    expect(noTree).not.toContain("once");
-    expect(noTree).not.toContain("helper");
-    expect(noTree).not.toContain("helper_fn");
+    expect(exports).toEqual(["DEMO_H", "f", "ready", "static_count", "top"]);
+    expect(exports).not.toContain("hidden");
+    expect(exports).not.toContain("Inner");
+    expect(exports).not.toContain("once");
+    expect(exports).not.toContain("helper");
+    expect(exports).not.toContain("helper_fn");
   });
 
-  it("keeps C++ namespace members when the tree is absent", () => {
+  it("keeps qualified C++ namespace members from native captures", () => {
     const source =
       "namespace N { int ns_val; }\nint top;\nint f() { int hidden; return hidden; }\nauto run = []() { struct Local {}; int lambda_hidden; return 0; };\n";
-    const noTree = moduleFromNativeQueriesWithoutTree("probe.hpp", source, CPP_SUPPORT)
+    const exports = moduleFromSource("probe.hpp", source, CPP_SUPPORT)
       .exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : []))
       .sort();
-    expect(noTree).toEqual(expect.arrayContaining(["N", "ns_val", "top", "f"]));
-    expect(noTree).not.toContain("hidden");
-    expect(noTree).not.toContain("Local");
-    expect(noTree).not.toContain("lambda_hidden");
-    expect(noTree).toContain("run");
+    expect(exports).toEqual(expect.arrayContaining(["N", "N::ns_val", "top", "f"]));
+    expect(exports).not.toContain("hidden");
+    expect(exports).not.toContain("Local");
+    expect(exports).not.toContain("lambda_hidden");
+    expect(exports).toContain("run");
   });
 });
 

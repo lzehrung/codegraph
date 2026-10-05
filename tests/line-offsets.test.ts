@@ -61,7 +61,7 @@ describe("line start offsets", () => {
     expect(sup).toBeDefined();
     if (!sup) return;
 
-    const bindings = await collectImportsForFile(file, root, { source, sup, native: "off" });
+    const bindings = await collectImportsForFile(file, root, { source, sup });
     const alpha = namedBinding(bindings, "alpha");
     const beta = namedBinding(bindings, "beta");
     const betaRange = beta?.localRange;

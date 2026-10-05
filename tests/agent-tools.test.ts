@@ -132,14 +132,6 @@ describe("Agent Tools", () => {
     expectExactTypescriptEdges(result.graph!.edges);
   });
 
-  it("tool_getGraph accepts explicit native mode overrides", async () => {
-    const result = await tool_getGraph(samplePath, { native: "off" });
-    expect(result.status).toBe("ok");
-    expect(result.graph).toBeDefined();
-    expect(result.graph!.nodes.length).toBeGreaterThan(0);
-    expectExactTypescriptEdges(result.graph!.edges);
-  });
-
   it("tool_getDependencies returns bounded normalized dependencies", async () => {
     const result = await tool_getDependencies(samplePath, "main.ts", { depth: 1, limit: 5 });
     expect(result.status).toBe("ok");

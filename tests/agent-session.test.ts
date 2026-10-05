@@ -185,7 +185,7 @@ describe("agent session", () => {
 
     await createAgentSession({
       root,
-      buildOptions: { cache: "off", native: "off", onProgress: (update) => updates.push(update) },
+      buildOptions: { cache: "off", onProgress: (update) => updates.push(update) },
     }).loadProject({ symbolGraph: "skip" });
 
     expect(updates[0]).toMatchObject({
@@ -206,7 +206,7 @@ describe("agent session", () => {
 
     await createAgentSession({
       root,
-      buildOptions: { cache: "off", native: "off", onProgress: (update) => updates.push(update) },
+      buildOptions: { cache: "off", onProgress: (update) => updates.push(update) },
     }).loadProject({ symbolGraph: "skip" });
 
     const pathChecks = updates.filter((update) => update.activity === "Checking source file paths");
@@ -224,7 +224,7 @@ describe("agent session", () => {
 
     await createAgentSession({
       root,
-      buildOptions: { cache: "off", native: "off" },
+      buildOptions: { cache: "off" },
     }).loadProject({ symbolGraph: "skip" });
 
     const progressStartedAt = buildSpy.mock.calls[0]?.[1]?.progressStartedAt;
@@ -905,53 +905,6 @@ describe("agent session", () => {
     expect(createProjectSnapshotIdentity("same-files", { graph: { dynamicImportHeuristics: true } })).not.toBe(
       createProjectSnapshotIdentity("same-files", { graph: { dynamicImportHeuristics: false } }),
     );
-    expect(createProjectSnapshotIdentity("same-files", { native: "on" })).not.toBe(
-      createProjectSnapshotIdentity("same-files", { native: "off" }),
-    );
-    const previousDisableNative = process.env.CODEGRAPH_DISABLE_NATIVE;
-    let enabledRuntimeIdentity = "";
-    let disabledRuntimeIdentity = "";
-    try {
-      delete process.env.CODEGRAPH_DISABLE_NATIVE;
-      enabledRuntimeIdentity = createProjectSnapshotIdentity("same-files", { native: "auto" });
-      process.env.CODEGRAPH_DISABLE_NATIVE = "1";
-      disabledRuntimeIdentity = createProjectSnapshotIdentity("same-files", { native: "auto" });
-    } finally {
-      if (previousDisableNative === undefined) {
-        delete process.env.CODEGRAPH_DISABLE_NATIVE;
-      } else {
-        process.env.CODEGRAPH_DISABLE_NATIVE = previousDisableNative;
-      }
-    }
-    expect(disabledRuntimeIdentity).not.toBe(enabledRuntimeIdentity);
-  });
-
-  it("rebuilds the detailed sidecar when the effective native runtime changes", async () => {
-    const root = await mkGitRepo();
-    const previousDisableNative = process.env.CODEGRAPH_DISABLE_NATIVE;
-    let initialIdentity = "";
-    let transitionedIdentity = "";
-    let detailedBuildCount = 0;
-    try {
-      delete process.env.CODEGRAPH_DISABLE_NATIVE;
-      const initial = await createAgentSession({ root }).loadProject();
-      initialIdentity = initial.index.projectSnapshotIdentity ?? "";
-      const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
-
-      process.env.CODEGRAPH_DISABLE_NATIVE = "1";
-      const transitioned = await createAgentSession({ root }).loadProject();
-      transitionedIdentity = transitioned.index.projectSnapshotIdentity ?? "";
-      detailedBuildCount = symbolGraphSpy.mock.calls.length;
-    } finally {
-      if (previousDisableNative === undefined) {
-        delete process.env.CODEGRAPH_DISABLE_NATIVE;
-      } else {
-        process.env.CODEGRAPH_DISABLE_NATIVE = previousDisableNative;
-      }
-    }
-
-    expect(transitionedIdentity).not.toBe(initialIdentity);
-    expect(detailedBuildCount).toBe(1);
   });
 
   it("builds agent snapshots through incremental disk cache by default", async () => {
@@ -1171,7 +1124,7 @@ describe("agent session", () => {
     const { root, main, firstHeader, secondHeader } = await createConfigurationFreshnessFixture();
     const session = createAgentSession({
       root,
-      buildOptions: { cache: "off", native: "on" },
+      buildOptions: { cache: "off" },
       freshness: { policy: "check" },
     });
     const snapshot = await session.loadProject({ symbolGraph: "skip" });
@@ -1191,7 +1144,7 @@ describe("agent session", () => {
     const retained = await session.loadProject({ symbolGraph: "skip" });
     const control = await createAgentSession({
       root,
-      buildOptions: { cache: "off", native: "on" },
+      buildOptions: { cache: "off" },
     }).loadProject({ symbolGraph: "skip" });
 
     expect(freshness).toMatchObject({
@@ -1220,7 +1173,7 @@ describe("agent session", () => {
     const { root, main, firstHeader, secondHeader } = await createConfigurationFreshnessFixture();
     const session = createAgentSession({
       root,
-      buildOptions: { cache: "off", native: "on" },
+      buildOptions: { cache: "off" },
       freshness: { policy: "auto" },
     });
     const snapshot = await session.loadProject({ symbolGraph: "skip" });
@@ -1262,7 +1215,7 @@ describe("agent session", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const session = createAgentSession({
       root,
-      buildOptions: { cache: "off", native: "off" },
+      buildOptions: { cache: "off" },
       freshness: { policy: "auto" },
     });
     try {
@@ -1359,7 +1312,7 @@ describe("agent session", () => {
       root,
       useConfig: false,
       discovery: { ignoreGlobs: ["tsconfig.json"] },
-      buildOptions: { cache: "off", native: "off" },
+      buildOptions: { cache: "off" },
       freshness: { policy: "auto" },
     });
     const targets = (snapshot: AgentProjectSnapshot) =>
@@ -1386,7 +1339,7 @@ describe("agent session", () => {
     const { root, main, firstHeader } = await createConfigurationFreshnessFixture();
     const session = createAgentSession({
       root,
-      buildOptions: { cache: "off", native: "on" },
+      buildOptions: { cache: "off" },
       freshness: { policy: "manual" },
     });
     const snapshot = await session.loadProject({ symbolGraph: "skip" });

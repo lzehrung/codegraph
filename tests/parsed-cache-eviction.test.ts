@@ -18,7 +18,6 @@ describe("parsed AST cache eviction", () => {
       const index = await buildProjectIndex(root, {
         cache: "off",
         keepParsed: true,
-        native: "on",
         parsedCacheMaxEntries: 2,
       });
 

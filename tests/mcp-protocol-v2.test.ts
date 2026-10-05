@@ -78,7 +78,7 @@ async function assertModernConversation(client: Client): Promise<void> {
 describe("MCP protocol v2 interoperability", () => {
   it("negotiates the modern era over Streamable HTTP", async () => {
     const root = await createFixture("codegraph-mcp-v2-http-");
-    const counted = countingSession(createAgentSession({ root, buildOptions: { native: "off", cache: "off" } }));
+    const counted = countingSession(createAgentSession({ root, buildOptions: { cache: "off" } }));
     let server: CodegraphMcpHttpServer | undefined;
     const client = new Client(
       { name: "codegraph-mcp-protocol-v2-http-test", version: "1.0.0" },
@@ -149,18 +149,7 @@ describe("MCP protocol v2 interoperability", () => {
     );
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [
-        path.resolve("dist", "cli.js"),
-        "mcp",
-        "serve",
-        "--root",
-        root,
-        "--stdio",
-        "--native",
-        "off",
-        "--cache",
-        "off",
-      ],
+      args: [path.resolve("dist", "cli.js"), "mcp", "serve", "--root", root, "--stdio", "--cache", "off"],
       cwd: process.cwd(),
       stderr: "pipe",
     });

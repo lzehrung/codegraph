@@ -55,12 +55,11 @@ export type WorkerPoolSetupResult = {
 };
 
 export function shouldEnableNativeWorkers(opts: BuildOptions | undefined, fileCount?: number): boolean {
-  if (opts?.native === "off") return false;
   // No files to parse means no work to distribute. Piscina starts minThreads eagerly, so an
   // explicit request would otherwise spawn a full pool for a warm no-change run and tear it
   // down again without ever submitting a task.
   if (fileCount === 0) return false;
-  if (!isNativeTreeSitterAvailable(opts?.native)) return false;
+  if (!isNativeTreeSitterAvailable()) return false;
   if (opts?.useNativeWorkers === false) return false;
   if (opts?.useNativeWorkers === true) return true;
   return (fileCount ?? 0) >= NATIVE_WORKER_AUTO_FILE_THRESHOLD;
@@ -224,11 +223,7 @@ function recordPreparedNativeExecutionOutcome(report: BuildReport | undefined, p
   });
 }
 
-function createOversizedNativeSourceFallback(
-  file: string,
-  support: LanguageSupport,
-  source: string,
-): PreparedFileContext {
+function createOversizedNativeSourceSkip(file: string, support: LanguageSupport, source: string): PreparedFileContext {
   const bytes = Buffer.byteLength(source, "utf8");
   return {
     file,
@@ -254,8 +249,12 @@ export async function prepareFileContextForBuild(
   const source =
     trustedSource ??
     (confinedRoot ? await readConfinedUtf8File(confinedRoot, lexicalRoot ?? confinedRoot, file) : undefined);
-  if (source && Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
-    const prepared = createOversizedNativeSourceFallback(file, support, source);
+  if (
+    source &&
+    !isGraphOnlyLanguage(support.id) &&
+    Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES
+  ) {
+    const prepared = createOversizedNativeSourceSkip(file, support, source);
     recordPreparedNativeExecutionOutcome(report, prepared);
     return prepared;
   }
@@ -276,10 +275,10 @@ export async function prepareFileContextForBuild(
           workerSetup.report.errors.push({ file, message: stringifyUnknown(error) });
         }
       }
-      prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions, source, support);
+      prepared = await prepareFileForIndexing(file, opts?.languageExtensions, source, support);
     }
   } else {
-    prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions, source, support);
+    prepared = await prepareFileForIndexing(file, opts?.languageExtensions, source, support);
   }
   recordPreparedNativeExecutionOutcome(report, prepared);
   return prepared;
@@ -338,13 +337,7 @@ export async function prepareFileContextsForBuildBatch(
             workerSetup.report.errors.push({ file: entry.file, message: stringifyUnknown(error) });
           }
         }
-        const prepared = await prepareFileForIndexing(
-          entry.file,
-          opts?.native,
-          opts?.languageExtensions,
-          undefined,
-          entry.support,
-        );
+        const prepared = await prepareFileForIndexing(entry.file, opts?.languageExtensions, undefined, entry.support);
         recordPreparedNativeExecutionOutcome(report, prepared);
         results[entry.index] = prepared;
         continue;

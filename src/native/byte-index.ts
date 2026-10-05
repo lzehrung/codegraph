@@ -1,3 +1,5 @@
+import { collectLineStartOffsets, positionAtOffset } from "../util/lines.js";
+
 /**
  * Tree-sitter native captures expose UTF-8 byte offsets (Rust `start_byte()`/`end_byte()` and a
  * byte-relative `Point.column`), while codegraph's `Range` type and JS `String.slice` operate on
@@ -10,12 +12,23 @@ export type ByteToStringIndexMap = {
   readonly sourceLength: number;
   readonly byteToStringIndex: Uint32Array;
   readonly lineStartBytes: readonly number[];
+  /**
+   * UTF-16 line starts that also end lines at a lone `\r`, present only when the source has one.
+   * Tree-sitter counts rows at `\n` only, so those files take positions from the string index.
+   */
+  readonly loneCrLineStarts?: readonly number[];
 };
 
 const EMPTY_BYTE_TO_STRING_INDEX = new Uint32Array(0);
 const EMPTY_LINE_START_BYTES: readonly number[] = [];
 
 export function buildByteToStringIndexMap(source: string): ByteToStringIndexMap {
+  const map = buildByteMap(source);
+  if (!/\r(?!\n)/.test(source)) return map;
+  return { ...map, loneCrLineStarts: collectLineStartOffsets(source) };
+}
+
+function buildByteMap(source: string): ByteToStringIndexMap {
   const byteLength = Buffer.byteLength(source, "utf8");
   if (byteLength === source.length) {
     // Pure ASCII: byte offsets and UTF-16 indexes coincide, so skip building the table.
@@ -68,8 +81,12 @@ export function stringIndexForByte(map: ByteToStringIndexMap, byteIndex: number)
  */
 export function stringPositionForBytePoint(
   map: ByteToStringIndexMap,
-  point: { row: number; column: number },
+  point: { row: number; column: number; index: number },
 ): { row: number; column: number } {
+  if (map.loneCrLineStarts) {
+    const position = positionAtOffset(map.loneCrLineStarts, stringIndexForByte(map, point.index));
+    return { row: position.line - 1, column: position.column - 1 };
+  }
   if (map.isAscii) return { row: point.row, column: point.column };
   const lineStartByte = map.lineStartBytes[point.row] ?? 0;
   const lineStartIndex = stringIndexForByte(map, lineStartByte);

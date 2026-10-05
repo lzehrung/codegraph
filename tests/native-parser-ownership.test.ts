@@ -198,9 +198,7 @@ nativeDescribe("native parser ownership", () => {
 
     for (const testCase of cases) {
       const files = testCase.files.map(normalizeFile);
-      const index = await buildProjectIndexFromFiles(testCase.root, files, {
-        native: "on",
-      });
+      const index = await buildProjectIndexFromFiles(testCase.root, files, {});
 
       if (testCase.symbolFile && testCase.symbolNames) {
         const seen = new Set(
@@ -234,9 +232,7 @@ nativeDescribe("native parser ownership", () => {
     const root = path.join(sampleRoot, "typescript");
     const files = ["main.ts", "utils.ts", "helpers.ts"].map((file) => path.join(root, file));
 
-    const index = await buildProjectIndexFromFiles(root, files, {
-      native: "on",
-    });
+    const index = await buildProjectIndexFromFiles(root, files, {});
     const detailed = await buildSymbolGraphDetailed(index);
 
     expect(detailed.nodes.size).toBeGreaterThan(0);

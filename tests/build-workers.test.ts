@@ -24,7 +24,7 @@ afterAll(async () => {
 });
 
 describe("native build worker batches", () => {
-  it("counts and records an omitted worker result before falling back", async () => {
+  it("counts an omitted worker result before retrying native parsing", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-worker-short-batch-"));
     tempDirs.push(root);
     const file = path.join(root, "sample.ts");
@@ -50,12 +50,7 @@ describe("native build worker batches", () => {
     };
     const report: BuildReport = { timings: {} };
 
-    const prepared = await prepareFileContextsForBuildBatch(
-      [{ file, support }],
-      { native: "off" },
-      workerSetup,
-      report,
-    );
+    const prepared = await prepareFileContextsForBuildBatch([{ file, support }], {}, workerSetup, report);
 
     expect(run).toHaveBeenCalledOnce();
     expect(prepared).toHaveLength(1);
@@ -67,10 +62,10 @@ describe("native build worker batches", () => {
         message: "Native worker returned no result for batch task.",
       },
     ]);
-    expect(report.backend?.native.filesFellBack).toBe(1);
+    expect(report.backend?.native.filesUsed).toBe(1);
   });
 
-  it("falls back when a worker returns null", async () => {
+  it("retries native parsing when a worker returns null", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-worker-null-result-"));
     tempDirs.push(root);
     const file = path.join(root, "sample.ts");
@@ -96,12 +91,7 @@ describe("native build worker batches", () => {
     };
     const report: BuildReport = { timings: {} };
 
-    const prepared = await prepareFileContextsForBuildBatch(
-      [{ file, support }],
-      { native: "off" },
-      workerSetup,
-      report,
-    );
+    const prepared = await prepareFileContextsForBuildBatch([{ file, support }], {}, workerSetup, report);
 
     expect(run).toHaveBeenCalledOnce();
     expect(prepared).toHaveLength(1);
@@ -112,7 +102,7 @@ describe("native build worker batches", () => {
         message: "Native worker returned no result for batch task.",
       },
     ]);
-    expect(report.backend?.native.filesFellBack).toBe(1);
+    expect(report.backend?.native.filesUsed).toBe(1);
   });
 
   it("submits each bounded slice as one batch request", async () => {
@@ -148,7 +138,7 @@ describe("native build worker batches", () => {
 
     const prepared = await prepareFileContextsForBuildBatch(
       files.map((file) => ({ file, support })),
-      { native: "off" },
+      {},
       workerSetup,
       undefined,
     );
@@ -186,7 +176,7 @@ describe("native build worker batches", () => {
       const prepared = await prepareFileContextForBuild(
         lexicalFile,
         support,
-        { native: "off" },
+        {},
         workerSetup,
         undefined,
         await fs.realpath(realRoot),
@@ -208,7 +198,7 @@ describe("native build worker batches", () => {
     await fs.writeFile(file, source, "utf8");
     const expectedDiagnostic = `source exceeds native byte limit (${Buffer.byteLength(source, "utf8")} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`;
 
-    const mainPrepared = await prepareFileForIndexing(file, "on");
+    const mainPrepared = await prepareFileForIndexing(file);
     const mainAttempt = attemptParsePreparedFileContext(mainPrepared);
     const workerExtractor = createNativeExtractor({
       loadBinding: () => ({ binding: null }),

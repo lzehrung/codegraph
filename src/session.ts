@@ -94,18 +94,13 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
     useBloomFilters: options.useBloomFilters,
     graph: options.graph
       ? {
-          fast: options.graph.fast,
           resolveNodeModules: options.graph.resolveNodeModules,
           dynamicImportHeuristics: options.graph.dynamicImportHeuristics,
-          native: options.graph.native,
           logLevel: options.graph.logLevel,
           resolutionHints: normalizeStringArray(options.graph.resolutionHints),
-          fastRegexDisabledLanguages: normalizeStringArray(options.graph.fastRegexDisabledLanguages),
         }
       : undefined,
-    native: options.native,
     cacheVerify: options.cacheVerify,
-    incrementalStrict: options.incrementalStrict,
     parsedCacheMaxEntries: options.parsedCacheMaxEntries,
     logLevel: options.logLevel,
     keepParsed: options.keepParsed,

@@ -1240,6 +1240,7 @@ describe("Go to Definition", () => {
       const result = await testGoToDefinition(index, consumerFile, 3, 37, serviceFile, 5);
       if (result.status === "ok") {
         expect(result.provenance).toEqual({
+          backend: "native",
           resolution: "php-qualified",
           confidence: "high",
         });

@@ -9,14 +9,11 @@ import {
   parsePhpImportStatement,
   parseRustImportStatements,
 } from "../src/languages/import-statement-parsers.js";
-import { extractJsTsSpecifiers, extractPythonSpecifiers } from "../src/util.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import { supportById } from "../src/languages.js";
 import { buildProjectIndex } from "../src/index.js";
-import { collectJsTextImports } from "../src/indexer/imports/js-text-imports.js";
 import { collectNativeCaptureImportBindings } from "../src/indexer/imports/native-captures.js";
 import { finalizeLanguageSpecificImports } from "../src/indexer/imports/language-specific.js";
-import { collectPythonImportsFromSource } from "../src/indexer/imports/python.js";
 import type { ImportBinding } from "../src/indexer/types.js";
 import type { NativeMatch } from "../src/native/tree-sitter-native.js";
 
@@ -171,35 +168,6 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
     // identifier-part-character but not a valid identifier-start-character.
     expect(parseCsharpUsingDirective("using \u203fname = Some.Namespace;")).toBeNull();
   });
-  it("Python fallback module-specifier extraction: import/from with Unicode module names", () => {
-    expect(extractPythonSpecifiers("import créer\n").map(({ spec }) => spec)).toEqual(["créer"]);
-    expect(extractPythonSpecifiers("from créer import x\n").map(({ spec }) => spec)).toContain("créer");
-    // PEP 3131 XID_Continue includes combining marks; a per-code-point \p{L}/\p{N} class
-    // stops before the trailing combining acute accent, silently dropping it from the
-    // captured module name.
-    expect(extractPythonSpecifiers("import café\u0301\n").map(({ spec }) => spec)).toEqual(["café\u0301"]);
-    // A dotted segment must itself start with an identifier character: matching the whole
-    // continuation class (letters/digits/dots) across the separator let a digit immediately
-    // follow a `.`, which Python's grammar never allows. The list item is not a dotted name,
-    // so no specifier is extracted from it.
-    expect(extractPythonSpecifiers("import pkg.2mod\n").map(({ spec }) => spec)).toEqual([]);
-  });
-
-  it("Python import bindings accept combining-mark continuations", async () => {
-    const bindings: ImportBinding[] = [];
-    await collectPythonImportsFromSource({
-      projectRoot: process.cwd(),
-      file: path.join(process.cwd(), "consumer.py"),
-      source: "from package import café as alias\nimport package.café as moduleAlias\n",
-      pushBinding: (binding) => bindings.push(binding),
-      getBindings: () => bindings,
-    });
-
-    expect(bindings).toEqual([
-      expect.objectContaining({ kind: "named", from: "package", imported: "café", local: "alias" }),
-      expect.objectContaining({ kind: "namespace", from: "package.café", localNS: "moduleAlias" }),
-    ]);
-  });
 
   it("JS CommonJS destructuring require(): Unicode property name binding", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cjs-unicode-destructure-"));
@@ -231,94 +199,6 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
-  });
-
-  it("JS text fallback preserves every Unicode identifier import form", async () => {
-    const bindings: ImportBinding[] = [];
-    const source = [
-      'import { \u2118 as namedAlias\u200c, type typeName\u200d as typeAlias } from "es";',
-      'import * as namespaceAlias\u200d from "namespace";',
-      'const defaultAlias\u200c = require("default");',
-      'const { \u2118: objectAlias\u200d, propertyName\u200c } = require("properties");',
-      'import equalsAlias\u200d = require("equals");',
-    ].join("\n");
-    await collectJsTextImports({
-      source,
-      languageId: "ts",
-      resolveFrom: async (from) => ({ external: from }),
-      pushBinding: (binding) => bindings.push(binding),
-    });
-
-    const cjsPatternStart = source.indexOf("const {");
-    expect(bindings).toEqual([
-      {
-        kind: "named",
-        local: "namedAlias\u200c",
-        imported: "\u2118",
-        explicitAlias: true,
-        from: "es",
-        importedRange: rangeForToken(source, "\u2118"),
-        localRange: rangeForToken(source, "namedAlias\u200c"),
-        resolved: { external: "es" },
-        typeOnly: false,
-      },
-      {
-        kind: "named",
-        local: "typeAlias",
-        imported: "typeName\u200d",
-        explicitAlias: true,
-        from: "es",
-        importedRange: rangeForToken(source, "typeName\u200d"),
-        localRange: rangeForToken(source, "typeAlias"),
-        resolved: { external: "es" },
-        typeOnly: true,
-      },
-      {
-        kind: "namespace",
-        localNS: "namespaceAlias\u200d",
-        from: "namespace",
-        localRange: rangeForToken(source, "namespaceAlias\u200d"),
-        resolved: { external: "namespace" },
-        typeOnly: false,
-      },
-      {
-        kind: "namespace",
-        localNS: "defaultAlias\u200c",
-        from: "default",
-        localRange: rangeForToken(source, "defaultAlias\u200c"),
-        resolved: { external: "default" },
-        mechanism: "cjs",
-      },
-      {
-        kind: "named",
-        local: "objectAlias\u200d",
-        imported: "\u2118",
-        explicitAlias: true,
-        from: "properties",
-        importedRange: rangeForToken(source, "\u2118", cjsPatternStart),
-        localRange: rangeForToken(source, "objectAlias\u200d"),
-        resolved: { external: "properties" },
-        mechanism: "cjs",
-      },
-      {
-        kind: "named",
-        local: "propertyName\u200c",
-        imported: "propertyName\u200c",
-        from: "properties",
-        importedRange: rangeForToken(source, "propertyName\u200c"),
-        localRange: rangeForToken(source, "propertyName\u200c"),
-        resolved: { external: "properties" },
-        mechanism: "cjs",
-      },
-      {
-        kind: "namespace",
-        localNS: "equalsAlias\u200d",
-        from: "equals",
-        localRange: rangeForToken(source, "equalsAlias\u200d"),
-        resolved: { external: "equals" },
-        mechanism: "cjs",
-      },
-    ]);
   });
 });
 
@@ -402,7 +282,7 @@ describe("Identifier equality rules", () => {
 });
 
 describe("Unicode import parser seams", () => {
-  it("keeps native and fallback object-pattern bindings after nested defaults and regex literals", async () => {
+  it("keeps native object-pattern bindings after nested defaults and regex literals", async () => {
     const bindings: ImportBinding[] = [];
     const source =
       "const { \u2118: localAlias\u200d, x = fallback(a, b, c), pattern = /[},(]/, y } = require('properties');";
@@ -474,20 +354,6 @@ describe("Unicode import parser seams", () => {
     ]);
     expect(source.slice(importedRange.start.index, importedRange.end.index)).toBe("\u2118");
     expect(source.slice(localRange.start.index, localRange.end.index)).toBe("localAlias\u200d");
-
-    const fallbackBindings: ImportBinding[] = [];
-    await collectJsTextImports({
-      source,
-      languageId: "ts",
-      resolveFrom,
-      pushBinding: (binding) => fallbackBindings.push(binding),
-    });
-    expect(fallbackBindings.map((binding) => (binding.kind === "named" ? binding.imported : binding.kind))).toEqual([
-      "\u2118",
-      "x",
-      "pattern",
-      "y",
-    ]);
   });
 
   it("normalizes a Unicode Go import alias from text", async () => {
@@ -515,31 +381,24 @@ describe("Unicode import parser seams", () => {
     ]);
   });
 
-  it("extracts Unicode import-equals bindings in the specifier fallback", () => {
-    expect(extractJsTsSpecifiers("import alias\u200d = require('package');\n")).toEqual([
-      { spec: "package", exportCondition: "require" },
-    ]);
-  });
-
   it("parses Unicode Python module names from native-query path captures", () => {
     const support = supportById("python")!;
-    // Native Python specifiers come from @from on the path-bearing node. Statement-text
-    // parsing remains reduced-mode recovery; `__future__` is the native-mode exception.
+    // Native Python specifiers come from @from on the path-bearing node.
     const specs = collectModuleSpecifiersFromSource(support, "import café\u0301\nfrom pkg import x\n", {
       compactNativeImports: {
         imports: [
           {
             patternIndex: 0,
             captures: [
-              { name: "stmt", text: "import café\u0301" },
-              { name: "from", text: "café\u0301" },
+              { name: "stmt", text: "import café\u0301", startIndex: 0 },
+              { name: "from", text: "café\u0301", startIndex: 7 },
             ],
           },
           {
             patternIndex: 0,
             captures: [
-              { name: "stmt", text: "from pkg import x" },
-              { name: "from", text: "pkg" },
+              { name: "stmt", text: "from pkg import x", startIndex: Buffer.byteLength("import café\u0301\n") },
+              { name: "from", text: "pkg", startIndex: Buffer.byteLength("import café\u0301\nfrom ") },
             ],
           },
         ],

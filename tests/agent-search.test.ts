@@ -26,7 +26,6 @@ const DEFAULT_ANALYSIS = {
   mode: "semantic" as const,
   backend: "unknown" as const,
   parserDegradedFiles: 0,
-  fallbackImportExtractionFiles: 0,
   nativeFilesUsed: 0,
   nativeFilesFellBack: 0,
   label: "semantic",
@@ -178,13 +177,13 @@ describe("agent search", () => {
 
     expect(response.results.some((result) => result.file === "docs/agent-search.md")).toBe(true);
     expect(response.analysis).toMatchObject({
-      mode: "reduced",
+      mode: "semantic",
       backend: "unknown",
       label: "path-only",
     });
     expect(response.results[0]?.provenance).toMatchObject({
       capability: "text",
-      analysisMode: "reduced",
+      analysisMode: "semantic",
       backend: "unknown",
     });
     expect(buildSpy).not.toHaveBeenCalled();

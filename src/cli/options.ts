@@ -12,7 +12,6 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--out",
   "--stderr-file",
   "--threads",
-  "--native",
   "--cache",
   "--cache-dir",
   "--changed-since",
@@ -121,14 +120,12 @@ const SHARED_BUILD_FLAGS = [
   "--no-progress",
   "--workers",
   "--no-gitignore",
-  "--fast-graph",
   "--resolve-node-modules",
   "--dynamic-import-heuristics",
 ];
 const SHARED_BUILD_OPTIONS = [
   "--root",
   "--threads",
-  "--native",
   "--cache",
   "--cache-dir",
   "--include-glob",
@@ -365,7 +362,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "graph-delta",
     commandSchema(
-      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--incremental-strict"],
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS],
       [...SHARED_BUILD_OPTIONS, "--changed-since", "--git-base", "--git-head", "--output"],
       {
         kind: "max",
@@ -523,7 +520,6 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         "--host",
         "--ignore-glob",
         "--include-glob",
-        "--native",
         "--port",
         "--resolution-hint",
         "--root",
@@ -592,13 +588,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "review",
     commandSchema(
-      [
-        ...SHARED_BUILD_FLAGS,
-        ...JSON_OUTPUT_FLAGS,
-        ...REPORT_FLAGS,
-        "--include-symbol-details",
-        "--incremental-strict",
-      ],
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, ...REPORT_FLAGS, "--include-symbol-details"],
       [
         ...SHARED_BUILD_OPTIONS,
         ...REPORT_OPTIONS,

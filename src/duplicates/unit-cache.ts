@@ -6,7 +6,6 @@ import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
 import {
   getNativeTreeSitterSupportedLanguageIds,
   isNativeDuplicateTokenizationAvailable,
-  isNativeTreeSitterDisabledByEnv,
 } from "../native/tree-sitter-native.js";
 import { SqliteDatabase, isNodeSqliteUsable, nodeSqliteUnavailableError } from "../sqlite-driver.js";
 import { logWithLevel } from "../logging.js";
@@ -140,27 +139,17 @@ export function duplicateUnitCacheVariant(
   projectRoot?: string,
 ): string {
   const normalizedProjectRoot = normalizePath(projectRoot ?? index.projectRoot ?? "");
-  const nativeMode = normalizedDuplicateUnitCacheNativeMode(index.nativeMode);
   return JSON.stringify({
     version: DUPLICATE_UNIT_CACHE_VERSION,
     tokenizerRevision: DUPLICATE_TOKENIZER_REVISION,
     projectRoot: normalizedProjectRoot,
-    nativeMode,
-    nativeDuplicateTokens: isNativeDuplicateTokenizationAvailable(index.nativeMode),
-    nativeSyntaxLanguages: getNativeTreeSitterSupportedLanguageIds(index.nativeMode),
-    nativeEnvDisabled: nativeMode === undefined ? isNativeTreeSitterDisabledByEnv() : undefined,
+    nativeDuplicateTokens: isNativeDuplicateTokenizationAvailable(),
+    nativeSyntaxLanguages: getNativeTreeSitterSupportedLanguageIds(),
     minTokens,
     maxTokens,
     shingleSize,
     windowSize,
   });
-}
-
-export function normalizedDuplicateUnitCacheNativeMode(
-  nativeMode: ProjectIndex["nativeMode"] | undefined,
-): ProjectIndex["nativeMode"] | undefined {
-  if (nativeMode === undefined || nativeMode === "auto") return undefined;
-  return nativeMode;
 }
 
 export function duplicateUnitCacheSignature(

@@ -13,7 +13,6 @@ import {
   isNativeTreeSitterAvailable,
 } from "../native/tree-sitter-native.js";
 import { cacheRoot } from "../indexer/build-cache/location.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { Graph } from "../types.js";
 import { restrictGraphToIncludeRoots } from "../util/include-roots.js";
 import { supportForFile } from "../languages.js";
@@ -103,7 +102,6 @@ export type InspectCommandContext = {
   discoveryOptions: ProjectFileDiscoveryOptions;
   languageExtensions: LanguageExtensionMap | undefined;
   graphOptions: GraphBuildOptions | undefined;
-  nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
   cacheLocation: CacheLocation | undefined;
@@ -177,7 +175,6 @@ async function buildScopedReportGraph(
     discovery?: ProjectFileDiscoveryOptions;
     languageExtensions?: LanguageExtensionMap;
     graphOptions?: GraphBuildOptions;
-    nativeMode?: NativeRuntimeMode;
     workerOpts?: { useNativeWorkers: true } | Record<string, never>;
     progressHandler?: BuildOptions["onProgress"];
     report?: BuildReport;
@@ -201,7 +198,6 @@ async function buildScopedReportGraph(
       ...(opts.discovery ? { discovery: opts.discovery } : {}),
       ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
       ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
-      ...(opts.nativeMode && opts.nativeMode !== "auto" ? { native: opts.nativeMode } : {}),
       ...(opts.workerOpts ?? {}),
       ...(opts.graphOptions ? { graph: opts.graphOptions } : {}),
       ...(opts.report ? { report: opts.report } : {}),
@@ -373,7 +369,6 @@ async function buildInspectReport(
   cache: CacheMode | undefined,
   cacheDir: string | undefined,
   cacheLocation: CacheLocation | undefined,
-  nativeMode: NativeRuntimeMode,
   workerOpts: { useNativeWorkers: true } | Record<string, never>,
   progressHandler: BuildOptions["onProgress"],
   buildReport: BuildReport | undefined,
@@ -401,7 +396,6 @@ async function buildInspectReport(
       discovery,
       ...(languageExtensions ? { languageExtensions } : {}),
       ...(progressHandler ? { onProgress: progressHandler } : {}),
-      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
       ...(useNativeWorkers ? { useNativeWorkers: true } : {}),
       ...(graphOptions ? { graph: graphOptions } : {}),
       ...(buildReport ? { report: buildReport } : {}),
@@ -434,16 +428,16 @@ async function buildInspectReport(
       top: duplicateResult.groups.map(summarizeDuplicateGroup),
     };
   }
-  const loadError = getNativeTreeSitterLoadError(nativeMode);
+  const loadError = getNativeTreeSitterLoadError();
   return {
     root: normalizePath(projectRoot),
     includeRoots: includeRoots.map(normalizePath),
     ...(indexCache ? { indexCache } : {}),
     backend: {
       native: {
-        available: isNativeTreeSitterAvailable(nativeMode),
+        available: isNativeTreeSitterAvailable(),
         ...(loadError ? { loadError: String(loadError) } : {}),
-        supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(nativeMode),
+        supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(),
       },
     },
     files: {
@@ -497,7 +491,6 @@ export async function handleInspectCommand(context: InspectCommandContext): Prom
     cache,
     context.getOpt("--cache-dir"),
     context.cacheLocation,
-    context.nativeMode,
     context.workerOpts,
     context.progressHandler,
     context.commandReport?.index,
@@ -526,7 +519,6 @@ export async function handleHotspotsCommand(context: InspectCommandContext): Pro
     discovery: context.discoveryOptions,
     ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
     ...(context.graphOptions ? { graphOptions: context.graphOptions } : {}),
-    nativeMode: context.nativeMode,
     workerOpts: context.workerOpts,
     ...(context.progressHandler ? { progressHandler: context.progressHandler } : {}),
     writeStderrLine: context.writeStderrLine,

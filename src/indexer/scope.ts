@@ -1,5 +1,5 @@
 import { sliceText, toRange } from "../util/ast.js";
-import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/tree-sitter-native.js";
+import { getNativeSyntaxTreeExecution } from "../native/tree-sitter-native.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { declarationKindToBindingKind } from "./declarations.js";
@@ -82,11 +82,11 @@ export function buildScopeIndexFromSource(
   source: string,
   support: LanguageSupport,
   imports: ImportBinding[] = [],
-  opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode; locals?: readonly SymbolDef[] },
+  opts?: { tree?: SyntaxTreeLike; locals?: readonly SymbolDef[] },
 ): ScopeIndex {
   let tree = opts?.tree ?? null;
   if (!tree) {
-    const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support, opts?.nativeMode);
+    const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support);
     if (nativeTreeExecution.tree) {
       tree = new ProjectedSyntaxTree(source, nativeTreeExecution.tree);
     }

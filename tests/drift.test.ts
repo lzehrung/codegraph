@@ -215,7 +215,6 @@ describe("architecture drift", () => {
     await writeFile(root, "src/x.h", "int x(void);\n");
     const head = await buildArchitectureSnapshot(root, {
       includeRoots: ["src"],
-      native: "off",
       graph: { resolutionHints: ["src"] },
     });
     const report = compareArchitectureSnapshots(makeSnapshot(), head, { failOn: [] });

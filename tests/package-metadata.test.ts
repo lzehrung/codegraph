@@ -411,15 +411,15 @@ describe("package metadata", () => {
     }
   });
 
-  it("keeps the native package optional at the root package boundary", () => {
+  it("requires the native package at the root package boundary", () => {
     const rootPackage = readJson("package.json");
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(rootPackage.dependencies);
     const optionalDependencies = readStringRecord(rootPackage.optionalDependencies);
     const nativeVersion = typeof nativePackage.version === "string" ? nativePackage.version : "";
 
-    expect(dependencies["@lzehrung/codegraph-native"]).toBeUndefined();
-    expect(optionalDependencies["@lzehrung/codegraph-native"]).toBe(`^${nativeVersion}`);
+    expect(dependencies["@lzehrung/codegraph-native"]).toBe(`^${nativeVersion}`);
+    expect(optionalDependencies["@lzehrung/codegraph-native"]).toBeUndefined();
   });
 
   it("ships the raw bundled skill directory without a stale archive copy", () => {
@@ -606,7 +606,6 @@ describe("package metadata", () => {
           "Edge",
           "EdgeTo",
           "ExportEntry",
-          "FallbackImportExtractionReport",
           "FileChange",
           "FileId",
           "FindReferencesResult",
@@ -615,7 +614,6 @@ describe("package metadata", () => {
           "GraphBuildOptions",
           "GraphDeltaReport",
           "GraphQueryResult",
-          "GraphReport",
           "HTML_SUPPORT",
           "Hunk",
           "ICodeReviewSession",
@@ -657,7 +655,6 @@ describe("package metadata", () => {
           "NativeBackendFallbackReason",
           "NativeBackendReport",
           "NativeQueryScope",
-          "NativeRuntimeMode",
           "NeighborQuery",
           "NeighborResult",
           "PHP_SUPPORT",
@@ -1030,8 +1027,6 @@ describe("package metadata", () => {
           "CycleSortMode",
           "DependencyNode",
           "DetailedCycle",
-          "FallbackImportExtractionEvent",
-          "FallbackImportExtractionReason",
           "GraphBuildOptions",
           "GraphCacheEntry",
           "HotspotEntry",
@@ -1131,12 +1126,10 @@ describe("package metadata", () => {
           "CallHierarchySite",
           "DEFAULT_WORKSPACE_SYMBOL_LIMIT",
           "ExportEntry",
-          "FallbackImportExtractionReport",
           "FindReferencesResult",
           "GoToRequest",
           "GoToResult",
           "GraphDeltaReport",
-          "GraphReport",
           "ImplementationMatch",
           "ImplementationsResult",
           "ImportBinding",
@@ -1350,16 +1343,13 @@ describe("package metadata", () => {
     expect(scripts["test:watch"]).toBe("node ./scripts/ensure-dist-for-tests.mjs && vitest --watch");
   });
 
-  it("keeps native-required and reduced-mode fallback test lanes explicit", () => {
+  it("keeps the native test lanes explicit", () => {
     const rootPackage = readJson("package.json");
     const scripts = readStringRecord(rootPackage.scripts);
 
-    expect(scripts["test:native"]).toBe(
-      "npm run test:native:rust && npm run test:native:required && npm run test:native:fallback",
-    );
+    expect(scripts["test:native"]).toBe("npm run test:native:rust && npm run test:native:required");
+    expect(scripts["test:native:fallback"]).toBeUndefined();
     expect(scripts["test:native:required"]).toBe("node ./scripts/run-native-required-tests.mjs");
-    expect(scripts["test:native:fallback"]).toContain("tests/native-fallback-reporting.test.ts");
-    expect(scripts["test:native:fallback"]).toContain("tests/native-fallback-contract.test.ts");
     expect(scripts.check).toContain("npm run test:native");
     expect(scripts.check).toContain("npm run test:coverage");
     expect(scripts.check).not.toContain("npm run test:ci");

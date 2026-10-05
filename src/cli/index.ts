@@ -1,9 +1,8 @@
 import { performance } from "node:perf_hooks";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { type BuildOptions, type BuildReport, type CacheLocation } from "../indexer/types.js";
-import { summarizeAnalysis, type AnalysisSummary } from "../analysis-summary.js";
+import { isAnalysisComplete, summarizeAnalysis, type AnalysisSummary } from "../analysis-summary.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import { parseCacheModeOption, parseNonNegativeIntegerOption } from "./options.js";
@@ -35,7 +34,7 @@ type IndexPrettyOutput = {
 
 function formatIndexOutput(output: IndexPrettyOutput): string {
   const lines = [`Indexed ${output.files} file(s) with ${output.edges} edge(s).`];
-  if (output.analysis.mode !== "semantic") {
+  if (!isAnalysisComplete(output.analysis)) {
     lines.push(`Analysis: ${output.analysis.label}.`);
   }
   if (!output.modules) {
@@ -56,7 +55,6 @@ export type IndexCommandContext = {
   gitBase: string | undefined;
   changedSince: string | undefined;
   discoveryOptions: ProjectFileDiscoveryOptions;
-  nativeMode: NativeRuntimeMode;
   languageExtensions: LanguageExtensionMap | undefined;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
@@ -103,8 +101,8 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
   const cacheVerify = context.hasFlag("--cache-verify");
 
   // Always populated (not gated behind --report/--verbose) so a plain `index`
-  // run can detect and surface reduced-accuracy analysis (native tree-sitter
-  // unavailable or per-file fallback) via both the stderr warning and the
+  // run can detect and surface files native analysis skipped (for example
+  // sourceTooLarge or queryFailure) via both the stderr warning and the
   // pretty/--json `analysis` field below, per finding #43.
   const indexReport: BuildReport = { timings: {} };
   if (commandReport) {
@@ -116,7 +114,6 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
     onProgress: context.progressHandler,
     threads,
     discovery: context.discoveryOptions,
-    ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
     ...context.workerOpts,
     ...(cacheDir ? { cacheDir } : {}),
@@ -135,7 +132,7 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
     ? await buildProjectIndexIncremental(context.projectRootFs, baseIndexOptions)
     : await buildProjectIndexFromFiles(context.projectRootFs, files, baseIndexOptions);
   context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
-  const analysis = summarizeAnalysis({ index, nativeMode: context.nativeMode, report: indexReport });
+  const analysis = summarizeAnalysis({ index, report: indexReport });
   if (full) {
     const modules = [...index.byFile.values()].map((m) => ({
       file: m.file,

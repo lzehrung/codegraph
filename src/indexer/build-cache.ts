@@ -59,7 +59,6 @@ export {
   type ManifestBuildOptions,
 } from "./build-cache/options.js";
 export {
-  createFallbackImportExtractionHandler,
   initCacheReport,
   initFileReport,
   initManifestReport,

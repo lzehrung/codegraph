@@ -31,7 +31,7 @@ function sha256(filePath: string): string {
 }
 
 async function certificationFixture(
-  options: { securityStatus?: "pass" | "fail"; omitReduced?: boolean } = {},
+  options: { securityStatus?: "pass" | "fail"; omitRuntime?: boolean } = {},
 ): Promise<CertificationFixture> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-certification-report-"));
   temporaryDirectories.push(root);
@@ -81,17 +81,11 @@ async function certificationFixture(
     checks: [],
     packageIdentities: [],
   };
-  writeJson(path.join(reportsDirectory, `package-smoke-${target}.json`), {
-    ...reportBase,
-    target,
-    mode: "runtime",
-  });
-  if (!options.omitReduced) {
-    writeJson(path.join(reportsDirectory, "package-smoke-reduced.json"), {
+  if (!options.omitRuntime) {
+    writeJson(path.join(reportsDirectory, `package-smoke-${target}.json`), {
       ...reportBase,
-      target: null,
-      mode: "reduced",
-      certificationClass: "reduced",
+      target,
+      mode: "runtime",
     });
   }
   const securityPath = path.join(root, "security.json");
@@ -165,12 +159,12 @@ describe("CertificationReportV1 assembly", () => {
     );
     expect(report.summary).toEqual({ status: "pass", failures: [] });
     expect(report.source).toMatchObject({ revision: "a".repeat(40), dirty: false });
-    expect(report.packages).toHaveLength(2);
+    expect(report.packages).toHaveLength(1);
     expect(report.versions).toMatchObject({ root: "2.0.0", native: "3.0.0" });
   });
 
-  it("fails closed when a required package row was not executed", async () => {
-    const fixture = await certificationFixture({ omitReduced: true });
+  it("fails closed when a required native package row was not executed", async () => {
+    const fixture = await certificationFixture({ omitRuntime: true });
     const report = await assembleCertificationReport(fixture.assemblyOptions);
 
     expect(report.summary.status).toBe("incomplete");

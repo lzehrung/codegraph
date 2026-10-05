@@ -630,9 +630,7 @@ describe("runtime fingerprint without loading the addon", () => {
       supportedLanguageIds: [...LANGUAGES].sort(),
       origin: originFor(populated),
     };
-    expect(serializeNativeRuntimeFingerprint("auto", false, fromCache)).toBe(
-      serializeNativeRuntimeFingerprint("auto", false, fromLoad),
-    );
+    expect(serializeNativeRuntimeFingerprint(fromCache)).toBe(serializeNativeRuntimeFingerprint(fromLoad));
   });
 
   it("declines outside the platforms and layouts that populate the cache", async () => {

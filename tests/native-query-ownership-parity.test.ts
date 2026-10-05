@@ -1,13 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { LANG_CONFIGS } from "../src/bootstrap/tree-sitter-languages.js";
 import { chunkFile, type Chunk } from "../src/chunking/chunk-file.js";
 import { chunkSFCFile } from "../src/chunking/chunk-sfc.js";
 import { astGrep } from "../src/index.js";
 import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
-import { resetNativeRuntimeModeForTests, withNativeRuntimeMode, withNativeRuntimeModeAsync } from "./helpers/native.js";
 
 function normalizeChunks(chunks: Chunk[]) {
   return chunks.map((chunk) => ({
@@ -83,14 +82,10 @@ const SFC_CHUNK_CASES = [
 ];
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 
-afterEach(() => {
-  resetNativeRuntimeModeForTests();
-});
-
 nativeDescribe("native query ownership", () => {
   it("keeps chunkFile productive in native mode", () => {
     for (const testCase of SOURCE_CHUNK_CASES) {
-      const nativeChunks = withNativeRuntimeMode("native", () =>
+      const nativeChunks = (() =>
         chunkFile({
           language: testCase.config,
           source: testCase.source,
@@ -98,8 +93,7 @@ nativeDescribe("native query ownership", () => {
           minTokens: 1,
           maxTokens: 12,
           tokenizer: tokenize,
-        }),
-      );
+        }))();
 
       expect(stableChunks(nativeChunks)).toMatchSnapshot();
     }
@@ -108,7 +102,7 @@ nativeDescribe("native query ownership", () => {
   it("keeps SFC chunking productive in native mode", () => {
     for (const testCase of SFC_CHUNK_CASES) {
       const source = fs.readFileSync(testCase.filePath, "utf8");
-      const nativeChunks = withNativeRuntimeMode("native", () =>
+      const nativeChunks = (() =>
         chunkSFCFile({
           source,
           filePath: testCase.filePath,
@@ -116,8 +110,7 @@ nativeDescribe("native query ownership", () => {
           minTokens: 1,
           maxTokens: 16,
           tokenizer: tokenize,
-        }),
-      );
+        }))();
 
       expect(stableChunks(nativeChunks)).toMatchSnapshot();
     }
@@ -127,60 +120,8 @@ nativeDescribe("native query ownership", () => {
     const projectRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
     const query = "(import_statement source: (string) @mod)";
 
-    const nativeHits = await withNativeRuntimeModeAsync(
-      "native",
-      async () => await astGrep(projectRoot, query, ["**/*.ts"]),
-    );
+    const nativeHits = await (async () => await astGrep(projectRoot, query, ["**/*.ts"]))();
 
     expect(stableAstGrepHits(projectRoot, nativeHits)).toMatchSnapshot();
-  });
-});
-
-describe("reduced query mode", () => {
-  it("keeps chunkFile safe without native", () => {
-    for (const testCase of SOURCE_CHUNK_CASES) {
-      const reducedChunks = withNativeRuntimeMode("reduced", () =>
-        chunkFile({
-          language: testCase.config,
-          source: testCase.source,
-          filePath: testCase.filePath,
-          minTokens: 1,
-          maxTokens: 12,
-          tokenizer: tokenize,
-        }),
-      );
-
-      expect(stableChunks(reducedChunks)).toMatchSnapshot();
-    }
-  });
-
-  it("keeps SFC chunking safe without native", () => {
-    for (const testCase of SFC_CHUNK_CASES) {
-      const source = fs.readFileSync(testCase.filePath, "utf8");
-      const reducedChunks = withNativeRuntimeMode("reduced", () =>
-        chunkSFCFile({
-          source,
-          filePath: testCase.filePath,
-          framework: testCase.framework,
-          minTokens: 1,
-          maxTokens: 16,
-          tokenizer: tokenize,
-        }),
-      );
-
-      expect(stableChunks(reducedChunks)).toMatchSnapshot();
-    }
-  });
-
-  it("keeps astGrep empty-but-safe without native", async () => {
-    const projectRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
-    const query = "(import_statement source: (string) @mod)";
-
-    const reducedHits = await withNativeRuntimeModeAsync(
-      "reduced",
-      async () => await astGrep(projectRoot, query, ["**/*.ts"]),
-    );
-
-    expect(reducedHits).toEqual([]);
   });
 });

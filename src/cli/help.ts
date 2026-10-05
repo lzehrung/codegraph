@@ -30,9 +30,6 @@ ${renderCliCommandList()}
 For the complete catalog, run: codegraph help advanced
 
 Graph Options:
-  --fast-graph                Use text import extraction for plain .js and .ts
-                              files. May miss multiline or complex patterns;
-                              TSX and other languages keep normal extraction.
   --resolve-node-modules      Include node_modules in resolution
   --dynamic-import-heuristics Attempt to resolve dynamic imports
   --resolution-hint <hint>    Custom resolution hint (e.g., tsconfig:path)
@@ -42,7 +39,6 @@ Graph Options:
 
 Build Options:
   --threads N               Number of worker threads (default: auto)
-  --native <mode>           Native runtime mode: auto, on, off
   --workers                 Force Piscina native-extraction workers (auto above 250 files)
   --cache <mode>            Cache mode: disk, memory, off
   --cache-dir <path>        Cache location override (also CODEGRAPH_CACHE_DIR); rejects the home directory or a filesystem root
@@ -107,7 +103,6 @@ Examples:
   codegraph inspect ./src --limit 20 --duplicates
   codegraph duplicates ./src --min-confidence medium
   codegraph graph ./src
-  codegraph graph --fast-graph --mermaid ./src
   codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
   codegraph skill install --agent agents
   codegraph skill install --agent codex
@@ -187,7 +182,7 @@ Safety:
   Removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 `;
 const SHARED_INDEX_OPTIONS_HELP = `Index options:
-  Supports shared --cache, --cache-dir, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+  Supports shared --cache, --cache-dir, --cache-strict, --cache-verify, --threads, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
   Cache precedence is --cache-dir, then CODEGRAPH_CACHE_DIR, then cache.location from project/user config, then repository metadata, then the project root. Use cache.location "project", "repo", "user", or an absolute path. A configured anchor that resolves to the home directory or a filesystem root is rejected with an error.
   Index builds report progress automatically on an interactive stderr terminal. Use --progress to force redirected progress logs or --no-progress to suppress feedback.`;
 
@@ -425,7 +420,7 @@ Behavior:
   status retries proven health checks and reports a verification remedy for an unreachable or mismatched server. stop removes only confirmed stale registries or signals a Codegraph server whose root, process, and startup time match the registry.
 
 Forwarded startup options:
-  --cache, --cache-dir, --cache-strict, --cache-verify, --native, --threads, --workers,
+  --cache, --cache-dir, --cache-strict, --cache-verify, --threads, --workers,
   --include-glob, --ignore-glob, --no-gitignore, and --resolution-hint pass to mcp serve.
 
 Safety:
@@ -450,7 +445,6 @@ Index Options:
   --progress         Force progress output when stderr is redirected
   --no-progress      Suppress automatic index progress feedback
   --threads N        Number of worker threads (default: auto)
-  --native <mode>    Native runtime mode: auto, on, off
   --workers          Force Piscina native-extraction workers (auto above 250 files)
   --include-glob <glob> Restrict discovered files to extra glob(s), relative to each scan root
   --ignore-glob <glob>  Exclude extra discovered files by glob, relative to each scan root
@@ -487,7 +481,6 @@ Index Options:
   --progress         Force progress output when stderr is redirected
   --no-progress      Suppress automatic index progress feedback
   --threads N        Number of worker threads (default: auto)
-  --native <mode>    Native runtime mode: auto, on, off
   --workers          Force Piscina native-extraction workers (auto above 250 files)
   --include-glob <glob> Restrict discovered files to extra glob(s), relative to each scan root
   --ignore-glob <glob>  Exclude extra discovered files by glob, relative to each scan root
@@ -578,7 +571,7 @@ Options:
 
 export const INDEX_HELP_TEXT = `codegraph index - Build the project symbol index
 
-Usage: codegraph index [roots...] [--root <path>] [--json | --pretty | --full] [--verbose] [--cache <mode>] [--cache-strict] [--cache-verify] [--threads N] [--native <mode>] [--workers]
+Usage: codegraph index [roots...] [--root <path>] [--json | --pretty | --full] [--verbose] [--cache <mode>] [--cache-strict] [--cache-verify] [--threads N] [--workers]
 
 Output:
   Builds or refreshes the project symbol index and graph. Default output is a compact file/edge count; --json/--full includes module details.
@@ -588,7 +581,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const GRAPH_HELP_TEXT = `codegraph graph - Build a dependency graph
 
-Usage: codegraph graph [roots...] [--root <path>] [--json | --pretty | --mermaid | --dot] [--sqlite <path>] [--output <path> | --stdout] [--sql-artifacts] [--fast-graph] [--resolve-node-modules] [--dynamic-import-heuristics]
+Usage: codegraph graph [roots...] [--root <path>] [--json | --pretty | --mermaid | --dot] [--sqlite <path>] [--output <path> | --stdout] [--sql-artifacts] [--resolve-node-modules] [--dynamic-import-heuristics]
 
 Output:
   Emits a file dependency graph for the selected roots. Use --json/--pretty/--mermaid/--dot/--sqlite for machine-readable or explicit human formats.
@@ -717,7 +710,7 @@ export const DOCTOR_HELP_TEXT = `codegraph doctor - Inspect backend/runtime stat
 Usage: codegraph doctor [artifact-path] [--json | --pretty]
 
 Output:
-  Reports Node/runtime health, optional native backend status, and local artifact presence.
+  Reports Node/runtime health, required native addon status (exits non-zero when it cannot load), and local artifact presence.
 `;
 
 export const CHUNK_HELP_TEXT = `codegraph chunk - Chunk a file for embeddings

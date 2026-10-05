@@ -1,7 +1,6 @@
 import type { BuildOptions } from "../indexer/types.js";
 import type { Edge } from "../types.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
-import type { NativeRuntimeMode } from "../native/tree-sitter-native.js";
 import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
 
 export type ArchitectureDriftFindingKind =
@@ -162,7 +161,6 @@ export interface ArchitectureSnapshotOptions {
   discovery?: ProjectFileDiscoveryOptions;
   graph?: GraphBuildOptions;
   index?: BuildOptions;
-  native?: NativeRuntimeMode;
   duplicateLimit?: number;
 }
 

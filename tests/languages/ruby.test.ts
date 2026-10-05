@@ -198,7 +198,6 @@ describe("Ruby query-driven locals", () => {
     const native = getNativeQueryExecution(parsed.source, parsed.sup);
     const module = collectLocalsAndExportsFromSource("probe.rb", parsed.source, parsed.sup, [], {
       nativeQueries: native.results,
-      nativeMode: "off",
     });
     const names = module.locals.map((local) => local.localName);
     // `usesQueryDrivenLocals` must be on for the query lane to run without a tree; before
@@ -336,7 +335,7 @@ describe("Ruby bare require targets", () => {
       await fsp.writeFile(packageFile, "module.exports = 1;\n");
       await fsp.writeFile(rubyFile, "module Foo\nend\n");
       await fsp.writeFile(use, 'require "foo"\n');
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const binding = index.byFile
         .get(fileIdentityKey(use))
         ?.imports.find((entry) => entry.kind === "star" && entry.from === "foo");
@@ -358,76 +357,72 @@ describe("Ruby bare require targets", () => {
   });
 });
 describe("Ruby require_relative lookup", () => {
-  it.each(["on", "off"] as const)(
-    "resolves the sibling before a root decoy in %s mode while bare require keeps root precedence",
-    async (native) => {
-      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-relative-root-"));
-      try {
-        const nested = path.join(root, "lib", "a");
-        await fsp.mkdir(nested, { recursive: true });
-        const rootFoo = path.join(root, "foo.rb");
-        const siblingFoo = path.join(nested, "foo.rb");
-        const relative = path.join(nested, "relative.rb");
-        const bare = path.join(nested, "bare.rb");
-        const mixedFile = path.join(nested, "mixed.rb");
-        const missingFile = path.join(nested, "missing.rb");
-        const rootOnly = path.join(root, "root_only.rb");
-        await Promise.all([
-          fsp.writeFile(rootFoo, "class Widget\n  def render; -1; end\nend\n"),
-          fsp.writeFile(siblingFoo, "class Widget\n  def render; 1; end\nend\n"),
-          fsp.writeFile(relative, "require_relative 'foo'\ndef relative_use\n  Widget.new.render\nend\n"),
-          fsp.writeFile(bare, "require 'foo'\ndef bare_use\n  Widget.new.render\nend\n"),
-          fsp.writeFile(mixedFile, "require 'foo'\nrequire_relative 'foo'\n"),
-          fsp.writeFile(rootOnly, "class RootOnly; end\n"),
-          fsp.writeFile(missingFile, "require_relative 'root_only'\n"),
-        ]);
-        const index = await buildProjectIndex(root, { cache: "off", native });
-        const mixed = index.byFile
-          .get(fileIdentityKey(mixedFile))
-          ?.imports.filter((entry) => entry.kind === "star" && entry.from === "foo");
-        expect(
-          mixed?.map((entry) => (typeof entry.resolved === "string" ? fileIdentityKey(entry.resolved) : "external")),
-        ).toEqual(native === "on" ? [fileIdentityKey(rootFoo), fileIdentityKey(siblingFoo)] : []);
-        const mixedEdges = index.graph.edges
-          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(mixedFile) && edge.to.type === "file")
+  it("resolves the sibling before a root decoy while bare require keeps root precedence", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-relative-root-"));
+    try {
+      const nested = path.join(root, "lib", "a");
+      await fsp.mkdir(nested, { recursive: true });
+      const rootFoo = path.join(root, "foo.rb");
+      const siblingFoo = path.join(nested, "foo.rb");
+      const relative = path.join(nested, "relative.rb");
+      const bare = path.join(nested, "bare.rb");
+      const mixedFile = path.join(nested, "mixed.rb");
+      const missingFile = path.join(nested, "missing.rb");
+      const rootOnly = path.join(root, "root_only.rb");
+      await Promise.all([
+        fsp.writeFile(rootFoo, "class Widget\n  def render; -1; end\nend\n"),
+        fsp.writeFile(siblingFoo, "class Widget\n  def render; 1; end\nend\n"),
+        fsp.writeFile(relative, "require_relative 'foo'\ndef relative_use\n  Widget.new.render\nend\n"),
+        fsp.writeFile(bare, "require 'foo'\ndef bare_use\n  Widget.new.render\nend\n"),
+        fsp.writeFile(mixedFile, "require 'foo'\nrequire_relative 'foo'\n"),
+        fsp.writeFile(rootOnly, "class RootOnly; end\n"),
+        fsp.writeFile(missingFile, "require_relative 'root_only'\n"),
+      ]);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const mixed = index.byFile
+        .get(fileIdentityKey(mixedFile))
+        ?.imports.filter((entry) => entry.kind === "star" && entry.from === "foo");
+      expect(
+        mixed?.map((entry) => (typeof entry.resolved === "string" ? fileIdentityKey(entry.resolved) : "external")),
+      ).toEqual([fileIdentityKey(rootFoo), fileIdentityKey(siblingFoo)]);
+      const mixedEdges = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(mixedFile) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : ""));
+      expect(new Set(mixedEdges)).toEqual(new Set([fileIdentityKey(rootFoo), fileIdentityKey(siblingFoo)]));
+      const missingBinding = index.byFile
+        .get(fileIdentityKey(missingFile))
+        ?.imports.find((entry) => entry.kind === "star" && entry.from === "root_only");
+      expect(missingBinding?.resolved).toEqual({ external: "root_only" });
+      expect(
+        index.graph.edges.some(
+          (edge) =>
+            fileIdentityKey(edge.from) === fileIdentityKey(missingFile) &&
+            edge.to.type === "file" &&
+            fileIdentityKey(edge.to.path) === fileIdentityKey(rootOnly),
+        ),
+      ).toBe(false);
+      for (const [consumer, expected, excluded] of [
+        [relative, siblingFoo, rootFoo],
+        [bare, rootFoo, siblingFoo],
+      ]) {
+        const binding = index.byFile
+          .get(fileIdentityKey(consumer))
+          ?.imports.find((entry) => entry.kind === "star" && entry.from === "foo");
+        const targets = index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer) && edge.to.type === "file")
           .map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : ""));
-        expect(new Set(mixedEdges)).toEqual(new Set([fileIdentityKey(rootFoo), fileIdentityKey(siblingFoo)]));
-        const missingBinding = index.byFile
-          .get(fileIdentityKey(missingFile))
-          ?.imports.find((entry) => entry.kind === "star" && entry.from === "root_only");
-        expect(missingBinding?.resolved).toEqual(native === "on" ? { external: "root_only" } : undefined);
-        expect(
-          index.graph.edges.some(
-            (edge) =>
-              fileIdentityKey(edge.from) === fileIdentityKey(missingFile) &&
-              edge.to.type === "file" &&
-              fileIdentityKey(edge.to.path) === fileIdentityKey(rootOnly),
-          ),
-        ).toBe(false);
-        for (const [consumer, expected, excluded] of [
-          [relative, siblingFoo, rootFoo],
-          [bare, rootFoo, siblingFoo],
-        ]) {
-          const binding = index.byFile
-            .get(fileIdentityKey(consumer))
-            ?.imports.find((entry) => entry.kind === "star" && entry.from === "foo");
-          const targets = index.graph.edges
-            .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(consumer) && edge.to.type === "file")
-            .map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : ""));
-          expect(targets).toEqual([fileIdentityKey(expected)]);
-          expect(targets).not.toContain(fileIdentityKey(excluded));
-          if (native === "off") continue;
-          expect(fileIdentityKey(String(binding?.resolved))).toBe(fileIdentityKey(expected));
-          expect(fileIdentityKey(String(binding?.resolved))).not.toBe(fileIdentityKey(excluded));
-          const goto = await goToDefinition(index, { file: consumer, line: 3, column: 4 });
-          expect(goto.status).toBe("ok");
-          if (goto.status !== "ok") throw new Error("Expected required Ruby constant");
-          expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(expected));
-          expect(fileIdentityKey(goto.definition.file)).not.toBe(fileIdentityKey(excluded));
-        }
-      } finally {
-        await fsp.rm(root, { recursive: true, force: true });
+        expect(targets).toEqual([fileIdentityKey(expected)]);
+        expect(targets).not.toContain(fileIdentityKey(excluded));
+        expect(fileIdentityKey(String(binding?.resolved))).toBe(fileIdentityKey(expected));
+        expect(fileIdentityKey(String(binding?.resolved))).not.toBe(fileIdentityKey(excluded));
+        const goto = await goToDefinition(index, { file: consumer, line: 3, column: 4 });
+        expect(goto.status).toBe("ok");
+        if (goto.status !== "ok") throw new Error("Expected required Ruby constant");
+        expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(expected));
+        expect(fileIdentityKey(goto.definition.file)).not.toBe(fileIdentityKey(excluded));
       }
-    },
-  );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -5,11 +5,9 @@ import { fileIdentityKey, normalizePath, normalizeResolutionHints } from "./util
 import { mapLimit } from "./util/concurrency.js";
 import { logWithLevel } from "./logging.js";
 import type { LogLevel } from "./logging.js";
-import { isNativeRequiredUnavailableError } from "./native/tree-sitter-native.js";
-import type { NativeRuntimeMode } from "./native/tree-sitter-native.js";
+import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from "./native/tree-sitter-native.js";
 import { initNativeBackendReport } from "./native/native-backend-report.js";
 import { collectAngularJsFrameworkEdges } from "./graphs/angularjs.js";
-import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "./languages.js";
 import type { BuildReport } from "./indexer/types.js";
@@ -39,17 +37,13 @@ export async function collectGraph(
   files: string[],
   opts?: {
     parsed?: Map<string, ParsedFileContext>;
-    fast?: boolean;
-    fastRegexDisabledLanguages?: string[];
     threads?: number;
     resolveNodeModules?: boolean;
     dynamicImportHeuristics?: boolean;
     resolutionHints?: string[];
-    native?: NativeRuntimeMode;
     fileSignatures?: Map<string, GraphFileSignature>;
     cachedFileEdges?: Map<string, GraphCacheEntry>;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
-    onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     report?: BuildReport;
     baseGraph?: Graph;
     replaceFiles?: Set<string>;
@@ -58,6 +52,7 @@ export async function collectGraph(
     languageExtensions?: LanguageExtensionMap;
   },
 ): Promise<Graph> {
+  assertNativeRequiredAvailable();
   const normalizedFiles = files.map(normalizePath);
   const normalizedAllFiles = (opts?.allFiles ?? files).map(normalizePath);
   const isSqlFile = (file: string): boolean =>
@@ -134,17 +129,13 @@ export async function collectGraph(
       const parsedEntry = opts?.parsed?.get(fileIdentityKey(file));
       const edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
         ...(parsedEntry ? { parsed: parsedEntry } : {}),
-        fast: !!opts?.fast,
-        ...(opts?.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages } : {}),
         resolveNodeModules: !!opts?.resolveNodeModules,
         dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
         resolutionHints,
-        ...(opts?.native ? { native: opts.native } : {}),
         ...(sigEntry ? { fileSignature: sigEntry } : {}),
         ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
         ...(cachedFileEdges ? { cachedFileEdges } : {}),
         ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
-        ...(opts?.onFallbackImportExtraction ? { onFallbackImportExtraction: opts.onFallbackImportExtraction } : {}),
         ...(opts?.report ? { report: opts.report } : {}),
         allFiles: normalizedAllFiles,
         ...(sqlFactCache ? { sqlFactCache } : {}),

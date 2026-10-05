@@ -413,7 +413,7 @@ describe("C++ classification and same-file navigation", () => {
       const bindings = buildScopeIndexFromSource(header, headerSource, CPP_SUPPORT).all.filter(
         (binding) => binding.kind === "function" && binding.name === "pick",
       );
-      const parsed = getNativeSyntaxTreeExecution(useSource, CPP_SUPPORT, "on");
+      const parsed = getNativeSyntaxTreeExecution(useSource, CPP_SUPPORT);
       if (!parsed.tree) throw new Error("Expected a native C++ syntax tree");
       const call = new ProjectedSyntaxTree(useSource, parsed.tree).rootNode.descendantForIndex(
         callOffset,
@@ -534,7 +534,7 @@ describe("C++ classification and same-file navigation", () => {
       for (const [name, source] of Object.entries(sources)) {
         await fs.writeFile(path.join(root, name), source, "utf8");
       }
-      const index = await buildProjectIndex(root, { cache: "disk", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "disk" });
       const key = (name: keyof typeof sources, symbol: string, projectIndex = index, projectRoot = root): string => {
         const callable = projectIndex.byFile
           .get(fileIdentityKey(path.join(projectRoot, name)))
@@ -550,7 +550,7 @@ describe("C++ classification and same-file navigation", () => {
       closeDiskCacheDatabase(root, { cache: "disk" });
       await fs.cp(root, movedRoot, { recursive: true });
       const report: BuildReport = { timings: {} };
-      const warm = await buildProjectIndexIncremental(movedRoot, { cache: "disk", native: "on", report });
+      const warm = await buildProjectIndexIncremental(movedRoot, { cache: "disk", report });
       expect(report.cache?.misses ?? 0).toBe(0);
       expect(key("api.hpp", "run", warm, movedRoot)).toBe(key("a.cpp", "run", warm, movedRoot));
       for (const name of ["run", "local", "hidden", "nested", "scoped"] as const) {
@@ -574,7 +574,7 @@ describe("C++ classification and same-file navigation", () => {
       const file = path.join(root, "a.cpp");
       await fs.writeFile(file, lines.join("\n"), "utf8");
       await fs.writeFile(path.join(root, "b.cpp"), decoy, "utf8");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const keys = (name: string) =>
         index.byFile
           .get(fileIdentityKey(path.join(root, name)))
@@ -1886,7 +1886,7 @@ describe("C++ implicit this in qualified and bare member calls", () => {
         "",
       ];
       await fs.writeFile(file, lines.join("\n"), "utf8");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       for (const [line, name] of [
         [2, "::f"],
         [4, "::g"],
@@ -1917,7 +1917,7 @@ describe("C++ implicit this in qualified and bare member calls", () => {
         "",
       ];
       await fs.writeFile(file, lines.join("\n"), "utf8");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const graph = await buildSymbolGraphDetailed(index);
       const label = (id: string): string => {
         const node = graph.nodes.get(id);
@@ -1969,7 +1969,7 @@ describe("C++ implicit this in qualified and bare member calls", () => {
         "",
       ];
       await fs.writeFile(file, lines.join("\n"), "utf8");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const gotoAt = (line: number) =>
         goToDefinition(index, { file, line, column: lines[line - 1]!.indexOf("helper(") + 1 });
       for (const line of [9, 10]) {
@@ -2017,7 +2017,7 @@ describe("C++ implicit this in qualified and bare member calls", () => {
     ].join("\n");
     try {
       await fs.writeFile(file, source, "utf8");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const lines = source.split("\n");
       const targetLine = async (line: number, qualified: string) => {
         const column = lines[line - 1]!.indexOf(qualified) + qualified.lastIndexOf(":") + 2;
@@ -2065,7 +2065,7 @@ describe("C++ implicit this in qualified and bare member calls", () => {
     ].join("\n");
     try {
       await fs.writeFile(file, source, "utf8");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const lines = source.split("\n");
       const gotoLine = async (line: number, column: number) =>
         await goToDefinition(index, { file, line, column: column + 1 });
@@ -2111,7 +2111,7 @@ describe("C++ namespace aliases", () => {
     ];
     try {
       await fs.writeFile(file, lines.join("\n") + "\n");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const at = async (line: number, name: string, use = false) => {
         const source = lines[line - 1]!;
         const column = (use ? source.lastIndexOf(name) : source.indexOf(name)) + 1;
@@ -2208,7 +2208,7 @@ describe("C++ namespace aliases", () => {
     try {
       await fs.writeFile(header, headerLines.join("\n") + "\n");
       await fs.writeFile(file, lines.join("\n") + "\n");
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const at = async (target: string, sourceLines: string[], line: number) =>
         goToDefinition(index, { file: target, line, column: columnOf(sourceLines, line) });
       const inside = await at(file, lines, 6);

@@ -89,12 +89,11 @@ const definition: LanguageTestDefinition = {
 
 runLanguageTests(definition);
 
-it("recovers Less option imports in reduced mode", () => {
+it("extracts Less option imports with native queries", () => {
   const support = supportById("less")!;
   const specifiers = collectModuleSpecifiersFromSource(
     support,
     '@import (reference) "./reference";\n@import (css) "./css-mode";',
-    { native: "off" },
   );
 
   expect(specifiers).toEqual([

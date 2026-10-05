@@ -423,8 +423,7 @@ export function run() { helper(); new Widget(); }
 
     const index = await buildProjectIndex(root, {
       cache: "off",
-      native: "off",
-      graph: { resolutionHints: ["src"], native: "off" },
+      graph: { resolutionHints: ["src"] },
     });
     const sgraph = await buildSymbolGraphDetailed(index);
     const dbPath = path.join(root, "graph.sqlite");
@@ -436,8 +435,9 @@ export function run() { helper(); new Widget(); }
 
     const rows = await queryGraphSqliteRaw(
       dbPath,
-      "SELECT include_form FROM file_edges WHERE raw = ? ORDER BY include_form;",
-      ["x.h"],
+      // Native edges keep each include's spelling: `<x.h>` for the angle form, `x.h` for the quoted one.
+      "SELECT include_form FROM file_edges WHERE raw IN (?, ?) ORDER BY include_form;",
+      ["x.h", "<x.h>"],
     );
     expect(rows.rows).toEqual([["angle"], ["literal"]]);
   });

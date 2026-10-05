@@ -40,16 +40,9 @@ Default workflow:
 
 Index caches store project-relative paths, so a cache can be moved with its project. Cache selection precedence is `--cache-dir`, `CODEGRAPH_CACHE_DIR`, `cache.location` in project config (then user config), repository metadata, then the project root. `cache.location` accepts `project`, `repo`, `user`, or an absolute path; `--root` remains the project scope boundary. A configured anchor (`--cache-dir`, `CODEGRAPH_CACHE_DIR`, or an absolute `cache.location`) that resolves to the home directory or a filesystem root is rejected with an error instead of being used.
 
-## Runtime selection
+## Native runtime
 
-The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise.
-
-- `--native on`: require native explicitly and fail if it is unavailable
-- `--native off`: disable native explicitly and run reduced graph-only and regex recovery mode
-
-Reduced-accuracy runs are never silent: `graph` and `index` print a one-line `Backend:` warning on stderr whenever the native addon is unavailable or files fell back to regex extraction, independent of `--progress`, and `graph --json` / `index` structured output carries an `analysis` object (`mode`, `backend`, `label`, and fallback file counts) so automation can tell `semantic`, `mixed`, and `reduced` runs apart.
-
-The `Backend:` warning names affected languages. Fallback reports distinguish an unavailable parser from a query that ran but found no imports.
+The CLI requires the native Tree-sitter addon. The `--native` flag is removed. If the addon cannot load, the command fails; run `codegraph doctor` to inspect runtime health. Doctor exits non-zero when the addon cannot load. A source file over the native size limit is skipped with `sourceTooLarge` in the backend report. A native query failure is reported as `queryFailure` without regex recovery. Graph-only document and stylesheet formats retain their supported extraction paths.
 
 ## Index and cache guidance
 
@@ -129,14 +122,8 @@ codegraph graph ./
 # Explicit structured graph output
 codegraph graph ./ --json
 
-# Opt-in text specifier shortcut for plain .js and .ts files
-codegraph graph ./src --fast-graph
-
 # Add best-effort Python importlib and __import__ edges
 codegraph graph ./src --dynamic-import-heuristics
-
-# Default extraction (Tree-sitter for supported source languages)
-codegraph graph ./src
 
 # Build a dependency graph from multiple roots
 codegraph graph ./src ./packages/app ./packages/lib --mermaid > graph.mmd
@@ -191,7 +178,7 @@ codegraph orient --report --report-file orient.report.json
 
 `inspect` emits bounded hotspots, unresolved imports, and cycles. Add `--duplicates` to include a bounded high-confidence duplicate summary; run the recommended `duplicates` command for full grouped JSON.
 
-Graph, index, search, inspect, orient, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Search and inspect timing reports contain command totals and the underlying index build report without changing normal stdout. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
+Graph, index, search, inspect, orient, and review reports include `backend.native.byLanguage` so native usage and skipped files remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Native skip and failure reasons include `sourceTooLarge` and `queryFailure`; `graph.fallbackImportExtraction` is removed. Search and inspect timing reports contain command totals and the underlying index build report without changing normal stdout. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
 
 When a command builds an index with `--report`, its timing payload can include `sourceDiscoveryMs` for source-file discovery, `metadataDiscoveryMs` for project-metadata discovery, `gitListMs` for Git candidate listing, `filesystemScanMs` when discovery falls back to a glob scan, `cacheProbeMs` for Git signatures and per-file cache probes before parse, and `steps` for named durations. Discovery steps are `git-list`, `git-ignore`, `filesystem-scan`, `cache-probe`, and `metadata-discovery`. An incremental build also names its manifest-reuse preamble with `file-identity`, `clear-resolution-caches`, `load-manifest`, `diff-build-options`, and `config-hash`. Post-parse persistence names `persist-cache`, `workspace-manifests`, `index-manifest`, `finalize`, and `snapshot-write`, and `index-manifest` is the total of its own sub-steps `git-head`, `config-hash`, `manifest-transform`, `manifest-write`, and `cache-prune`. These optional fields are absent when their step does not run. Reusing the same report object replaces the discovery fields and clears the previous build's steps.
 
@@ -495,7 +482,7 @@ Short JSON shape:
 - Use `codegraph orient --json` when a tool needs concrete focus follow-ups, reasons, limits, or omissions. Index feedback is stderr-only, so stdout remains parseable.
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
-- Agent commands and every current-state query default to disk cache and validate automatically; a whole-project `graph` or `index` run performs its explicit build. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
+- Agent commands and every current-state query default to disk cache and validate automatically; a whole-project `graph` or `index` run performs its explicit build. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
 - Commands that load the project index first report cache validation as `Checking project index`. A cold or incompatible rebuild then reports source discovery, Git listing or filesystem scan, ignore-file listing, metadata discovery, and counted path checks when available, before build or update progress. Warm cache hits complete as `Checked project index` without claiming a rebuild. Use `--progress` for redirected progress logs or `--no-progress` to suppress feedback.
 
 #### Live file views
@@ -531,7 +518,7 @@ The JSON response fields are `schemaVersion`, `file`, effective `offset` and `li
 
 An `explore` query that is only an indexed project-relative file path, such as `codegraph explore src/auth.ts --json`, adds this same live response as top-level `fileView`. A uniquely matching basename also resolves; `--no-source` suppresses the file view, while `--include-graph-context` and `--allow-sensitive` pass through explicitly.
 
-`search` is deterministic and vectorless. Hybrid search is code-first by default: source symbols and implementation files outrank docs unless `--mode text` is explicit or docs are the strongest remaining evidence. Search JSON now includes top-level `analysis` metadata plus per-result `provenance` so mixed or reduced runs stay visible. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, analysis metadata, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`; duplicate context also uses an internal pair budget and reports skipped duplicate work through omission counts.
+`search` is deterministic and vectorless. Hybrid search is code-first by default: source symbols and implementation files outrank docs unless `--mode text` is explicit or docs are the strongest remaining evidence. Search JSON now includes top-level `analysis` metadata plus per-result `provenance` so backend and skipped-file status stay visible. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, analysis metadata, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`; duplicate context also uses an internal pair budget and reports skipped duplicate work through omission counts.
 
 In `search --json`, `limits.indexedTextChunks` caps text candidates passed to final result scoring. `candidateCounts.indexedTextChunks` and `omittedCounts.indexedTextChunks` describe that earlier stage separately from `omittedCounts.results`. When `candidateCounts.indexedTextChunksLowerBound` is true, candidate totals and omissions are lower bounds because retrieval did not count all matches.
 
@@ -615,7 +602,7 @@ codegraph hotspots ./src --limit 20
 
 `apisurface --undocumented` lists local exports only when indexed docstring capture was available. The pretty output shows file, range, name, kind, and exported name, followed by a coverage warning when any file could not be checked. `--json` returns `{ symbols: [{ file, name, exportedAs, kind, range }], coverage: { state: "complete" | "partial", uncheckedFiles?: string[] } }`. File paths, including `uncheckedFiles`, are project-relative.
 
-Re-exports have no local declaration and are omitted. Unsupported docstring syntax and reduced-mode files are excluded from `symbols` and named in partial coverage; see [language parity](./language-parity.md#symbols-and-exports).
+Re-exports have no local declaration and are omitted. Unsupported docstring syntax and skipped source files are excluded from `symbols` and named in partial coverage; see [language parity](./language-parity.md#symbols-and-exports).
 
 Unused exports have no CLI, MCP, or library report.
 
@@ -725,9 +712,6 @@ codegraph review --base origin/main --head HEAD --duplicates impacted
 
 # File-level graph delta between revisions
 codegraph graph-delta --git-base origin/main --git-head HEAD --json > graph-delta.json
-
-# Disable fast graph extraction for changed files while keeping incremental selection
-codegraph graph-delta --git-base origin/main --git-head HEAD --incremental-strict --json
 ```
 
 ```bash
@@ -975,12 +959,10 @@ Important review-bundle details:
 - Changed symbol details may include `callCompatibility` for high-confidence provider-backed callsite arity mismatches after signature changes. Agents should inspect the code before treating these leads as defects.
 - When diff data is available, `symbols` and `summary.symbolsChanged` include only symbols and re-exports touched by diff hunks. Unchanged re-exports may appear in `changedFiles[].apiContext`, never as changed symbols.
 - `--review-depth minimal|standard|deep` applies preset bundles:
-  - `minimal`: fast graph, no symbol snippets, `maxCallsites=0`, `maxCandidates=10`
+  - `minimal`: no symbol snippets, `maxCallsites=0`, `maxCandidates=10`
   - `standard`: symbol snippets plus up to 2 callsites, `maxCandidates=25`
   - `deep`: symbol snippets plus up to 10 callsites, `maxCandidates=50`
-- Explicit flags like `--include-symbol-details`, `--max-callsites`, `--max-tests`, or `--fast-graph` override preset defaults.
-- For review accuracy, keep the default Tree-sitter import extraction unless you intentionally accept less complete JavaScript or TypeScript edges.
-- `--incremental-strict` disables fast graph extraction for changed files while still using incremental file selection.
+- Explicit flags like `--include-symbol-details`, `--max-callsites`, or `--max-tests` override preset defaults.
 - `--cache-verify` validates the manifest before reuse and falls back to a full rebuild if mismatches are detected.
 
 ## Local development
@@ -989,7 +971,6 @@ If you are working on this package itself, use `tsx` to run the source entrypoin
 
 ```bash
 npx tsx src/cli.ts graph
-npx tsx src/cli.ts graph --fast-graph
 npx tsx src/cli.ts goto <file> <line> <column>
 ```
 
@@ -999,7 +980,7 @@ Human-readable output is optimized for compact reading by people or models and m
 
 Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json` returns the structured file graph shown below; add `--output <path>` to write any selected format to a file.
 
-`graph` JSON output is always compact: `files` lists each path once, and every edge references source and target files by their integer offset into `files` instead of repeating the path string. This keeps output size proportional to the number of distinct files rather than the number of edges. Every JSON graph payload (with or without `--symbols`) ends with an `analysis` object describing the parse backend that produced it (`mode`: `semantic`, `mixed`, or `reduced`; plus `backend`, a human `label`, and fallback file counts), mirroring what `index --json` reports.
+`graph` JSON output is always compact: `files` lists each path once, and every edge references source and target files by their integer offset into `files` instead of repeating the path string. This keeps output size proportional to the number of distinct files rather than the number of edges. Every JSON graph payload (with or without `--symbols`) ends with an `analysis` object describing the parse backend (`mode: "semantic"`, `backend`, `label`, and skipped-file counts), mirroring what `index --json` reports.
 
 ```json
 {
@@ -1020,7 +1001,6 @@ Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json
     "mode": "semantic",
     "backend": "native",
     "parserDegradedFiles": 0,
-    "fallbackImportExtractionFiles": 0,
     "nativeFilesUsed": 2,
     "nativeFilesFellBack": 0,
     "label": "native semantic"
@@ -1035,7 +1015,6 @@ Format notes:
 - Use `--mermaid` for a Mermaid flowchart.
 - Use `--dot` for Graphviz DOT.
 - In DOT output, type-only edges are dotted and external nodes are dashed ellipses.
-- `--fast-graph` bypasses native import queries only for plain `.js` and `.ts` files, using lightweight text extraction that may miss multiline or complex patterns. TSX and other languages keep their normal extraction path.
 
 When using `--symbols`:
 

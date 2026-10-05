@@ -48,7 +48,6 @@ async function renameSnapshotForFiles(root: string, files: string[]): Promise<Ag
       mode: "semantic",
       backend: "unknown",
       parserDegradedFiles: 0,
-      fallbackImportExtractionFiles: 0,
       nativeFilesUsed: 0,
       nativeFilesFellBack: 0,
       label: "semantic",
@@ -773,6 +772,32 @@ describe("rename preview", () => {
     }
 
     await expect(renameSnapshotForFiles(root, [aliasFile])).rejects.toThrow("Index file is outside project root");
+  });
+
+  it("is not safe when the native parser skipped a file, but is safe on the same complete snapshot", async () => {
+    const root = await mkTmpDir("cg-rename-skipped-");
+    const serviceFile = path.join(root, "service.ts");
+    const consumerFile = path.join(root, "consumer.ts");
+    await fsp.writeFile(serviceFile, "export function service(): number { return 1; }\n");
+    await fsp.writeFile(consumerFile, 'import { service } from "./service.js";\nexport const value = service();\n');
+    const snapshot = await renameSnapshotForFiles(root, [serviceFile, consumerFile]);
+    const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "service" });
+    const handle = symbols.symbols.find((symbol) => symbol.name === "service")!.handle;
+
+    const complete = await previewRenameInSnapshot(snapshot, { root, handle, newName: "renamedService" });
+    expect(complete.safe).toBe(true);
+    expect(complete.unsafeSites.some((site) => site.reason === "parse_degraded")).toBe(false);
+
+    // A sourceTooLarge or queryFailure skip leaves references unverified in that file.
+    const skipped = await previewRenameInSnapshot(
+      {
+        ...snapshot,
+        analysis: { ...snapshot.analysis, nativeFilesFellBack: 1, label: "semantic (1 file(s) skipped)" },
+      },
+      { root, handle, newName: "renamedService" },
+    );
+    expect(skipped.safe).toBe(false);
+    expect(skipped.unsafeSites).toContainEqual(expect.objectContaining({ reason: "parse_degraded" }));
   });
 
   it("refuses source aliases whose real path is sensitive key material", async (context) => {

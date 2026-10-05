@@ -496,7 +496,6 @@ export function summarizeSourceOrders(rows: Array<{ amount: number; tax: number 
         "--cache",
         "memory",
         "--cache-strict",
-        "--fast-graph",
         "--resolve-node-modules",
       ]);
       expect(stdout).toContain("flowchart LR");

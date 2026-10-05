@@ -471,7 +471,7 @@ function searchPathOnly(
         label: relFile,
         file: relFile,
         provenance: createSearchProvenance(relFile, "text", "high", {
-          mode: "reduced",
+          mode: "semantic",
           backend: "unknown",
         }),
       });
@@ -492,10 +492,9 @@ function searchPathOnly(
     mode: "path",
     root,
     analysis: {
-      mode: "reduced",
+      mode: "semantic",
       backend: "unknown",
       parserDegradedFiles: 0,
-      fallbackImportExtractionFiles: 0,
       nativeFilesUsed: 0,
       nativeFilesFellBack: 0,
       label: "path-only",

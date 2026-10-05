@@ -7,19 +7,19 @@ import {
   parseRustImportStatements,
 } from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { logWithLevel, type LogLevel } from "../logging.js";
+import { recordNativeExecutionOutcome } from "../native/native-backend-report.js";
+import type { BuildReport } from "../indexer/types.js";
+import { errorMessage } from "../util/errors.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../worker/native-extract-worker.js";
+import type { LogLevel } from "../logging.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import {
   getCompactImportsExecution,
   getNativeSyntaxTreeExecution,
-  isNativeQueryAuthoritative,
-  supportsReducedModeRegexRecovery,
   type CompactCapture,
   type CompactQueryResults,
   type NativeCapture,
-  type NativeFallbackReason,
   type NativeQueryResults,
-  type NativeRuntimeMode,
 } from "../native/tree-sitter-native.js";
 import {
   extractGraphOnlyModuleSpecifiers,
@@ -30,46 +30,23 @@ import {
 } from "../document-links.js";
 import { sliceText, unquote } from "../util/ast.js";
 import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rust-test-modules.js";
-import { rustStatementStartIndex } from "../util/resolution/rust.js";
-import { pythonStatements, pythonTypeCheckingContext } from "../util/python-type-checking.js";
-import { maskPythonCommentsAndStrings } from "../util/comments.js";
-import {
-  collectTextImportSpecifiers,
-  rustSpecifierForParsedImport,
-} from "../indexer/imports/text-import-extractors.js";
+import { pythonTypeCheckingContext } from "../util/python-type-checking.js";
 import { maskImportBindingTrivia } from "../indexer/imports/binding-ranges.js";
+import { rustSpecifierForParsedImport } from "../indexer/imports/text-import-extractors.js";
 import {
   cFamilyImportFormFromText,
-  extractJsTsSpecifiers,
   isJsTsTypeOnlySpecifierStatement,
   isRubyLoadForm,
   type ModuleSpecifier,
 } from "../util/specifiers.js";
 
-export type FallbackImportExtractionReason =
-  | "fast"
-  | "reduced-mode"
-  | "unavailable"
-  | "unsupportedLanguage"
-  | "query-error"
-  | "query-empty";
-
-export type FallbackImportExtractionEvent = {
-  file?: string;
-  language: string;
-  reason: FallbackImportExtractionReason;
-};
-
 export type CollectModuleSpecifiersOptions = {
   tree?: SyntaxTreeLike;
   nativeQueries?: NativeQueryResults | null;
   compactNativeImports?: CompactQueryResults | null;
-  fast?: boolean;
   file?: string;
-  fastRegexDisabledLanguages?: string[];
-  onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
-  native?: NativeRuntimeMode;
   logLevel?: LogLevel;
+  report?: BuildReport;
 };
 
 const HTML_LIKE_LANGUAGE_IDS = new Set(["html", "vue", "svelte"]);
@@ -166,17 +143,8 @@ function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpeci
 function makeSeenSet(target: ModuleSpecifier[]): Set<string> {
   return new Set(target.map(moduleSpecifierKey));
 }
-
-function nativeCaptureStartIndex(
-  source: string,
-  capture: CompactCapture | NativeCapture | undefined,
-): number | undefined {
-  if (capture === undefined) return undefined;
-  if ("startIndex" in capture && typeof capture.startIndex === "number") {
-    return utf8ByteOffsetToStringIndex(source, capture.startIndex);
-  }
-  if (!("start" in capture)) return undefined;
-  return utf8ByteOffsetToStringIndex(source, capture.start.index);
+function nativeCaptureStartIndex(source: string, capture: CompactCapture | NativeCapture): number {
+  return utf8ByteOffsetToStringIndex(source, "startIndex" in capture ? capture.startIndex : capture.start.index);
 }
 
 function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
@@ -211,10 +179,7 @@ function extractTripleSlashReferenceSpecifiers(source: string): ModuleSpecifier[
   return out;
 }
 
-// Triple-slash reference edges are a source-text scan, independent of whether
-// the native query ran; apply it on every TS/TSX exit path (fast-mode regex
-// recovery, the native-query happy path, and the query-unavailable/query-error
-// regex-recovery fallback), not just the native-query path.
+// Triple-slash path directives supplement native TS/TSX import captures.
 function appendTripleSlashReferencesForTs(support: LanguageSupport, source: string, out: ModuleSpecifier[]): void {
   if (support.id !== "ts" && support.id !== "tsx") return;
   appendUniqueSpecifiers(out, extractTripleSlashReferenceSpecifiers(source), makeSeenSet(out));
@@ -255,46 +220,26 @@ function extractCssModuleSpecifiers(source: string): ModuleSpecifier[] {
   return out;
 }
 
-export function mapNativeExecutionFallbackReason(
-  languageId: string,
-  nativeFallbackReason: NativeFallbackReason | undefined,
-  queryFailed: boolean,
-  queryRan: boolean,
-): FallbackImportExtractionReason {
-  if (queryFailed || nativeFallbackReason === "queryFailure") {
-    return "query-error";
-  }
-  if (nativeFallbackReason === "unsupportedLanguage") {
-    return "unsupportedLanguage";
-  }
-  // An oversized source downgraded before execution is an availability limit, not an
-  // empty query result.
-  if (nativeFallbackReason === "sourceTooLarge") {
-    return "unavailable";
-  }
-  if (nativeFallbackReason === "unavailable" || !queryRan) {
-    return supportsReducedModeRegexRecovery(languageId) ? "reduced-mode" : "unavailable";
-  }
-  return "query-empty";
-}
-
 function resolveNativeImportMatches(
   support: LanguageSupport,
   source: string,
   opts: CollectModuleSpecifiersOptions | undefined,
 ): {
   matches: CompactQueryResults["imports"] | NativeQueryResults["imports"] | null;
-  fallbackReason?: NativeFallbackReason;
 } {
-  const providedImports = opts?.compactNativeImports?.imports ?? opts?.nativeQueries?.imports;
-  if (providedImports !== undefined) {
-    return { matches: providedImports };
+  if (opts?.compactNativeImports !== undefined) return { matches: opts.compactNativeImports?.imports ?? null };
+  if (opts?.nativeQueries !== undefined) return { matches: opts.nativeQueries?.imports ?? null };
+  const execution = getCompactImportsExecution(source, support);
+  if (execution.fallbackReason) {
+    recordNativeExecutionOutcome(opts?.report, {
+      ...(opts?.file ? { file: opts.file } : {}),
+      support,
+      results: null,
+      fallbackReason: execution.fallbackReason,
+      ...(execution.error ? { error: execution.error } : {}),
+    });
   }
-  const execution = getCompactImportsExecution(source, support, opts?.native);
-  return {
-    matches: execution.results?.imports ?? null,
-    ...(execution.fallbackReason ? { fallbackReason: execution.fallbackReason } : {}),
-  };
+  return { matches: execution.results?.imports ?? null };
 }
 
 export function collectModuleSpecifiersFromSource(
@@ -304,40 +249,29 @@ export function collectModuleSpecifiersFromSource(
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
 
-  const supportsRegexImportRecovery = supportsReducedModeRegexRecovery(support.id);
   const htmlLikeLanguage = isHtmlLikeLanguage(support.id, opts?.file);
-  const graphOnlyLanguage = isGraphOnlyLanguage(support.id);
-  const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(support.id);
-  const reportFallback = (reason: FallbackImportExtractionReason) => {
-    const event: FallbackImportExtractionEvent = {
-      language: support.id,
-      reason,
+  if (isGraphOnlyLanguage(support.id)) return extractGraphOnlyModuleSpecifiers(support.id, source);
+  if (Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+    recordNativeExecutionOutcome(opts?.report, {
       ...(opts?.file ? { file: opts.file } : {}),
-    };
-    opts?.onFallbackImportExtraction?.(event);
-  };
-  if (graphOnlyLanguage) {
-    reportFallback("unsupportedLanguage");
-    return extractGraphOnlyModuleSpecifiers(support.id, source);
+      support,
+      results: null,
+      fallbackReason: "sourceTooLarge",
+    });
+    return [];
   }
 
-  const shouldAttemptFallback =
-    support.id === "python" ? /\b(import|from)\b/.test(source) : /\b(import|require|from)\b/.test(source);
-  const nativeImportExecution = resolveNativeImportMatches(support, source, opts);
-  const resolvedNativeImports = nativeImportExecution.matches;
-  const nativeFallbackReason = nativeImportExecution.fallbackReason;
-  const importFallbackReason = (queryFailed: boolean): FallbackImportExtractionReason =>
-    mapNativeExecutionFallbackReason(support.id, nativeFallbackReason, queryFailed, resolvedNativeImports !== null);
+  const nativeImportsArray = resolveNativeImportMatches(support, source, opts).matches;
+  if (!nativeImportsArray) return [];
+  const nativeImportsToProcess = htmlLikeLanguage ? [] : nativeImportsArray;
+  const isPythonTypeOnly = support.id === "python" ? pythonTypeCheckingContext(source) : undefined;
 
-  // PHP keeps its tree-based qualified-usage scan (`new \Foo\Bar`, typed parameters); the
-  // import statements themselves come from the shared @from capture path below. Python needs
-  // no branch at all: its import queries capture @from, and the shared text-extractor tail
-  // covers the recovery path.
+  // PHP also resolves qualified usages directly from the native syntax tree.
   if (support.id === "php") {
     const phpTree =
       opts?.tree ??
       (() => {
-        const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support, opts?.native);
+        const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support);
         return nativeTreeExecution.tree ? new ProjectedSyntaxTree(source, nativeTreeExecution.tree) : null;
       })();
     if (phpTree) {
@@ -346,51 +280,7 @@ export function collectModuleSpecifiersFromSource(
     }
   }
 
-  if (supportsRegexImportRecovery && opts?.fast && !fastRegexDisabled) {
-    try {
-      reportFallback("fast");
-      for (const specifier of extractJsTsSpecifiers(source)) out.push(specifier);
-    } catch {
-      // ignore
-    }
-    appendTripleSlashReferencesForTs(support, source, out);
-    return normalizeModuleSpecifiers(out);
-  }
-
-  const nativeImportsArray = resolvedNativeImports;
-  const hasNativeImports = !!nativeImportsArray;
-  const nativeImportsToProcess = htmlLikeLanguage ? [] : (nativeImportsArray ?? []);
-  const isPythonTypeOnly = support.id === "python" ? pythonTypeCheckingContext(source) : undefined;
-
-  let queryFailed = false;
-  // Current native add-ons retain capture offsets. Older add-ons use ordered source lookup.
-  let rustStatementSearchIndex = 0;
-  // Statement starts are never inside a string or comment, so an offsetless capture cannot
-  // match text quoted earlier in the file.
-  let pythonStatementStarts: number[] | undefined;
-  let pythonStatementCursor = 0;
-  // The graph query emits one match per name of `import a, b`; later matches of the same
-  // statement name a module not seen yet, so they reuse its start instead of consuming the next.
-  let lastPythonStatement: { text: string; start: number; names: Set<string> } | undefined;
-  const locatePythonStatement = (text: string, name: string): number => {
-    if (lastPythonStatement?.text === text && !lastPythonStatement.names.has(name)) {
-      lastPythonStatement.names.add(name);
-      return lastPythonStatement.start;
-    }
-    const start = nextPythonStatement(text);
-    lastPythonStatement = start >= 0 ? { text, start, names: new Set([name]) } : undefined;
-    return start;
-  };
-  const nextPythonStatement = (text: string): number => {
-    pythonStatementStarts ??= pythonStatements(maskPythonCommentsAndStrings(source)).map((entry) => entry.start);
-    while (pythonStatementCursor < pythonStatementStarts.length) {
-      const start = pythonStatementStarts[pythonStatementCursor]!;
-      pythonStatementCursor += 1;
-      if (source.startsWith(text, start)) return start;
-    }
-    return -1;
-  };
-  if (hasNativeImports) {
+  if (nativeImportsArray) {
     try {
       for (const match of nativeImportsToProcess) {
         const capMap = Object.fromEntries(match.captures.map((capture) => [capture.name, capture] as const)) as Record<
@@ -406,12 +296,8 @@ export function collectModuleSpecifiersFromSource(
             ? isJsTsTypeOnlySpecifierStatement(stmtText)
             : support.isTypeOnly(stmtText);
         if (!typeOnly && isPythonTypeOnly) {
-          // Captures arrive in source order, so an older add-on without offsets is located by text.
-          const trimmed = stmtText.trim();
-          const start =
-            nativeCaptureStartIndex(source, capMap["stmt"]) ??
-            (trimmed ? locatePythonStatement(trimmed, capMap["from"]?.text ?? "") : -1);
-          if (start >= 0) typeOnly = isPythonTypeOnly(start);
+          const statement = capMap["stmt"];
+          if (statement) typeOnly = isPythonTypeOnly(nativeCaptureStartIndex(source, statement));
         }
         if (support.id === "kotlin") {
           const parsed = parseKotlinImportStatement(stmtText);
@@ -425,16 +311,8 @@ export function collectModuleSpecifiersFromSource(
           continue;
         }
         if (support.id === "rust") {
-          const capturedStartIndex = nativeCaptureStartIndex(source, capMap["stmt"]);
-          const statementStartIndex = rustStatementStartIndex(
-            source,
-            stmtText,
-            capturedStartIndex,
-            rustStatementSearchIndex,
-          );
-          if (capturedStartIndex === undefined && statementStartIndex !== undefined) {
-            rustStatementSearchIndex = statementStartIndex + stmtText.trim().length;
-          }
+          const statement = capMap["stmt"];
+          const statementStartIndex = statement ? nativeCaptureStartIndex(source, statement) : undefined;
           if (isRustCfgTestStatement(source, stmtText, statementStartIndex)) continue;
           const parsedList = parseRustImportStatements(stmtText);
           if (parsedList.length) {
@@ -500,103 +378,28 @@ export function collectModuleSpecifiersFromSource(
         }
       }
       if (htmlLikeLanguage) {
-        const beforeHtmlRecovery = out.length;
         const htmlSeen = makeSeenSet(out);
         appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
         appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source), htmlSeen);
         appendUniqueSpecifiers(out, extractHtmlStyleSpecifiers(source), htmlSeen);
-        if (!beforeHtmlRecovery && out.length) {
-          reportFallback(importFallbackReason(false));
-        }
       }
       if (support.id === "css" || support.id === "scss" || support.id === "less") {
-        const beforeCssRecovery = out.length;
         const cssSeen = makeSeenSet(out);
         appendUniqueSpecifiers(out, extractCssImportSpecifiers(source), cssSeen);
         appendUniqueSpecifiers(out, extractCssModuleSpecifiers(source), cssSeen);
         appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
-        if (!beforeCssRecovery && out.length) {
-          reportFallback(importFallbackReason(false));
-        }
       }
       appendTripleSlashReferencesForTs(support, source, out);
-      // Python's reduced-mode text registry still recovers when the native query ran and
-      // matched nothing (e.g. native off with empty compact results); the recovery must
-      // report query-empty instead of the authoritative early return dropping the imports.
-      if (support.id === "python" && (queryFailed || !out.length) && shouldAttemptFallback) {
-        const extracted = collectTextImportSpecifiers("python", source);
-        if (extracted.length) {
-          reportFallback(importFallbackReason(queryFailed));
-          appendUniqueSpecifiers(out, extracted, makeSeenSet(out));
-        }
-      }
-      if (out.length || isNativeQueryAuthoritative(support, "imports")) {
-        return normalizeModuleSpecifiers(out);
-      }
+      return normalizeModuleSpecifiers(out);
     } catch (error) {
-      queryFailed = true;
-      if (!htmlLikeLanguage) {
-        logWithLevel(
-          opts?.logLevel,
-          "warn",
-          `Warning: Native query error in collectModuleSpecifiersFromSource for ${support.id}:`,
-          error,
-        );
-      }
-      out.length = 0;
-    }
-  }
-  if (supportsRegexImportRecovery) {
-    if ((queryFailed || !out.length) && shouldAttemptFallback) {
-      try {
-        const extracted = extractJsTsSpecifiers(source);
-        if (extracted.length) {
-          reportFallback(importFallbackReason(queryFailed));
-          out.push(...extracted);
-        }
-      } catch {
-        // ignore
-      }
-    }
-    appendTripleSlashReferencesForTs(support, source, out);
-    return normalizeModuleSpecifiers(out);
-  }
-
-  const reducedRecoveryReason = importFallbackReason(queryFailed);
-  if (htmlLikeLanguage && !out.length) {
-    const beforeRecovery = out.length;
-    const attributeSpecs = extractHtmlAttributeSpecifiers(source);
-    const inlineSpecs = extractHtmlInlineScriptSpecifiers(source);
-    const styleSpecs = extractHtmlStyleSpecifiers(source);
-    if (attributeSpecs.length || inlineSpecs.length || styleSpecs.length) {
-      const fallbackSeen = makeSeenSet(out);
-      appendUniqueSpecifiers(out, attributeSpecs, fallbackSeen);
-      appendUniqueSpecifiers(out, inlineSpecs, fallbackSeen);
-      appendUniqueSpecifiers(out, styleSpecs, fallbackSeen);
-    }
-    if (out.length > beforeRecovery) {
-      reportFallback(reducedRecoveryReason);
-    }
-  }
-  if (support.id === "css" || support.id === "scss" || support.id === "less") {
-    const beforeRecovery = out.length;
-    const cssSeen = makeSeenSet(out);
-    appendUniqueSpecifiers(out, extractCssImportSpecifiers(source), cssSeen);
-    appendUniqueSpecifiers(out, extractCssModuleSpecifiers(source), cssSeen);
-    appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
-    if (out.length > beforeRecovery) {
-      reportFallback(reducedRecoveryReason);
-    }
-  }
-  // The shared text extractor registry also serves the indexer's binding recovery, so a
-  // language recovers the same specifiers on both paths instead of only one.
-  if (!out.length) {
-    const textSpecifiers = collectTextImportSpecifiers(support.id, source, {
-      ...(opts?.file ? { file: opts.file } : {}),
-    });
-    if (textSpecifiers.length) {
-      reportFallback(reducedRecoveryReason);
-      appendUniqueSpecifiers(out, textSpecifiers, makeSeenSet(out));
+      recordNativeExecutionOutcome(opts?.report, {
+        ...(opts?.file ? { file: opts.file } : {}),
+        support,
+        results: null,
+        fallbackReason: "queryFailure",
+        error: errorMessage(error),
+      });
+      return [];
     }
   }
   return normalizeModuleSpecifiers(out);

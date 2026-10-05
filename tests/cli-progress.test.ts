@@ -649,7 +649,7 @@ describe("CLI index progress", () => {
   });
 
   it.each(["inspect", "hotspots"] as const)(
-    "%s reuses a Git-backed child-root snapshot across unchanged and native-runtime checks",
+    "%s reuses a Git-backed child-root snapshot across unchanged checks",
     async (command) => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), `codegraph-cli-${command}-child-snapshot-`));
       const srcDir = path.join(root, "src");
@@ -666,10 +666,9 @@ describe("CLI index progress", () => {
       runGit(root, ["add", "."]);
       runGit(root, ["commit", "-m", "initial"]);
 
-      const commandArgs = (cache: "off" | "disk", progress: boolean, nativeMode?: "off"): string[] => {
+      const commandArgs = (cache: "off" | "disk", progress: boolean): string[] => {
         const args = [command, "--root", root, srcDir, "--limit", "10", "--cache", cache, "--json"];
         if (progress) args.push("--progress");
-        if (nativeMode) args.push("--native", nativeMode);
         return args;
       };
       const readScopedResult = (stdout: string): unknown => {
@@ -723,25 +722,14 @@ describe("CLI index progress", () => {
         expect(migrated.stderr).toContain("Built project index");
         expect(readScopedResult(migrated.stdout)).toEqual(warmScoped);
 
-        const switched = await captureCli(commandArgs("disk", true, "off"), { progressPreparationDelayMs: 0 });
-        expect(switched.stderr).toContain("Building project index");
-        expect(switched.stderr).toContain("Built project index");
-        const switchedScoped = readScopedResult(switched.stdout);
-        const nativeOffCold = await captureCli(commandArgs("off", false, "off"));
-        expect(switchedScoped).toEqual(readScopedResult(nativeOffCold.stdout));
-        await buildProjectIndex(root, { cache: "disk", native: "off" });
-        const secondNativeOff = await captureCli(commandArgs("disk", true, "off"), { progressPreparationDelayMs: 0 });
-        expectSnapshotOnlyProgress(secondNativeOff.stderr);
-        expect(readScopedResult(secondNativeOff.stdout)).toEqual(switchedScoped);
-
         await fsp.writeFile(sourceFile, "export const a = 2;\n", "utf8");
-        const stale = await captureCli(commandArgs("disk", true, "off"), { progressPreparationDelayMs: 0 });
+        const stale = await captureCli(commandArgs("disk", true), { progressPreparationDelayMs: 0 });
         expect(stale.stderr).toContain("Updating project index");
         expect(stale.stderr).toContain("Updated project index");
         const staleScoped = readScopedResult(stale.stdout);
-        expect(staleScoped).not.toEqual(switchedScoped);
+        expect(staleScoped).not.toEqual(warmScoped);
 
-        const changedCold = await captureCli(commandArgs("off", false, "off"));
+        const changedCold = await captureCli(commandArgs("off", false));
         expect(staleScoped).toEqual(readScopedResult(changedCold.stdout));
       } finally {
         await fsp.rm(root, { recursive: true, force: true });

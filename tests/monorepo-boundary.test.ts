@@ -124,7 +124,7 @@ describe("monorepo resolution boundaries", () => {
       const outerUse = posix(path.join(root, "u", "UseOuter.cs"));
       await writeFile(innerUse, `${useLines.join("\n")}\n`);
       await writeFile(outerUse, `${useLines.join("\n")}\n`);
-      const index = await buildProjectIndex(root, { cache: "off", native: "on" });
+      const index = await buildProjectIndex(root, { cache: "off" });
       const target = async (file: string, line: number, token: string) => {
         const column = useLines[line - 1]!.lastIndexOf(token) + 1;
         const result = await goToDefinition(index, { file, line, column });
