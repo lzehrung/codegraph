@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph-core",
-  "version": "2.4.0",
+  "version": "3.0.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -56,7 +56,7 @@
   },
   "description": "Pure TypeScript library for Codegraph project indexes, graphs, impact analysis, and agent-shaped query helpers without the CLI or MCP server.",
   "dependencies": {
-    "@lzehrung/codegraph-native": "^1.13.0",
+    "@lzehrung/codegraph-native": "^2.0.0",
     "picomatch": "^4.0.3",
     "piscina": "^4.9.4",
     "tinyglobby": "^0.2.17",

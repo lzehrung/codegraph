@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph",
-  "version": "2.4.0",
+  "version": "3.0.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -181,8 +181,8 @@
     "vitest": "^4.1.8"
   },
   "dependencies": {
-    "@lzehrung/codegraph-core": "2.4.0",
-    "@lzehrung/codegraph-native": "^1.13.0",
+    "@lzehrung/codegraph-core": "3.0.0",
+    "@lzehrung/codegraph-native": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "jsonc-parser": "^3.3.1",

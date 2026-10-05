@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-05
+
 ### Breaking
 
 - Remove the `native` build option and `--native` CLI flag. The native addon is required; a missing addon is an error. Use `codegraph doctor` to diagnose installation problems.
@@ -672,7 +674,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.0.0
 [2.4.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.4.0
 [2.3.31]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.31
 [2.3.30]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.30
