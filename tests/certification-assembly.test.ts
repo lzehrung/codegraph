@@ -36,8 +36,7 @@ function createAssemblyCheckout(): {
     scripts: { prepare: "do-not-run" },
     workspaces: ["packages/*"],
     devDependencies: { typescript: "1.0.0" },
-    dependencies: { "@lzehrung/codegraph-core": "1.0.0" },
-    optionalDependencies: { "@lzehrung/codegraph-native": "^1.0.0" },
+    dependencies: { "@lzehrung/codegraph-core": "1.0.0", "@lzehrung/codegraph-native": "^1.0.0" },
   };
   const coreManifest = {
     name: "@lzehrung/codegraph-core",
@@ -45,7 +44,7 @@ function createAssemblyCheckout(): {
     type: "module",
     main: "dist/index.js",
     files: ["dist"],
-    optionalDependencies: { "@lzehrung/codegraph-native": "^1.0.0" },
+    dependencies: { "@lzehrung/codegraph-native": "^1.0.0" },
   };
   const nativeManifest = {
     name: "@lzehrung/codegraph-native",
@@ -135,11 +134,10 @@ describe("release candidate assembly", () => {
     const packedRoot = packedManifests.get("@lzehrung/codegraph");
     expect(packedRoot).toMatchObject({
       version: "2.0.0",
-      dependencies: { "@lzehrung/codegraph-core": "2.0.0" },
-      optionalDependencies: { "@lzehrung/codegraph-native": "^3.0.0" },
+      dependencies: { "@lzehrung/codegraph-core": "2.0.0", "@lzehrung/codegraph-native": "^3.0.0" },
     });
     const packedCore = packedManifests.get("@lzehrung/codegraph-core");
-    expect(packedCore).toMatchObject({ version: "2.0.0" });
+    expect(packedCore).toMatchObject({ version: "2.0.0", dependencies: { "@lzehrung/codegraph-native": "^3.0.0" } });
     expect(packedRoot).not.toHaveProperty("scripts");
     expect(packedRoot).not.toHaveProperty("workspaces");
     expect(packedRoot).not.toHaveProperty("devDependencies");

@@ -639,7 +639,7 @@ describe("release script helpers", () => {
         {
           name: "@lzehrung/codegraph",
           version: "1.8.43",
-          optionalDependencies: {
+          dependencies: {
             "@lzehrung/codegraph-native": "^1.8.43",
           },
           workspaces: ["packages/*"],
@@ -653,7 +653,7 @@ describe("release script helpers", () => {
     ).toEqual({
       name: "@lzehrung/codegraph",
       version: "1.8.44",
-      optionalDependencies: {
+      dependencies: {
         "@lzehrung/codegraph-native": "^1.8.48",
       },
       workspaces: ["packages/*"],
@@ -669,18 +669,17 @@ describe("release script helpers", () => {
         {
           name: "@lzehrung/codegraph",
           version: "1.8.46",
-          optionalDependencies: {
-            "@lzehrung/codegraph-native": "^1.8.48",
-          },
           dependencies: {
+            "@lzehrung/codegraph-native": "^1.8.48",
             "fast-glob": "^3.3.3",
           },
         },
         {
           name: "@lzehrung/codegraph",
           version: "1.8.45",
-          optionalDependencies: {
+          dependencies: {
             "@lzehrung/codegraph-native": "^1.8.45",
+            "fast-glob": "^3.3.3",
           },
           scripts: {
             "publish:resume": "node ./scripts/release.mjs resume --publish",
@@ -689,16 +688,14 @@ describe("release script helpers", () => {
           devDependencies: {
             vitest: "^3.2.4",
           },
-          dependencies: {
-            "fast-glob": "^3.3.3",
-          },
         },
       ),
     ).toEqual({
       name: "@lzehrung/codegraph",
       version: "1.8.46",
-      optionalDependencies: {
+      dependencies: {
         "@lzehrung/codegraph-native": "^1.8.48",
+        "fast-glob": "^3.3.3",
       },
       scripts: {
         "publish:resume": "node ./scripts/release.mjs resume --publish",
@@ -706,9 +703,6 @@ describe("release script helpers", () => {
       workspaces: ["packages/*"],
       devDependencies: {
         vitest: "^3.2.4",
-      },
-      dependencies: {
-        "fast-glob": "^3.3.3",
       },
     });
   });
