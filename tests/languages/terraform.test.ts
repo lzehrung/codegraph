@@ -661,4 +661,128 @@ describe("Terraform edge forms", () => {
       await fsp.rm(outside, { recursive: true, force: true });
     }
   });
+
+  it("keeps a dynamic iterator in its labels off a same-named resource", async () => {
+    const root = await createTempProjectRoot("cg-terraform-dynamic-labels-", [
+      {
+        path: "main.tf",
+        contents: [
+          'resource "aws_subnet" "key" {}',
+          'resource "aws_x" "y" {',
+          '  dynamic "rule" {',
+          "    for_each = [aws_subnet.key]",
+          "    iterator = aws_subnet",
+          "    labels   = [aws_subnet.key]",
+          "    content {}",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      const inLabels = await goToDefinition(index, await positionOf(root, "main.tf", "aws_subnet.key]", 11, 1));
+      expect(inLabels.status).toBe("not_found");
+      // `for_each` stays in the enclosing scope, so its use still names the resource.
+      expect(await referenceSummary(index, root, "main.tf", '"key"')).toEqual({
+        sites: ["main.tf:1", "main.tf:4"],
+        coverage: "complete",
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("binds a check block's data use to its scoped data source, not the module-wide one", async () => {
+    const root = await createTempProjectRoot("cg-terraform-check-data-", [
+      {
+        path: "main.tf",
+        contents: [
+          'data "http" "health" {}',
+          'check "up" {',
+          '  data "http" "health" {}',
+          "  assert {",
+          "    condition = data.http.health.status_code == 200",
+          "  }",
+          "}",
+          "locals {",
+          "  body = data.http.health.response_body",
+          "}",
+          "",
+        ].join("\n"),
+      },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      const inCheck = await goToDefinition(index, await positionOf(root, "main.tf", "data.http.health.status", 10));
+      expect(inCheck.status).toBe("not_found");
+      expect(await referenceSummary(index, root, "main.tf", '"health"')).toEqual({
+        sites: ["main.tf:1", "main.tf:9"],
+        coverage: "complete",
+      });
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "health" });
+      const rename = await previewRenameWithSession(session, {
+        root,
+        handle: symbols.symbols[0]!.handle,
+        newName: "status",
+      });
+      expect(rename.edits.map((edit) => `${edit.file}:${edit.range.start.line}`)).toEqual(["main.tf:1", "main.tf:9"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not rename ECMAScript-like export text in Terraform comments", async () => {
+    const root = await createTempProjectRoot("cg-terraform-export-comment-", [
+      { path: "main.tf", contents: 'variable "region" {}\n# export { region }\nlocals {\n  r = var.region\n}\n' },
+    ]);
+    try {
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "region" });
+      const rename = await previewRenameWithSession(session, {
+        root,
+        handle: symbols.symbols[0]!.handle,
+        newName: "zone",
+      });
+      expect(rename.edits.map((edit) => `${edit.file}:${edit.range.start.line}:${edit.kind}`)).toEqual([
+        "main.tf:1:definition",
+        "main.tf:4:reference",
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds references that are operands of binary and unary operators", async () => {
+    const root = await createTempProjectRoot("cg-terraform-operators-", [
+      {
+        path: "main.tf",
+        contents: [
+          'variable "a" {}',
+          'variable "b" {}',
+          "locals {",
+          "  sum  = var.a + var.b",
+          "  not  = !var.b",
+          "  both = var.a == 1 && -var.b > 0",
+          "}",
+          "",
+        ].join("\n"),
+      },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      const summary = await findReferences(index, await positionOf(root, "main.tf", '"b"', 1));
+      expect(summary.status).toBe("ok");
+      if (summary.status !== "ok") return;
+      expect(
+        summary.references.map((reference) => `${reference.range.start.line}:${reference.range.start.column}`),
+      ).toEqual(["2:11", "4:22", "5:15", "6:29"]);
+      const right = await goToDefinition(index, await positionOf(root, "main.tf", "+ var.b", 6));
+      expect(right.status === "ok" && right.definition.localName).toBe("b");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

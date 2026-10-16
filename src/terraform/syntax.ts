@@ -269,17 +269,31 @@ function collectModuleCall(block: SyntaxNodeLike, declaration: TerraformDeclarat
 type TraversalStep = { kind: "attr"; name: SyntaxNodeLike } | { kind: "index" };
 
 /**
+ * tree-sitter-hcl attaches a traversal that follows an operand to the operator node instead:
+ * `var.a + var.b` parses as `(operation (binary_operation var get_attr(a) var)) get_attr(b)`, and
+ * `!var.f` as `(operation (unary_operation var)) get_attr(f)`. HCL binds traversals tighter than
+ * operators, so a root that ends one of these wrappers continues after the wrapper.
+ */
+const OPERATOR_WRAPPERS = new Set(["binary_operation", "unary_operation", "operation"]);
+
+/** Named nodes after `node` in document order, climbing out of operator wrappers that it ends. */
+function* followingNodes(node: SyntaxNodeLike): Generator<SyntaxNodeLike> {
+  let current = node;
+  for (let parent = current.parent; parent; parent = current.parent) {
+    const children = parent.namedChildren.filter(isSyntaxNode);
+    yield* children.slice(children.findIndex((child) => sameNode(child, current)) + 1);
+    if (!OPERATOR_WRAPPERS.has(parent.type)) return;
+    current = parent;
+  }
+}
+
+/**
  * `get_attr` and index steps after the root. A splat or any other node ends the traversal and is
  * returned as `end`.
  */
-function traversalSteps(
-  expression: SyntaxNodeLike,
-  variable: SyntaxNodeLike,
-): { steps: TraversalStep[]; end: SyntaxNodeLike | undefined } {
+function traversalSteps(variable: SyntaxNodeLike): { steps: TraversalStep[]; end: SyntaxNodeLike | undefined } {
   const steps: TraversalStep[] = [];
-  const children = expression.namedChildren.filter(isSyntaxNode);
-  const start = children.findIndex((child) => sameNode(child, variable));
-  for (const child of children.slice(start + 1)) {
+  for (const child of followingNodes(variable)) {
     if (child.type === "get_attr") {
       const name = child.namedChildren.filter(isSyntaxNode)[0];
       if (name?.type !== "identifier") return { steps, end: child };
@@ -344,7 +358,33 @@ function isIteratorInScope(variable: SyntaxNodeLike, root: string): boolean {
       ) {
         return true;
       }
+    } else if (node.type === "attribute" && attributeNameNode(node)?.text === "labels") {
+      // A dynamic block's iterator is in scope in its `labels`, but not in its `for_each`.
+      const dynamicBlock = node.parent?.parent;
+      if (
+        dynamicBlock?.type === "block" &&
+        blockTypeName(dynamicBlock) === "dynamic" &&
+        dynamicIteratorName(dynamicBlock) === root
+      ) {
+        return true;
+      }
     }
+  }
+  return false;
+}
+
+/**
+ * True when a `check` block around `variable` declares its own `data "<type>" "<name>"`. That
+ * scoped data source is not a module-wide declaration, so the use names no indexed symbol.
+ */
+function isCheckScopedData(variable: SyntaxNodeLike, type: string, name: string): boolean {
+  for (let node = variable.parent; node; node = node.parent) {
+    if (node.type !== "block" || blockTypeName(node) !== "check") continue;
+    return (blockBody(node)?.namedChildren.filter(isSyntaxNode) ?? []).some((child) => {
+      if (child.type !== "block" || blockTypeName(child) !== "data") return false;
+      const [typeLabel, nameLabel] = blockLabels(child);
+      return literalStringText(typeLabel)?.text === type && literalStringText(nameLabel)?.text === name;
+    });
   }
   return false;
 }
@@ -355,13 +395,14 @@ function firstAttribute(steps: readonly TraversalStep[], from = 0): SyntaxNodeLi
 }
 
 function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): void {
-  const expression = variable.parent;
-  if (expression?.type !== "expression" || isObjectKey(expression)) return;
+  const parent = variable.parent;
+  if (!parent) return;
+  if (parent.type === "expression" ? isObjectKey(parent) : !OPERATOR_WRAPPERS.has(parent.type)) return;
   const rootNode = variable.namedChildren.filter(isSyntaxNode)[0];
   if (rootNode?.type !== "identifier") return;
   const root = rootNode.text;
   if (isIteratorInScope(variable, root)) return;
-  const { steps, end } = traversalSteps(expression, variable);
+  const { steps, end } = traversalSteps(variable);
   const push = (name: SyntaxNodeLike, target: TerraformReferenceTarget): void => {
     facts.references.push({ range: toRange(name), target });
   };
@@ -393,7 +434,9 @@ function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): 
   if (root === "data") {
     const type = firstAttribute(steps);
     const name = firstAttribute(steps, 1);
-    if (type && name) push(name, { kind: "data", type: type.text, name: name.text });
+    if (type && name && !isCheckScopedData(variable, type.text, name.text)) {
+      push(name, { kind: "data", type: type.text, name: name.text });
+    }
     return;
   }
   if (BUILT_IN_ROOTS.has(root)) return;

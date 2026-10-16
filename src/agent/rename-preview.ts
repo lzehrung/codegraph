@@ -331,7 +331,11 @@ export async function previewRenameInSnapshot(
     resolved.def.localName,
     loadSource,
   );
-  const exportDeclarations = await collectExportDeclarationCandidates(snapshot, resolved.def, loadSource);
+  // Terraform exports are its `variable` and `output` declarations, which the definition and
+  // reference edits already cover; the ECMAScript export-text scan would match comments.
+  const exportDeclarations: ExportDeclarationScan = isTerraformFile(snapshot.index, resolved.def.file)
+    ? { candidates: [], missingFiles: [] }
+    : await collectExportDeclarationCandidates(snapshot, resolved.def, loadSource);
   const allCandidates: CandidateEdit[] = [
     ...definitionCandidates,
     ...importDeclarations.candidates,
