@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-04T17:27:41.931Z",
+  "generatedAt": "2026-10-16T06:29:38.300Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 631,
+  "numTotalTests": 662,
   "numFailedTests": 0,
   "languages": [
     {
@@ -271,6 +271,17 @@
       "status": "passing"
     },
     {
+      "language": "Terraform",
+      "files": [
+        "tests/languages/terraform.test.ts"
+      ],
+      "tests": 31,
+      "passed": 31,
+      "failed": 0,
+      "skipped": 0,
+      "status": "passing"
+    },
+    {
       "language": "TSX",
       "files": [
         "tests/languages/tsx.test.ts"
@@ -324,8 +335,8 @@
       "tests/languages/import-from-captures.test.ts",
       "tests/languages/query-hygiene.test.ts"
     ],
-    "tests": 93,
-    "passed": 93,
+    "tests": 95,
+    "passed": 95,
     "failed": 0,
     "skipped": 0
   }

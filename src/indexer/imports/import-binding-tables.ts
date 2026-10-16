@@ -788,6 +788,9 @@ export const IMPORT_BINDING_ROWS: Record<string, ImportBindingRow> = {
   },
   scss: { omittedReason: STYLESHEET_OMITTED },
   sql: { omittedReason: "Data language; no import-statement or implicit-binding dispatch." },
+  terraform: {
+    omittedReason: "A module call binds no local names; `module.<name>` resolves in src/terraform/.",
+  },
   svelte: { omittedReason: "Svelte component format; script blocks parse as js/ts and templates as html." },
   swift: {
     appendImplicit: appendSwiftImplicitBinding,

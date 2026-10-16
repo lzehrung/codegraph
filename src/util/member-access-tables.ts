@@ -308,6 +308,10 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   scss: { omittedReason: "Style language; no member-access concept." },
   svelte: { omittedReason: "Svelte component format; script blocks parse as js/ts and templates as html." },
   sql: { omittedReason: "Data language; no member-access concept." },
+  terraform: {
+    omittedReason:
+      "Configuration language; `var.x`, `module.m.out`, and resource addresses resolve in src/terraform/, not through member access.",
+  },
   swift: {
     memberAccessShapes: [
       { nodeTypes: ["navigation_expression"], object: { namedIndex: 0 }, property: { navigation: true } },

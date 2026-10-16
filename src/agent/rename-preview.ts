@@ -35,6 +35,7 @@ import {
   type AgentSession,
 } from "./session.js";
 import { buildSymbolLookup } from "./symbol-lookup.js";
+import { terraformRenameCollisions } from "../terraform/resolution.js";
 
 export type RenamePreviewRequest = {
   root: string;
@@ -616,6 +617,25 @@ async function addScopeConflicts(
       reason: "name_collision",
       existingHandle: semanticSymbolFromDef(snapshot, localCollision).handle,
       message: `The target scope already declares "${newName}".`,
+    });
+  }
+
+  // A Terraform module spans its directory, so a same-kind declaration in a sibling file collides.
+  for (const collision of await terraformRenameCollisions(snapshot.index, target, newName)) {
+    if (
+      localCollision &&
+      collision.file === localCollision.file &&
+      collision.range.start.index === localCollision.range.start.index
+    ) {
+      continue;
+    }
+    const collisionFile = normalizeAgentFilePath(snapshot.root, collision.file);
+    conflicts.push({
+      file: collisionFile,
+      location: { file: collisionFile, range: collision.range },
+      reason: "name_collision",
+      existingHandle: semanticSymbolFromDef(snapshot, collision).handle,
+      message: `The Terraform module already declares "${newName}".`,
     });
   }
 

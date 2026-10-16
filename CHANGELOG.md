@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Added
+
+- Terraform (`.tf`) support. Each module directory is indexed as one namespace: `variable`, `output`, `locals`, `module`, `resource`, and `data` declarations become symbols, and the new `resource`, `data`, `module`, and `output` symbol kinds are accepted by `codegraph symbols --kind` and MCP `workspace_symbols`. A module with a local `source` depends on every `.tf` file in that directory; registry and Git sources stay external. Go-to-definition, references, rename preview, and impact mapping follow `var.`, `local.`, `module.`, data source, and resource references, module outputs, and module call arguments. `.terraform/` directories are no longer discovered.
+
 ## [3.0.0] - 2026-10-05
 
 ### Breaking

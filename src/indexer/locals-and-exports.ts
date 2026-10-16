@@ -925,6 +925,10 @@ export function collectLocalsAndExportsFromSource(
     if (s === "class") return SymbolKind.Class;
     if (s === "interface") return SymbolKind.Interface;
     if (s === "type") return SymbolKind.TypeAlias;
+    if (s === "resource") return SymbolKind.Resource;
+    if (s === "data") return SymbolKind.DataSource;
+    if (s === "module") return SymbolKind.Module;
+    if (s === "output") return SymbolKind.Output;
     return SymbolKind.Variable;
   };
 

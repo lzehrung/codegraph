@@ -24,6 +24,10 @@ export enum SymbolKind {
   Index = "index",
   Constraint = "constraint",
   Routine = "routine",
+  Resource = "resource",
+  DataSource = "data",
+  Module = "module",
+  Output = "output",
 }
 
 export type SymbolDef = {

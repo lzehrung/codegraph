@@ -234,6 +234,15 @@ const SQL_ROW: TriviaRow = {
   ],
 };
 
+// HCL: `#` and `//` line comments, `/* */` block comments, quoted strings with `${...}`
+// interpolation, and `<<EOT` / `<<-EOT` heredocs whose closing marker may be indented.
+const TERRAFORM_ROW: TriviaRow = {
+  lineComments: ["#", "//"],
+  blockComments: [SLASH_STAR_COMMENT],
+  strings: [{ open: '"', close: '"', escape: "\\", interpolation: { start: "${", end: "}" } }],
+  heredocs: [{ opener: "<<-?([A-Za-z_][A-Za-z0-9_-]*)", indentedTerminator: true }],
+};
+
 const TRIVIA_ROWS: Record<string, TriviaRow> = {
   js: JS_LIKE_ROW,
   ts: JS_LIKE_ROW,
@@ -257,6 +266,7 @@ const TRIVIA_ROWS: Record<string, TriviaRow> = {
   cpp: C_FAMILY_ROW,
   java: JAVA_ROW,
   sql: SQL_ROW,
+  terraform: TERRAFORM_ROW,
 };
 
 /** The trivia row for `languageId`; unknown ids fall back to the JS-family row, which is what
