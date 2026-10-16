@@ -368,6 +368,20 @@ describe("Terraform references", () => {
       // Variables, resources, and outputs are separate namespaces, so a resource name is free.
       const otherKind = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "main" });
       expect(otherKind.safe).toBe(true);
+      // HCL identifiers allow `-` after the first character.
+      const hyphenated = await previewRenameWithSession(session, {
+        root,
+        handle: target!.handle,
+        newName: "aws-region",
+      });
+      expect(hyphenated.safe).toBe(true);
+      expect(hyphenated.edits.map((edit) => edit.newText)).toEqual(["aws-region", "aws-region", "aws-region"]);
+      const leadingHyphen = await previewRenameWithSession(session, {
+        root,
+        handle: target!.handle,
+        newName: "-region",
+      });
+      expect(leadingHyphen.conflicts.map((conflict) => conflict.reason)).toContain("invalid_identifier");
     });
   });
 });

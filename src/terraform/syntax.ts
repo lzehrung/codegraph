@@ -54,6 +54,9 @@ const MODULE_META_ARGUMENTS = new Set(["source", "version", "providers", "count"
  */
 const BUILT_IN_ROOTS = new Set(["path", "terraform", "self", "count", "each", "ephemeral"]);
 
+/** An HCL identifier: a letter or `_`, then letters, digits, `_`, or `-` (`my-server`). */
+export const TERRAFORM_IDENTIFIER_PATTERN = /^[_\p{ID_Start}][_\p{ID_Continue}-]*$/u;
+
 function sameNode(left: SyntaxNodeLike | null | undefined, right: SyntaxNodeLike | null | undefined): boolean {
   return (
     !!left &&

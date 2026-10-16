@@ -36,6 +36,7 @@ import {
 } from "./session.js";
 import { buildSymbolLookup } from "./symbol-lookup.js";
 import { terraformRenameCollisions } from "../terraform/resolution.js";
+import { TERRAFORM_IDENTIFIER_PATTERN } from "../terraform/syntax.js";
 
 export type RenamePreviewRequest = {
   root: string;
@@ -549,9 +550,9 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   const invalidPathCharacters = newName.includes("/") || newName.includes("\\") || newName.includes("\0");
   const support = supportForFileWithoutHeaderSample(def.file, snapshot.index.languageExtensions);
   const allowsDollar = support?.id === "js" || support?.id === "ts" || support?.id === "tsx";
-  const identifierPattern = allowsDollar
-    ? /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u
-    : /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
+  let identifierPattern = /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
+  if (allowsDollar) identifierPattern = /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u;
+  else if (support?.id === "terraform") identifierPattern = TERRAFORM_IDENTIFIER_PATTERN;
   if (!newName || invalidPathCharacters || !identifierPattern.test(newName)) {
     const displaySupport = supportForFile(def.file, snapshot.index.languageExtensions);
     conflicts.push({
