@@ -66,8 +66,12 @@ export async function findTerraformReferences(
   if (!isTerraformFile(index, def.file)) return null;
   const declaration = await terraformDeclarationForDefinition(index, def);
   const candidateFiles = terraformModuleFiles(index, def.file);
+  const unavailableFiles: FileId[] = [];
   if (declaration?.kind === "variable" || declaration?.kind === "output") {
-    for (const caller of await terraformModuleCallerFiles(index, def)) {
+    const callers = await terraformModuleCallerFiles(index, def);
+    // A file whose facts cannot load may call this module, so its caller edits are unproven.
+    unavailableFiles.push(...callers.unavailable);
+    for (const caller of callers.files) {
       if (!candidateFiles.some((file) => fileIdentityKey(file) === fileIdentityKey(caller))) {
         candidateFiles.push(caller);
       }
@@ -89,7 +93,6 @@ export async function findTerraformReferences(
 
   if (options.includeDefinition) addReference(def.file, def.range);
   const scannedFiles: FileId[] = [];
-  const unavailableFiles: FileId[] = [];
   if (!declaration) unavailableFiles.push(def.file);
   for (const file of declaration ? candidateFiles : []) {
     const facts = await terraformFactsForFile(index, file);

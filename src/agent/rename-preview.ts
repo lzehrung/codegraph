@@ -35,7 +35,12 @@ import {
   type AgentSession,
 } from "./session.js";
 import { buildSymbolLookup } from "./symbol-lookup.js";
-import { isTerraformFile, isTerraformReservedRename, terraformRenameCollisions } from "../terraform/resolution.js";
+import {
+  isTerraformFile,
+  isTerraformReservedRename,
+  terraformRenameCollisions,
+  terraformScopedDataCaptures,
+} from "../terraform/resolution.js";
 import { TERRAFORM_IDENTIFIER_PATTERN } from "../terraform/syntax.js";
 
 export type RenamePreviewRequest = {
@@ -588,6 +593,7 @@ async function addTerraformConflicts(
   snapshot: AgentProjectSnapshot,
   target: SymbolDef,
   newName: string,
+  references: readonly Reference[],
   conflicts: RenameConflict[],
 ): Promise<void> {
   if (await isTerraformReservedRename(snapshot.index, target, newName)) {
@@ -609,6 +615,15 @@ async function addTerraformConflicts(
       message: `The Terraform module already declares "${newName}".`,
     });
   }
+  for (const capture of await terraformScopedDataCaptures(snapshot.index, target, newName, references)) {
+    const captureFile = normalizeAgentFilePath(snapshot.root, capture.file);
+    conflicts.push({
+      file: captureFile,
+      location: { file: captureFile, range: capture.range },
+      reason: "shadowing",
+      message: `A check block declares its own data source "${newName}", which would capture this reference.`,
+    });
+  }
 }
 
 async function addScopeConflicts(
@@ -619,7 +634,7 @@ async function addScopeConflicts(
   conflicts: RenameConflict[],
 ): Promise<void> {
   if (isTerraformFile(snapshot.index, target.file)) {
-    await addTerraformConflicts(snapshot, target, newName, conflicts);
+    await addTerraformConflicts(snapshot, target, newName, references, conflicts);
     return;
   }
   const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(target.file));

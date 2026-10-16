@@ -817,4 +817,81 @@ describe("Terraform edge forms", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("reaches same-module files in transitive impact, including after a file is deleted", async () => {
+    // `region` feeds `main.tf`'s resource; `outputs.tf` reads that resource, not `region`.
+    const changed = await locateChangedSymbols(fixtureIndex, fixtureFile("variables.tf"), [
+      { oldStart: 3, newStart: 3, lines: ['+  default = "us-west-2"'] },
+    ]);
+    const fromInput = await analyzeImpact(
+      fixtureIndex,
+      changed,
+      [{ path: fixtureFile("variables.tf"), kind: "modified", hunks: [] }],
+      { depth: 3 },
+    );
+    expect(fromInput.map((item) => relative(fixtureRoot, item.file))).toEqual(
+      expect.arrayContaining(["main.tf", "outputs.tf"]),
+    );
+
+    const root = await createTempProjectRoot("cg-terraform-deleted-", [
+      { path: "main.tf", contents: "locals {\n  a = aws_s3_bucket.logs.id\n}\n" },
+      { path: "other/main.tf", contents: 'variable "x" {}\n' },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      const deleted = normalizePath(path.join(root, "storage.tf"));
+      const impacted = await analyzeImpact(index, [], [{ path: deleted, kind: "deleted", hunks: [] }], { depth: 2 });
+      expect(impacted.map((item) => relative(root, item.file))).toEqual(["main.tf"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects renaming a data source to a name a check block declares for itself", async () => {
+    const root = await createTempProjectRoot("cg-terraform-check-capture-", [
+      {
+        path: "main.tf",
+        contents: [
+          'data "http" "health" {}',
+          'check "up" {',
+          '  data "http" "status" {}',
+          "  assert {",
+          "    condition = data.http.health.status_code == 200",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+    ]);
+    try {
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "health" });
+      const handle = symbols.symbols[0]!.handle;
+      const captured = await previewRenameWithSession(session, { root, handle, newName: "status" });
+      expect(captured.safe).toBe(false);
+      expect(captured.conflicts.map((conflict) => `${conflict.reason}:${conflict.location?.range.start.line}`)).toEqual(
+        ["shadowing:5"],
+      );
+      const free = await previewRenameWithSession(session, { root, handle, newName: "probe" });
+      expect(free.safe).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps child input references partial when a caller file cannot be read", async () => {
+    await withCopiedFixture(fixtureRoot, async (root) => {
+      const index = await buildProjectIndex(root, { cache: "off", keepParsed: false });
+      // `main.tf` holds the only `module "network"` call; it disappears after indexing.
+      await fsp.rm(path.join(root, "main.tf"));
+      const references = await findReferences(
+        index,
+        await positionOf(root, "modules/network/variables.tf", '"region"', 1),
+      );
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") return;
+      expect(references.referenceCoverage?.state).toBe("partial");
+      expect(references.referenceCoverage?.affectedFiles).toContain(normalizePath(path.join(root, "main.tf")));
+    });
+  });
 });

@@ -4,7 +4,7 @@ import { ensureParsedContext } from "../indexer/parse-context.js";
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isNativeRequiredUnavailableError } from "../native/runtime.js";
-import type { FileId } from "../types.js";
+import type { FileId, Range } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { terraformLocalModuleDirectory } from "../util/resolution/terraform.js";
 import {
@@ -315,6 +315,35 @@ export async function terraformRenameCollisions(
   return indexedDefinitions(index, await matchingDeclarations(index, terraformModuleFiles(index, def.file), query));
 }
 
+/**
+ * Reference sites to a data source `def` that a `check` block would capture after renaming it to
+ * `newName`: the check declares its own `data "<type>" "<newName>"`, which wins inside the check.
+ */
+export async function terraformScopedDataCaptures(
+  index: ProjectIndex,
+  def: SymbolDef,
+  newName: string,
+  references: ReadonlyArray<{ file: FileId; range: Range }>,
+): Promise<Array<{ file: FileId; range: Range }>> {
+  if (!isTerraformFile(index, def.file)) return [];
+  const declaration = await terraformDeclarationForDefinition(index, def);
+  if (declaration?.kind !== "data") return [];
+  const address = `${declaration.type}.${newName}`;
+  const captured: Array<{ file: FileId; range: Range }> = [];
+  for (const reference of references) {
+    const facts = await terraformFactsForFile(index, reference.file);
+    const start = reference.range.start.index ?? 0;
+    const inCapturingCheck = facts?.checkScopes.some(
+      (scope) =>
+        (scope.range.start.index ?? 0) <= start &&
+        start < (scope.range.end.index ?? 0) &&
+        scope.dataSources.includes(address),
+    );
+    if (inCapturingCheck) captured.push(reference);
+  }
+  return captured;
+}
+
 /** Input variable names Terraform reserves because module calls use them as meta-arguments. */
 const RESERVED_INPUT_NAMES = new Set([
   "source",
@@ -340,14 +369,23 @@ export async function isTerraformReservedRename(
 /**
  * Files outside the declaring module that can reference a declaration: every file of each module
  * that calls the declaring directory through a local source. Call arguments name input variables,
- * and `module.<name>.<output>` can appear in any file of the calling module.
+ * and `module.<name>.<output>` can appear in any file of the calling module. `unavailable` lists
+ * files whose facts could not be loaded, so whether they call the module is unknown.
  */
-export async function terraformModuleCallerFiles(index: ProjectIndex, def: SymbolDef): Promise<FileId[]> {
+export async function terraformModuleCallerFiles(
+  index: ProjectIndex,
+  def: SymbolDef,
+): Promise<{ files: FileId[]; unavailable: FileId[] }> {
   const directoryKey = fileIdentityKey(path.dirname(def.file));
   const callers = new Map<string, FileId>();
+  const unavailable: FileId[] = [];
   for (const file of indexedTerraformFiles(index)) {
     const facts = await terraformFactsForFile(index, file);
-    const callsDirectory = facts?.declarations.some((declaration) => {
+    if (!facts) {
+      unavailable.push(file);
+      continue;
+    }
+    const callsDirectory = facts.declarations.some((declaration) => {
       if (declaration.kind !== "module" || declaration.source === undefined) return false;
       const directory = terraformLocalModuleDirectory(file, declaration.source);
       return directory !== null && fileIdentityKey(directory) === directoryKey;
@@ -355,5 +393,5 @@ export async function terraformModuleCallerFiles(index: ProjectIndex, def: Symbo
     if (!callsDirectory) continue;
     for (const peer of terraformModuleFiles(index, file)) callers.set(fileIdentityKey(peer), peer);
   }
-  return [...callers.values()];
+  return { files: [...callers.values()], unavailable };
 }

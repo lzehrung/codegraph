@@ -72,10 +72,14 @@ export type TerraformReferenceSite = {
  */
 export type TerraformModuleObjectUse = { module: string; range: Range; selection?: TerraformOutputSelection };
 
+/** A `check` block and the `<type>.<name>` addresses of the data sources it declares for itself. */
+export type TerraformCheckScope = { range: Range; dataSources: string[] };
+
 export type TerraformFileFacts = {
   declarations: TerraformDeclaration[];
   references: TerraformReferenceSite[];
   moduleObjectUses: TerraformModuleObjectUse[];
+  checkScopes: TerraformCheckScope[];
 };
 
 /** Module block arguments that configure the call instead of passing an input variable. */
@@ -233,6 +237,9 @@ function collectDeclarations(root: SyntaxNodeLike, facts: TerraformFileFacts): v
   const body = root.namedChildren.filter(isSyntaxNode).find((child) => child.type === "body");
   for (const block of body?.namedChildren.filter(isSyntaxNode) ?? []) {
     if (block.type !== "block") continue;
+    if (blockTypeName(block) === "check") {
+      facts.checkScopes.push({ range: toRange(block), dataSources: checkScopedDataSources(block) });
+    }
     for (const nameNode of declarationNameNodes(block)) {
       const declaration = terraformDeclarationForNameNode(nameNode);
       if (!declaration) continue;
@@ -380,13 +387,18 @@ function isIteratorInScope(variable: SyntaxNodeLike, root: string): boolean {
 function isCheckScopedData(variable: SyntaxNodeLike, type: string, name: string): boolean {
   for (let node = variable.parent; node; node = node.parent) {
     if (node.type !== "block" || blockTypeName(node) !== "check") continue;
-    return (blockBody(node)?.namedChildren.filter(isSyntaxNode) ?? []).some((child) => {
-      if (child.type !== "block" || blockTypeName(child) !== "data") return false;
-      const [typeLabel, nameLabel] = blockLabels(child);
-      return literalStringText(typeLabel)?.text === type && literalStringText(nameLabel)?.text === name;
-    });
+    return checkScopedDataSources(node).includes(`${type}.${name}`);
   }
   return false;
+}
+
+/** `<type>.<name>` of each data source a `check` block declares for itself. */
+function checkScopedDataSources(checkBlock: SyntaxNodeLike): string[] {
+  return (blockBody(checkBlock)?.namedChildren.filter(isSyntaxNode) ?? []).flatMap((child) => {
+    if (child.type !== "block" || blockTypeName(child) !== "data") return [];
+    const [type, name] = blockLabels(child).map((label) => literalStringText(label)?.text);
+    return type && name ? [`${type}.${name}`] : [];
+  });
 }
 
 function firstAttribute(steps: readonly TraversalStep[], from = 0): SyntaxNodeLike | undefined {
@@ -446,7 +458,7 @@ function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): 
 
 /** Extracts declarations and reference sites from one parsed Terraform file. */
 export function extractTerraformFacts(root: SyntaxNodeLike): TerraformFileFacts {
-  const facts: TerraformFileFacts = { declarations: [], references: [], moduleObjectUses: [] };
+  const facts: TerraformFileFacts = { declarations: [], references: [], moduleObjectUses: [], checkScopes: [] };
   collectDeclarations(root, facts);
   const stack: SyntaxNodeLike[] = [root];
   while (stack.length) {
