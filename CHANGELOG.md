@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Security
+
+- Update `smol-toml` to 1.9.1 to fix GHSA-r4xh-jqrq-34v2, quadratic-time parsing of crafted TOML. Codegraph parses TOML for Cargo manifests and Codex installer configuration.
+
 ## [3.0.0] - 2026-10-05
 
 ### Breaking
