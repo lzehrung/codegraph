@@ -175,21 +175,43 @@ async function findDeclaration(
   return { status: "ok", file: match.file, declaration: match.declaration, def };
 }
 
-/** Indexed files of the module that a module call in `file` sources, or a reason it has none. */
-async function calledModuleFiles(
+/** The directory a module call in `file`'s module sources, or a reason it has none. */
+async function calledModuleDirectory(
   index: ProjectIndex,
   file: FileId,
   moduleName: string,
-): Promise<{ status: "ok"; files: FileId[] } | TerraformNotFound> {
+): Promise<{ status: "ok"; directory: string } | TerraformNotFound> {
   const call = await findDeclaration(index, terraformModuleFiles(index, file), { kind: "module", name: moduleName });
   if (call.status !== "ok") return call;
   const source = call.declaration.source;
   if (source === undefined) return { status: "not_found", reason: `Module ${moduleName} has no literal source` };
   const directory = terraformLocalModuleDirectory(call.file, source);
   if (!directory) return { status: "not_found", reason: `Module source ${source} is not a local path` };
-  const childFile = indexedTerraformFileInDirectory(index, directory);
-  if (!childFile) return { status: "not_found", reason: `Module source ${source} has no indexed Terraform files` };
+  return { status: "ok", directory };
+}
+
+/** Indexed files of the module that a module call in `file` sources, or a reason it has none. */
+async function calledModuleFiles(
+  index: ProjectIndex,
+  file: FileId,
+  moduleName: string,
+): Promise<{ status: "ok"; files: FileId[] } | TerraformNotFound> {
+  const called = await calledModuleDirectory(index, file, moduleName);
+  if (called.status !== "ok") return called;
+  const childFile = indexedTerraformFileInDirectory(index, called.directory);
+  if (!childFile) return { status: "not_found", reason: `Module ${moduleName} source has no indexed Terraform files` };
   return { status: "ok", files: terraformModuleFiles(index, childFile) };
+}
+
+/** True when `module.<moduleName>` written in `file` calls the module whose files include `def`. */
+export async function terraformModuleCallTargetsDefinition(
+  index: ProjectIndex,
+  file: FileId,
+  moduleName: string,
+  def: SymbolDef,
+): Promise<boolean> {
+  const called = await calledModuleDirectory(index, file, moduleName);
+  return called.status === "ok" && fileIdentityKey(called.directory) === fileIdentityKey(path.dirname(def.file));
 }
 
 /** Resolves one reference target written in `file` to its indexed declaration. */
@@ -243,6 +265,28 @@ export async function terraformRenameCollisions(
     name: newName,
   };
   return indexedDefinitions(index, await matchingDeclarations(index, terraformModuleFiles(index, def.file), query));
+}
+
+/** Input variable names Terraform reserves because module calls use them as meta-arguments. */
+const RESERVED_INPUT_NAMES = new Set([
+  "source",
+  "version",
+  "providers",
+  "count",
+  "for_each",
+  "lifecycle",
+  "depends_on",
+  "locals",
+]);
+
+/** True when renaming `def` to `newName` would give an input variable a reserved name. */
+export async function isTerraformReservedRename(
+  index: ProjectIndex,
+  def: SymbolDef,
+  newName: string,
+): Promise<boolean> {
+  if (!RESERVED_INPUT_NAMES.has(newName) || !isTerraformFile(index, def.file)) return false;
+  return (await terraformDeclarationForDefinition(index, def))?.kind === "variable";
 }
 
 /**

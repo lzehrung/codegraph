@@ -14,3 +14,7 @@ output "private_ips" {
 output "consul_ui" {
   value = module.consul.ui_url
 }
+
+output "vpc_ids" {
+  value = module.network[*].vpc_id
+}

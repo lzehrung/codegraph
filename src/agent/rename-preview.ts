@@ -35,7 +35,7 @@ import {
   type AgentSession,
 } from "./session.js";
 import { buildSymbolLookup } from "./symbol-lookup.js";
-import { terraformRenameCollisions } from "../terraform/resolution.js";
+import { isTerraformFile, isTerraformReservedRename, terraformRenameCollisions } from "../terraform/resolution.js";
 import { TERRAFORM_IDENTIFIER_PATTERN } from "../terraform/syntax.js";
 
 export type RenamePreviewRequest = {
@@ -353,7 +353,10 @@ export async function previewRenameInSnapshot(
     if (defNodeId(definition) === resolved.id) continue;
     await addScopeConflicts(snapshot, definition, request.newName, [], conflicts);
   }
-  addExportDeclarationConflicts(snapshot, semanticDefinitions, request.newName, conflicts);
+  // Terraform exports inputs and outputs in separate namespaces; addTerraformConflicts checks them.
+  if (!isTerraformFile(snapshot.index, resolved.def.file)) {
+    addExportDeclarationConflicts(snapshot, semanticDefinitions, request.newName, conflicts);
+  }
 
   for (const reference of importDeclarations.missing) {
     unsafeSites.push({
@@ -573,6 +576,37 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   return conflicts;
 }
 
+/**
+ * Terraform keeps one namespace per declaration kind (and per type for resources and data
+ * sources) across the module directory, so the generic same-file and export checks do not apply.
+ */
+async function addTerraformConflicts(
+  snapshot: AgentProjectSnapshot,
+  target: SymbolDef,
+  newName: string,
+  conflicts: RenameConflict[],
+): Promise<void> {
+  if (await isTerraformReservedRename(snapshot.index, target, newName)) {
+    const file = normalizeAgentFilePath(snapshot.root, target.file);
+    conflicts.push({
+      file,
+      location: { file, range: target.range },
+      reason: "invalid_identifier",
+      message: `"${newName}" is reserved for Terraform module call arguments and cannot name an input variable.`,
+    });
+  }
+  for (const collision of await terraformRenameCollisions(snapshot.index, target, newName)) {
+    const collisionFile = normalizeAgentFilePath(snapshot.root, collision.file);
+    conflicts.push({
+      file: collisionFile,
+      location: { file: collisionFile, range: collision.range },
+      reason: "name_collision",
+      existingHandle: semanticSymbolFromDef(snapshot, collision).handle,
+      message: `The Terraform module already declares "${newName}".`,
+    });
+  }
+}
+
 async function addScopeConflicts(
   snapshot: AgentProjectSnapshot,
   target: SymbolDef,
@@ -580,6 +614,10 @@ async function addScopeConflicts(
   references: readonly Reference[],
   conflicts: RenameConflict[],
 ): Promise<void> {
+  if (isTerraformFile(snapshot.index, target.file)) {
+    await addTerraformConflicts(snapshot, target, newName, conflicts);
+    return;
+  }
   const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(target.file));
   if (!moduleIndex) return;
   const file = normalizeAgentFilePath(snapshot.root, target.file);
@@ -618,25 +656,6 @@ async function addScopeConflicts(
       reason: "name_collision",
       existingHandle: semanticSymbolFromDef(snapshot, localCollision).handle,
       message: `The target scope already declares "${newName}".`,
-    });
-  }
-
-  // A Terraform module spans its directory, so a same-kind declaration in a sibling file collides.
-  for (const collision of await terraformRenameCollisions(snapshot.index, target, newName)) {
-    if (
-      localCollision &&
-      collision.file === localCollision.file &&
-      collision.range.start.index === localCollision.range.start.index
-    ) {
-      continue;
-    }
-    const collisionFile = normalizeAgentFilePath(snapshot.root, collision.file);
-    conflicts.push({
-      file: collisionFile,
-      location: { file: collisionFile, range: collision.range },
-      reason: "name_collision",
-      existingHandle: semanticSymbolFromDef(snapshot, collision).handle,
-      message: `The Terraform module already declares "${newName}".`,
     });
   }
 

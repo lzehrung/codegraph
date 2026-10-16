@@ -315,7 +315,7 @@ describe("Terraform references", () => {
       "a child output, from any file of the calling module",
       "modules/network/outputs.tf",
       '"vpc_id"',
-      ["modules/network/outputs.tf:1:9", "outputs.tf:6:26"],
+      ["modules/network/outputs.tf:1:9", "outputs.tf:6:26", "outputs.tf:19:29"],
     ],
     [
       "a same-named output in an uncalled sibling",
@@ -382,6 +382,45 @@ describe("Terraform references", () => {
         newName: "-region",
       });
       expect(leadingHyphen.conflicts.map((conflict) => conflict.reason)).toContain("invalid_identifier");
+      // Module call meta-argument names cannot name an input variable.
+      const reserved = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "source" });
+      expect(reserved.safe).toBe(false);
+      expect(reserved.conflicts.map((conflict) => conflict.reason)).toEqual(["invalid_identifier"]);
+
+      // Inputs and outputs are separate namespaces even when one file declares both.
+      const storageSymbols = await workspaceSymbolsWithSession(session, { root, query: "region" });
+      const storageInput = storageSymbols.symbols.find((symbol) => symbol.location.file === "modules/storage/main.tf");
+      const sameFileOutputName = await previewRenameWithSession(session, {
+        root,
+        handle: storageInput!.handle,
+        newName: "vpc_id",
+      });
+      expect(sameFileOutputName.conflicts).toEqual([]);
+      expect(sameFileOutputName.safe).toBe(true);
+    });
+  });
+
+  it("keeps output references partial when the module is used as a whole value", async () => {
+    await withCopiedFixture(fixtureRoot, async (root) => {
+      await fsp.writeFile(path.join(root, "whole.tf"), 'output "network_all" {\n  value = module.network\n}\n', "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const references = await findReferences(
+        index,
+        await positionOf(root, "modules/network/outputs.tf", '"vpc_id"', 1),
+      );
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") return;
+      expect(references.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["strategy_unavailable"],
+        affectedFiles: [normalizePath(path.join(root, "whole.tf"))],
+      });
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "vpc_id" });
+      const output = symbols.symbols.find((symbol) => symbol.location.file === "modules/network/outputs.tf");
+      const rename = await previewRenameWithSession(session, { root, handle: output!.handle, newName: "network_id" });
+      expect(rename.safe).toBe(false);
     });
   });
 });

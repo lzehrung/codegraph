@@ -40,9 +40,13 @@ export type TerraformReferenceSite = {
   target: TerraformReferenceTarget;
 };
 
+/** A module call used as a whole value (`module.net`), so any of its outputs may be read. */
+export type TerraformModuleObjectUse = { module: string; range: Range };
+
 export type TerraformFileFacts = {
   declarations: TerraformDeclaration[];
   references: TerraformReferenceSite[];
+  moduleObjectUses: TerraformModuleObjectUse[];
 };
 
 /** Module block arguments that configure the call instead of passing an input variable. */
@@ -225,23 +229,38 @@ function collectModuleCall(block: SyntaxNodeLike, declaration: TerraformDeclarat
 
 type TraversalStep = { kind: "attr"; name: SyntaxNodeLike } | { kind: "index" };
 
-/** `get_attr` and index steps after the root; a splat or any other node ends the traversal. */
-function traversalSteps(expression: SyntaxNodeLike, variable: SyntaxNodeLike): TraversalStep[] {
+/**
+ * `get_attr` and index steps after the root. A splat or any other node ends the traversal and is
+ * returned as `end`.
+ */
+function traversalSteps(
+  expression: SyntaxNodeLike,
+  variable: SyntaxNodeLike,
+): { steps: TraversalStep[]; end: SyntaxNodeLike | undefined } {
   const steps: TraversalStep[] = [];
   const children = expression.namedChildren;
   const start = children.findIndex((child) => sameNode(child, variable));
   for (const child of children.slice(start + 1)) {
     if (child.type === "get_attr") {
       const name = child.namedChildren[0];
-      if (name?.type !== "identifier") break;
+      if (name?.type !== "identifier") return { steps, end: child };
       steps.push({ kind: "attr", name });
     } else if (child.type === "index") {
       steps.push({ kind: "index" });
     } else {
-      break;
+      return { steps, end: child };
     }
   }
-  return steps;
+  return { steps, end: undefined };
+}
+
+/** The first attribute name inside a `[*].name` or `.*.name` splat. */
+function splatAttribute(splat: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined {
+  if (splat?.type !== "splat") return undefined;
+  const form = splat.namedChildren[0];
+  const first = form?.namedChildren[0];
+  const name = first?.type === "get_attr" ? first.namedChildren[0] : undefined;
+  return name?.type === "identifier" ? name : undefined;
 }
 
 function isObjectKey(expression: SyntaxNodeLike): boolean {
@@ -303,7 +322,7 @@ function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): 
   if (rootNode?.type !== "identifier") return;
   const root = rootNode.text;
   if (isIteratorInScope(variable, root)) return;
-  const steps = traversalSteps(expression, variable);
+  const { steps, end } = traversalSteps(expression, variable);
   const push = (name: SyntaxNodeLike, target: TerraformReferenceTarget): void => {
     facts.references.push({ range: toRange(name), target });
   };
@@ -319,8 +338,10 @@ function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): 
     push(moduleName, { kind: "module", name: moduleName.text });
     let next = 1;
     while (steps[next]?.kind === "index") next += 1;
-    const output = firstAttribute(steps, next);
+    // `module.m[*].out` reads `out` from each instance through a splat.
+    const output = firstAttribute(steps, next) ?? (next === steps.length ? splatAttribute(end) : undefined);
     if (output) push(output, { kind: "output", module: moduleName.text, name: output.text });
+    else facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName) });
     return;
   }
   if (root === "data") {
@@ -336,7 +357,7 @@ function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): 
 
 /** Extracts declarations and reference sites from one parsed Terraform file. */
 export function extractTerraformFacts(root: SyntaxNodeLike): TerraformFileFacts {
-  const facts: TerraformFileFacts = { declarations: [], references: [] };
+  const facts: TerraformFileFacts = { declarations: [], references: [], moduleObjectUses: [] };
   collectDeclarations(root, facts);
   const stack: SyntaxNodeLike[] = [root];
   while (stack.length) {

@@ -18,6 +18,7 @@ import {
   terraformDeclarationForDefinition,
   terraformFactsForFile,
   terraformModuleCallerFiles,
+  terraformModuleCallTargetsDefinition,
   terraformModuleFiles,
 } from "./resolution.js";
 
@@ -96,18 +97,24 @@ export async function findTerraformReferences(
       continue;
     }
     scannedFiles.push(file);
-    let ambiguousSite = false;
+    let unprovenUse = false;
     for (const site of facts.references) {
       if (site.target.name !== def.localName) continue;
       const resolved = await resolveTerraformTarget(index, file, site.target);
       if (resolved.status === "ok") {
         if (sameDef(resolved.def, def, index.languageExtensions)) addReference(file, site.range);
       } else if (resolved.ambiguous?.some((candidate) => sameDef(candidate, def, index.languageExtensions))) {
-        ambiguousSite = true;
+        // A use that ties between this declaration and a duplicate may still name it.
+        unprovenUse = true;
       }
     }
-    // A use that ties between this declaration and a duplicate may still name it.
-    if (ambiguousSite) unavailableFiles.push(file);
+    // A whole module value (`module.net` passed on) may read this output without naming it.
+    if (declaration?.kind === "output") {
+      for (const use of facts.moduleObjectUses) {
+        if (await terraformModuleCallTargetsDefinition(index, file, use.module, def)) unprovenUse = true;
+      }
+    }
+    if (unprovenUse) unavailableFiles.push(file);
   }
 
   references.sort(
