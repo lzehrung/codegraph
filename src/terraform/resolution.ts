@@ -12,6 +12,7 @@ import {
   type TerraformDeclaration,
   type TerraformDeclarationKind,
   type TerraformFileFacts,
+  type TerraformModuleObjectUse,
   type TerraformReferenceTarget,
 } from "./syntax.js";
 
@@ -180,14 +181,14 @@ async function calledModuleDirectory(
   index: ProjectIndex,
   file: FileId,
   moduleName: string,
-): Promise<{ status: "ok"; directory: string } | TerraformNotFound> {
+): Promise<{ status: "ok"; directory: string; forEach: boolean } | TerraformNotFound> {
   const call = await findDeclaration(index, terraformModuleFiles(index, file), { kind: "module", name: moduleName });
   if (call.status !== "ok") return call;
   const source = call.declaration.source;
   if (source === undefined) return { status: "not_found", reason: `Module ${moduleName} has no literal source` };
   const directory = terraformLocalModuleDirectory(call.file, source);
   if (!directory) return { status: "not_found", reason: `Module source ${source} is not a local path` };
-  return { status: "ok", directory };
+  return { status: "ok", directory, forEach: call.declaration.forEach === true };
 }
 
 /** Indexed files of the module that a module call in `file` sources, or a reason it has none. */
@@ -195,23 +196,29 @@ async function calledModuleFiles(
   index: ProjectIndex,
   file: FileId,
   moduleName: string,
+  instanceSelected: boolean,
 ): Promise<{ status: "ok"; files: FileId[] } | TerraformNotFound> {
   const called = await calledModuleDirectory(index, file, moduleName);
   if (called.status !== "ok") return called;
+  // `module.m.key.out` on a `for_each` call selects instance `key`, so `key` is not an output.
+  if (called.forEach && !instanceSelected) {
+    return { status: "not_found", reason: `Module ${moduleName} uses for_each; select an instance before an output` };
+  }
   const childFile = indexedTerraformFileInDirectory(index, called.directory);
   if (!childFile) return { status: "not_found", reason: `Module ${moduleName} source has no indexed Terraform files` };
   return { status: "ok", files: terraformModuleFiles(index, childFile) };
 }
 
-/** True when `module.<moduleName>` written in `file` calls the module whose files include `def`. */
-export async function terraformModuleCallTargetsDefinition(
+/** True when `use` in `file` may read an output of the module whose files include `def`. */
+export async function terraformModuleUseTargetsDefinition(
   index: ProjectIndex,
   file: FileId,
-  moduleName: string,
+  use: TerraformModuleObjectUse,
   def: SymbolDef,
 ): Promise<boolean> {
-  const called = await calledModuleDirectory(index, file, moduleName);
-  return called.status === "ok" && fileIdentityKey(called.directory) === fileIdentityKey(path.dirname(def.file));
+  const called = await calledModuleDirectory(index, file, use.module);
+  if (called.status !== "ok" || (use.onlyForEach && !called.forEach)) return false;
+  return fileIdentityKey(called.directory) === fileIdentityKey(path.dirname(def.file));
 }
 
 /** Resolves one reference target written in `file` to its indexed declaration. */
@@ -223,7 +230,8 @@ export async function resolveTerraformTarget(
   let files: FileId[];
   let query: DeclarationQuery;
   if (target.kind === "output" || target.kind === "input") {
-    const called = await calledModuleFiles(index, file, target.module);
+    const instanceSelected = target.kind === "input" || target.instanceSelected;
+    const called = await calledModuleFiles(index, file, target.module, instanceSelected);
     if (called.status !== "ok") return called;
     files = called.files;
     query = { kind: target.kind === "output" ? "output" : "variable", name: target.name };

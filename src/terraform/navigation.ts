@@ -18,7 +18,7 @@ import {
   terraformDeclarationForDefinition,
   terraformFactsForFile,
   terraformModuleCallerFiles,
-  terraformModuleCallTargetsDefinition,
+  terraformModuleUseTargetsDefinition,
   terraformModuleFiles,
 } from "./resolution.js";
 
@@ -111,7 +111,7 @@ export async function findTerraformReferences(
     // A whole module value (`module.net` passed on) may read this output without naming it.
     if (declaration?.kind === "output") {
       for (const use of facts.moduleObjectUses) {
-        if (await terraformModuleCallTargetsDefinition(index, file, use.module, def)) unprovenUse = true;
+        if (await terraformModuleUseTargetsDefinition(index, file, use, def)) unprovenUse = true;
       }
     }
     if (unprovenUse) unavailableFiles.push(file);

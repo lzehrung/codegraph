@@ -24,13 +24,18 @@ export type TerraformDeclaration = {
   range: Range;
   /** Literal `source` of a module call; absent when missing or not a plain string. */
   source?: string;
+  /** True when a module call sets `for_each`, so `module.<name>.<key>` selects an instance. */
+  forEach?: boolean;
 };
 
 export type TerraformReferenceTarget =
   | { kind: "variable" | "local" | "module"; name: string }
   | { kind: "resource" | "data"; type: string; name: string }
-  /** `module.<module>.<name>`: an output of the called module. */
-  | { kind: "output"; module: string; name: string }
+  /**
+   * `module.<module>.<name>`: an output of the called module. `instanceSelected` is true when an
+   * index (`[0]`, `["key"]`) or a splat precedes `<name>`.
+   */
+  | { kind: "output"; module: string; name: string; instanceSelected: boolean }
   /** An argument in `module "<module>" { <name> = ... }`: an input variable of the called module. */
   | { kind: "input"; module: string; name: string };
 
@@ -40,8 +45,12 @@ export type TerraformReferenceSite = {
   target: TerraformReferenceTarget;
 };
 
-/** A module call used as a whole value (`module.net`), so any of its outputs may be read. */
-export type TerraformModuleObjectUse = { module: string; range: Range };
+/**
+ * A module call used as a whole value (`module.net`), so any of its outputs may be read. With
+ * `onlyForEach`, the use names an attribute without an index (`module.net.a.b`), which reads an
+ * instance rather than an output only when the call sets `for_each`.
+ */
+export type TerraformModuleObjectUse = { module: string; range: Range; onlyForEach?: boolean };
 
 export type TerraformFileFacts = {
   declarations: TerraformDeclaration[];
@@ -219,6 +228,7 @@ function collectModuleCall(block: SyntaxNodeLike, declaration: TerraformDeclarat
       if (source !== undefined) declaration.source = source;
       continue;
     }
+    if (nameNode.text === "for_each") declaration.forEach = true;
     if (MODULE_META_ARGUMENTS.has(nameNode.text)) continue;
     facts.references.push({
       range: toRange(nameNode),
@@ -338,10 +348,19 @@ function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): 
     push(moduleName, { kind: "module", name: moduleName.text });
     let next = 1;
     while (steps[next]?.kind === "index") next += 1;
+    const attribute = firstAttribute(steps, next);
     // `module.m[*].out` reads `out` from each instance through a splat.
-    const output = firstAttribute(steps, next) ?? (next === steps.length ? splatAttribute(end) : undefined);
-    if (output) push(output, { kind: "output", module: moduleName.text, name: output.text });
-    else facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName) });
+    const output = attribute ?? (next === steps.length ? splatAttribute(end) : undefined);
+    if (!output) {
+      facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName) });
+      return;
+    }
+    const instanceSelected = next > 1 || !attribute;
+    push(output, { kind: "output", module: moduleName.text, name: output.text, instanceSelected });
+    // Without an index, `output` may be a `for_each` instance key followed by the real output.
+    if (!instanceSelected) {
+      facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName), onlyForEach: true });
+    }
     return;
   }
   if (root === "data") {

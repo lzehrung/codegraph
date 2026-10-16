@@ -400,6 +400,59 @@ describe("Terraform references", () => {
     });
   });
 
+  it("does not read a for_each instance key as an output, and keeps that module's output references partial", async () => {
+    const root = await createTempProjectRoot("cg-terraform-for-each-", [
+      {
+        path: "main.tf",
+        contents: [
+          'module "net" {',
+          '  source   = "./net"',
+          '  for_each = toset(["primary"])',
+          "}",
+          'output "by_key" {',
+          "  value = module.net.primary.vpc_id",
+          "}",
+          'output "by_index" {',
+          '  value = module.net["primary"].vpc_id',
+          "}",
+          "",
+        ].join("\n"),
+      },
+      // `primary` is also an output name: the decoy an instance key must not resolve to.
+      { path: "net/outputs.tf", contents: 'output "vpc_id" {}\noutput "primary" {}\n' },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      const byKey = await goToDefinition(index, await positionOf(root, "main.tf", "net.primary", 4));
+      expect(byKey.status).toBe("not_found");
+      const byIndex = await goToDefinition(index, await positionOf(root, "main.tf", '"].vpc_id', 3));
+      expect(byIndex.status).toBe("ok");
+      if (byIndex.status === "ok") expect(relative(root, byIndex.definition.file)).toBe("net/outputs.tf");
+
+      for (const [needle, expected] of [
+        ['"primary"', ["net/outputs.tf:2"]],
+        ['"vpc_id"', ["main.tf:9", "net/outputs.tf:1"]],
+      ] as const) {
+        const references = await findReferences(index, await positionOf(root, "net/outputs.tf", needle, 1));
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") return;
+        expect(
+          references.references.map((reference) => `${relative(root, reference.file)}:${reference.range.start.line}`),
+        ).toEqual(expected);
+        expect(references.referenceCoverage?.state, needle).toBe("partial");
+      }
+
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "primary" });
+      const decoy = symbols.symbols.find((symbol) => symbol.location.file === "net/outputs.tf");
+      const rename = await previewRenameWithSession(session, { root, handle: decoy!.handle, newName: "main_id" });
+      expect(rename.safe).toBe(false);
+      expect(rename.edits.map((edit) => `${edit.file}:${edit.range.start.line}`)).toEqual(["net/outputs.tf:2"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps output references partial when the module is used as a whole value", async () => {
     await withCopiedFixture(fixtureRoot, async (root) => {
       await fsp.writeFile(path.join(root, "whole.tf"), 'output "network_all" {\n  value = module.network\n}\n', "utf8");
