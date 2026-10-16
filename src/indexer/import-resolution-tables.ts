@@ -185,10 +185,11 @@ export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
     resolvesImportsFromDeclarationsOmittedReason:
       "A module source names a directory, not a declaration in another file.",
     implicitCompilationUnit: "module",
-    // A module source names its directory, so an added file there re-resolves the call.
+    // A module source names a directory, possibly through `..`, so an added `.tf` file anywhere
+    // can join a called module and re-resolves the calls.
     externalSpecifierResolution: {
       separator: "path",
-      importNamesDirectory: "parent",
+      reResolveAnyAddedExtensions: [".tf"],
     },
   },
   swift: {

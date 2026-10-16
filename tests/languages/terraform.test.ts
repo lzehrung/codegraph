@@ -17,7 +17,14 @@ import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import type { ProjectIndex } from "../../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { locateChangedSymbols } from "../../src/impact/map.js";
-import { createTempProjectRoot, readOnlySamplePath, withCopiedFixture } from "../helpers/filesystem.js";
+import { resolveTerraformModuleSourcePaths } from "../../src/util/resolution/terraform.js";
+import {
+  createTempProjectRoot,
+  isSymlinkUnavailable,
+  mkTmpDir,
+  readOnlySamplePath,
+  withCopiedFixture,
+} from "../helpers/filesystem.js";
 
 const fixtureRoot = normalizePath(readOnlySamplePath("terraform"));
 let fixtureIndex: ProjectIndex;
@@ -475,5 +482,153 @@ describe("Terraform references", () => {
       const rename = await previewRenameWithSession(session, { root, handle: output!.handle, newName: "network_id" });
       expect(rename.safe).toBe(false);
     });
+  });
+});
+
+describe("Terraform edge forms", () => {
+  async function referenceSummary(index: ProjectIndex, root: string, file: string, needle: string, offset = 1) {
+    const references = await findReferences(index, await positionOf(root, file, needle, offset));
+    expect(references.status).toBe("ok");
+    if (references.status !== "ok") return undefined;
+    return {
+      sites: references.references.map(
+        (reference) => `${relative(root, reference.file)}:${reference.range.start.line}`,
+      ),
+      coverage: references.referenceCoverage?.state,
+    };
+  }
+
+  it("re-resolves a parent-directory module source when a file is added there", async () => {
+    const root = await createTempProjectRoot("cg-terraform-parent-", [
+      { path: "a.tf", contents: 'variable "x" {}\n' },
+      { path: "child/main.tf", contents: 'module "up" {\n  source = "../"\n}\n' },
+    ]);
+    try {
+      const child = normalizePath(path.join(root, "child", "main.tf"));
+      const initial = await buildProjectIndexIncremental(root, { cache: "disk" });
+      expect(edgeTargets(initial, root, child)).toEqual(["a.tf"]);
+      await fsp.writeFile(path.join(root, "b.tf"), 'variable "y" {}\n', "utf8");
+      const warm = await buildProjectIndexIncremental(root, { cache: "disk" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(edgeTargets(warm, root, child)).toEqual(["a.tf", "b.tf"]);
+      expect(edgeTargets(warm, root, child)).toEqual(edgeTargets(cold, root, child));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("adds line and block context to references", async () => {
+    const position = await positionOf(fixtureRoot, "variables.tf", '"region"', 1);
+    const line = await findReferences(fixtureIndex, position, { context: "line", lines: 0 });
+    const block = await findReferences(fixtureIndex, position, { context: "block" });
+    expect(line.status).toBe("ok");
+    expect(block.status).toBe("ok");
+    if (line.status !== "ok" || block.status !== "ok") return;
+    const use = (references: typeof line.references) =>
+      references.find((reference) => relative(fixtureRoot, reference.file) === "main.tf");
+    expect(use(line.references)?.context).toContain("var.region");
+    expect(use(block.references)?.context).toMatch(/^locals \{/);
+    expect(line.references.every((reference) => reference.context !== undefined)).toBe(true);
+  });
+
+  it("keeps child references partial when the module call is declared twice", async () => {
+    const root = await createTempProjectRoot("cg-terraform-duplicate-call-", [
+      {
+        path: "main.tf",
+        contents:
+          'module "net" {\n  source = "./net"\n  r = 1\n}\nmodule "net" {\n  source = "./net"\n}\nlocals {\n  o = module.net.out\n}\n',
+      },
+      { path: "net/main.tf", contents: 'variable "r" {}\noutput "out" {}\n' },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      expect(await referenceSummary(index, root, "net/main.tf", '"r"')).toEqual({
+        sites: ["net/main.tf:1"],
+        coverage: "partial",
+      });
+      expect(await referenceSummary(index, root, "net/main.tf", '"out"')).toEqual({
+        sites: ["net/main.tf:2"],
+        coverage: "partial",
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads declarations and references through comments", async () => {
+    const root = await createTempProjectRoot("cg-terraform-comments-", [
+      {
+        path: "main.tf",
+        contents: [
+          'variable "region" /* note */ {}',
+          'resource "aws_instance" /* n */ "web" {}',
+          "locals {",
+          "  a = var /* c */ .region",
+          "  b = aws_instance.web.id",
+          "}",
+          "",
+        ].join("\n"),
+      },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      expect(
+        listSymbols(index, { file: normalizePath(path.join(root, "main.tf")) }).map((symbol) => symbol.name),
+      ).toEqual(expect.arrayContaining(["region", "web"]));
+      expect(await referenceSummary(index, root, "main.tf", '"region"')).toEqual({
+        sites: ["main.tf:1", "main.tf:4"],
+        coverage: "complete",
+      });
+      const goto = await goToDefinition(index, await positionOf(root, "main.tf", ".region", 1));
+      expect(goto.status === "ok" && goto.definition.range.start.line).toBe(1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads an index after a single module call as an output, not an instance", async () => {
+    const root = await createTempProjectRoot("cg-terraform-single-index-", [
+      {
+        path: "main.tf",
+        contents: 'module "net" {\n  source = "./net"\n}\nlocals {\n  a = module.net["settings"].vpc_id\n}\n',
+      },
+      // `vpc_id` is also an output name: the decoy an object field must not resolve to.
+      { path: "net/main.tf", contents: 'output "settings" {}\noutput "vpc_id" {}\n' },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      const field = await goToDefinition(index, await positionOf(root, "main.tf", "].vpc_id", 2));
+      expect(field.status).toBe("not_found");
+      expect(await referenceSummary(index, root, "net/main.tf", '"vpc_id"')).toEqual({
+        sites: ["net/main.tf:2"],
+        coverage: "partial",
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes a module file symlinked inside the project and excludes one escaping it", async () => {
+    const root = await mkTmpDir("cg-terraform-link-");
+    const outside = await mkTmpDir("cg-terraform-link-outside-");
+    try {
+      await fsp.mkdir(path.join(root, "net"));
+      await fsp.mkdir(path.join(root, "real"));
+      await fsp.writeFile(path.join(root, "real", "inside.tf"), 'variable "a" {}\n', "utf8");
+      await fsp.writeFile(path.join(outside, "outside.tf"), 'variable "b" {}\n', "utf8");
+      await fsp.writeFile(path.join(root, "net", "plain.tf"), 'variable "c" {}\n', "utf8");
+      try {
+        await fsp.symlink(path.join(root, "real", "inside.tf"), path.join(root, "net", "inside.tf"), "file");
+        await fsp.symlink(path.join(outside, "outside.tf"), path.join(root, "net", "outside.tf"), "file");
+      } catch (error) {
+        if (isSymlinkUnavailable(error)) return;
+        throw error;
+      }
+      const resolved = await resolveTerraformModuleSourcePaths(root, "./net", path.join(root, "main.tf"));
+      expect(resolved.map((file) => relative(normalizePath(root), file))).toEqual(["net/inside.tf", "net/plain.tf"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(outside, { recursive: true, force: true });
+    }
   });
 });

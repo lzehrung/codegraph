@@ -12,7 +12,10 @@ import {
   type TerraformDeclaration,
   type TerraformDeclarationKind,
   type TerraformFileFacts,
+  type TerraformModuleInstancing,
   type TerraformModuleObjectUse,
+  type TerraformOutputSelection,
+  terraformOutputSelectionReadsOutput,
   type TerraformReferenceTarget,
 } from "./syntax.js";
 
@@ -32,8 +35,15 @@ export const TERRAFORM_LANGUAGE_ID = "terraform";
 /**
  * A failed resolution. `ambiguous` lists the declarations that tie when a name is declared more
  * than once in one module, so references can report partial coverage instead of a clean miss.
+ * `ambiguousModuleDirectories` lists the local directories that tied module calls source, when the
+ * module call itself is declared more than once.
  */
-export type TerraformNotFound = { status: "not_found"; reason: string; ambiguous?: SymbolDef[] };
+export type TerraformNotFound = {
+  status: "not_found";
+  reason: string;
+  ambiguous?: SymbolDef[];
+  ambiguousModuleDirectories?: string[];
+};
 
 export type TerraformResolution = { status: "ok"; def: SymbolDef } | TerraformNotFound;
 
@@ -181,14 +191,29 @@ async function calledModuleDirectory(
   index: ProjectIndex,
   file: FileId,
   moduleName: string,
-): Promise<{ status: "ok"; directory: string; forEach: boolean } | TerraformNotFound> {
-  const call = await findDeclaration(index, terraformModuleFiles(index, file), { kind: "module", name: moduleName });
+): Promise<{ status: "ok"; directory: string; instancing: TerraformModuleInstancing } | TerraformNotFound> {
+  const query: DeclarationQuery = { kind: "module", name: moduleName };
+  const calls = await matchingDeclarations(index, terraformModuleFiles(index, file), query);
+  if (calls.length > 1) {
+    return {
+      status: "not_found",
+      reason: `Terraform ${describe(query)} is declared more than once in the module`,
+      ambiguousModuleDirectories: calls.flatMap((call) => {
+        const directory =
+          call.declaration.source === undefined
+            ? null
+            : terraformLocalModuleDirectory(call.file, call.declaration.source);
+        return directory ? [directory] : [];
+      }),
+    };
+  }
+  const call = await findDeclaration(index, terraformModuleFiles(index, file), query);
   if (call.status !== "ok") return call;
   const source = call.declaration.source;
   if (source === undefined) return { status: "not_found", reason: `Module ${moduleName} has no literal source` };
   const directory = terraformLocalModuleDirectory(call.file, source);
   if (!directory) return { status: "not_found", reason: `Module source ${source} is not a local path` };
-  return { status: "ok", directory, forEach: call.declaration.forEach === true };
+  return { status: "ok", directory, instancing: call.declaration.instancing ?? "single" };
 }
 
 /** Indexed files of the module that a module call in `file` sources, or a reason it has none. */
@@ -196,20 +221,33 @@ async function calledModuleFiles(
   index: ProjectIndex,
   file: FileId,
   moduleName: string,
-  instanceSelected: boolean,
+  selection: TerraformOutputSelection | undefined,
 ): Promise<{ status: "ok"; files: FileId[] } | TerraformNotFound> {
   const called = await calledModuleDirectory(index, file, moduleName);
   if (called.status !== "ok") return called;
-  // `module.m.key.out` on a `for_each` call selects instance `key`, so `key` is not an output.
-  if (called.forEach && !instanceSelected) {
-    return { status: "not_found", reason: `Module ${moduleName} uses for_each; select an instance before an output` };
+  if (selection && !terraformOutputSelectionReadsOutput(selection, called.instancing)) {
+    return { status: "not_found", reason: `The indexes after module ${moduleName} do not select an output` };
   }
   const childFile = indexedTerraformFileInDirectory(index, called.directory);
   if (!childFile) return { status: "not_found", reason: `Module ${moduleName} source has no indexed Terraform files` };
   return { status: "ok", files: terraformModuleFiles(index, childFile) };
 }
 
-/** True when `use` in `file` may read an output of the module whose files include `def`. */
+function isModuleDirectoryOf(directory: string, def: SymbolDef): boolean {
+  return fileIdentityKey(directory) === fileIdentityKey(path.dirname(def.file));
+}
+
+/** True when a failed resolution may still name `def` through a tied declaration or module call. */
+export function terraformResolutionMayName(
+  resolution: TerraformNotFound,
+  def: SymbolDef,
+  sameDefinition: (candidate: SymbolDef) => boolean,
+): boolean {
+  if (resolution.ambiguous?.some(sameDefinition)) return true;
+  return resolution.ambiguousModuleDirectories?.some((directory) => isModuleDirectoryOf(directory, def)) ?? false;
+}
+
+/** True when `use` in `file` may read an output of the module whose files include `def`, unproven. */
 export async function terraformModuleUseTargetsDefinition(
   index: ProjectIndex,
   file: FileId,
@@ -217,8 +255,10 @@ export async function terraformModuleUseTargetsDefinition(
   def: SymbolDef,
 ): Promise<boolean> {
   const called = await calledModuleDirectory(index, file, use.module);
-  if (called.status !== "ok" || (use.onlyForEach && !called.forEach)) return false;
-  return fileIdentityKey(called.directory) === fileIdentityKey(path.dirname(def.file));
+  if (called.status !== "ok") return terraformResolutionMayName(called, def, () => false);
+  // A selection that fits the call names its output; the reference loop resolves that site.
+  if (use.selection && terraformOutputSelectionReadsOutput(use.selection, called.instancing)) return false;
+  return isModuleDirectoryOf(called.directory, def);
 }
 
 /** Resolves one reference target written in `file` to its indexed declaration. */
@@ -230,8 +270,8 @@ export async function resolveTerraformTarget(
   let files: FileId[];
   let query: DeclarationQuery;
   if (target.kind === "output" || target.kind === "input") {
-    const instanceSelected = target.kind === "input" || target.instanceSelected;
-    const called = await calledModuleFiles(index, file, target.module, instanceSelected);
+    const selection = target.kind === "output" ? target.selection : undefined;
+    const called = await calledModuleFiles(index, file, target.module, selection);
     if (called.status !== "ok") return called;
     files = called.files;
     query = { kind: target.kind === "output" ? "output" : "variable", name: target.name };

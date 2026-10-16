@@ -19,6 +19,7 @@ import {
   terraformFactsForFile,
   terraformModuleCallerFiles,
   terraformModuleUseTargetsDefinition,
+  terraformResolutionMayName,
   terraformModuleFiles,
 } from "./resolution.js";
 
@@ -103,12 +104,16 @@ export async function findTerraformReferences(
       const resolved = await resolveTerraformTarget(index, file, site.target);
       if (resolved.status === "ok") {
         if (sameDef(resolved.def, def, index.languageExtensions)) addReference(file, site.range);
-      } else if (resolved.ambiguous?.some((candidate) => sameDef(candidate, def, index.languageExtensions))) {
-        // A use that ties between this declaration and a duplicate may still name it.
+      } else if (
+        terraformResolutionMayName(resolved, def, (candidate) => sameDef(candidate, def, index.languageExtensions))
+      ) {
+        // A use that ties between this declaration and a duplicate, or between duplicate module
+        // calls, may still name it.
         unprovenUse = true;
       }
     }
-    // A whole module value (`module.net` passed on) may read this output without naming it.
+    // A whole module value (`module.net`), or indexes that do not fit the call's instancing, may
+    // read this output without naming it.
     if (declaration?.kind === "output") {
       for (const use of facts.moduleObjectUses) {
         if (await terraformModuleUseTargetsDefinition(index, file, use, def)) unprovenUse = true;

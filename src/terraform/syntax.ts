@@ -24,18 +24,36 @@ export type TerraformDeclaration = {
   range: Range;
   /** Literal `source` of a module call; absent when missing or not a plain string. */
   source?: string;
-  /** True when a module call sets `for_each`, so `module.<name>.<key>` selects an instance. */
-  forEach?: boolean;
+  /** How a module call is instanced: `count` and `for_each` calls need one index per instance. */
+  instancing?: TerraformModuleInstancing;
 };
+
+export type TerraformModuleInstancing = "single" | "count" | "for_each";
+
+/** How `module.<module>...<output>` reaches its output: indexes before it, or a splat. */
+export type TerraformOutputSelection = { indexes: number; splat: boolean };
+
+/**
+ * True when `selection` reads an output of a call with `instancing`. A splat reads each instance.
+ * Otherwise a `count` or `for_each` call needs exactly one instance index (`module.m["key"].out`),
+ * and a single call needs none: there, `module.m["key"].out` reads field `out` of output `key`.
+ */
+export function terraformOutputSelectionReadsOutput(
+  selection: TerraformOutputSelection,
+  instancing: TerraformModuleInstancing,
+): boolean {
+  if (selection.splat) return !selection.indexes;
+  return selection.indexes === (instancing === "single" ? 0 : 1);
+}
 
 export type TerraformReferenceTarget =
   | { kind: "variable" | "local" | "module"; name: string }
   | { kind: "resource" | "data"; type: string; name: string }
   /**
-   * `module.<module>.<name>`: an output of the called module. `instanceSelected` is true when an
-   * index (`[0]`, `["key"]`) or a splat precedes `<name>`.
+   * `module.<module>.<name>`: an output of the called module when `selection` matches the call's
+   * instancing (see `terraformOutputSelectionReadsOutput`).
    */
-  | { kind: "output"; module: string; name: string; instanceSelected: boolean }
+  | { kind: "output"; module: string; name: string; selection: TerraformOutputSelection }
   /** An argument in `module "<module>" { <name> = ... }`: an input variable of the called module. */
   | { kind: "input"; module: string; name: string };
 
@@ -46,11 +64,11 @@ export type TerraformReferenceSite = {
 };
 
 /**
- * A module call used as a whole value (`module.net`), so any of its outputs may be read. With
- * `onlyForEach`, the use names an attribute without an index (`module.net.a.b`), which reads an
- * instance rather than an output only when the call sets `for_each`.
+ * A module call value that may read any of its outputs: a whole value (`module.net`) has no
+ * `selection`; an output site carries its `selection`, which reads something other than the named
+ * output when it does not match the call's instancing.
  */
-export type TerraformModuleObjectUse = { module: string; range: Range; onlyForEach?: boolean };
+export type TerraformModuleObjectUse = { module: string; range: Range; selection?: TerraformOutputSelection };
 
 export type TerraformFileFacts = {
   declarations: TerraformDeclaration[];
@@ -70,6 +88,11 @@ const BUILT_IN_ROOTS = new Set(["path", "terraform", "self", "count", "each", "e
 /** An HCL identifier: a letter or `_`, then letters, digits, `_`, or `-` (`my-server`). */
 export const TERRAFORM_IDENTIFIER_PATTERN = /^[_\p{ID_Start}][_\p{ID_Continue}-]*$/u;
 
+/** Comments are named nodes that can sit between any two children; facts ignore them. */
+function isSyntaxNode(node: SyntaxNodeLike): boolean {
+  return node.type !== "comment";
+}
+
 function sameNode(left: SyntaxNodeLike | null | undefined, right: SyntaxNodeLike | null | undefined): boolean {
   return (
     !!left &&
@@ -85,14 +108,14 @@ function containsNode(ancestor: SyntaxNodeLike, node: SyntaxNodeLike): boolean {
 }
 
 function blockTypeName(block: SyntaxNodeLike): string | undefined {
-  const first = block.namedChildren[0];
+  const first = block.namedChildren.filter(isSyntaxNode)[0];
   return first?.type === "identifier" ? first.text : undefined;
 }
 
 /** Labels between the block type and `{`. */
 function blockLabels(block: SyntaxNodeLike): SyntaxNodeLike[] {
   const labels: SyntaxNodeLike[] = [];
-  for (const child of block.namedChildren.slice(1)) {
+  for (const child of block.namedChildren.filter(isSyntaxNode).slice(1)) {
     if (child.type === "block_start") break;
     labels.push(child);
   }
@@ -100,7 +123,7 @@ function blockLabels(block: SyntaxNodeLike): SyntaxNodeLike[] {
 }
 
 function blockBody(block: SyntaxNodeLike): SyntaxNodeLike | undefined {
-  return block.namedChildren.find((child) => child.type === "body");
+  return block.namedChildren.filter(isSyntaxNode).find((child) => child.type === "body");
 }
 
 function isTopLevelBlock(block: SyntaxNodeLike): boolean {
@@ -110,42 +133,46 @@ function isTopLevelBlock(block: SyntaxNodeLike): boolean {
 /** The text node of a quoted string with no interpolation, such as a block label. */
 function literalStringText(stringLit: SyntaxNodeLike | undefined): SyntaxNodeLike | null {
   if (stringLit?.type !== "string_lit") return null;
-  const parts = stringLit.namedChildren.filter(
-    (child) => child.type !== "quoted_template_start" && child.type !== "quoted_template_end",
-  );
+  const parts = stringLit.namedChildren
+    .filter(isSyntaxNode)
+    .filter((child) => child.type !== "quoted_template_start" && child.type !== "quoted_template_end");
   const text = parts.length === 1 ? parts[0] : undefined;
   return text?.type === "template_literal" ? text : null;
 }
 
 function attributeNameNode(attribute: SyntaxNodeLike): SyntaxNodeLike | undefined {
-  const name = attribute.namedChildren[0];
+  const name = attribute.namedChildren.filter(isSyntaxNode)[0];
   return name?.type === "identifier" ? name : undefined;
 }
 
 function attributeValue(attribute: SyntaxNodeLike): SyntaxNodeLike | undefined {
-  return attribute.namedChildren.find((child) => child.type === "expression");
+  return attribute.namedChildren.filter(isSyntaxNode).find((child) => child.type === "expression");
 }
 
 function bodyAttributes(block: SyntaxNodeLike): SyntaxNodeLike[] {
-  return blockBody(block)?.namedChildren.filter((child) => child.type === "attribute") ?? [];
+  return (
+    blockBody(block)
+      ?.namedChildren.filter(isSyntaxNode)
+      .filter((child) => child.type === "attribute") ?? []
+  );
 }
 
 /** A plain string attribute value, such as a module `source`. */
 function literalStringValue(attribute: SyntaxNodeLike): string | undefined {
   const value = attributeValue(attribute);
-  if (value?.namedChildren.length !== 1) return undefined;
-  const literal = value.namedChildren[0];
-  if (literal?.type !== "literal_value" || literal.namedChildren.length !== 1) return undefined;
-  return literalStringText(literal.namedChildren[0])?.text;
+  if (value?.namedChildren.filter(isSyntaxNode).length !== 1) return undefined;
+  const literal = value.namedChildren.filter(isSyntaxNode)[0];
+  if (literal?.type !== "literal_value" || literal.namedChildren.filter(isSyntaxNode).length !== 1) return undefined;
+  return literalStringText(literal.namedChildren.filter(isSyntaxNode)[0])?.text;
 }
 
 /** A bare identifier attribute value, such as a `dynamic` block `iterator`. */
 function bareIdentifierValue(attribute: SyntaxNodeLike): string | undefined {
   const value = attributeValue(attribute);
-  if (value?.namedChildren.length !== 1) return undefined;
-  const variable = value.namedChildren[0];
+  if (value?.namedChildren.filter(isSyntaxNode).length !== 1) return undefined;
+  const variable = value.namedChildren.filter(isSyntaxNode)[0];
   if (variable?.type !== "variable_expr") return undefined;
-  const identifier = variable.namedChildren[0];
+  const identifier = variable.namedChildren.filter(isSyntaxNode)[0];
   return identifier?.type === "identifier" ? identifier.text : undefined;
 }
 
@@ -201,8 +228,8 @@ function declarationNameNodes(block: SyntaxNodeLike): SyntaxNodeLike[] {
 }
 
 function collectDeclarations(root: SyntaxNodeLike, facts: TerraformFileFacts): void {
-  const body = root.namedChildren.find((child) => child.type === "body");
-  for (const block of body?.namedChildren ?? []) {
+  const body = root.namedChildren.filter(isSyntaxNode).find((child) => child.type === "body");
+  for (const block of body?.namedChildren.filter(isSyntaxNode) ?? []) {
     if (block.type !== "block") continue;
     for (const nameNode of declarationNameNodes(block)) {
       const declaration = terraformDeclarationForNameNode(nameNode);
@@ -228,7 +255,7 @@ function collectModuleCall(block: SyntaxNodeLike, declaration: TerraformDeclarat
       if (source !== undefined) declaration.source = source;
       continue;
     }
-    if (nameNode.text === "for_each") declaration.forEach = true;
+    if (nameNode.text === "for_each" || nameNode.text === "count") declaration.instancing = nameNode.text;
     if (MODULE_META_ARGUMENTS.has(nameNode.text)) continue;
     facts.references.push({
       range: toRange(nameNode),
@@ -248,11 +275,11 @@ function traversalSteps(
   variable: SyntaxNodeLike,
 ): { steps: TraversalStep[]; end: SyntaxNodeLike | undefined } {
   const steps: TraversalStep[] = [];
-  const children = expression.namedChildren;
+  const children = expression.namedChildren.filter(isSyntaxNode);
   const start = children.findIndex((child) => sameNode(child, variable));
   for (const child of children.slice(start + 1)) {
     if (child.type === "get_attr") {
-      const name = child.namedChildren[0];
+      const name = child.namedChildren.filter(isSyntaxNode)[0];
       if (name?.type !== "identifier") return { steps, end: child };
       steps.push({ kind: "attr", name });
     } else if (child.type === "index") {
@@ -267,9 +294,9 @@ function traversalSteps(
 /** The first attribute name inside a `[*].name` or `.*.name` splat. */
 function splatAttribute(splat: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined {
   if (splat?.type !== "splat") return undefined;
-  const form = splat.namedChildren[0];
-  const first = form?.namedChildren[0];
-  const name = first?.type === "get_attr" ? first.namedChildren[0] : undefined;
+  const form = splat.namedChildren.filter(isSyntaxNode)[0];
+  const first = form?.namedChildren.filter(isSyntaxNode)[0];
+  const name = first?.type === "get_attr" ? first.namedChildren.filter(isSyntaxNode)[0] : undefined;
   return name?.type === "identifier" ? name : undefined;
 }
 
@@ -289,20 +316,20 @@ function dynamicIteratorName(dynamicBlock: SyntaxNodeLike): string | undefined {
 function isIteratorInScope(variable: SyntaxNodeLike, root: string): boolean {
   for (let node = variable.parent; node; node = node.parent) {
     if (node.type === "for_tuple_expr" || node.type === "for_object_expr") {
-      const intro = node.namedChildren.find((child) => child.type === "for_intro");
+      const intro = node.namedChildren.filter(isSyntaxNode).find((child) => child.type === "for_intro");
       if (
         intro &&
         !containsNode(intro, variable) &&
-        intro.namedChildren.some((child) => child.type === "identifier" && child.text === root)
+        intro.namedChildren.filter(isSyntaxNode).some((child) => child.type === "identifier" && child.text === root)
       ) {
         return true;
       }
     } else if (node.type === "template_for") {
-      const start = node.namedChildren.find((child) => child.type === "template_for_start");
+      const start = node.namedChildren.filter(isSyntaxNode).find((child) => child.type === "template_for_start");
       if (
         start &&
         !containsNode(start, variable) &&
-        start.namedChildren.some((child) => child.type === "identifier" && child.text === root)
+        start.namedChildren.filter(isSyntaxNode).some((child) => child.type === "identifier" && child.text === root)
       ) {
         return true;
       }
@@ -328,7 +355,7 @@ function firstAttribute(steps: readonly TraversalStep[], from = 0): SyntaxNodeLi
 function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): void {
   const expression = variable.parent;
   if (expression?.type !== "expression" || isObjectKey(expression)) return;
-  const rootNode = variable.namedChildren[0];
+  const rootNode = variable.namedChildren.filter(isSyntaxNode)[0];
   if (rootNode?.type !== "identifier") return;
   const root = rootNode.text;
   if (isIteratorInScope(variable, root)) return;
@@ -355,12 +382,10 @@ function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): 
       facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName) });
       return;
     }
-    const instanceSelected = next > 1 || !attribute;
-    push(output, { kind: "output", module: moduleName.text, name: output.text, instanceSelected });
-    // Without an index, `output` may be a `for_each` instance key followed by the real output.
-    if (!instanceSelected) {
-      facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName), onlyForEach: true });
-    }
+    const selection: TerraformOutputSelection = { indexes: next - 1, splat: !attribute };
+    push(output, { kind: "output", module: moduleName.text, name: output.text, selection });
+    // When `selection` does not fit the call's instancing, the site reads some other output.
+    facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName), selection });
     return;
   }
   if (root === "data") {
@@ -385,7 +410,7 @@ export function extractTerraformFacts(root: SyntaxNodeLike): TerraformFileFacts 
       collectReference(node, facts);
       continue;
     }
-    for (const child of node.namedChildren) stack.push(child);
+    for (const child of node.namedChildren.filter(isSyntaxNode)) stack.push(child);
   }
   facts.references.sort((left, right) => (left.range.start.index ?? 0) - (right.range.start.index ?? 0));
   return facts;

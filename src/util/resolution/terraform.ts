@@ -18,7 +18,8 @@ export function terraformLocalModuleDirectory(fromFile: string, source: string):
 /**
  * Every Terraform file directly inside a local module source directory, sorted and confined to
  * the project root. A module is the whole directory, so a module call depends on each file.
- * Subdirectories are separate modules and are not included.
+ * Subdirectories are separate modules and are not included. A symlink counts when its target is a
+ * regular file inside the project root.
  */
 export async function resolveTerraformModuleSourcePaths(
   projectRoot: string,
@@ -35,14 +36,23 @@ export async function resolveTerraformModuleSourcePaths(
     return [];
   }
   const candidates = entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => normalizePath(path.join(directory, entry.name)))
-    .filter((file) => supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "terraform")
-    .sort((left, right) => left.localeCompare(right));
+    .filter((entry) => entry.isFile() || entry.isSymbolicLink())
+    .map((entry) => ({ file: normalizePath(path.join(directory, entry.name)), link: entry.isSymbolicLink() }))
+    .filter(({ file }) => supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "terraform")
+    .sort((left, right) => left.file.localeCompare(right.file));
   const confined: string[] = [];
   for (const candidate of candidates) {
-    const hit = await confineResolvedPath(projectRoot, candidate);
+    if (candidate.link && !(await isRegularFileTarget(candidate.file))) continue;
+    const hit = await confineResolvedPath(projectRoot, candidate.file);
     if (hit) confined.push(hit);
   }
   return confined;
+}
+
+async function isRegularFileTarget(link: string): Promise<boolean> {
+  try {
+    return (await fsp.stat(link)).isFile();
+  } catch {
+    return false;
+  }
 }

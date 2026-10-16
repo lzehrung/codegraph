@@ -8,13 +8,16 @@ function literalLabel(capture?: string): string {
   return `(string_lit . (quoted_template_start) . (template_literal)${name} . (quoted_template_end) .)`;
 }
 
+/** An anchored step between block header parts; a comment may sit between them. */
+const HEADER_GAP = ". (comment)* .";
+
 /** A chunk block for top-level block keywords that take `labels` labels; the last label names it. */
 function labeledChunkBlock(keywords: readonly string[], labels: 1 | 2, captureId: string): BlockDefinition {
   const keywordList = keywords.map((keyword) => `"${keyword}"`).join(" ");
-  const leading = labels === 2 ? " . (string_lit)" : "";
+  const leading = labels === 2 ? ` ${HEADER_GAP} (string_lit)` : "";
   return {
     type: "block",
-    nameQuery: `. (identifier) @kw (#any-of? @kw ${keywordList})${leading} . (string_lit (template_literal) @chunk.name) . (block_start)`,
+    nameQuery: `. (identifier) @kw (#any-of? @kw ${keywordList})${leading} ${HEADER_GAP} (string_lit (template_literal) @chunk.name) ${HEADER_GAP} (block_start)`,
     captureId,
   };
 }
@@ -24,14 +27,14 @@ function unlabeledChunkBlock(keywords: readonly string[], captureId: string): Bl
   const keywordList = keywords.map((keyword) => `"${keyword}"`).join(" ");
   return {
     type: "block",
-    nameQuery: `. (identifier) @chunk.name (#any-of? @chunk.name ${keywordList}) . (block_start)`,
+    nameQuery: `. (identifier) @chunk.name (#any-of? @chunk.name ${keywordList}) ${HEADER_GAP} (block_start)`,
     captureId,
   };
 }
 
-const ONE_LABEL_DECLARATION = `(config_file (body (block . (identifier) @kind (#any-of? @kind "variable" "output" "module") . ${literalLabel("name")} . (block_start))))`;
-const TWO_LABEL_DECLARATION = `(config_file (body (block . (identifier) @kind (#any-of? @kind "resource" "data") . ${literalLabel()} . ${literalLabel("name")} . (block_start))))`;
-const LOCALS_DECLARATION = `(config_file (body (block . (identifier) @kind (#eq? @kind "locals") . (block_start) (body (attribute . (identifier) @name)))))`;
+const ONE_LABEL_DECLARATION = `(config_file (body (block . (identifier) @kind (#any-of? @kind "variable" "output" "module") ${HEADER_GAP} ${literalLabel("name")} ${HEADER_GAP} (block_start))))`;
+const TWO_LABEL_DECLARATION = `(config_file (body (block . (identifier) @kind (#any-of? @kind "resource" "data") ${HEADER_GAP} ${literalLabel()} ${HEADER_GAP} ${literalLabel("name")} ${HEADER_GAP} (block_start))))`;
+const LOCALS_DECLARATION = `(config_file (body (block . (identifier) @kind (#eq? @kind "locals") ${HEADER_GAP} (block_start) (body (attribute . (identifier) @name)))))`;
 
 /**
  * Terraform (HCL) configuration. Symbols are top-level `variable`, `output`, `module`, `resource`,
@@ -66,7 +69,7 @@ export const TERRAFORM_DEF: LanguageDefinition = {
           . (expression . (literal_value . ${literalLabel("from")} .) .)))) @stmt))
     `,
     exports: `
-      (config_file (body (block . (identifier) @kind (#any-of? @kind "variable" "output") . ${literalLabel("name")} . (block_start))))
+      (config_file (body (block . (identifier) @kind (#any-of? @kind "variable" "output") ${HEADER_GAP} ${literalLabel("name")} ${HEADER_GAP} (block_start))))
     `,
     locals: `
       ${ONE_LABEL_DECLARATION}
