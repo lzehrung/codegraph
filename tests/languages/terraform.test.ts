@@ -17,6 +17,7 @@ import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import type { ProjectIndex } from "../../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { locateChangedSymbols } from "../../src/impact/map.js";
+import { analyzeImpact } from "../../src/impact/analyzer.js";
 import { resolveTerraformModuleSourcePaths } from "../../src/util/resolution/terraform.js";
 import {
   createTempProjectRoot,
@@ -554,11 +555,42 @@ describe("Terraform edge forms", () => {
     expect(line.status).toBe("ok");
     expect(block.status).toBe("ok");
     if (line.status !== "ok" || block.status !== "ok") return;
-    const use = (references: typeof line.references) =>
-      references.find((reference) => relative(fixtureRoot, reference.file) === "main.tf");
-    expect(use(line.references)?.context).toContain("var.region");
-    expect(use(block.references)?.context).toMatch(/^locals \{/);
-    expect(line.references.every((reference) => reference.context !== undefined)).toBe(true);
+    const firstLines = (references: typeof line.references) =>
+      references.map((reference) => `${relative(fixtureRoot, reference.file)}:${reference.context?.split("\n")[0]}`);
+    expect(firstLines(line.references)).toEqual([
+      'main.tf:  name_prefix = "${var.region}-app"',
+      "main.tf:  region = var.region",
+      "main.tf:  region = var.region",
+      'variables.tf:variable "region" {',
+    ]);
+    // Block context is the enclosing HCL block, not the whole file.
+    expect(firstLines(block.references)).toEqual([
+      "main.tf:locals {",
+      'main.tf:module "network" {',
+      'main.tf:module "storage" {',
+      'variables.tf:variable "region" {',
+    ]);
+    const network = block.references[1]?.context ?? "";
+    expect(network.split("\n").at(-1)).toBe("}");
+    expect(network).not.toContain("locals");
+  });
+
+  it("reaches every file of a calling module in transitive impact", async () => {
+    const changed = await locateChangedSymbols(fixtureIndex, fixtureFile("modules/network/main.tf"), [
+      { oldStart: 2, newStart: 2, lines: ["+  cidr_block = var.cidr"] },
+    ]);
+    expect(changed.map((symbol) => `${symbol.name}:${symbol.kind}`)).toEqual(["main:resource"]);
+    const impacted = await analyzeImpact(
+      fixtureIndex,
+      changed,
+      [{ path: fixtureFile("modules/network/main.tf"), kind: "modified", hunks: [] }],
+      { depth: 3 },
+    );
+    const files = impacted.map((item) => relative(fixtureRoot, item.file)).sort();
+    // The child output reads the resource; the root reads that output from `outputs.tf`, which
+    // holds no module block of its own.
+    expect(files).toEqual(expect.arrayContaining(["modules/network/outputs.tf", "main.tf", "outputs.tf"]));
+    expect(files).not.toContain("modules/storage/main.tf");
   });
 
   it("keeps child references partial when the module call is declared twice", async () => {

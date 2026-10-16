@@ -11,6 +11,7 @@ import { buildDependencyStats, normalizeSeverityWeights, selectStrongerImpactRea
 import { attachCallCompatibilityHints } from "./call-compatibility.js";
 import { computeMemberResolutionCoverage } from "./member-resolution-coverage.js";
 import { createReferenceLookupCache } from "./reference-cache.js";
+import { isTerraformFile, terraformModuleFiles } from "../terraform/resolution.js";
 import {
   createImpactWorkBudget,
   IMPACT_SYMBOL_BATCH_SIZE,
@@ -130,7 +131,10 @@ export async function analyzeImpact(
     diagnostics,
     fanInByFile,
   );
-  const reverseDepsForImpact = reverseDepsForSqlChangedObjects(reverseDeps, filteredChangedSymbols);
+  const reverseDepsForImpact = reverseDepsWithTerraformModulePeers(
+    index,
+    reverseDepsForSqlChangedObjects(reverseDeps, filteredChangedSymbols),
+  );
   recordReferenceLookupOmitted(workBudget, filteredChangedSymbols.length - budgetedChangedSymbols.length);
   if (diagnostics) {
     const memberResolutionCoverage = computeMemberResolutionCoverage(filteredChangedSymbols, index);
@@ -226,6 +230,35 @@ export async function analyzeImpact(
     emitImpactItem(item, "final");
   }
   return sorted;
+}
+
+/**
+ * A Terraform module call's `source` edge comes from the file holding the `module` block, but
+ * every file of the calling module reads `module.<name>.<output>`: Terraform evaluates the
+ * directory as one module. Each Terraform importer's module peers therefore depend on the same
+ * target for impact.
+ */
+function reverseDepsWithTerraformModulePeers(
+  index: ProjectIndex,
+  reverseDeps: Map<FileId, Edge[]>,
+): Map<FileId, Edge[]> {
+  let extended: Map<FileId, Edge[]> | undefined;
+  for (const [file, edges] of reverseDeps) {
+    const dependents = new Set(edges.map((edge) => fileIdentityKey(edge.from)));
+    const peerEdges: Edge[] = [];
+    for (const edge of edges) {
+      if (!isTerraformFile(index, edge.from)) continue;
+      for (const peer of terraformModuleFiles(index, edge.from)) {
+        if (dependents.has(fileIdentityKey(peer))) continue;
+        dependents.add(fileIdentityKey(peer));
+        peerEdges.push({ ...edge, from: peer });
+      }
+    }
+    if (!peerEdges.length) continue;
+    extended ??= new Map(reverseDeps);
+    extended.set(file, [...edges, ...peerEdges]);
+  }
+  return extended ?? reverseDeps;
 }
 
 function reverseDepsForSqlChangedObjects(

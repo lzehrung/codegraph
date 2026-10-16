@@ -69,7 +69,7 @@ export function extractEnclosingBlock(
   let current: SyntaxNodeLike | null = node;
   let genericCandidate: SyntaxNodeLike | null = null;
   const isRootLikeNode = (type: string): boolean =>
-    type === "program" || type === "module" || type === "source_file" || type === "document";
+    type === "program" || type === "module" || type === "source_file" || type === "document" || type === "config_file";
   const blockTypePriority = (type: string): number => {
     if (sup.id === "ts" || sup.id === "tsx" || sup.id === "js") {
       if (
@@ -94,6 +94,9 @@ export function extractEnclosingBlock(
         return 1;
       }
       return 0;
+    }
+    if (sup.id === "terraform") {
+      return type === "block" ? 2 : 0;
     }
     return 0;
   };
