@@ -34,15 +34,17 @@ export type TerraformModuleInstancing = "single" | "count" | "for_each";
 export type TerraformOutputSelection = { indexes: number; splat: boolean };
 
 /**
- * True when `selection` reads an output of a call with `instancing`. A splat reads each instance.
- * Otherwise a `count` or `for_each` call needs exactly one instance index (`module.m["key"].out`),
- * and a single call needs none: there, `module.m["key"].out` reads field `out` of output `key`.
+ * True when `selection` reads an output of a call with `instancing`. A splat reads each instance
+ * of a `count` list or the one single instance; a `for_each` value is a map, which a splat wraps as
+ * one element, so `module.m[*].key.out` selects instance `key`. Otherwise a `count` or `for_each`
+ * call needs exactly one instance index (`module.m["key"].out`), and a single call needs none:
+ * there, `module.m["key"].out` reads field `out` of output `key`.
  */
 export function terraformOutputSelectionReadsOutput(
   selection: TerraformOutputSelection,
   instancing: TerraformModuleInstancing,
 ): boolean {
-  if (selection.splat) return !selection.indexes;
+  if (selection.splat) return !selection.indexes && instancing !== "for_each";
   return selection.indexes === (instancing === "single" ? 0 : 1);
 }
 

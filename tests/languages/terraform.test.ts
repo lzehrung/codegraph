@@ -422,6 +422,9 @@ describe("Terraform references", () => {
           'output "by_index" {',
           '  value = module.net["primary"].vpc_id',
           "}",
+          'output "by_splat" {',
+          "  value = module.net[*].primary.vpc_id",
+          "}",
           "",
         ].join("\n"),
       },
@@ -432,6 +435,9 @@ describe("Terraform references", () => {
       const index = await buildProjectIndex(root);
       const byKey = await goToDefinition(index, await positionOf(root, "main.tf", "net.primary", 4));
       expect(byKey.status).toBe("not_found");
+      // A splat wraps the for_each map as one element, so `primary` is still an instance key.
+      const bySplat = await goToDefinition(index, await positionOf(root, "main.tf", "[*].primary", 4));
+      expect(bySplat.status).toBe("not_found");
       const byIndex = await goToDefinition(index, await positionOf(root, "main.tf", '"].vpc_id', 3));
       expect(byIndex.status).toBe("ok");
       if (byIndex.status === "ok") expect(relative(root, byIndex.definition.file)).toBe("net/outputs.tf");
@@ -497,6 +503,30 @@ describe("Terraform edge forms", () => {
       coverage: references.referenceCoverage?.state,
     };
   }
+
+  it("keeps the module source edge when a comment sits around the source value", async () => {
+    const root = await createTempProjectRoot("cg-terraform-source-comment-", [
+      {
+        path: "main.tf",
+        contents:
+          'module "a" {\n  source = /* local */ "./net"\n}\nmodule "b" {\n  source /* local */ = "./other"\n}\n',
+      },
+      { path: "net/a.tf", contents: 'variable "x" {}\n' },
+      { path: "other/a.tf", contents: 'variable "y" {}\n' },
+    ]);
+    try {
+      const main = normalizePath(path.join(root, "main.tf"));
+      const initial = await buildProjectIndexIncremental(root, { cache: "disk" });
+      expect(edgeTargets(initial, root, main)).toEqual(["net/a.tf", "other/a.tf"]);
+      await fsp.writeFile(path.join(root, "net", "b.tf"), 'variable "z" {}\n', "utf8");
+      const warm = await buildProjectIndexIncremental(root, { cache: "disk" });
+      const cold = await buildProjectIndex(root, { cache: "off" });
+      expect(edgeTargets(warm, root, main)).toEqual(["net/a.tf", "net/b.tf", "other/a.tf"]);
+      expect(edgeTargets(warm, root, main)).toEqual(edgeTargets(cold, root, main));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 
   it("re-resolves a parent-directory module source when a file is added there", async () => {
     const root = await createTempProjectRoot("cg-terraform-parent-", [
