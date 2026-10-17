@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { findSqlRoutineMentions, sqlRoutineDefinitionNamespace } from "../src/sql/routine-mentions.js";
+import {
+  findSqlRoutineMentions,
+  sqlRoutineDefinitionNamespace,
+  sqlStatementDropsRoutine,
+} from "../src/sql/routine-mentions.js";
 
 /** `kind:namespace:text` for each mention, with the text as written in the statement. */
 function describeMentions(statement: string): string[] {
@@ -10,6 +14,13 @@ function describeMentions(statement: string): string[] {
 
 function mentionTexts(statement: string): string[] {
   return findSqlRoutineMentions(statement).map((mention) => statement.slice(mention.start, mention.end));
+}
+
+/** The call mentions of a statement, with their text as written. */
+function callMentions(statement: string): Array<{ text: string; speculative: boolean }> {
+  return findSqlRoutineMentions(statement)
+    .filter((mention) => mention.kind === "call")
+    .map((mention) => ({ text: statement.slice(mention.start, mention.end), speculative: mention.speculative }));
 }
 
 describe("SQL routine mentions", () => {
@@ -235,6 +246,55 @@ describe("SQL routine mentions", () => {
   });
 
   it.each([
+    ["a keyword", "SELECT[normalize_email(x)] FROM t"],
+    ["a number", "SELECT 1[normalize_email(x)]"],
+    ["AS", "SELECT 1 AS[normalize_email(x)]"],
+    ["a clause keyword", "SELECT 1 WHERE[normalize_email(x)] = 1"],
+  ])("does not read a bracketed identifier right after %s as a routine call", (_label, statement) => {
+    expect(describeMentions(statement)).toEqual([]);
+  });
+
+  it.each([
+    ["a column", "SELECT arr[normalize_email(1)] FROM t"],
+    ["an identifier that ends in a digit", "SELECT x1[normalize_email(1)]"],
+    ["a qualified column", "SELECT t.col[normalize_email(1)] FROM t"],
+    ["ARRAY", "SELECT ARRAY[normalize_email(1)]"],
+    ["a closing parenthesis", "SELECT (a)[normalize_email(1)]"],
+  ])("keeps a call inside a subscript after %s", (_label, statement) => {
+    expect(mentionTexts(statement)).toContain("normalize_email");
+  });
+
+  it.each([
+    ["a nested block comment", "SELECT 1 /* a /* b */ normalize_email(x) */"],
+    ["two levels of block comments", "SELECT /* a /* b /* c */ */ normalize_email(x) */ 1"],
+    ["a block comment that is never closed", "SELECT /* a /* b */ normalize_email(x)"],
+  ])("ignores a name inside %s", (_label, statement) => {
+    expect(describeMentions(statement)).toEqual([]);
+  });
+
+  it.each([
+    ["a call after a nested comment", "SELECT /* a /* b */ */ normalize_email(x)"],
+    ["a CALL target after a nested comment", "CALL /* a /* b */ */ normalize_email(x)"],
+  ])("keeps %s", (_label, statement) => {
+    expect(callMentions(statement).map((call) => call.text)).toEqual(["normalize_email"]);
+  });
+
+  it.each([
+    ["an escaped quote", "SELECT E'can\\'t normalize_email(x)'"],
+    ["a lowercase prefix", "SELECT e'can\\'t normalize_email(x)'"],
+    ["a doubled quote and an escaped quote", "SELECT E'it''s \\' normalize_email(x)', 1"],
+  ])("ignores a name inside an E string with %s", (_label, statement) => {
+    expect(describeMentions(statement)).toEqual([]);
+  });
+
+  it.each([
+    ["an escaped backslash before the closing quote", "SELECT E'a\\\\', normalize_email(x)"],
+    ["a word that ends in e, which is no E string", "SELECT date'a\\' normalize_email(x)'"],
+  ])("keeps the call after %s", (_label, statement) => {
+    expect(callMentions(statement).map((call) => call.text)).toEqual(["normalize_email"]);
+  });
+
+  it.each([
     ["a string after CALL", "CALL 'note' norm(1)"],
     ["a string after EXEC", "EXEC 'x' dbo.norm 1"],
     ["a comment-shaped string", "CALL '/* note */' norm(1)"],
@@ -312,6 +372,67 @@ describe("SQL routine mentions", () => {
   it("keeps a call whose arguments are not table hints, even in a FROM list", () => {
     expect(mentionTexts("SELECT * FROM get_users(id)")).toEqual(["get_users"]);
     expect(mentionTexts("SELECT * FROM get_users()")).toEqual(["get_users"]);
+  });
+
+  it.each([
+    ["a DO block", "DO $$ BEGIN EXECUTE cmd; END $$"],
+    [
+      "a function",
+      "CREATE FUNCTION w() RETURNS int AS $$ DECLARE cmd text; r int; BEGIN EXECUTE cmd INTO r; RETURN r; END $$ LANGUAGE plpgsql",
+    ],
+    ["a USING clause", "DO $$ BEGIN EXECUTE cmd USING 1, 2; END $$"],
+    ["a qualified variable", "DO $$ BEGIN EXECUTE state.cmd; END $$"],
+  ])("does not read the command variable of a PL/pgSQL EXECUTE in %s as a routine", (_label, statement) => {
+    expect(callMentions(statement)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a function in the command",
+      "DO $$ BEGIN EXECUTE format('SELECT %s', normalize_email(x)); END $$",
+      ["format", "normalize_email"],
+    ],
+    ["a function that builds the command", "DO $$ BEGIN EXECUTE build_command(x); END $$", ["build_command"]],
+    [
+      "a CALL after an EXECUTE",
+      "CREATE PROCEDURE p() LANGUAGE plpgsql AS $$ BEGIN EXECUTE cmd; CALL q(1); END $$",
+      ["q"],
+    ],
+  ])("keeps the calls in %s", (_label, statement, expected) => {
+    expect(callMentions(statement).map((call) => call.text)).toEqual(expected);
+  });
+
+  it.each([
+    ["EXEC in a T-SQL procedure body", "CREATE PROCEDURE dbo.p AS BEGIN EXEC dbo.q 1; END"],
+    ["EXECUTE in a T-SQL procedure body", "CREATE PROCEDURE dbo.p AS BEGIN EXECUTE dbo.q @a = 1; END"],
+    ["a top-level EXECUTE", "EXECUTE dbo.q @a = 1"],
+  ])("keeps the target of %s as a certain call", (_label, statement) => {
+    expect(callMentions(statement)).toEqual([{ text: "dbo.q", speculative: false }]);
+  });
+
+  it.each([
+    ["a T-SQL INSERT without INTO", "INSERT dbo.norm (id) VALUES (1)", "dbo.norm"],
+    ["a MySQL INSERT without INTO", "INSERT norm (id) VALUES (1)", "norm"],
+    ["a COPY with a column list", "COPY public.norm (id, email) FROM stdin", "public.norm"],
+  ])("does not read the target of %s as a routine call", (_label, statement, name) => {
+    expect(mentionTexts(statement)).not.toContain(name);
+  });
+
+  it("keeps a call in the query of an INSERT without INTO", () => {
+    expect(mentionTexts("INSERT dbo.norm (id) SELECT norm(1)")).toEqual(["norm"]);
+  });
+
+  it.each([
+    ["DROP FUNCTION f(text)", true],
+    ["DROP /* note */ FUNCTION f(text)", true],
+    ["DROP -- note\n PROCEDURE f(text)", true],
+    ["DROP /* note */ /* more */ TRIGGER t ON u", true],
+    ["DROP /* note */ TABLE f", false],
+    ["DROP TABLE f", false],
+    ["SELECT 'DROP FUNCTION f'", false],
+    ["-- DROP FUNCTION f\nSELECT 1", false],
+  ])("tells whether %s drops a routine", (statement, drops) => {
+    expect(sqlStatementDropsRoutine(statement)).toBe(drops);
   });
 
   it("keeps a call in an index expression and does not treat the indexed table as a call", () => {

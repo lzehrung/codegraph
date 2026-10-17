@@ -675,6 +675,8 @@ async function findReferencesInternal(
   const sqlReferences = await findSqlReferences(index, def, {
     // A SQL definition spans its whole statement, so rename finds the declaration's name through here.
     includeDefinition: collectionMode !== "usages",
+    // Rename edits the name in `public.f`, not the qualifier that comes with it.
+    renameRanges: collectionMode === "rename",
     ...(maxReferences === undefined ? {} : { maxReferences }),
   });
   if (sqlReferences) return sqlReferences;

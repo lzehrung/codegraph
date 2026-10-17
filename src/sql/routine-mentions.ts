@@ -43,6 +43,7 @@ export type SqlRoutineMention = {
 
 /** The statement head that defines a routine. Fact extraction and mention scanning share it. */
 export const SQL_ROUTINE_DEFINITION_RE = /\bcreate\s+(?:or\s+replace\s+)?(function|procedure|trigger)\s+/i;
+const DROP_ROUTINE_RE = /^\s*drop\s+(?:function|procedure|trigger)\b/i;
 
 const CODE_STATEMENT_RE = /^\s*(?:create\s+(?:or\s+replace\s+)?(?:function|procedure)|do)\b/i;
 const DO_STATEMENT_RE = /^\s*do\b/i;
@@ -67,15 +68,15 @@ const WORD_RE = /[A-Za-z_][\w$]*/y;
 const WITH_ORDINALITY_RE = /with\s+ordinality\b/iy;
 // A table hint is a word with an optional argument: `NOLOCK`, `INDEX (ix_users)`, `INDEX = 0`.
 const TABLE_HINT_RE = /^(\w+)\s*(?:[(=][\s\S]*)?$/;
-// Strings and comments are masked everywhere. A `[` after an identifier opens a PostgreSQL array.
-const MASK_OPTIONS: SqlMaskOptions = { arrayBrackets: true };
+// The scanner reads PostgreSQL and SQL Server text: arrays, escape strings, and nested block comments.
+const MASK_OPTIONS: SqlMaskOptions = { arrayBrackets: true, nestedBlockComments: true, escapeStrings: true };
 
 type WordTable = Readonly<Record<string, true>>;
 
 // The body language of a function, procedure, or `DO` block that Codegraph reads as SQL.
 const BODY_LANGUAGES: WordTable = { sql: true, plpgsql: true };
 // Words before a name that is followed by `(` but is a table, index, type, or routine definition,
-// not a call: `INSERT INTO users (id)`, `REFERENCES users (id)`, `CAST(x AS numeric(10, 2))`.
+// not a call: `INSERT INTO users (id)`, `INSERT users (id)`, `COPY users (id)`, `REFERENCES users (id)`.
 const NON_CALL_PRECEDING_WORDS: WordTable = {
   table: true,
   view: true,
@@ -95,6 +96,8 @@ const NON_CALL_PRECEDING_WORDS: WordTable = {
   call: true,
   exec: true,
   execute: true,
+  insert: true,
+  copy: true,
 };
 // Words after `EXEC`, `EXECUTE`, or `CALL` that do not name a routine: `EXECUTE AS`, `GRANT EXECUTE ON`.
 const NON_ROUTINE_NAME_WORDS: WordTable = {
@@ -119,6 +122,8 @@ const NON_ROUTINE_NAME_WORDS: WordTable = {
 const REFERENCE_PRECEDING_WORDS: WordTable = { alter: true, on: true, enable: true, disable: true };
 // A bare `CALL (`, `EXEC (`, or `EXECUTE (` is the keyword, not a routine of that name.
 const CALL_KEYWORDS: WordTable = { call: true, exec: true, execute: true };
+// A PL/pgSQL `EXECUTE` runs the command string that an expression gives, so its operand is no routine.
+const EXECUTE_WORDS: WordTable = { exec: true, execute: true };
 // Words that follow a source in a `FROM` list without naming its alias.
 const NON_ALIAS_WORDS: WordTable = {
   on: true,
@@ -261,14 +266,18 @@ function routineBodyBlock(scan: string): (before: string) => boolean {
 /**
  * Masks strings and comments. The `$$` body of a function, procedure, or `DO` block stays visible
  * when its language is SQL or PL/pgSQL. Any other `$$` string stays masked: a parameter default, a
- * setting, or the body of a language Codegraph cannot read.
+ * setting, or the body of a language Codegraph cannot read. `inBody` is true when a body stays visible.
  */
-function maskStatementCode(statementText: string): string {
+function maskStatementCode(statementText: string): { masked: string; inBody: boolean } {
   const masked = maskSqlStringsAndComments(statementText, MASK_OPTIONS);
-  if (!statementText.includes("$") || !CODE_STATEMENT_RE.test(masked)) return masked;
+  if (!statementText.includes("$") || !CODE_STATEMENT_RE.test(masked)) return { masked, inBody: false };
   const scan = maskSqlQuotedIdentifiers(masked);
-  if (!bodyLanguageIsReadable(statementText, scan)) return masked;
-  return maskSqlStringsAndComments(statementText, { ...MASK_OPTIONS, keepDollarQuotedBody: routineBodyBlock(scan) });
+  if (!bodyLanguageIsReadable(statementText, scan)) return { masked, inBody: false };
+  const withBody = maskSqlStringsAndComments(statementText, {
+    ...MASK_OPTIONS,
+    keepDollarQuotedBody: routineBodyBlock(scan),
+  });
+  return { masked: withBody, inBody: withBody !== masked };
 }
 
 function keywordMentionKind(
@@ -314,22 +323,23 @@ function collectKeywordMentions(masked: string, scan: string, mentions: Map<numb
 function callKeywordMatchAllowsComments(statement: string, maskedMatch: string, start: number): boolean {
   if (statement.startsWith(maskedMatch, start)) return true;
   if (start < 0 || start + maskedMatch.length > statement.length) return false;
-  let block = false;
+  let depth = 0;
   let line = false;
   let index = 0;
   while (index < maskedMatch.length) {
     const original = statement[start + index] ?? "";
     const masked = maskedMatch[index] ?? "";
     const nextOriginal = statement[start + index + 1] ?? "";
-    if (!block && !line && original === "/" && nextOriginal === "*") block = true;
-    else if (!block && !line && original === "-" && nextOriginal === "-") line = true;
-    const inComment = block || line;
+    if (!depth && !line && original === "-" && nextOriginal === "-") line = true;
+    // A block comment can hold block comments.
+    if (!line && original === "/" && nextOriginal === "*") depth += 1;
+    const inComment = depth > 0 || line;
     if (original !== masked && (!inComment || (masked !== " " && masked !== "\n"))) return false;
     if (line && original === "\n") line = false;
-    if (block && original === "*" && nextOriginal === "/") {
+    if (depth && original === "*" && nextOriginal === "/") {
       const maskedSlash = maskedMatch[index + 1] ?? "";
       if (maskedSlash !== " " && maskedSlash !== "\n" && maskedSlash !== "/") return false;
-      block = false;
+      depth -= 1;
       index += 2;
       continue;
     }
@@ -489,8 +499,11 @@ function collectCallKeywordMentions(
   masked: string,
   scan: string,
   mentions: Map<number, SqlRoutineMention>,
+  inBody: boolean,
 ): void {
   for (const match of scan.matchAll(CALL_KEYWORD_RE)) {
+    // `EXECUTE cmd` in a PL/pgSQL body names a variable that holds a command, not a routine.
+    if (inBody && hasWord(EXECUTE_WORDS, (match[1] ?? "").toLowerCase())) continue;
     const matchStart = match.index ?? 0;
     const end = matchStart + match[0].length;
     if (!callKeywordMatchAllowsComments(statementText, masked.slice(matchStart, end), matchStart)) continue;
@@ -502,13 +515,20 @@ function collectCallKeywordMentions(
   }
 }
 
-function collectCallShapeMentions(masked: string, scan: string, mentions: Map<number, SqlRoutineMention>): void {
+function collectCallShapeMentions(
+  masked: string,
+  scan: string,
+  mentions: Map<number, SqlRoutineMention>,
+  inBody: boolean,
+): void {
   const excluded = excludedCallShapeStarts(scan);
   for (const match of scan.matchAll(CALL_SHAPE_RE)) {
     const start = match.index ?? 0;
     if (mentions.has(start) || excluded.has(start)) continue;
     const previous = previousWord(scan, start);
-    if (previous && hasWord(NON_CALL_PRECEDING_WORDS, previous)) continue;
+    // In a PL/pgSQL body `EXECUTE f(x)` calls `f` to build the command.
+    const buildsCommand = inBody && !!previous && hasWord(EXECUTE_WORDS, previous);
+    if (previous && hasWord(NON_CALL_PRECEDING_WORDS, previous) && !buildsCommand) continue;
     const end = start + (match[1] ?? "").length;
     const name = normalizeSqlObjectName(masked.slice(start, end));
     if (!name || (!name.includes(".") && hasWord(CALL_KEYWORDS, name.toLowerCase()))) continue;
@@ -518,17 +538,18 @@ function collectCallShapeMentions(masked: string, scan: string, mentions: Map<nu
 
 /**
  * Finds every place one statement names a routine. A call inside a `$$` body or a `BEGIN ... END` body
- * counts. A name inside a string literal, a comment, or a quoted identifier does not.
+ * counts. A name inside a string literal, a comment, or a quoted identifier does not, and neither does
+ * the operand of a PL/pgSQL `EXECUTE`, which holds a command.
  */
 export function findSqlRoutineMentions(statementText: string): SqlRoutineMention[] {
-  const masked = maskStatementCode(statementText);
+  const { masked, inBody } = maskStatementCode(statementText);
   // Names are read from `masked`. Keywords, calls, and parentheses are read from `scan`, where a
   // quoted identifier is one bare word and nothing inside it can read as syntax.
   const scan = maskSqlQuotedIdentifiers(masked);
   const mentions = new Map<number, SqlRoutineMention>();
   collectKeywordMentions(masked, scan, mentions);
-  collectCallKeywordMentions(statementText, masked, scan, mentions);
-  collectCallShapeMentions(masked, scan, mentions);
+  collectCallKeywordMentions(statementText, masked, scan, mentions, inBody);
+  collectCallShapeMentions(masked, scan, mentions, inBody);
   return [...mentions.values()].sort((left, right) => left.start - right.start);
 }
 
@@ -541,8 +562,8 @@ export function sqlRoutineDefinitionNamespace(statementText: string): SqlRoutine
 /**
  * True for `DROP FUNCTION`, `DROP PROCEDURE`, and `DROP TRIGGER`. Fact extraction records the dropped
  * name as a `drops_object` fact, which says nothing about the kind of the object. A table of the same
- * name is not dropped.
+ * name is not dropped. A comment can sit between the words, so the check reads the masked text.
  */
 export function sqlStatementDropsRoutine(statementText: string): boolean {
-  return /^drop\s+(?:function|procedure|trigger)\b/i.test(statementText);
+  return /\bdrop\b/i.test(statementText) && DROP_ROUTINE_RE.test(maskSqlStringsAndComments(statementText));
 }

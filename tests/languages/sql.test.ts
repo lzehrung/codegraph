@@ -15,7 +15,7 @@ import {
   supportForFile,
   type ProjectIndex,
 } from "../../src/index.js";
-import { previewRenameWithSession } from "../../src/agent/rename-preview.js";
+import { previewRenameWithSession, type RenamePreviewResponse } from "../../src/agent/rename-preview.js";
 import { createAgentSession } from "../../src/agent/session.js";
 import { workspaceSymbolsWithSession } from "../../src/agent/workspace-symbols.js";
 import { closeDiskCacheDatabase } from "../../src/indexer/build-cache/module-cache.js";
@@ -301,6 +301,32 @@ describe("SQL routine call sites", () => {
     return impact.impacted
       .map((item) => item.file)
       .filter((file) => file !== changedFile)
+      .sort();
+  }
+
+  /** Previews renaming the symbol called `name`. A schema-qualified symbol is found by its last part. */
+  async function previewRenameOf(project: SqlProject, name: string, newName: string): Promise<RenamePreviewResponse> {
+    const session = createAgentSession({ root: project.root, freshness: { policy: "check" } });
+    try {
+      const query = name.split(".").pop() ?? name;
+      const symbols = await workspaceSymbolsWithSession(session, { root: project.root, query });
+      const target = symbols.symbols.find((symbol) => symbol.name === name);
+      if (!target) throw new Error(`Expected the symbol ${name}`);
+      return await previewRenameWithSession(session, { root: project.root, handle: target.handle, newName });
+    } finally {
+      session.invalidate();
+    }
+  }
+
+  /** `file:line:column` of each edit in a rename preview, the form `siteAt` reports. */
+  function editSites(preview: RenamePreviewResponse): string[] {
+    return preview.edits.map((edit) => `${edit.file}:${edit.range.start.line}:${edit.range.start.column}`).sort();
+  }
+
+  /** `file:line:column` of each site a rename preview cannot edit safely. */
+  function unsafeRenameSites(preview: RenamePreviewResponse): string[] {
+    return preview.unsafeSites
+      .map((site) => `${site.location.file}:${site.location.range.start.line}:${site.location.range.start.column}`)
       .sort();
   }
 
@@ -1031,6 +1057,95 @@ describe("SQL routine call sites", () => {
       );
       expect(await gotoAt(project, "use.sql", use, 1, "users")).toBe("schema.sql:1");
       expect(await gotoAt(project, "use.sql", use, 2, "users")).toBe("schema.sql:2");
+    });
+  });
+
+  it("renames the name in a schema-qualified reference, keeps the qualifier, and keeps every edit of a file", async () => {
+    const schema = [
+      "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;",
+      "CREATE TABLE users (id integer, email text);",
+    ];
+    const use = [
+      "SELECT public.normalize_email(email), normalize_email(email), db.public.normalize_email(email) FROM public.users;",
+      "SELECT public . normalize_email(email) FROM users;",
+      "ALTER FUNCTION public.normalize_email(text) OWNER TO app;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const routine = await previewRenameOf(project, "normalize_email", "normalize_email_v2");
+      const table = await previewRenameOf(project, "users", "users_v2");
+
+      // Each edit replaces the name itself. A qualifier in front of it stays.
+      expect(editSites(routine)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "normalize_email"),
+          siteAt("use.sql", use, 1, "normalize_email", 0),
+          siteAt("use.sql", use, 1, "normalize_email", 1),
+          siteAt("use.sql", use, 1, "normalize_email", 2),
+          siteAt("use.sql", use, 2, "normalize_email"),
+          siteAt("use.sql", use, 3, "normalize_email"),
+        ].sort(),
+      );
+      expect(editSites(table)).toEqual(
+        [
+          siteAt("schema.sql", schema, 2, "users"),
+          siteAt("use.sql", use, 1, "users"),
+          siteAt("use.sql", use, 2, "users"),
+        ].sort(),
+      );
+      expect(new Set(routine.edits.map((edit) => edit.oldText))).toEqual(new Set(["normalize_email"]));
+      expect(new Set(table.edits.map((edit) => edit.oldText))).toEqual(new Set(["users"]));
+      for (const preview of [routine, table]) {
+        expect(unsafeRenameSites(preview).filter((site) => site.startsWith("use.sql:"))).toEqual([]);
+      }
+
+      // References keep the whole qualified name. Only rename narrows it.
+      const references = await referencesAt(project, "schema.sql", schema, 1, "normalize_email");
+      expect(referenceSites(project.root, references)).toContain(siteAt("use.sql", use, 1, "public.normalize_email"));
+      expect(referenceSites(project.root, references)).not.toContain(siteAt("use.sql", use, 1, "normalize_email", 0));
+    });
+  });
+
+  it("reports a call without the schema of a schema-qualified definition as an unsafe rename site, not as an edit", async () => {
+    const schema = ["CREATE FUNCTION app.normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;"];
+    const use = ["SELECT app.normalize_email(email), normalize_email(email);"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const preview = await previewRenameOf(project, "app.normalize_email", "app.normalize_address");
+      const qualifiedCall = siteAt("use.sql", use, 1, "app.normalize_email");
+      const bareCall = siteAt("use.sql", use, 1, "normalize_email", 1);
+
+      // The qualified call is renamed whole, as the definition is. The bare call cannot take a qualified name.
+      expect(editSites(preview)).toContain(qualifiedCall);
+      expect(editSites(preview)).not.toContain(bareCall);
+      expect(unsafeRenameSites(preview)).toContain(bareCall);
+    });
+  });
+
+  it("does not count the command variable of a PL/pgSQL EXECUTE as a call of a routine with the same name", async () => {
+    const schema = ["CREATE FUNCTION norm(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;"];
+    const use = [
+      "CREATE FUNCTION run_it() RETURNS void AS $$ DECLARE norm text := 'SELECT 1'; BEGIN EXECUTE norm; END $$ LANGUAGE plpgsql;",
+      "CREATE FUNCTION run_built() RETURNS void AS $$ BEGIN EXECUTE format('SELECT %s', norm(1)); END $$ LANGUAGE plpgsql;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const result = await referencesAt(project, "schema.sql", schema, 1, "norm");
+
+      expect(referenceSites(project.root, result)).toEqual(
+        [siteAt("schema.sql", schema, 1, "norm"), siteAt("use.sql", use, 2, "norm(1)")].sort(),
+      );
+      expect(await gotoAt(project, "use.sql", use, 1, "norm", 1)).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 2, "norm(1)")).toBe("schema.sql:1");
+    });
+  });
+
+  it("does not count the name in a DROP FUNCTION with a comment inside as a reference to a table", async () => {
+    const schema = ["CREATE TABLE norm (id integer);"];
+    const use = ["DROP /* note */ FUNCTION IF EXISTS norm(integer);", "SELECT id FROM norm;"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const table = await referencesAt(project, "schema.sql", schema, 1, "norm");
+
+      expect(referenceSites(project.root, table)).toEqual(
+        [siteAt("schema.sql", schema, 1, "norm"), siteAt("use.sql", use, 2, "norm")].sort(),
+      );
     });
   });
 });

@@ -93,23 +93,93 @@ export type SqlMaskOptions = {
    */
   keepDollarQuotedBody?: (before: string) => boolean;
   /**
-   * Read a `[` that directly follows an identifier character, `)`, `]`, or a quoted identifier as a
-   * PostgreSQL array constructor or subscript, as in `ARRAY[...]` and `x[1]`. Its content is code, so
-   * strings and comments inside it are masked. Off by default: SQLite and T-SQL read every `[` as a
-   * quoted identifier whose content stays as written, and the read-only query guard relies on that.
+   * Read a `[` as a PostgreSQL array constructor or subscript when it follows `ARRAY`, a `)`, a `]`, a
+   * quote, or an identifier that is neither a keyword nor a number, as in `ARRAY[...]` and `x[1]`. The
+   * content is code, so strings and comments inside it are masked, and both brackets are blanked. Any
+   * other `[` opens a quoted identifier, as in `SELECT[col]` and `FROM [dbo].[t]`. Off by default:
+   * SQLite and T-SQL read every `[` as a quoted identifier whose content stays as written, and the
+   * read-only query guard relies on that.
    */
   arrayBrackets?: boolean;
+  /**
+   * Let a block comment hold block comments, as PostgreSQL and SQL Server do. Off by default: SQLite
+   * and MySQL end a comment at the first closing delimiter, and the read-only query guard relies on that.
+   */
+  nestedBlockComments?: boolean;
+  /**
+   * Read a backslash in an `E'...'` string as an escape, as PostgreSQL does, so `E'can\'t'` is one
+   * string. Off by default: SQLite has no such string, and the read-only query guard relies on that.
+   */
+  escapeStrings?: boolean;
 };
 
-// A `[` directly after one of these opens an array constructor or subscript, not a quoted identifier.
-const ARRAY_BRACKET_PREVIOUS = '[\\w)\\]"`]';
-const ARRAY_BRACKET_PREVIOUS_RE = new RegExp(ARRAY_BRACKET_PREVIOUS);
+// A `[` directly after one of these characters opens an array subscript, not a quoted identifier.
+const SUBSCRIPT_PREVIOUS_RE = /[)\]"`]/;
 // So does a `[` after the word `ARRAY` and whitespace, as in `ARRAY [1, 2]`.
 const ARRAY_KEYWORD_BEFORE_RE = /\barray\s+$/i;
 const ARRAY_KEYWORD_WINDOW = 64;
+// Words that stand directly before an identifier and never before a subscript, as in `SELECT[col]`.
+const NON_SUBSCRIPT_WORDS: Readonly<Record<string, true>> = {
+  select: true,
+  from: true,
+  where: true,
+  and: true,
+  or: true,
+  not: true,
+  as: true,
+  on: true,
+  by: true,
+  in: true,
+  is: true,
+  join: true,
+  inner: true,
+  left: true,
+  right: true,
+  full: true,
+  cross: true,
+  outer: true,
+  natural: true,
+  set: true,
+  then: true,
+  else: true,
+  when: true,
+  case: true,
+  values: true,
+  into: true,
+  having: true,
+  union: true,
+  distinct: true,
+  all: true,
+  like: true,
+  between: true,
+  using: true,
+  with: true,
+  limit: true,
+  offset: true,
+  order: true,
+  group: true,
+  table: true,
+  update: true,
+  delete: true,
+  insert: true,
+  exec: true,
+  execute: true,
+  call: true,
+  top: true,
+  returning: true,
+  exists: true,
+  over: true,
+};
 
 function opensArrayBracket(statement: string, bracketIndex: number): boolean {
-  if (ARRAY_BRACKET_PREVIOUS_RE.test(statement[bracketIndex - 1] ?? "")) return true;
+  if (SUBSCRIPT_PREVIOUS_RE.test(statement[bracketIndex - 1] ?? "")) return true;
+  let wordStart = bracketIndex;
+  while (wordStart > 0 && /[\w$]/.test(statement[wordStart - 1] ?? "")) wordStart -= 1;
+  if (wordStart < bracketIndex) {
+    const word = statement.slice(wordStart, bracketIndex).toLowerCase();
+    // A number has no subscript, and a keyword is followed by an identifier: `SELECT 1[alias]`.
+    return !/^\d/.test(word) && !Object.hasOwn(NON_SUBSCRIPT_WORDS, word);
+  }
   return ARRAY_KEYWORD_BEFORE_RE.test(statement.slice(Math.max(0, bracketIndex - ARRAY_KEYWORD_WINDOW), bracketIndex));
 }
 
@@ -117,11 +187,13 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
   let out = "";
   let i = 0;
   let singleQuoted = false;
+  let escapeString = false;
   let doubleQuoted = false;
   let backtickQuoted = false;
   let bracketQuoted = false;
+  let arrayDepth = 0;
   let lineComment = false;
-  let blockComment = false;
+  let blockDepth = 0;
   let dollarQuote: string | null = null;
 
   while (i < statement.length) {
@@ -135,9 +207,15 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
       continue;
     }
 
-    if (lineComment || blockComment || dollarQuote || singleQuoted) {
-      if (blockComment && char === "*" && next === "/") {
-        blockComment = false;
+    if (lineComment || blockDepth || dollarQuote || singleQuoted) {
+      if (blockDepth && options?.nestedBlockComments && char === "/" && next === "*") {
+        blockDepth += 1;
+        out += "  ";
+        i += 2;
+        continue;
+      }
+      if (blockDepth && char === "*" && next === "/") {
+        blockDepth -= 1;
         out += "  ";
         i += 2;
         continue;
@@ -148,6 +226,12 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
         dollarQuote = null;
         continue;
       }
+      if (singleQuoted && escapeString && char === "\\" && next) {
+        // A backslash escapes the character after it, so `\'` does not end the string.
+        out += next === "\n" ? " \n" : "  ";
+        i += 2;
+        continue;
+      }
       if (singleQuoted && char === "'" && next === "'") {
         out += "  ";
         i += 2;
@@ -155,6 +239,7 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
       }
       if (singleQuoted && char === "'") {
         singleQuoted = false;
+        escapeString = false;
       }
       out += char === "\n" ? "\n" : " ";
       i += 1;
@@ -182,13 +267,16 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
       continue;
     }
     if (char === "/" && next === "*") {
-      blockComment = true;
+      blockDepth = 1;
       out += "  ";
       i += 2;
       continue;
     }
     if (char === "'") {
       singleQuoted = true;
+      // `E'...'` is a PostgreSQL escape string. A word that merely ends in `e`, as in `date'...'`, is not.
+      escapeString =
+        !!options?.escapeStrings && /[eE]/.test(statement[i - 1] ?? "") && !/[\w$]/.test(statement[i - 2] ?? "");
       out += " ";
       i += 1;
       continue;
@@ -196,8 +284,19 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
     if (char === '"') doubleQuoted = true;
     if (char === "`") backtickQuoted = true;
     if (char === "[") {
-      const opensArray = options?.arrayBrackets && opensArrayBracket(statement, i);
-      if (!opensArray) bracketQuoted = true;
+      if (options?.arrayBrackets && opensArrayBracket(statement, i)) {
+        arrayDepth += 1;
+        out += " ";
+        i += 1;
+        continue;
+      }
+      bracketQuoted = true;
+    }
+    if (char === "]" && arrayDepth) {
+      arrayDepth -= 1;
+      out += " ";
+      i += 1;
+      continue;
     }
     if (char === "$") {
       const tagMatch = statement.slice(i).match(/^\$[A-Za-z_][\w$]*\$|^\$\$/);
@@ -206,7 +305,12 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
         const bodyStart = i + tag.length;
         const closeIndex = statement.indexOf(tag, bodyStart);
         const bodyEnd = closeIndex < 0 ? statement.length : closeIndex;
-        const bodyOptions = options?.arrayBrackets ? { arrayBrackets: true } : undefined;
+        // Nested dollar-quoted blocks inside the body stay masked, so the body takes no such callback.
+        const bodyOptions: SqlMaskOptions = {
+          ...(options.arrayBrackets ? { arrayBrackets: true } : {}),
+          ...(options.nestedBlockComments ? { nestedBlockComments: true } : {}),
+          ...(options.escapeStrings ? { escapeStrings: true } : {}),
+        };
         out += " ".repeat(tag.length) + maskSqlStringsAndComments(statement.slice(bodyStart, bodyEnd), bodyOptions);
         i = bodyEnd;
         if (closeIndex >= 0) {
@@ -228,18 +332,13 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
   return out;
 }
 
-// A quoted identifier is double-quoted, backtick-quoted, or a bracketed `[...]` that is no array bracket.
-const QUOTED_IDENTIFIER_RE = new RegExp(
-  `"(?:""|[^"])*(?:"|$)|\`[^\`]*(?:\`|$)|(?<!${ARRAY_BRACKET_PREVIOUS})(?<!\\barray\\s+)\\[[^\\]]*(?:\\]|$)`,
-  "gi",
-);
+// Every `[` left in text from `maskSqlStringsAndComments` opens a quoted identifier: array brackets are blank.
+const QUOTED_IDENTIFIER_RE = /"(?:""|[^"])*(?:"|$)|`[^`]*(?:`|$)|\[[^\]]*(?:\]|$)/g;
 
 /**
  * Replaces each quoted identifier in text from `maskSqlStringsAndComments` with underscores of the
- * same length: a double-quoted or backtick-quoted one, or a bracketed `[...]` that is no array bracket
- * (see `arrayBrackets`). A scan for keywords, calls, and parentheses then reads an identifier as one
- * bare word: nothing inside it can read as syntax. The content of an array bracket stays, because
- * `ARRAY[f(x)]` holds a real call.
+ * same length: a double-quoted, backtick-quoted, or bracketed one. A scan for keywords, calls, and
+ * parentheses then reads an identifier as one bare word: nothing inside it can read as syntax.
  */
 export function maskSqlQuotedIdentifiers(masked: string): string {
   return masked.replace(QUOTED_IDENTIFIER_RE, (identifier) => identifier.replace(/[^\n]/g, "_"));

@@ -1260,7 +1260,11 @@ function normalizeEdits(
 ): RenameEdit[] {
   const byRange = new Map<string, RenameEdit>();
   for (const edit of edits) {
-    const key = `${edit.file}:${edit.range.start.index ?? ""}:${edit.range.end.index ?? ""}:${edit.oldText}:${edit.newText}`;
+    // A range without byte indices, as a SQL reference has, is told apart by its line and column.
+    const { start, end } = edit.range;
+    const startKey = start.index ?? `${start.line}:${start.column}`;
+    const endKey = end.index ?? `${end.line}:${end.column}`;
+    const key = `${edit.file}:${startKey}:${endKey}:${edit.oldText}:${edit.newText}`;
     if (!byRange.has(key)) byRange.set(key, edit);
   }
   const normalized = [...byRange.values()].sort(compareEdits);

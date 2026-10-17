@@ -137,6 +137,7 @@ function sqlDefinitionMatches(
 const SQL_IDENTIFIER = SQL_IDENTIFIER_PART_PATTERN;
 const SQL_DOTTED_TOKEN = String.raw`${SQL_IDENTIFIER}(?:\s*\.\s*${SQL_IDENTIFIER})*`;
 const SQL_DOTTED_TOKEN_RE = new RegExp(SQL_DOTTED_TOKEN, "g");
+const SQL_IDENTIFIER_PART_RE = new RegExp(SQL_IDENTIFIER, "g");
 const SQL_SOURCE_KEYWORDS = new Set([
   "as",
   "on",
@@ -324,7 +325,21 @@ function sqlNameResolvesToDefinition(lookup: SqlDefinitionLookup, name: string, 
   return matches.basename.length === 1 && matches.basename[0] === definition;
 }
 
-function factReferenceRanges(fact: SqlStatementFact, objectName: string, claimedStarts?: ReadonlySet<number>): Range[] {
+/**
+ * Where the last `partCount` parts of a dotted name begin. Rename edits the definition's own name and
+ * keeps the qualifier in front of it: a rename of `f` edits the `f` in `public.f`.
+ */
+function trailingPartsOffset(dottedName: string, partCount: number): number {
+  const parts = [...dottedName.matchAll(SQL_IDENTIFIER_PART_RE)];
+  return parts[parts.length - partCount]?.index ?? 0;
+}
+
+function factReferenceRanges(
+  fact: SqlStatementFact,
+  objectName: string,
+  claimedStarts?: ReadonlySet<number>,
+  keepParts = 0,
+): Range[] {
   const statement: SqlStatementNavigationSlice = {
     text: fact.statementText,
     startLine: fact.startLine,
@@ -339,11 +354,12 @@ function factReferenceRanges(fact: SqlStatementFact, objectName: string, claimed
     if (!token || sqlObjectLookupKey(token) !== objectKey) continue;
     const offset = match.index ?? 0;
     if (claimedStarts?.has(offset)) continue;
+    const nameOffset = keepParts ? trailingPartsOffset(match[0], keepParts) : 0;
     ranges.push(
       rangeForToken(
-        statementLineForOffset(statement, offset),
-        statementColumnForOffset(statement, offset),
-        match[0].length,
+        statementLineForOffset(statement, offset + nameOffset),
+        statementColumnForOffset(statement, offset + nameOffset),
+        match[0].length - nameOffset,
       ),
     );
   }
@@ -501,11 +517,13 @@ function claimedMentionStarts(
   return claimed;
 }
 
-function mentionRange(statement: SqlStatementNavigationSlice, mention: SqlRoutineMention): Range {
+function mentionRange(statement: SqlStatementNavigationSlice, mention: SqlRoutineMention, keepParts = 0): Range {
+  const start =
+    mention.start + (keepParts ? trailingPartsOffset(statement.text.slice(mention.start, mention.end), keepParts) : 0);
   return {
     start: {
-      line: statementLineForOffset(statement, mention.start),
-      column: statementColumnForOffset(statement, mention.start),
+      line: statementLineForOffset(statement, start),
+      column: statementColumnForOffset(statement, start),
     },
     end: {
       line: statementLineForOffset(statement, mention.end),
@@ -646,6 +664,8 @@ function indexedSqlDefinition(index: ProjectIndex, definition: SymbolDef): Symbo
 type FindSqlReferencesOptions = {
   includeDefinition?: boolean;
   maxReferences?: number;
+  /** Report only the definition's own name in a qualified reference, and keep the qualifier out of the range. */
+  renameRanges?: boolean;
 };
 
 export async function findSqlReferences(
@@ -668,6 +688,7 @@ export async function findSqlReferences(
   // Files with a mention that several routine definitions could own, so no one definition owns it.
   const ambiguousFiles: string[] = [];
   const includeDefinition = options?.includeDefinition ?? true;
+  const keepParts = options?.renameRanges ? sqlObjectNameParts(definition.localName).length : 0;
   const maxReferences =
     typeof options?.maxReferences === "number" && options.maxReferences > 0 ? options.maxReferences : undefined;
   const collectionLimit = maxReferences === undefined ? undefined : maxReferences + 1;
@@ -700,12 +721,12 @@ export async function findSqlReferences(
             // A definition always names itself, even when several definitions share the name. Only a
             // lookup that includes the declaration reports it.
             const namesDefinition = siteKey(file, statement.startLine, statement.startColumn) === definitionKey;
-            if (includeDefinition && namesDefinition) addReference(file, mentionRange(statement, mention));
+            if (includeDefinition && namesDefinition) addReference(file, mentionRange(statement, mention, keepParts));
             continue;
           }
           const candidates = routineCandidates(routineLookups, mention);
           if (!candidates.includes(definition)) continue;
-          if (candidates.length === 1) addReference(file, mentionRange(statement, mention));
+          if (candidates.length === 1) addReference(file, mentionRange(statement, mention, keepParts));
           else if (!ambiguousFiles.includes(file)) ambiguousFiles.push(file);
         }
       }
@@ -719,7 +740,7 @@ export async function findSqlReferences(
       const claimed = claimedStarts?.get(`${fact.startLine}:${fact.startColumn}`);
       for (const name of [fact.objectName, fact.relatedObjectName]) {
         if (!name || !sqlNameResolvesToDefinition(lookup, name, definition)) continue;
-        for (const range of factReferenceRanges(fact, name, claimed)) {
+        for (const range of factReferenceRanges(fact, name, claimed, keepParts)) {
           addReference(file, range);
         }
       }
