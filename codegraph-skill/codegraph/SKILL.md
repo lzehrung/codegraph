@@ -44,7 +44,6 @@ Implicit peer lookup uses same-directory package/namespace facts, not compiler b
 1. Known target: use `goto`, `refs`, or `get_file`. Use `orient` only if you need a repo map.
 2. Find declarations with `workspace_symbols` / `codegraph symbols`; use `search` for broader queries.
 3. Read source, then follow `refs`, `calls`, or `file_deps`. File dependencies are not symbol calls.
-4. Terraform: find blocks with `codegraph symbols --kind resource,data,module,output` (inputs and `locals` are `variable`). `goto` / `refs` follow `var.`, `local.`, `module.`, data, and resource references across local module calls; trust absence only with `complete` coverage.
 
 `explore` / `codegraph explore "query"` combines one search with context from its top results; it does not plan subqueries.
 MCP omits source unless `includeSource: true`; CLI includes it unless `--no-source`.

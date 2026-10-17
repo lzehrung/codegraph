@@ -33,19 +33,11 @@ import {
 export const TERRAFORM_LANGUAGE_ID = "terraform";
 
 /**
- * A failed resolution. `ambiguous` lists the declarations that tie when a name is declared more
- * than once in one module, so references can report partial coverage instead of a clean miss.
- * `ambiguousModuleDirectories` lists the local directories that tied module calls source, when the
- * module call itself is declared more than once. `incomplete` marks a lookup that could not read
- * every file of the module, so it may name any declaration.
+ * A failed resolution. `unproven` marks a lookup that may still name any same-named declaration:
+ * the name is declared more than once in the module (invalid Terraform, so no target is chosen) or
+ * a file of the module could not be read. References report such uses as partial coverage.
  */
-export type TerraformNotFound = {
-  status: "not_found";
-  reason: string;
-  ambiguous?: SymbolDef[];
-  ambiguousModuleDirectories?: string[];
-  incomplete?: true;
-};
+export type TerraformNotFound = { status: "not_found"; reason: string; unproven?: true };
 
 export type TerraformResolution = { status: "ok"; def: SymbolDef } | TerraformNotFound;
 
@@ -179,7 +171,15 @@ function unreadableModuleFiles(query: DeclarationQuery): TerraformNotFound {
   return {
     status: "not_found",
     reason: `A Terraform file of the module could not be read, so ${describe(query)} is unproven`,
-    incomplete: true,
+    unproven: true,
+  };
+}
+
+function declaredMoreThanOnce(query: DeclarationQuery): TerraformNotFound {
+  return {
+    status: "not_found",
+    reason: `Terraform ${describe(query)} is declared more than once in the module`,
+    unproven: true,
   };
 }
 
@@ -192,13 +192,7 @@ async function findDeclaration(
   if (unreadable) return unreadableModuleFiles(query);
   const [match, ...others] = matches;
   if (!match) return { status: "not_found", reason: `No Terraform ${describe(query)} declaration in the module` };
-  if (others.length) {
-    return {
-      status: "not_found",
-      reason: `Terraform ${describe(query)} is declared more than once in the module`,
-      ambiguous: indexedDefinitions(index, matches),
-    };
-  }
+  if (others.length) return declaredMoreThanOnce(query);
   const def = definitionForDeclaration(index, match.file, match.declaration);
   if (!def) return { status: "not_found", reason: `Terraform ${describe(query)} declaration is not indexed` };
   return { status: "ok", file: match.file, declaration: match.declaration, def };
@@ -211,21 +205,6 @@ async function calledModuleDirectory(
   moduleName: string,
 ): Promise<{ status: "ok"; directory: string; instancing: TerraformModuleInstancing } | TerraformNotFound> {
   const query: DeclarationQuery = { kind: "module", name: moduleName };
-  const { matches: calls, unreadable } = await matchingDeclarations(index, terraformModuleFiles(index, file), query);
-  if (unreadable) return unreadableModuleFiles(query);
-  if (calls.length > 1) {
-    return {
-      status: "not_found",
-      reason: `Terraform ${describe(query)} is declared more than once in the module`,
-      ambiguousModuleDirectories: calls.flatMap((call) => {
-        const directory =
-          call.declaration.source === undefined
-            ? null
-            : terraformLocalModuleDirectory(call.file, call.declaration.source);
-        return directory ? [directory] : [];
-      }),
-    };
-  }
   const call = await findDeclaration(index, terraformModuleFiles(index, file), query);
   if (call.status !== "ok") return call;
   const source = call.declaration.source;
@@ -256,16 +235,6 @@ function isModuleDirectoryOf(directory: string, def: SymbolDef): boolean {
   return fileIdentityKey(directory) === fileIdentityKey(path.dirname(def.file));
 }
 
-/** True when a failed resolution may still name `def` through a tied declaration or module call. */
-export function terraformResolutionMayName(
-  resolution: TerraformNotFound,
-  def: SymbolDef,
-  sameDefinition: (candidate: SymbolDef) => boolean,
-): boolean {
-  if (resolution.incomplete || resolution.ambiguous?.some(sameDefinition)) return true;
-  return resolution.ambiguousModuleDirectories?.some((directory) => isModuleDirectoryOf(directory, def)) ?? false;
-}
-
 /** True when `use` in `file` may read an output of the module whose files include `def`, unproven. */
 export async function terraformModuleUseTargetsDefinition(
   index: ProjectIndex,
@@ -274,7 +243,7 @@ export async function terraformModuleUseTargetsDefinition(
   def: SymbolDef,
 ): Promise<boolean> {
   const called = await calledModuleDirectory(index, file, use.module);
-  if (called.status !== "ok") return terraformResolutionMayName(called, def, () => false);
+  if (called.status !== "ok") return called.unproven === true;
   // A selection that fits the call names its output; the reference loop resolves that site.
   if (use.selection && terraformOutputSelectionReadsOutput(use.selection, called.instancing)) return false;
   return isModuleDirectoryOf(called.directory, def);
@@ -422,8 +391,7 @@ export async function terraformModuleCallerFiles(
 /**
  * True when a module resource address written in `file` may name `def`: a nested module call in
  * its chain, or a resource or data source of the last called module. Each chain segment resolves
- * in the module the previous segment calls; a segment declared more than once follows every
- * directory its tied calls source, and an unreadable module may name anything.
+ * in the module the previous segment calls; an unproven segment may name anything.
  */
 export async function terraformAddressMayName(
   index: ProjectIndex,
@@ -432,27 +400,17 @@ export async function terraformAddressMayName(
   def: SymbolDef,
   kind: TerraformDeclarationKind | undefined,
 ): Promise<boolean> {
-  const namesResource = kind === "resource" || kind === "data";
-  let callers: FileId[] = [file];
+  let from: FileId | undefined = file;
   for (const [position, moduleName] of chain.entries()) {
-    const directories: string[] = [];
-    for (const caller of callers) {
-      const called = await calledModuleDirectory(index, caller, moduleName);
-      if (called.status === "ok") directories.push(called.directory);
-      else if (called.incomplete) return true;
-      else directories.push(...(called.ambiguousModuleDirectories ?? []));
-    }
+    if (!from) return false;
+    const called = await calledModuleDirectory(index, from, moduleName);
+    if (called.status !== "ok") return called.unproven === true;
     const nextModule = chain[position + 1];
     if (nextModule === undefined) {
-      return namesResource && directories.some((directory) => isModuleDirectoryOf(directory, def));
+      return (kind === "resource" || kind === "data") && isModuleDirectoryOf(called.directory, def);
     }
-    if (kind === "module" && nextModule === def.localName) {
-      if (directories.some((directory) => isModuleDirectoryOf(directory, def))) return true;
-    }
-    callers = directories.flatMap((directory) => {
-      const moduleFile = indexedTerraformFileInDirectory(index, directory);
-      return moduleFile ? [moduleFile] : [];
-    });
+    if (kind === "module" && nextModule === def.localName && isModuleDirectoryOf(called.directory, def)) return true;
+    from = indexedTerraformFileInDirectory(index, called.directory);
   }
   return false;
 }

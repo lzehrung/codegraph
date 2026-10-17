@@ -626,30 +626,6 @@ describe("Terraform edge forms", () => {
     expect(files).not.toContain("modules/storage/main.tf");
   });
 
-  it("keeps child references partial when the module call is declared twice", async () => {
-    const root = await createTempProjectRoot("cg-terraform-duplicate-call-", [
-      {
-        path: "main.tf",
-        contents:
-          'module "net" {\n  source = "./net"\n  r = 1\n}\nmodule "net" {\n  source = "./net"\n}\nlocals {\n  o = module.net.out\n}\n',
-      },
-      { path: "net/main.tf", contents: 'variable "r" {}\noutput "out" {}\n' },
-    ]);
-    try {
-      const index = await buildProjectIndex(root);
-      expect(await referenceSummary(index, root, "net/main.tf", '"r"')).toEqual({
-        sites: ["net/main.tf:1"],
-        coverage: "partial",
-      });
-      expect(await referenceSummary(index, root, "net/main.tf", '"out"')).toEqual({
-        sites: ["net/main.tf:2"],
-        coverage: "partial",
-      });
-    } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("reads declarations and references through comments", async () => {
     const root = await createTempProjectRoot("cg-terraform-comments-", [
       {
@@ -928,6 +904,24 @@ describe("Terraform edge forms", () => {
     });
   });
 
+  it("keeps a declaration unproven when a peer file of its module cannot be read", async () => {
+    const root = await createTempProjectRoot("cg-terraform-unreadable-peer-", [
+      { path: "a.tf", contents: 'variable "region" {}\n' },
+      // `b.tf` declares `region` too, but disappears after indexing.
+      { path: "b.tf", contents: 'variable "region" {}\n' },
+      { path: "c.tf", contents: "locals {\n  r = var.region\n}\n" },
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off", keepParsed: false });
+      await fsp.rm(path.join(root, "b.tf"));
+      const goto = await goToDefinition(index, await positionOf(root, "c.tf", "var.region", 4));
+      expect(goto.status).toBe("not_found");
+      expect((await referenceSummary(index, root, "a.tf", '"region"'))?.coverage).toBe("partial");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("impacts a calling module when its called module loses its last file", async () => {
     const root = await createTempProjectRoot("cg-terraform-deleted-child-", [
       { path: "main.tf", contents: 'module "c" {\n  source = "./child"\n}\n' },
@@ -1039,68 +1033,6 @@ describe("Terraform edge forms", () => {
       const child = symbols.symbols.find((symbol) => symbol.kind === "module");
       const rename = await previewRenameWithSession(session, { root, handle: child!.handle, newName: "inner" });
       expect(rename.safe).toBe(false);
-    } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("follows a nested address through every directory a duplicated ancestor call sources", async () => {
-    const root = await createTempProjectRoot("cg-terraform-ambiguous-ancestor-", [
-      {
-        path: "main.tf",
-        contents: [
-          'module "parent" {',
-          '  source = "./parent"',
-          "}",
-          'module "parent" {',
-          '  source = "./alt"',
-          "}",
-          'module "solo" {',
-          '  source = "./solo"',
-          "}",
-          "import {",
-          "  to = module.parent.module.child.aws_instance.web",
-          '  id = "i-1"',
-          "}",
-          "",
-        ].join("\n"),
-      },
-      { path: "parent/main.tf", contents: 'module "child" {\n  source = "./child"\n}\n' },
-      { path: "alt/main.tf", contents: 'module "child" {\n  source = "./child"\n}\n' },
-      { path: "parent/child/main.tf", contents: 'resource "aws_instance" "web" {}\n' },
-      { path: "alt/child/main.tf", contents: 'resource "aws_instance" "web" {}\n' },
-      // A called module the address chain does not reach.
-      { path: "solo/main.tf", contents: 'module "child" {\n  source = "./child"\n}\n' },
-      { path: "solo/child/main.tf", contents: 'resource "aws_instance" "web" {}\n' },
-    ]);
-    try {
-      const index = await buildProjectIndex(root);
-      const coverage = async (file: string, needle: string) =>
-        (await referenceSummary(index, root, file, needle))?.coverage;
-      expect(await coverage("parent/child/main.tf", '"web"')).toBe("partial");
-      expect(await coverage("alt/child/main.tf", '"web"')).toBe("partial");
-      expect(await coverage("parent/main.tf", '"child"')).toBe("partial");
-      expect(await coverage("alt/main.tf", '"child"')).toBe("partial");
-      expect(await coverage("solo/child/main.tf", '"web"')).toBe("complete");
-      expect(await coverage("solo/main.tf", '"child"')).toBe("complete");
-    } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps a declaration unproven when a peer file of its module cannot be read", async () => {
-    const root = await createTempProjectRoot("cg-terraform-unreadable-peer-", [
-      { path: "a.tf", contents: 'variable "region" {}\n' },
-      // `b.tf` declares `region` too, but disappears after indexing.
-      { path: "b.tf", contents: 'variable "region" {}\n' },
-      { path: "c.tf", contents: "locals {\n  r = var.region\n}\n" },
-    ]);
-    try {
-      const index = await buildProjectIndex(root, { cache: "off", keepParsed: false });
-      await fsp.rm(path.join(root, "b.tf"));
-      const goto = await goToDefinition(index, await positionOf(root, "c.tf", "var.region", 4));
-      expect(goto.status).toBe("not_found");
-      expect((await referenceSummary(index, root, "a.tf", '"region"'))?.coverage).toBe("partial");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

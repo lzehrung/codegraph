@@ -20,7 +20,6 @@ import {
   terraformFactsForFile,
   terraformModuleCallerFiles,
   terraformModuleUseTargetsDefinition,
-  terraformResolutionMayName,
   terraformModuleFiles,
 } from "./resolution.js";
 
@@ -115,11 +114,8 @@ export async function findTerraformReferences(
       const resolved = await resolveTerraformTarget(index, file, site.target);
       if (resolved.status === "ok") {
         if (sameDef(resolved.def, def, index.languageExtensions)) addReference(file, site.range);
-      } else if (
-        terraformResolutionMayName(resolved, def, (candidate) => sameDef(candidate, def, index.languageExtensions))
-      ) {
-        // A use that ties between this declaration and a duplicate, or between duplicate module
-        // calls, may still name it.
+      } else if (resolved.unproven) {
+        // A same-named use behind a duplicate declaration or an unreadable file may still name it.
         unprovenUse = true;
       }
     }
