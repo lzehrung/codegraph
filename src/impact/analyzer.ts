@@ -13,6 +13,7 @@ import { attachCallCompatibilityHints } from "./call-compatibility.js";
 import { computeMemberResolutionCoverage } from "./member-resolution-coverage.js";
 import { createReferenceLookupCache } from "./reference-cache.js";
 import { indexedTerraformFiles, isTerraformFile, terraformModuleFiles } from "../terraform/resolution.js";
+import { terraformLocalModuleDirectory } from "../util/resolution/terraform.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import {
   createImpactWorkBudget,
@@ -283,7 +284,17 @@ function reverseDepsWithTerraformModulePeers(
     if (!oldPath || supportForFileWithoutHeaderSample(oldPath, index.languageExtensions)?.id !== "terraform") continue;
     const directoryKey = fileIdentityKey(path.dirname(oldPath));
     const peers = terraformFiles.filter((file) => fileIdentityKey(path.dirname(file)) === directoryKey);
-    addDependents(fileIdentityKey(oldPath), oldPath, peers);
+    // Without its last file the directory resolves nowhere, so callers' source edges are external.
+    const callers = index.graph.edges.flatMap((edge) => {
+      if (!isTerraformFile(index, edge.from)) return [];
+      const directory =
+        edge.to.type === "external"
+          ? terraformLocalModuleDirectory(edge.from, edge.to.name)
+          : path.dirname(edge.to.path);
+      if (!directory || fileIdentityKey(directory) !== directoryKey) return [];
+      return terraformModuleFiles(index, edge.from);
+    });
+    addDependents(fileIdentityKey(oldPath), oldPath, [...peers, ...callers]);
   }
   if (!extended.size) return reverseDeps;
   return new Map([...reverseDeps, ...extended]);

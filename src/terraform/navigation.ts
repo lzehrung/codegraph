@@ -67,7 +67,8 @@ export async function findTerraformReferences(
   const declaration = await terraformDeclarationForDefinition(index, def);
   const candidateFiles = terraformModuleFiles(index, def.file);
   const unavailableFiles: FileId[] = [];
-  if (declaration?.kind === "variable" || declaration?.kind === "output") {
+  // Callers name inputs and outputs, and resource addresses name resources and data sources.
+  if (declaration && ["variable", "output", "resource", "data"].includes(declaration.kind)) {
     const callers = await terraformModuleCallerFiles(index, def);
     // A file whose facts cannot load may call this module, so its caller edits are unproven.
     unavailableFiles.push(...callers.unavailable);
@@ -116,11 +117,11 @@ export async function findTerraformReferences(
       }
     }
     // A whole module value (`module.net`), or indexes that do not fit the call's instancing, may
-    // read this output without naming it.
-    if (declaration?.kind === "output") {
-      for (const use of facts.moduleObjectUses) {
-        if (await terraformModuleUseTargetsDefinition(index, file, use, def)) unprovenUse = true;
-      }
+    // read this output without naming it; a resource address names a resource or data source.
+    const namesResources = declaration?.kind === "resource" || declaration?.kind === "data";
+    for (const use of facts.moduleObjectUses) {
+      if (use.address ? !namesResources : declaration?.kind !== "output") continue;
+      if (await terraformModuleUseTargetsDefinition(index, file, use, def)) unprovenUse = true;
     }
     if (unprovenUse) unavailableFiles.push(file);
   }

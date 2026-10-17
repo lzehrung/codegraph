@@ -68,9 +68,31 @@ export type TerraformReferenceSite = {
 /**
  * A module call value that may read any of its outputs: a whole value (`module.net`) has no
  * `selection`; an output site carries its `selection`, which reads something other than the named
- * output when it does not match the call's instancing.
+ * output when it does not match the call's instancing. An `address` use is a resource address in
+ * `import`, `moved`, or `removed` (`module.net.aws_instance.web`), which names a resource or data
+ * source of the called module rather than an output.
  */
-export type TerraformModuleObjectUse = { module: string; range: Range; selection?: TerraformOutputSelection };
+export type TerraformModuleObjectUse = {
+  module: string;
+  range: Range;
+  selection?: TerraformOutputSelection;
+  address?: true;
+};
+
+/** Blocks whose `from` and `to` hold resource addresses, not expressions. */
+const ADDRESS_BLOCKS = new Set(["import", "moved", "removed"]);
+
+function isResourceAddress(variable: SyntaxNodeLike): boolean {
+  for (let node = variable.parent; node; node = node.parent) {
+    if (node.type !== "attribute") continue;
+    const name = attributeNameNode(node)?.text;
+    const block = node.parent?.parent;
+    return (
+      (name === "to" || name === "from") && block?.type === "block" && ADDRESS_BLOCKS.has(blockTypeName(block) ?? "")
+    );
+  }
+  return false;
+}
 
 /** A `check` block and the `<type>.<name>` addresses of the data sources it declares for itself. */
 export type TerraformCheckScope = { range: Range; dataSources: string[] };
@@ -428,6 +450,10 @@ function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): 
     const moduleName = firstAttribute(steps);
     if (!moduleName) return;
     push(moduleName, { kind: "module", name: moduleName.text });
+    if (isResourceAddress(variable)) {
+      facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName), address: true });
+      return;
+    }
     let next = 1;
     while (steps[next]?.kind === "index") next += 1;
     const attribute = firstAttribute(steps, next);

@@ -18,6 +18,7 @@ import type { ProjectIndex } from "../../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { locateChangedSymbols } from "../../src/impact/map.js";
 import { analyzeImpact } from "../../src/impact/analyzer.js";
+import type { FileChange } from "../../src/impact/types.js";
 import { resolveTerraformModuleSourcePaths } from "../../src/util/resolution/terraform.js";
 import {
   createTempProjectRoot,
@@ -893,5 +894,80 @@ describe("Terraform edge forms", () => {
       expect(references.referenceCoverage?.state).toBe("partial");
       expect(references.referenceCoverage?.affectedFiles).toContain(normalizePath(path.join(root, "main.tf")));
     });
+  });
+
+  it("impacts a calling module when its called module loses its last file", async () => {
+    const root = await createTempProjectRoot("cg-terraform-deleted-child-", [
+      { path: "main.tf", contents: 'module "c" {\n  source = "./child"\n}\n' },
+      { path: "outputs.tf", contents: 'output "o" {\n  value = module.c.out\n}\n' },
+      { path: "unrelated/main.tf", contents: 'variable "x" {}\n' },
+    ]);
+    try {
+      // The index is built after the change, so `./child` no longer resolves to a file.
+      const index = await buildProjectIndex(root);
+      const oldPath = normalizePath(path.join(root, "child", "main.tf"));
+      const impactedBy = async (change: FileChange) =>
+        (await analyzeImpact(index, [], [change], { depth: 2 })).map((item) => relative(root, item.file)).sort();
+      expect(await impactedBy({ path: oldPath, kind: "deleted", hunks: [] })).toEqual(["main.tf", "outputs.tf"]);
+      expect(
+        await impactedBy({
+          path: normalizePath(path.join(root, "moved", "main.tf")),
+          oldPath,
+          kind: "renamed",
+          hunks: [],
+        }),
+      ).toEqual(["main.tf", "outputs.tf"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a module resource address as an address, not an output", async () => {
+    const root = await createTempProjectRoot("cg-terraform-address-", [
+      {
+        path: "main.tf",
+        contents: [
+          'module "net" {',
+          '  source = "./net"',
+          "}",
+          "import {",
+          "  to = module.net.aws_instance.web",
+          '  id = "i-1"',
+          "}",
+          "locals {",
+          "  o = module.net.aws_instance",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      // `aws_instance` is also an output name: the decoy an address must not resolve to.
+      { path: "net/main.tf", contents: 'resource "aws_instance" "web" {}\noutput "aws_instance" {}\n' },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      const inAddress = await goToDefinition(index, await positionOf(root, "main.tf", "net.aws_instance.web", 4));
+      expect(inAddress.status).toBe("not_found");
+      const inExpression = await goToDefinition(index, await positionOf(root, "main.tf", "net.aws_instance\n", 4));
+      expect(inExpression.status === "ok" && inExpression.definition.kind).toBe("output");
+      expect(await referenceSummary(index, root, "net/main.tf", 'output "aws_instance"', 8)).toEqual({
+        sites: ["main.tf:9", "net/main.tf:2"],
+        coverage: "complete",
+      });
+      // The address names the child resource, which references cannot rewrite yet.
+      expect(await referenceSummary(index, root, "net/main.tf", '"web"')).toEqual({
+        sites: ["net/main.tf:1"],
+        coverage: "partial",
+      });
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "aws_instance" });
+      const output = symbols.symbols.find((symbol) => symbol.kind === "output");
+      const rename = await previewRenameWithSession(session, { root, handle: output!.handle, newName: "instance" });
+      expect(rename.edits.map((edit) => `${edit.file}:${edit.range.start.line}`).sort()).toEqual([
+        "main.tf:9",
+        "net/main.tf:2",
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
