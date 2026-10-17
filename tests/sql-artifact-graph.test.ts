@@ -1125,4 +1125,117 @@ describe("SQL artifact graph", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("links every routine in a DROP or GRANT target list, not only the first", async () => {
+    const root = await mkTmpDir("cg-sql-target-list-");
+    try {
+      const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+      const schema = file("schema.sql");
+      const statements: Record<string, string> = {
+        "bare.sql": "DROP FUNCTION f, g;",
+        "signatures.sql": "DROP FUNCTION IF EXISTS f(integer), g(text);",
+        "grant.sql": "GRANT EXECUTE ON FUNCTION f(integer), g(text) TO app;",
+      };
+      await fsp.writeFile(
+        schema,
+        [
+          "CREATE FUNCTION f(a integer) RETURNS integer AS $$ SELECT a $$ LANGUAGE sql;",
+          "CREATE FUNCTION g(a text) RETURNS text AS $$ SELECT a $$ LANGUAGE sql;",
+          "CREATE TABLE g (id integer);",
+        ].join("\n"),
+        "utf8",
+      );
+      for (const [name, statement] of Object.entries(statements))
+        await fsp.writeFile(file(name), `${statement}\n`, "utf8");
+
+      const sourceGraph = await collectGraph(root, [schema, ...Object.keys(statements).map(file)]);
+      const rawBetween = (from: string): string[] =>
+        sourceGraph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+
+      // Both names are routine statements of the same kind. The table `g` is neither dropped nor read.
+      expect(rawBetween(file("bare.sql"))).toEqual(["sql:drops_object:callable:f", "sql:drops_object:callable:g"]);
+      expect(rawBetween(file("signatures.sql"))).toEqual([
+        "sql:drops_object:callable:f",
+        "sql:drops_object:callable:g",
+      ]);
+      expect(rawBetween(file("grant.sql"))).toEqual([
+        "sql:references_object:callable:f",
+        "sql:references_object:callable:g",
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not link the table of an INSERT after a modifier to a routine of the same name", async () => {
+    const root = await mkTmpDir("cg-sql-insert-modifier-");
+    try {
+      const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+      const schema = file("schema.sql");
+      const statements: Record<string, string> = {
+        "ignore.sql": "INSERT IGNORE norm (id) VALUES (1);",
+        "top.sql": "INSERT TOP (1) dbo.norm (id) VALUES (1);",
+        "query.sql": "INSERT IGNORE norm (id) SELECT norm(1);",
+      };
+      await fsp.writeFile(
+        schema,
+        [
+          "CREATE TABLE norm (id integer);",
+          "CREATE FUNCTION norm(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;",
+        ].join("\n"),
+        "utf8",
+      );
+      for (const [name, statement] of Object.entries(statements))
+        await fsp.writeFile(file(name), `${statement}\n`, "utf8");
+
+      const sourceGraph = await collectGraph(root, [schema, ...Object.keys(statements).map(file)]);
+      const rawBetween = (from: string): string[] =>
+        sourceGraph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+
+      expect(rawBetween(file("ignore.sql"))).not.toContain("sql:reads_from:callable:norm");
+      expect(rawBetween(file("top.sql")).filter((raw) => raw.includes("callable"))).toEqual([]);
+      // The call in the query of the same INSERT is a call.
+      expect(rawBetween(file("query.sql"))).toContain("sql:reads_from:callable:norm");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not link a column named like CALL to the routine that aliases it", async () => {
+    const root = await mkTmpDir("cg-sql-call-column-");
+    try {
+      const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+      const schema = file("schema.sql");
+      const column = file("column.sql");
+      const call = file("call.sql");
+      await fsp.writeFile(
+        schema,
+        [
+          "CREATE TABLE contacts (id integer, call integer);",
+          "CREATE FUNCTION audit_user() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(column, "SELECT id, call audit_user FROM contacts;\n", "utf8");
+      await fsp.writeFile(call, "CALL audit_user();\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schema, column, call]);
+      const rawBetween = (from: string): string[] =>
+        sourceGraph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+
+      expect(rawBetween(column)).toEqual(["sql:reads_from:contacts"]);
+      expect(rawBetween(call)).toEqual(["sql:reads_from:callable:audit_user"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

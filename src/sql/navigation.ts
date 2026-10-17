@@ -178,7 +178,12 @@ function sqlObjectNameParts(name: string): string[] {
     .filter(Boolean);
 }
 
-function sqlStatementSlices(facts: readonly SqlStatementFact[]): SqlStatementNavigationSlice[] {
+const slicesByFacts = new WeakMap<readonly SqlStatementFact[], readonly SqlStatementNavigationSlice[]>();
+
+/** The statements of one file's facts in source order. A file's facts are fixed, so the result is cached. */
+function sqlStatementSlices(facts: readonly SqlStatementFact[]): readonly SqlStatementNavigationSlice[] {
+  const cached = slicesByFacts.get(facts);
+  if (cached) return cached;
   const slices: SqlStatementNavigationSlice[] = [];
   const seen = new Set<number>();
   for (const fact of facts) {
@@ -193,7 +198,9 @@ function sqlStatementSlices(facts: readonly SqlStatementFact[]): SqlStatementNav
       endLine: fact.endLine,
     });
   }
-  return slices.sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
+  slices.sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
+  slicesByFacts.set(facts, slices);
+  return slices;
 }
 
 function sqlStatementAtLine(facts: readonly SqlStatementFact[], line: number): SqlStatementNavigationSlice | null {
@@ -611,10 +618,10 @@ export async function goToSqlDefinition(index: ProjectIndex, req: GoToRequest): 
   const lookup = getSqlDefinitionLookup(index);
   const routineLookups = await getSqlRoutineLookups(index);
   const facts = await sqlFactsForFile(index, req.file);
-  if (routineLookups.namespaceByDefinition.size) {
-    const routineResult = goToRoutineMention(index, routineLookups, req.file, facts, req);
-    if (routineResult) return routineResult;
-  }
+  // `DROP FUNCTION f`, `CALL f`, and the like name a routine even when the project defines none, so they
+  // never fall through to a table of the same name.
+  const routineResult = goToRoutineMention(index, routineLookups, req.file, facts, req);
+  if (routineResult) return routineResult;
   const statement = sqlStatementAtLine(facts, req.line);
   const name = wordAtPosition(source, req.line, req.column);
   if (!name) return { status: "not_found", reason: "No SQL object at position" };

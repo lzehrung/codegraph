@@ -1148,4 +1148,95 @@ describe("SQL routine call sites", () => {
       );
     });
   });
+
+  it.each<[string, string[]]>([
+    ["no routine in the project", []],
+    [
+      "an unrelated routine in the project",
+      ["CREATE FUNCTION other() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;"],
+    ],
+  ])(
+    "does not resolve a routine that DROP, ALTER, CALL, or EXEC names to a table of the same name with %s",
+    async (_label, routines) => {
+      const schema = ["CREATE TABLE norm (id integer);", ...routines];
+      const routineSyntax = [
+        "DROP FUNCTION norm(integer);",
+        "DROP PROCEDURE IF EXISTS norm(integer);",
+        "CALL norm();",
+        "ALTER FUNCTION norm(integer) OWNER TO app;",
+        "COMMENT ON FUNCTION norm(integer) IS 'x';",
+        "GRANT EXECUTE ON FUNCTION norm(text) TO app;",
+        "EXEC norm;",
+        "DROP TRIGGER norm ON users;",
+      ];
+      const use = [...routineSyntax, "SELECT * FROM norm;", "INSERT INTO norm (id) VALUES (1);"];
+      await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+        for (const [index, statement] of routineSyntax.entries()) {
+          expect(await gotoAt(project, "use.sql", use, index + 1, "norm"), statement).toBe("not_found");
+          expect((await referencesAt(project, "use.sql", use, index + 1, "norm")).status, statement).toBe("not_found");
+        }
+        // A plain table read and an INSERT target still resolve to the table.
+        expect(await gotoAt(project, "use.sql", use, routineSyntax.length + 1, "norm")).toBe("schema.sql:1");
+        expect(await gotoAt(project, "use.sql", use, routineSyntax.length + 2, "norm")).toBe("schema.sql:1");
+      });
+    },
+  );
+
+  it("finds every routine in a DROP or GRANT target list, and goes from each name to its routine", async () => {
+    const schema = [
+      "CREATE FUNCTION f(a integer) RETURNS integer AS $$ SELECT a $$ LANGUAGE sql;",
+      "CREATE FUNCTION g(a text) RETURNS text AS $$ SELECT a $$ LANGUAGE sql;",
+      "CREATE TABLE g (id integer);",
+    ];
+    const admin = [
+      "DROP FUNCTION f, g;",
+      "DROP FUNCTION IF EXISTS f(integer), g(text);",
+      "GRANT EXECUTE ON FUNCTION f(integer), g(text) TO app;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "admin.sql": admin }, async (project) => {
+      const routine = await referencesAt(project, "schema.sql", schema, 2, "g(a text)");
+      const table = await referencesAt(project, "schema.sql", schema, 3, "g (id");
+
+      expect(referenceSites(project.root, routine)).toEqual(
+        [
+          siteAt("schema.sql", schema, 2, "g(a text)"),
+          siteAt("admin.sql", admin, 1, "g;"),
+          siteAt("admin.sql", admin, 2, "g(text)"),
+          siteAt("admin.sql", admin, 3, "g(text)"),
+        ].sort(),
+      );
+      // The table that shares the name is neither dropped nor granted on.
+      expect(referenceSites(project.root, table)).toEqual([siteAt("schema.sql", schema, 3, "g (id")]);
+      expect(await gotoAt(project, "admin.sql", admin, 1, "g;")).toBe("schema.sql:2");
+      expect(await gotoAt(project, "admin.sql", admin, 2, "g(text)")).toBe("schema.sql:2");
+      expect(await gotoAt(project, "admin.sql", admin, 3, "g(text)")).toBe("schema.sql:2");
+    });
+  });
+
+  it("does not count the table of an INSERT after a modifier or a column aliased like a CALL as calls", async () => {
+    const schema = [
+      "CREATE FUNCTION norm(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;",
+      "CREATE FUNCTION audit_user() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;",
+    ];
+    const use = [
+      "INSERT IGNORE norm (id) VALUES (1);",
+      "INSERT TOP (1) dbo.norm (id) VALUES (norm(2));",
+      "SELECT call audit_user FROM contacts;",
+      "SELECT audit_user();",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const norm = await referencesAt(project, "schema.sql", schema, 1, "norm(x integer)");
+      const audit = await referencesAt(project, "schema.sql", schema, 2, "audit_user()");
+
+      // Only the call in the VALUES list is a call of `norm`.
+      expect(referenceSites(project.root, norm)).toEqual(
+        [siteAt("schema.sql", schema, 1, "norm(x integer)"), siteAt("use.sql", use, 2, "norm(2)")].sort(),
+      );
+      expect(referenceSites(project.root, audit)).toEqual(
+        [siteAt("schema.sql", schema, 2, "audit_user()"), siteAt("use.sql", use, 4, "audit_user()")].sort(),
+      );
+      // `audit_user` there is a column alias. It names no routine, so goto has nothing to resolve.
+      expect(await gotoAt(project, "use.sql", use, 3, "audit_user")).toBe("not_found");
+    });
+  });
 });

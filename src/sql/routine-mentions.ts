@@ -68,6 +68,8 @@ const WORD_RE = /[A-Za-z_][\w$]*/y;
 const WITH_ORDINALITY_RE = /with\s+ordinality\b/iy;
 // A table hint is a word with an optional argument: `NOLOCK`, `INDEX (ix_users)`, `INDEX = 0`.
 const TABLE_HINT_RE = /^(\w+)\s*(?:[(=][\s\S]*)?$/;
+// `INSERT` and its MySQL sibling `REPLACE`, which can put modifiers before the table.
+const INSERT_RE = /\b(?:insert|replace)\b/gi;
 // The scanner reads PostgreSQL and SQL Server text: arrays, escape strings, and nested block comments.
 const MASK_OPTIONS: SqlMaskOptions = { arrayBrackets: true, nestedBlockComments: true, escapeStrings: true };
 
@@ -124,6 +126,8 @@ const REFERENCE_PRECEDING_WORDS: WordTable = { alter: true, on: true, enable: tr
 const CALL_KEYWORDS: WordTable = { call: true, exec: true, execute: true };
 // A PL/pgSQL `EXECUTE` runs the command string that an expression gives, so its operand is no routine.
 const EXECUTE_WORDS: WordTable = { exec: true, execute: true };
+// MySQL modifiers between `INSERT` and the table: `INSERT IGNORE users (id)`. T-SQL adds `TOP (n)`.
+const INSERT_MODIFIERS: WordTable = { ignore: true, low_priority: true, delayed: true, high_priority: true };
 // Words that follow a source in a `FROM` list without naming its alias.
 const NON_ALIAS_WORDS: WordTable = {
   on: true,
@@ -292,6 +296,33 @@ function keywordMentionKind(
   return previous && hasWord(REFERENCE_PRECEDING_WORDS, previous) ? "reference" : null;
 }
 
+/**
+ * A `DROP` or `GRANT ... ON` statement can name several routines, as in `DROP FUNCTION f(integer), g`.
+ * Each name after a comma is a mention of the same kind and name space. A parenthesized signature
+ * between two names is skipped, and the list ends at the first token that is no comma.
+ */
+function collectTargetList(
+  masked: string,
+  scan: string,
+  firstEnd: number,
+  target: Pick<SqlRoutineMention, "kind" | "namespace">,
+  mentions: Map<number, SqlRoutineMention>,
+): void {
+  let cursor = skipWhitespace(scan, firstEnd);
+  for (;;) {
+    if (scan[cursor] === "(") {
+      const close = matchingParen(scan, cursor);
+      if (close < 0) return;
+      cursor = skipWhitespace(scan, close + 1);
+    }
+    if (scan[cursor] !== ",") return;
+    const named = nameAt(masked, cursor + 1);
+    if (!named) return;
+    mentions.set(named.start, { ...named, ...target, speculative: false });
+    cursor = skipWhitespace(scan, named.end);
+  }
+}
+
 function collectKeywordMentions(masked: string, scan: string, mentions: Map<number, SqlRoutineMention>): void {
   const definition = SQL_ROUTINE_DEFINITION_RE.exec(scan);
   const definitionKeyword = definition?.[1];
@@ -312,6 +343,9 @@ function collectKeywordMentions(masked: string, scan: string, mentions: Map<numb
     if (!named) continue;
     const namespace = keyword === "trigger" ? "trigger" : "callable";
     mentions.set(named.start, { ...named, kind, namespace, speculative: false });
+    // `ALTER` and `ENABLE` take one name, and a comma after it separates actions, as in
+    // `DISABLE TRIGGER a, ENABLE TRIGGER b`. `DROP` and `GRANT ... ON` take a list.
+    if (kind === "drop" || previous === "on") collectTargetList(masked, scan, named.end, { kind, namespace }, mentions);
   }
 }
 
@@ -452,11 +486,45 @@ function collectSourceItemExclusions(scan: string, excluded: Set<number>): void 
 }
 
 /**
+ * Skips the modifiers after `INSERT`: `IGNORE` and `LOW_PRIORITY` in MySQL, `TOP (n) [PERCENT]` in
+ * T-SQL. `TOP (n)` is no call, so it is excluded here. Returns -1 when its parenthesis is unbalanced.
+ */
+function skipInsertModifiers(scan: string, from: number, excluded: Set<number>): number {
+  let cursor = skipWhitespace(scan, from);
+  for (;;) {
+    const word = wordAt(scan, cursor);
+    const next = skipWhitespace(scan, cursor + word.length);
+    if (hasWord(INSERT_MODIFIERS, word)) {
+      cursor = next;
+    } else if (word === "top" && scan[next] === "(") {
+      const close = matchingParen(scan, next);
+      if (close < 0) return -1;
+      excluded.add(cursor);
+      cursor = skipWhitespace(scan, close + 1);
+      if (wordAt(scan, cursor) === "percent") cursor = skipWhitespace(scan, cursor + "percent".length);
+    } else {
+      return cursor;
+    }
+  }
+}
+
+/** `INSERT IGNORE users (id)` and `INSERT TOP (1) dbo.users (id)` name a table, not a routine. */
+function excludeInsertTargets(scan: string, excluded: Set<number>): void {
+  for (const keyword of scan.matchAll(INSERT_RE)) {
+    let cursor = skipInsertModifiers(scan, (keyword.index ?? 0) + keyword[0].length, excluded);
+    if (cursor < 0) continue;
+    if (wordAt(scan, cursor) === "into") cursor = skipWhitespace(scan, cursor + "into".length);
+    const target = nameAt(scan, cursor);
+    if (target && scan[skipWhitespace(scan, target.end)] === "(") excluded.add(target.start);
+  }
+}
+
+/**
  * Call shapes that are no calls. `CREATE INDEX ... ON table (columns)` and `WITH name(columns) AS (`
  * put a parenthesis after a name that is not a call, and so does a source in a `FROM` list with an
- * alias column list or table hints. Those false calls hide the index's table and invent a routine
- * reference. Calls in an index expression, a join predicate, a CTE body, or a source's arguments are
- * later names and stay.
+ * alias column list or table hints, or the table of an `INSERT` after a modifier. Those false calls
+ * hide the index's table and invent a routine reference. Calls in an index expression, a join
+ * predicate, a CTE body, a source's arguments, or the query of an `INSERT` are later names and stay.
  */
 function excludedCallShapeStarts(scan: string): Set<number> {
   const excluded = new Set<number>();
@@ -491,7 +559,23 @@ function excludedCallShapeStarts(scan: string): Set<number> {
     excluded.add(nameStart);
   }
   collectSourceItemExclusions(scan, excluded);
+  excludeInsertTargets(scan, excluded);
   return excluded;
+}
+
+/**
+ * `SELECT call audit_user FROM contacts` selects a column named `call` and aliases it. No statement
+ * starts right after `SELECT`, a comma, or an opening parenthesis, so a keyword there is a column. This
+ * reads the original text: a string literal is blank in the masked text, but `SELECT 'x'` followed by
+ * `EXEC p` in a T-SQL script without semicolons does start a statement.
+ */
+function followsExpressionStart(statementText: string, keywordStart: number): boolean {
+  let cursor = keywordStart;
+  while (cursor > 0 && /\s/.test(statementText[cursor - 1] ?? "")) cursor -= 1;
+  const before = statementText[cursor - 1];
+  if (before === "," || before === "(") return true;
+  const word = previousWord(statementText, keywordStart);
+  return word === "select" || word === "distinct";
 }
 
 function collectCallKeywordMentions(
@@ -505,6 +589,7 @@ function collectCallKeywordMentions(
     // `EXECUTE cmd` in a PL/pgSQL body names a variable that holds a command, not a routine.
     if (inBody && hasWord(EXECUTE_WORDS, (match[1] ?? "").toLowerCase())) continue;
     const matchStart = match.index ?? 0;
+    if (followsExpressionStart(statementText, matchStart)) continue;
     const end = matchStart + match[0].length;
     if (!callKeywordMatchAllowsComments(statementText, masked.slice(matchStart, end), matchStart)) continue;
     const start = end - (match[2] ?? "").length;

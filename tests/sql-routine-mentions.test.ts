@@ -414,12 +414,114 @@ describe("SQL routine mentions", () => {
     ["a T-SQL INSERT without INTO", "INSERT dbo.norm (id) VALUES (1)", "dbo.norm"],
     ["a MySQL INSERT without INTO", "INSERT norm (id) VALUES (1)", "norm"],
     ["a COPY with a column list", "COPY public.norm (id, email) FROM stdin", "public.norm"],
+    ["a MySQL INSERT IGNORE", "INSERT IGNORE norm (id) VALUES (1)", "norm"],
+    ["a MySQL INSERT with two modifiers", "INSERT LOW_PRIORITY IGNORE dbo.norm (id) VALUES (1)", "dbo.norm"],
+    ["a MySQL INSERT DELAYED", "INSERT DELAYED norm (id) VALUES (1)", "norm"],
+    ["a T-SQL INSERT TOP", "INSERT TOP (1) dbo.norm (id) VALUES (1)", "dbo.norm"],
+    ["a T-SQL INSERT TOP PERCENT", "INSERT TOP (10) PERCENT dbo.norm (id) VALUES (1)", "dbo.norm"],
+    ["a T-SQL INSERT TOP with a call in its limit", "INSERT TOP (ABS(1)) dbo.norm (id) VALUES (1)", "dbo.norm"],
+    ["a T-SQL INSERT TOP and INTO", "INSERT TOP (1) INTO dbo.norm (id) VALUES (1)", "dbo.norm"],
+    ["a MySQL REPLACE", "REPLACE norm (id) VALUES (1)", "norm"],
+    ["a MySQL REPLACE with a modifier", "REPLACE LOW_PRIORITY norm (id) VALUES (1)", "norm"],
+    ["an INSERT IGNORE in a procedure", "CREATE PROCEDURE p() BEGIN INSERT IGNORE norm (id) VALUES (1); END", "norm"],
   ])("does not read the target of %s as a routine call", (_label, statement, name) => {
     expect(mentionTexts(statement)).not.toContain(name);
   });
 
-  it("keeps a call in the query of an INSERT without INTO", () => {
-    expect(mentionTexts("INSERT dbo.norm (id) SELECT norm(1)")).toEqual(["norm"]);
+  it.each([
+    ["INSERT dbo.norm (id) SELECT norm(1)"],
+    ["INSERT IGNORE norm (id) SELECT norm(1)"],
+    ["INSERT TOP (1) dbo.norm (id) VALUES (norm(1))"],
+    ["INSERT LOW_PRIORITY norm (id) VALUES (1), (norm(2))"],
+    ["REPLACE norm (id) SELECT norm(1)"],
+  ])("keeps the call in the query of %s", (statement) => {
+    const starts = findSqlRoutineMentions(statement)
+      .filter((mention) => statement.slice(mention.start, mention.end).endsWith("norm"))
+      .map((mention) => mention.start);
+
+    // The table before the column list is no call. The one call is the last `norm`.
+    expect(starts).toEqual([statement.lastIndexOf("norm")]);
+  });
+
+  it.each([
+    ["REPLACE as a string function", "SELECT REPLACE(a, 'x', 'y')", "REPLACE"],
+    ["INSERT as a string function", "SELECT INSERT('Quadratic', 3, 4, 'What')", "INSERT"],
+  ])("keeps %s as a call shape, not a table target", (_label, statement, name) => {
+    expect(mentionTexts(statement)).toContain(name);
+  });
+
+  it.each([
+    ["names without signatures", "DROP FUNCTION f, g", ["drop:callable:f", "drop:callable:g"]],
+    ["names with signatures", "DROP FUNCTION f(integer), g(text)", ["drop:callable:f", "drop:callable:g"]],
+    [
+      "signatures with several arguments",
+      "DROP FUNCTION IF EXISTS f(integer, text), g",
+      ["drop:callable:f", "drop:callable:g"],
+    ],
+    ["three names", "DROP ROUTINE a(int), b(int), c", ["drop:callable:a", "drop:callable:b", "drop:callable:c"]],
+    [
+      "qualified, quoted, and bracketed names",
+      'DROP FUNCTION app.f(int), "A b", [dbo].[c]',
+      ["drop:callable:app.f", 'drop:callable:"A b"', "drop:callable:[dbo].[c]"],
+    ],
+    ["a clause after the list", "DROP FUNCTION f(integer), g(text) CASCADE", ["drop:callable:f", "drop:callable:g"]],
+    ["T-SQL procedures", "DROP PROCEDURE dbo.p1, dbo.p2", ["drop:callable:dbo.p1", "drop:callable:dbo.p2"]],
+    ["T-SQL triggers", "DROP TRIGGER t1, t2", ["drop:trigger:t1", "drop:trigger:t2"]],
+    ["a comment inside the list", "DROP FUNCTION f(integer) /* a, b */, g", ["drop:callable:f", "drop:callable:g"]],
+    ["GRANT", "GRANT EXECUTE ON FUNCTION f(text), g(text) TO app", ["reference:callable:f", "reference:callable:g"]],
+    ["REVOKE", "REVOKE EXECUTE ON FUNCTION f, g FROM app", ["reference:callable:f", "reference:callable:g"]],
+  ])("reads every routine in the target list of %s as the same kind of mention", (_label, statement, expected) => {
+    expect(describeMentions(statement)).toEqual(expected);
+  });
+
+  it.each([
+    ["a clause after the only target", "DROP FUNCTION f(integer) CASCADE", ["drop:callable:f"]],
+    ["the roles of a GRANT", "GRANT EXECUTE ON FUNCTION f(text) TO a, b", ["reference:callable:f"]],
+    ["a comma in a comment string", "COMMENT ON FUNCTION f(text) IS 'a, b'", ["reference:callable:f"]],
+    ["the table of a trigger drop", "DROP TRIGGER t ON users", ["drop:trigger:t"]],
+    ["ALTER FUNCTION", "ALTER FUNCTION f(int) OWNER TO a", ["reference:callable:f"]],
+    [
+      "the actions of one ALTER TABLE",
+      "ALTER TABLE u DISABLE TRIGGER a, ENABLE TRIGGER b",
+      ["reference:trigger:a", "reference:trigger:b"],
+    ],
+    [
+      "another action after ENABLE TRIGGER",
+      "ALTER TABLE u ENABLE TRIGGER a, ADD COLUMN x int",
+      ["reference:trigger:a"],
+    ],
+    ["a list of tables", "DROP TABLE a, b", []],
+  ])("does not read a name the statement does not list as a routine: %s", (_label, statement, expected) => {
+    expect(describeMentions(statement)).toEqual(expected);
+  });
+
+  it.each([
+    ["right after SELECT", "SELECT call audit_user FROM contacts"],
+    ["after a comma", "SELECT id, call audit_user FROM contacts"],
+    ["after DISTINCT", "SELECT DISTINCT exec audit_user FROM contacts"],
+    ["named EXECUTE", "SELECT execute audit_user FROM contacts"],
+    ["in parentheses", "SELECT (call audit_user) FROM contacts"],
+    ["in an INSERT query", "INSERT INTO t SELECT call audit_user FROM c"],
+    ["after UNION", "SELECT 1 UNION SELECT call audit_user FROM c"],
+  ])("does not read a column named like CALL as a call: %s", (_label, statement) => {
+    expect(callMentions(statement).map((call) => call.text)).not.toContain("audit_user");
+  });
+
+  it.each([
+    ["a statement start", "CALL audit_user(1)"],
+    ["T-SQL EXEC", "EXEC audit_user 1"],
+    ["a begin block", "CREATE PROCEDURE w() BEGIN CALL audit_user(); END"],
+    ["a THEN branch", "CREATE PROCEDURE w() BEGIN IF x THEN CALL audit_user(); END IF; END"],
+    ["a T-SQL batch after a SELECT without a semicolon", "SELECT 1\nEXEC audit_user 1"],
+    ["a T-SQL batch after a string", "SELECT 'done'\nEXEC audit_user 1"],
+    ["a T-SQL batch after two strings", "SELECT 'a', 'b'\nEXEC audit_user 1"],
+    ["a T-SQL IF", "IF @x > 0 EXEC audit_user @x"],
+    ["INSERT ... EXEC", "INSERT INTO t EXEC audit_user 1"],
+    ["INSERT ... EXEC after a column list", "INSERT INTO t (a) EXEC audit_user 1"],
+    ["a MySQL trigger", "CREATE TRIGGER t AFTER INSERT ON u FOR EACH ROW CALL audit_user()"],
+    ["a procedure whose body is one statement", "CREATE PROCEDURE dbo.p AS EXEC audit_user"],
+  ])("keeps a CALL or EXEC in %s as a certain call", (_label, statement) => {
+    expect(callMentions(statement)).toEqual([{ text: "audit_user", speculative: false }]);
   });
 
   it.each([

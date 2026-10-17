@@ -15,6 +15,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - SQL: a routine name that two definitions carry, such as overloads or a repeated `CREATE OR REPLACE`, now gives `not_found` from a call and `partial` reference coverage. A column or table that shares a routine's name no longer resolves to the routine, and a trigger and the function it runs can share a name.
 - SQL: impact analysis now finds the references of a changed SQL object, as it does for other languages. A read or call inside the changed file is found, and the changed file is listed with a `directRef` reason. A reference lookup for a SQL definition that is not in the index now gives `not_found` instead of an empty `complete` result.
 - SQL: rename preview now edits the name in a schema-qualified reference such as `public.users` or `public.f()` and keeps the qualifier. Before, such a reference was left out as an unsafe site, and several references to one name in a file collapsed into one edit.
+- SQL: go-to-definition and `refs` on a routine named by `DROP FUNCTION`, `ALTER FUNCTION`, `CALL`, or `EXEC` no longer resolve to a table of the same name when the project defines no routine; they give `not_found`, as they already did when another routine was indexed. A `DROP FUNCTION f, g` or `GRANT ... ON FUNCTION f, g` target list now names every routine in it, and a MySQL `INSERT IGNORE` or T-SQL `INSERT TOP (n)` table or a column named `call` is no longer read as a call.
 
 ## [3.0.1] - 2026-10-17
 
