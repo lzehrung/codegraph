@@ -272,7 +272,7 @@ Usage: codegraph symbols [query] [--root <path>] [--kind <kind,...>] [--exported
 
 Matching:
   Exact and qualified symbol identities rank ahead of prefix, token, and substring matches. Imports are excluded by default; use --include-imports to include aliases.
-  A query is required unless --kind or --file-glob narrows the lookup. --kind accepts function, class, variable, interface, type, default, table, view, index, constraint, or routine.
+  A query is required unless --kind or --file-glob narrows the lookup. --kind accepts function, class, variable, interface, type, default, table, view, index, constraint, routine, resource, data, module, or output.
 
 Output:
   JSON includes portable handles, exact declaration ranges, provenance, limits, and omission counts. Pretty output is concise and intended for direct reading.

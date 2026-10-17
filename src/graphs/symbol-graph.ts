@@ -23,6 +23,10 @@ export type SymbolNodeKind =
   | "index"
   | "constraint"
   | "routine"
+  | "resource"
+  | "data"
+  | "module"
+  | "output"
   | "import"
   | "namespaceImport";
 
@@ -71,6 +75,10 @@ function normalizeSymbolNodeKind(kind: string): SymbolNodeKind {
   if (kind === "index") return "index";
   if (kind === "constraint") return "constraint";
   if (kind === "routine") return "routine";
+  if (kind === "resource") return "resource";
+  if (kind === "data") return "data";
+  if (kind === "module") return "module";
+  if (kind === "output") return "output";
   if (kind === "import") return "import";
   if (kind === "namespaceImport") return "namespaceImport";
   return "variable";

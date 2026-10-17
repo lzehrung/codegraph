@@ -1396,6 +1396,24 @@ nativeDescribe("native semantic coverage", () => {
         { file: "AnnotationConsumer.java", line: 5, column: 2, expectedStatus: "ok" },
         { file: "AnnotationTypes.java", line: 3, column: 19, expectedStatus: "ok" },
       ),
+      sampleExpectation(
+        "terraform",
+        [
+          "main.tf",
+          "variables.tf",
+          "outputs.tf",
+          "modules/network/main.tf",
+          "modules/network/variables.tf",
+          "modules/network/outputs.tf",
+          "modules/storage/main.tf",
+        ],
+        [
+          { file: "main.tf", names: ["web", "logs", "ubuntu", "network", "name_prefix"] },
+          { file: "modules/network/outputs.tf", names: ["vpc_id", "subnet_id"] },
+        ],
+        { file: "outputs.tf", line: 6, column: 26, expectedStatus: "ok" },
+        { file: "modules/network/variables.tf", line: 5, column: 11, expectedStatus: "ok" },
+      ),
     ];
 
     for (const testCase of cases) {

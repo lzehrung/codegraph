@@ -4,6 +4,7 @@ import { resolveImportSpecifier, resolvePathLikeModule, resolvePythonModule, res
 import { getImportableLanguageExtensions, STYLESHEET_RESOLUTION_EXTENSIONS } from "../resolution-candidates.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "./csharp.js";
 import { resolveJvmPackageImportPaths } from "./jvm.js";
+import { resolveTerraformModuleSourcePaths } from "./terraform.js";
 import type { MatchPathFn } from "./tsconfig.js";
 import type {
   CFamilyIncludeForm,
@@ -234,6 +235,15 @@ export async function resolveSpecifierTargets(
     languageId === "cpp"
   ) {
     return resolveLanguageImportTargets(file, specifier, languageId, metadata);
+  }
+  if (languageId === "terraform") {
+    const files = await resolveTerraformModuleSourcePaths(
+      metadata.projectRoot,
+      specifier,
+      file,
+      metadata.languageExtensions,
+    );
+    return { files, externalName: specifier };
   }
   if (languageId === "csharp" || languageId === "ruby") {
     return resolveCsharpOrRubyTargets(file, specifier, languageId, metadata);

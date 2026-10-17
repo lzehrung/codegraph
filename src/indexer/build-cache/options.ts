@@ -38,8 +38,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 86 removes the reduced-mode import recovery and native runtime option from persisted
  * cache identity; stale modules and graph edges must be rebuilt with required native parsing.
  * Epoch 87 removes obsolete graph and incremental options from persisted cache identity.
+ * Epoch 88 indexes Terraform `.tf` files, adds the resource, data, module, and output symbol kinds,
+ * and resolves local module sources to every Terraform file in the source directory.
  */
-export const CORE_ALGORITHM_EPOCH = 87;
+export const CORE_ALGORITHM_EPOCH = 88;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

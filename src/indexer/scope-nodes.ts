@@ -462,6 +462,11 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     childSkipNameTypes: new Set(["identifier"]),
     moduleRootTypes: new Set(["program"]),
   },
+  // Terraform declarations are order-independent across the module; references resolve in
+  // src/terraform/, so the scope walker registers no Terraform node shapes.
+  terraform: {
+    wholeScopeKinds: WHOLE_FILE_SCOPE,
+  },
   scss: {
     parameterParents: new Set(["parameter"]),
     childSkipNameTypes: new Set(["identifier", "parameters"]),

@@ -1149,6 +1149,24 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 }
 `;
 
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 58`] = `
+{
+  "goto": {
+    "file": "modules/network/outputs.tf",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.tf:30",
+      "modules/network/main.tf:3",
+      "modules/network/variables.tf:5",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
 exports[`native semantic coverage > keeps native semantics stable when Rust autobins is false 1`] = `
 {
   "goto": {

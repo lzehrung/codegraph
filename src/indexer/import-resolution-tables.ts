@@ -181,6 +181,17 @@ export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
     omittedReason: "Data language; no declaration imports, implicit compilation unit, or external-specifier rule.",
   },
   svelte: { omittedReason: "Svelte component format; script blocks parse as js/ts and templates as html." },
+  terraform: {
+    resolvesImportsFromDeclarationsOmittedReason:
+      "A module source names a directory, not a declaration in another file.",
+    implicitCompilationUnit: "module",
+    // A module source names a directory, possibly through `..`, so an added `.tf` file anywhere
+    // can join a called module and re-resolves the calls.
+    externalSpecifierResolution: {
+      separator: "path",
+      reResolveAnyAddedExtensions: [".tf"],
+    },
+  },
   swift: {
     resolvesImportsFromDeclarationsOmittedReason:
       "An import names a module; same-module declarations are visible without resolving that import to a file.",

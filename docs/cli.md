@@ -281,7 +281,9 @@ codegraph search --help
 
 `symbols` performs deterministic symbol-identity lookup, unlike hybrid `search`, which also ranks paths, prose, SQL, snippets, and graph evidence. Exact qualified names such as `src/session.ts::CodeReviewSession` rank before exact local/export names, prefixes, identifier tokens, and substrings.
 
-Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; concise pretty output is the default and `--json` returns the structured envelope.
+Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. `--kind` accepts `function`, `class`, `variable`, `interface`, `type`, `default`, `table`, `view`, `index`, `constraint`, `routine`, `resource`, `data`, `module`, or `output`. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; concise pretty output is the default and `--json` returns the structured envelope.
+
+Terraform declarations use their own kinds: managed resources are `resource`, data sources are `data`, module calls are `module`, outputs are `output`, and input variables and `locals` attributes are `variable`. `goto` and `refs` follow `var.`, `local.`, `module.`, data source, and resource references within a module directory, module outputs, and module call arguments; `partial` reference coverage marks uses Codegraph cannot prove, such as a whole `module.<name>` value. See [Language parity](./language-parity.md#terraform) for limits.
 
 `search --no-snippets` keeps ranked matches and metadata while omitting source snippets from each result. This is useful when a caller needs handles and paths but will fetch bounded live source separately with `file`.
 
@@ -564,7 +566,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 #### Chunking
 
-`chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. `--language` accepts `c`, `cpp`, `csharp`, `css`, `go`, `html`, `java`, `javascript`, `json`, `kotlin`, `less`, `php`, `python`, `ruby`, `rust`, `scss`, `sql`, `svelte`, `swift`, `text`, `tsx`, `typescript`, `vue`, `yaml`, or `zig`; an unrecognized extension still falls back to text. Use `--text` to force text chunking.
+`chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. `--language` accepts `c`, `cpp`, `csharp`, `css`, `go`, `html`, `java`, `javascript`, `json`, `kotlin`, `less`, `php`, `python`, `ruby`, `rust`, `scss`, `sql`, `svelte`, `swift`, `terraform`, `text`, `tsx`, `typescript`, `vue`, `yaml`, or `zig`; an unrecognized extension still falls back to text. Use `--text` to force text chunking.
 
 ### Dependency analysis and diagnostics
 

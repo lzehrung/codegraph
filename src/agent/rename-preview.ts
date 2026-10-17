@@ -35,6 +35,13 @@ import {
   type AgentSession,
 } from "./session.js";
 import { buildSymbolLookup } from "./symbol-lookup.js";
+import {
+  isTerraformFile,
+  isTerraformReservedRename,
+  terraformRenameCollisions,
+  terraformScopedDataCaptures,
+} from "../terraform/resolution.js";
+import { TERRAFORM_IDENTIFIER_PATTERN } from "../terraform/syntax.js";
 
 export type RenamePreviewRequest = {
   root: string;
@@ -329,7 +336,11 @@ export async function previewRenameInSnapshot(
     resolved.def.localName,
     loadSource,
   );
-  const exportDeclarations = await collectExportDeclarationCandidates(snapshot, resolved.def, loadSource);
+  // Terraform exports are its `variable` and `output` declarations, which the definition and
+  // reference edits already cover; the ECMAScript export-text scan would match comments.
+  const exportDeclarations: ExportDeclarationScan = isTerraformFile(snapshot.index, resolved.def.file)
+    ? { candidates: [], missingFiles: [] }
+    : await collectExportDeclarationCandidates(snapshot, resolved.def, loadSource);
   const allCandidates: CandidateEdit[] = [
     ...definitionCandidates,
     ...importDeclarations.candidates,
@@ -351,7 +362,10 @@ export async function previewRenameInSnapshot(
     if (defNodeId(definition) === resolved.id) continue;
     await addScopeConflicts(snapshot, definition, request.newName, [], conflicts);
   }
-  addExportDeclarationConflicts(snapshot, semanticDefinitions, request.newName, conflicts);
+  // Terraform exports inputs and outputs in separate namespaces; addTerraformConflicts checks them.
+  if (!isTerraformFile(snapshot.index, resolved.def.file)) {
+    addExportDeclarationConflicts(snapshot, semanticDefinitions, request.newName, conflicts);
+  }
 
   for (const reference of importDeclarations.missing) {
     unsafeSites.push({
@@ -548,9 +562,9 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   const invalidPathCharacters = newName.includes("/") || newName.includes("\\") || newName.includes("\0");
   const support = supportForFileWithoutHeaderSample(def.file, snapshot.index.languageExtensions);
   const allowsDollar = support?.id === "js" || support?.id === "ts" || support?.id === "tsx";
-  const identifierPattern = allowsDollar
-    ? /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u
-    : /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
+  let identifierPattern = /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
+  if (allowsDollar) identifierPattern = /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u;
+  else if (support?.id === "terraform") identifierPattern = TERRAFORM_IDENTIFIER_PATTERN;
   if (!newName || invalidPathCharacters || !identifierPattern.test(newName)) {
     const displaySupport = supportForFile(def.file, snapshot.index.languageExtensions);
     conflicts.push({
@@ -571,6 +585,47 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   return conflicts;
 }
 
+/**
+ * Terraform keeps one namespace per declaration kind (and per type for resources and data
+ * sources) across the module directory, so the generic same-file and export checks do not apply.
+ */
+async function addTerraformConflicts(
+  snapshot: AgentProjectSnapshot,
+  target: SymbolDef,
+  newName: string,
+  references: readonly Reference[],
+  conflicts: RenameConflict[],
+): Promise<void> {
+  if (await isTerraformReservedRename(snapshot.index, target, newName)) {
+    const file = normalizeAgentFilePath(snapshot.root, target.file);
+    conflicts.push({
+      file,
+      location: { file, range: target.range },
+      reason: "invalid_identifier",
+      message: `"${newName}" is reserved for Terraform module call arguments and cannot name an input variable.`,
+    });
+  }
+  for (const collision of await terraformRenameCollisions(snapshot.index, target, newName)) {
+    const collisionFile = normalizeAgentFilePath(snapshot.root, collision.file);
+    conflicts.push({
+      file: collisionFile,
+      location: { file: collisionFile, range: collision.range },
+      reason: "name_collision",
+      existingHandle: semanticSymbolFromDef(snapshot, collision).handle,
+      message: `The Terraform module already declares "${newName}".`,
+    });
+  }
+  for (const capture of await terraformScopedDataCaptures(snapshot.index, target, newName, references)) {
+    const captureFile = normalizeAgentFilePath(snapshot.root, capture.file);
+    conflicts.push({
+      file: captureFile,
+      location: { file: captureFile, range: capture.range },
+      reason: "shadowing",
+      message: `A check block declares its own data source "${newName}", which would capture this reference.`,
+    });
+  }
+}
+
 async function addScopeConflicts(
   snapshot: AgentProjectSnapshot,
   target: SymbolDef,
@@ -578,6 +633,10 @@ async function addScopeConflicts(
   references: readonly Reference[],
   conflicts: RenameConflict[],
 ): Promise<void> {
+  if (isTerraformFile(snapshot.index, target.file)) {
+    await addTerraformConflicts(snapshot, target, newName, references, conflicts);
+    return;
+  }
   const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(target.file));
   if (!moduleIndex) return;
   const file = normalizeAgentFilePath(snapshot.root, target.file);

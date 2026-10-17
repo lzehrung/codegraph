@@ -106,6 +106,7 @@ import {
   SymbolKind,
 } from "./types.js";
 import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
+import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
 import {
   createLoadingParsedFileProvider,
   fileBindingIsUnshadowed,
@@ -133,6 +134,8 @@ export async function goToDefinition(
 
   const sqlResult = await goToSqlDefinition(index, req);
   if (sqlResult) return sqlResult;
+  const terraformResult = await goToTerraformDefinition(index, req);
+  if (terraformResult) return terraformResult;
 
   const context =
     parsedContext ??
@@ -582,6 +585,32 @@ export async function getCppEquivalentCallableDefinitions(
   return [family.definition, ...family.equivalents];
 }
 
+/** Adds the requested `line` or `block` context to each reference, parsing each file once. */
+async function attachReferenceContext(
+  index: ProjectIndex,
+  refs: readonly Reference[],
+  opts: FindReferencesOptions | undefined,
+): Promise<void> {
+  if (!opts?.context) return;
+  const perFileCache = new Map<string, { source: string; tree: SyntaxTreeLike; sup: LanguageSupport }>();
+  for (const ref of refs) {
+    let cached = perFileCache.get(fileIdentityKey(ref.file));
+    if (!cached) {
+      const parsedEntry = index.parsed?.get(fileIdentityKey(ref.file));
+      const parsed = await ensureParsedContext(ref.file, parsedEntry, index.languageExtensions);
+      cached = { source: parsed.source, tree: parsed.tree, sup: parsed.sup };
+      perFileCache.set(fileIdentityKey(ref.file), cached);
+    }
+    if (opts.context === "line") {
+      const lines = opts.lines ?? DEFAULT_REF_CONTEXT_LINES;
+      ref.context = extractLineContext(cached.source, ref.range.start.line, lines);
+    } else if (opts.context === "block") {
+      const maxLines = opts.blockMaxLines ?? 60;
+      ref.context = extractEnclosingBlock(cached.source, cached.tree, ref.range, maxLines, cached.sup);
+    }
+  }
+}
+
 async function findReferencesInternal(
   index: ProjectIndex,
   req: FindReferencesRequest,
@@ -634,6 +663,14 @@ async function findReferencesInternal(
     ...(maxReferences === undefined ? {} : { maxReferences }),
   });
   if (sqlReferences) return sqlReferences;
+  const terraformReferences = await findTerraformReferences(index, def, {
+    includeDefinition: collectionMode === "all",
+    ...(maxReferences === undefined ? {} : { maxReferences }),
+  });
+  if (terraformReferences) {
+    if (terraformReferences.status === "ok") await attachReferenceContext(index, terraformReferences.references, opts);
+    return terraformReferences;
+  }
 
   const definitionFile = def.file;
   const definitionSiteKey = referenceSiteKey(definitionFile, def.range);
@@ -1512,27 +1549,7 @@ async function findReferencesInternal(
     return left.file.localeCompare(right.file);
   });
 
-  if (opts?.context) {
-    const perFileCache = new Map<string, { source: string; tree: SyntaxTreeLike; sup: LanguageSupport }>();
-
-    for (const ref of refs) {
-      let cached = perFileCache.get(fileIdentityKey(ref.file));
-      if (!cached) {
-        const parsedEntry = index.parsed?.get(fileIdentityKey(ref.file));
-        const parsed = await ensureParsedContext(ref.file, parsedEntry, index.languageExtensions);
-        cached = { source: parsed.source, tree: parsed.tree, sup: parsed.sup };
-        perFileCache.set(fileIdentityKey(ref.file), cached);
-      }
-
-      if (opts.context === "line") {
-        const lines = opts.lines ?? DEFAULT_REF_CONTEXT_LINES;
-        ref.context = extractLineContext(cached.source, ref.range.start.line, lines);
-      } else if (opts.context === "block") {
-        const maxLines = opts.blockMaxLines ?? 60;
-        ref.context = extractEnclosingBlock(cached.source, cached.tree, ref.range, maxLines, cached.sup);
-      }
-    }
-  }
+  await attachReferenceContext(index, refs, opts);
 
   const scannedFiles = [definitionFile, ...candidateFiles, ...receiverScannedFiles];
   // Top-level implicit-unit names and C# partial / Swift shared-owner members are both bounded

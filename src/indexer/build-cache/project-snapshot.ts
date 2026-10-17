@@ -1362,6 +1362,10 @@ function isSymbolNodeKind(value: unknown): value is SymbolNodeKind {
     value === "index" ||
     value === "constraint" ||
     value === "routine" ||
+    value === "resource" ||
+    value === "data" ||
+    value === "module" ||
+    value === "output" ||
     value === "import" ||
     value === "namespaceImport"
   );

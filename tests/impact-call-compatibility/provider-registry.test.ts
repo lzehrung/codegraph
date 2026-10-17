@@ -25,6 +25,7 @@ const NON_CALLABLE_LANGUAGE_IDS: Record<string, string> = {
   scss: "stylesheet",
   sql: "SQL object facts, not callable symbols",
   svelte: "SFC document; script blocks parse as js/ts and templates as HTML",
+  terraform: "configuration blocks; calls name only built-in functions",
   vue: "SFC document; script blocks parse as js/ts and templates as HTML",
 };
 

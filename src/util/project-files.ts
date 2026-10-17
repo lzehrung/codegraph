@@ -62,6 +62,8 @@ export const DEFAULT_PROJECT_FILE_IGNORES = [
   "**/vendor/bundle/**",
   "**/.build/**",
   "**/Pods/**",
+  // `terraform init` copies remote modules and provider plugins here; they are not project source.
+  "**/.terraform/**",
 ];
 
 export const DEFAULT_PROJECT_MANIFESTS = [
@@ -129,7 +131,7 @@ export const DEFAULT_PROJECT_MANIFESTS = [
 ];
 
 export const DEFAULT_PROJECT_PATTERNS = [
-  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,pyi,pyw,php,phtml,php4,php8,vue,svelte,astro,hbs,handlebars,md,mdx,rst,adoc,asciidoc,go,java,cs,csx,rb,rbw,rake,gemspec,rs,html,htm,xhtml,css,scss,less,kt,kts,ktm,swift,zig,c,h,i,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl,cppm,ixx,mxx,sql,ddl,pgsql,mysql}",
+  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,pyi,pyw,php,phtml,php4,php8,vue,svelte,astro,hbs,handlebars,md,mdx,rst,adoc,asciidoc,go,java,cs,csx,rb,rbw,rake,gemspec,rs,html,htm,xhtml,css,scss,less,kt,kts,ktm,swift,zig,c,h,i,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl,cppm,ixx,mxx,sql,ddl,pgsql,mysql,tf}",
   ...DEFAULT_PROJECT_MANIFESTS.map((name) => `**/${name}`),
 ];
 

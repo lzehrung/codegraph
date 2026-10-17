@@ -136,6 +136,10 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
                 "func helper() {}",
                 "(function_declaration name: (simple_identifier) @name)",
             ),
+            "terraform" => (
+                "variable \"region\" {}",
+                "(block (identifier) (string_lit (template_literal) @name))",
+            ),
             "zig" => (
                 "pub fn helper() void {}",
                 "(function_declaration name: (identifier) @name)",
@@ -171,6 +175,7 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
             "scss",
             "sql",
             "swift",
+            "terraform",
             "ts",
             "tsx",
             "zig",

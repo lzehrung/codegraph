@@ -37,6 +37,7 @@ const LANGUAGE_NAMES = {
   sql: "SQL",
   svelte: "Svelte",
   swift: "Swift",
+  terraform: "Terraform",
   tsx: "TSX",
   typescript: "TypeScript",
   vue: "Vue",

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Edge, FileId } from "../types.js";
 import { type ProjectIndex } from "../indexer/types.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -6,11 +7,14 @@ import { compileTestPatterns, createIndexTestFileMatcher } from "./test-patterns
 import type { ChangedSymbol, ImpactItem, ImpactOptions, FileChange } from "./types.js";
 import { createImpactIgnoreMatcher } from "./path.js";
 import { analyzeDirectReferences } from "./direct.js";
-import { analyzeTransitiveImpact, seedTransitiveFromFiles } from "./transitive.js";
+import { analyzeTransitiveImpact, seedTransitiveFromFiles, type ReverseDependencyLookup } from "./transitive.js";
 import { buildDependencyStats, normalizeSeverityWeights, selectStrongerImpactReason } from "./severity.js";
 import { attachCallCompatibilityHints } from "./call-compatibility.js";
 import { computeMemberResolutionCoverage } from "./member-resolution-coverage.js";
 import { createReferenceLookupCache } from "./reference-cache.js";
+import { isTerraformFile, terraformModuleFiles } from "../terraform/resolution.js";
+import { terraformLocalModuleDirectory } from "../util/resolution/terraform.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import {
   createImpactWorkBudget,
   IMPACT_SYMBOL_BATCH_SIZE,
@@ -130,7 +134,11 @@ export async function analyzeImpact(
     diagnostics,
     fanInByFile,
   );
-  const reverseDepsForImpact = reverseDepsForSqlChangedObjects(reverseDeps, filteredChangedSymbols);
+  const reverseDepsForImpact = terraformImpactDependents(
+    index,
+    reverseDepsForSqlChangedObjects(reverseDeps, filteredChangedSymbols),
+    changedFiles,
+  );
   recordReferenceLookupOmitted(workBudget, filteredChangedSymbols.length - budgetedChangedSymbols.length);
   if (diagnostics) {
     const memberResolutionCoverage = computeMemberResolutionCoverage(filteredChangedSymbols, index);
@@ -226,6 +234,95 @@ export async function analyzeImpact(
     emitImpactItem(item, "final");
   }
   return sorted;
+}
+
+/**
+ * Terraform evaluates a directory as one module, and its file edges cover only module `source`
+ * calls. For impact, every file of a module depends on its other files (they share one
+ * namespace), every file of a calling module depends on the called module's files (any of them
+ * can read `module.<name>.<output>`), and a deleted or renamed `.tf` path keeps its old module
+ * peers and callers as dependents.
+ *
+ * Dependents are derived on lookup: each module directory gets one shared edge per file the first
+ * time a traversal reaches it, so impact never materializes file-to-file edges for whole modules.
+ */
+function terraformImpactDependents(
+  index: ProjectIndex,
+  reverseDeps: ReadonlyMap<FileId, Edge[]>,
+  changedFiles: readonly FileChange[],
+): ReverseDependencyLookup {
+  const moduleEdgesByDirectory = new Map<string, Edge[]>();
+  const moduleEdges = (file: FileId): Edge[] => {
+    const directoryKey = fileIdentityKey(path.dirname(file));
+    let edges = moduleEdgesByDirectory.get(directoryKey);
+    if (!edges) {
+      edges = terraformModuleFiles(index, file).map((peer) => ({
+        from: peer,
+        to: { type: "file", path: peer },
+        raw: "terraform-module",
+      }));
+      moduleEdgesByDirectory.set(directoryKey, edges);
+    }
+    return edges;
+  };
+
+  const deletedDependents = new Map<string, Edge[][]>();
+  for (const change of changedFiles) {
+    if (change.kind !== "deleted" && change.kind !== "renamed") continue;
+    const oldPath = change.kind === "renamed" ? change.oldPath : change.path;
+    if (!oldPath || supportForFileWithoutHeaderSample(oldPath, index.languageExtensions)?.id !== "terraform") continue;
+    const directoryKey = fileIdentityKey(path.dirname(oldPath));
+    const parts: Edge[][] = [];
+    const peer = [...index.byFile.values()].find(
+      (module) => isTerraformFile(index, module.file) && fileIdentityKey(path.dirname(module.file)) === directoryKey,
+    );
+    if (peer) parts.push(moduleEdges(peer.file));
+    // Without its last file the directory resolves nowhere, so callers' source edges are external.
+    for (const edge of index.graph.edges) {
+      if (!isTerraformFile(index, edge.from)) continue;
+      const directory =
+        edge.to.type === "external"
+          ? terraformLocalModuleDirectory(edge.from, edge.to.name)
+          : path.dirname(edge.to.path);
+      if (directory && fileIdentityKey(directory) === directoryKey) parts.push(moduleEdges(edge.from));
+    }
+    deletedDependents.set(fileIdentityKey(oldPath), parts);
+  }
+
+  const resolved = new Map<string, readonly Edge[]>();
+  return {
+    get(fileKey) {
+      const cached = resolved.get(fileKey);
+      if (cached) return cached;
+      const base = reverseDeps.get(fileKey) ?? [];
+      const parts: Edge[][] = [...(deletedDependents.get(fileKey) ?? [])];
+      const module = index.byFile.get(fileKey);
+      if (module && isTerraformFile(index, module.file)) parts.push(moduleEdges(module.file));
+      for (const edge of base) {
+        if (isTerraformFile(index, edge.from)) parts.push(moduleEdges(edge.from));
+      }
+      let edges: readonly Edge[] = base;
+      // A file reached only through its own module shares the module's edge array, which lists the
+      // file itself; the traversal skips that self edge.
+      if (!base.length && parts.length === 1) {
+        edges = parts[0]!;
+      } else if (parts.length) {
+        const seen = new Set(base.map((edge) => fileIdentityKey(edge.from)));
+        const combined = [...base];
+        for (const part of parts) {
+          for (const edge of part) {
+            const dependentKey = fileIdentityKey(edge.from);
+            if (seen.has(dependentKey)) continue;
+            seen.add(dependentKey);
+            combined.push(edge);
+          }
+        }
+        edges = combined;
+      }
+      resolved.set(fileKey, edges);
+      return edges;
+    },
+  };
 }
 
 function reverseDepsForSqlChangedObjects(

@@ -82,6 +82,7 @@ export const KOTLIN_SUPPORT = adaptDefinition(getLanguageById("kotlin")!);
 export const SWIFT_SUPPORT = adaptDefinition(getLanguageById("swift")!);
 export const ZIG_SUPPORT = adaptDefinition(getLanguageById("zig")!);
 export const SQL_SUPPORT = adaptDefinition(getLanguageById("sql")!);
+export const TERRAFORM_SUPPORT = adaptDefinition(getLanguageById("terraform")!);
 
 export const LANGUAGE_SUPPORTS: LanguageSupport[] = getAllLanguages().map(adaptDefinition);
 

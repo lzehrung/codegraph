@@ -277,6 +277,8 @@ See [Agent workflows](./docs/agent-workflows.md) for exploration strategy, warm 
 
 **SQL:** statement chunking, object symbols, common DDL/DML and CTE facts, SQL-to-SQL edges, and object-level navigation. codegraph does not claim column-definition resolution.
 
+**Terraform:** module-directory symbols, dependency edges to local module sources, and navigation for `var`, `local`, `module`, data source, and resource references, including module outputs and call arguments.
+
 **Graph-first formats:** HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, AsciiDoc, CSS, SCSS, and Less have narrower graph or chunking support.
 
 **Single-file components:** Vue and Svelte script blocks participate in dependency graphs and chunking; semantic navigation is narrower.

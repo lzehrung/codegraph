@@ -24,5 +24,6 @@ import "./definitions/cpp.js";
 import "./definitions/kotlin.js";
 import "./definitions/swift.js";
 import "./definitions/sql.js";
+import "./definitions/terraform.js";
 
 import "./definitions/zig.js";

@@ -7,6 +7,30 @@ import type { BindingKind } from "./scope-types.js";
 
 const DESCENDANT_DECLARATION_CONTAINER_TYPES = new Set(["function_definition", "declaration"]);
 
+type DescendantDeclarationContainer = {
+  types: ReadonlySet<string>;
+  /** Named-child depth of the declared name below the container. */
+  maxDepth: number;
+};
+
+/**
+ * Per-language containers whose declared name sits below a direct child. A Terraform block label
+ * is the text inside its quoted string, two levels below the block, so an edit in the block body
+ * reaches the label only by a descendant search. The depth bound keeps a `locals` block, whose
+ * attributes are separate declarations, from claiming an edit for its first attribute. `block` is
+ * a body node in other grammars, so it stays language-scoped.
+ */
+const LANGUAGE_DESCENDANT_DECLARATION_CONTAINERS: Readonly<Record<string, DescendantDeclarationContainer>> = {
+  terraform: { types: new Set(["block"]), maxDepth: 2 },
+};
+
+/** The descendant search depth for `node`, or 0 when it is not a declaration container. */
+function descendantDeclarationDepth(node: SyntaxNodeLike, support: LanguageSupport): number {
+  if (DESCENDANT_DECLARATION_CONTAINER_TYPES.has(node.type)) return Number.POSITIVE_INFINITY;
+  const container = LANGUAGE_DESCENDANT_DECLARATION_CONTAINERS[support.id];
+  return container?.types.has(node.type) ? container.maxDepth : 0;
+}
+
 export function declarationKindToBindingKind(kind: string): BindingKind {
   if (kind === "function") return "function";
   if (kind === "method") return "function";
@@ -51,8 +75,9 @@ export function findTrackedDeclarationNameInAncestors(
       }
       return child;
     }
-    if (DESCENDANT_DECLARATION_CONTAINER_TYPES.has(current.type)) {
-      const nested = findTrackedDeclarationNameInDescendants(current, support, trackedPositions);
+    const depth = descendantDeclarationDepth(current, support);
+    if (depth) {
+      const nested = findTrackedDeclarationNameInDescendants(current, support, depth, trackedPositions);
       if (nested) return nested;
     }
     current = current.parent;
@@ -63,12 +88,17 @@ export function findTrackedDeclarationNameInAncestors(
 function findTrackedDeclarationNameInDescendants(
   node: SyntaxNodeLike,
   support: LanguageSupport,
+  maxDepth: number,
   trackedPositions?: ReadonlySet<string>,
 ): SyntaxNodeLike | null {
-  const queue: SyntaxNodeLike[] = [...(node.namedChildren || [])];
+  const queue: Array<{ node: SyntaxNodeLike; depth: number }> = (node.namedChildren || []).map((child) => ({
+    node: child,
+    depth: 1,
+  }));
   while (queue.length) {
-    const current = queue.shift();
-    if (!current) continue;
+    const entry = queue.shift();
+    if (!entry) continue;
+    const current = entry.node;
     if (support.isDeclarationName?.(current)) {
       if (!trackedPositions) return current;
       const line = (current.startPosition?.row ?? 0) + 1;
@@ -77,7 +107,8 @@ function findTrackedDeclarationNameInDescendants(
         return current;
       }
     }
-    queue.push(...(current.namedChildren || []));
+    if (entry.depth >= maxDepth) continue;
+    for (const child of current.namedChildren || []) queue.push({ node: child, depth: entry.depth + 1 });
   }
   return null;
 }
