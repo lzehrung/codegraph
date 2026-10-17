@@ -260,6 +260,13 @@ export function sqlObjectMentionCovers(statement: string, offset: number): boole
   return syntacticObjectSpans(statement).some((span) => offset >= span.start && offset < span.end);
 }
 
+/** The name a `CREATE` statement defines: `users` in `CREATE TABLE users`, `f` in `CREATE FUNCTION f`. */
+export function sqlDefinedNameSpan(statement: string): SqlNameSpan | null {
+  const spans: SqlNameSpan[] = [];
+  namesAfterPrefixes(maskSqlStringsAndComments(statement), DEFINITION_PREFIXES, spans);
+  return spans.reduce<SqlNameSpan | null>((first, span) => (!first || span.start < first.start ? span : first), null);
+}
+
 /**
  * True when every fact-level relation read of `objectName` is a routine call (`FROM get_users()`).
  * A real table read of that name in the same statement keeps the relation edge.

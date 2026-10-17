@@ -6,7 +6,7 @@ import { edgeKey } from "../util/graph-edges.js";
 import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
 import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
-import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extract-facts.js";
@@ -278,38 +278,14 @@ export function sqlEdgeMatchesChangedObjects(raw: string | undefined, objects: r
   return false;
 }
 
-const routineNamespaceByFile = new Map<string, Map<string, SqlRoutineNamespace>>();
-
-export function sqlChangedSymbolTarget(symbol: {
-  file: string;
-  name: string;
-  kind: SymbolKind;
-  range: { start: { line: number; column: number } };
-}): { name: string; namespace: SqlTargetNamespace } | null {
-  if (symbol.kind === SymbolKind.Table || symbol.kind === SymbolKind.View || symbol.kind === SymbolKind.Index) {
-    return { name: symbol.name, namespace: "relation" };
-  }
-  if (symbol.kind !== SymbolKind.Routine) return null;
-  const namespace =
-    routineNamespaceByFile
-      .get(fileIdentityKey(symbol.file))
-      ?.get(`${symbol.range.start.line}:${symbol.range.start.column}`) ?? "callable";
-  return { name: symbol.name, namespace };
-}
-
 export function buildSqlModuleIndex(filePath: string, source: string): ModuleIndex {
   const normalizedFile = normalizePath(filePath);
   const facts = extractSqlFactsFromSource(normalizedFile, source);
   const locals: SymbolDef[] = [];
   const exports: ModuleIndex["exports"] = [];
   const seen = new Set<string>();
-  const routineNamespaces = new Map<string, SqlRoutineNamespace>();
-  routineNamespaceByFile.set(fileIdentityKey(normalizedFile), routineNamespaces);
 
   for (const fact of facts) {
-    if (fact.kind === "defines_routine" && fact.objectName) {
-      routineNamespaces.set(`${fact.startLine}:${fact.startColumn}`, sqlRoutineDefinitionNamespace(fact.statementText));
-    }
     if (!isDefinitionFact(fact) || !fact.objectName) continue;
     const key = `${fact.objectName}:${fact.startLine}:${fact.kind}`;
     if (seen.has(key)) continue;
@@ -391,9 +367,11 @@ export async function collectSqlEdgesForFile(
   for (const fact of currentFacts) {
     // The name in `DROP FUNCTION name` is a routine mention below, never a table of the same name.
     if (fact.kind === "drops_object" && sqlStatementDropsRoutine(fact.statementText)) continue;
+    const readsRelation = fact.kind === "reads_from" || fact.kind === "joins";
     for (const objectName of referenceObjectNames(fact)) {
-      // `SELECT * FROM get_users()` is a call. It is not a read of a table that shares the name.
-      if (sqlRelationNameIsRoutineCall(fact.statementText, objectName)) continue;
+      // `SELECT * FROM get_users()` is a call, not a read of a table that shares the name. A write
+      // target such as `INSERT INTO get_users` is still the table.
+      if (readsRelation && sqlRelationNameIsRoutineCall(fact.statementText, objectName)) continue;
       const match = sqlDefinitionCandidates(cache, objectName);
       for (const edge of sqlEdgesForCandidates(normalizedFile, fact.kind, objectName, match, "relation")) addEdge(edge);
     }

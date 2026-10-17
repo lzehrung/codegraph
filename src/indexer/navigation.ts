@@ -635,8 +635,12 @@ async function findReferencesInternal(
     );
     // A column can share a table's name. Only a syntactically proven object or routine mention
     // overrides the definition that encloses the position; a column stays on that definition.
-    const sqlMention =
-      sqlTarget?.status === "ok" && (!localAtPosition || (await sqlPositionIsProvenObjectOrRoutineMention(index, req)));
+    const namesObject =
+      sqlTarget && localAtPosition ? await sqlPositionIsProvenObjectOrRoutineMention(index, req) : false;
+    // A proven mention that no single definition owns, such as an overloaded callee, is unresolved.
+    // It is not a reference to the definition around it.
+    if (namesObject && sqlTarget?.status === "not_found") return { status: "not_found", reason: sqlTarget.reason };
+    const sqlMention = sqlTarget?.status === "ok" && (!localAtPosition || namesObject);
     if (sqlMention && sqlTarget?.status === "ok") {
       def = sqlTarget.definition;
       provenance = sqlTarget.provenance;
@@ -669,7 +673,8 @@ async function findReferencesInternal(
   const maxReferences =
     typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
   const sqlReferences = await findSqlReferences(index, def, {
-    includeDefinition: collectionMode === "all",
+    // A SQL definition spans its whole statement, so rename finds the declaration's name through here.
+    includeDefinition: collectionMode !== "usages",
     ...(maxReferences === undefined ? {} : { maxReferences }),
   });
   if (sqlReferences) return sqlReferences;

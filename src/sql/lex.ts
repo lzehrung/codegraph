@@ -86,10 +86,12 @@ export function splitTopLevelCommaSeparated(text: string): string[] {
 
 export type SqlMaskOptions = {
   /**
-   * Keep the body of a dollar-quoted block visible. A routine body is code, so the body keeps its
-   * calls. Strings, comments, and nested dollar-quoted blocks inside the body stay masked.
+   * Decides which dollar-quoted blocks keep their body visible. `before` is the masked text ahead of
+   * the block, so a caller can read the words that introduce it, as in `AS $$`. A routine body is
+   * code, so its calls count. Strings, comments, and nested dollar-quoted blocks inside a kept body
+   * stay masked, and every other block is masked whole.
    */
-  dollarQuotedCode?: boolean;
+  keepDollarQuotedBody?: (before: string) => boolean;
 };
 
 export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOptions): string {
@@ -178,7 +180,7 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
     if (char === "$") {
       const tagMatch = statement.slice(i).match(/^\$[A-Za-z_][\w$]*\$|^\$\$/);
       const tag = tagMatch?.[0];
-      if (tag && options?.dollarQuotedCode) {
+      if (tag && options?.keepDollarQuotedBody?.(out)) {
         const bodyStart = i + tag.length;
         const closeIndex = statement.indexOf(tag, bodyStart);
         const bodyEnd = closeIndex < 0 ? statement.length : closeIndex;
@@ -201,4 +203,16 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
     i += 1;
   }
   return out;
+}
+
+const QUOTED_IDENTIFIER_RE = /"(?:""|[^"])*(?:"|$)|`[^`]*(?:`|$)/g;
+
+/**
+ * Replaces each double-quoted or backtick-quoted identifier in text from `maskSqlStringsAndComments`
+ * with underscores of the same length. A scan for keywords, calls, and parentheses then reads an
+ * identifier as one bare word: nothing inside it can read as syntax. Bracketed `[...]` text stays,
+ * because `ARRAY[f(x)]` holds a real call.
+ */
+export function maskSqlQuotedIdentifiers(masked: string): string {
+  return masked.replace(QUOTED_IDENTIFIER_RE, (identifier) => identifier.replace(/[^\n]/g, "_"));
 }

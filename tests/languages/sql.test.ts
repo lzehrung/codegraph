@@ -6,6 +6,7 @@ import {
   analyzeImpactFromDiff,
   buildProjectIndex,
   buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
   chunkFile,
   extractSqlFactsFromSource,
   findReferences,
@@ -17,6 +18,8 @@ import {
 import { previewRenameWithSession } from "../../src/agent/rename-preview.js";
 import { createAgentSession } from "../../src/agent/session.js";
 import { workspaceSymbolsWithSession } from "../../src/agent/workspace-symbols.js";
+import { closeDiskCacheDatabase } from "../../src/indexer/build-cache/module-cache.js";
+import { findRenameReferences, findUsageReferences } from "../../src/indexer/navigation.js";
 import type { FindReferencesResult, GoToResult } from "../../src/indexer/types.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
@@ -771,5 +774,158 @@ describe("SQL routine call sites", () => {
         expect(tableChange.impacted.map((item) => item.file)).toEqual(["reader.sql"]);
       },
     );
+  });
+
+  it.each<[string, string[]]>([
+    ["the project snapshot", []],
+    ["per-file cache entries", ["extra.sql"]],
+  ])(
+    "keeps a trigger apart from a same-named function in impact after a disk-cache reload from %s",
+    async (_label, added) => {
+      const schema = [
+        "CREATE FUNCTION audit() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER audit BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION audit();",
+      ];
+      const files = {
+        "schema.sql": schema,
+        "caller.sql": ["SELECT audit();"],
+        "admin.sql": ["ALTER TABLE users ENABLE TRIGGER audit;"],
+      };
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-impact-reload-"));
+      const movedRoot = `${root}-moved`;
+      try {
+        for (const [name, lines] of Object.entries(files)) {
+          await fsp.writeFile(path.join(root, name), [...lines, ""].join("\n"), "utf8");
+        }
+        await buildProjectIndex(root, { cache: "disk", threads: 1 });
+        closeDiskCacheDatabase(root, { cache: "disk" });
+        // An index restored from the cache never reads these statements again. A copy at a new path
+        // reaches that state in this process: no earlier build here indexed the copy's files. An added
+        // file invalidates the project snapshot, so the unchanged files come from per-file entries.
+        await fsp.cp(root, movedRoot, { recursive: true });
+        for (const name of added) await fsp.writeFile(path.join(movedRoot, name), "SELECT 1;\n", "utf8");
+        const warm = await buildProjectIndexIncremental(movedRoot, { cache: "disk", threads: 1 });
+
+        const impactedBy = async (hunk: readonly string[]): Promise<string[]> => {
+          const diffText = [
+            "diff --git a/schema.sql b/schema.sql",
+            "--- a/schema.sql",
+            "+++ b/schema.sql",
+            ...hunk,
+            "",
+          ];
+          const impact = await analyzeImpactFromDiff(movedRoot, warm, {
+            provider: "raw",
+            diffText: diffText.join("\n"),
+            includeTests: true,
+          });
+          if ("files" in impact) throw new Error("Expected a full impact report");
+          return impact.impacted.map((item) => item.file);
+        };
+
+        // `ENABLE TRIGGER audit` names the trigger. `SELECT audit()` names the function.
+        expect(
+          await impactedBy([
+            "@@ -2,1 +2,1 @@",
+            `-${schema[1]}`,
+            "+CREATE TRIGGER audit BEFORE UPDATE OR INSERT ON users FOR EACH ROW EXECUTE FUNCTION audit();",
+          ]),
+        ).toEqual(["admin.sql"]);
+        expect(
+          await impactedBy([
+            "@@ -1,1 +1,1 @@",
+            `-${schema[0]}`,
+            "+CREATE FUNCTION audit() RETURNS trigger AS $$ BEGIN RETURN OLD; END $$ LANGUAGE plpgsql;",
+          ]),
+        ).toEqual(["caller.sql"]);
+      } finally {
+        closeDiskCacheDatabase(root, { cache: "disk" });
+        closeDiskCacheDatabase(movedRoot, { cache: "disk" });
+        await fsp.rm(root, { recursive: true, force: true });
+        await fsp.rm(movedRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("returns not_found for a call or table it cannot resolve, not the references of the definition around it", async () => {
+    const schema = [
+      "CREATE FUNCTION pick(a integer) RETURNS integer AS $$ SELECT a $$ LANGUAGE sql;",
+      "CREATE FUNCTION pick(a text) RETURNS text AS $$ SELECT a $$ LANGUAGE sql;",
+      "CREATE FUNCTION wrap(a integer) RETURNS integer AS $$ SELECT pick(a) $$ LANGUAGE sql;",
+      "CREATE TRIGGER pick_trg BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION pick();",
+      "CREATE VIEW ext_view AS SELECT id, email FROM external_table;",
+      "CREATE TABLE users (id integer);",
+      "CREATE TABLE users (id integer);",
+    ];
+    await withSqlProject({ "schema.sql": schema }, async (project) => {
+      const overloadedInBody = await referencesAt(project, "schema.sql", schema, 3, "pick(a)");
+      const overloadedInTrigger = await referencesAt(project, "schema.sql", schema, 4, "pick()");
+      const unknownTable = await referencesAt(project, "schema.sql", schema, 5, "external_table");
+
+      expect(overloadedInBody.status).toBe("not_found");
+      expect(overloadedInTrigger.status).toBe("not_found");
+      expect(unknownTable.status).toBe("not_found");
+
+      // A column is no object name, so it keeps the view that holds it.
+      const column = await referencesAt(project, "schema.sql", schema, 5, "email");
+      expect(okReferences(column).definition.localName).toBe("ext_view");
+      // A definition's own name finds that definition, even when other definitions share the name.
+      const overload = await referencesAt(project, "schema.sql", schema, 2, "pick(a text)");
+      const secondUsers = await referencesAt(project, "schema.sql", schema, 7, "users");
+      expect(okReferences(overload).definition.range.start.line).toBe(2);
+      expect(okReferences(secondUsers).definition.range.start.line).toBe(7);
+    });
+  });
+
+  it("finds every call when identical statements share one line", async () => {
+    const schema = ["CREATE FUNCTION f(a integer) RETURNS integer AS $$ SELECT a $$ LANGUAGE sql;"];
+    const use = ["SELECT f(1); SELECT f(1);", "SELECT f(2); SELECT f(2); SELECT f(2);"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const result = await referencesAt(project, "schema.sql", schema, 1, "f(a integer)");
+      const calls = [
+        siteAt("use.sql", use, 1, "f(1)", 0),
+        siteAt("use.sql", use, 1, "f(1)", 1),
+        siteAt("use.sql", use, 2, "f(2)", 0),
+        siteAt("use.sql", use, 2, "f(2)", 1),
+        siteAt("use.sql", use, 2, "f(2)", 2),
+      ];
+
+      expect(referenceSites(project.root, result)).toEqual(
+        [siteAt("schema.sql", schema, 1, "f(a integer)"), ...calls].sort(),
+      );
+      expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(await gotoAt(project, "use.sql", use, 1, "f(1)", 0)).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 1, "f(1)", 1)).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 2, "f(2)", 2)).toBe("schema.sql:1");
+    });
+  });
+
+  it("leaves the declaration out of usage references and keeps it for references and rename", async () => {
+    const schema = [
+      "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;",
+      "CREATE TABLE users (id integer, email text);",
+    ];
+    const use = ["SELECT normalize_email(email) FROM users;"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      for (const [line, token] of [
+        [1, "normalize_email"],
+        [2, "users"],
+      ] as const) {
+        const { definition } = okReferences(await referencesAt(project, "schema.sql", schema, line, token));
+        const declaration = siteAt("schema.sql", schema, line, token);
+        const usage = siteAt("use.sql", use, 1, token);
+
+        expect(referenceSites(project.root, await findReferences(project.index, { def: definition }))).toEqual(
+          [declaration, usage].sort(),
+        );
+        expect(referenceSites(project.root, await findUsageReferences(project.index, { def: definition }))).toEqual([
+          usage,
+        ]);
+        // A SQL definition spans its whole statement, so rename edits the declaration's name from here.
+        expect(referenceSites(project.root, await findRenameReferences(project.index, definition))).toEqual(
+          [declaration, usage].sort(),
+        );
+      }
+    });
   });
 });

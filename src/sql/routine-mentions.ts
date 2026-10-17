@@ -1,5 +1,6 @@
 import {
   createSqlObjectNameRegExp,
+  maskSqlQuotedIdentifiers,
   maskSqlStringsAndComments,
   normalizeSqlObjectName,
   SQL_OBJECT_NAME_PATTERN,
@@ -42,7 +43,10 @@ export type SqlRoutineMention = {
 export const SQL_ROUTINE_DEFINITION_RE = /\bcreate\s+(?:or\s+replace\s+)?(function|procedure|trigger)\s+/i;
 
 const CODE_STATEMENT_RE = /^\s*(?:create\s+(?:or\s+replace\s+)?(?:function|procedure)|do)\b/i;
-const LANGUAGE_NAME_RE = /^\s+(?:'([A-Za-z_]\w*)'|([A-Za-z_]\w*))/;
+const DO_STATEMENT_RE = /^\s*do\b/i;
+const LANGUAGE_KEYWORD_RE = /\blanguage\b/gi;
+// The name a `LANGUAGE` clause gives: a bare word, a double-quoted identifier, or a string.
+const LANGUAGE_NAME_RE = /^(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|([A-Za-z_]\w*))/;
 const ROUTINE_KEYWORD_RE = /\b(function|procedure|routine|trigger)\b/gi;
 const IF_EXISTS_RE = /if\s+exists\s+/iy;
 const NAME_RE = createSqlObjectNameRegExp("y");
@@ -131,26 +135,65 @@ function nameAt(text: string, index: number): { name: string; start: number; end
   return name ? { name, start, end: start + match[0].length } : null;
 }
 
-// The last LANGUAGE clause wins: an earlier `language` can be a parameter name, as in `f(language text)`.
-function declaredBodyLanguage(statementText: string, masked: string): string | undefined {
-  for (const match of [...masked.matchAll(/\blanguage\b/gi)].reverse()) {
-    const named = LANGUAGE_NAME_RE.exec(statementText.slice((match.index ?? 0) + match[0].length));
-    const language = named?.[1] ?? named?.[2];
-    if (language) return language.toLowerCase();
+/** Skips whitespace and comments, which can sit between `LANGUAGE` and the language name. */
+function skipTrivia(text: string, index: number): number {
+  let cursor = skipWhitespace(text, index);
+  while (text.startsWith("--", cursor) || text.startsWith("/*", cursor)) {
+    if (text.startsWith("--", cursor)) {
+      const lineEnd = text.indexOf("\n", cursor);
+      cursor = lineEnd < 0 ? text.length : lineEnd;
+    } else {
+      const blockEnd = text.indexOf("*/", cursor + 2);
+      cursor = blockEnd < 0 ? text.length : blockEnd + 2;
+    }
+    cursor = skipWhitespace(text, cursor);
   }
-  return undefined;
+  return cursor;
+}
+
+/**
+ * True unless the statement declares a body language that Codegraph cannot read as SQL. The last
+ * `LANGUAGE` clause outside the parentheses wins: an earlier `language` can be a parameter name, as in
+ * `f(language text)`. A clause whose name cannot be read counts as another language, so its body
+ * stays masked.
+ */
+function bodyLanguageIsReadable(statementText: string, scan: string): boolean {
+  const clauses = [...scan.matchAll(LANGUAGE_KEYWORD_RE)].filter((match) => !sqlParenDepthAt(scan, match.index ?? 0));
+  const clause = clauses.at(-1);
+  if (!clause) return true;
+  const nameStart = skipTrivia(statementText, (clause.index ?? 0) + clause[0].length);
+  const named = LANGUAGE_NAME_RE.exec(statementText.slice(nameStart));
+  const language = named?.[1] ?? named?.[2] ?? named?.[3];
+  return !!language && hasWord(BODY_LANGUAGES, language.toLowerCase());
+}
+
+/** Decides which dollar-quoted block holds the routine body: the one after `AS`, or the first of a `DO` statement. */
+function routineBodyBlock(scan: string): (before: string) => boolean {
+  if (DO_STATEMENT_RE.test(scan)) {
+    let seen = false;
+    return () => {
+      const first = !seen;
+      seen = true;
+      return first;
+    };
+  }
+  return (before) => {
+    const code = maskSqlQuotedIdentifiers(before);
+    return previousWord(code, code.length) === "as" && !sqlParenDepthAt(code, code.length);
+  };
 }
 
 /**
  * Masks strings and comments. The `$$` body of a function, procedure, or `DO` block stays visible
- * when its language is SQL or PL/pgSQL. The body of any other language is code Codegraph cannot read.
+ * when its language is SQL or PL/pgSQL. Any other `$$` string stays masked: a parameter default, a
+ * setting, or the body of a language Codegraph cannot read.
  */
 function maskStatementCode(statementText: string): string {
   const masked = maskSqlStringsAndComments(statementText);
   if (!statementText.includes("$") || !CODE_STATEMENT_RE.test(masked)) return masked;
-  const language = declaredBodyLanguage(statementText, masked);
-  if (language && !hasWord(BODY_LANGUAGES, language)) return masked;
-  return maskSqlStringsAndComments(statementText, { dollarQuotedCode: true });
+  const scan = maskSqlQuotedIdentifiers(masked);
+  if (!bodyLanguageIsReadable(statementText, scan)) return masked;
+  return maskSqlStringsAndComments(statementText, { keepDollarQuotedBody: routineBodyBlock(scan) });
 }
 
 function keywordMentionKind(
@@ -165,21 +208,21 @@ function keywordMentionKind(
   return previous && hasWord(REFERENCE_PRECEDING_WORDS, previous) ? "reference" : null;
 }
 
-function collectKeywordMentions(masked: string, mentions: Map<number, SqlRoutineMention>): void {
-  const definition = SQL_ROUTINE_DEFINITION_RE.exec(masked);
+function collectKeywordMentions(masked: string, scan: string, mentions: Map<number, SqlRoutineMention>): void {
+  const definition = SQL_ROUTINE_DEFINITION_RE.exec(scan);
   const definitionKeyword = definition?.[1];
   const definitionKeywordStart =
     definition && definitionKeyword ? definition.index + definition[0].lastIndexOf(definitionKeyword) : -1;
-  for (const match of masked.matchAll(ROUTINE_KEYWORD_RE)) {
+  for (const match of scan.matchAll(ROUTINE_KEYWORD_RE)) {
     const keywordStart = match.index ?? 0;
     const keyword = (match[1] ?? "").toLowerCase();
-    const previous = previousWord(masked, keywordStart);
+    const previous = previousWord(scan, keywordStart);
     const kind = keywordMentionKind(keyword, previous, keywordStart === definitionKeywordStart);
     if (!kind) continue;
     let nameFrom = keywordStart + match[0].length;
     if (kind === "drop" || kind === "reference") {
-      IF_EXISTS_RE.lastIndex = skipWhitespace(masked, nameFrom);
-      if (IF_EXISTS_RE.exec(masked)) nameFrom = IF_EXISTS_RE.lastIndex;
+      IF_EXISTS_RE.lastIndex = skipWhitespace(scan, nameFrom);
+      if (IF_EXISTS_RE.exec(scan)) nameFrom = IF_EXISTS_RE.lastIndex;
     }
     const named = nameAt(masked, nameFrom);
     if (!named) continue;
@@ -238,36 +281,36 @@ function matchingParen(text: string, openIndex: number): number {
  * name that is not a call. Those false calls hide the index's table and invent a routine reference.
  * Calls in an index expression, a join predicate, or a CTE body are later names and stay.
  */
-function excludedCallShapeStarts(masked: string): Set<number> {
+function excludedCallShapeStarts(scan: string): Set<number> {
   const excluded = new Set<number>();
-  if (/^\s*create\s+(?:unique\s+)?index\b/i.test(masked)) {
+  if (/^\s*create\s+(?:unique\s+)?index\b/i.test(scan)) {
     const onRe = /\bon\s+/gi;
-    for (const match of masked.matchAll(onRe)) {
+    for (const match of scan.matchAll(onRe)) {
       const keywordAt = match.index ?? 0;
-      if (sqlParenDepthAt(masked, keywordAt) > 0) continue;
+      if (sqlParenDepthAt(scan, keywordAt) > 0) continue;
       let cursor = keywordAt + match[0].length;
-      let named = nameAt(masked, cursor);
+      let named = nameAt(scan, cursor);
       while (named && (named.name.toLowerCase() === "only" || named.name.toLowerCase() === "lateral")) {
         cursor = named.end;
-        named = nameAt(masked, cursor);
+        named = nameAt(scan, cursor);
       }
-      if (!named || masked[skipWhitespace(masked, named.end)] !== "(") continue;
+      if (!named || scan[skipWhitespace(scan, named.end)] !== "(") continue;
       excluded.add(named.start);
       break;
     }
   }
   const cteRe = new RegExp(String.raw`(?:\bwith\s+(?:recursive\s+)?|,\s*)(${SQL_OBJECT_NAME_PATTERN})\s*\(`, "gi");
-  for (const match of masked.matchAll(cteRe)) {
+  for (const match of scan.matchAll(cteRe)) {
     const rawName = match[1] ?? "";
     if (!rawName) continue;
     const matchStart = match.index ?? 0;
     const parenIndex = matchStart + match[0].length - 1;
     let nameEnd = parenIndex;
-    while (nameEnd > matchStart && /\s/.test(masked[nameEnd - 1] ?? "")) nameEnd -= 1;
+    while (nameEnd > matchStart && /\s/.test(scan[nameEnd - 1] ?? "")) nameEnd -= 1;
     const nameStart = nameEnd - rawName.length;
-    if (masked.slice(nameStart, nameEnd) !== rawName) continue;
-    const close = matchingParen(masked, parenIndex);
-    if (close < 0 || !/^\s*as\s*\(/i.test(masked.slice(close + 1))) continue;
+    if (scan.slice(nameStart, nameEnd) !== rawName) continue;
+    const close = matchingParen(scan, parenIndex);
+    if (close < 0 || !/^\s*as\s*\(/i.test(scan.slice(close + 1))) continue;
     excluded.add(nameStart);
   }
   return excluded;
@@ -276,46 +319,48 @@ function excludedCallShapeStarts(masked: string): Set<number> {
 function collectCallKeywordMentions(
   statementText: string,
   masked: string,
+  scan: string,
   mentions: Map<number, SqlRoutineMention>,
 ): void {
-  for (const match of masked.matchAll(CALL_KEYWORD_RE)) {
+  for (const match of scan.matchAll(CALL_KEYWORD_RE)) {
     const matchStart = match.index ?? 0;
-    if (!callKeywordMatchAllowsComments(statementText, match[0], matchStart)) continue;
-    const rawName = match[2] ?? "";
-    const name = normalizeSqlObjectName(rawName);
+    const end = matchStart + match[0].length;
+    if (!callKeywordMatchAllowsComments(statementText, masked.slice(matchStart, end), matchStart)) continue;
+    const start = end - (match[2] ?? "").length;
+    const name = normalizeSqlObjectName(masked.slice(start, end));
     if (!name || (!name.includes(".") && hasWord(NON_ROUTINE_NAME_WORDS, name.toLowerCase()))) continue;
-    const start = matchStart + match[0].length - rawName.length;
     if (mentions.has(start)) continue;
-    const end = start + rawName.length;
     mentions.set(start, { name, start, end, kind: "call", namespace: "callable", speculative: false });
   }
 }
 
-function collectCallShapeMentions(masked: string, mentions: Map<number, SqlRoutineMention>): void {
-  const excluded = excludedCallShapeStarts(masked);
-  for (const match of masked.matchAll(CALL_SHAPE_RE)) {
+function collectCallShapeMentions(masked: string, scan: string, mentions: Map<number, SqlRoutineMention>): void {
+  const excluded = excludedCallShapeStarts(scan);
+  for (const match of scan.matchAll(CALL_SHAPE_RE)) {
     const start = match.index ?? 0;
     if (mentions.has(start) || excluded.has(start)) continue;
-    const previous = previousWord(masked, start);
+    const previous = previousWord(scan, start);
     if (previous && hasWord(NON_CALL_PRECEDING_WORDS, previous)) continue;
-    const rawName = match[1] ?? "";
-    const name = normalizeSqlObjectName(rawName);
+    const end = start + (match[1] ?? "").length;
+    const name = normalizeSqlObjectName(masked.slice(start, end));
     if (!name || (!name.includes(".") && hasWord(CALL_KEYWORDS, name.toLowerCase()))) continue;
-    const end = start + rawName.length;
     mentions.set(start, { name, start, end, kind: "call", namespace: "callable", speculative: true });
   }
 }
 
 /**
  * Finds every place one statement names a routine. A call inside a `$$` body or a `BEGIN ... END` body
- * counts. A name inside a string literal or a comment does not.
+ * counts. A name inside a string literal, a comment, or a quoted identifier does not.
  */
 export function findSqlRoutineMentions(statementText: string): SqlRoutineMention[] {
   const masked = maskStatementCode(statementText);
+  // Names are read from `masked`. Keywords, calls, and parentheses are read from `scan`, where a
+  // quoted identifier is one bare word and nothing inside it can read as syntax.
+  const scan = maskSqlQuotedIdentifiers(masked);
   const mentions = new Map<number, SqlRoutineMention>();
-  collectKeywordMentions(masked, mentions);
-  collectCallKeywordMentions(statementText, masked, mentions);
-  collectCallShapeMentions(masked, mentions);
+  collectKeywordMentions(masked, scan, mentions);
+  collectCallKeywordMentions(statementText, masked, scan, mentions);
+  collectCallShapeMentions(masked, scan, mentions);
   return [...mentions.values()].sort((left, right) => left.start - right.start);
 }
 

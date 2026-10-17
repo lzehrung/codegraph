@@ -869,6 +869,45 @@ describe("SQL artifact graph", () => {
     }
   });
 
+  it("keeps the table write edge when a write statement also calls a routine of the same name", async () => {
+    const root = await mkTmpDir("cg-sql-write-call-");
+    try {
+      const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+      const schema = file("schema.sql");
+      const statements: Record<string, string> = {
+        "insert.sql": "INSERT INTO get_users (id) SELECT id FROM get_users();",
+        "update.sql": "UPDATE get_users SET id = g.id FROM get_users() g;",
+        "merge.sql": "MERGE INTO get_users t USING get_users() s ON t.id = s.id WHEN MATCHED THEN DELETE;",
+        "delete.sql": "DELETE FROM get_users USING get_users() g WHERE get_users.id = g.id;",
+      };
+      await fsp.writeFile(
+        schema,
+        [
+          "CREATE TABLE get_users (id integer);",
+          "CREATE FUNCTION get_users() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;",
+        ].join("\n"),
+        "utf8",
+      );
+      for (const [name, statement] of Object.entries(statements)) {
+        await fsp.writeFile(file(name), `${statement}\n`, "utf8");
+      }
+
+      const sourceGraph = await collectGraph(root, [schema, ...Object.keys(statements).map(file)]);
+      const rawBetween = (from: string): string[] =>
+        sourceGraph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+
+      // The routine call is a read of the function. The write target is still the table.
+      for (const name of Object.keys(statements)) {
+        expect(rawBetween(file(name))).toEqual(["sql:reads_from:callable:get_users", "sql:writes_to:get_users"]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not treat an index target or CTE declaration as a routine call", async () => {
     const root = await mkTmpDir("cg-sql-index-cte-");
     try {

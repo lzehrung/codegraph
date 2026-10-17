@@ -25,6 +25,7 @@ describe("SQL routine mentions", () => {
     ["a PL/pgSQL assignment", "DO $$ BEGIN v := normalize_email(x); END $$", "normalize_email"],
     ["a join predicate", "SELECT * FROM a JOIN b ON norm(a.id) = b.id", "norm"],
     ["a CTE body", "WITH c AS (SELECT norm(1)) SELECT 1", "norm"],
+    ["an array constructor", "SELECT ARRAY[f(1), g(2)]", "f"],
   ])("finds a call in %s", (_label, statement, text) => {
     expect(describeMentions(statement)).toContain(`call:callable:${text}`);
   });
@@ -122,6 +123,15 @@ describe("SQL routine mentions", () => {
     ["a function without a LANGUAGE clause", "CREATE FUNCTION w() RETURNS int AS $$ SELECT f(1) $$"],
     ["a DO block", "DO $$ BEGIN PERFORM f(1); END $$"],
     ["a procedure", "CREATE PROCEDURE w() LANGUAGE plpgsql AS $$ BEGIN CALL f(1); END $$"],
+    ["a double-quoted language", 'CREATE FUNCTION w() RETURNS int AS $$ SELECT f(1) $$ LANGUAGE "plpgsql"'],
+    [
+      "a language after a block comment",
+      "CREATE FUNCTION w() RETURNS int AS $$ SELECT f(1) $$ LANGUAGE /* note */ plpgsql",
+    ],
+    ["a language after a line comment", "CREATE FUNCTION w() RETURNS int AS $$ SELECT f(1) $$ LANGUAGE -- note\n sql"],
+    ["a parameter named language", "CREATE FUNCTION w(language text) RETURNS int AS $$ SELECT f(1) $$ LANGUAGE sql"],
+    ["a DO block with a language before the body", "DO LANGUAGE plpgsql $$ BEGIN PERFORM f(1); END $$"],
+    ["a DO block with a language after the body", "DO $$ BEGIN PERFORM f(1); END $$ LANGUAGE plpgsql"],
   ])("reads the $$ body of %s as code", (_label, statement) => {
     expect(describeMentions(statement)).toContain("call:callable:f");
   });
@@ -137,8 +147,63 @@ describe("SQL routine mentions", () => {
       "a nested dollar-quoted string",
       "CREATE FUNCTION w() RETURNS int AS $$ BEGIN EXECUTE $q$ SELECT f(1) $q$; END $$ LANGUAGE plpgsql",
     ],
+    ["a double-quoted language", 'CREATE FUNCTION w() RETURNS int AS $$ return f(1) $$ LANGUAGE "plpython3u"'],
+    [
+      "a language after a block comment",
+      "CREATE FUNCTION w() RETURNS int AS $$ return f(1) $$ LANGUAGE /* note */ plpython3u",
+    ],
+    [
+      "a language after a line comment",
+      "CREATE FUNCTION w() RETURNS int AS $$ return f(1) $$ LANGUAGE -- note\n plpython3u",
+    ],
+    [
+      "a double-quoted language before AS",
+      'CREATE FUNCTION w() RETURNS int LANGUAGE "plpython3u" AS $$ return f(1) $$',
+    ],
+    ["a DO block in another language", 'DO $$ return f(1) $$ LANGUAGE "plpython3u"'],
+    [
+      "a language clause that cannot be read",
+      "CREATE FUNCTION w() RETURNS int AS $$ return f(1) $$ LANGUAGE $q$plpython3u$q$",
+    ],
   ])("does not read %s as a call", (_label, statement) => {
     expect(describeMentions(statement)).not.toContain("call:callable:f");
+  });
+
+  it.each([
+    [
+      "a parameter default",
+      "CREATE FUNCTION w(x text DEFAULT $$normalize_email(x)$$) RETURNS int AS $$ SELECT f(1) $$ LANGUAGE sql",
+    ],
+    [
+      "a SET value",
+      "CREATE FUNCTION w() RETURNS int AS $$ SELECT f(1) $$ LANGUAGE sql SET search_path = $$normalize_email(x)$$",
+    ],
+    [
+      "a procedure parameter default",
+      "CREATE PROCEDURE w(x text DEFAULT $$normalize_email(x)$$) LANGUAGE sql AS $$ CALL f(1) $$",
+    ],
+  ])("reads only the routine body as code, not %s", (_label, statement) => {
+    expect(mentionTexts(statement)).toContain("f");
+    expect(mentionTexts(statement)).not.toContain("normalize_email");
+  });
+
+  it.each([
+    ["a call-shaped alias", 'SELECT 1 AS "normalize_email(email)"'],
+    ["a CALL keyword in an alias", 'SELECT 1 AS "call normalize_email"'],
+    ["a DROP FUNCTION in an alias", 'SELECT 1 AS "drop function normalize_email"'],
+    ["an escaped quote in an alias", 'SELECT 1 AS "a"" normalize_email(x)"'],
+    ["a backtick alias", "SELECT 1 AS `normalize_email(email)`"],
+  ])("does not read the inside of a quoted identifier as a routine: %s", (_label, statement) => {
+    expect(describeMentions(statement)).toEqual([]);
+  });
+
+  it.each([
+    ["a quoted call", 'SELECT "normalize_email"(email)', '"normalize_email"'],
+    ["a quoted call after a quoted alias", 'SELECT 1 AS "a(b)", "normalize_email"(email)', '"normalize_email"'],
+    ["a quoted schema and name", 'SELECT "App"."Norm"(1)', '"App"."Norm"'],
+    ["a quoted CALL target", 'CALL "App"."Norm"(1)', '"App"."Norm"'],
+  ])("keeps %s as a routine call", (_label, statement, text) => {
+    expect(mentionTexts(statement)).toEqual([text]);
   });
 
   it.each([

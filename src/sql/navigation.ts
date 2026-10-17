@@ -30,7 +30,7 @@ import {
   sqlObjectLookupKey,
   sqlParenDepthAt,
 } from "./lex.js";
-import { sqlObjectMentionCovers } from "./object-mentions.js";
+import { sqlDefinedNameSpan, sqlObjectMentionCovers } from "./object-mentions.js";
 import {
   findSqlRoutineMentions,
   sqlRoutineDefinitionNamespace,
@@ -38,6 +38,7 @@ import {
   type SqlRoutineMention,
   type SqlRoutineNamespace,
 } from "./routine-mentions.js";
+import type { SqlChangedObject } from "./source-graph.js";
 import type { SqlStatementFact } from "./types.js";
 
 type SqlStatementNavigationSlice = {
@@ -178,11 +179,12 @@ function sqlObjectNameParts(name: string): string[] {
 
 function sqlStatementSlices(facts: readonly SqlStatementFact[]): SqlStatementNavigationSlice[] {
   const slices: SqlStatementNavigationSlice[] = [];
-  const seen = new Set<string>();
+  const seen = new Set<number>();
   for (const fact of facts) {
-    const key = `${fact.startLine}:${fact.endLine}:${fact.statementText}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    // One statement yields several facts. Its start offset tells it apart from an identical statement
+    // on the same line, which its lines and text cannot.
+    if (seen.has(fact.startIndex)) continue;
+    seen.add(fact.startIndex);
     slices.push({
       text: fact.statementText,
       startLine: fact.startLine,
@@ -564,7 +566,8 @@ function routineMentionIsProven(lookups: SqlRoutineLookups, statementText: strin
 
 /**
  * True when the position names an object or a routine by SQL syntax: a `FROM`/`JOIN`/`CALL`/`ON`
- * target, not a column that happens to share a table's name.
+ * target, not a column that happens to share a table's name. The name that a `CREATE` statement
+ * defines is no mention: it names the definition itself.
  */
 export async function sqlPositionIsProvenObjectOrRoutineMention(
   index: ProjectIndex,
@@ -576,6 +579,8 @@ export async function sqlPositionIsProvenObjectOrRoutineMention(
   for (const statement of sqlStatementSlices(facts)) {
     const offset = statementOffsetAtPosition(statement, req.line, req.column);
     if (offset === undefined || offset < 0 || offset >= statement.text.length) continue;
+    const defined = sqlDefinedNameSpan(statement.text);
+    if (defined && offset >= defined.start && offset < defined.end) return false;
     if (routineMentionIsProven(routineLookups, statement.text, offset)) return true;
     return sqlObjectMentionCovers(statement.text, offset);
   }
@@ -606,6 +611,20 @@ export async function goToSqlDefinition(index: ProjectIndex, req: GoToRequest): 
   });
 }
 
+/**
+ * The site of the name `definition` declares, as in `users` in `CREATE TABLE users`. A definition spans
+ * its whole statement, so its range does not say where its name is.
+ */
+async function declarationSiteKey(index: ProjectIndex, definition: SymbolDef): Promise<string | null> {
+  const { line, column } = definition.range.start;
+  const facts = await sqlFactsForFile(index, definition.file);
+  const statement = sqlStatementSlices(facts).find((slice) => slice.startLine === line && slice.startColumn === column);
+  const name = statement ? sqlDefinedNameSpan(statement.text) : null;
+  if (!statement || !name) return null;
+  const nameLine = statementLineForOffset(statement, name.start);
+  return siteKey(definition.file, nameLine, statementColumnForOffset(statement, name.start));
+}
+
 type FindSqlReferencesOptions = {
   includeDefinition?: boolean;
   maxReferences?: number;
@@ -632,12 +651,16 @@ export async function findSqlReferences(
     typeof options?.maxReferences === "number" && options.maxReferences > 0 ? options.maxReferences : undefined;
   const collectionLimit = maxReferences === undefined ? undefined : maxReferences + 1;
   const definitionKey = siteKey(definition.file, definition.range.start.line, definition.range.start.column);
+  // A usage lookup leaves out the declaration. A routine's declaration is a mention, skipped below.
+  // A relation's is not, so find the site of its name here.
+  let declarationKey: string | null = null;
+  if (!includeDefinition && !routineNamespace) declarationKey = await declarationSiteKey(index, definition);
   const hasReachedCollectionLimit = (): boolean =>
     collectionLimit !== undefined && references.length >= collectionLimit;
   const addReference = (file: string, range: Range): void => {
     if (hasReachedCollectionLimit()) return;
     const key = siteKey(file, range.start.line, range.start.column);
-    if (!includeDefinition && key === definitionKey) return;
+    if (key === declarationKey) return;
     if (seen.has(key)) return;
     seen.add(key);
     references.push({ file, range });
@@ -653,10 +676,10 @@ export async function findSqlReferences(
           if (hasReachedCollectionLimit()) break;
           if (mention.namespace !== routineNamespace) continue;
           if (mention.kind === "definition") {
-            // A definition always names itself, even when several definitions share the name.
-            if (siteKey(file, statement.startLine, statement.startColumn) === definitionKey) {
-              addReference(file, mentionRange(statement, mention));
-            }
+            // A definition always names itself, even when several definitions share the name. Only a
+            // lookup that includes the declaration reports it.
+            const namesDefinition = siteKey(file, statement.startLine, statement.startColumn) === definitionKey;
+            if (includeDefinition && namesDefinition) addReference(file, mentionRange(statement, mention));
             continue;
           }
           const candidates = routineCandidates(routineLookups, mention);
@@ -713,4 +736,40 @@ export async function findSqlReferences(
       strategyUnavailableFiles: ambiguousFiles,
     }),
   };
+}
+
+type SqlChangedSymbol = {
+  file: string;
+  name: string;
+  kind: SymbolKind;
+  range: { start: { line: number; column: number } };
+};
+
+/**
+ * What each changed SQL symbol is called in graph edges: a table, view, or index by its name, a
+ * routine by its name and name space. The index stores no name space, and an index restored from a
+ * cache never read the statement, so the name space comes from the facts of the changed file.
+ */
+export async function sqlChangedSymbolTargets<T extends SqlChangedSymbol>(
+  index: ProjectIndex,
+  symbols: readonly T[],
+): Promise<Map<T, SqlChangedObject>> {
+  const targets = new Map<T, SqlChangedObject>();
+  const namespacesByFile = new Map<string, Map<string, SqlRoutineNamespace>>();
+  for (const symbol of symbols) {
+    if (symbol.kind === SymbolKind.Table || symbol.kind === SymbolKind.View || symbol.kind === SymbolKind.Index) {
+      targets.set(symbol, { name: symbol.name, namespace: "relation" });
+      continue;
+    }
+    if (symbol.kind !== SymbolKind.Routine) continue;
+    const fileKey = fileIdentityKey(symbol.file);
+    let namespaces = namespacesByFile.get(fileKey);
+    if (!namespaces) {
+      namespaces = await routineNamespacesByStart(index, symbol.file);
+      namespacesByFile.set(fileKey, namespaces);
+    }
+    const { line, column } = symbol.range.start;
+    targets.set(symbol, { name: symbol.name, namespace: namespaces.get(`${line}:${column}`) ?? "callable" });
+  }
+  return targets;
 }
