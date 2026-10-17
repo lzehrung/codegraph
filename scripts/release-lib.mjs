@@ -207,7 +207,7 @@ export function extractChangelogSection(changelog, version) {
   }
   const bodyLines = [];
   for (const line of lines.slice(headingIndex + 1)) {
-    if (line.startsWith("## [") || /^\[[^\]]+\]: \S/.test(line)) {
+    if (line.startsWith("## ") || /^\[[^\]]+\]: \S/.test(line)) {
       break;
     }
     bodyLines.push(line);
