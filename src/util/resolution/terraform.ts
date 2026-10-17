@@ -6,14 +6,21 @@ import { confineResolvedPath, normalizePath } from "../paths.js";
 /**
  * The directory a Terraform module `source` names, or null when the source is not local.
  *
- * Terraform treats a source as a local path only when it starts with `./` or `../`. Every other
- * form (a registry address, a Git, HTTP, or S3 URL, or an archive) is installed by
- * `terraform init`, so it is external to the project.
+ * Terraform treats a source as a local path when it starts with `./` or `../`, and as an absolute
+ * path (copied as a package by `terraform init`) when it starts with `/` or a drive letter. Every
+ * other form (a registry address, a Git, HTTP, or S3 URL, or an archive) is installed from
+ * elsewhere, so it is external to the project. Callers confine the directory to the project root.
  */
 export function terraformLocalModuleDirectory(fromFile: string, source: string): string | null {
-  if (!source.startsWith("./") && !source.startsWith("../")) return null;
-  return normalizePath(path.resolve(path.dirname(fromFile), source));
+  if (source.startsWith("./") || source.startsWith("../")) {
+    return normalizePath(path.resolve(path.dirname(fromFile), source));
+  }
+  if (WINDOWS_DRIVE_PATH.test(source)) return normalizePath(path.win32.normalize(source));
+  if (source.startsWith("/")) return normalizePath(path.resolve(source));
+  return null;
 }
+
+const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/u;
 
 /**
  * Every Terraform file directly inside a local module source directory, sorted and confined to

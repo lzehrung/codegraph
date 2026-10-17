@@ -1011,4 +1011,102 @@ describe("Terraform edge forms", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("follows a nested address through every directory a duplicated ancestor call sources", async () => {
+    const root = await createTempProjectRoot("cg-terraform-ambiguous-ancestor-", [
+      {
+        path: "main.tf",
+        contents: [
+          'module "parent" {',
+          '  source = "./parent"',
+          "}",
+          'module "parent" {',
+          '  source = "./alt"',
+          "}",
+          'module "solo" {',
+          '  source = "./solo"',
+          "}",
+          "import {",
+          "  to = module.parent.module.child.aws_instance.web",
+          '  id = "i-1"',
+          "}",
+          "",
+        ].join("\n"),
+      },
+      { path: "parent/main.tf", contents: 'module "child" {\n  source = "./child"\n}\n' },
+      { path: "alt/main.tf", contents: 'module "child" {\n  source = "./child"\n}\n' },
+      { path: "parent/child/main.tf", contents: 'resource "aws_instance" "web" {}\n' },
+      { path: "alt/child/main.tf", contents: 'resource "aws_instance" "web" {}\n' },
+      // A called module the address chain does not reach.
+      { path: "solo/main.tf", contents: 'module "child" {\n  source = "./child"\n}\n' },
+      { path: "solo/child/main.tf", contents: 'resource "aws_instance" "web" {}\n' },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      const coverage = async (file: string, needle: string) =>
+        (await referenceSummary(index, root, file, needle))?.coverage;
+      expect(await coverage("parent/child/main.tf", '"web"')).toBe("partial");
+      expect(await coverage("alt/child/main.tf", '"web"')).toBe("partial");
+      expect(await coverage("parent/main.tf", '"child"')).toBe("partial");
+      expect(await coverage("alt/main.tf", '"child"')).toBe("partial");
+      expect(await coverage("solo/child/main.tf", '"web"')).toBe("complete");
+      expect(await coverage("solo/main.tf", '"child"')).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a declaration unproven when a peer file of its module cannot be read", async () => {
+    const root = await createTempProjectRoot("cg-terraform-unreadable-peer-", [
+      { path: "a.tf", contents: 'variable "region" {}\n' },
+      // `b.tf` declares `region` too, but disappears after indexing.
+      { path: "b.tf", contents: 'variable "region" {}\n' },
+      { path: "c.tf", contents: "locals {\n  r = var.region\n}\n" },
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off", keepParsed: false });
+      await fsp.rm(path.join(root, "b.tf"));
+      const goto = await goToDefinition(index, await positionOf(root, "c.tf", "var.region", 4));
+      expect(goto.status).toBe("not_found");
+      expect((await referenceSummary(index, root, "a.tf", '"region"'))?.coverage).toBe("partial");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves an absolute module source inside the project and keeps one outside external", async () => {
+    const root = normalizePath(await mkTmpDir("cg-terraform-absolute-"));
+    const outside = normalizePath(await mkTmpDir("cg-terraform-absolute-outside-"));
+    try {
+      await fsp.mkdir(path.join(root, "net"));
+      await fsp.writeFile(path.join(root, "net", "variables.tf"), 'variable "region" {}\n', "utf8");
+      await fsp.writeFile(path.join(outside, "variables.tf"), 'variable "region" {}\n', "utf8");
+      await fsp.writeFile(
+        path.join(root, "main.tf"),
+        `module "net" {\n  source = "${root}/net"\n  region = 1\n}\nmodule "far" {\n  source = "${outside}"\n  region = 2\n}\n`,
+        "utf8",
+      );
+      const index = await buildProjectIndex(root);
+      expect(edgeTargets(index, root, `${root}/main.tf`)).toEqual([`external:${outside}`, "net/variables.tf"]);
+      expect(await referenceSummary(index, root, "net/variables.tf", '"region"')).toEqual({
+        sites: ["main.tf:3", "net/variables.tf:1"],
+        coverage: "complete",
+      });
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "region" });
+      const rename = await previewRenameWithSession(session, {
+        root,
+        handle: symbols.symbols[0]!.handle,
+        newName: "zone",
+      });
+      expect(rename.safe).toBe(true);
+      expect(rename.edits.map((edit) => `${edit.file}:${edit.range.start.line}`).sort()).toEqual([
+        "main.tf:3",
+        "net/variables.tf:1",
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(outside, { recursive: true, force: true });
+    }
+  });
 });
