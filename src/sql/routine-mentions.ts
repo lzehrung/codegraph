@@ -3,6 +3,7 @@ import {
   maskSqlStringsAndComments,
   normalizeSqlObjectName,
   SQL_OBJECT_NAME_PATTERN,
+  sqlParenDepthAt,
 } from "./lex.js";
 
 /**
@@ -187,6 +188,91 @@ function collectKeywordMentions(masked: string, mentions: Map<number, SqlRoutine
   }
 }
 
+/**
+ * Comments are blank in `masked`, so a comment between `CALL`/`EXEC` and the name fails a literal
+ * compare. Accept that gap when every changed character is a comment. A string is blank too, but it
+ * is not a comment, so `CALL 'note' norm` stays rejected.
+ */
+function callKeywordMatchAllowsComments(statement: string, maskedMatch: string, start: number): boolean {
+  if (statement.startsWith(maskedMatch, start)) return true;
+  if (start < 0 || start + maskedMatch.length > statement.length) return false;
+  let block = false;
+  let line = false;
+  let index = 0;
+  while (index < maskedMatch.length) {
+    const original = statement[start + index] ?? "";
+    const masked = maskedMatch[index] ?? "";
+    const nextOriginal = statement[start + index + 1] ?? "";
+    if (!block && !line && original === "/" && nextOriginal === "*") block = true;
+    else if (!block && !line && original === "-" && nextOriginal === "-") line = true;
+    const inComment = block || line;
+    if (original !== masked && (!inComment || (masked !== " " && masked !== "\n"))) return false;
+    if (line && original === "\n") line = false;
+    if (block && original === "*" && nextOriginal === "/") {
+      const maskedSlash = maskedMatch[index + 1] ?? "";
+      if (maskedSlash !== " " && maskedSlash !== "\n" && maskedSlash !== "/") return false;
+      block = false;
+      index += 2;
+      continue;
+    }
+    index += 1;
+  }
+  return true;
+}
+
+function matchingParen(text: string, openIndex: number): number {
+  let depth = 0;
+  for (let index = openIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "(") depth += 1;
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * `CREATE INDEX ... ON table (columns)` and `WITH name(columns) AS (` put a parenthesis after a
+ * name that is not a call. Those false calls hide the index's table and invent a routine reference.
+ * Calls in an index expression, a join predicate, or a CTE body are later names and stay.
+ */
+function excludedCallShapeStarts(masked: string): Set<number> {
+  const excluded = new Set<number>();
+  if (/^\s*create\s+(?:unique\s+)?index\b/i.test(masked)) {
+    const onRe = /\bon\s+/gi;
+    for (const match of masked.matchAll(onRe)) {
+      const keywordAt = match.index ?? 0;
+      if (sqlParenDepthAt(masked, keywordAt) > 0) continue;
+      let cursor = keywordAt + match[0].length;
+      let named = nameAt(masked, cursor);
+      while (named && (named.name.toLowerCase() === "only" || named.name.toLowerCase() === "lateral")) {
+        cursor = named.end;
+        named = nameAt(masked, cursor);
+      }
+      if (!named || masked[skipWhitespace(masked, named.end)] !== "(") continue;
+      excluded.add(named.start);
+      break;
+    }
+  }
+  const cteRe = new RegExp(String.raw`(?:\bwith\s+(?:recursive\s+)?|,\s*)(${SQL_OBJECT_NAME_PATTERN})\s*\(`, "gi");
+  for (const match of masked.matchAll(cteRe)) {
+    const rawName = match[1] ?? "";
+    if (!rawName) continue;
+    const matchStart = match.index ?? 0;
+    const parenIndex = matchStart + match[0].length - 1;
+    let nameEnd = parenIndex;
+    while (nameEnd > matchStart && /\s/.test(masked[nameEnd - 1] ?? "")) nameEnd -= 1;
+    const nameStart = nameEnd - rawName.length;
+    if (masked.slice(nameStart, nameEnd) !== rawName) continue;
+    const close = matchingParen(masked, parenIndex);
+    if (close < 0 || !/^\s*as\s*\(/i.test(masked.slice(close + 1))) continue;
+    excluded.add(nameStart);
+  }
+  return excluded;
+}
+
 function collectCallKeywordMentions(
   statementText: string,
   masked: string,
@@ -194,8 +280,7 @@ function collectCallKeywordMentions(
 ): void {
   for (const match of masked.matchAll(CALL_KEYWORD_RE)) {
     const matchStart = match.index ?? 0;
-    // A string or comment between the keyword and the name is blank in `masked`, so the name is not next to the keyword.
-    if (!statementText.startsWith(match[0], matchStart)) continue;
+    if (!callKeywordMatchAllowsComments(statementText, match[0], matchStart)) continue;
     const rawName = match[2] ?? "";
     const name = normalizeSqlObjectName(rawName);
     if (!name || (!name.includes(".") && hasWord(NON_ROUTINE_NAME_WORDS, name.toLowerCase()))) continue;
@@ -207,9 +292,10 @@ function collectCallKeywordMentions(
 }
 
 function collectCallShapeMentions(masked: string, mentions: Map<number, SqlRoutineMention>): void {
+  const excluded = excludedCallShapeStarts(masked);
   for (const match of masked.matchAll(CALL_SHAPE_RE)) {
     const start = match.index ?? 0;
-    if (mentions.has(start)) continue;
+    if (mentions.has(start) || excluded.has(start)) continue;
     const previous = previousWord(masked, start);
     if (previous && hasWord(NON_CALL_PRECEDING_WORDS, previous)) continue;
     const rawName = match[1] ?? "";

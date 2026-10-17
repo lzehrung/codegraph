@@ -30,6 +30,7 @@ import {
   sqlObjectLookupKey,
   sqlParenDepthAt,
 } from "./lex.js";
+import { sqlObjectMentionCovers } from "./object-mentions.js";
 import {
   findSqlRoutineMentions,
   sqlRoutineDefinitionNamespace,
@@ -551,6 +552,34 @@ function goToRoutineMention(
     return mention.speculative ? null : { status: "not_found", reason: "No matching SQL routine definition" };
   }
   return null;
+}
+
+function routineMentionIsProven(lookups: SqlRoutineLookups, statementText: string, offset: number): boolean {
+  const mention = findSqlRoutineMentions(statementText).find((entry) => offset >= entry.start && offset < entry.end);
+  if (!mention) return false;
+  // A bare `name(` is a routine only when an indexed routine has that name. Otherwise it may be a table.
+  if (!mention.speculative) return true;
+  return routineCandidates(lookups, mention).length > 0;
+}
+
+/**
+ * True when the position names an object or a routine by SQL syntax: a `FROM`/`JOIN`/`CALL`/`ON`
+ * target, not a column that happens to share a table's name.
+ */
+export async function sqlPositionIsProvenObjectOrRoutineMention(
+  index: ProjectIndex,
+  req: GoToRequest,
+): Promise<boolean> {
+  if (!isSqlFile(req.file)) return false;
+  const facts = await sqlFactsForFile(index, req.file);
+  const routineLookups = await getSqlRoutineLookups(index);
+  for (const statement of sqlStatementSlices(facts)) {
+    const offset = statementOffsetAtPosition(statement, req.line, req.column);
+    if (offset === undefined || offset < 0 || offset >= statement.text.length) continue;
+    if (routineMentionIsProven(routineLookups, statement.text, offset)) return true;
+    return sqlObjectMentionCovers(statement.text, offset);
+  }
+  return false;
 }
 
 export async function goToSqlDefinition(index: ProjectIndex, req: GoToRequest): Promise<GoToResult | null> {

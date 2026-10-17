@@ -23,6 +23,8 @@ describe("SQL routine mentions", () => {
     ["quoted identifiers", 'SELECT "App"."Norm"(1)', '"App"."Norm"'],
     ["whitespace around the dot", "SELECT app . norm (1)", "app . norm"],
     ["a PL/pgSQL assignment", "DO $$ BEGIN v := normalize_email(x); END $$", "normalize_email"],
+    ["a join predicate", "SELECT * FROM a JOIN b ON norm(a.id) = b.id", "norm"],
+    ["a CTE body", "WITH c AS (SELECT norm(1)) SELECT 1", "norm"],
   ])("finds a call in %s", (_label, statement, text) => {
     expect(describeMentions(statement)).toContain(`call:callable:${text}`);
   });
@@ -38,6 +40,9 @@ describe("SQL routine mentions", () => {
     ["T-SQL EXEC", "EXEC dbo.refresh_totals 1", ["call:callable:dbo.refresh_totals"]],
     ["T-SQL EXECUTE", "EXECUTE dbo.refresh_totals @account_id = 7", ["call:callable:dbo.refresh_totals"]],
     ["T-SQL EXEC with a return code", "EXEC @status = dbo.refresh_totals 9", ["call:callable:dbo.refresh_totals"]],
+    ["a comment between CALL and the name", "CALL /* note */ norm(1)", ["call:callable:norm"]],
+    ["a comment between EXEC and the name", "EXEC /* note */ dbo.norm 1", ["call:callable:dbo.norm"]],
+    ["a line comment between CALL and the name", "CALL -- note\n norm(1)", ["call:callable:norm"]],
     [
       "a trigger EXECUTE FUNCTION",
       "CREATE TRIGGER t BEFORE UPDATE ON u FOR EACH ROW EXECUTE FUNCTION touch()",
@@ -134,6 +139,28 @@ describe("SQL routine mentions", () => {
     ],
   ])("does not read %s as a call", (_label, statement) => {
     expect(describeMentions(statement)).not.toContain("call:callable:f");
+  });
+
+  it.each([
+    ["a string after CALL", "CALL 'note' norm(1)"],
+    ["a string after EXEC", "EXEC 'x' dbo.norm 1"],
+    ["a comment-shaped string", "CALL '/* note */' norm(1)"],
+  ])("does not treat an intervening string as whitespace: %s", (_label, statement) => {
+    expect(mentionTexts(statement)).not.toContain("norm");
+    expect(mentionTexts(statement)).not.toContain("dbo.norm");
+  });
+
+  it.each([
+    ["an index target", "CREATE INDEX ix ON norm (id)", "norm"],
+    ["a qualified index target", "CREATE INDEX ix ON ONLY dbo.norm (id)", "dbo.norm"],
+    ["a CTE declaration", "WITH norm(x) AS (SELECT 1) SELECT x FROM norm", "norm"],
+    ["a later CTE declaration", "WITH a(x) AS (SELECT 1), norm(y) AS (SELECT 2) SELECT y FROM norm", "norm"],
+  ])("does not read %s as a routine", (_label, statement, name) => {
+    expect(mentionTexts(statement)).not.toContain(name);
+  });
+
+  it("keeps a call in an index expression and does not treat the indexed table as a call", () => {
+    expect(mentionTexts("CREATE INDEX ix ON users (normalize_email(email))")).toEqual(["normalize_email"]);
   });
 
   it.each([

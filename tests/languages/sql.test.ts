@@ -714,4 +714,62 @@ describe("SQL routine call sites", () => {
       expect(referenceSites(project.root, viewItself)).toEqual([siteAt("schema.sql", schema, 2, "user_emails")]);
     });
   });
+
+  it("keeps refs at a column on the enclosing definition when that name is also a table", async () => {
+    const schema = [
+      "CREATE TABLE users (id integer);",
+      "CREATE TABLE orders (users integer);",
+      "CREATE VIEW user_dir AS SELECT users FROM users;",
+    ];
+    await withSqlProject({ "schema.sql": schema }, async (project) => {
+      const column = await referencesAt(project, "schema.sql", schema, 2, "users");
+      const columnInView = await referencesAt(project, "schema.sql", schema, 3, "users", 0);
+      const tableInView = await referencesAt(project, "schema.sql", schema, 3, "users", 1);
+
+      expect(okReferences(column).definition.localName).toBe("orders");
+      expect(referenceSites(project.root, column)).toEqual([siteAt("schema.sql", schema, 2, "orders")]);
+      expect(okReferences(columnInView).definition.localName).toBe("user_dir");
+      expect(okReferences(tableInView).definition.localName).toBe("users");
+    });
+  });
+
+  it("reaches only callers of the changed name when a table and a routine share it", async () => {
+    const schema = [
+      "CREATE TABLE audit_trail (id integer);",
+      "CREATE FUNCTION audit_trail() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;",
+    ];
+    const caller = ["SELECT audit_trail();"];
+    const reader = ["SELECT id FROM audit_trail;"];
+    const diff = (hunk: readonly string[]): string =>
+      ["diff --git a/schema.sql b/schema.sql", "--- a/schema.sql", "+++ b/schema.sql", ...hunk, ""].join("\n");
+    await withSqlProject(
+      { "schema.sql": schema, "caller.sql": caller, "reader.sql": reader },
+      async ({ root, index }) => {
+        const routineChange = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText: diff([
+            "@@ -2,1 +2,1 @@",
+            "-CREATE FUNCTION audit_trail() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;",
+            "+CREATE FUNCTION audit_trail() RETURNS integer AS $$ SELECT 2 $$ LANGUAGE sql;",
+          ]),
+          includeTests: true,
+        });
+        const tableChange = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText: diff([
+            "@@ -1,1 +1,1 @@",
+            "-CREATE TABLE audit_trail (id integer);",
+            "+CREATE TABLE audit_trail (id bigint);",
+          ]),
+          includeTests: true,
+        });
+        if ("files" in routineChange || "files" in tableChange) throw new Error("Expected full impact reports");
+
+        expect(routineChange.changedSymbols.map((symbol) => symbol.name)).toEqual(["audit_trail"]);
+        expect(routineChange.impacted.map((item) => item.file)).toEqual(["caller.sql"]);
+        expect(tableChange.changedSymbols.map((symbol) => symbol.name)).toEqual(["audit_trail"]);
+        expect(tableChange.impacted.map((item) => item.file)).toEqual(["reader.sql"]);
+      },
+    );
+  });
 });

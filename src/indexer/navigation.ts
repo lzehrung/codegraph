@@ -105,7 +105,7 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
-import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
+import { findSqlReferences, goToSqlDefinition, sqlPositionIsProvenObjectOrRoutineMention } from "../sql/navigation.js";
 import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
 import {
   createLoadingParsedFileProvider,
@@ -633,7 +633,11 @@ async function findReferencesInternal(
         column: req.column,
       }),
     );
-    if (sqlTarget?.status === "ok") {
+    // A column can share a table's name. Only a syntactically proven object or routine mention
+    // overrides the definition that encloses the position; a column stays on that definition.
+    const sqlMention =
+      sqlTarget?.status === "ok" && (!localAtPosition || (await sqlPositionIsProvenObjectOrRoutineMention(index, req)));
+    if (sqlMention && sqlTarget?.status === "ok") {
       def = sqlTarget.definition;
       provenance = sqlTarget.provenance;
     } else if (localAtPosition) {

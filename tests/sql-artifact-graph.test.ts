@@ -705,16 +705,16 @@ describe("SQL artifact graph", () => {
           .sort();
 
       expect(rawBetween(callerFile, routinesFile)).toEqual([
-        "sql:reads_from:app.shared_name",
-        "sql:reads_from:normalize_email",
-        "sql:reads_from:public.normalize_email",
+        "sql:reads_from:callable:app.shared_name",
+        "sql:reads_from:callable:normalize_email",
+        "sql:reads_from:callable:public.normalize_email",
       ]);
       expect(edgesBetween(callerFile, routinesFile)).toContainEqual(
-        expect.objectContaining({ raw: "sql:reads_from:normalize_email", resolved: "precise", confidence: 1 }),
+        expect.objectContaining({ raw: "sql:reads_from:callable:normalize_email", resolved: "precise", confidence: 1 }),
       );
       expect(edgesBetween(callerFile, routinesFile)).toContainEqual(
         expect.objectContaining({
-          raw: "sql:reads_from:public.normalize_email",
+          raw: "sql:reads_from:callable:public.normalize_email",
           resolved: "heuristic",
           confidence: 0.7,
         }),
@@ -727,8 +727,8 @@ describe("SQL artifact graph", () => {
       expect(rawBetween(readerFile, routinesFile)).toEqual([]);
       // ALTER and DROP statements follow the table convention: they are references.
       expect(rawBetween(adminFile, routinesFile)).toEqual([
-        "sql:drops_object:normalize_email",
-        "sql:references_object:normalize_email",
+        "sql:drops_object:callable:normalize_email",
+        "sql:references_object:callable:normalize_email",
       ]);
       expect(rawBetween(adminFile, tablesFile)).toEqual([]);
     } finally {
@@ -746,7 +746,7 @@ describe("SQL artifact graph", () => {
         graph.edges.some(
           (edge) =>
             edge.from === callerFile &&
-            edge.raw === "sql:reads_from:normalize_email" &&
+            edge.raw === "sql:reads_from:callable:normalize_email" &&
             edge.to.type === "file" &&
             edge.to.path === schemaFile,
         );
@@ -775,6 +775,133 @@ describe("SQL artifact graph", () => {
         replaceFiles: new Set([schemaFile]),
       });
       expect(hasCallEdge(withoutRoutine)).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not emit a routine edge when two files define the same name", async () => {
+    const root = await mkTmpDir("cg-sql-ambiguous-routine-");
+    try {
+      const first = path.join(root, "001_first.sql").replace(/\\/g, "/");
+      const second = path.join(root, "002_second.sql").replace(/\\/g, "/");
+      const caller = path.join(root, "caller.sql").replace(/\\/g, "/");
+      await fsp.writeFile(first, "CREATE FUNCTION refresh() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;\n", "utf8");
+      await fsp.writeFile(
+        second,
+        "CREATE OR REPLACE FUNCTION refresh() RETURNS integer AS $$ SELECT 2 $$ LANGUAGE sql;\n",
+        "utf8",
+      );
+      await fsp.writeFile(caller, "SELECT refresh();\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [first, second, caller]);
+
+      expect(sourceGraph.edges.some((edge) => edge.from === caller && edge.raw.includes("refresh"))).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a same-named table read and routine call in separate namespaces", async () => {
+    const root = await mkTmpDir("cg-sql-same-name-namespace-");
+    try {
+      const schema = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const caller = path.join(root, "caller.sql").replace(/\\/g, "/");
+      const reader = path.join(root, "reader.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schema,
+        [
+          "CREATE TABLE audit_trail (id integer);",
+          "CREATE FUNCTION audit_trail() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(caller, "SELECT audit_trail();\n", "utf8");
+      await fsp.writeFile(reader, "SELECT id FROM audit_trail;\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schema, caller, reader]);
+      const rawBetween = (from: string): string[] =>
+        sourceGraph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+
+      expect(rawBetween(caller)).toEqual(["sql:reads_from:callable:audit_trail"]);
+      expect(rawBetween(reader)).toEqual(["sql:reads_from:audit_trail"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not add a table edge for a routine call in FROM and keeps other reads", async () => {
+    const root = await mkTmpDir("cg-sql-from-call-");
+    try {
+      const schema = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const query = path.join(root, "query.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schema,
+        [
+          "CREATE TABLE get_users (id integer);",
+          "CREATE FUNCTION get_users() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;",
+          "CREATE TABLE accounts (id integer);",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(
+        query,
+        [
+          "SELECT * FROM get_users();",
+          "SELECT * FROM get_users() g JOIN accounts ON accounts.id = g.id;",
+          "SELECT get_users(1) FROM accounts;",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const sourceGraph = await collectGraph(root, [schema, query]);
+      const raws = sourceGraph.edges
+        .filter((edge) => edge.from === query && edge.to.type === "file" && edge.to.path === schema)
+        .map((edge) => edge.raw)
+        .sort();
+
+      expect(raws).toEqual(["sql:joins:accounts", "sql:reads_from:accounts", "sql:reads_from:callable:get_users"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat an index target or CTE declaration as a routine call", async () => {
+    const root = await mkTmpDir("cg-sql-index-cte-");
+    try {
+      const schema = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const indexTarget = path.join(root, "index_target.sql").replace(/\\/g, "/");
+      const indexExpr = path.join(root, "index_expr.sql").replace(/\\/g, "/");
+      const cteDecl = path.join(root, "cte_decl.sql").replace(/\\/g, "/");
+      const cteBody = path.join(root, "cte_body.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schema,
+        [
+          "CREATE TABLE norm (id integer);",
+          "CREATE FUNCTION norm(id integer) RETURNS integer AS $$ SELECT id $$ LANGUAGE sql;",
+          "CREATE TABLE accounts (id integer);",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(indexTarget, "CREATE INDEX ix ON norm (id);\n", "utf8");
+      await fsp.writeFile(indexExpr, "CREATE INDEX iy ON accounts (norm(id));\n", "utf8");
+      await fsp.writeFile(cteDecl, "WITH norm(x) AS (SELECT 1) SELECT x FROM norm;\n", "utf8");
+      await fsp.writeFile(cteBody, "WITH c AS (SELECT norm(1)) SELECT 1;\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schema, indexTarget, indexExpr, cteDecl, cteBody]);
+      const rawBetween = (from: string): string[] =>
+        sourceGraph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+
+      expect(rawBetween(indexTarget)).toEqual(["sql:defines_index:norm"]);
+      expect(rawBetween(indexExpr)).toEqual(["sql:defines_index:accounts", "sql:reads_from:callable:norm"]);
+      expect(rawBetween(cteDecl)).toEqual([]);
+      expect(rawBetween(cteBody)).toEqual(["sql:reads_from:callable:norm"]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

@@ -6,7 +6,7 @@ import { edgeKey } from "../util/graph-edges.js";
 import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
 import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
-import { normalizePath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extract-facts.js";
@@ -18,11 +18,13 @@ import {
   sqlRoutineNameCandidates,
   type SqlDefinitionIndex,
 } from "./lookup.js";
+import { sqlRelationNameIsRoutineCall } from "./object-mentions.js";
 import {
   findSqlRoutineMentions,
   sqlRoutineDefinitionNamespace,
   sqlStatementDropsRoutine,
   type SqlRoutineMentionKind,
+  type SqlRoutineNamespace,
 } from "./routine-mentions.js";
 import type { SqlFactKind, SqlStatementFact } from "./types.js";
 
@@ -78,7 +80,7 @@ export function sqlCorpusSignature(
 ): string | undefined {
   if (!sqlFiles.length || !fileSignatures) return undefined;
   const hash = crypto.createHash("sha1");
-  hash.update("sql-corpus-v2\0");
+  hash.update("sql-corpus-v3\0");
   for (const file of sqlFiles) {
     const signature = fileSignatures.get(file);
     if (!signature) return undefined;
@@ -152,16 +154,14 @@ function sqlRoutineDefinitionCandidates(
   name: string,
 ): SqlDefinitionCandidateMatch {
   const { candidates, exact } = sqlRoutineNameCandidates(definitions, name, (fact) => fact.objectName ?? "");
-  const uniqueCandidates = uniqueFacts(candidates);
-  if (exact) {
-    return {
-      candidates: uniqueCandidates,
-      resolved: uniqueCandidates.length === 1 ? "precise" : "heuristic",
-      confidence: uniqueCandidates.length === 1 ? 1 : 0.8,
-    };
-  }
-  if (uniqueCandidates.length !== 1) return { candidates: [], resolved: "heuristic", confidence: 0.7 };
-  return { candidates: uniqueCandidates, resolved: "heuristic", confidence: 0.7 };
+  // Two files can define `refresh`. Count before uniqueFacts: collapsing rows would hide that more
+  // than one candidate exists and still emit an edge to every surviving row.
+  if (candidates.length !== 1) return { candidates: [], resolved: "heuristic", confidence: exact ? 0.8 : 0.7 };
+  return {
+    candidates: uniqueFacts(candidates),
+    resolved: exact ? "precise" : "heuristic",
+    confidence: exact ? 1 : 0.7,
+  };
 }
 
 function definitionKeys(name: string): { exact: string; base: string } {
@@ -180,20 +180,29 @@ function addDefinition(
   pushSqlLookupValue(definitionsByBaseName, keys.base, fact);
 }
 
+export type SqlTargetNamespace = "relation" | SqlRoutineNamespace;
+
+function sqlEdgeRaw(kind: SqlFactKind, namespace: SqlTargetNamespace, objectName: string): string {
+  if (namespace === "relation") return `sql:${kind}:${objectName}`;
+  return `sql:${kind}:${namespace}:${objectName}`;
+}
+
 function sqlEdgesForCandidates(
   normalizedFile: string,
   kind: SqlFactKind,
   objectName: string,
   match: SqlDefinitionCandidateMatch,
+  namespace: SqlTargetNamespace,
 ): Edge[] {
   const candidates: SqlStatementFact[] = [];
   for (const candidate of match.candidates) {
     if (candidate.filePath !== normalizedFile) candidates.push(candidate);
   }
+  const raw = sqlEdgeRaw(kind, namespace, objectName);
   return candidates.map((candidate) => ({
     from: normalizedFile,
     to: { type: "file", path: candidate.filePath },
-    raw: `sql:${kind}:${objectName}`,
+    raw,
     resolved: match.resolved,
     confidence: match.confidence,
   }));
@@ -221,28 +230,71 @@ function sqlRoutineMentionEdges(
       const definitions = mention.namespace === "trigger" ? cache.triggerDefinitions : cache.callableDefinitions;
       const match = sqlRoutineDefinitionCandidates(definitions, mention.name);
       edges.push(
-        ...sqlEdgesForCandidates(normalizedFile, ROUTINE_MENTION_EDGE_KINDS[mention.kind], mention.name, match),
+        ...sqlEdgesForCandidates(
+          normalizedFile,
+          ROUTINE_MENTION_EDGE_KINDS[mention.kind],
+          mention.name,
+          match,
+          mention.namespace,
+        ),
       );
     }
   }
   return edges;
 }
 
-export function sqlObjectNameFromEdgeRaw(raw: string | undefined): string | null {
+export type SqlChangedObject = { name: string; namespace?: SqlTargetNamespace };
+
+const ROUTINE_EDGE_NAMESPACES = new Set<SqlTargetNamespace>(["callable", "trigger"]);
+
+export function sqlEdgeTargetFromRaw(raw: string | undefined): { namespace: SqlTargetNamespace; name: string } | null {
   if (!raw?.startsWith("sql:")) return null;
   const kindSeparator = raw.indexOf(":", 4);
-  if (kindSeparator < 4) return null;
-  const objectName = raw.slice(kindSeparator + 1);
-  return objectName.length ? objectName : null;
+  if (kindSeparator < 0) return null;
+  const rest = raw.slice(kindSeparator + 1);
+  if (!rest) return null;
+  const namespaceSeparator = rest.indexOf(":");
+  if (namespaceSeparator > 0) {
+    const namespace = rest.slice(0, namespaceSeparator);
+    const name = rest.slice(namespaceSeparator + 1);
+    if (ROUTINE_EDGE_NAMESPACES.has(namespace as SqlTargetNamespace)) {
+      return name ? { namespace: namespace as SqlTargetNamespace, name } : null;
+    }
+  }
+  return { namespace: "relation", name: rest };
 }
 
-export function sqlEdgeMatchesChangedObjects(raw: string | undefined, objectNames: ReadonlySet<string>): boolean {
-  const objectName = sqlObjectNameFromEdgeRaw(raw);
-  if (!objectName || !objectNames.size) return false;
-  for (const name of objectNames) {
-    if (sqlObjectNamesMatchConservatively(objectName, name)) return true;
+export function sqlObjectNameFromEdgeRaw(raw: string | undefined): string | null {
+  return sqlEdgeTargetFromRaw(raw)?.name ?? null;
+}
+
+export function sqlEdgeMatchesChangedObjects(raw: string | undefined, objects: readonly SqlChangedObject[]): boolean {
+  const target = sqlEdgeTargetFromRaw(raw);
+  if (!target || !objects.length) return false;
+  for (const object of objects) {
+    if (object.namespace !== undefined && object.namespace !== target.namespace) continue;
+    if (sqlObjectNamesMatchConservatively(target.name, object.name)) return true;
   }
   return false;
+}
+
+const routineNamespaceByFile = new Map<string, Map<string, SqlRoutineNamespace>>();
+
+export function sqlChangedSymbolTarget(symbol: {
+  file: string;
+  name: string;
+  kind: SymbolKind;
+  range: { start: { line: number; column: number } };
+}): { name: string; namespace: SqlTargetNamespace } | null {
+  if (symbol.kind === SymbolKind.Table || symbol.kind === SymbolKind.View || symbol.kind === SymbolKind.Index) {
+    return { name: symbol.name, namespace: "relation" };
+  }
+  if (symbol.kind !== SymbolKind.Routine) return null;
+  const namespace =
+    routineNamespaceByFile
+      .get(fileIdentityKey(symbol.file))
+      ?.get(`${symbol.range.start.line}:${symbol.range.start.column}`) ?? "callable";
+  return { name: symbol.name, namespace };
 }
 
 export function buildSqlModuleIndex(filePath: string, source: string): ModuleIndex {
@@ -251,8 +303,13 @@ export function buildSqlModuleIndex(filePath: string, source: string): ModuleInd
   const locals: SymbolDef[] = [];
   const exports: ModuleIndex["exports"] = [];
   const seen = new Set<string>();
+  const routineNamespaces = new Map<string, SqlRoutineNamespace>();
+  routineNamespaceByFile.set(fileIdentityKey(normalizedFile), routineNamespaces);
 
   for (const fact of facts) {
+    if (fact.kind === "defines_routine" && fact.objectName) {
+      routineNamespaces.set(`${fact.startLine}:${fact.startColumn}`, sqlRoutineDefinitionNamespace(fact.statementText));
+    }
     if (!isDefinitionFact(fact) || !fact.objectName) continue;
     const key = `${fact.objectName}:${fact.startLine}:${fact.kind}`;
     if (seen.has(key)) continue;
@@ -335,8 +392,10 @@ export async function collectSqlEdgesForFile(
     // The name in `DROP FUNCTION name` is a routine mention below, never a table of the same name.
     if (fact.kind === "drops_object" && sqlStatementDropsRoutine(fact.statementText)) continue;
     for (const objectName of referenceObjectNames(fact)) {
+      // `SELECT * FROM get_users()` is a call. It is not a read of a table that shares the name.
+      if (sqlRelationNameIsRoutineCall(fact.statementText, objectName)) continue;
       const match = sqlDefinitionCandidates(cache, objectName);
-      for (const edge of sqlEdgesForCandidates(normalizedFile, fact.kind, objectName, match)) addEdge(edge);
+      for (const edge of sqlEdgesForCandidates(normalizedFile, fact.kind, objectName, match, "relation")) addEdge(edge);
     }
   }
   const hasRoutineDefinitions = cache.callableDefinitions.exact.size || cache.triggerDefinitions.exact.size;
