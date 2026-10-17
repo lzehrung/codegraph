@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-10-17
+
 ### Added
 
 - Terraform (`.tf`) support. Each module directory is indexed as one namespace: `variable`, `output`, `locals`, `module`, `resource`, and `data` declarations become symbols, and the new `resource`, `data`, `module`, and `output` symbol kinds are accepted by `codegraph symbols --kind` and MCP `workspace_symbols`. A module with a local `source` depends on every `.tf` file in that directory; registry and Git sources stay external. Go-to-definition, references, rename preview, and impact mapping follow `var.`, `local.`, `module.`, data source, and resource references, module outputs, and module call arguments. `.terraform/` directories are no longer discovered.
@@ -682,7 +684,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.0.1...HEAD
+[3.0.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.0.1
 [3.0.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.0.0
 [2.4.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.4.0
 [2.3.31]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.31
