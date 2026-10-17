@@ -92,7 +92,26 @@ export type SqlMaskOptions = {
    * stay masked, and every other block is masked whole.
    */
   keepDollarQuotedBody?: (before: string) => boolean;
+  /**
+   * Read a `[` that directly follows an identifier character, `)`, `]`, or a quoted identifier as a
+   * PostgreSQL array constructor or subscript, as in `ARRAY[...]` and `x[1]`. Its content is code, so
+   * strings and comments inside it are masked. Off by default: SQLite and T-SQL read every `[` as a
+   * quoted identifier whose content stays as written, and the read-only query guard relies on that.
+   */
+  arrayBrackets?: boolean;
 };
+
+// A `[` directly after one of these opens an array constructor or subscript, not a quoted identifier.
+const ARRAY_BRACKET_PREVIOUS = '[\\w)\\]"`]';
+const ARRAY_BRACKET_PREVIOUS_RE = new RegExp(ARRAY_BRACKET_PREVIOUS);
+// So does a `[` after the word `ARRAY` and whitespace, as in `ARRAY [1, 2]`.
+const ARRAY_KEYWORD_BEFORE_RE = /\barray\s+$/i;
+const ARRAY_KEYWORD_WINDOW = 64;
+
+function opensArrayBracket(statement: string, bracketIndex: number): boolean {
+  if (ARRAY_BRACKET_PREVIOUS_RE.test(statement[bracketIndex - 1] ?? "")) return true;
+  return ARRAY_KEYWORD_BEFORE_RE.test(statement.slice(Math.max(0, bracketIndex - ARRAY_KEYWORD_WINDOW), bracketIndex));
+}
 
 export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOptions): string {
   let out = "";
@@ -176,7 +195,10 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
     }
     if (char === '"') doubleQuoted = true;
     if (char === "`") backtickQuoted = true;
-    if (char === "[") bracketQuoted = true;
+    if (char === "[") {
+      const opensArray = options?.arrayBrackets && opensArrayBracket(statement, i);
+      if (!opensArray) bracketQuoted = true;
+    }
     if (char === "$") {
       const tagMatch = statement.slice(i).match(/^\$[A-Za-z_][\w$]*\$|^\$\$/);
       const tag = tagMatch?.[0];
@@ -184,7 +206,8 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
         const bodyStart = i + tag.length;
         const closeIndex = statement.indexOf(tag, bodyStart);
         const bodyEnd = closeIndex < 0 ? statement.length : closeIndex;
-        out += " ".repeat(tag.length) + maskSqlStringsAndComments(statement.slice(bodyStart, bodyEnd));
+        const bodyOptions = options?.arrayBrackets ? { arrayBrackets: true } : undefined;
+        out += " ".repeat(tag.length) + maskSqlStringsAndComments(statement.slice(bodyStart, bodyEnd), bodyOptions);
         i = bodyEnd;
         if (closeIndex >= 0) {
           out += " ".repeat(tag.length);
@@ -205,13 +228,18 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
   return out;
 }
 
-const QUOTED_IDENTIFIER_RE = /"(?:""|[^"])*(?:"|$)|`[^`]*(?:`|$)/g;
+// A quoted identifier is double-quoted, backtick-quoted, or a bracketed `[...]` that is no array bracket.
+const QUOTED_IDENTIFIER_RE = new RegExp(
+  `"(?:""|[^"])*(?:"|$)|\`[^\`]*(?:\`|$)|(?<!${ARRAY_BRACKET_PREVIOUS})(?<!\\barray\\s+)\\[[^\\]]*(?:\\]|$)`,
+  "gi",
+);
 
 /**
- * Replaces each double-quoted or backtick-quoted identifier in text from `maskSqlStringsAndComments`
- * with underscores of the same length. A scan for keywords, calls, and parentheses then reads an
- * identifier as one bare word: nothing inside it can read as syntax. Bracketed `[...]` text stays,
- * because `ARRAY[f(x)]` holds a real call.
+ * Replaces each quoted identifier in text from `maskSqlStringsAndComments` with underscores of the
+ * same length: a double-quoted or backtick-quoted one, or a bracketed `[...]` that is no array bracket
+ * (see `arrayBrackets`). A scan for keywords, calls, and parentheses then reads an identifier as one
+ * bare word: nothing inside it can read as syntax. The content of an array bracket stays, because
+ * `ARRAY[f(x)]` holds a real call.
  */
 export function maskSqlQuotedIdentifiers(masked: string): string {
   return masked.replace(QUOTED_IDENTIFIER_RE, (identifier) => identifier.replace(/[^\n]/g, "_"));

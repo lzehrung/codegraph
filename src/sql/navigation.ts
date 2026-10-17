@@ -625,6 +625,24 @@ async function declarationSiteKey(index: ProjectIndex, definition: SymbolDef): P
   return siteKey(definition.file, nameLine, statementColumnForOffset(statement, name.start));
 }
 
+/**
+ * The indexed definition declared at the site `definition` names. Impact analysis passes a copy of a
+ * definition, and a lookup by object identity cannot match a copy.
+ */
+function indexedSqlDefinition(index: ProjectIndex, definition: SymbolDef): SymbolDef | null {
+  const { line, column } = definition.range.start;
+  const locals = index.byFile.get(fileIdentityKey(definition.file))?.locals ?? [];
+  return (
+    locals.find(
+      (local) =>
+        local.range.start.line === line &&
+        local.range.start.column === column &&
+        local.kind === definition.kind &&
+        local.localName === definition.localName,
+    ) ?? null
+  );
+}
+
 type FindSqlReferencesOptions = {
   includeDefinition?: boolean;
   maxReferences?: number;
@@ -632,10 +650,13 @@ type FindSqlReferencesOptions = {
 
 export async function findSqlReferences(
   index: ProjectIndex,
-  definition: SymbolDef,
+  requested: SymbolDef,
   options?: FindSqlReferencesOptions,
 ): Promise<FindReferencesResult | null> {
-  if (!isSqlFile(definition.file)) return null;
+  if (!isSqlFile(requested.file)) return null;
+  const definition = indexedSqlDefinition(index, requested);
+  // Without the indexed definition no lookup can match, and an empty list would claim a complete scan.
+  if (!definition) return { status: "not_found", reason: "SQL definition is not in the index" };
   const references: Reference[] = [];
   const seen = new Set<string>();
   const lookup = getSqlDefinitionLookup(index);

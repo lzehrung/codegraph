@@ -25,7 +25,9 @@ describe("SQL routine mentions", () => {
     ["a PL/pgSQL assignment", "DO $$ BEGIN v := normalize_email(x); END $$", "normalize_email"],
     ["a join predicate", "SELECT * FROM a JOIN b ON norm(a.id) = b.id", "norm"],
     ["a CTE body", "WITH c AS (SELECT norm(1)) SELECT 1", "norm"],
+    ["a MATERIALIZED CTE body", "WITH c AS MATERIALIZED (SELECT norm(1)) SELECT 1", "norm"],
     ["an array constructor", "SELECT ARRAY[f(1), g(2)]", "f"],
+    ["an array constructor after a space", "SELECT ARRAY [norm(1)]", "norm"],
   ])("finds a call in %s", (_label, statement, text) => {
     expect(describeMentions(statement)).toContain(`call:callable:${text}`);
   });
@@ -96,6 +98,9 @@ describe("SQL routine mentions", () => {
     "SELECT call FROM t",
     "EXEC ('SELECT 1')",
     "GRANT EXECUTE TO app",
+    "SELECT * FROM users (NOLOCK)",
+    "SELECT * FROM users WITH (NOLOCK)",
+    "SELECT * FROM users u WITH (NOLOCK), orders o WITH (NOLOCK, INDEX (ix_orders))",
   ])("finds no routine in %s", (statement) => {
     expect(describeMentions(statement)).toEqual([]);
   });
@@ -193,6 +198,11 @@ describe("SQL routine mentions", () => {
     ["a DROP FUNCTION in an alias", 'SELECT 1 AS "drop function normalize_email"'],
     ["an escaped quote in an alias", 'SELECT 1 AS "a"" normalize_email(x)"'],
     ["a backtick alias", "SELECT 1 AS `normalize_email(email)`"],
+    ["a bracketed alias", "SELECT 1 AS [normalize_email(email)]"],
+    ["a bracketed alias without AS", "SELECT 1 [normalize_email(email)]"],
+    ["a CALL keyword in a bracketed alias", "SELECT 1 AS [call normalize_email]"],
+    ["a DROP FUNCTION in a bracketed alias", "SELECT 1 AS [drop function normalize_email]"],
+    ["a bracketed alias that holds a quote", "SELECT 1 AS [it's normalize_email(x)]"],
   ])("does not read the inside of a quoted identifier as a routine: %s", (_label, statement) => {
     expect(describeMentions(statement)).toEqual([]);
   });
@@ -202,8 +212,26 @@ describe("SQL routine mentions", () => {
     ["a quoted call after a quoted alias", 'SELECT 1 AS "a(b)", "normalize_email"(email)', '"normalize_email"'],
     ["a quoted schema and name", 'SELECT "App"."Norm"(1)', '"App"."Norm"'],
     ["a quoted CALL target", 'CALL "App"."Norm"(1)', '"App"."Norm"'],
+    ["a bracketed call", "SELECT [normalize_email](email)", "[normalize_email]"],
+    ["a bracketed call after a bracketed alias", "SELECT 1 AS [a(b)], [normalize_email](email)", "[normalize_email]"],
+    ["a bracketed schema and name", "SELECT [App].[Norm](1)", "[App].[Norm]"],
+    ["a bracketed EXEC target", "EXEC [dbo].[refresh_totals] 1", "[dbo].[refresh_totals]"],
   ])("keeps %s as a routine call", (_label, statement, text) => {
     expect(mentionTexts(statement)).toEqual([text]);
+  });
+
+  it.each([
+    ["a string in an array constructor", "SELECT ARRAY['normalize_email(x)', normalize_email(y)]"],
+    ["a block comment in an array constructor", "SELECT ARRAY[/* normalize_email(x) */ normalize_email(y)]"],
+    ["a line comment in an array constructor", "SELECT ARRAY[1, -- normalize_email(x)\n normalize_email(y)]"],
+    ["a string in an array constructor after a space", "SELECT ARRAY ['normalize_email(x)', normalize_email(y)]"],
+    ["a string in a subscript", "SELECT arr['normalize_email(x)'], normalize_email(y) FROM t"],
+    ["a nested array constructor", "SELECT ARRAY[ARRAY['normalize_email(x)'], ARRAY[normalize_email(y)]]"],
+    ["a quoted identifier in an array constructor", 'SELECT ARRAY["a(b)", normalize_email(y)]'],
+  ])("reads only the code in %s", (_label, statement) => {
+    expect(findSqlRoutineMentions(statement).map((mention) => mention.start)).toEqual([
+      statement.lastIndexOf("normalize_email"),
+    ]);
   });
 
   it.each([
@@ -220,8 +248,70 @@ describe("SQL routine mentions", () => {
     ["a qualified index target", "CREATE INDEX ix ON ONLY dbo.norm (id)", "dbo.norm"],
     ["a CTE declaration", "WITH norm(x) AS (SELECT 1) SELECT x FROM norm", "norm"],
     ["a later CTE declaration", "WITH a(x) AS (SELECT 1), norm(y) AS (SELECT 2) SELECT y FROM norm", "norm"],
+    ["a MATERIALIZED CTE declaration", "WITH norm(x) AS MATERIALIZED (SELECT 1) SELECT x FROM norm", "norm"],
+    ["a NOT MATERIALIZED CTE declaration", "WITH norm(x) AS NOT MATERIALIZED (SELECT 1) SELECT x FROM norm", "norm"],
+    [
+      "a later MATERIALIZED CTE declaration",
+      "WITH a(x) AS (SELECT 1), norm(y) AS MATERIALIZED (SELECT 2) SELECT y FROM norm",
+      "norm",
+    ],
+    [
+      "a lowercase tight NOT MATERIALIZED declaration",
+      "with norm(x) as not materialized(select 1) select x from norm",
+      "norm",
+    ],
   ])("does not read %s as a routine", (_label, statement, name) => {
     expect(mentionTexts(statement)).not.toContain(name);
+  });
+
+  it.each([
+    ["a function source with AS", "SELECT * FROM generate_series(1, 3) AS norm(i)"],
+    ["a function source without AS", "SELECT * FROM generate_series(1, 3) norm(i)"],
+    ["a table without AS", "SELECT * FROM users norm(i)"],
+    ["a subquery without AS", "SELECT * FROM (SELECT 1) norm(i)"],
+    ["a VALUES list without AS", "SELECT * FROM (VALUES (1, 2)) norm(a, b)"],
+    ["a LATERAL join without AS", "SELECT * FROM a JOIN LATERAL f(a.id) norm(i) ON true"],
+    ["WITH ORDINALITY", "SELECT * FROM unnest(arr) WITH ORDINALITY norm(x, n)"],
+    ["a later source", "SELECT * FROM a, generate_series(1, 3) norm(i), b"],
+    ["a MERGE source", "MERGE INTO t USING (VALUES (1)) norm(a) ON t.a = norm.a WHEN MATCHED THEN DELETE"],
+    ["a quoted alias", 'SELECT * FROM generate_series(1, 3) "Norm"(i)'],
+  ])("does not read the alias column list of %s as a routine", (_label, statement) => {
+    expect(mentionTexts(statement).map((text) => text.toLowerCase())).not.toContain("norm");
+    expect(mentionTexts(statement)).not.toContain('"Norm"');
+  });
+
+  it.each([
+    ["a function source", "SELECT * FROM norm(1)", ["norm"]],
+    ["a function source with an alias column list", "SELECT * FROM norm(1) g(i)", ["norm"]],
+    ["a LATERAL function source", "SELECT * FROM a, LATERAL norm(a.id) AS t(x)", ["norm"]],
+    ["a function source after a comma", "SELECT * FROM a, norm(1)", ["norm"]],
+    [
+      "a call in the arguments of a source",
+      "SELECT * FROM generate_series(1, norm(3)) g(i)",
+      ["generate_series", "norm"],
+    ],
+    ["a call after the FROM list", "SELECT * FROM users u WHERE norm(u.id) > 0", ["norm"]],
+    ["a call after IS DISTINCT FROM", "SELECT 1 WHERE a IS DISTINCT FROM norm(x)", ["norm"]],
+  ])("keeps the calls of %s", (_label, statement, expected) => {
+    expect(mentionTexts(statement)).toEqual(expected);
+  });
+
+  it.each([
+    ["a hint in parentheses", "SELECT * FROM users (NOLOCK)", "users"],
+    ["several hints in parentheses", "SELECT * FROM users (NOLOCK, READPAST)", "users"],
+    ["a hint after WITH", "SELECT * FROM users WITH (NOLOCK)", "users"],
+    ["a hint after an alias and WITH", "SELECT * FROM users u WITH (NOLOCK)", "users"],
+    ["a hint after AS and an alias", "SELECT * FROM users AS u (NOLOCK)", "users"],
+    ["a hint on a qualified table", "SELECT * FROM dbo.users (NOLOCK)", "dbo.users"],
+    ["a hint on a joined table", "SELECT * FROM a JOIN dbo.orders (NOLOCK) ON a.id = orders.id", "dbo.orders"],
+    ["an INDEX hint", "SELECT * FROM dbo.users (INDEX (ix_users))", "dbo.users"],
+  ])("does not read %s as a routine call", (_label, statement, name) => {
+    expect(mentionTexts(statement)).not.toContain(name);
+  });
+
+  it("keeps a call whose arguments are not table hints, even in a FROM list", () => {
+    expect(mentionTexts("SELECT * FROM get_users(id)")).toEqual(["get_users"]);
+    expect(mentionTexts("SELECT * FROM get_users()")).toEqual(["get_users"]);
   });
 
   it("keeps a call in an index expression and does not treat the indexed table as a call", () => {

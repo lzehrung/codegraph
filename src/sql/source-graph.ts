@@ -23,6 +23,7 @@ import {
   findSqlRoutineMentions,
   sqlRoutineDefinitionNamespace,
   sqlStatementDropsRoutine,
+  type SqlRoutineMention,
   type SqlRoutineMentionKind,
   type SqlRoutineNamespace,
 } from "./routine-mentions.js";
@@ -122,10 +123,11 @@ function referenceObjectNames(fact: SqlStatementFact): string[] {
   return Array.from(new Set(names));
 }
 
+// Two statements can share a line, so the start offset tells definitions apart, not the start line.
 function uniqueFacts(candidates: readonly SqlStatementFact[]): SqlStatementFact[] {
   return uniqueByKey(
     candidates,
-    (candidate) => `${candidate.filePath}:${candidate.startLine}:${candidate.kind}:${candidate.objectName ?? ""}`,
+    (candidate) => `${candidate.filePath}:${candidate.startIndex}:${candidate.kind}:${candidate.objectName ?? ""}`,
   );
 }
 
@@ -287,7 +289,7 @@ export function buildSqlModuleIndex(filePath: string, source: string): ModuleInd
 
   for (const fact of facts) {
     if (!isDefinitionFact(fact) || !fact.objectName) continue;
-    const key = `${fact.objectName}:${fact.startLine}:${fact.kind}`;
+    const key = `${fact.objectName}:${fact.startIndex}:${fact.kind}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const symbol: SymbolDef = {
@@ -364,14 +366,24 @@ export async function collectSqlEdgesForFile(
     seen.add(key);
     edges.push(edge);
   };
+  // A call in a `FROM` list reads a routine, not a table of that name. Only a name that an indexed
+  // routine carries is one: `FROM users (NOLOCK)` reads a table, and so does a call to a function
+  // that the indexed files do not define. Navigation applies the same rule.
+  const hasCallables = !!cache.callableDefinitions.exact.size;
+  const namesIndexedRoutine = (mention: SqlRoutineMention): boolean =>
+    !!sqlRoutineNameCandidates(cache.callableDefinitions, mention.name, (fact) => fact.objectName ?? "").candidates
+      .length;
   for (const fact of currentFacts) {
     // The name in `DROP FUNCTION name` is a routine mention below, never a table of the same name.
     if (fact.kind === "drops_object" && sqlStatementDropsRoutine(fact.statementText)) continue;
     const readsRelation = fact.kind === "reads_from" || fact.kind === "joins";
     for (const objectName of referenceObjectNames(fact)) {
-      // `SELECT * FROM get_users()` is a call, not a read of a table that shares the name. A write
-      // target such as `INSERT INTO get_users` is still the table.
-      if (readsRelation && sqlRelationNameIsRoutineCall(fact.statementText, objectName)) continue;
+      // A write target such as `INSERT INTO get_users` is still the table.
+      const isCall =
+        hasCallables &&
+        readsRelation &&
+        sqlRelationNameIsRoutineCall(fact.statementText, objectName, namesIndexedRoutine);
+      if (isCall) continue;
       const match = sqlDefinitionCandidates(cache, objectName);
       for (const edge of sqlEdgesForCandidates(normalizedFile, fact.kind, objectName, match, "relation")) addEdge(edge);
     }

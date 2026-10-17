@@ -293,6 +293,17 @@ describe("SQL routine call sites", () => {
     return gotoTarget(project.root, await goToDefinition(project.index, { file: project.file(file), line, column }));
   }
 
+  /**
+   * The files impact reports besides the changed file. A declaration counts as a reference to itself,
+   * as in other languages, so the changed file is reported too.
+   */
+  function dependentFiles(impact: { impacted: readonly { file: string }[] }, changedFile: string): string[] {
+    return impact.impacted
+      .map((item) => item.file)
+      .filter((file) => file !== changedFile)
+      .sort();
+  }
+
   it("finds a routine call in a SELECT with complete coverage and goes from the call to the routine", async () => {
     const schema = ["CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;"];
     const report = ["SELECT normalize_email(email) FROM users;"];
@@ -625,10 +636,13 @@ describe("SQL routine call sites", () => {
       if ("files" in routineChange || "files" in tableChange) throw new Error("Expected full impact reports");
 
       expect(routineChange.changedSymbols.map((symbol) => symbol.name)).toEqual(["normalize_email"]);
-      expect(routineChange.impacted.map((item) => item.file)).toEqual(["caller.sql"]);
-      expect(routineChange.impacted[0]).toMatchObject({ symbols: ["normalize_email"], reasons: ["directRef"] });
+      expect(dependentFiles(routineChange, "schema.sql")).toEqual(["caller.sql"]);
+      expect(routineChange.impacted.find((item) => item.file === "caller.sql")).toMatchObject({
+        symbols: ["normalize_email"],
+        reasons: expect.arrayContaining(["directRef"]),
+      });
       expect(tableChange.changedSymbols.map((symbol) => symbol.name)).toEqual(["users"]);
-      expect(tableChange.impacted.map((item) => item.file)).toEqual(["reader.sql"]);
+      expect(dependentFiles(tableChange, "schema.sql")).toEqual(["reader.sql"]);
     });
   });
 
@@ -769,9 +783,9 @@ describe("SQL routine call sites", () => {
         if ("files" in routineChange || "files" in tableChange) throw new Error("Expected full impact reports");
 
         expect(routineChange.changedSymbols.map((symbol) => symbol.name)).toEqual(["audit_trail"]);
-        expect(routineChange.impacted.map((item) => item.file)).toEqual(["caller.sql"]);
+        expect(dependentFiles(routineChange, "schema.sql")).toEqual(["caller.sql"]);
         expect(tableChange.changedSymbols.map((symbol) => symbol.name)).toEqual(["audit_trail"]);
-        expect(tableChange.impacted.map((item) => item.file)).toEqual(["reader.sql"]);
+        expect(dependentFiles(tableChange, "schema.sql")).toEqual(["reader.sql"]);
       },
     );
   });
@@ -820,7 +834,7 @@ describe("SQL routine call sites", () => {
             includeTests: true,
           });
           if ("files" in impact) throw new Error("Expected a full impact report");
-          return impact.impacted.map((item) => item.file);
+          return dependentFiles(impact, "schema.sql");
         };
 
         // `ENABLE TRIGGER audit` names the trigger. `SELECT audit()` names the function.
@@ -926,6 +940,97 @@ describe("SQL routine call sites", () => {
           [declaration, usage].sort(),
         );
       }
+    });
+  });
+
+  it("keeps two overloads that share a line apart", async () => {
+    const defs = [
+      "CREATE FUNCTION pick(a integer) RETURNS integer AS $$ SELECT a $$ LANGUAGE sql; CREATE FUNCTION pick(a text) RETURNS text AS $$ SELECT a $$ LANGUAGE sql;",
+    ];
+    const use = ["SELECT pick(1);"];
+    await withSqlProject({ "defs.sql": defs, "use.sql": use }, async (project) => {
+      const symbols = listSymbols(project.index, { file: project.file("defs.sql") });
+      const integerOverload = await referencesAt(project, "defs.sql", defs, 1, "pick(a integer)");
+      const textOverload = await referencesAt(project, "defs.sql", defs, 1, "pick(a text)");
+
+      expect(symbols.map((symbol) => symbol.name)).toEqual(["pick", "pick"]);
+      // The call fits both, so it resolves to neither.
+      expect(await gotoAt(project, "use.sql", use, 1, "pick")).toBe("not_found");
+      expect(referenceSites(project.root, integerOverload)).toEqual([siteAt("defs.sql", defs, 1, "pick(a integer)")]);
+      expect(referenceSites(project.root, textOverload)).toEqual([siteAt("defs.sql", defs, 1, "pick(a text)")]);
+      for (const overload of [integerOverload, textOverload]) {
+        expect(okReferences(overload).referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+          affectedFiles: [project.file("use.sql")],
+        });
+      }
+    });
+  });
+
+  it("finds the references of a copy of an indexed definition, and none for a definition that is not indexed", async () => {
+    const schema = [
+      "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;",
+      "CREATE TABLE users (id integer, email text);",
+      "CREATE TRIGGER users_touch BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION normalize_email();",
+    ];
+    const use = ["SELECT normalize_email(email) FROM users;"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const expected: Array<[number, string, string[]]> = [
+        [
+          1,
+          "normalize_email",
+          [
+            siteAt("schema.sql", schema, 1, "normalize_email"),
+            siteAt("schema.sql", schema, 3, "normalize_email"),
+            siteAt("use.sql", use, 1, "normalize_email"),
+          ],
+        ],
+        [2, "users", [siteAt("schema.sql", schema, 2, "users"), siteAt("use.sql", use, 1, "users")]],
+        [3, "users_touch", [siteAt("schema.sql", schema, 3, "users_touch")]],
+      ];
+      for (const [line, token, sites] of expected) {
+        const { definition } = okReferences(await referencesAt(project, "schema.sql", schema, line, token));
+        // Impact analysis builds the definition it looks up from a changed symbol, so it is no indexed object.
+        const copy = {
+          ...definition,
+          range: { start: { ...definition.range.start }, end: { ...definition.range.end } },
+        };
+        const result = await findReferences(project.index, { def: copy });
+
+        expect(referenceSites(project.root, result)).toEqual(sites.sort());
+        expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+
+        // A definition at a site nothing is declared at cannot be looked up, so it reports no scan at all.
+        const elsewhere = { ...copy, range: { start: { line: 99, column: 1 }, end: { line: 99, column: 5 } } };
+        expect((await findReferences(project.index, { def: elsewhere })).status).toBe("not_found");
+      }
+    });
+  });
+
+  it("counts a T-SQL table hint as a table reference, not as a call of a routine with the same name", async () => {
+    const schema = [
+      "CREATE TABLE users (id integer);",
+      "CREATE FUNCTION users() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;",
+    ];
+    const use = ["SELECT * FROM users (NOLOCK);", "SELECT * FROM users();", "SELECT * FROM users WITH (NOLOCK);"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const table = await referencesAt(project, "schema.sql", schema, 1, "users");
+      const routine = await referencesAt(project, "schema.sql", schema, 2, "users");
+
+      expect(referenceSites(project.root, table)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "users"),
+          siteAt("use.sql", use, 1, "users"),
+          siteAt("use.sql", use, 3, "users"),
+        ].sort(),
+      );
+      expect(referenceSites(project.root, routine)).toEqual(
+        [siteAt("schema.sql", schema, 2, "users"), siteAt("use.sql", use, 2, "users")].sort(),
+      );
+      expect(await gotoAt(project, "use.sql", use, 1, "users")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 2, "users")).toBe("schema.sql:2");
     });
   });
 });

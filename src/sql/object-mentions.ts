@@ -7,7 +7,7 @@ import {
   sqlParenDepthAt,
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
-import { findSqlRoutineMentions } from "./routine-mentions.js";
+import { findSqlRoutineMentions, type SqlRoutineMention } from "./routine-mentions.js";
 
 export type SqlNameSpan = { name: string; start: number; end: number };
 
@@ -268,16 +268,27 @@ export function sqlDefinedNameSpan(statement: string): SqlNameSpan | null {
 }
 
 /**
- * True when every fact-level relation read of `objectName` is a routine call (`FROM get_users()`).
- * A real table read of that name in the same statement keeps the relation edge.
+ * True when every fact-level relation read of `objectName` is a routine call (`FROM get_users()`). A
+ * real table read of that name in the same statement keeps the relation edge. A bare `name(` is a
+ * call only when `namesIndexedRoutine` says an indexed routine carries that name: a table can have
+ * the same shape, as in `FROM users (NOLOCK)`.
  */
-export function sqlRelationNameIsRoutineCall(statement: string, objectName: string): boolean {
+export function sqlRelationNameIsRoutineCall(
+  statement: string,
+  objectName: string,
+  namesIndexedRoutine: (mention: SqlRoutineMention) => boolean,
+): boolean {
   const key = sqlObjectLookupKey(objectName);
   const reads = sqlRelationReadSpans(statement).filter((span) => sqlObjectLookupKey(span.name) === key);
   if (!reads.length) return false;
   const callStarts = new Set(
     findSqlRoutineMentions(statement)
-      .filter((mention) => mention.kind === "call" && sqlObjectLookupKey(mention.name) === key)
+      .filter(
+        (mention) =>
+          mention.kind === "call" &&
+          sqlObjectLookupKey(mention.name) === key &&
+          (!mention.speculative || namesIndexedRoutine(mention)),
+      )
       .map((mention) => mention.start),
   );
   return reads.every((span) => callStarts.has(span.start));

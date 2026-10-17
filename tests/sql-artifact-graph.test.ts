@@ -945,4 +945,79 @@ describe("SQL artifact graph", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each<[string, string[]]>([
+    ["a project without routines", []],
+    [
+      "a project with an unrelated routine",
+      ["CREATE FUNCTION other() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;"],
+    ],
+    [
+      "a project with a routine named like the table",
+      ["CREATE FUNCTION users() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;"],
+    ],
+  ])("keeps the table edge of a T-SQL table hint in %s", async (_label, routines) => {
+    const root = await mkTmpDir("cg-sql-table-hint-");
+    try {
+      const schema = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const hint = path.join(root, "hint.sql").replace(/\\/g, "/");
+      const withHint = path.join(root, "with_hint.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schema,
+        ["CREATE TABLE users (id integer);", "CREATE TABLE orders (uid integer);", ...routines].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(
+        hint,
+        "SELECT * FROM users (NOLOCK) JOIN orders (NOLOCK) ON orders.uid = users.id;\n",
+        "utf8",
+      );
+      await fsp.writeFile(withHint, "SELECT * FROM users u WITH (NOLOCK);\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schema, hint, withHint]);
+      const rawBetween = (from: string): string[] =>
+        sourceGraph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+
+      // A hint list is no argument list: the statement reads the table and calls nothing.
+      expect(rawBetween(hint)).toEqual(["sql:joins:orders", "sql:reads_from:users"]);
+      expect(rawBetween(withHint)).toEqual(["sql:reads_from:users"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not link a source alias with a column list to a routine of the same name", async () => {
+    const root = await mkTmpDir("cg-sql-alias-list-");
+    try {
+      const schema = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const withAs = path.join(root, "with_as.sql").replace(/\\/g, "/");
+      const withoutAs = path.join(root, "without_as.sql").replace(/\\/g, "/");
+      const call = path.join(root, "call.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schema,
+        ["CREATE FUNCTION norm(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;"].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(withAs, "SELECT * FROM generate_series(1, 3) AS norm(i);\n", "utf8");
+      await fsp.writeFile(withoutAs, "SELECT * FROM generate_series(1, 3) norm(i);\n", "utf8");
+      await fsp.writeFile(call, "SELECT * FROM generate_series(1, norm(3)) g(i);\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schema, withAs, withoutAs, call]);
+      const rawBetween = (from: string): string[] =>
+        sourceGraph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+
+      expect(rawBetween(withAs)).toEqual([]);
+      expect(rawBetween(withoutAs)).toEqual([]);
+      // A call in the arguments of the source is still a call.
+      expect(rawBetween(call)).toEqual(["sql:reads_from:callable:norm"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

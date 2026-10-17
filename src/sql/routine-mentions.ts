@@ -4,7 +4,9 @@ import {
   maskSqlStringsAndComments,
   normalizeSqlObjectName,
   SQL_OBJECT_NAME_PATTERN,
+  splitTopLevelCommaSeparated,
   sqlParenDepthAt,
+  type SqlMaskOptions,
 } from "./lex.js";
 
 /**
@@ -57,6 +59,16 @@ const CALL_KEYWORD_RE = new RegExp(
   "gi",
 );
 const CALL_SHAPE_RE = new RegExp(String.raw`${NAME_BOUNDARY}(${SQL_OBJECT_NAME_PATTERN})\s*\(`, "g");
+// `AS (`, `AS MATERIALIZED (`, and `AS NOT MATERIALIZED (` open the body of a common table expression.
+const CTE_BODY_RE = /^\s*as(?:\s+(?:not\s+)?materialized)?\s*\(/i;
+// A source in a `FROM` list, a `JOIN`, a T-SQL `APPLY`, or a `USING` clause.
+const SOURCE_KEYWORD_RE = /\b(from|join|using|apply)\b/gi;
+const WORD_RE = /[A-Za-z_][\w$]*/y;
+const WITH_ORDINALITY_RE = /with\s+ordinality\b/iy;
+// A table hint is a word with an optional argument: `NOLOCK`, `INDEX (ix_users)`, `INDEX = 0`.
+const TABLE_HINT_RE = /^(\w+)\s*(?:[(=][\s\S]*)?$/;
+// Strings and comments are masked everywhere. A `[` after an identifier opens a PostgreSQL array.
+const MASK_OPTIONS: SqlMaskOptions = { arrayBrackets: true };
 
 type WordTable = Readonly<Record<string, true>>;
 
@@ -107,6 +119,69 @@ const NON_ROUTINE_NAME_WORDS: WordTable = {
 const REFERENCE_PRECEDING_WORDS: WordTable = { alter: true, on: true, enable: true, disable: true };
 // A bare `CALL (`, `EXEC (`, or `EXECUTE (` is the keyword, not a routine of that name.
 const CALL_KEYWORDS: WordTable = { call: true, exec: true, execute: true };
+// Words that follow a source in a `FROM` list without naming its alias.
+const NON_ALIAS_WORDS: WordTable = {
+  on: true,
+  using: true,
+  where: true,
+  group: true,
+  order: true,
+  having: true,
+  limit: true,
+  offset: true,
+  fetch: true,
+  for: true,
+  returning: true,
+  union: true,
+  intersect: true,
+  except: true,
+  window: true,
+  with: true,
+  join: true,
+  inner: true,
+  left: true,
+  right: true,
+  full: true,
+  cross: true,
+  natural: true,
+  outer: true,
+  apply: true,
+  lateral: true,
+  tablesample: true,
+  into: true,
+  option: true,
+  set: true,
+  values: true,
+  select: true,
+  from: true,
+};
+// T-SQL table hints, which `FROM users (NOLOCK)` puts in parentheses without `WITH`.
+const TABLE_HINTS: WordTable = {
+  forcescan: true,
+  forceseek: true,
+  holdlock: true,
+  index: true,
+  nolock: true,
+  noexpand: true,
+  nowait: true,
+  paglock: true,
+  readcommitted: true,
+  readcommittedlock: true,
+  readpast: true,
+  readuncommitted: true,
+  repeatableread: true,
+  rowlock: true,
+  serializable: true,
+  snapshot: true,
+  spatial_window_max_cells: true,
+  tablock: true,
+  tablockx: true,
+  updlock: true,
+  xlock: true,
+};
+// `FROM` and `USING` take a comma-separated list of sources. `JOIN` and `APPLY` take one.
+const SOURCE_LIST_KEYWORDS: WordTable = { from: true, using: true };
+const SOURCE_MODIFIERS: WordTable = { lateral: true, only: true };
 
 function hasWord(table: WordTable, word: string): boolean {
   return Object.hasOwn(table, word);
@@ -189,11 +264,11 @@ function routineBodyBlock(scan: string): (before: string) => boolean {
  * setting, or the body of a language Codegraph cannot read.
  */
 function maskStatementCode(statementText: string): string {
-  const masked = maskSqlStringsAndComments(statementText);
+  const masked = maskSqlStringsAndComments(statementText, MASK_OPTIONS);
   if (!statementText.includes("$") || !CODE_STATEMENT_RE.test(masked)) return masked;
   const scan = maskSqlQuotedIdentifiers(masked);
   if (!bodyLanguageIsReadable(statementText, scan)) return masked;
-  return maskSqlStringsAndComments(statementText, { keepDollarQuotedBody: routineBodyBlock(scan) });
+  return maskSqlStringsAndComments(statementText, { ...MASK_OPTIONS, keepDollarQuotedBody: routineBodyBlock(scan) });
 }
 
 function keywordMentionKind(
@@ -276,10 +351,102 @@ function matchingParen(text: string, openIndex: number): number {
   return -1;
 }
 
+function wordAt(text: string, index: number): string {
+  WORD_RE.lastIndex = index;
+  return WORD_RE.exec(text)?.[0].toLowerCase() ?? "";
+}
+
+/** True when a parenthesized list holds nothing but T-SQL table hints, so it is no argument list. */
+function isTableHintList(content: string): boolean {
+  return splitTopLevelCommaSeparated(content).every((part) => {
+    const hint = TABLE_HINT_RE.exec(part.trim())?.[1];
+    return !!hint && hasWord(TABLE_HINTS, hint.toLowerCase());
+  });
+}
+
+/** A table hint can take an argument: `INDEX (ix_orders)` is a hint, not a call of `INDEX`. */
+function excludeHintCallShapes(scan: string, open: number, close: number, excluded: Set<number>): void {
+  for (const match of scan.slice(open + 1, close).matchAll(CALL_SHAPE_RE)) {
+    excluded.add(open + 1 + (match.index ?? 0));
+  }
+}
+
 /**
- * `CREATE INDEX ... ON table (columns)` and `WITH name(columns) AS (` put a parenthesis after a
- * name that is not a call. Those false calls hide the index's table and invent a routine reference.
- * Calls in an index expression, a join predicate, or a CTE body are later names and stay.
+ * Reads one source of a `FROM` list, `JOIN`, or `APPLY`: a name, a function call, or a parenthesized
+ * query, then an optional alias with a column list. A parenthesis after the alias opens its column
+ * list, and one after a name that holds only table hints opens those hints. Neither is a call; the
+ * source's own arguments are. Returns where the source ends, or -1 when no source starts at `from`.
+ */
+function excludeSourceItem(scan: string, from: number, excluded: Set<number>): number {
+  let cursor = skipWhitespace(scan, from);
+  for (let word = wordAt(scan, cursor); hasWord(SOURCE_MODIFIERS, word); word = wordAt(scan, cursor)) {
+    cursor = skipWhitespace(scan, cursor + word.length);
+  }
+  if (scan[cursor] === "(") {
+    const close = matchingParen(scan, cursor);
+    if (close < 0) return -1;
+    cursor = close + 1;
+  } else {
+    const source = nameAt(scan, cursor);
+    if (!source) return -1;
+    cursor = skipWhitespace(scan, source.end);
+    if (scan[cursor] === "(") {
+      const close = matchingParen(scan, cursor);
+      if (close < 0) return -1;
+      if (isTableHintList(scan.slice(cursor + 1, close))) {
+        excluded.add(source.start);
+        excludeHintCallShapes(scan, cursor, close, excluded);
+      }
+      cursor = close + 1;
+    }
+  }
+  cursor = skipWhitespace(scan, cursor);
+  WITH_ORDINALITY_RE.lastIndex = cursor;
+  if (WITH_ORDINALITY_RE.test(scan)) cursor = skipWhitespace(scan, WITH_ORDINALITY_RE.lastIndex);
+  if (wordAt(scan, cursor) === "as") cursor = skipWhitespace(scan, cursor + 2);
+  const alias = nameAt(scan, cursor);
+  if (alias && !hasWord(NON_ALIAS_WORDS, alias.name.toLowerCase())) {
+    cursor = skipWhitespace(scan, alias.end);
+    if (scan[cursor] === "(") {
+      // `FROM generate_series(1, 3) g(i)`: the parenthesis opens the alias's column list.
+      excluded.add(alias.start);
+      const close = matchingParen(scan, cursor);
+      if (close < 0) return -1;
+      cursor = skipWhitespace(scan, close + 1);
+    }
+  }
+  // `FROM users u WITH (NOLOCK)` puts table hints after `WITH`.
+  const hintsOpen = skipWhitespace(scan, cursor + 4);
+  if (wordAt(scan, cursor) === "with" && scan[hintsOpen] === "(") {
+    excluded.add(cursor);
+    const close = matchingParen(scan, hintsOpen);
+    if (close < 0) return -1;
+    if (isTableHintList(scan.slice(hintsOpen + 1, close))) excludeHintCallShapes(scan, hintsOpen, close, excluded);
+    return close + 1;
+  }
+  return cursor;
+}
+
+function collectSourceItemExclusions(scan: string, excluded: Set<number>): void {
+  for (const keyword of scan.matchAll(SOURCE_KEYWORD_RE)) {
+    let cursor = (keyword.index ?? 0) + keyword[0].length;
+    const takesList = hasWord(SOURCE_LIST_KEYWORDS, (keyword[1] ?? "").toLowerCase());
+    for (;;) {
+      cursor = excludeSourceItem(scan, cursor, excluded);
+      if (cursor < 0 || !takesList) break;
+      cursor = skipWhitespace(scan, cursor);
+      if (scan[cursor] !== ",") break;
+      cursor += 1;
+    }
+  }
+}
+
+/**
+ * Call shapes that are no calls. `CREATE INDEX ... ON table (columns)` and `WITH name(columns) AS (`
+ * put a parenthesis after a name that is not a call, and so does a source in a `FROM` list with an
+ * alias column list or table hints. Those false calls hide the index's table and invent a routine
+ * reference. Calls in an index expression, a join predicate, a CTE body, or a source's arguments are
+ * later names and stay.
  */
 function excludedCallShapeStarts(scan: string): Set<number> {
   const excluded = new Set<number>();
@@ -310,9 +477,10 @@ function excludedCallShapeStarts(scan: string): Set<number> {
     const nameStart = nameEnd - rawName.length;
     if (scan.slice(nameStart, nameEnd) !== rawName) continue;
     const close = matchingParen(scan, parenIndex);
-    if (close < 0 || !/^\s*as\s*\(/i.test(scan.slice(close + 1))) continue;
+    if (close < 0 || !CTE_BODY_RE.test(scan.slice(close + 1))) continue;
     excluded.add(nameStart);
   }
+  collectSourceItemExclusions(scan, excluded);
   return excluded;
 }
 
