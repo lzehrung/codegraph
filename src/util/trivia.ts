@@ -102,7 +102,7 @@ function buildMarkedMask(
       continue;
     }
     // An unquoted `url(...)` is read before comments and strings: its content is opaque.
-    const cssUrl = row.unquotedCssUrl ? unquotedCssUrlConstruct(source, index) : null;
+    const cssUrl = row.unquotedCssUrl ? unquotedCssUrlConstruct(source, row, index) : null;
     if (cssUrl !== null) {
       if (options.maskCssUrls && options.maskStrings) {
         for (const [start, end] of constructSpans(cssUrl, options.mode)) {
@@ -158,19 +158,15 @@ function isCssSpaceUnit(unit: number): boolean {
   return unit === 0x20 || unit === 0x09 || unit === 0x0a || unit === 0x0d || unit === 0x0c;
 }
 
-/** The unit after the `}` that closes the Sass interpolation whose `{` is at `openBrace`, or -1. */
-function sassInterpolationEnd(source: string, openBrace: number): number {
-  let depth = 0;
-  for (let cursor = openBrace; cursor < source.length; cursor += 1) {
-    const unit = source.charCodeAt(cursor);
-    if (unit === 0x7b) depth += 1;
-    if (unit === 0x7d) {
-      depth -= 1;
-      if (!depth) return cursor + 1;
-    }
-  }
-  return -1;
-}
+/**
+ * The `#{...}` interpolation of an unquoted `url(...)`. Its expression is code, so a string or a
+ * comment inside it is trivia, and a `}` inside one closes nothing.
+ */
+const CSS_URL_INTERPOLATION: NonNullable<TriviaStringForm["interpolation"]> = {
+  start: "#{",
+  end: "}",
+  excludeFromMask: true,
+};
 
 /**
  * Reads an unquoted `url(...)` that starts at `index`, with the Sass rule for such a token: after
@@ -178,7 +174,7 @@ function sassInterpolationEnd(source: string, openBrace: number): number {
  * optional space and `)`. A quote, a `$`, a `(`, or a space that does not end the token means the
  * text is an ordinary function call, so this returns null and the normal rules apply.
  */
-function unquotedCssUrlConstruct(source: string, index: number): TriviaConstruct | null {
+function unquotedCssUrlConstruct(source: string, row: TriviaRow, index: number): TriviaConstruct | null {
   if (
     source.charCodeAt(index + 3) !== 0x28 ||
     (source.charCodeAt(index) | 0x20) !== 0x75 ||
@@ -190,6 +186,7 @@ function unquotedCssUrlConstruct(source: string, index: number): TriviaConstruct
   if (index > 0 && isCssIdentifierUnit(source.charCodeAt(index - 1))) return null;
   const bodyStart = index + 4;
   const holes: TriviaSpan[] = [];
+  const holeTrivia: TriviaSpan[] = [];
   let cursor = bodyStart;
   while (cursor < source.length && isCssSpaceUnit(source.charCodeAt(cursor))) cursor += 1;
   while (cursor < source.length) {
@@ -202,6 +199,7 @@ function unquotedCssUrlConstruct(source: string, index: number): TriviaConstruct
         segmentStart = holeEnd;
       }
       if (segmentStart < cursor) maskSpans.push([segmentStart, cursor]);
+      maskSpans.push(...holeTrivia);
       maskSpans.push([cursor, cursor + 1]);
       return {
         start: index,
@@ -221,10 +219,10 @@ function unquotedCssUrlConstruct(source: string, index: number): TriviaConstruct
       continue;
     }
     if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {
-      const holeEnd = sassInterpolationEnd(source, cursor + 1);
-      if (holeEnd < 0) return null;
-      holes.push([cursor, holeEnd]);
-      cursor = holeEnd;
+      const hole = collectInterpolationSpans(source, row, cursor, CSS_URL_INTERPOLATION);
+      holes.push([cursor, hole.end]);
+      holeTrivia.push(...hole.spans);
+      cursor = hole.end;
       continue;
     }
     const isUrlUnit =

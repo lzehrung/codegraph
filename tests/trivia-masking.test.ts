@@ -6,7 +6,7 @@ import {
   stripPythonCommentsAndStrings,
 } from "../src/util/comments.js";
 import { maskImportBindingTrivia } from "../src/indexer/imports/binding-ranges.js";
-import { maskTrivia } from "../src/util/trivia.js";
+import { buildTriviaMask, maskTrivia } from "../src/util/trivia.js";
 
 /** Asserts the masked output keeps every UTF-16 offset (equal length, astral-safe). */
 function expectOffsetsPreserved(source: string, masked: string): void {
@@ -197,6 +197,20 @@ describe("trivia masking keeps following code visible per language", () => {
     const call = maskTrivia('.a { b: url($path); c: url("//q/r"); }\n', "scss", { maskCssUrls: true });
     expect(call).toContain("url($path)");
     expect(call).not.toContain("//q/r");
+  });
+
+  it("masks a string or comment inside the interpolation of an unquoted SCSS url(...), and keeps the expression", () => {
+    // The SCSS scanner reads the expression of `#{...}` as code: only the strings and comments in it are trivia.
+    const source =
+      "$a: 1;\n.a { b: url(#{'$str'}.svg); c: url(#{$base}/a.svg); d: url(#{'}'}x.svg); e: url(#{/* } */ 1}.svg); }\n$later: 2;\n";
+    const mask = buildTriviaMask(source, "scss", { holes: true, maskCssUrls: true });
+    let code = "";
+    for (let index = 0; index < source.length; index += 1) code += mask[index] ? " " : source.charAt(index);
+    expect(code).not.toContain("$str");
+    expect(code).toContain("#{$base}");
+    expect(code).not.toContain("x.svg");
+    expect(code).not.toContain("} */");
+    expect(code).toContain("$later: 2;");
   });
 
   it("preserves offsets across an astral character inside masked trivia", () => {

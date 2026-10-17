@@ -56,6 +56,8 @@ export type ScssModuleLoad = {
   hide: ScssConfiguredName[] | null;
   /** `@use ... with ($name: ...)` keys. */
   withKeys: ScssConfiguredName[];
+  /** An `@import` inside a rule or an at-rule block: Sass declares what it imports in that block only. */
+  nested: boolean;
 };
 
 export type ScssUseSyntax = "variable" | "call" | "include" | "extend" | "config" | "show" | "hide";
@@ -266,6 +268,9 @@ export function extractScssFacts(source: string): ScssFileFacts {
   const localCounts = new Map<string, number>();
   let paramsParenAt = -1;
   let callParenAt = -1;
+  /** Offset where the current statement starts: after the last `;` or block brace. */
+  let statementBegin = 0;
+  let headCache: { begin: number; atRule: boolean; block: boolean } | null = null;
 
   const rangeOf = (start: number, end: number): Range => ({
     start: positionAtOffset(lineStarts, start),
@@ -418,6 +423,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
     braces.push(true);
     blocks.push(frame);
     statementStart = true;
+    statementBegin = braceIndex + 1;
     statementRule = "";
     inInclude = false;
     parens.length = 0;
@@ -433,6 +439,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
       if (!frame.flow) nonFlowBlocks -= 1;
     }
     statementStart = true;
+    statementBegin = braceIndex + 1;
     statementRule = "";
     inInclude = false;
     parens.length = 0;
@@ -681,6 +688,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
       show: null,
       hide: null,
       withKeys: [],
+      nested: false,
     };
     let cursor = url.end;
     let stopAt = cursor;
@@ -780,6 +788,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
           show: null,
           hide: null,
           withKeys: [],
+          nested: blocks.length > 0,
         });
       }
       cursor = after;
@@ -917,6 +926,46 @@ export function extractScssFacts(source: string): ScssFileFacts {
     return end;
   };
 
+  /**
+   * What the statement that starts at `statementBegin` is: an at-rule or not, and whether a block
+   * follows its head (a style rule) or it ends at a `;` or at the `}` of its own block (a
+   * declaration). The scan runs once per statement.
+   */
+  const statementHead = (): { atRule: boolean; block: boolean } => {
+    if (headCache?.begin === statementBegin) return headCache;
+    let cursor = skipBlank(statementBegin);
+    const atRule = source.charCodeAt(cursor) === 0x40;
+    let interpolation = 0;
+    let block = false;
+    for (; cursor < length; cursor += 1) {
+      if (mask[cursor]) continue;
+      const unit = source.charCodeAt(cursor);
+      if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {
+        interpolation += 1;
+        cursor += 1;
+        continue;
+      }
+      if (interpolation) {
+        if (unit === 0x7b) interpolation += 1;
+        if (unit === 0x7d) interpolation -= 1;
+        continue;
+      }
+      if (unit === 0x7b) {
+        block = true;
+        break;
+      }
+      if (unit === 0x7d || unit === 0x3b) break;
+    }
+    headCache = { begin: statementBegin, atRule, block };
+    return headCache;
+  };
+
+  /** True inside the head of a style rule, where `:is(` and `:not(` are selectors, not calls. */
+  const opensStyleRule = (): boolean => {
+    const head = statementHead();
+    return head.block && !head.atRule;
+  };
+
   /** `ns.member` access, a call, or a plain identifier. Returns the offset to continue from. */
   const handleIdentifier = (start: number, ident: { text: string; end: number }): number => {
     if (inInclude && ident.text === "using") {
@@ -963,6 +1012,9 @@ export function extractScssFacts(source: string): ScssFileFacts {
         dynamics.push({ form: ident.text as ScssDynamicForm, arg: readCallArgument(ident.end) });
         return ident.end;
       }
+      // A CSS functional pseudo-class or pseudo-element in a selector (`:is(`, `:not(`, `::part(`)
+      // is no Sass function call.
+      if (previous === 0x3a && opensStyleRule()) return ident.end;
       addUse({
         kind: "function",
         syntax: "call",
@@ -1011,6 +1063,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
     }
     if (unit === 0x3b) {
       statementStart = true;
+      statementBegin = index + 1;
       inInclude = false;
       statementRule = "";
       pendingLocals = [];

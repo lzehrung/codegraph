@@ -6610,4 +6610,58 @@ describe("Find References: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("reports partial coverage when a file assigns a variable that its `as *` module declares", async () => {
+    // dart-sass compiles this to `.a { width: 2 }`: the assignment assigns the variable of the module.
+    const files = {
+      "_vars.scss": "$x: 1;\n",
+      "main.scss": '@use "vars" as *;\n$x: 2;\n.a { width: $x; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_vars.scss"]!, line: 1, column: 1 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["main.scss"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the with key that configures a private variable of the module", async () => {
+    // dart-sass accepts `with ($-accent: blue)` for a private `!default` variable.
+    const files = {
+      "_c.scss": "$-accent: red !default;\n.x { w: $-accent; }\n",
+      "main.scss": '@use "c" with ($-accent: blue);\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_c.scss"]!, line: 1, column: 1 },
+        { file: paths["_c.scss"]!, line: 2, column: tokenColumn(".x { w: $-accent; }", "$-accent") },
+        { file: paths["main.scss"]!, line: 1, column: tokenColumn(files["main.scss"], "$-accent") },
+      ];
+      const result = await testFindReferences(index, paths["_c.scss"]!, 1, 1, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when an @import nested in a rule may declare the name in its own block", async () => {
+    // dart-sass declares what `.a { @import "vars"; }` imports inside `.a` only, and this scan does
+    // not follow blocks, so the use in `.a` is not proved.
+    const files = { "_vars.scss": "$x: 1;\n", "main.scss": '.a { @import "vars"; w: $x; }\n' };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_vars.scss"]!, line: 1, column: 1 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["main.scss"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -47,6 +47,7 @@ import {
   scssMemberForDefinition,
   scssRenameCollisions,
   scssRenameUseConflicts,
+  scssRenamedName,
   scssReplacementText,
 } from "../scss/resolution.js";
 import { SCSS_IDENTIFIER_PATTERN } from "../scss/syntax.js";
@@ -198,6 +199,11 @@ export async function previewRenameInSnapshot(
   const maxEdits = normalizeMaxEdits(request.maxEdits);
   const provenance = semanticRenameProvenance(snapshot);
   const conflicts = validateNewName(snapshot, resolved.def, request.newName);
+  // An SCSS edit writes the name with the sigil of the symbol (`$y` for a request of `y`), so the
+  // scope checks and the textual edits use that spelling.
+  const newName = isScssFile(snapshot.index, resolved.def.file)
+    ? scssRenamedName(resolved.def.localName, request.newName)
+    : request.newName;
   const semanticReferences: Reference[] = [];
   let referenceFailure: string | undefined;
   try {
@@ -366,10 +372,10 @@ export async function previewRenameInSnapshot(
   const boundedCandidates = boundList(allCandidates, maxEdits);
   const candidateLimitExceeded = boundedCandidates.omitted > 0;
   const candidates = boundedCandidates.items;
-  await addScopeConflicts(snapshot, resolved.def, request.newName, selectedReferences, conflicts);
+  await addScopeConflicts(snapshot, resolved.def, newName, selectedReferences, conflicts);
   for (const definition of semanticDefinitions.values()) {
     if (defNodeId(definition) === resolved.id) continue;
-    await addScopeConflicts(snapshot, definition, request.newName, [], conflicts);
+    await addScopeConflicts(snapshot, definition, newName, [], conflicts);
   }
   // Terraform exports inputs and outputs in separate namespaces; addTerraformConflicts checks them.
   if (!isTerraformFile(snapshot.index, resolved.def.file) && !isScssFile(snapshot.index, resolved.def.file)) {
@@ -448,7 +454,7 @@ export async function previewRenameInSnapshot(
       snapshot,
       realRoot,
       oldName: resolved.def.localName,
-      newName: request.newName,
+      newName,
       includeComments: request.includeComments ?? false,
       includeStrings: request.includeStrings ?? false,
       remaining: Math.max(0, maxEdits - edits.length),

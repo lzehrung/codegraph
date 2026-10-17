@@ -828,13 +828,19 @@ async function scssRefs(project: ScssProject, name: string, needle: string, occu
   return { sites, coverage: result.referenceCoverage };
 }
 
-async function previewScssRename(project: ScssProject, name: string, inFile: string, newName: string) {
+async function previewScssRename(
+  project: ScssProject,
+  name: string,
+  inFile: string,
+  newName: string,
+  options: { includeComments?: boolean } = {},
+) {
   const session = createAgentSession({ root: project.root, freshness: { policy: "check" } });
   try {
     const symbols = await workspaceSymbolsWithSession(session, { root: project.root, query: name });
     const target = symbols.symbols.find((symbol) => symbol.name === name && symbol.location.file.endsWith(inFile));
     if (!target) throw new Error(`Missing symbol ${name} in ${inFile}`);
-    return await previewRenameWithSession(session, { root: project.root, handle: target.handle, newName });
+    return await previewRenameWithSession(session, { root: project.root, handle: target.handle, newName, ...options });
   } finally {
     session.invalidate();
   }
@@ -1813,4 +1819,219 @@ describe("SCSS module navigation: review follow-ups", () => {
       );
     },
   );
+});
+
+describe("SCSS module navigation: second review follow-ups", () => {
+  const native = isNativeTreeSitterAvailable();
+
+  function lineOf(source: string, offset: number): number {
+    return source.slice(0, offset).split("\n").length;
+  }
+
+  it.runIf(native)("checks the name an edit writes when a rename request has no sigil", async () => {
+    // The edit writes `$y` for a request of `y`, so the block variable `$y` collides with it.
+    const source = ".a { $x: 1px; $y: 2px; w: $x; }\n// $x here\n";
+    await withScssProject({ "m.scss": source }, async (project) => {
+      for (const newName of ["y", "$y"]) {
+        const renamed = await previewScssRename(project, "$x", "m.scss", newName);
+        expect(
+          renamed.conflicts.map((conflict) => conflict.reason),
+          newName,
+        ).toEqual(["name_collision"]);
+        expect(renamed.safe, newName).toBe(false);
+      }
+      // A free name is safe, and the comment edit takes the same spelling as the code edits.
+      const free = await previewScssRename(project, "$x", "m.scss", "z", { includeComments: true });
+      expect(free.conflicts).toEqual([]);
+      expect(free.safe).toBe(true);
+      expect(free.edits.map((edit) => edit.newText)).toEqual(["$z", "$z", "$z"]);
+    });
+  });
+
+  it.runIf(native)(
+    "reports partial coverage when a file assigns a variable that its `as *` module declares",
+    async () => {
+      // dart-sass compiles this to `.a { width: 2; v: 2 }`: the assignment assigns the variable of the
+      // module (`get()` reads 2), so the two declarations name one variable.
+      await withScssProject(
+        {
+          "_vars.scss": "$x: 1;\n@function get() { @return $x; }\n",
+          "main.scss": '@use "vars" as *;\n$x: 2;\n.a { width: $x; v: get(); }\n',
+        },
+        async (project) => {
+          for (const [file, needle] of [
+            ["_vars.scss", "$x"],
+            ["main.scss", "$x:"],
+          ] as const) {
+            const refs = await scssRefs(project, file, needle);
+            expect(refs.coverage?.state, file).toBe("partial");
+            expect(
+              refs.coverage?.affectedFiles?.map((affected) => project.relative(affected)),
+              file,
+            ).toEqual(["main.scss"]);
+            expect((await previewScssRename(project, "$x", file, "$y")).safe, file).toBe(false);
+          }
+        },
+      );
+      // A block variable assigns nothing (dart-sass: `.a { width: 2 } .b { width: 1 }`).
+      await withScssProject(
+        {
+          "_vars.scss": "$x: 1;\n",
+          "main.scss": '@use "vars" as *;\n.a { $x: 2; width: $x; }\n.b { width: $x; }\n',
+        },
+        async (project) => {
+          const refs = await scssRefs(project, "_vars.scss", "$x");
+          expect(refs.sites).toEqual(["_vars.scss:1", "main.scss:3"]);
+          expect(refs.coverage?.state).toBe("complete");
+        },
+      );
+      // A mixin of the same name hides the loaded one (dart-sass: `.a { margin: 2px }`).
+      await withScssProject(
+        {
+          "_lib.scss": "@mixin pad { padding: 1px; }\n",
+          "main.scss": '@use "lib" as *;\n@mixin pad { margin: 2px; }\n.a { @include pad; }\n',
+        },
+        async (project) => {
+          const refs = await scssRefs(project, "_lib.scss", "pad");
+          expect(refs.sites).toEqual(["_lib.scss:1"]);
+          expect(refs.coverage?.state).toBe("complete");
+        },
+      );
+    },
+  );
+
+  const PSEUDO_CLASS_SOURCE = [
+    "@function is($x) { @return 1; }",
+    "@function gap($x) { @return $x; }",
+    ".a:is(.b):not(.c) > .d:has(e):nth-child(2n + 1) { margin:gap(4px); w: is(2); &:where(.f) { z: 1; } }",
+    "@media (min-width:has(1)) { .g { w: 1; } }",
+    "",
+  ].join("\n");
+
+  it("does not read a CSS functional pseudo-class in a selector as a function call", () => {
+    // dart-sass keeps `:is(.b)` and `:has(e)` as selectors, and calls the user functions for
+    // `gap(4px)` and `is(2)`. A declaration with no space after the colon is still a declaration.
+    const facts = extractScssFacts(PSEUDO_CLASS_SOURCE);
+    expect(
+      facts.uses
+        .filter((use) => use.kind === "function")
+        .map((use) => `${use.text}@${lineOf(PSEUDO_CLASS_SOURCE, use.nameStart)}`),
+    ).toEqual(["gap@3", "is@3", "has@4"]);
+  });
+
+  it.runIf(native)("lists only the call of a function that a selector pseudo-class also spells", async () => {
+    await withScssProject({ "m.scss": PSEUDO_CLASS_SOURCE }, async (project) => {
+      const refs = await scssRefs(project, "m.scss", "@function is", 0, "@function ".length);
+      expect(refs.sites).toEqual(["m.scss:1", "m.scss:3"]);
+    });
+  });
+
+  it.runIf(native)("keeps a consumer whose text cannot be read as a candidate that is never proved", async () => {
+    await withScssProject(
+      {
+        "_c.scss": "$primary: red;\n",
+        "main.scss": '@use "c";\n.a { w: c.$primary; }\n',
+        "user.scss": '@use "c";\n.b { w: c.$primary; }\n',
+      },
+      async (project) => {
+        // The graph knows that user.scss loads _c.scss. Removing the file makes its text unreadable.
+        await fsp.rm(path.join(project.root, "user.scss"));
+        const refs = await scssRefs(project, "_c.scss", "$primary");
+        expect(refs.sites).toEqual(["_c.scss:1", "main.scss:2"]);
+        expect(refs.coverage?.state).toBe("partial");
+        expect(refs.coverage?.affectedFiles?.map((file) => project.relative(file))).toEqual(["user.scss"]);
+      },
+    );
+  });
+
+  it.runIf(native)("resolves a private variable that a with key configures", async () => {
+    // dart-sass accepts `with ($-accent: blue)` for a private `!default` variable of the module,
+    // though a read of `c.$-accent` is an error.
+    await withScssProject(
+      {
+        "_c.scss": "$-accent: red !default;\n.x { w: $-accent; }\n",
+        "main.scss": '@use "c" with ($-accent: blue);\n',
+      },
+      async (project) => {
+        const refs = await scssRefs(project, "_c.scss", "$-accent");
+        expect(refs.sites).toEqual(["_c.scss:1", "_c.scss:2", "main.scss:1"]);
+        expect(refs.coverage?.state).toBe("complete");
+        const renamed = await previewScssRename(project, "$-accent", "_c.scss", "$-tone");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => edit.file).sort()).toEqual(["_c.scss", "_c.scss", "main.scss"]);
+      },
+    );
+  });
+
+  it.runIf(native)("reports a name collision with a placeholder that another file extending it sees", async () => {
+    // dart-sass compiles `@extend %b` to both placeholders when main.scss sees both modules
+    // (`.x { color: red } .x { color: blue }`), so the rename changes what `.x` extends.
+    const modules = { "_base.scss": "%a { color: red; }\n", "_other.scss": "%b { color: blue; }\n" };
+    await withScssProject(
+      { ...modules, "main.scss": '@use "base";\n@use "other";\n.x { @extend %a; }\n' },
+      async (project) => {
+        const renamed = await previewScssRename(project, "a", "_base.scss", "b");
+        expect(renamed.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`)).toEqual([
+          "name_collision:_other.scss",
+        ]);
+        expect(renamed.safe).toBe(false);
+        expect((await previewScssRename(project, "a", "_base.scss", "c")).safe).toBe(true);
+      },
+    );
+    // No file that extends `%a` sees _other.scss, so `b` stays free.
+    await withScssProject(
+      {
+        ...modules,
+        "main.scss": '@use "base";\n.x { @extend %a; }\n',
+        "other-main.scss": '@use "other";\n.y { @extend %b; }\n',
+      },
+      async (project) => {
+        const renamed = await previewScssRename(project, "a", "_base.scss", "b");
+        expect(renamed.conflicts).toEqual([]);
+        expect(renamed.safe).toBe(true);
+      },
+    );
+  });
+
+  it("reads a string or comment inside the interpolation of an unquoted url() as trivia", () => {
+    // dart-sass evaluates the expression inside `#{...}`: a quoted `'$primary'` is text, and a `}`
+    // inside a string or comment closes nothing.
+    const reads = (source: string): string[] => extractScssFacts(source).uses.map((use) => use.text);
+    expect(reads("$primary: red;\n.a { background: url(#{'$primary'}.svg); }\n")).toEqual([]);
+    expect(reads("$base: img;\n.a { background: url(#{$base}/a.svg); }\n")).toEqual(["$base"]);
+    expect(reads("$later: 1px;\n.a { background: url(#{'}'}x.svg); w: $later; }\n")).toEqual(["$later"]);
+    expect(reads("$later: 1px;\n.a { background: url(#{/* } */ 'x'}.svg); w: $later; }\n")).toEqual(["$later"]);
+  });
+
+  it("marks an @import inside a rule or an at-rule block as nested", () => {
+    const facts = extractScssFacts('@import "top";\n.a { @import "inner"; }\n@media print { @import "media"; }\n');
+    expect(facts.loads.map((load) => `${load.url}:${load.nested}`)).toEqual(["top:false", "inner:true", "media:true"]);
+  });
+
+  it.runIf(native)("leaves the names a nested @import brings in unproven, and out of the file scope", async () => {
+    // dart-sass declares what `.a { @import "vars"; }` imports inside `.a` only (`$x` is an error
+    // outside the block), and this scan does not follow blocks, so no use of it is proved.
+    await withScssProject(
+      { "_vars.scss": "$x: 1;\n", "main.scss": '.a { @import "vars"; w: $x; }\n' },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "w: $x", 0, 3)).toBe("not_found");
+        const refs = await scssRefs(project, "_vars.scss", "$x");
+        expect(refs.coverage?.state).toBe("partial");
+        expect(refs.coverage?.affectedFiles?.map((file) => project.relative(file))).toEqual(["main.scss"]);
+      },
+    );
+    // The `$x` that `_lib.scss` imports inside `.a` is not a global of main.scss: `.b` reads the
+    // variable of _other.scss (dart-sass: `.b { w: 2 }`).
+    await withScssProject(
+      {
+        "_vars.scss": "$x: 1;\n",
+        "_lib.scss": '.a { @import "vars"; }\n',
+        "_other.scss": "$x: 2;\n",
+        "main.scss": '@import "lib";\n@import "other";\n.b { w: $x; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "w: $x", 0, 3)).toBe("_other.scss:1");
+      },
+    );
+  });
 });

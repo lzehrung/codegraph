@@ -6004,4 +6004,44 @@ describe("Go to Definition: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("leaves a name that a nested @import brings in unresolved, and keeps the variable of the next import", async () => {
+    // dart-sass declares what `.a { @import "vars"; }` imports inside `.a` only.
+    const nested = { "_vars.scss": "$x: 1;\n", "main.scss": '.a { @import "vars"; w: $x; }\n' };
+    const first = await scssProject(nested);
+    try {
+      await testGoToDefinition(
+        first.index,
+        first.paths["main.scss"]!,
+        1,
+        columnOf(nested["main.scss"], "$x"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(first.root, { recursive: true, force: true });
+    }
+    // The `$x` that `_lib.scss` imports inside `.a` is no global: `.b` reads the variable of `_other.scss`.
+    const files = {
+      "_vars.scss": "$x: 1;\n",
+      "_lib.scss": '.a { @import "vars"; }\n',
+      "_other.scss": "$x: 2;\n",
+      "main.scss": '@import "lib";\n@import "other";\n.b { w: $x; }\n',
+    };
+    const second = await scssProject(files);
+    try {
+      const mainLine = files["main.scss"].split("\n")[2]!;
+      await testGoToDefinition(
+        second.index,
+        second.paths["main.scss"]!,
+        3,
+        columnOf(mainLine, "$x"),
+        second.paths["_other.scss"]!,
+        1,
+      );
+    } finally {
+      await fsp.rm(second.root, { recursive: true, force: true });
+    }
+  });
 });
