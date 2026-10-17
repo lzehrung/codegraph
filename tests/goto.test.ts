@@ -6044,4 +6044,59 @@ describe("Go to Definition: SCSS Sass modules", () => {
       await fsp.rm(second.root, { recursive: true, force: true });
     }
   });
+
+  it("reads the module variable in the default of a parameter with its name, and the parameter in the body", async () => {
+    // dart-sass: `@mixin box($size: $size)` reads the module `$size` in its default.
+    const files = {
+      "_vars.scss": "$size: 1px;\n",
+      "star.scss": '@use "vars" as *;\n@mixin box($size: $size) { width: $size; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const line = files["star.scss"].split("\n")[1]!;
+      await testGoToDefinition(
+        index,
+        paths["star.scss"]!,
+        2,
+        columnOf(line, "$size: $size", 7),
+        paths["_vars.scss"]!,
+        1,
+      );
+      await testGoToDefinition(
+        index,
+        paths["star.scss"]!,
+        2,
+        columnOf(line, "width: $size", 7),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("compares a placeholder as written, so %foo-bar and %foo_bar are two placeholders", async () => {
+    // dart-sass: `@extend %foo_bar` finds no target when only `%foo-bar` exists.
+    const files = {
+      "_ph.scss": "%foo-bar { color: red; }\n",
+      "main.scss": '@use "ph";\n.a { @extend %foo-bar; }\n.b { @extend %foo_bar; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const lines = files["main.scss"].split("\n");
+      await testGoToDefinition(index, paths["main.scss"]!, 2, columnOf(lines[1]!, "foo-bar"), paths["_ph.scss"]!, 1);
+      await testGoToDefinition(
+        index,
+        paths["main.scss"]!,
+        3,
+        columnOf(lines[2]!, "foo_bar"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

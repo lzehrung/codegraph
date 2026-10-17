@@ -213,6 +213,32 @@ describe("trivia masking keeps following code visible per language", () => {
     expect(code).toContain("$later: 2;");
   });
 
+  it("masks a string or comment inside the interpolation of a quoted string, and keeps the expression", () => {
+    // The expression of `#{...}` in a quoted SCSS string is code: only the strings and comments in it are trivia.
+    const visible = (source: string, languageId: string): string => {
+      const mask = buildTriviaMask(source, languageId, { holes: true, maskCssUrls: true });
+      let code = "";
+      for (let index = 0; index < source.length; index += 1) code += mask[index] ? " " : source.charAt(index);
+      return code;
+    };
+    const scss = visible(
+      '$a: 1;\n.a { c: "#{\'$str\'}"; d: "x #{$base} y"; e: "#{/* $note */ 1}"; f: "a #{ "b #{\'$deep\'} c" } d"; }\n$later: 2;\n',
+      "scss",
+    );
+    expect(scss).not.toContain("$str");
+    expect(scss).not.toContain("$note");
+    expect(scss).not.toContain("$deep");
+    expect(scss).toContain("#{$base}");
+    expect(scss).toContain("$later: 2;");
+    // A template literal behaves the same: the hole shows `call(`, and its string and comment are trivia.
+    const js = visible('const t = `a ${ call("lit") /* note */ } b ${ keep } c`;\nconst next = 1;\n', "js");
+    expect(js).not.toContain("lit");
+    expect(js).not.toContain("note");
+    expect(js).toContain("call(");
+    expect(js).toContain("${ keep }");
+    expect(js).toContain("const next = 1;");
+  });
+
   it("preserves offsets across an astral character inside masked trivia", () => {
     const source = "# \u{1F389} don't\nimport os\n";
     const masked = maskPythonCommentsAndStrings(source);

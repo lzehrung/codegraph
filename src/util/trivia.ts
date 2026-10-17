@@ -199,7 +199,7 @@ function unquotedCssUrlConstruct(source: string, row: TriviaRow, index: number):
         segmentStart = holeEnd;
       }
       if (segmentStart < cursor) maskSpans.push([segmentStart, cursor]);
-      maskSpans.push(...holeTrivia);
+      for (const span of holeTrivia) maskSpans.push(span);
       maskSpans.push([cursor, cursor + 1]);
       return {
         start: index,
@@ -221,7 +221,7 @@ function unquotedCssUrlConstruct(source: string, row: TriviaRow, index: number):
     if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {
       const hole = collectInterpolationSpans(source, row, cursor, CSS_URL_INTERPOLATION);
       holes.push([cursor, hole.end]);
-      holeTrivia.push(...hole.spans);
+      for (const span of hole.spans) holeTrivia.push(span);
       cursor = hole.end;
       continue;
     }
@@ -475,8 +475,8 @@ function quotedStringConstruct(
 }
 
 /** Walks a literal body and returns the index just past the close delimiter plus the body
- * segments a span mask marks. Excluded interpolation expressions stay unmasked; the close
- * delimiter itself is never part of the segments. */
+ * segments a span mask marks. Excluded interpolation expressions stay unmasked, except for the
+ * strings and comments inside them; the close delimiter itself is never part of the segments. */
 function collectQuotedBody(
   source: string,
   row: TriviaRow,
@@ -508,6 +508,7 @@ function collectQuotedBody(
         if (interpolation.excludeFromMask) {
           pushSegment(cursor);
           const inner = collectInterpolationSpans(source, row, cursor, interpolation);
+          for (const span of inner.spans) segments.push(span);
           cursor = inner.end;
           segmentStart = cursor;
           continue;

@@ -26,7 +26,10 @@ export type ScssDeclaration = {
   kind: ScssMemberKind;
   /** Spelling in source: `$primary`, `pad`, or `ph` (no `%`). */
   name: string;
-  /** Sass identity of the name: `-` and `_` are one character, and the sigil is dropped. */
+  /**
+   * Sass identity of the name: `-` and `_` are one character, and the sigil is dropped. A
+   * placeholder keeps its exact spelling, so `%a-b` and `%a_b` are two placeholders.
+   */
   canonical: string;
   range: Range;
   /** True for a module member: a top-level declaration, or a `$name: value !global` assignment. */
@@ -69,7 +72,7 @@ export type ScssUse = {
   namespace: string | null;
   /** Member token as written (`$primary`, `$theme-primary`, `pad`). */
   text: string;
-  /** Sass identity of `text`. */
+  /** Sass identity of `text`; a placeholder keeps its exact spelling. */
   canonical: string;
   nameStart: number;
   nameEnd: number;
@@ -92,7 +95,13 @@ export type ScssLocalBinding = {
   range: Range;
 };
 
-export type ScssDynamicForm = "load-css" | "get-function" | "module-variables" | "module-functions";
+export type ScssDynamicForm =
+  | "load-css"
+  | "get-function"
+  | "get-mixin"
+  | "module-variables"
+  | "module-functions"
+  | "module-mixins";
 
 export type ScssDynamic = {
   form: ScssDynamicForm;
@@ -110,7 +119,14 @@ export type ScssFileFacts = {
   lineStarts: readonly number[];
 };
 
-const DYNAMIC_FORMS = new Set<string>(["load-css", "get-function", "module-variables", "module-functions"]);
+const DYNAMIC_FORMS = new Set<string>([
+  "load-css",
+  "get-function",
+  "get-mixin",
+  "module-variables",
+  "module-functions",
+  "module-mixins",
+]);
 
 /** Sass compares identifiers after treating `_` as `-`, and ignores one leading `$` or `%`. */
 export function sassCanonical(name: string): string {
@@ -324,7 +340,9 @@ export function extractScssFacts(source: string): ScssFileFacts {
   });
 
   const addUse = (use: Omit<ScssUse, "canonical" | "hitStart"> & { hitStart?: number }): void => {
-    uses.push({ ...use, canonical: sassCanonical(use.text), hitStart: use.hitStart ?? use.nameStart });
+    // Sass folds `_` into `-` for variables, mixins, and functions, but compares a placeholder as written.
+    const canonical = use.kind === "placeholder" ? use.text : sassCanonical(use.text);
+    uses.push({ ...use, canonical, hitStart: use.hitStart ?? use.nameStart });
   };
 
   const addVariableUse = (start: number, end: number, namespace: string | null): void => {
@@ -885,6 +903,36 @@ export function extractScssFacts(source: string): ScssFileFacts {
     return from;
   };
 
+  /**
+   * The offset of the `,` or `)` that ends a parameter whose default value starts at `from`. A
+   * comma or a parenthesis inside a nested bracket or an interpolation does not end it.
+   */
+  const parameterEnd = (from: number): number => {
+    let depth = 0;
+    let interpolation = 0;
+    for (let cursor = from; cursor < length; cursor += 1) {
+      if (mask[cursor]) continue;
+      const unit = source.charCodeAt(cursor);
+      if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {
+        interpolation += 1;
+        cursor += 1;
+      } else if (interpolation) {
+        if (unit === 0x7b) interpolation += 1;
+        if (unit === 0x7d) interpolation -= 1;
+      } else if (unit === 0x28 || unit === 0x5b) {
+        depth += 1;
+      } else if (unit === 0x29 || unit === 0x5d) {
+        if (!depth) return cursor;
+        depth -= 1;
+      } else if (unit === 0x2c && !depth) {
+        return cursor;
+      } else if (unit === 0x3b || unit === 0x7b || unit === 0x7d) {
+        return cursor;
+      }
+    }
+    return length;
+  };
+
   /** One `$name` token: a parameter, a declaration, a keyword-argument name, or a use. */
   const handleVariable = (start: number): number => {
     const variable = readIdent(source, start + 1);
@@ -894,8 +942,9 @@ export function extractScssFacts(source: string): ScssFileFacts {
     const isColon = source.charCodeAt(next) === 0x3a && source.charCodeAt(next + 1) !== 0x3a;
     const top = parens[parens.length - 1];
     if (top?.mode === "params" && top.argStart) {
-      // A mixin or function parameter hides a member from its own position to the end of the body.
-      pendingLocals.push(makeLocal(start, end, start));
+      // A parameter hides a member from the end of its default value to the end of the body. Its own
+      // default still reads the member. The default of a later parameter reads the parameter.
+      pendingLocals.push(makeLocal(start, end, isColon ? parameterEnd(next + 1) : end));
     } else if (statementStart && isColon) {
       const flags = statementFlags(next);
       const canonical = sassCanonical(variable.text);
@@ -1117,7 +1166,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
           declarations.push({
             kind: "placeholder",
             name: placeholder.text,
-            canonical: sassCanonical(placeholder.text),
+            canonical: placeholder.text,
             range: rangeOf(index + 1, placeholder.end),
             topLevel: true,
             isDefault: false,

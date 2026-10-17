@@ -50,7 +50,7 @@ import {
   scssRenamedName,
   scssReplacementText,
 } from "../scss/resolution.js";
-import { SCSS_IDENTIFIER_PATTERN } from "../scss/syntax.js";
+import { sassCanonical, SCSS_IDENTIFIER_PATTERN } from "../scss/syntax.js";
 
 export type RenamePreviewRequest = {
   root: string;
@@ -678,7 +678,7 @@ async function addScssConflicts(
       location: { file: collisionFile, range: collision.range },
       reason: "name_collision",
       existingHandle: semanticSymbolFromDef(snapshot, collision).handle,
-      message: `A scope that sees "${target.localName}" already uses "${newName}" for another member.`,
+      message: `A scope that sees this member after the rename already uses "${newName}" for another member.`,
     });
   }
   const { captured, inaccessible } = await scssRenameUseConflicts(snapshot.index, target, newName);
@@ -725,6 +725,10 @@ async function addScopeConflicts(
   if (!moduleIndex) return;
   const file = normalizeAgentFilePath(snapshot.root, target.file);
   let localCollision: SymbolDef | undefined;
+  // Sass folds `_` into `-` in a variable name, so `$a_b` and `$a-b` are one variable.
+  const foldsName = isScssFile(snapshot.index, target.file) && target.localName.startsWith("$");
+  const sameName = (name: string): boolean =>
+    name === newName || (foldsName && sassCanonical(name) === sassCanonical(newName));
   try {
     const parsed = await ensureParsedContext(
       target.file,
@@ -742,15 +746,20 @@ async function addScopeConflicts(
     const targetScope = targetBinding
       ? scopeIndex.allScopes.find((scope) => scope.map.get(canonicalTargetName) === targetBinding)
       : undefined;
-    const collisionBinding = targetScope?.map.get(parsed.sup.normalizeIdentifier(newName));
-    if (collisionBinding?.def) {
+    let collisionBinding = targetScope?.map.get(parsed.sup.normalizeIdentifier(newName));
+    if (!collisionBinding && foldsName) {
+      collisionBinding = [...(targetScope?.map.values() ?? [])].find(
+        (binding) => binding !== targetBinding && sameName(binding.name),
+      );
+    }
+    const collisionDef = collisionBinding?.def;
+    if (collisionDef) {
       localCollision = moduleIndex.locals.find(
-        (candidate) =>
-          candidate.localName === newName && candidate.range.start.index === collisionBinding.def?.start.index,
+        (candidate) => sameName(candidate.localName) && candidate.range.start.index === collisionDef.start.index,
       );
     }
   } catch {
-    localCollision = moduleIndex.locals.find((candidate) => candidate !== target && candidate.localName === newName);
+    localCollision = moduleIndex.locals.find((candidate) => candidate !== target && sameName(candidate.localName));
   }
   if (localCollision) {
     conflicts.push({

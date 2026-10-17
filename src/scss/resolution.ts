@@ -107,6 +107,11 @@ type ProjectModel = {
   hostsByStem: Map<string, FileId[]>;
   /** Files that are not SCSS but import a file, by the key of the imported file. */
   hostsByTarget: Map<string, FileId[]>;
+  /**
+   * A definition that exposures show although its name is private. Rename preview sets it on a
+   * copy of the model to see the scopes that a private member joins when it takes a public name.
+   */
+  unhide?: SymbolDef;
 };
 
 /** A member as one module exposes it. A forward prefix changes `exposed`, never `def`. */
@@ -175,7 +180,8 @@ function defKey(line: number, column: number, canonical: string): string {
 }
 
 function isPrivateName(canonical: string): boolean {
-  return canonical.startsWith("-");
+  // Variables, mixins, and functions fold `_` into `-`; a placeholder keeps the spelling it has.
+  return canonical.startsWith("-") || canonical.startsWith("_");
 }
 
 function appendTo<T>(table: Map<string, T[]>, key: string, value: T): void {
@@ -252,7 +258,12 @@ function buildOwnMembers(
   const placeholders: PlaceholderDeclaration[] = [];
   for (const declaration of facts.declarations) {
     if (!declaration.topLevel) continue;
-    const siteKey = defKey(declaration.range.start.line, declaration.range.start.column, declaration.canonical);
+    // The key matches `defAt`: the position of the definition and its name with `_` folded into `-`.
+    const siteKey = defKey(
+      declaration.range.start.line,
+      declaration.range.start.column,
+      sassCanonical(declaration.name),
+    );
     const def = defAt.get(siteKey);
     if (declaration.kind === "placeholder") {
       if (def) placeholders.push({ def, declared: declaration.canonical });
@@ -470,7 +481,7 @@ function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk
   const members: Member[] = [];
   let incomplete = false;
   for (const member of current.own) {
-    if (mode === "module" && isPrivateName(member.declared)) continue;
+    if (mode === "module" && isPrivateName(member.declared) && member.def !== model.unhide) continue;
     members.push(ownAsMember(member, mode === "import"));
   }
   for (const resolved of current.loads) {
@@ -486,7 +497,7 @@ function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk
         if (passesFilter(member, load)) members.push(withPrefix(member, load.prefix));
       } else if (mode === "import") {
         members.push(member);
-      } else if (!isPrivateName(member.exposed)) {
+      } else if (!isPrivateName(member.exposed) || member.def === model.unhide) {
         // A consumer of a module cannot see a private name that `@import` brought in.
         members.push({ ...member, importOnly: false });
       }
@@ -857,6 +868,13 @@ function assignsStarVariable(model: ProjectModel, file: ModuleModel, canonical: 
   });
 }
 
+/** True when a consumer of `file` can reach `def` through it: the file declares it, forwards it, or imports it. */
+function exposesDefinition(model: ProjectModel, file: ModuleModel, def: SymbolDef): boolean {
+  return (["module", "import"] as const).some((mode) =>
+    exposureOf(model, file.key, mode, newWalk()).members.some((member) => member.def === def),
+  );
+}
+
 /**
  * Files that can see `member`, plus files whose unresolved URL or `meta.load-css` may load the
  * declaring file. `unavailable` files were not fully proved. A directory index (`_index.scss`)
@@ -935,8 +953,19 @@ export async function scssReferenceCandidates(
     }
   }
 
-  const stems = new Set<string>([moduleStem(def.file)]);
-  if (moduleStem(def.file) === "index") stems.add(moduleStem(path.dirname(def.file)));
+  // A URL can reach the member through the declaring file, or through a module that forwards or
+  // imports it. Each of them gives a stem that a load of an unresolved URL can name.
+  const stems = new Set<string>();
+  const addStems = (file: FileId): void => {
+    const stem = moduleStem(file);
+    stems.add(stem);
+    if (stem === "index") stems.add(moduleStem(path.dirname(file)));
+  };
+  addStems(def.file);
+  for (const file of files) {
+    const current = model.files.get(fileIdentityKey(file));
+    if (current && exposesDefinition(model, current, def)) addStems(file);
+  }
   for (const current of model.files.values()) {
     if (seen.has(current.key)) continue;
     const unresolvedMatch = [...stems].some((stem) => current.unresolvedStems.has(stem));
@@ -1006,7 +1035,8 @@ export async function scssRenameCollisions(index: ProjectIndex, def: SymbolDef, 
   const model = await projectModel(index);
   const member = await scssMemberForDefinition(index, def);
   if (!member) return [];
-  const next = sassCanonical(newName);
+  // Sass compares a placeholder as written and folds `_` into `-` for every other member.
+  const next = member.kind === "placeholder" ? sassBare(newName) : sassCanonical(newName);
   if (next === member.declared) return [];
   const collisions = new Set<SymbolDef>();
   const { files } = await scssReferenceCandidates(index, member);
@@ -1035,12 +1065,16 @@ export async function scssRenameCollisions(index: ProjectIndex, def: SymbolDef, 
       }
     }
   };
+  // A private member is hidden from the files that load it with `@use ... as *` or `@forward`. A
+  // public member joins their scopes, so those scopes must not already use the new name.
+  const becomesPublic = isPrivateName(member.declared) && !isPrivateName(next);
+  const view: ProjectModel = becomesPublic ? { ...model, exposures: new Map(), unhide: member.def } : model;
   for (const file of files) {
     const current = model.files.get(fileIdentityKey(file));
     if (!current) continue;
-    check(exposureOf(model, current.key, "module", newWalk()).members);
-    check(exposureOf(model, current.key, "import", newWalk()).members);
-    check(globalScope(model, current));
+    check(exposureOf(view, current.key, "module", newWalk()).members);
+    check(exposureOf(view, current.key, "import", newWalk()).members);
+    check(globalScope(view, current));
   }
   return [...collisions];
 }

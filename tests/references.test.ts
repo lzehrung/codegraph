@@ -6664,4 +6664,62 @@ describe("Find References: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("finds the read in the default of a parameter with the member's name, and not the read of the parameter", async () => {
+    const files = {
+      "_vars.scss": "$size: 1px;\n",
+      "star.scss": '@use "vars" as *;\n@mixin box($size: $size) { width: $size; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const line = files["star.scss"].split("\n")[1]!;
+      const expected = [
+        { file: paths["_vars.scss"]!, line: 1, column: 1 },
+        { file: paths["star.scss"]!, line: 2, column: tokenColumn(line, "$size", 1) },
+      ];
+      const result = await testFindReferences(index, paths["_vars.scss"]!, 1, 1, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when a style block loads a forwarding module by an unresolved URL", async () => {
+    // The graph reads the URL of a style block as `external`, and `_theme.scss` forwards the declaring
+    // module, so the block reaches `$primary` through the stem `theme`, not `colors`.
+    const files = {
+      "_colors.scss": "$primary: red;\n",
+      "_theme.scss": '@forward "colors";\n',
+      "main.scss": '@use "theme";\n.a { color: theme.$primary; }\n',
+      "Comp.vue":
+        '<template><div /></template>\n<style lang="scss">\n@use "./theme";\n.a { color: theme.$primary; }\n</style>\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_colors.scss"]!, line: 1, column: 1 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["Comp.vue"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage for a file that looks a mixin up by name", async () => {
+    const files = {
+      "_lib.scss": "@mixin pad { padding: 1px; }\n",
+      "main.scss": '@use "sass:meta";\n@use "lib";\n.a { @include lib.pad; x: meta.get-mixin("pad", "lib"); }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_lib.scss"]!, line: 1, column: 8 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["main.scss"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
