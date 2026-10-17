@@ -170,6 +170,35 @@ describe("trivia masking keeps following code visible per language", () => {
     expect(masked).toContain(" d { content: ");
   });
 
+  it("masks an SCSS line comment through the line break, so an apostrophe in it opens no string", () => {
+    const source = "// Bootstrap's grid\n$primary: red;\n.a { content: 'x'; } // it's done\n$later: 1;\n";
+    const masked = maskTrivia(source, "scss");
+    expectOffsetsPreserved(source, masked);
+    expect(masked).not.toContain("Bootstrap");
+    expect(masked).not.toContain("it's done");
+    expect(masked).not.toContain("'x'");
+    expect(masked).toContain("$primary: red;");
+    expect(masked).toContain("$later: 1;");
+  });
+
+  it("reads an unquoted SCSS url(...) as one opaque token and leaves url($path) to the ordinary rules", () => {
+    const source = ".a { b: url(http://x/y.png); c: url(a/*b.png); d: url(//cdn/z.png); }\n$later: 1;\n";
+    const rendered = maskTrivia(source, "scss");
+    expectOffsetsPreserved(source, rendered);
+    expect(rendered).toContain("url(http://x/y.png)");
+    expect(rendered).toContain("url(a/*b.png)");
+    expect(rendered).toContain("url(//cdn/z.png)");
+    expect(rendered).toContain("$later: 1;");
+    const code = maskTrivia(source, "scss", { maskCssUrls: true });
+    expectOffsetsPreserved(source, code);
+    expect(code).not.toContain("http://x");
+    expect(code).not.toContain("cdn");
+    expect(code).toContain("$later: 1;");
+    const call = maskTrivia('.a { b: url($path); c: url("//q/r"); }\n', "scss", { maskCssUrls: true });
+    expect(call).toContain("url($path)");
+    expect(call).not.toContain("//q/r");
+  });
+
   it("preserves offsets across an astral character inside masked trivia", () => {
     const source = "# \u{1F389} don't\nimport os\n";
     const masked = maskPythonCommentsAndStrings(source);

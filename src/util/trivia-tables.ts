@@ -67,6 +67,12 @@ export type TriviaRow = {
   percentLiterals?: boolean;
   /** Zig multiline strings: backslash-prefixed continuation lines. */
   zigMultiline?: boolean;
+  /**
+   * `url(` with unquoted content (Sass and CSS). The content is one opaque token, so a line
+   * comment opener, a quote, or a block comment opener inside it starts no comment or string:
+   * `url(http://x/y.png)` has no comment. The text stays visible unless the caller sets `maskCssUrls`.
+   */
+  unquotedCssUrl?: boolean;
 };
 
 const SLASH_STAR_COMMENT: TriviaBlockComment = { open: "/*", close: "*/" };
@@ -195,8 +201,8 @@ const ZIG_ROW: TriviaRow = {
   zigMultiline: true,
 };
 
-// CSS family: block comments only. `//` is SCSS/Less comment syntax, but an unquoted `url(//...)`
-// is not, so a line comment would blank real declarations.
+// CSS and Less: block comments only. Less has `//` comments, but this row keeps `//` visible so
+// an unquoted `url(//...)` is not read as a comment, and Less has no unquoted-url rule here.
 const CSS_FAMILY_ROW: TriviaRow = {
   lineComments: [],
   blockComments: [SLASH_STAR_COMMENT],
@@ -204,6 +210,19 @@ const CSS_FAMILY_ROW: TriviaRow = {
     { open: "'", close: "'", escape: "\\" },
     { open: '"', close: '"', escape: "\\" },
   ],
+};
+
+// SCSS: `//` comments end at the line break and are read before any quote, so an apostrophe in
+// `// don't` cannot open a string. `#{...}` is code even inside a string. An unquoted `url(...)`
+// is one token, so `url(http://x/y.png)` and `url(//cdn/y.png)` contain no comment.
+const SCSS_ROW: TriviaRow = {
+  lineComments: ["//"],
+  blockComments: [SLASH_STAR_COMMENT],
+  strings: [
+    { open: "'", close: "'", escape: "\\", interpolation: { start: "#{", end: "}", excludeFromMask: true } },
+    { open: '"', close: '"', escape: "\\", interpolation: { start: "#{", end: "}", excludeFromMask: true } },
+  ],
+  unquotedCssUrl: true,
 };
 
 const C_FAMILY_ROW: TriviaRow = {
@@ -261,7 +280,7 @@ const TRIVIA_ROWS: Record<string, TriviaRow> = {
   zig: ZIG_ROW,
   css: CSS_FAMILY_ROW,
   less: CSS_FAMILY_ROW,
-  scss: CSS_FAMILY_ROW,
+  scss: SCSS_ROW,
   c: C_FAMILY_ROW,
   cpp: C_FAMILY_ROW,
   java: JAVA_ROW,

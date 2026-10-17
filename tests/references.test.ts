@@ -6476,3 +6476,100 @@ describe("Find References: implicit compilation-unit peers", () => {
     }
   });
 });
+
+describe("Find References: SCSS Sass modules", () => {
+  async function scssProject(files: Record<string, string>) {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-references-"));
+    const paths: Record<string, string> = {};
+    for (const [name, text] of Object.entries(files)) {
+      paths[name] = path.join(root, name).replace(/\\/g, "/");
+      await fsp.writeFile(paths[name], text, "utf8");
+    }
+    const index = await createTestIndexFromFiles(root, Object.values(paths));
+    return { root, paths, index };
+  }
+
+  it("finds the uses of a variable from either of two top-level assignments, with complete coverage", async () => {
+    const files = {
+      "_theme.scss": "$accent: 10px !default;\n$accent: $accent * 2;\n",
+      "main.scss": '@use "theme";\n.a { width: theme.$accent; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_theme.scss"]!, line: 1, column: 1 },
+        { file: paths["_theme.scss"]!, line: 2, column: 1 },
+        { file: paths["_theme.scss"]!, line: 2, column: tokenColumn("$accent: $accent * 2;", "$accent", 1) },
+        { file: paths["main.scss"]!, line: 2, column: tokenColumn(".a { width: theme.$accent; }", "$accent") },
+      ];
+      for (const line of [1, 2]) {
+        const result = await testFindReferences(index, paths["_theme.scss"]!, line, 1, expected);
+        expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lists no parameter, loop variable, or keyword name as a use of the module variable", async () => {
+    const files = {
+      "_vars.scss": "$size: 1px;\n@mixin box($w, $size: 2px) { width: $w; height: $size; }\n",
+      "star.scss":
+        '@use "vars" as *;\n.a { @include box(1px, $size: 3px); width: $size; @each $size in 1px, 2px { margin: $size; } }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_vars.scss"]!, line: 1, column: 1 },
+        {
+          file: paths["star.scss"]!,
+          line: 2,
+          column: tokenColumn(".a { @include box(1px, $size: 3px); width: $size;", "$size", 1),
+        },
+      ];
+      const result = await testFindReferences(index, paths["_vars.scss"]!, 1, 1, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps declarations that follow an apostrophe in a // comment", async () => {
+    const files = {
+      "_colors.scss": "// Bootstrap's palette\n$primary: red;\n.swatch { color: $primary; }\n",
+      "main.scss": '@use "colors";\n.a { color: colors.$primary; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_colors.scss"]!, line: 2, column: 1 },
+        { file: paths["_colors.scss"]!, line: 3, column: tokenColumn(".swatch { color: $primary; }", "$primary") },
+        { file: paths["main.scss"]!, line: 2, column: tokenColumn(".a { color: colors.$primary; }", "$primary") },
+      ];
+      const result = await testFindReferences(index, paths["_colors.scss"]!, 2, 1, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when a Vue style block may load the declaring module", async () => {
+    const files = {
+      "_colors.scss": "$primary: red;\n",
+      "main.scss": '@use "colors";\n.a { color: colors.$primary; }\n',
+      "Comp.vue":
+        '<template><div /></template>\n<style lang="scss">\n@use "./colors";\n.a { color: colors.$primary; }\n</style>\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_colors.scss"]!, line: 1, column: 1 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.reasons).toContain("strategy_unavailable");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["Comp.vue"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

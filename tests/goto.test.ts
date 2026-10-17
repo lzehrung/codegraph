@@ -5855,3 +5855,111 @@ describe("Shared-owner member navigation (C# partials, Swift extensions, Zig imp
     }
   });
 });
+
+describe("Go to Definition: SCSS Sass modules", () => {
+  async function scssProject(files: Record<string, string>) {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-goto-"));
+    const paths: Record<string, string> = {};
+    for (const [name, text] of Object.entries(files)) {
+      paths[name] = path.join(root, name).replace(/\\/g, "/");
+      await fsp.writeFile(paths[name], text, "utf8");
+    }
+    const index = await createTestIndexFromFiles(root, Object.values(paths));
+    return { root, paths, index };
+  }
+
+  function columnOf(source: string, needle: string, delta = 0): number {
+    const at = source.indexOf(needle);
+    if (at < 0) throw new Error(`Expected ${needle} in ${source}`);
+    return at - (source.lastIndexOf("\n", at - 1) + 1) + 1 + delta;
+  }
+
+  it("resolves namespaced, unnamespaced star, and imported members to the declaring partial", async () => {
+    const files = {
+      "_colors.scss": "$primary: red;\n@mixin pad { padding: 1px; }\n",
+      "main.scss": '@use "colors";\n.a { color: colors.$primary; @include colors.pad; }\n',
+      "star.scss": '@use "colors" as *;\n.a { color: $primary; @include pad; }\n',
+      "legacy.scss": '@import "colors";\n.a { color: $primary; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const colors = paths["_colors.scss"]!;
+      const mainLine = files["main.scss"].split("\n")[1]!;
+      await testGoToDefinition(index, paths["main.scss"]!, 2, columnOf(mainLine, "$primary"), colors, 1);
+      await testGoToDefinition(index, paths["main.scss"]!, 2, columnOf(mainLine, "colors.pad", 7), colors, 2);
+      const starLine = files["star.scss"].split("\n")[1]!;
+      await testGoToDefinition(index, paths["star.scss"]!, 2, columnOf(starLine, "$primary"), colors, 1);
+      await testGoToDefinition(index, paths["star.scss"]!, 2, columnOf(starLine, "pad"), colors, 2);
+      const legacyLine = files["legacy.scss"].split("\n")[1]!;
+      await testGoToDefinition(index, paths["legacy.scss"]!, 2, columnOf(legacyLine, "$primary"), colors, 1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("never resolves a parameter, loop variable, or keyword name to a module member", async () => {
+    const files = {
+      "_vars.scss": "$size: 1px;\n@mixin box($w, $size: 2px) { width: $w; height: $size; }\n",
+      "star.scss":
+        '@use "vars" as *;\n.a { @include box(1px, $size: 3px); width: $size; @each $size in 1px, 2px { margin: $size; } }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const starLine = files["star.scss"].split("\n")[1]!;
+      // The plain use resolves to the module member.
+      await testGoToDefinition(
+        index,
+        paths["star.scss"]!,
+        2,
+        columnOf(starLine, "width: $size", 7),
+        paths["_vars.scss"]!,
+        1,
+      );
+      const hidden: Array<[string, number, number]> = [
+        ["_vars.scss", 2, columnOf(files["_vars.scss"].split("\n")[1]!, "height: $size", 8)],
+        ["star.scss", 2, columnOf(starLine, "$size: 3px")],
+        ["star.scss", 2, columnOf(starLine, "margin: $size", 8)],
+      ];
+      for (const [name, line, column] of hidden) {
+        const result = await goToDefinition(index, { file: paths[name]!, line, column });
+        const resolvedToModule =
+          result.status === "ok" &&
+          result.definition.file === paths["_vars.scss"] &&
+          result.definition.range.start.line === 1;
+        expect(resolvedToModule, `${name}:${line}:${column}`).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("matches forward show names with the prefix and keeps the first of two assignments", async () => {
+    const files = {
+      "_source.scss": "$ink: black !default;\n$ink: white;\n@mixin pad { padding: 1px; }\n",
+      "agg.scss": '@forward "source" as theme-* show $theme-ink, theme-pad;\n',
+      "user.scss": '@use "agg";\n.a { color: agg.$theme-ink; @include agg.theme-pad; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const userLine = files["user.scss"].split("\n")[1]!;
+      await testGoToDefinition(
+        index,
+        paths["user.scss"]!,
+        2,
+        columnOf(userLine, "$theme-ink"),
+        paths["_source.scss"]!,
+        1,
+      );
+      await testGoToDefinition(
+        index,
+        paths["user.scss"]!,
+        2,
+        columnOf(userLine, "theme-pad"),
+        paths["_source.scss"]!,
+        3,
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

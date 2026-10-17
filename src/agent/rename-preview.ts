@@ -42,6 +42,14 @@ import {
   terraformScopedDataCaptures,
 } from "../terraform/resolution.js";
 import { TERRAFORM_IDENTIFIER_PATTERN } from "../terraform/syntax.js";
+import {
+  isScssFile,
+  scssMemberForDefinition,
+  scssRenameCaptures,
+  scssRenameCollisions,
+  scssReplacementText,
+} from "../scss/resolution.js";
+import { SCSS_IDENTIFIER_PATTERN } from "../scss/syntax.js";
 
 export type RenamePreviewRequest = {
   root: string;
@@ -338,9 +346,10 @@ export async function previewRenameInSnapshot(
   );
   // Terraform exports are its `variable` and `output` declarations, which the definition and
   // reference edits already cover; the ECMAScript export-text scan would match comments.
-  const exportDeclarations: ExportDeclarationScan = isTerraformFile(snapshot.index, resolved.def.file)
-    ? { candidates: [], missingFiles: [] }
-    : await collectExportDeclarationCandidates(snapshot, resolved.def, loadSource);
+  const exportDeclarations: ExportDeclarationScan =
+    isTerraformFile(snapshot.index, resolved.def.file) || isScssFile(snapshot.index, resolved.def.file)
+      ? { candidates: [], missingFiles: [] }
+      : await collectExportDeclarationCandidates(snapshot, resolved.def, loadSource);
   const allCandidates: CandidateEdit[] = [
     ...definitionCandidates,
     ...importDeclarations.candidates,
@@ -363,7 +372,7 @@ export async function previewRenameInSnapshot(
     await addScopeConflicts(snapshot, definition, request.newName, [], conflicts);
   }
   // Terraform exports inputs and outputs in separate namespaces; addTerraformConflicts checks them.
-  if (!isTerraformFile(snapshot.index, resolved.def.file)) {
+  if (!isTerraformFile(snapshot.index, resolved.def.file) && !isScssFile(snapshot.index, resolved.def.file)) {
     addExportDeclarationConflicts(snapshot, semanticDefinitions, request.newName, conflicts);
   }
 
@@ -398,7 +407,24 @@ export async function previewRenameInSnapshot(
     ) {
       continue;
     }
-    if (oldText !== resolved.def.localName) {
+    let newText = request.newName;
+    if (isScssFile(snapshot.index, resolved.def.file)) {
+      const replaced = scssReplacementText(resolved.def.localName, oldText, request.newName);
+      if (replaced === null) {
+        unsafeSites.push({
+          location: { file: loaded.displayPath, range: candidate.range },
+          text: oldText,
+          reason: "unresolved_reference",
+          provenance: {
+            ...provenance,
+            confidence: "low",
+            reason: "Live source no longer matches indexed symbol text.",
+          },
+        });
+        continue;
+      }
+      newText = replaced;
+    } else if (oldText !== resolved.def.localName) {
       unsafeSites.push({
         location: { file: loaded.displayPath, range: candidate.range },
         text: oldText,
@@ -411,7 +437,7 @@ export async function previewRenameInSnapshot(
       file: loaded.displayPath,
       range: candidate.range,
       oldText,
-      newText: request.newName,
+      newText,
       kind: candidate.kind,
       provenance,
     });
@@ -565,6 +591,7 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   let identifierPattern = /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
   if (allowsDollar) identifierPattern = /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u;
   else if (support?.id === "terraform") identifierPattern = TERRAFORM_IDENTIFIER_PATTERN;
+  else if (support?.id === "scss") identifierPattern = SCSS_IDENTIFIER_PATTERN;
   if (!newName || invalidPathCharacters || !identifierPattern.test(newName)) {
     const displaySupport = supportForFile(def.file, snapshot.index.languageExtensions);
     conflicts.push({
@@ -626,6 +653,39 @@ async function addTerraformConflicts(
   }
 }
 
+/**
+ * An SCSS name is a module member. A same-kind member that a scope seeing the renamed one
+ * already declares or exposes under the new name collides. A local variable of the new name
+ * captures the reference sites in its scope.
+ */
+async function addScssConflicts(
+  snapshot: AgentProjectSnapshot,
+  target: SymbolDef,
+  newName: string,
+  references: readonly Reference[],
+  conflicts: RenameConflict[],
+): Promise<void> {
+  for (const collision of await scssRenameCollisions(snapshot.index, target, newName)) {
+    const collisionFile = normalizeAgentFilePath(snapshot.root, collision.file);
+    conflicts.push({
+      file: collisionFile,
+      location: { file: collisionFile, range: collision.range },
+      reason: "name_collision",
+      existingHandle: semanticSymbolFromDef(snapshot, collision).handle,
+      message: `A scope that sees "${target.localName}" already uses "${newName}" for another member.`,
+    });
+  }
+  for (const capture of await scssRenameCaptures(snapshot.index, target, newName, references)) {
+    const captureFile = normalizeAgentFilePath(snapshot.root, capture.file);
+    conflicts.push({
+      file: captureFile,
+      location: { file: captureFile, range: capture.range },
+      reason: "shadowing",
+      message: `A local variable "${newName}" would capture this reference.`,
+    });
+  }
+}
+
 async function addScopeConflicts(
   snapshot: AgentProjectSnapshot,
   target: SymbolDef,
@@ -635,6 +695,11 @@ async function addScopeConflicts(
 ): Promise<void> {
   if (isTerraformFile(snapshot.index, target.file)) {
     await addTerraformConflicts(snapshot, target, newName, references, conflicts);
+    return;
+  }
+  // A selector or a block-level variable is no module member, so the scope checks below apply.
+  if (isScssFile(snapshot.index, target.file) && (await scssMemberForDefinition(snapshot.index, target))) {
+    await addScssConflicts(snapshot, target, newName, references, conflicts);
     return;
   }
   const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(target.file));

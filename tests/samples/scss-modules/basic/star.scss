@@ -1,0 +1,10 @@
+@use "colors" as *;
+
+.star {
+  color: $primary;
+  @include pad;
+}
+
+@mixin local($primary) {
+  color: $primary;
+}

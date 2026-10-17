@@ -40,8 +40,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 87 removes obsolete graph and incremental options from persisted cache identity.
  * Epoch 88 indexes Terraform `.tf` files, adds the resource, data, module, and output symbol kinds,
  * and resolves local module sources to every Terraform file in the source directory.
+ * Epoch 90 masks SCSS `//` comments and unquoted `url(...)` tokens, and resolves a Sass directory
+ * load to its `_index.scss`.
  */
-export const CORE_ALGORITHM_EPOCH = 88;
+export const CORE_ALGORITHM_EPOCH = 90;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

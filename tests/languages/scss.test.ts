@@ -10,11 +10,16 @@ import {
   collectLocalsAndExportsFromSource,
   findReferences,
   goToDefinition,
+  type ProjectIndex,
 } from "../../src/index.js";
 import { supportById } from "../../src/languages.js";
 import { resolveModuleSpecifierEdges } from "../../src/graphs/edge-resolution.js";
 import { resolveSpecifierTargets } from "../../src/util/resolution/specifier-targets.js";
 import { isNativeTreeSitterAvailable, runNativeLanguageQueries } from "../../src/native/tree-sitter-native.js";
+import { extractScssFacts } from "../../src/scss/syntax.js";
+import { previewRenameWithSession } from "../../src/agent/rename-preview.js";
+import { createAgentSession } from "../../src/agent/session.js";
+import { workspaceSymbolsWithSession } from "../../src/agent/workspace-symbols.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -237,6 +242,35 @@ it("resolves bare Sass imports to sibling partials", async () => {
     expect(
       graph.edges.some((edge) => edge.from === mainFile && edge.to.type === "external" && edge.to.name === "./missing"),
     ).toBe(true);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
+it("resolves a directory to its index partial, with or without the underscore", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-directory-index-"));
+  const mainFile = path.join(root, "main.scss").replace(/\\/g, "/");
+  const partialIndex = path.join(root, "lib", "_index.scss").replace(/\\/g, "/");
+  const plainIndex = path.join(root, "plain", "index.scss").replace(/\\/g, "/");
+  await fsp.mkdir(path.join(root, "lib"), { recursive: true });
+  await fsp.mkdir(path.join(root, "plain"), { recursive: true });
+  await Promise.all([
+    fsp.writeFile(mainFile, '@use "lib";\n@use "plain";\n@use "./empty";\n', "utf8"),
+    fsp.writeFile(partialIndex, "$a: 1;\n", "utf8"),
+    fsp.writeFile(plainIndex, "$b: 2;\n", "utf8"),
+    fsp.mkdir(path.join(root, "empty"), { recursive: true }),
+  ]);
+  try {
+    const graph = await collectGraph(root, [mainFile, partialIndex, plainIndex]);
+    const targets = new Map(
+      graph.edges
+        .filter((edge) => edge.from === mainFile)
+        .map((edge) => [edge.raw, edge.to.type === "file" ? edge.to.path : edge.to.type] as const),
+    );
+    expect(targets.get("lib")).toBe(partialIndex);
+    expect(targets.get("plain")).toBe(plainIndex);
+    // A directory without an index file is no module.
+    expect(targets.get("./empty")).toBe("external");
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }
@@ -499,4 +533,821 @@ it("keeps a stylesheet @use and a same-spelled document url() as separate depend
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }
+});
+
+function modulePosition(source: string, needle: string, occurrence = 0): { line: number; column: number } {
+  let from = 0;
+  let at = -1;
+  for (let index = 0; index <= occurrence; index += 1) {
+    at = source.indexOf(needle, from);
+    if (at < 0) throw new Error(`Missing ${needle}`);
+    from = at + needle.length;
+  }
+  const line = source.slice(0, at).split("\n").length;
+  const column = at - source.lastIndexOf("\n", Math.max(0, at - 1));
+  return { line, column: at === 0 ? 1 : column };
+}
+
+function refKeys(root: string, references: { file: string; range: { start: { line: number } } }[]): string[] {
+  return references.map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`).sort();
+}
+
+describe("SCSS module navigation", () => {
+  const basic = path.resolve("tests/samples/scss-modules/basic");
+  const forward = path.resolve("tests/samples/scss-modules/forward");
+
+  it.runIf(isNativeTreeSitterAvailable())("resolves @use, @import, as *, hyphens, and not decoys", async () => {
+    const index = await buildProjectIndex(basic, { cache: "off" });
+    const colors = path.join(basic, "_colors.scss");
+    const main = path.join(basic, "main.scss");
+    const legacy = path.join(basic, "legacy.scss");
+    const other = path.join(basic, "other.scss");
+    const math = path.join(basic, "math.scss");
+    const colorsSource = await fsp.readFile(colors, "utf8");
+    const mainSource = await fsp.readFile(main, "utf8");
+    const legacySource = await fsp.readFile(legacy, "utf8");
+    const otherSource = await fsp.readFile(other, "utf8");
+    const mathSource = await fsp.readFile(math, "utf8");
+    const primary = modulePosition(colorsSource, "$primary");
+    const refs = await findReferences(index, { file: colors, ...primary });
+    expect(refs.status).toBe("ok");
+    if (refs.status !== "ok") return;
+    expect(refs.referenceCoverage?.state).toBe("complete");
+    expect(refKeys(basic, refs.references)).toEqual(
+      [
+        "_colors.scss:1",
+        "_colors.scss:17",
+        "_colors.scss:20",
+        "_colors.scss:21",
+        "main.scss:5",
+        "legacy.scss:4",
+        "star.scss:4",
+        "with.scss:1",
+      ].sort(),
+    );
+
+    const namespaced = modulePosition(mainSource, "$primary");
+    const fromNamespace = await goToDefinition(index, { file: main, ...namespaced });
+    expect(fromNamespace.status).toBe("ok");
+    if (fromNamespace.status === "ok") expect(path.basename(fromNamespace.definition.file)).toBe("_colors.scss");
+
+    const alias = modulePosition(mainSource, "c.pad");
+    const fromAlias = await goToDefinition(index, { file: main, line: alias.line, column: alias.column + 2 });
+    expect(fromAlias.status).toBe("ok");
+    if (fromAlias.status === "ok") {
+      expect(path.basename(fromAlias.definition.file)).toBe("_colors.scss");
+      expect(fromAlias.definition.localName).toBe("pad");
+    }
+
+    const legacyUse = modulePosition(legacySource, "$primary");
+    const fromLegacy = await goToDefinition(index, { file: legacy, ...legacyUse });
+    expect(fromLegacy.status).toBe("ok");
+    if (fromLegacy.status === "ok") expect(path.basename(fromLegacy.definition.file)).toBe("_colors.scss");
+
+    const folded = modulePosition(mainSource, "$primary_color");
+    const fromFolded = await goToDefinition(index, { file: main, ...folded });
+    expect(fromFolded.status).toBe("ok");
+    if (fromFolded.status === "ok") expect(fromFolded.definition.localName).toBe("$primary-color");
+
+    const decoy = modulePosition(otherSource, "$primary");
+    const fromDecoy = await goToDefinition(index, { file: other, ...decoy });
+    expect(fromDecoy.status).toBe("ok");
+    if (fromDecoy.status === "ok") expect(path.basename(fromDecoy.definition.file)).toBe("other.scss");
+
+    const builtin = modulePosition(mathSource, "div");
+    const fromBuiltin = await goToDefinition(index, { file: math, ...builtin });
+    expect(fromBuiltin.status).toBe("not_found");
+
+    const divDecl = modulePosition(colorsSource, "div");
+    const divRefs = await findReferences(index, { file: colors, ...divDecl });
+    expect(divRefs.status).toBe("ok");
+    if (divRefs.status === "ok") {
+      expect(divRefs.references.some((reference) => path.basename(reference.file) === "math.scss")).toBe(false);
+      expect(divRefs.references.some((reference) => path.basename(reference.file) === "other.scss")).toBe(false);
+    }
+
+    const extendSource = await fsp.readFile(path.join(basic, "extend.scss"), "utf8");
+    const extendUse = modulePosition(extendSource, "ph");
+    const fromExtend = await goToDefinition(index, { file: path.join(basic, "extend.scss"), ...extendUse });
+    expect(fromExtend.status).toBe("ok");
+    if (fromExtend.status === "ok") {
+      expect(path.basename(fromExtend.definition.file)).toBe("_colors.scss");
+      expect(fromExtend.definition.localName).toBe("ph");
+    }
+  });
+
+  it.runIf(isNativeTreeSitterAvailable())("applies @forward prefix, show, and hide", async () => {
+    const index = await buildProjectIndex(forward, { cache: "off" });
+    const sourceFile = path.join(forward, "_source.scss");
+    const source = await fsp.readFile(sourceFile, "utf8");
+    const pad = modulePosition(source, "pad");
+    const refs = await findReferences(index, { file: sourceFile, ...pad });
+    expect(refs.status).toBe("ok");
+    if (refs.status !== "ok") return;
+    expect(refs.referenceCoverage?.state).toBe("complete");
+    expect(refKeys(forward, refs.references)).toEqual(
+      ["_source.scss:2", "agg.scss:1", "user.scss:5", "hider.scss:1"].sort(),
+    );
+
+    const skip = modulePosition(source, "skip");
+    const skipRefs = await findReferences(index, { file: sourceFile, ...skip });
+    expect(skipRefs.status).toBe("ok");
+    if (skipRefs.status === "ok") {
+      expect(refKeys(forward, skipRefs.references)).toEqual(["_source.scss:5", "hide-user.scss:4"].sort());
+    }
+
+    const user = await fsp.readFile(path.join(forward, "user.scss"), "utf8");
+    const ink = modulePosition(user, "$theme-ink");
+    const fromInk = await goToDefinition(index, { file: path.join(forward, "user.scss"), ...ink });
+    expect(fromInk.status).toBe("ok");
+    if (fromInk.status === "ok") expect(fromInk.definition.localName).toBe("$ink");
+  });
+
+  it.runIf(isNativeTreeSitterAvailable())(
+    "reports partial coverage for an unresolved URL and meta.load-css",
+    async () => {
+      const urlRoot = path.resolve("tests/samples/scss-modules/partial-url");
+      const urlIndex = await buildProjectIndex(urlRoot, { cache: "off" });
+      const urlFile = path.join(urlRoot, "_colors.scss");
+      const urlSource = await fsp.readFile(urlFile, "utf8");
+      const urlPrimary = await findReferences(urlIndex, { file: urlFile, ...modulePosition(urlSource, "$primary") });
+      expect(urlPrimary.status).toBe("ok");
+      if (urlPrimary.status === "ok") {
+        expect(urlPrimary.referenceCoverage?.state).toBe("partial");
+        expect(urlPrimary.referenceCoverage?.reasons).toContain("strategy_unavailable");
+        expect(urlPrimary.references.some((reference) => path.basename(reference.file) === "user.scss")).toBe(true);
+      }
+
+      const metaRoot = path.resolve("tests/samples/scss-modules/partial-meta");
+      const metaIndex = await buildProjectIndex(metaRoot, { cache: "off" });
+      const metaFile = path.join(metaRoot, "_colors.scss");
+      const metaSource = await fsp.readFile(metaFile, "utf8");
+      const metaRefs = await findReferences(metaIndex, { file: metaFile, ...modulePosition(metaSource, "$primary") });
+      expect(metaRefs.status).toBe("ok");
+      if (metaRefs.status === "ok") {
+        expect(metaRefs.referenceCoverage?.state).toBe("partial");
+        expect(metaRefs.referenceCoverage?.reasons).toContain("strategy_unavailable");
+      }
+    },
+  );
+
+  it.runIf(isNativeTreeSitterAvailable())(
+    "renames only the member and collides on a visible same-kind name",
+    async () => {
+      const session = createAgentSession({ root: basic, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root: basic, query: "$primary" });
+      const primary = symbols.symbols.find(
+        (symbol) => symbol.name === "$primary" && symbol.location.file.endsWith("_colors.scss"),
+      );
+      expect(primary).toBeDefined();
+      const renamed = await previewRenameWithSession(session, {
+        root: basic,
+        handle: primary!.handle,
+        newName: "$accent",
+      });
+      expect(renamed.safe).toBe(true);
+      expect(renamed.edits.map((edit) => edit.oldText).every((text) => text === "$primary")).toBe(true);
+      expect(renamed.edits.map((edit) => edit.newText).every((text) => text === "$accent")).toBe(true);
+      expect(renamed.edits.map((edit) => path.basename(edit.file)).sort()).toEqual(
+        [
+          "_colors.scss",
+          "_colors.scss",
+          "_colors.scss",
+          "_colors.scss",
+          "legacy.scss",
+          "main.scss",
+          "star.scss",
+          "with.scss",
+        ].sort(),
+      );
+      const mainEdit = renamed.edits.find((edit) => edit.file.endsWith("main.scss"));
+      const mainSource = await fsp.readFile(path.join(basic, "main.scss"), "utf8");
+      const mainLine = mainSource.split("\n")[mainEdit!.range.start.line - 1] ?? "";
+      expect(mainLine[mainEdit!.range.start.column - 2]).toBe(".");
+      expect(
+        mainLine.slice(mainEdit!.range.start.column - 1, mainEdit!.range.start.column - 1 + mainEdit!.oldText.length),
+      ).toBe("$primary");
+
+      const collision = await previewRenameWithSession(session, {
+        root: basic,
+        handle: primary!.handle,
+        newName: "$primary-color",
+      });
+      expect(collision.safe).toBe(false);
+      expect(collision.conflicts.some((conflict) => conflict.reason === "name_collision")).toBe(true);
+
+      const forwardSession = createAgentSession({ root: forward, freshness: { policy: "check" } });
+      const mixins = await workspaceSymbolsWithSession(forwardSession, { root: forward, query: "pad" });
+      const pad = mixins.symbols.find(
+        (symbol) => symbol.name === "pad" && symbol.location.file.endsWith("_source.scss"),
+      );
+      const mixinRename = await previewRenameWithSession(forwardSession, {
+        root: forward,
+        handle: pad!.handle,
+        newName: "inset",
+      });
+      expect(mixinRename.safe).toBe(true);
+      expect(mixinRename.edits.every((edit) => edit.oldText === "pad" && edit.newText === "inset")).toBe(true);
+      const userEdit = mixinRename.edits.find((edit) => edit.file.endsWith("user.scss"));
+      const userSource = await fsp.readFile(path.join(forward, "user.scss"), "utf8");
+      const userLine = userSource.split("\n")[userEdit!.range.start.line - 1] ?? "";
+      expect(userLine.slice(userEdit!.range.start.column - 1 - "theme-".length, userEdit!.range.start.column - 1)).toBe(
+        "theme-",
+      );
+      expect(mixinRename.edits.some((edit) => edit.file.endsWith("hide-user.scss"))).toBe(false);
+      // The `show` entry (`theme-pad`) and the `hide` entry (`pad`) name the mixin too.
+      expect(mixinRename.edits.map((edit) => path.basename(edit.file)).sort()).toEqual([
+        "_source.scss",
+        "agg.scss",
+        "hider.scss",
+        "user.scss",
+      ]);
+    },
+  );
+});
+
+type ScssProject = {
+  root: string;
+  index: ProjectIndex;
+  relative: (file: string) => string;
+  position: (
+    name: string,
+    needle: string,
+    occurrence?: number,
+    delta?: number,
+  ) => { file: string; line: number; column: number };
+};
+
+async function withScssProject(
+  files: Record<string, string>,
+  run: (project: ScssProject) => Promise<void>,
+): Promise<void> {
+  const root = (await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-module-"))).replace(/\\/g, "/");
+  try {
+    for (const [name, text] of Object.entries(files)) {
+      const target = path.join(root, name);
+      await fsp.mkdir(path.dirname(target), { recursive: true });
+      await fsp.writeFile(target, text, "utf8");
+    }
+    const index = await buildProjectIndex(root, { cache: "off" });
+    await run({
+      root,
+      index,
+      relative: (file) => path.relative(root, file).replace(/\\/g, "/"),
+      position: (name, needle, occurrence = 0, delta = 0) => {
+        const text = files[name];
+        if (text === undefined) throw new Error(`Missing fixture file ${name}`);
+        const found = modulePosition(text, needle, occurrence);
+        return { file: `${root}/${name}`, line: found.line, column: found.column + delta };
+      },
+    });
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
+/** `file:line` of the definition a position resolves to, or the failure status. */
+async function scssGoto(
+  project: ScssProject,
+  name: string,
+  needle: string,
+  occurrence = 0,
+  delta = 0,
+): Promise<string> {
+  const result = await goToDefinition(project.index, project.position(name, needle, occurrence, delta));
+  if (result.status !== "ok") return result.status;
+  return `${project.relative(result.definition.file)}:${result.definition.range.start.line}`;
+}
+
+async function scssRefs(project: ScssProject, name: string, needle: string, occurrence = 0, delta = 0) {
+  const result = await findReferences(project.index, project.position(name, needle, occurrence, delta));
+  if (result.status !== "ok") throw new Error(`findReferences did not resolve: ${result.reason}`);
+  const sites = result.references
+    .map((reference) => `${project.relative(reference.file)}:${reference.range.start.line}`)
+    .sort();
+  return { sites, coverage: result.referenceCoverage };
+}
+
+async function previewScssRename(project: ScssProject, name: string, inFile: string, newName: string) {
+  const session = createAgentSession({ root: project.root, freshness: { policy: "check" } });
+  try {
+    const symbols = await workspaceSymbolsWithSession(session, { root: project.root, query: name });
+    const target = symbols.symbols.find((symbol) => symbol.name === name && symbol.location.file.endsWith(inFile));
+    if (!target) throw new Error(`Missing symbol ${name} in ${inFile}`);
+    return await previewRenameWithSession(session, { root: project.root, handle: target.handle, newName });
+  } finally {
+    session.invalidate();
+  }
+}
+
+describe("SCSS module navigation: lexing, scopes, forwards, imports, and coverage", () => {
+  const native = isNativeTreeSitterAvailable();
+
+  it.runIf(native)("keeps declarations that follow an apostrophe in a // comment", async () => {
+    await withScssProject(
+      {
+        "_colors.scss":
+          "// Bootstrap's palette: an apostrophe in a line comment opens no string\n$primary: red;\n$later: blue;\n.swatch { color: $primary; }\n",
+        "main.scss":
+          '// don\'t edit by hand\n@use "colors";\n.a { color: colors.$primary; border-color: colors.$later; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$later")).toBe("_colors.scss:3");
+        const primary = await scssRefs(project, "_colors.scss", "$primary");
+        expect(primary.sites).toEqual(["_colors.scss:2", "_colors.scss:4", "main.scss:3"]);
+        expect(primary.coverage?.state).toBe("complete");
+      },
+    );
+  });
+
+  it.runIf(native)("reads an unquoted url(http://...) as one token that hides no later declaration", async () => {
+    await withScssProject(
+      {
+        "_theme.scss": ".a { background: url(http://example.com/a.png); }\n$later: 1px;\n",
+        "main.scss": '@use "theme";\n.b { width: theme.$later; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$later")).toBe("_theme.scss:2");
+      },
+    );
+  });
+
+  it("scans an unquoted url(...) as one token, whatever quote or comment opener it holds", () => {
+    const facts = extractScssFacts(
+      ".a { b: url(a/*b.png); c: url(//cdn.example.com/x.png); d: url( data:image/png;base64,AA//BB== ); }\n$later: 1px;\n.e { w: $later; }\n",
+    );
+    expect(facts.declarations.map((declaration) => declaration.name)).toEqual(["$later"]);
+    expect(facts.uses.map((use) => use.text)).toEqual(["$later"]);
+  });
+
+  it("reads only a quoted Sass import as a load, and leaves every plain CSS import form out", () => {
+    const facts = extractScssFacts(
+      [
+        '@import "a", "b";',
+        "@import url(plain.css);",
+        '@import "plain.css";',
+        '@import "//cdn.example.com/x";',
+        '@import "https://fonts.example.com/css";',
+        '@import "media" screen and (min-width: 40em);',
+        '@import "dynamic-#{$name}";',
+        '@import "last";',
+        "",
+      ].join("\n"),
+    );
+    expect(facts.loads.map((load) => `${load.kind}:${load.url}`)).toEqual(["import:a", "import:b", "import:last"]);
+  });
+
+  it.runIf(native)(
+    "does not treat parameters, loop variables, using parameters, or keyword names as module members",
+    async () => {
+      const vars = [
+        "$size: 1px;",
+        "$gap: 2px;",
+        "$primary: red;",
+        "@mixin box($w, $size: 2px, $gap: $size) {",
+        "  width: $w;",
+        "  height: $size;",
+        "  margin: $gap;",
+        "}",
+        "@function dbl($size) {",
+        "  @return $size * 2;",
+        "}",
+        "@mixin wrap($n) {",
+        "  @content($n);",
+        "}",
+        "",
+      ].join("\n");
+      const star = [
+        '@use "vars" as *;',
+        ".a {",
+        "  @include box(1px, $size: 3px);",
+        "  width: $size;",
+        "  height: dbl($size: 2);",
+        "  @each $primary in red, blue {",
+        "    color: $primary;",
+        "  }",
+        "  @for $gap from 1 through 2 {",
+        "    margin: $gap;",
+        "  }",
+        "  @include wrap(1) using ($gap) {",
+        "    padding: $gap;",
+        "  }",
+        "}",
+        "",
+      ].join("\n");
+      await withScssProject({ "_vars.scss": vars, "star.scss": star }, async (project) => {
+        // Only the plain use on line 4 of star.scss names the module variable.
+        expect(await scssGoto(project, "star.scss", "width: $size", 0, "width: ".length)).toBe("_vars.scss:1");
+        const size = await scssRefs(project, "_vars.scss", "$size");
+        expect(size.sites).toEqual(["_vars.scss:1", "star.scss:4"]);
+        expect(size.coverage?.state).toBe("complete");
+        expect((await scssRefs(project, "_vars.scss", "$gap")).sites).toEqual(["_vars.scss:2"]);
+        expect((await scssRefs(project, "_vars.scss", "$primary")).sites).toEqual(["_vars.scss:3"]);
+
+        const moduleLevel = ["_vars.scss:1", "_vars.scss:2", "_vars.scss:3"];
+        const localSites: Array<[string, string, number]> = [
+          ["star.scss", "color: $primary", "color: ".length],
+          ["star.scss", "margin: $gap", "margin: ".length],
+          ["star.scss", "padding: $gap", "padding: ".length],
+          ["star.scss", "$size: 3px", 0],
+          ["star.scss", "($size: 2", 1],
+          ["_vars.scss", "$gap: $size", "$gap: ".length],
+          ["_vars.scss", "height: $size", "height: ".length],
+          ["_vars.scss", "margin: $gap", "margin: ".length],
+          ["_vars.scss", "@return $size", "@return ".length],
+        ];
+        for (const [name, needle, delta] of localSites) {
+          expect(moduleLevel, `${name} ${needle}`).not.toContain(await scssGoto(project, name, needle, 0, delta));
+        }
+
+        const renamed = await previewScssRename(project, "$size", "_vars.scss", "$extent");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => `${edit.file}:${edit.range.start.line}`).sort()).toEqual([
+          "_vars.scss:1",
+          "star.scss:4",
+        ]);
+      });
+    },
+  );
+
+  it.runIf(native)("treats repeated top-level assignments of one name as one variable", async () => {
+    await withScssProject(
+      {
+        "_theme.scss": "$accent: 10px !default;\n$accent: $accent * 2;\n",
+        "main.scss": '@use "theme";\n.a { width: theme.$accent; }\n',
+        "local.scss": "$z: 1px !default;\n$z: $z * 2;\n.b { width: $z; }\n",
+      },
+      async (project) => {
+        expect(await scssGoto(project, "local.scss", "$z; }")).toBe("local.scss:1");
+        expect(await scssGoto(project, "local.scss", "$z * 2")).toBe("local.scss:1");
+        const union = ["local.scss:1", "local.scss:2", "local.scss:2", "local.scss:3"];
+        const fromFirst = await scssRefs(project, "local.scss", "$z");
+        const fromSecond = await scssRefs(project, "local.scss", "$z: $z");
+        expect(fromFirst.sites).toEqual(union);
+        expect(fromSecond.sites).toEqual(union);
+        expect(fromFirst.coverage?.state).toBe("complete");
+        expect(fromSecond.coverage?.state).toBe("complete");
+
+        expect(await scssGoto(project, "main.scss", "$accent")).toBe("_theme.scss:1");
+        const crossFile = await scssRefs(project, "_theme.scss", "$accent: $accent");
+        expect(crossFile.sites).toEqual(["_theme.scss:1", "_theme.scss:2", "_theme.scss:2", "main.scss:2"]);
+        expect(crossFile.coverage?.state).toBe("complete");
+
+        const renamed = await previewScssRename(project, "$accent", "_theme.scss", "$tone");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => `${edit.file}:${edit.range.start.line}`).sort()).toEqual([
+          "_theme.scss:1",
+          "_theme.scss:2",
+          "_theme.scss:2",
+          "main.scss:2",
+        ]);
+      },
+    );
+  });
+
+  it.runIf(native)("keeps an assignment inside a top-level @if on the file variable", async () => {
+    const main = [
+      "$z: 1px;",
+      "@if true {",
+      "  $z: 2px;",
+      "  .a { width: $z; }",
+      "}",
+      ".b { width: $z; }",
+      ".c {",
+      "  $z: 3px;",
+      "  margin: $z;",
+      "}",
+      "",
+    ].join("\n");
+    await withScssProject({ "main.scss": main }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "$z");
+      // A variable assigned inside a style rule is a new local; the @if block shares the file scope.
+      expect(refs.sites).toEqual(["main.scss:1", "main.scss:3", "main.scss:4", "main.scss:6"]);
+    });
+  });
+
+  it.runIf(native)("compares forward show and hide lists with the exposed names", async () => {
+    await withScssProject(
+      {
+        "_s.scss": "$pad: 1px;\n@mixin pad { padding: $pad; }\n",
+        "agg.scss": '@forward "s" show pad;\n',
+        "m.scss": '@use "agg";\n.a { @include agg.pad; }\n',
+        "pre.scss": '@forward "s" as t-* hide $pad;\n',
+        "m2.scss": '@use "pre";\n.a { b: pre.$t-pad; }\n',
+      },
+      async (project) => {
+        // A bare `show pad` names the mixin, never the variable `$pad`.
+        const mixin = await scssRefs(project, "_s.scss", "@mixin pad", 0, "@mixin ".length);
+        expect(mixin.sites).toEqual(["_s.scss:2", "agg.scss:1", "m.scss:2"]);
+        // `hide $pad` under the prefix `t-` compares `$t-pad`, so it hides nothing.
+        const variable = await scssRefs(project, "_s.scss", "$pad");
+        expect(variable.sites).toEqual(["_s.scss:1", "_s.scss:2", "m2.scss:2"]);
+        expect(await scssGoto(project, "m2.scss", "$t-pad")).toBe("_s.scss:1");
+      },
+    );
+  });
+
+  it.runIf(native)("does not resolve a name that show or hide removed from the module", async () => {
+    // dart-sass rejects every use below. The lookup must miss instead of reaching the removed member.
+    await withScssProject(
+      {
+        "_s.scss": "$pad: 1px;\n@mixin pad { padding: $pad; }\n@mixin skip { margin: 0; }\n",
+        "agg.scss": '@forward "s" show pad;\n',
+        "hider.scss": '@forward "s" hide skip;\n',
+        "m.scss": '@use "agg";\n@use "hider";\n.a { b: agg.$pad; @include hider.skip; @include agg.skip; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "m.scss", "agg.$pad", 0, "agg.".length)).toBe("not_found");
+        expect(await scssGoto(project, "m.scss", "hider.skip", 0, "hider.".length)).toBe("not_found");
+        expect(await scssGoto(project, "m.scss", "agg.skip", 0, "agg.".length)).toBe("not_found");
+      },
+    );
+  });
+
+  it.runIf(native)("sees through @import of a forwarder and @use of an importer, without privacy", async () => {
+    await withScssProject(
+      {
+        "_a.scss": "$x: 1px;\n$-secret: 2px;\n@mixin pad { padding: 1px; }\n",
+        "_fwd.scss": '@forward "a";\n',
+        "legacy.scss": '@import "fwd";\n.o { width: $x; @include pad; }\n',
+        "_base.scss": "$bvar: 1px;\n",
+        "_imp.scss": '@import "base";\n',
+        "use-imp.scss": '@use "imp" as c;\n.b { width: c.$bvar; }\n',
+        "legacy2.scss": '@import "a";\n.p { width: $-secret; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "legacy.scss", "$x")).toBe("_a.scss:1");
+        expect(await scssGoto(project, "legacy.scss", "pad")).toBe("_a.scss:3");
+        expect(await scssGoto(project, "use-imp.scss", "$bvar")).toBe("_base.scss:1");
+        expect(await scssGoto(project, "legacy2.scss", "$-secret")).toBe("_a.scss:2");
+        const x = await scssRefs(project, "_a.scss", "$x");
+        expect(x.sites).toEqual(["_a.scss:1", "legacy.scss:2"]);
+        expect(x.coverage?.state).toBe("complete");
+        const secret = await scssRefs(project, "_a.scss", "$-secret");
+        expect(secret.sites).toEqual(["_a.scss:2", "legacy2.scss:2"]);
+      },
+    );
+    // dart-sass rejects this program: a member whose name starts with `-` is private to its module.
+    await withScssProject(
+      {
+        "_a.scss": "$-secret: 2px;\n",
+        "private.scss": '@use "a";\n.p { width: a.$-secret; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "private.scss", "$-secret")).toBe("not_found");
+      },
+    );
+  });
+
+  it.runIf(native)("resolves a directory index module and counts its consumers", async () => {
+    await withScssProject(
+      {
+        "lib/_index.scss": "$primary: red;\n",
+        "main.scss": '@use "lib";\n.a { color: lib.$primary; }\n',
+        "rel.scss": '@use "./lib";\n.b { color: lib.$primary; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$primary")).toBe("lib/_index.scss:1");
+        const refs = await scssRefs(project, "lib/_index.scss", "$primary");
+        expect(refs.sites).toEqual(["lib/_index.scss:1", "main.scss:2", "rel.scss:2"]);
+        expect(refs.coverage?.state).toBe("complete");
+      },
+    );
+  });
+
+  it.runIf(native)("reports partial coverage when a Vue or Svelte style block may load the module", async () => {
+    await withScssProject(
+      {
+        "_colors.scss": "$primary: red;\n",
+        "main.scss": '@use "colors";\n.a { color: colors.$primary; }\n',
+        "Comp.vue":
+          '<template><div /></template>\n<style lang="scss">\n@use "./colors";\n.a { color: colors.$primary; }\n</style>\n',
+        "Widget.svelte":
+          '<div />\n<style lang="scss">\n  @use "./colors";\n  div { color: colors.$primary; }\n</style>\n',
+      },
+      async (project) => {
+        const refs = await scssRefs(project, "_colors.scss", "$primary");
+        expect(refs.sites).toContain("main.scss:2");
+        expect(refs.coverage?.state).toBe("partial");
+        expect(refs.coverage?.reasons).toContain("strategy_unavailable");
+        expect(refs.coverage?.affectedFiles?.map((file) => project.relative(file)).sort()).toEqual([
+          "Comp.vue",
+          "Widget.svelte",
+        ]);
+      },
+    );
+  });
+
+  it.runIf(native)("does not count a plain CSS @import as an unresolved Sass load", async () => {
+    await withScssProject(
+      {
+        "_colors.scss": "$primary: red;\n",
+        "css.scss":
+          '@use "colors";\n@import url(foo.css);\n@import "foo.css";\n@import "https://fonts.example.com/css";\n@import "print" print;\n.a { color: colors.$primary; }\n',
+      },
+      async (project) => {
+        const refs = await scssRefs(project, "_colors.scss", "$primary");
+        expect(refs.sites).toEqual(["_colors.scss:1", "css.scss:6"]);
+        expect(refs.coverage?.state).toBe("complete");
+      },
+    );
+  });
+
+  it.runIf(native)("does not count selector, unit, or file-name text as a module member use", async () => {
+    await withScssProject(
+      {
+        "_button.scss": "@mixin primary { color: red; }\n",
+        "main.scss": '@use "button";\nbutton.primary { color: blue; }\n.x { @include button.primary; width: 1.5em; }\n',
+      },
+      async (project) => {
+        const refs = await scssRefs(project, "_button.scss", "primary");
+        expect(refs.sites).toEqual(["_button.scss:1", "main.scss:3"]);
+      },
+    );
+  });
+
+  it.runIf(native)("resolves every target of an @extend list", async () => {
+    await withScssProject(
+      {
+        "_base.scss": "%a { color: red; }\n%b { color: blue; }\n",
+        "ext.scss": '@use "base";\n.x { @extend %a, %b; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "ext.scss", "%a", 0, 1)).toBe("_base.scss:1");
+        expect(await scssGoto(project, "ext.scss", "%b", 0, 1)).toBe("_base.scss:2");
+        const refs = await scssRefs(project, "_base.scss", "%b", 0, 1);
+        expect(refs.sites).toEqual(["_base.scss:2", "ext.scss:2"]);
+      },
+    );
+  });
+
+  it.runIf(native)("records a !global declaration inside a block as a module member", async () => {
+    await withScssProject(
+      {
+        "_c.scss": "@mixin init { $made: 1px !global; }\n@include init;\n",
+        "glob.scss": '@use "c";\n.a { w: c.$made; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "glob.scss", "$made")).toBe("_c.scss:1");
+      },
+    );
+  });
+
+  it.runIf(native)("compares @use namespaces as written", async () => {
+    // dart-sass rejects bad.scss: the namespaces `my_lib` and `my-lib` differ.
+    await withScssProject(
+      {
+        "_my_lib.scss": "$x: 1px;\n",
+        "ns.scss": '@use "my_lib";\n.a { w: my_lib.$x; }\n',
+        "bad.scss": '@use "my_lib";\n.a { w: my-lib.$x; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "ns.scss", "$x")).toBe("_my_lib.scss:1");
+        expect(await scssGoto(project, "bad.scss", "$x")).toBe("not_found");
+      },
+    );
+  });
+
+  it.runIf(native)("reports a name collision with a member that a scope seeing the renamed one declares", async () => {
+    const colors = "$primary: red;\n$-secret: blue;\n$primary-color: green;\n";
+    await withScssProject(
+      {
+        "_colors.scss": colors,
+        "_other.scss": "$accent: blue;\n",
+        "star.scss": '@use "colors" as *;\n@use "other" as *;\n.a { color: $primary; }\n',
+      },
+      async (project) => {
+        // Two `as *` modules share one scope in star.scss.
+        const collides = await previewScssRename(project, "$primary", "_colors.scss", "$accent");
+        expect(collides.safe).toBe(false);
+        expect(collides.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`)).toEqual([
+          "name_collision:_other.scss",
+        ]);
+        const free = await previewScssRename(project, "$primary", "_colors.scss", "$tone");
+        expect(free.safe).toBe(true);
+        expect(free.conflicts).toEqual([]);
+      },
+    );
+    await withScssProject(
+      {
+        "_colors.scss": colors,
+        "_other.scss": "$accent: blue;\n",
+        "legacy.scss": '@import "colors";\n@import "other";\n.a { color: $primary; }\n',
+      },
+      async (project) => {
+        // @import merges both files into the global scope of legacy.scss.
+        const collides = await previewScssRename(project, "$primary", "_colors.scss", "$accent");
+        expect(collides.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`)).toEqual([
+          "name_collision:_other.scss",
+        ]);
+      },
+    );
+    await withScssProject(
+      {
+        "_x.scss": "$x: 1px;\n",
+        "_y.scss": "$y: 2px;\n",
+        "agg.scss": '@forward "x";\n@forward "y";\n',
+        "m.scss": '@use "agg";\n.a { w: agg.$x; }\n',
+      },
+      async (project) => {
+        // The module agg.scss exposes both `$x` and `$y`, so the renamed `$x` would collide in it.
+        const collides = await previewScssRename(project, "$x", "_x.scss", "$y");
+        expect(collides.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`)).toEqual([
+          "name_collision:_y.scss",
+        ]);
+        expect((await previewScssRename(project, "$x", "_x.scss", "$z")).safe).toBe(true);
+      },
+    );
+    await withScssProject(
+      { "_colors.scss": colors, "main.scss": '@use "colors";\n.a { color: colors.$primary; }\n' },
+      async (project) => {
+        // A private member of the declaring file and an equal spelling (`_` is `-`) both collide.
+        const privateName = await previewScssRename(project, "$primary", "_colors.scss", "$-secret");
+        expect(privateName.conflicts.map((conflict) => conflict.reason)).toEqual(["name_collision"]);
+        const sameSpelling = await previewScssRename(project, "$primary", "_colors.scss", "$primary_color");
+        expect(sameSpelling.conflicts.map((conflict) => conflict.reason)).toEqual(["name_collision"]);
+      },
+    );
+  });
+
+  it.runIf(native)("reports a local variable that would capture a renamed reference", async () => {
+    await withScssProject(
+      {
+        "_colors.scss": "$primary: red;\n",
+        "cap.scss":
+          '@use "colors" as *;\n@mixin tint($gap) {\n  color: $primary;\n  margin: $gap;\n}\n.b { @include tint(1px); }\n',
+      },
+      async (project) => {
+        const captured = await previewScssRename(project, "$primary", "_colors.scss", "$gap");
+        expect(captured.safe).toBe(false);
+        expect(captured.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`)).toEqual([
+          "shadowing:cap.scss",
+        ]);
+        const free = await previewScssRename(project, "$primary", "_colors.scss", "$tone");
+        expect(free.safe).toBe(true);
+      },
+    );
+  });
+
+  it.runIf(native)("keeps the scope collision check for a variable declared in a block", async () => {
+    await withScssProject({ "m.scss": ".a { $x: 1px; $y: 2px; w: $x; }\n" }, async (project) => {
+      // A block-level variable is no module member, so the generic scope check still applies.
+      const collides = await previewScssRename(project, "$x", "m.scss", "$y");
+      expect(collides.safe).toBe(false);
+      expect(collides.conflicts.map((conflict) => conflict.reason)).toEqual(["name_collision"]);
+      expect((await previewScssRename(project, "$x", "m.scss", "$z")).safe).toBe(true);
+    });
+  });
+
+  it("extracts facts from a large file in linear time", () => {
+    const lines: string[] = [];
+    for (let index = 0; index < 4000; index += 1) {
+      lines.push(
+        `$var-${index}: ${index}px;`,
+        `@mixin m${index}($a, $b: 1px, $c: $var-${index}) {`,
+        "  width: $a; height: $b; margin: $c;",
+        "}",
+      );
+    }
+    const started = performance.now();
+    const facts = extractScssFacts(lines.join("\n"));
+    const elapsed = performance.now() - started;
+    expect(facts.declarations).toHaveLength(8000);
+    expect(elapsed).toBeLessThan(2000);
+  });
+
+  it.runIf(native)("finds references in a large module with many same-kind uses quickly", async () => {
+    const declarations = 2000;
+    const consumers = 8;
+    const files: Record<string, string> = {
+      "_vars.scss": `${Array.from({ length: declarations }, (_, index) => `$v${index}: ${index}px;`).join("\n")}\n`,
+    };
+    for (let consumer = 0; consumer < consumers; consumer += 1) {
+      const uses = Array.from({ length: declarations }, (_, index) => `.c${index} { width: $v${index}; }`).join("\n");
+      files[`consumer${consumer}.scss`] = `@use "vars" as *;\n${uses}\n`;
+    }
+    await withScssProject(files, async (project) => {
+      const started = performance.now();
+      const refs = await scssRefs(project, "_vars.scss", "$v5:");
+      const elapsed = performance.now() - started;
+      expect(refs.sites).toHaveLength(consumers + 1);
+      expect(refs.coverage?.state).toBe("complete");
+      expect(elapsed).toBeLessThan(4000);
+    });
+  });
+
+  it.runIf(native)("builds the module model for hundreds of files without a graph scan per load", async () => {
+    const files: Record<string, string> = {};
+    for (let file = 0; file < 400; file += 1) {
+      const loads: string[] = [];
+      for (let back = 1; back <= 4 && back <= file; back += 1) loads.push(`@use "f${file - back}" as f${file - back};`);
+      files[`_f${file}.scss`] = `${loads.join("\n")}\n$v${file}: ${file}px;\n`.replace(/^\n/, "");
+    }
+    files["main.scss"] = '@use "f399";\n.a { width: f399.$v399; }\n';
+    await withScssProject(files, async (project) => {
+      const started = performance.now();
+      expect(await scssGoto(project, "main.scss", "$v399")).toBe("_f399.scss:5");
+      expect(performance.now() - started).toBeLessThan(3000);
+    });
+  });
 });

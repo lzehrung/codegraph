@@ -179,7 +179,11 @@ async function findFirstExistingScssPartialCandidate(base: string): Promise<stri
   const partialStem = baseExt ? path.basename(base, originalExt) : basename;
   const partialBasename = `_${partialStem}.scss`;
   const partialPath = path.join(path.dirname(base), partialBasename);
-  return (await fileExists(partialPath)) ? path.resolve(partialPath) : null;
+  if (await fileExists(partialPath)) return path.resolve(partialPath);
+  // A directory loads its index partial: `@use "lib"` reaches `lib/_index.scss`.
+  if (baseExt) return null;
+  const indexPartial = path.join(base, "_index.scss");
+  return (await fileExists(indexPartial)) ? path.resolve(indexPartial) : null;
 }
 
 export async function resolvePathLikeModule(

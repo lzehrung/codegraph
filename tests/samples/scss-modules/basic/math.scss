@@ -1,0 +1,6 @@
+@use "colors";
+@use "sass:math";
+
+.calc {
+  width: math.div(1, 2);
+}

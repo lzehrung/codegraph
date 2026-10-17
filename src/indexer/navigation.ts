@@ -106,6 +106,7 @@ import {
   SymbolKind,
 } from "./types.js";
 import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
+import { findScssReferences, goToScssDefinition } from "../scss/navigation.js";
 import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
 import {
   createLoadingParsedFileProvider,
@@ -136,6 +137,8 @@ export async function goToDefinition(
   if (sqlResult) return sqlResult;
   const terraformResult = await goToTerraformDefinition(index, req);
   if (terraformResult) return terraformResult;
+  const scssResult = await goToScssDefinition(index, req);
+  if (scssResult) return scssResult;
 
   const context =
     parsedContext ??
@@ -670,6 +673,14 @@ async function findReferencesInternal(
   if (terraformReferences) {
     if (terraformReferences.status === "ok") await attachReferenceContext(index, terraformReferences.references, opts);
     return terraformReferences;
+  }
+  const scssReferences = await findScssReferences(index, def, {
+    includeDefinition: collectionMode === "all",
+    ...(maxReferences === undefined ? {} : { maxReferences }),
+  });
+  if (scssReferences) {
+    if (scssReferences.status === "ok") await attachReferenceContext(index, scssReferences.references, opts);
+    return scssReferences;
   }
 
   const definitionFile = def.file;

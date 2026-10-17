@@ -9,6 +9,14 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Added
+
+- SCSS Sass module navigation. `@use` (default namespace, `as`, and `as *`), `@forward` (`as prefix-*`, `show`, and `hide`), and legacy `@import` resolve `$variables`, mixins, functions, and `@extend` placeholders across files. `show` and `hide` list the exposed (prefixed) names, `@import` has no privacy, member names treat `-` and `_` as one character, and namespaces compare as written. Parameters, loop variables, `using` parameters, and keyword-argument names are local, and a variable that one file assigns again stays one variable. `sass:` modules stay external. Reference coverage is `partial` for unreadable files, unresolved module URLs, Vue and Svelte style blocks that may load the module, ambiguous members, and `meta.load-css` / `meta.get-function` / `meta.module-variables` / `meta.module-functions`. Rename preview edits only the member name. It reports `name_collision` when a scope that sees the member already uses the new name, and `shadowing` when a local variable would capture a reference.
+
+### Fixed
+
+- SCSS: a directory resolves to its `_index.scss` partial, so `@use "lib"` reaches `lib/_index.scss` as it already reached `lib/index.scss`.
+
 ## [3.0.1] - 2026-10-17
 
 ### Added
