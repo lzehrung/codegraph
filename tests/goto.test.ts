@@ -6099,4 +6099,23 @@ describe("Go to Definition: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves @extend to a placeholder that a media query or a rule declares, here and in a used module", async () => {
+    // dart-sass extends a placeholder wherever its rule sits.
+    const files = {
+      "_lib.scss": "@media screen {\n  %in-media { a: b; }\n}\n.rule { %in-rule { c: d; } }\n",
+      "main.scss": '@use "lib";\n.a { @extend %in-rule; }\n@media screen { .b { @extend %in-media; } }\n',
+      "alone.scss": "@media screen {\n  %ph { color: red; }\n  .a { @extend %ph; }\n}\n",
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const main = files["main.scss"].split("\n");
+      await testGoToDefinition(index, paths["main.scss"]!, 2, columnOf(main[1]!, "in-rule"), paths["_lib.scss"]!, 4);
+      await testGoToDefinition(index, paths["main.scss"]!, 3, columnOf(main[2]!, "in-media"), paths["_lib.scss"]!, 2);
+      const alone = files["alone.scss"].split("\n");
+      await testGoToDefinition(index, paths["alone.scss"]!, 3, columnOf(alone[2]!, "ph"), paths["alone.scss"]!, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

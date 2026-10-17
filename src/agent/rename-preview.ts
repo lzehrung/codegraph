@@ -663,7 +663,8 @@ async function addTerraformConflicts(
  * An SCSS name is a module member. A same-kind member that a scope seeing the renamed one
  * already declares or exposes under the new name collides. A local variable that would capture a
  * use is a shadowing conflict. A new name that starts with `-` or `_` is private, so a use through
- * `@use` or `@forward` could no longer reach it.
+ * `@use` or `@forward` could no longer reach it, and a `@forward` hide list that names the new name
+ * hides the member from the uses that read it through that forward.
  */
 async function addScssConflicts(
   snapshot: AgentProjectSnapshot,
@@ -681,7 +682,7 @@ async function addScssConflicts(
       message: `A scope that sees this member after the rename already uses "${newName}" for another member.`,
     });
   }
-  const { captured, inaccessible } = await scssRenameUseConflicts(snapshot.index, target, newName);
+  const { captured, inaccessible, hidden } = await scssRenameUseConflicts(snapshot.index, target, newName);
   for (const capture of captured) {
     const captureFile = normalizeAgentFilePath(snapshot.root, capture.file);
     conflicts.push({
@@ -701,6 +702,18 @@ async function addScssConflicts(
       location: { file: siteFile, range: site.range },
       reason: "invalid_identifier",
       message: `"${newName}" is private to its module, so this use through @use or @forward could no longer reach it.`,
+    });
+  }
+  const hiddenFiles = new Set<string>();
+  for (const site of hidden) {
+    const siteFile = normalizeAgentFilePath(snapshot.root, site.file);
+    if (hiddenFiles.has(siteFile)) continue;
+    hiddenFiles.add(siteFile);
+    conflicts.push({
+      file: siteFile,
+      location: { file: siteFile, range: site.range },
+      reason: "invalid_identifier",
+      message: `A @forward hide list would hide "${newName}" from this use after the rename.`,
     });
   }
 }

@@ -40,7 +40,21 @@ export type ScssNotFound = { status: "not_found"; reason: string; unproven?: tru
  */
 export type ScssAccess = "own" | "import" | "module";
 
-export type ScssResolved = { status: "ok"; def: SymbolDef; prefix: string; access: ScssAccess };
+/**
+ * A `@forward` that has a `show` or `hide` list and that a member passed through. `exposed` is the
+ * canonical name the list sees: the prefix of this forward and of the forwards inside it, plus the
+ * declared name.
+ */
+export type ScssForwardFilter = { load: ScssModuleLoad; exposed: string };
+
+export type ScssResolved = {
+  status: "ok";
+  def: SymbolDef;
+  prefix: string;
+  access: ScssAccess;
+  /** The forward lists on the path from the declaring file to the use, innermost first. */
+  filters: readonly ScssForwardFilter[];
+};
 
 /**
  * `shadow`: a local variable owns the name, so module lookup must not claim it. `indexed` is true
@@ -77,7 +91,18 @@ type OwnMember = {
   isDefault: boolean;
 };
 
-type PlaceholderDeclaration = { def: SymbolDef; declared: string };
+/**
+ * A placeholder as one file declares it. Sass extends every rule of a file that has the name, in a
+ * media query or in another rule too, so the repeated declarations are one placeholder.
+ */
+type PlaceholderDeclaration = {
+  def: SymbolDef;
+  declared: string;
+  /** Every declaration site in the file, `def` first. */
+  sites: ScssSite[];
+  /** `defKey` of every site, so a definition that the index reports finds its placeholder. */
+  siteKeys: Set<string>;
+};
 
 type ModuleModel = {
   file: FileId;
@@ -125,6 +150,8 @@ type Member = {
   isDefault: boolean;
   /** Reached through `@import` only, so a name that starts with `-` or `_` is still visible. */
   importOnly: boolean;
+  /** The `@forward` lists the member passed through, innermost first. */
+  filters: readonly ScssForwardFilter[];
 };
 
 type Exposure = {
@@ -256,6 +283,7 @@ function buildOwnMembers(
   const ownByName = new Map<string, OwnMember[]>();
   const variables = new Map<string, OwnMember>();
   const placeholders: PlaceholderDeclaration[] = [];
+  const placeholderSites = new Map<string, { def: SymbolDef | undefined; siteKey: string; range: Range }[]>();
   for (const declaration of facts.declarations) {
     if (!declaration.topLevel) continue;
     // The key matches `defAt`: the position of the definition and its name with `_` folded into `-`.
@@ -266,7 +294,7 @@ function buildOwnMembers(
     );
     const def = defAt.get(siteKey);
     if (declaration.kind === "placeholder") {
-      if (def) placeholders.push({ def, declared: declaration.canonical });
+      appendTo(placeholderSites, declaration.canonical, { def, siteKey, range: declaration.range });
       continue;
     }
     const name = `${declaration.kind}:${declaration.canonical}`;
@@ -291,6 +319,22 @@ function buildOwnMembers(
     if (declaration.kind === "variable") variables.set(name, member);
     own.push(member);
     appendTo(ownByName, name, member);
+  }
+  // Sass extends every rule of a file that has the name, so the declarations of one name are one
+  // placeholder. Each of them is a site, also when the index holds no definition for it: a rename
+  // that skipped one would leave the old name behind.
+  for (const [declared, entries] of placeholderSites) {
+    const first = entries.find((entry) => entry.def);
+    if (!first?.def) continue;
+    placeholders.push({
+      def: first.def,
+      declared,
+      sites: [
+        { file: first.def.file, range: first.def.range },
+        ...entries.filter((entry) => entry !== first).map((entry) => ({ file, range: entry.range })),
+      ],
+      siteKeys: new Set(entries.map((entry) => entry.siteKey)),
+    });
   }
   return { own, ownByName, placeholders };
 }
@@ -398,12 +442,23 @@ function ownAsMember(member: OwnMember, importOnly: boolean): Member {
     def: member.def,
     isDefault: member.isDefault,
     importOnly,
+    filters: [],
   };
 }
 
 function withPrefix(member: Member, prefix: string): Member {
   if (!prefix) return member;
   return { ...member, exposed: sassCanonical(prefix) + member.exposed, prefix: prefix + member.prefix };
+}
+
+/**
+ * The member as a module that forwards it exposes it: the prefix is added, and a `show` or `hide`
+ * list is kept, so rename preview can test the new name against it.
+ */
+function withForward(member: Member, load: ScssModuleLoad): Member {
+  const prefixed = withPrefix(member, load.prefix);
+  if (!load.show && !load.hide) return prefixed;
+  return { ...prefixed, filters: [...member.filters, { load, exposed: prefixed.exposed }] };
 }
 
 /**
@@ -494,7 +549,7 @@ function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk
     if (inner.incomplete) incomplete = true;
     for (const member of inner.members) {
       if (forwarded) {
-        if (passesFilter(member, load)) members.push(withPrefix(member, load.prefix));
+        if (passesFilter(member, load)) members.push(withForward(member, load));
       } else if (mode === "import") {
         members.push(member);
       } else if (!isPrivateName(member.exposed) || member.def === model.unhide) {
@@ -556,7 +611,13 @@ function choose(
     return { status: "not_found", reason: `${emptyReason}; a loaded module did not resolve`, unproven: true };
   }
   if (rest.length) return { status: "not_found", reason: ambiguousReason, unproven: true };
-  return { status: "ok", def: first.def, prefix: first.prefix, access: first.importOnly ? "import" : "module" };
+  return {
+    status: "ok",
+    def: first.def,
+    prefix: first.prefix,
+    access: first.importOnly ? "import" : "module",
+    filters: first.filters,
+  };
 }
 
 function unresolvedIntroducesMembers(loads: readonly ResolvedLoad[]): boolean {
@@ -705,7 +766,7 @@ function resolveUnnamespaced(model: ProjectModel, current: ModuleModel, use: Scs
     return { status: "not_found", reason: `More than one SCSS member matches ${use.text}`, unproven: true };
   }
   const [only] = own;
-  if (only) return { status: "ok", def: only.def, prefix: "", access: "own" };
+  if (only) return { status: "ok", def: only.def, prefix: "", access: "own", filters: [] };
   if (unresolvedIntroducesMembers(current.loads)) {
     return { status: "not_found", reason: "An unresolved SCSS import may also define this name", unproven: true };
   }
@@ -809,7 +870,7 @@ function resolvePlaceholder(model: ProjectModel, current: ModuleModel, use: Scss
   let access: ScssAccess = "module";
   if (declaringKey === current.key) access = "own";
   else if (sameModule.has(declaringKey)) access = "import";
-  return { status: "ok", def: first, prefix: "", access };
+  return { status: "ok", def: first, prefix: "", access, filters: [] };
 }
 
 /**
@@ -827,24 +888,21 @@ export async function resolveScssUse(index: ProjectIndex, file: FileId, use: Scs
   return resolveUnnamespaced(model, current, use);
 }
 
-/** The top-level member a definition declares, or null for locals, parameters, and selectors. */
+/**
+ * The member a definition declares: a top-level member, or a placeholder at any depth. Null for
+ * locals, parameters, and other selectors.
+ */
 export async function scssMemberForDefinition(index: ProjectIndex, def: SymbolDef): Promise<ScssDeclaredMember | null> {
   const model = await projectModel(index);
   const current = model.files.get(fileIdentityKey(def.file));
   if (!current) return null;
   const at = defKey(def.range.start.line, def.range.start.column, sassCanonical(def.localName));
-  const declared = current.defAt.get(at);
-  if (!declared) return null;
+  if (!current.defAt.has(at)) return null;
   const member = current.own.find((entry) => entry.siteKeys.has(at));
   if (member) return member;
-  const placeholder = current.placeholders.find((entry) => entry.def === declared);
+  const placeholder = current.placeholders.find((entry) => entry.siteKeys.has(at));
   if (!placeholder) return null;
-  return {
-    kind: "placeholder",
-    declared: placeholder.declared,
-    def: placeholder.def,
-    sites: [{ file: placeholder.def.file, range: placeholder.def.range }],
-  };
+  return { kind: "placeholder", declared: placeholder.declared, def: placeholder.def, sites: placeholder.sites };
 }
 
 /** Reference span for a use. Null when a forward prefix cannot be split from the member. */
@@ -1113,6 +1171,31 @@ function readsMember(use: ScssUse): boolean {
 
 export type ScssRenameSite = { file: FileId; range: Range };
 
+/** True when a file that sees `def` forwards it through a `show` or `hide` list. */
+function isForwardedThroughList(model: ProjectModel, files: readonly FileId[], def: SymbolDef): boolean {
+  return files.some((file) => {
+    const current = model.files.get(fileIdentityKey(file));
+    if (!current?.loads.some(({ load }) => load.kind === "forward" && (load.show || load.hide))) return false;
+    return exposureOf(model, current.key, "module", newWalk()).members.some(
+      (entry) => entry.def === def && entry.filters.length > 0,
+    );
+  });
+}
+
+/**
+ * True when a `hide` list on the path of a use names the member under its new name. A `show` list
+ * and a `hide` list that name the member today are edited with it, so only another entry can hide
+ * the new name.
+ */
+function hidesRenamedMember(filters: readonly ScssForwardFilter[], member: ScssDeclaredMember, next: string): boolean {
+  return filters.some(({ load, exposed }) => {
+    const renamed = exposed.slice(0, exposed.length - member.declared.length) + next;
+    return (load.hide ?? []).some(
+      (entry) => (entry.kind === "variable") === (member.kind === "variable") && sassCanonical(entry.name) === renamed,
+    );
+  });
+}
+
 /**
  * The uses that the new name would break.
  * - A local variable (a parameter, a loop variable, or a block variable) captures a bare variable
@@ -1120,22 +1203,29 @@ export type ScssRenameSite = { file: FileId; range: Range };
  *   use plus the new name. A namespaced use cannot be captured.
  * - A name that starts with `-` or `_` is private to its module, so a use through `@use` or
  *   `@forward` could no longer reach it. `@import` and the declaring file keep access.
+ * - A `@forward` with a `hide` list that names the new name (with the forward prefix) hides the
+ *   member from the use that reads it through that forward.
  */
 export async function scssRenameUseConflicts(
   index: ProjectIndex,
   def: SymbolDef,
   newName: string,
-): Promise<{ captured: ScssRenameSite[]; inaccessible: ScssRenameSite[] }> {
+): Promise<{ captured: ScssRenameSite[]; inaccessible: ScssRenameSite[]; hidden: ScssRenameSite[] }> {
   const captured: ScssRenameSite[] = [];
   const inaccessible: ScssRenameSite[] = [];
+  const hidden: ScssRenameSite[] = [];
   const member = await scssMemberForDefinition(index, def);
-  if (!member) return { captured, inaccessible };
+  if (!member) return { captured, inaccessible, hidden };
   const next = sassCanonical(newName);
+  if (next === member.declared) return { captured, inaccessible, hidden };
   const becomesPrivate = isPrivateName(next) && !isPrivateName(member.declared);
   const canBeCaptured = member.kind === "variable";
-  if (!canBeCaptured && !becomesPrivate) return { captured, inaccessible };
+  // A placeholder is in no `show` or `hide` list, so only a private name can break its uses.
+  if (member.kind === "placeholder" && !becomesPrivate) return { captured, inaccessible, hidden };
   const model = await projectModel(index);
   const { files } = await scssReferenceCandidates(index, member);
+  const mayBeHidden = isForwardedThroughList(model, files, member.def);
+  if (!canBeCaptured && !becomesPrivate && !mayBeHidden) return { captured, inaccessible, hidden };
   for (const file of files) {
     const current = model.files.get(fileIdentityKey(file));
     if (!current) continue;
@@ -1151,9 +1241,12 @@ export async function scssRenameUseConflicts(
         }
       }
       if (becomesPrivate && resolved.access === "module" && readsMember(use)) inaccessible.push({ file, range });
+      if (mayBeHidden && readsMember(use) && hidesRenamedMember(resolved.filters, member, next)) {
+        hidden.push({ file, range });
+      }
     }
   }
-  return { captured, inaccessible };
+  return { captured, inaccessible, hidden };
 }
 
 /** Replacement text for one SCSS member edit, or null when the site is not that member. */

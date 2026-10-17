@@ -32,7 +32,10 @@ export type ScssDeclaration = {
    */
   canonical: string;
   range: Range;
-  /** True for a module member: a top-level declaration, or a `$name: value !global` assignment. */
+  /**
+   * True for a module member: a top-level declaration, a `$name: value !global` assignment, or a
+   * placeholder at any depth, because Sass extends a placeholder wherever its rule sits.
+   */
   topLevel: boolean;
   /** Variable declared with `!default`. */
   isDefault: boolean;
@@ -224,6 +227,15 @@ function isDynamicForm(name: string): name is ScssDynamicForm {
 }
 
 /**
+ * The dynamic lookup that a function or mixin name spells, or null. Sass reads `_` as `-` in such
+ * a name, so `get_function` and `get-function` are one function.
+ */
+function dynamicFormOf(name: string): ScssDynamicForm | null {
+  const folded = name.replace(/_/g, "-");
+  return isDynamicForm(folded) ? folded : null;
+}
+
+/**
  * Sass reads an `@import` as plain CSS, not as a module load, when the URL ends in `.css`, starts
  * with `//`, `http://`, or `https://`, holds an interpolation, or is written as `url(...)`, or when
  * the argument has media queries.
@@ -286,7 +298,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
   let callParenAt = -1;
   /** Offset where the current statement starts: after the last `;` or block brace. */
   let statementBegin = 0;
-  let headCache: { begin: number; atRule: boolean; block: boolean } | null = null;
+  let headCache: { begin: number; styleRule: boolean } | null = null;
 
   const rangeOf = (start: number, end: number): Range => ({
     start: positionAtOffset(lineStarts, start),
@@ -412,9 +424,16 @@ export function extractScssFacts(source: string): ScssFileFacts {
     return readQuoted(source, skipSpaceAndComments(paren + 1))?.text ?? null;
   };
 
-  const isMetaCall = (namespace: string | null, member: string): boolean => {
-    if (!isDynamicForm(member)) return false;
-    return namespace === null ? metaStar : metaNamespaces.has(namespace);
+  /**
+   * The lookup that a call through `sass:meta` names, or null. The name folds `_` into `-`, and the
+   * namespace compares as written, so `meta.get_function` is a lookup and `my-meta.get-function` is
+   * not when the module is bound to `my_meta`.
+   */
+  const metaCallForm = (namespace: string | null, member: string): ScssDynamicForm | null => {
+    const form = dynamicFormOf(member);
+    if (!form) return null;
+    const viaMeta = namespace === null ? metaStar : metaNamespaces.has(namespace);
+    return viaMeta ? form : null;
   };
 
   const bindLocal = (frame: BlockFrame, local: ScssLocalBinding): void => {
@@ -521,8 +540,9 @@ export function extractScssFacts(source: string): ScssFileFacts {
     const after = skipBlank(member.end);
     if (source.charCodeAt(after) === 0x28) callParenAt = after;
     inInclude = true;
-    if (isMetaCall(member.namespace, member.member)) {
-      dynamics.push({ form: member.member as ScssDynamicForm, arg: readCallArgument(member.end) });
+    const dynamicForm = metaCallForm(member.namespace, member.member);
+    if (dynamicForm) {
+      dynamics.push({ form: dynamicForm, arg: readCallArgument(member.end) });
       return member.end;
     }
     addUse({
@@ -976,14 +996,16 @@ export function extractScssFacts(source: string): ScssFileFacts {
   };
 
   /**
-   * What the statement that starts at `statementBegin` is: an at-rule or not, and whether a block
-   * follows its head (a style rule) or it ends at a `;` or at the `}` of its own block (a
-   * declaration). The scan runs once per statement.
+   * True inside the head of a style rule: a block follows the head, and the statement is no
+   * at-rule, except `@at-root`, which takes a selector. There `:is(` and `:not(` are selectors, not
+   * calls, and a `%name` declares a placeholder. A declaration ends at a `;` or at the `}` of its
+   * own block. The scan runs once per statement.
    */
-  const statementHead = (): { atRule: boolean; block: boolean } => {
-    if (headCache?.begin === statementBegin) return headCache;
+  const opensStyleRule = (): boolean => {
+    if (headCache?.begin === statementBegin) return headCache.styleRule;
     let cursor = skipBlank(statementBegin);
-    const atRule = source.charCodeAt(cursor) === 0x40;
+    const isAtRule = source.charCodeAt(cursor) === 0x40;
+    const takesSelector = !isAtRule || readIdent(source, cursor + 1)?.text === "at-root";
     let interpolation = 0;
     let block = false;
     for (; cursor < length; cursor += 1) {
@@ -1005,14 +1027,8 @@ export function extractScssFacts(source: string): ScssFileFacts {
       }
       if (unit === 0x7d || unit === 0x3b) break;
     }
-    headCache = { begin: statementBegin, atRule, block };
-    return headCache;
-  };
-
-  /** True inside the head of a style rule, where `:is(` and `:not(` are selectors, not calls. */
-  const opensStyleRule = (): boolean => {
-    const head = statementHead();
-    return head.block && !head.atRule;
+    headCache = { begin: statementBegin, styleRule: block && takesSelector };
+    return headCache.styleRule;
   };
 
   /** `ns.member` access, a call, or a plain identifier. Returns the offset to continue from. */
@@ -1030,8 +1046,9 @@ export function extractScssFacts(source: string): ScssFileFacts {
       if (!member || member.namespace === null) return ident.end;
       const isVariable = member.memberText.startsWith("$");
       const isCall = source.charCodeAt(skipBlank(member.end)) === 0x28;
-      if (!isVariable && isCall && isMetaCall(member.namespace, member.member)) {
-        dynamics.push({ form: member.member as ScssDynamicForm, arg: readCallArgument(member.end) });
+      const dynamicForm = isCall && !isVariable ? metaCallForm(member.namespace, member.member) : null;
+      if (dynamicForm) {
+        dynamics.push({ form: dynamicForm, arg: readCallArgument(member.end) });
       } else if (isVariable) {
         addUse({
           kind: "variable",
@@ -1057,8 +1074,9 @@ export function extractScssFacts(source: string): ScssFileFacts {
       return member.end;
     }
     if (source.charCodeAt(ident.end) === 0x28) {
-      if (isMetaCall(null, ident.text)) {
-        dynamics.push({ form: ident.text as ScssDynamicForm, arg: readCallArgument(ident.end) });
+      const bareForm = metaCallForm(null, ident.text);
+      if (bareForm) {
+        dynamics.push({ form: bareForm, arg: readCallArgument(ident.end) });
         return ident.end;
       }
       // A CSS functional pseudo-class or pseudo-element in a selector (`:is(`, `:not(`, `::part(`)
@@ -1160,18 +1178,17 @@ export function extractScssFacts(source: string): ScssFileFacts {
     }
     if (unit === 0x25) {
       const placeholder = readIdent(source, index + 1);
-      if (placeholder) {
-        const nextUnit = source.charCodeAt(skipBlank(placeholder.end));
-        if (!blocks.length && (statementStart || nextUnit === 0x7b || nextUnit === 0x2c)) {
-          declarations.push({
-            kind: "placeholder",
-            name: placeholder.text,
-            canonical: placeholder.text,
-            range: rangeOf(index + 1, placeholder.end),
-            topLevel: true,
-            isDefault: false,
-          });
-        }
+      // A placeholder in the head of a style rule is a declaration at any depth: Sass extends it
+      // wherever its rule sits, in a media query, in another rule, or in a mixin.
+      if (placeholder && opensStyleRule()) {
+        declarations.push({
+          kind: "placeholder",
+          name: placeholder.text,
+          canonical: placeholder.text,
+          range: rangeOf(index + 1, placeholder.end),
+          topLevel: true,
+          isDefault: false,
+        });
       }
       touch();
       statementStart = false;

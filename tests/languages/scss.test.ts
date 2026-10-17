@@ -2327,3 +2327,382 @@ describe("SCSS module navigation: final review follow-ups", () => {
     });
   });
 });
+
+describe("SCSS module navigation: late review follow-ups", () => {
+  const native = isNativeTreeSitterAvailable();
+
+  function lineOf(source: string, offset: number): number {
+    return source.slice(0, offset).split("\n").length;
+  }
+
+  /** The conflicts of a rename as `reason:file`. */
+  async function conflictsOf(
+    files: Record<string, string>,
+    name: string,
+    inFile: string,
+    newName: string,
+  ): Promise<string[]> {
+    let reasons: string[] = [];
+    await withScssProject(files, async (project) => {
+      const renamed = await previewScssRename(project, name, inFile, newName);
+      reasons = renamed.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`);
+    });
+    return reasons;
+  }
+
+  it.runIf(native)("reports a conflict when a forward hide list hides the new name from a read", async () => {
+    // dart-sass: after `$x` becomes `$y`, `api.$y` is undefined, because `@forward "lib" hide $y` hides it.
+    const lib = { "_lib.scss": "$x: 1;\n" };
+    const api = (forward: string): Record<string, string> => ({ ...lib, "_api.scss": `${forward}\n` });
+    const readThroughApi = { "main.scss": '@use "api";\n.a { w: api.$x; }\n' };
+    const hidden = ["invalid_identifier:main.scss"];
+    const rename = (files: Record<string, string>, newName = "$y", name = "$x", inFile = "_lib.scss") =>
+      conflictsOf(files, name, inFile, newName);
+    expect(await rename({ ...api('@forward "lib" hide $y;'), ...readThroughApi }), "namespace").toEqual(hidden);
+    // A free name, and a hide list that names another kind of member, hide nothing.
+    expect(await rename({ ...api('@forward "lib" hide $y;'), ...readThroughApi }, "$z"), "free name").toEqual([]);
+    expect(await rename({ ...api('@forward "lib" hide y;'), ...readThroughApi }), "other kind").toEqual([]);
+    // `@use ... as *` and `@import` read the same exposure.
+    expect(
+      await rename({ ...api('@forward "lib" hide $y;'), "main.scss": '@use "api" as *;\n.a { w: $x; }\n' }),
+      "star",
+    ).toEqual(hidden);
+    expect(
+      await rename({ ...api('@forward "lib" hide $y;'), "main.scss": '@import "api";\n.a { w: $x; }\n' }),
+      "import",
+    ).toEqual(hidden);
+    // A list names the exposed spelling, so the prefix of the forward counts.
+    const prefixed = { "main.scss": '@use "api";\n.a { w: api.$theme-x; }\n' };
+    expect(await rename({ ...api('@forward "lib" as theme-* hide $theme-y;'), ...prefixed }), "prefix").toEqual(hidden);
+    expect(await rename({ ...api('@forward "lib" as theme-* hide $y;'), ...prefixed }), "bare entry").toEqual([]);
+    // `-` and `_` are one character in a list entry.
+    expect(
+      await conflictsOf(
+        {
+          "_lib.scss": "$foo-bar: 1;\n",
+          "_api.scss": '@forward "lib" hide $foo_baz;\n',
+          "main.scss": '@use "api";\n.a { w: api.$foo-bar; }\n',
+        },
+        "$foo-bar",
+        "_lib.scss",
+        "$foo-baz",
+      ),
+      "spelling",
+    ).toEqual(hidden);
+    // A list on an outer forward hides the member from the files that use the outer module.
+    expect(
+      await rename({
+        ...lib,
+        "_api.scss": '@forward "lib";\n',
+        "_outer.scss": '@forward "api" as o-* hide $o-y;\n',
+        "main.scss": '@use "outer";\n.a { w: outer.$o-x; }\n',
+      }),
+      "chain",
+    ).toEqual(hidden);
+    // Mixins and functions have their own lists.
+    expect(
+      await conflictsOf(
+        {
+          "_lib.scss": "@mixin pad { padding: 1px; }\n@function size() { @return 1px; }\n",
+          "_api.scss": '@forward "lib" hide pad2, size2;\n',
+          "main.scss": '@use "api";\n.a { @include api.pad; w: api.size(); }\n',
+        },
+        "pad",
+        "_lib.scss",
+        "pad2",
+      ),
+      "mixin",
+    ).toEqual(hidden);
+    expect(
+      await conflictsOf(
+        {
+          "_lib.scss": "@function size() { @return 1px; }\n",
+          "_api.scss": '@forward "lib" hide size2;\n',
+          "main.scss": '@use "api";\n.a { w: api.size(); }\n',
+        },
+        "size",
+        "_lib.scss",
+        "size2",
+      ),
+      "function",
+    ).toEqual(hidden);
+    // Nothing reads the member through the forward, or a file reads it through another module.
+    expect(await rename({ ...api('@forward "lib" hide $y;'), "main.scss": '@use "api";\n' }), "no read").toEqual([]);
+    expect(
+      await rename({ ...api('@forward "lib" hide $y;'), "main.scss": '@use "lib";\n.a { w: lib.$x; }\n' }),
+      "other module",
+    ).toEqual([]);
+  });
+
+  it.runIf(native)("keeps a show list in step with the renamed member", async () => {
+    // dart-sass: `@forward "lib" show $y` and `api.$y` work once the show entry changes with `$x`.
+    await withScssProject(
+      {
+        "_lib.scss": "$x: 1;\n",
+        "_api.scss": '@forward "lib" show $x;\n',
+        "main.scss": '@use "api";\n.a { w: api.$x; }\n',
+      },
+      async (project) => {
+        const renamed = await previewScssRename(project, "$x", "_lib.scss", "$y");
+        expect(renamed.conflicts).toEqual([]);
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => edit.file).sort()).toEqual(["_api.scss", "_lib.scss", "main.scss"]);
+      },
+    );
+  });
+
+  it("reads the underscore spellings of the meta lookups as dynamic lookups", () => {
+    // dart-sass reads `_` as `-` in a function or mixin name, so `meta.get_function` is `meta.get-function`.
+    const facts = extractScssFacts(
+      [
+        '@use "sass:meta";',
+        '@use "lib";',
+        ".a {",
+        '  @include meta.load_css("lib");',
+        '  x: meta.get_function("pad");',
+        '  y: meta.get_mixin("pad");',
+        '  z: meta.module_variables("lib");',
+        '  w: meta.module_functions("lib");',
+        '  v: meta.module_mixins("lib");',
+        '  u: meta.get-function("pad");',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    expect(facts.dynamics.map((dynamic) => `${dynamic.form}:${dynamic.arg}`)).toEqual([
+      "load-css:lib",
+      "get-function:pad",
+      "get-mixin:pad",
+      "module-variables:lib",
+      "module-functions:lib",
+      "module-mixins:lib",
+      "get-function:pad",
+    ]);
+    expect(facts.uses.filter((use) => use.syntax === "call")).toEqual([]);
+    // The namespace compares as written: `my_meta` and `my-meta` are two namespaces (dart-sass: "There
+    // is no module with namespace my-meta" for the other one).
+    const lookups = (source: string): string[] =>
+      extractScssFacts(source).dynamics.map((dynamic) => `${dynamic.form}:${dynamic.arg}`);
+    const calls = (source: string): string[] =>
+      extractScssFacts(source).uses.map((use) => `${use.namespace}.${use.text}`);
+    const underscore =
+      '@use "sass:meta" as my_meta;\n.a { x: my_meta.get_function("a"); y: my-meta.get_function("b"); }\n';
+    expect(lookups(underscore)).toEqual(["get-function:a"]);
+    expect(calls(underscore)).toEqual(["my-meta.get_function"]);
+    const hyphen = '@use "sass:meta" as my-meta;\n.a { x: my-meta.get_function("a"); y: my_meta.get_function("b"); }\n';
+    expect(lookups(hyphen)).toEqual(["get-function:a"]);
+    expect(calls(hyphen)).toEqual(["my_meta.get_function"]);
+    // A bare call is a lookup only when `sass:meta` is loaded with `as *`.
+    const star = extractScssFacts('@use "sass:meta" as *;\n.a { x: get_function("a"); y: module_mixins("b"); }\n');
+    expect(star.dynamics.map((dynamic) => `${dynamic.form}:${dynamic.arg}`)).toEqual([
+      "get-function:a",
+      "module-mixins:b",
+    ]);
+    expect(extractScssFacts('.a { x: get_function("a"); }\n').dynamics).toEqual([]);
+  });
+
+  it.runIf(native)("reports partial coverage for a file that looks a name up with an underscore spelling", async () => {
+    const lib = "@function pad() { @return 1px; }\n@mixin box { padding: 1px; }\n";
+    for (const lookup of ['meta.get_function("pad")', 'meta.get_mixin("box")', 'meta.module_functions("lib")']) {
+      await withScssProject(
+        {
+          "_lib.scss": lib,
+          "main.scss": `@use "sass:meta";\n@use "lib";\n.a { @include lib.box; w: lib.pad(); x: ${lookup}; }\n`,
+        },
+        async (project) => {
+          const refs = await scssRefs(project, "_lib.scss", "@function pad", 0, "@function ".length);
+          expect(refs.sites, lookup).toEqual(["_lib.scss:1", "main.scss:3"]);
+          expect(refs.coverage?.state, lookup).toBe("partial");
+          expect(
+            refs.coverage?.affectedFiles?.map((file) => project.relative(file)),
+            lookup,
+          ).toEqual(["main.scss"]);
+        },
+      );
+    }
+  });
+
+  const PLACEHOLDER_FORMS = [
+    "@media screen {",
+    "  %in-media { a: b; }",
+    "  .m { @extend %in-media; }",
+    "}",
+    ".rule { %in-rule { c: d; } }",
+    "@mixin m { %in-mixin { e: f; } }",
+    ".list, %in-list { g: h; }",
+    ".mid %in-selector .tail { i: j; }",
+    "@at-root %at-root { k: l; }",
+    "@at-root .scoped:not(.other) { n: o; }",
+    "%top { m: n; }",
+    ".use { @extend %top, %in-rule; width: 50%; margin: math.div(10, 3) % 2; }",
+    "",
+  ].join("\n");
+
+  it("records a placeholder in the head of any style rule as a declaration", () => {
+    // dart-sass extends a placeholder wherever its rule sits: in a media query, in another rule, in a
+    // mixin that is included, in a selector list, and after `@at-root`.
+    const facts = extractScssFacts(PLACEHOLDER_FORMS);
+    expect(
+      facts.declarations
+        .filter((declaration) => declaration.kind === "placeholder")
+        .map((declaration) => `${declaration.name}@${declaration.range.start.line}`),
+    ).toEqual(["in-media@2", "in-rule@5", "in-mixin@6", "in-list@7", "in-selector@8", "at-root@9", "top@11"]);
+    expect(facts.uses.filter((use) => use.kind === "placeholder").map((use) => use.text)).toEqual([
+      "in-media",
+      "top",
+      "in-rule",
+    ]);
+    // The `:not(` of an `@at-root` selector is no call, and the `math.div(` of a value is one.
+    expect(facts.uses.filter((use) => use.syntax === "call").map((use) => use.text)).toEqual(["div"]);
+  });
+
+  it.runIf(native)("resolves @extend to a placeholder that a media query, a rule, or a mixin declares", async () => {
+    const files = {
+      "m.scss": [
+        "@media screen {",
+        "  %in-media { a: b; }",
+        "  .m { @extend %in-media; }",
+        "}",
+        ".rule { %in-rule { c: d; } }",
+        ".r { @extend %in-rule; }",
+        "@mixin mix { %in-mixin { e: f; } }",
+        "@include mix;",
+        ".x { @extend %in-mixin; }",
+        "",
+      ].join("\n"),
+    };
+    await withScssProject(files, async (project) => {
+      expect(await scssGoto(project, "m.scss", "@extend %in-media", 0, 9)).toBe("m.scss:2");
+      expect(await scssGoto(project, "m.scss", "@extend %in-rule", 0, 9)).toBe("m.scss:5");
+      expect(await scssGoto(project, "m.scss", "@extend %in-mixin", 0, 9)).toBe("m.scss:7");
+      for (const [needle, uses] of [
+        ["%in-media {", ["m.scss:2", "m.scss:3"]],
+        ["%in-rule {", ["m.scss:5", "m.scss:6"]],
+        ["%in-mixin {", ["m.scss:7", "m.scss:9"]],
+      ] as const) {
+        const refs = await scssRefs(project, "m.scss", needle, 0, 1);
+        expect(refs.sites, needle).toEqual(uses);
+        expect(refs.coverage?.state, needle).toBe("complete");
+      }
+    });
+    // Another file reaches the placeholder through `@use`, whatever block declares it.
+    await withScssProject(
+      {
+        "_lib.scss": "@media screen {\n  %in-media { a: b; }\n}\n.rule { %in-rule { c: d; } }\n",
+        "main.scss": '@use "lib";\n.a { @extend %in-rule; }\n@media screen { .b { @extend %in-media; } }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "@extend %in-rule", 0, 9)).toBe("_lib.scss:4");
+        expect(await scssGoto(project, "main.scss", "@extend %in-media", 0, 9)).toBe("_lib.scss:2");
+        const media = await scssRefs(project, "_lib.scss", "%in-media {", 0, 1);
+        expect(media.sites).toEqual(["_lib.scss:2", "main.scss:3"]);
+        expect(media.coverage?.state).toBe("complete");
+      },
+    );
+  });
+
+  it.runIf(native)("treats the placeholder that one file declares again as one placeholder", async () => {
+    // dart-sass: `.x { @extend %btn }` extends both rules, `.x { a: b } @media screen { .x { c: d } }`.
+    const source = "%btn { a: b; }\n@media screen { %btn { c: d; } }\n.x { @extend %btn; }\n";
+    await withScssProject({ "m.scss": source }, async (project) => {
+      expect(await scssGoto(project, "m.scss", "@extend %btn", 0, 9)).toBe("m.scss:1");
+      for (const declaration of [0, 1]) {
+        const refs = await scssRefs(project, "m.scss", "%btn {", declaration, 1);
+        expect(refs.sites, `declaration ${declaration}`).toEqual(["m.scss:1", "m.scss:2", "m.scss:3"]);
+        expect(refs.coverage?.state, `declaration ${declaration}`).toBe("complete");
+      }
+      // Renaming the placeholder renames the rule in the media query too.
+      const renamed = await previewScssRename(project, "btn", "m.scss", "button");
+      expect(renamed.conflicts).toEqual([]);
+      expect(renamed.edits.map((edit) => `${edit.range.start.line}:${edit.oldText}->${edit.newText}`)).toEqual([
+        "1:btn->button",
+        "2:btn->button",
+        "3:btn->button",
+      ]);
+    });
+    // A mention in the middle of a selector has no index symbol. It is a site even when it comes first.
+    const mid = ".z %mid .w { c: d; }\n%mid { a: b; }\n.q { @extend %mid; }\n";
+    await withScssProject({ "m.scss": mid }, async (project) => {
+      const refs = await scssRefs(project, "m.scss", "%mid {", 0, 1);
+      expect(refs.sites).toEqual(["m.scss:1", "m.scss:2", "m.scss:3"]);
+      const renamed = await previewScssRename(project, "mid", "m.scss", "center");
+      expect(renamed.edits.map((edit) => `${edit.range.start.line}:${edit.range.start.column}`)).toEqual([
+        "1:5",
+        "2:2",
+        "3:15",
+      ]);
+    });
+    // Two files that declare the name stay ambiguous: the use may mean either one.
+    await withScssProject(
+      {
+        "_a.scss": "%dup { a: b; }\n",
+        "_b.scss": "@media screen { %dup { c: d; } }\n",
+        "m.scss": '@use "a";\n@use "b";\n.x { @extend %dup; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "m.scss", "@extend %dup", 0, 9)).toBe("not_found");
+        const refs = await scssRefs(project, "_a.scss", "%dup", 0, 1);
+        expect(refs.coverage?.state).toBe("partial");
+        expect(refs.coverage?.affectedFiles?.map((file) => project.relative(file))).toEqual(["m.scss"]);
+      },
+    );
+  });
+
+  it.runIf(native)("keeps the exact spelling of a placeholder in an @extend with !optional", async () => {
+    // dart-sass: `%foo-bar` and `%foo_bar` are two placeholders, so `@extend %foo_bar !optional` finds none.
+    const source =
+      "%foo-bar { color: red; }\n.a { @extend %foo_bar !optional; }\n.b { @extend %foo-bar !optional; }\n.c { @extend %foo-bar; }\n";
+    await withScssProject({ "m.scss": source }, async (project) => {
+      expect(await scssGoto(project, "m.scss", "%foo_bar", 0, 1)).toBe("not_found");
+      expect(await scssGoto(project, "m.scss", "%foo-bar !", 0, 1)).toBe("m.scss:1");
+      const refs = await scssRefs(project, "m.scss", "%foo-bar {", 0, 1);
+      expect(refs.sites).toEqual(["m.scss:1", "m.scss:3", "m.scss:4"]);
+      const renamed = await previewScssRename(project, "foo-bar", "m.scss", "baz");
+      expect(renamed.edits.map((edit) => edit.range.start.line)).toEqual([1, 3, 4]);
+    });
+    await withScssProject(
+      {
+        "_ph.scss": "%foo_bar { color: red; }\n",
+        "main.scss": '@use "ph";\n.a { @extend %foo-bar !optional; }\n.b { @extend %foo_bar !optional; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "%foo-bar", 0, 1)).toBe("not_found");
+        expect(await scssGoto(project, "main.scss", "%foo_bar", 0, 1)).toBe("_ph.scss:1");
+        expect((await scssRefs(project, "_ph.scss", "%foo_bar", 0, 1)).sites).toEqual(["_ph.scss:1", "main.scss:3"]);
+      },
+    );
+  });
+
+  it("reads the expression of an interpolation as code and its strings and comments as text", () => {
+    // dart-sass: a string inside `#{...}` is text, and the expression around it is evaluated, in a
+    // quoted string, in an unquoted url(...), in a selector, in an attribute selector, and in a custom property.
+    const reads = (body: string): string[] => {
+      const source = `$primary: red;\n.a { ${body}; }\n`;
+      return extractScssFacts(source).uses.map((use) => `${use.text}@${lineOf(source, use.nameStart)}`);
+    };
+    for (const literal of [
+      "background: url(#{'$primary'}.svg)",
+      'background: url(#{"$primary"}.svg)',
+      "background: url( #{'$primary'} )",
+      "content: \"#{'$primary'}\"",
+      "content: '#{\"$primary\"}'",
+      'content: "#{/* $primary */ 1}"',
+      "--x: #{'$primary'}",
+      "@debug \"#{'$primary'}\"",
+      ".sel-#{'$primary'} { w: 1 }",
+      "[data-x=\"#{'$primary'}\"] { w: 1 }",
+    ]) {
+      expect(reads(literal), literal).toEqual([]);
+    }
+    for (const code of [
+      "background: url(#{$primary}.svg)",
+      'content: "x #{$primary} y"',
+      "content: \"#{ 'a' + '#{$primary}' }\"",
+      ".sel-#{$primary} { w: 1 }",
+    ]) {
+      expect(reads(code), code).toEqual(["$primary@2"]);
+    }
+    expect(reads("background: url(#{map-get($primary, 'k')}.svg)"), "mixed").toEqual(["map-get@2", "$primary@2"]);
+    expect(reads("background: url(#{foo('$primary')}.svg)"), "call").toEqual(["foo@2"]);
+  });
+});

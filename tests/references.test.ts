@@ -6722,4 +6722,48 @@ describe("Find References: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("finds every declaration of a placeholder and the use in another module, with complete coverage", async () => {
+    // dart-sass: `.x { @extend %btn }` extends the rule in the media query too.
+    const files = {
+      "_lib.scss": "%btn { a: b; }\n@media screen { %btn { c: d; } }\n",
+      "main.scss": '@use "lib";\n.x { @extend %btn; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_lib.scss"]!, line: 1, column: 2 },
+        { file: paths["_lib.scss"]!, line: 2, column: tokenColumn(files["_lib.scss"].split("\n")[1]!, "btn") },
+        { file: paths["main.scss"]!, line: 2, column: tokenColumn(files["main.scss"].split("\n")[1]!, "btn") },
+      ];
+      for (const [line, column] of [
+        [1, 2],
+        [2, expected[1]!.column],
+      ] as const) {
+        const result = await testFindReferences(index, paths["_lib.scss"]!, line, column, expected);
+        expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage for a file that looks a function up with an underscore spelling", async () => {
+    // dart-sass reads `_` as `-` in a function name, so `meta.get_function` is `meta.get-function`.
+    const files = {
+      "_lib.scss": "@function pad() { @return 1px; }\n",
+      "main.scss":
+        '@use "sass:meta";\n@use "lib";\n.a { w: lib.pad(); x: meta.get_function("pad", $module: "lib"); }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_lib.scss"]!, line: 1, column: 11 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["main.scss"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
