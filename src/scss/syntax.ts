@@ -262,6 +262,8 @@ export function extractScssFacts(source: string): ScssFileFacts {
   let statementRule = "";
   let nonFlowBlocks = 0;
   const globalVariables = new Set<string>();
+  /** How many bindings of each name are in scope now: parameters, loop variables, and block variables. */
+  const localCounts = new Map<string, number>();
   let paramsParenAt = -1;
   let callParenAt = -1;
 
@@ -392,14 +394,25 @@ export function extractScssFacts(source: string): ScssFileFacts {
     return namespace === null ? metaStar : metaNamespaces.has(namespace);
   };
 
+  const bindLocal = (frame: BlockFrame, local: ScssLocalBinding): void => {
+    frame.locals.push(local);
+    locals.push(local);
+    localCounts.set(local.canonical, (localCounts.get(local.canonical) ?? 0) + 1);
+  };
+
+  const unbindLocal = (local: ScssLocalBinding): void => {
+    const count = (localCounts.get(local.canonical) ?? 1) - 1;
+    if (count > 0) localCounts.set(local.canonical, count);
+    else localCounts.delete(local.canonical);
+  };
+
   const openBlock = (braceIndex: number): void => {
     const flow = FLOW_RULES.has(statementRule);
     const frame: BlockFrame = { locals: [], flow };
     if (!flow) nonFlowBlocks += 1;
     for (const local of pendingLocals) {
       if (local.from < 0) local.from = braceIndex;
-      frame.locals.push(local);
-      locals.push(local);
+      bindLocal(frame, local);
     }
     pendingLocals = [];
     braces.push(true);
@@ -413,7 +426,10 @@ export function extractScssFacts(source: string): ScssFileFacts {
   const closeBlock = (braceIndex: number): void => {
     const frame = blocks.pop();
     if (frame) {
-      for (const local of frame.locals) local.to = braceIndex;
+      for (const local of frame.locals) {
+        local.to = braceIndex;
+        unbindLocal(local);
+      }
       if (!frame.flow) nonFlowBlocks -= 1;
     }
     statementStart = true;
@@ -736,11 +752,17 @@ export function extractScssFacts(source: string): ScssFileFacts {
     return close < 0 ? length : close + 1;
   };
 
+  /**
+   * Records the Sass loads of an `@import`. The arguments stay in the main scan, so a variable in a
+   * media query or in the interpolation of `url(...)` is a use. A quoted URL is the exception: Sass
+   * keeps it as raw text, so `@import "https://x/#{$a}.css"` reads nothing.
+   */
   const handleImport = (from: number): number => {
     let cursor = from;
     while (cursor < length) {
       cursor = skipSpaceAndComments(cursor);
       const quoted = readQuoted(source, cursor);
+      if (quoted) consume(cursor, quoted.end);
       const functionEnd = quoted ? -1 : urlFunctionEnd(cursor);
       if (!quoted && functionEnd < 0) break;
       const end = quoted ? quoted.end : functionEnd;
@@ -773,7 +795,74 @@ export function extractScssFacts(source: string): ScssFileFacts {
       if (source.charCodeAt(cursor) !== 0x2c) break;
       cursor += 1;
     }
-    return Math.max(from, cursor);
+    return from;
+  };
+
+  /** The offset after the `}` that closes the interpolation whose `{` is at `open`, or -1 when it never closes. */
+  const interpolationEnd = (open: number): number => {
+    let depth = 0;
+    for (let cursor = open; cursor < length; cursor += 1) {
+      if (mask[cursor]) continue;
+      const unit = source.charCodeAt(cursor);
+      if (unit === 0x7b) depth += 1;
+      if (unit === 0x7d) {
+        depth -= 1;
+        if (!depth) return cursor + 1;
+      }
+    }
+    return -1;
+  };
+
+  /**
+   * The offset of the `:` after a custom property name that starts at `start` (`--name`, or a name
+   * with an interpolation such as `--#{$prefix}name`), or -1 when the text is no custom property.
+   */
+  const customPropertyColon = (start: number): number => {
+    if (source.charCodeAt(start) !== 0x2d || source.charCodeAt(start + 1) !== 0x2d) return -1;
+    let cursor = start + 2;
+    while (cursor < length && !mask[cursor]) {
+      const unit = source.charCodeAt(cursor);
+      if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {
+        const end = interpolationEnd(cursor + 1);
+        if (end < 0) return -1;
+        cursor = end;
+      } else if (isIdentPart(unit)) {
+        cursor += 1;
+      } else {
+        break;
+      }
+    }
+    const colon = skipBlank(cursor);
+    return source.charCodeAt(colon) === 0x3a ? colon : -1;
+  };
+
+  /**
+   * The value of a custom property (`--name: value`) is literal CSS, and only `#{...}` is code. The
+   * text from `from` to the end of the declaration is consumed, so a `$name` or a call in it is no
+   * use, and a brace in it opens no block. The declaration ends at a `;` or at the `}` of its
+   * block, outside any bracket.
+   */
+  const skipCustomPropertyValue = (from: number): void => {
+    let depth = 0;
+    let cursor = from;
+    while (cursor < length) {
+      if (mask[cursor]) {
+        cursor += 1;
+        continue;
+      }
+      const unit = source.charCodeAt(cursor);
+      if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {
+        const end = interpolationEnd(cursor + 1);
+        if (end < 0) return;
+        cursor = end;
+        continue;
+      }
+      if (!depth && (unit === 0x7d || unit === 0x3b)) return;
+      if (unit === 0x28 || unit === 0x5b || unit === 0x7b) depth += 1;
+      if (unit === 0x29 || unit === 0x5d || unit === 0x7d) depth = Math.max(0, depth - 1);
+      consumed[cursor] = 1;
+      cursor += 1;
+    }
   };
 
   const handleAtRule = (keyword: string, from: number): number => {
@@ -802,8 +891,11 @@ export function extractScssFacts(source: string): ScssFileFacts {
       const flags = statementFlags(next);
       const canonical = sassCanonical(variable.text);
       // A flow-control block that holds no rule or mixin shares the scope of the file: assigning
-      // a name the file already declared changes that variable instead of hiding it.
-      const reassigns = blocks.length > 0 && nonFlowBlocks === 0 && globalVariables.has(canonical);
+      // a name the file already declared changes that variable instead of hiding it. A loop
+      // variable of the same name is the exception: `@each $x in ...` binds `$x` for the block, so
+      // `$x: $x + 1` changes the loop variable and leaves the file variable alone.
+      const boundLocally = localCounts.has(canonical);
+      const reassigns = blocks.length > 0 && nonFlowBlocks === 0 && globalVariables.has(canonical) && !boundLocally;
       if (!blocks.length || flags.isGlobal || reassigns) {
         globalVariables.add(canonical);
         declarations.push({
@@ -816,9 +908,8 @@ export function extractScssFacts(source: string): ScssFileFacts {
         });
       } else {
         // The new variable hides a member only after its own statement, so `$x: $x + 1` reads the member.
-        const local = makeLocal(start, end, flags.end);
-        blocks[blocks.length - 1]?.locals.push(local);
-        locals.push(local);
+        const frame = blocks[blocks.length - 1];
+        if (frame) bindLocal(frame, makeLocal(start, end, flags.end));
       }
     } else if (!(top?.mode === "call" && top.argStart && isColon)) {
       addVariableUse(start, end, null);
@@ -987,8 +1078,13 @@ export function extractScssFacts(source: string): ScssFileFacts {
     }
     if (unit === 0x2d || isIdentStart(unit)) {
       const ident = readIdent(source, index);
+      const startsDeclaration = statementStart;
       touch();
       statementStart = false;
+      if (startsDeclaration && unit === 0x2d) {
+        const colon = customPropertyColon(index);
+        if (colon >= 0) skipCustomPropertyValue(colon + 1);
+      }
       index = ident ? Math.max(handleIdentifier(index, ident), ident.end) : index + 1;
       continue;
     }

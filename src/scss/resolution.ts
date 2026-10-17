@@ -1,5 +1,6 @@
 import path from "node:path";
 import { ensureParsedContext } from "../indexer/parse-context.js";
+import { sameDef } from "../indexer/reference-context.js";
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isNativeRequiredUnavailableError } from "../native/runtime.js";
@@ -33,10 +34,23 @@ import {
 
 export type ScssNotFound = { status: "not_found"; reason: string; unproven?: true };
 
-export type ScssResolution =
-  | { status: "ok"; def: SymbolDef; prefix: string }
-  | { status: "shadow"; range: Range }
-  | ScssNotFound;
+/**
+ * How a use reaches its member: in the file that declares it, through `@import` (which has no
+ * privacy), or through `@use` or `@forward` (which hide names that start with `-` or `_`).
+ */
+export type ScssAccess = "own" | "import" | "module";
+
+export type ScssResolved = { status: "ok"; def: SymbolDef; prefix: string; access: ScssAccess };
+
+/**
+ * `shadow`: a local variable owns the name, so module lookup must not claim it. `indexed` is true
+ * when the index holds a definition for one of those locals (a variable that a block declares);
+ * a parameter or a loop variable has none.
+ */
+export type ScssResolution = ScssResolved | { status: "shadow"; indexed: boolean } | ScssNotFound;
+
+/** A place where a member is declared. */
+export type ScssSite = { file: FileId; range: Range };
 
 /** A top-level declaration, as the index and the navigation consumers see it. */
 export type ScssDeclaredMember = {
@@ -46,7 +60,7 @@ export type ScssDeclaredMember = {
   /** First declaration of the member. A variable assigned again in the file keeps the first one. */
   def: SymbolDef;
   /** Every declaration site of the member, `def` first. */
-  sites: readonly SymbolDef[];
+  sites: readonly ScssSite[];
 };
 
 type LoadTarget = { type: "file"; file: FileId } | { type: "builtin" } | { type: "unresolved" };
@@ -57,7 +71,9 @@ type OwnMember = {
   kind: Exclude<ScssMemberKind, "placeholder">;
   declared: string;
   def: SymbolDef;
-  sites: SymbolDef[];
+  sites: ScssSite[];
+  /** `defKey` of every site, so a definition that the index reports finds its member. */
+  siteKeys: Set<string>;
   isDefault: boolean;
 };
 
@@ -83,6 +99,9 @@ type ProjectModel = {
   files: Map<string, ModuleModel>;
   /** Files that load a file directly, by the key of the loaded file. */
   reverse: Map<string, FileId[]>;
+  /** Keys of the files that `@import` a file, by the key of the imported file. */
+  importers: Map<string, string[]>;
+  importerChains: Map<string, ModuleModel[]>;
   exposures: Map<string, Exposure>;
   /** Files that are not SCSS but import a stylesheet URL that did not resolve, by stem. */
   hostsByStem: Map<string, FileId[]>;
@@ -98,8 +117,9 @@ type Member = {
   /** Forward prefix in source spelling; empty when no forward renamed the member. */
   prefix: string;
   def: SymbolDef;
-  sites: readonly SymbolDef[];
   isDefault: boolean;
+  /** Reached through `@import` only, so a name that starts with `-` or `_` is still visible. */
+  importOnly: boolean;
 };
 
 type Exposure = {
@@ -222,6 +242,7 @@ function loadTarget(
 }
 
 function buildOwnMembers(
+  file: FileId,
   facts: ScssFileFacts,
   defAt: ReadonlyMap<string, SymbolDef>,
 ): { own: OwnMember[]; ownByName: Map<string, OwnMember[]>; placeholders: PlaceholderDeclaration[] } {
@@ -231,24 +252,29 @@ function buildOwnMembers(
   const placeholders: PlaceholderDeclaration[] = [];
   for (const declaration of facts.declarations) {
     if (!declaration.topLevel) continue;
-    const def = defAt.get(defKey(declaration.range.start.line, declaration.range.start.column, declaration.canonical));
-    if (!def) continue;
+    const siteKey = defKey(declaration.range.start.line, declaration.range.start.column, declaration.canonical);
+    const def = defAt.get(siteKey);
     if (declaration.kind === "placeholder") {
-      placeholders.push({ def, declared: declaration.canonical });
+      if (def) placeholders.push({ def, declared: declaration.canonical });
       continue;
     }
     const name = `${declaration.kind}:${declaration.canonical}`;
     const assignedBefore = declaration.kind === "variable" ? variables.get(name) : undefined;
     if (assignedBefore) {
-      // One file assigning a variable again is still one variable.
-      assignedBefore.sites.push(def);
+      // One file assigning a variable again is still one variable. The assignment is a site even
+      // when the index holds no definition for it, as for an assignment inside `@each`: a rename
+      // that skipped it would leave the old name behind.
+      assignedBefore.sites.push({ file, range: declaration.range });
+      assignedBefore.siteKeys.add(siteKey);
       continue;
     }
+    if (!def) continue;
     const member: OwnMember = {
       kind: declaration.kind,
       declared: declaration.canonical,
       def,
-      sites: [def],
+      sites: [{ file: def.file, range: def.range }],
+      siteKeys: new Set([siteKey]),
       isDefault: declaration.isDefault,
     };
     if (declaration.kind === "variable") variables.set(name, member);
@@ -271,6 +297,7 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
   const targets = stylesheetTargets(index, scssKeys);
   const files = new Map<string, ModuleModel>();
   const reverse = new Map<string, FileId[]>();
+  const importers = new Map<string, string[]>();
   for (const { module, facts } of scssModules) {
     const key = fileIdentityKey(module.file);
     const importTargets = new Map<string, FileId>();
@@ -288,7 +315,11 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
     const unresolvedStems = new Set<string>();
     for (const resolved of loads) {
       if (resolved.target.type === "file") {
-        appendTo(reverse, fileIdentityKey(resolved.target.file), module.file);
+        const targetKey = fileIdentityKey(resolved.target.file);
+        appendTo(reverse, targetKey, module.file);
+        if (resolved.load.kind === "import" && !importers.get(targetKey)?.includes(key)) {
+          appendTo(importers, targetKey, key);
+        }
       } else if (resolved.target.type === "unresolved") {
         unresolvedStems.add(moduleStem(resolved.load.url));
       }
@@ -299,7 +330,7 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
     }
     const localsByName = new Map<string, ScssLocalBinding[]>();
     for (const local of facts.locals) appendTo(localsByName, local.canonical, local);
-    const { own, ownByName, placeholders } = buildOwnMembers(facts, defAt);
+    const { own, ownByName, placeholders } = buildOwnMembers(module.file, facts, defAt);
     files.set(key, {
       file: module.file,
       key,
@@ -315,7 +346,15 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
     });
   }
   const hosts = hostImports(index);
-  return { files, reverse, exposures: new Map(), hostsByStem: hosts.byStem, hostsByTarget: hosts.byTarget };
+  return {
+    files,
+    reverse,
+    importers,
+    importerChains: new Map(),
+    exposures: new Map(),
+    hostsByStem: hosts.byStem,
+    hostsByTarget: hosts.byTarget,
+  };
 }
 
 function projectModel(index: ProjectIndex): Promise<ProjectModel> {
@@ -327,20 +366,45 @@ function projectModel(index: ProjectIndex): Promise<ProjectModel> {
   return pending;
 }
 
-function ownAsMember(member: OwnMember): Member {
+function ownAsMember(member: OwnMember, importOnly: boolean): Member {
   return {
     kind: member.kind,
     exposed: member.declared,
     prefix: "",
     def: member.def,
-    sites: member.sites,
     isDefault: member.isDefault,
+    importOnly,
   };
 }
 
 function withPrefix(member: Member, prefix: string): Member {
   if (!prefix) return member;
   return { ...member, exposed: sassCanonical(prefix) + member.exposed, prefix: prefix + member.prefix };
+}
+
+/**
+ * `@import` runs the imported file inside the scope of the importer. The chain holds every file
+ * that imports `key`, directly or through other imports, nearest first, so a partial can read what
+ * its importers declared and loaded. `@use` and `@forward` give a file no such scope.
+ */
+function importerChain(model: ProjectModel, key: string): ModuleModel[] {
+  const cached = model.importerChains.get(key);
+  if (cached) return cached;
+  const chain: ModuleModel[] = [];
+  const seen = new Set<string>([key]);
+  const queue: string[] = [key];
+  for (let next = queue.shift(); next; next = queue.shift()) {
+    for (const importerKey of model.importers.get(next) ?? []) {
+      if (seen.has(importerKey)) continue;
+      seen.add(importerKey);
+      const importer = model.files.get(importerKey);
+      if (!importer) continue;
+      chain.push(importer);
+      queue.push(importerKey);
+    }
+  }
+  model.importerChains.set(key, chain);
+  return chain;
 }
 
 function listMatches(
@@ -394,7 +458,7 @@ function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk
   let incomplete = false;
   for (const member of current.own) {
     if (mode === "module" && isPrivateName(member.declared)) continue;
-    members.push(ownAsMember(member));
+    members.push(ownAsMember(member, mode === "import"));
   }
   for (const resolved of current.loads) {
     const { load, target } = resolved;
@@ -407,8 +471,11 @@ function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk
     for (const member of inner.members) {
       if (forwarded) {
         if (passesFilter(member, load)) members.push(withPrefix(member, load.prefix));
-      } else if (mode === "import" || !isPrivateName(member.exposed)) {
+      } else if (mode === "import") {
         members.push(member);
+      } else if (!isPrivateName(member.exposed)) {
+        // A consumer of a module cannot see a private name that `@import` brought in.
+        members.push({ ...member, importOnly: false });
       }
     }
   }
@@ -431,7 +498,7 @@ function kindMatches(member: ScssMemberKind, use: ScssUse["kind"]): boolean {
  * Cheap test before a use is resolved: it can name the member only when the kind agrees and the
  * spelling ends with the declared name, because a forward prefix only adds text in front.
  */
-export function scssUseMayNameMember(use: ScssUse, member: ScssDeclaredMember): boolean {
+function scssUseMayNameMember(use: ScssUse, member: ScssDeclaredMember): boolean {
   return kindMatches(member.kind, use.kind) && use.canonical.endsWith(member.declared);
 }
 
@@ -442,15 +509,15 @@ function lookup(table: ReadonlyMap<string, readonly Member[]>, kind: ScssUse["ki
   return [...(table.get(`${kind}:${canonical}`) ?? [])];
 }
 
+/** One member per declaration. A declaration reached by several paths keeps the most permissive access. */
 function uniqueMembers(members: readonly Member[]): Member[] {
-  const seen = new Set<SymbolDef>();
-  const unique: Member[] = [];
+  const byDef = new Map<SymbolDef, Member>();
   for (const member of members) {
-    if (seen.has(member.def)) continue;
-    seen.add(member.def);
-    unique.push(member);
+    const seen = byDef.get(member.def);
+    if (!seen) byDef.set(member.def, member);
+    else if (member.importOnly && !seen.importOnly) byDef.set(member.def, { ...seen, importOnly: true });
   }
-  return unique;
+  return [...byDef.values()];
 }
 
 function choose(
@@ -465,7 +532,7 @@ function choose(
     return { status: "not_found", reason: `${emptyReason}; a loaded module did not resolve`, unproven: true };
   }
   if (rest.length) return { status: "not_found", reason: ambiguousReason, unproven: true };
-  return { status: "ok", def: first.def, prefix: first.prefix };
+  return { status: "ok", def: first.def, prefix: first.prefix, access: first.importOnly ? "import" : "module" };
 }
 
 function unresolvedIntroducesMembers(loads: readonly ResolvedLoad[]): boolean {
@@ -475,11 +542,11 @@ function unresolvedIntroducesMembers(loads: readonly ResolvedLoad[]): boolean {
   });
 }
 
-function localShadowing(current: ModuleModel, use: ScssUse): ScssLocalBinding | undefined {
-  if (use.kind !== "variable") return undefined;
-  return current.localsByName
-    .get(use.canonical)
-    ?.find((local) => use.nameStart >= local.from && use.nameStart < local.to);
+/** The local variables that are in scope at `use` and have its name, outermost and earliest first. */
+function coveringLocals(current: ModuleModel, use: ScssUse): ScssLocalBinding[] {
+  if (use.kind !== "variable") return [];
+  const bindings = current.localsByName.get(use.canonical) ?? [];
+  return bindings.filter((local) => use.nameStart >= local.from && use.nameStart < local.to);
 }
 
 function resolveLoadName(model: ProjectModel, current: ModuleModel, use: ScssUse): ScssResolution {
@@ -509,11 +576,32 @@ function resolveLoadName(model: ProjectModel, current: ModuleModel, use: ScssUse
   return { ...choice, prefix: isConfig ? choice.prefix : load.prefix + choice.prefix };
 }
 
-function resolveNamespaced(model: ProjectModel, current: ModuleModel, use: ScssUse, namespace: string): ScssResolution {
+function matchingNamespaces(file: ModuleModel, namespace: string): ResolvedLoad[] {
   // Sass compares namespaces as written: `my-lib` and `my_lib` are different namespaces.
-  const namespaces = current.loads.filter(
-    (resolved) => resolved.load.kind === "use" && resolved.load.namespace === namespace,
-  );
+  return file.loads.filter((resolved) => resolved.load.kind === "use" && resolved.load.namespace === namespace);
+}
+
+/** One load per target, so two importers that load the same module do not look like a clash. */
+function uniqueTargets(loads: readonly ResolvedLoad[]): ResolvedLoad[] {
+  const seen = new Set<string>();
+  const unique: ResolvedLoad[] = [];
+  for (const resolved of loads) {
+    const { target, load } = resolved;
+    const key = target.type === "file" ? `file:${fileIdentityKey(target.file)}` : `${target.type}:${load.url}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(resolved);
+  }
+  return unique;
+}
+
+function resolveNamespaced(model: ProjectModel, current: ModuleModel, use: ScssUse, namespace: string): ScssResolution {
+  let namespaces = matchingNamespaces(current, namespace);
+  if (!namespaces.length) {
+    // A file that an `@import` runs inside its importer can use the namespaces of that importer.
+    const inherited = importerChain(model, current.key).flatMap((importer) => matchingNamespaces(importer, namespace));
+    namespaces = uniqueTargets(inherited);
+  }
   if (namespaces.length > 1) {
     return { status: "not_found", reason: `SCSS namespace ${namespace} is declared more than once`, unproven: true };
   }
@@ -532,43 +620,95 @@ function resolveNamespaced(model: ProjectModel, current: ModuleModel, use: ScssU
   );
 }
 
-function resolveUnnamespaced(model: ProjectModel, current: ModuleModel, use: ScssUse): ScssResolution {
-  const shadow = localShadowing(current, use);
-  if (shadow) return { status: "shadow", range: shadow.range };
-  const own = current.ownByName.get(`${use.kind}:${use.canonical}`) ?? [];
-  if (own.length > 1) {
-    return { status: "not_found", reason: `More than one SCSS member matches ${use.text}`, unproven: true };
-  }
-  const [only] = own;
-  if (only) return { status: "ok", def: only.def, prefix: "" };
-  if (unresolvedIntroducesMembers(current.loads)) {
-    return { status: "not_found", reason: "An unresolved SCSS import may also define this name", unproven: true };
-  }
-  const imported: Member[] = [];
+/**
+ * Adds the members of the `@use ... as *` and `@import` loads of `file` that match `use`. Returns
+ * true when a load could not be read, so the lookup is not complete.
+ */
+function collectLoaded(model: ProjectModel, file: ModuleModel, use: ScssUse, into: Member[]): boolean {
   let incomplete = false;
-  for (const resolved of current.loads) {
+  for (const resolved of file.loads) {
     if (resolved.target.type !== "file") continue;
     const star = resolved.load.kind === "use" && resolved.load.star;
     const legacy = resolved.load.kind === "import";
     if (!star && !legacy) continue;
     const inner = exposureOf(model, fileIdentityKey(resolved.target.file), legacy ? "import" : "module", newWalk());
     if (inner.incomplete) incomplete = true;
-    imported.push(...lookup(inner.byName, use.kind, use.canonical));
+    into.push(...lookup(inner.byName, use.kind, use.canonical));
+  }
+  return incomplete;
+}
+
+function resolveUnnamespaced(model: ProjectModel, current: ModuleModel, use: ScssUse): ScssResolution {
+  const covering = coveringLocals(current, use);
+  if (covering.length) {
+    const indexed = covering.some((local) =>
+      current.defAt.has(defKey(local.range.start.line, local.range.start.column, local.canonical)),
+    );
+    return { status: "shadow", indexed };
+  }
+  const ownKey = `${use.kind}:${use.canonical}`;
+  const own = current.ownByName.get(ownKey) ?? [];
+  if (own.length > 1) {
+    return { status: "not_found", reason: `More than one SCSS member matches ${use.text}`, unproven: true };
+  }
+  const [only] = own;
+  if (only) return { status: "ok", def: only.def, prefix: "", access: "own" };
+  if (unresolvedIntroducesMembers(current.loads)) {
+    return { status: "not_found", reason: "An unresolved SCSS import may also define this name", unproven: true };
+  }
+  const found: Member[] = [];
+  let incomplete = collectLoaded(model, current, use, found);
+  if (!found.length) {
+    // `@import` runs a file inside the scope of its importer, so the file reads what the importer
+    // declared and loaded. The order of the imports is not modeled.
+    for (const importer of importerChain(model, current.key)) {
+      for (const member of importer.ownByName.get(ownKey) ?? []) found.push(ownAsMember(member, true));
+      if (unresolvedIntroducesMembers(importer.loads)) incomplete = true;
+      if (collectLoaded(model, importer, use, found)) incomplete = true;
+    }
   }
   return choose(
-    imported,
+    found,
     `More than one SCSS member matches ${use.text}`,
     `No SCSS member matches ${use.text}`,
     incomplete,
   );
 }
 
-/** `@extend` reaches placeholders of the file and of every module it loads, public ones only. */
+/**
+ * `@extend` reaches the placeholders of its module and of the modules it loads. `@import` runs a
+ * file inside its importer, so the file, the files that import it, and everything they `@import`
+ * are one module, where a private name stays visible. Modules loaded with `@use` or `@forward`
+ * show public names only.
+ */
 function resolvePlaceholder(model: ProjectModel, current: ModuleModel, use: ScssUse): ScssResolution {
-  const found: PlaceholderDeclaration[] = current.placeholders.filter((entry) => entry.declared === use.canonical);
-  const seen = new Set<string>([current.key]);
-  const queue = [current];
+  const sameModule = new Map<string, ModuleModel>();
+  for (const file of [current, ...importerChain(model, current.key)]) sameModule.set(file.key, file);
   let unproven = false;
+  const importQueue = [...sameModule.values()];
+  for (let next = importQueue.shift(); next; next = importQueue.shift()) {
+    for (const resolved of next.loads) {
+      if (resolved.load.kind !== "import" || resolved.target.type !== "file") continue;
+      const key = fileIdentityKey(resolved.target.file);
+      if (sameModule.has(key)) continue;
+      const loaded = model.files.get(key);
+      if (!loaded) {
+        unproven = true;
+        continue;
+      }
+      sameModule.set(key, loaded);
+      importQueue.push(loaded);
+    }
+  }
+  const found = new Set<SymbolDef>();
+  const collect = (file: ModuleModel, publicOnly: boolean): void => {
+    for (const entry of file.placeholders) {
+      if (entry.declared === use.canonical && !(publicOnly && isPrivateName(entry.declared))) found.add(entry.def);
+    }
+  };
+  for (const file of sameModule.values()) collect(file, false);
+  const seen = new Set<string>(sameModule.keys());
+  const queue = [...sameModule.values()];
   for (let next = queue.shift(); next; next = queue.shift()) {
     for (const resolved of next.loads) {
       if (resolved.target.type === "unresolved") unproven = true;
@@ -581,17 +721,14 @@ function resolvePlaceholder(model: ProjectModel, current: ModuleModel, use: Scss
         unproven = true;
         continue;
       }
+      collect(loaded, true);
       queue.push(loaded);
-      for (const entry of loaded.placeholders) {
-        if (entry.declared === use.canonical && !isPrivateName(entry.declared)) found.push(entry);
-      }
     }
   }
   if (unproven) {
     return { status: "not_found", reason: "SCSS @extend modules were not all readable", unproven: true };
   }
-  const defs = [...new Set(found.map((entry) => entry.def))];
-  const [first, ...rest] = defs;
+  const [first, ...rest] = [...found];
   if (!first) return { status: "not_found", reason: `No SCSS placeholder matches %${use.text}` };
   if (rest.length) {
     return {
@@ -600,7 +737,11 @@ function resolvePlaceholder(model: ProjectModel, current: ModuleModel, use: Scss
       unproven: true,
     };
   }
-  return { status: "ok", def: first, prefix: "" };
+  const declaringKey = fileIdentityKey(first.file);
+  let access: ScssAccess = "module";
+  if (declaringKey === current.key) access = "own";
+  else if (sameModule.has(declaringKey)) access = "import";
+  return { status: "ok", def: first, prefix: "", access };
 }
 
 /**
@@ -626,25 +767,16 @@ export async function scssMemberForDefinition(index: ProjectIndex, def: SymbolDe
   const at = defKey(def.range.start.line, def.range.start.column, sassCanonical(def.localName));
   const declared = current.defAt.get(at);
   if (!declared) return null;
-  const member = current.own.find((entry) => entry.sites.includes(declared));
+  const member = current.own.find((entry) => entry.siteKeys.has(at));
   if (member) return member;
   const placeholder = current.placeholders.find((entry) => entry.def === declared);
   if (!placeholder) return null;
-  return { kind: "placeholder", declared: placeholder.declared, def: placeholder.def, sites: [placeholder.def] };
-}
-
-/**
- * Definition of the local variable that hides a member. A variable declared in a block has an
- * indexed definition; a parameter or loop variable has none.
- */
-export async function scssLocalDefinition(
-  index: ProjectIndex,
-  file: FileId,
-  binding: Range,
-  canonical: string,
-): Promise<SymbolDef | undefined> {
-  const model = await projectModel(index);
-  return model.files.get(fileIdentityKey(file))?.defAt.get(defKey(binding.start.line, binding.start.column, canonical));
+  return {
+    kind: "placeholder",
+    declared: placeholder.declared,
+    def: placeholder.def,
+    sites: [{ file: placeholder.def.file, range: placeholder.def.range }],
+  };
 }
 
 /** Reference span for a use. Null when a forward prefix cannot be split from the member. */
@@ -655,14 +787,15 @@ export function scssUseEditRange(facts: ScssFileFacts, use: ScssUse, prefix: str
 }
 
 /**
- * Files that can see `def`, plus files whose unresolved URL or `meta.load-css` may load the
+ * Files that can see `member`, plus files whose unresolved URL or `meta.load-css` may load the
  * declaring file. `unavailable` files were not fully proved. A directory index (`_index.scss`)
  * is also reached through the name of its directory.
  */
 export async function scssReferenceCandidates(
   index: ProjectIndex,
-  def: SymbolDef,
+  member: ScssDeclaredMember,
 ): Promise<{ files: FileId[]; unavailable: FileId[] }> {
+  const def = member.def;
   const model = await projectModel(index);
   const files: FileId[] = [];
   const seen = new Set<string>();
@@ -675,6 +808,21 @@ export async function scssReferenceCandidates(
     queue.push(...(model.reverse.get(key) ?? []));
     queue.push(...(model.hostsByTarget.get(key) ?? []));
   }
+  // `@import` runs a file inside the scope of its importer, so a file that an included file
+  // imports can use the member without loading the file that declares it. A target that is not
+  // SCSS (plain CSS) cannot read a Sass member.
+  const importQueue = [...files];
+  for (let next = importQueue.shift(); next; next = importQueue.shift()) {
+    for (const resolved of model.files.get(fileIdentityKey(next))?.loads ?? []) {
+      if (resolved.load.kind !== "import" || resolved.target.type !== "file") continue;
+      const target = resolved.target.file;
+      const key = fileIdentityKey(target);
+      if (seen.has(key) || !isScssFile(index, target)) continue;
+      seen.add(key);
+      files.push(target);
+      importQueue.push(target);
+    }
+  }
 
   const unavailable: FileId[] = [];
   const unavailableKeys = new Set<string>();
@@ -684,6 +832,37 @@ export async function scssReferenceCandidates(
     unavailableKeys.add(key);
     unavailable.push(file);
   };
+
+  // `@import` puts files in one global scope. A file there that declares the same name assigns the
+  // same variable (or replaces the same mixin or function), and this scan does not follow which
+  // declaration a use reads, so that file is not proved.
+  if (member.kind !== "placeholder") {
+    const declaringKey = fileIdentityKey(def.file);
+    const sharedScope = new Set<string>([declaringKey]);
+    const importerQueue = [declaringKey];
+    for (let next = importerQueue.shift(); next; next = importerQueue.shift()) {
+      for (const importerKey of model.importers.get(next) ?? []) {
+        if (sharedScope.has(importerKey)) continue;
+        sharedScope.add(importerKey);
+        importerQueue.push(importerKey);
+      }
+    }
+    const childQueue = [...sharedScope];
+    for (let next = childQueue.shift(); next; next = childQueue.shift()) {
+      for (const resolved of model.files.get(next)?.loads ?? []) {
+        if (resolved.load.kind !== "import" || resolved.target.type !== "file") continue;
+        const key = fileIdentityKey(resolved.target.file);
+        if (sharedScope.has(key)) continue;
+        sharedScope.add(key);
+        childQueue.push(key);
+      }
+    }
+    const ownKey = `${member.kind}:${member.declared}`;
+    for (const key of sharedScope) {
+      const other = model.files.get(key);
+      if (key !== declaringKey && other?.ownByName.has(ownKey)) markUnavailable(other.file);
+    }
+  }
 
   const stems = new Set<string>([moduleStem(def.file)]);
   if (moduleStem(def.file) === "index") stems.add(moduleStem(path.dirname(def.file)));
@@ -724,16 +903,22 @@ export function scssUseAt(facts: ScssFileFacts, line: number, column: number): S
   return facts.uses.find((use) => offset >= use.hitStart && offset < use.nameEnd);
 }
 
-/** Members one file sees without a namespace: its own declarations, `@use ... as *`, and `@import`. */
+/**
+ * Members one file sees without a namespace: its own declarations, `@use ... as *`, `@import`, and
+ * the scope it inherits from the files that `@import` it.
+ */
 function globalScope(model: ProjectModel, current: ModuleModel): Member[] {
-  const members = current.own.map(ownAsMember);
-  for (const resolved of current.loads) {
-    if (resolved.target.type !== "file") continue;
-    const star = resolved.load.kind === "use" && resolved.load.star;
-    const legacy = resolved.load.kind === "import";
-    if (!star && !legacy) continue;
-    const inner = exposureOf(model, fileIdentityKey(resolved.target.file), legacy ? "import" : "module", newWalk());
-    members.push(...inner.members);
+  const members: Member[] = [];
+  for (const file of [current, ...importerChain(model, current.key)]) {
+    for (const own of file.own) members.push(ownAsMember(own, true));
+    for (const resolved of file.loads) {
+      if (resolved.target.type !== "file") continue;
+      const star = resolved.load.kind === "use" && resolved.load.star;
+      const legacy = resolved.load.kind === "import";
+      if (!star && !legacy) continue;
+      const inner = exposureOf(model, fileIdentityKey(resolved.target.file), legacy ? "import" : "module", newWalk());
+      members.push(...inner.members);
+    }
   }
   return members;
 }
@@ -758,14 +943,19 @@ export async function scssRenameCollisions(index: ProjectIndex, def: SymbolDef, 
     return [...collisions];
   }
   const check = (members: readonly Member[]): void => {
-    const own = members.find((entry) => entry.def === member.def);
-    if (!own) return;
-    const wanted = own.exposed.slice(0, own.exposed.length - member.declared.length) + next;
-    for (const entry of members) {
-      if (entry.kind === member.kind && entry.def !== member.def && entry.exposed === wanted) collisions.add(entry.def);
+    // One declaration can be exposed under several spellings (a module that forwards it with two
+    // prefixes), and each spelling takes the new name in its own place.
+    for (const exposure of members) {
+      if (exposure.def !== member.def) continue;
+      const wanted = exposure.exposed.slice(0, exposure.exposed.length - member.declared.length) + next;
+      for (const entry of members) {
+        if (entry.kind === member.kind && entry.def !== member.def && entry.exposed === wanted) {
+          collisions.add(entry.def);
+        }
+      }
     }
   };
-  const { files } = await scssReferenceCandidates(index, member.def);
+  const { files } = await scssReferenceCandidates(index, member);
   for (const file of files) {
     const current = model.files.get(fileIdentityKey(file));
     if (!current) continue;
@@ -776,30 +966,81 @@ export async function scssRenameCollisions(index: ProjectIndex, def: SymbolDef, 
   return [...collisions];
 }
 
+export type ScssMemberUse = { use: ScssUse; resolved: ScssResolved };
+
 /**
- * Reference sites that a local variable of the new name would capture after the rename: a
- * parameter, loop variable, or block variable already in scope there. Only variables can be
- * captured this way.
+ * The uses in `facts` that resolve to `member`, in source order. `unproven` is true when a use that
+ * may name the member could not be resolved, so the file is not fully proved.
  */
-export async function scssRenameCaptures(
+export async function scssMemberUses(
+  index: ProjectIndex,
+  file: FileId,
+  facts: ScssFileFacts,
+  member: ScssDeclaredMember,
+): Promise<{ matches: ScssMemberUse[]; unproven: boolean }> {
+  const matches: ScssMemberUse[] = [];
+  let unproven = false;
+  for (const use of facts.uses) {
+    if (!scssUseMayNameMember(use, member)) continue;
+    const resolved = await resolveScssUse(index, file, use);
+    if (resolved.status === "shadow") continue;
+    if (resolved.status === "not_found") {
+      if (resolved.unproven) unproven = true;
+      continue;
+    }
+    if (sameDef(resolved.def, member.def)) matches.push({ use, resolved });
+  }
+  return { matches, unproven };
+}
+
+/** `with`, `show`, and `hide` name a member without reading it, so its privacy does not matter to them. */
+function readsMember(use: ScssUse): boolean {
+  return use.syntax !== "config" && use.syntax !== "show" && use.syntax !== "hide";
+}
+
+export type ScssRenameSite = { file: FileId; range: Range };
+
+/**
+ * The uses that the new name would break.
+ * - A local variable (a parameter, a loop variable, or a block variable) captures a bare variable
+ *   use when its name matches the name the use has after the rename: the forward prefix of the
+ *   use plus the new name. A namespaced use cannot be captured.
+ * - A name that starts with `-` or `_` is private to its module, so a use through `@use` or
+ *   `@forward` could no longer reach it. `@import` and the declaring file keep access.
+ */
+export async function scssRenameUseConflicts(
   index: ProjectIndex,
   def: SymbolDef,
   newName: string,
-  references: readonly { file: FileId; range: Range }[],
-): Promise<{ file: FileId; range: Range }[]> {
-  const model = await projectModel(index);
+): Promise<{ captured: ScssRenameSite[]; inaccessible: ScssRenameSite[] }> {
+  const captured: ScssRenameSite[] = [];
+  const inaccessible: ScssRenameSite[] = [];
   const member = await scssMemberForDefinition(index, def);
-  if (member?.kind !== "variable") return [];
+  if (!member) return { captured, inaccessible };
   const next = sassCanonical(newName);
-  const captured: { file: FileId; range: Range }[] = [];
-  for (const reference of references) {
-    const current = model.files.get(fileIdentityKey(reference.file));
-    const bindings = current?.localsByName.get(next);
-    const at = reference.range.start.index;
-    if (!bindings || at === undefined) continue;
-    if (bindings.some((binding) => at >= binding.from && at < binding.to)) captured.push(reference);
+  const becomesPrivate = isPrivateName(next) && !isPrivateName(member.declared);
+  const canBeCaptured = member.kind === "variable";
+  if (!canBeCaptured && !becomesPrivate) return { captured, inaccessible };
+  const model = await projectModel(index);
+  const { files } = await scssReferenceCandidates(index, member);
+  for (const file of files) {
+    const current = model.files.get(fileIdentityKey(file));
+    if (!current) continue;
+    const { matches } = await scssMemberUses(index, file, current.facts, member);
+    for (const { use, resolved } of matches) {
+      const range = scssUseEditRange(current.facts, use, resolved.prefix);
+      if (!range) continue;
+      if (canBeCaptured && use.syntax === "variable" && use.namespace === null) {
+        const spelled = sassCanonical(resolved.prefix) + next;
+        const bindings = current.localsByName.get(spelled);
+        if (bindings?.some((binding) => use.nameStart >= binding.from && use.nameStart < binding.to)) {
+          captured.push({ file, range });
+        }
+      }
+      if (becomesPrivate && resolved.access === "module" && readsMember(use)) inaccessible.push({ file, range });
+    }
   }
-  return captured;
+  return { captured, inaccessible };
 }
 
 /** Replacement text for one SCSS member edit, or null when the site is not that member. */

@@ -1,6 +1,5 @@
 import { buildIndexedCandidateCoverage } from "../indexer/navigation-references.js";
 import { createNavigationProvenance, okGoToResult } from "../indexer/navigation-provenance.js";
-import { sameDef } from "../indexer/reference-context.js";
 import type {
   FindReferencesResult,
   GoToRequest,
@@ -15,12 +14,11 @@ import {
   isScssFile,
   resolveScssUse,
   scssFactsForFile,
-  scssLocalDefinition,
   scssMemberForDefinition,
+  scssMemberUses,
   scssReferenceCandidates,
   scssUseAt,
   scssUseEditRange,
-  scssUseMayNameMember,
 } from "./resolution.js";
 import type { ScssUse } from "./syntax.js";
 
@@ -58,11 +56,11 @@ export async function goToScssDefinition(index: ProjectIndex, req: GoToRequest):
   if (!use) return null;
   const resolved = await resolveScssUse(index, req.file, use);
   if (resolved.status === "shadow") {
-    // A local variable owns the name, so a module member is wrong. The generic walker sees a
-    // block-level declaration but misreads a parameter default as the module member, so the
-    // answer comes from here.
-    const local = await scssLocalDefinition(index, req.file, resolved.range, use.canonical);
-    if (local) return okGoToResult(index, local, { resolution: "exact", confidence: "high" });
+    // A local variable owns the name, so a module member is wrong. The generic walker answers for
+    // a variable that a block declares, so go-to-definition agrees with find references there. A
+    // parameter or a loop variable has no definition in the index, and the walker would fall back
+    // to the module member, so the answer is `not_found`.
+    if (resolved.indexed) return null;
     return { status: "not_found", reason: `A local variable hides the SCSS member ${use.text}` };
   }
   if (resolved.status === "ok") {
@@ -85,7 +83,7 @@ export async function findScssReferences(
   const member = await scssMemberForDefinition(index, def);
   if (!member) return null;
 
-  const { files, unavailable } = await scssReferenceCandidates(index, member.def);
+  const { files, unavailable } = await scssReferenceCandidates(index, member);
   const references: Reference[] = [];
   const seen = new Set<string>();
   const scanned: FileId[] = [];
@@ -115,7 +113,7 @@ export async function findScssReferences(
   // Every assignment of a variable is a site of the same variable; `def` itself is the
   // definition and stays out unless the caller asks for it.
   for (const site of member.sites) {
-    if (!options.includeDefinition && sameDef(site, def)) continue;
+    if (!options.includeDefinition && siteKey(site.file, site.range) === siteKey(def.file, def.range)) continue;
     if (!push(site.file, site.range)) break;
   }
 
@@ -128,15 +126,9 @@ export async function findScssReferences(
     }
     scanned.push(file);
     let unproven = false;
-    for (const use of facts.uses) {
-      if (!scssUseMayNameMember(use, member)) continue;
-      const resolved = await resolveScssUse(index, file, use);
-      if (resolved.status === "shadow") continue;
-      if (resolved.status === "not_found") {
-        if (resolved.unproven) unproven = true;
-        continue;
-      }
-      if (!sameDef(resolved.def, member.def)) continue;
+    const { matches, unproven: unresolvedUse } = await scssMemberUses(index, file, facts, member);
+    if (unresolvedUse) unproven = true;
+    for (const { use, resolved } of matches) {
       const range = scssUseEditRange(facts, use, resolved.prefix);
       if (!range) {
         unproven = true;

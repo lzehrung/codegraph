@@ -5962,4 +5962,46 @@ describe("Go to Definition: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves what a partial reads from the file that imports it, and not from a file that uses it", async () => {
+    // dart-sass runs an imported partial inside the scope of its importer, and a used module in its own.
+    const files = {
+      "_vars.scss": "$primary: red;\n@mixin pad { padding: 1px; }\n",
+      "_buttons.scss": ".btn { color: $primary; @include pad; }\n",
+      "main.scss": '@import "vars";\n@import "buttons";\n',
+      "_card.scss": ".card { color: $primary; }\n",
+      "other.scss": '@use "vars" as *;\n@use "card";\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const buttonsLine = files["_buttons.scss"].split("\n")[0]!;
+      await testGoToDefinition(
+        index,
+        paths["_buttons.scss"]!,
+        1,
+        columnOf(buttonsLine, "$primary"),
+        paths["_vars.scss"]!,
+        1,
+      );
+      await testGoToDefinition(
+        index,
+        paths["_buttons.scss"]!,
+        1,
+        columnOf(buttonsLine, "pad"),
+        paths["_vars.scss"]!,
+        2,
+      );
+      await testGoToDefinition(
+        index,
+        paths["_card.scss"]!,
+        1,
+        columnOf(files["_card.scss"], "$primary"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -1261,9 +1261,13 @@ describe("SCSS module navigation: lexing, scopes, forwards, imports, and coverag
     await withScssProject(
       { "_colors.scss": colors, "main.scss": '@use "colors";\n.a { color: colors.$primary; }\n' },
       async (project) => {
-        // A private member of the declaring file and an equal spelling (`_` is `-`) both collide.
+        // A private member of the declaring file and an equal spelling (`_` is `-`) both collide. A
+        // private new name also hides the member from main.scss, which reads it through `@use`.
         const privateName = await previewScssRename(project, "$primary", "_colors.scss", "$-secret");
-        expect(privateName.conflicts.map((conflict) => conflict.reason)).toEqual(["name_collision"]);
+        expect(privateName.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`)).toEqual([
+          "name_collision:_colors.scss",
+          "invalid_identifier:main.scss",
+        ]);
         const sameSpelling = await previewScssRename(project, "$primary", "_colors.scss", "$primary_color");
         expect(sameSpelling.conflicts.map((conflict) => conflict.reason)).toEqual(["name_collision"]);
       },
@@ -1350,4 +1354,463 @@ describe("SCSS module navigation: lexing, scopes, forwards, imports, and coverag
       expect(performance.now() - started).toBeLessThan(3000);
     });
   });
+});
+
+describe("SCSS module navigation: review follow-ups", () => {
+  const native = isNativeTreeSitterAvailable();
+
+  function lineOf(source: string, offset: number): number {
+    return source.slice(0, offset).split("\n").length;
+  }
+
+  it.runIf(native)("reports a conflict when a private new name hides a member from @use and @forward", async () => {
+    // dart-sass rejects `colors.$-accent`, `$-accent` through `as *`, and `f.$-accent` through
+    // `@forward`: a name that starts with `-` or `_` is private to its module.
+    const colors = "$primary: red;\n";
+    const rejected: Array<[string, Record<string, string>, string]> = [
+      [
+        "namespace",
+        { "_colors.scss": colors, "main.scss": '@use "colors";\n.a { color: colors.$primary; }\n' },
+        "$-accent",
+      ],
+      ["star", { "_colors.scss": colors, "main.scss": '@use "colors" as *;\n.a { color: $primary; }\n' }, "$-accent"],
+      [
+        "underscore",
+        { "_colors.scss": colors, "main.scss": '@use "colors";\n.a { color: colors.$primary; }\n' },
+        "$_accent",
+      ],
+      [
+        "forward",
+        {
+          "_colors.scss": colors,
+          "_f.scss": '@forward "colors";\n',
+          "main.scss": '@use "f";\n.a { color: f.$primary; }\n',
+        },
+        "$-accent",
+      ],
+    ];
+    for (const [label, files, newName] of rejected) {
+      await withScssProject(files, async (project) => {
+        const renamed = await previewScssRename(project, "$primary", "_colors.scss", newName);
+        expect(renamed.safe, label).toBe(false);
+        expect(
+          renamed.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`),
+          label,
+        ).toEqual(["invalid_identifier:main.scss"]);
+      });
+    }
+    // The declaring file, `@import` (which has no privacy), and a `with` key keep access.
+    const accepted: Array<[string, Record<string, string>]> = [
+      ["same file", { "_colors.scss": "$primary: red;\n.a { color: $primary; }\n" }],
+      ["legacy import", { "_colors.scss": colors, "main.scss": '@import "colors";\n.a { color: $primary; }\n' }],
+      [
+        "import chain",
+        {
+          "_colors.scss": colors,
+          "_i.scss": '@import "colors";\n',
+          "main.scss": '@import "i";\n.a { color: $primary; }\n',
+        },
+      ],
+      [
+        "configuration",
+        {
+          "_colors.scss": "$primary: red !default;\n.x { w: $primary; }\n",
+          "main.scss": '@use "colors" with ($primary: blue);\n',
+        },
+      ],
+    ];
+    for (const [label, files] of accepted) {
+      await withScssProject(files, async (project) => {
+        const renamed = await previewScssRename(project, "$primary", "_colors.scss", "$-accent");
+        expect(renamed.conflicts, label).toEqual([]);
+        expect(renamed.safe, label).toBe(true);
+      });
+    }
+  });
+
+  it.runIf(native)("applies the privacy rule to placeholders too", async () => {
+    // dart-sass: `@extend %-pub` fails through `@use` ("The target selector was not found") and works
+    // through `@import`.
+    const base = "%pub { color: red; }\n";
+    await withScssProject(
+      { "_base.scss": base, "main.scss": '@use "base";\n.a { @extend %pub; }\n' },
+      async (project) => {
+        const renamed = await previewScssRename(project, "pub", "_base.scss", "-pub");
+        expect(renamed.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`)).toEqual([
+          "invalid_identifier:main.scss",
+        ]);
+      },
+    );
+    await withScssProject(
+      { "_base.scss": base, "main.scss": '@import "base";\n.a { @extend %pub; }\n' },
+      async (project) => {
+        expect((await previewScssRename(project, "pub", "_base.scss", "-pub")).conflicts).toEqual([]);
+      },
+    );
+  });
+
+  it.runIf(native)("resolves what a partial reads from the file that @imports it", async () => {
+    // dart-sass runs an imported partial inside the scope of its importer: the `$primary` below is
+    // the variable of main.scss, though _buttons.scss loads nothing.
+    await withScssProject(
+      {
+        "main.scss": '$primary: red;\n@import "buttons";\n',
+        "_buttons.scss": ".btn { color: $primary; }\n",
+      },
+      async (project) => {
+        expect(await scssGoto(project, "_buttons.scss", "$primary")).toBe("main.scss:1");
+        const refs = await scssRefs(project, "main.scss", "$primary");
+        expect(refs.sites).toEqual(["_buttons.scss:1", "main.scss:1"]);
+        expect(refs.coverage?.state).toBe("complete");
+        const renamed = await previewScssRename(project, "$primary", "main.scss", "$accent");
+        expect(renamed.edits.map((edit) => `${edit.file}:${edit.range.start.line}`).sort()).toEqual([
+          "_buttons.scss:1",
+          "main.scss:1",
+        ]);
+      },
+    );
+    // Siblings: what an earlier `@import` brought in is visible to the later partials, whatever the
+    // kind of member, and a partial inherits the importer's `@use` namespaces as well.
+    await withScssProject(
+      {
+        "_vars.scss":
+          "$primary: red;\n@mixin pad { padding: 1px; }\n@function dbl($n) { @return $n * 2; }\n%card { margin: 0; }\n",
+        "_buttons.scss": ".btn { color: $primary; @include pad; width: dbl(2px); @extend %card; }\n",
+        "main.scss": '@import "vars";\n@import "buttons";\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "_buttons.scss", "$primary")).toBe("_vars.scss:1");
+        expect(await scssGoto(project, "_buttons.scss", "pad")).toBe("_vars.scss:2");
+        expect(await scssGoto(project, "_buttons.scss", "dbl")).toBe("_vars.scss:3");
+        expect(await scssGoto(project, "_buttons.scss", "%card", 0, 1)).toBe("_vars.scss:4");
+        const refs = await scssRefs(project, "_vars.scss", "$primary");
+        expect(refs.sites).toEqual(["_buttons.scss:1", "_vars.scss:1"]);
+        expect(refs.coverage?.state).toBe("complete");
+      },
+    );
+    await withScssProject(
+      {
+        "_vars.scss": "$primary: red;\n",
+        "_buttons.scss": ".btn { color: vars.$primary; }\n",
+        "main.scss": '@use "vars";\n@import "buttons";\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "_buttons.scss", "$primary")).toBe("_vars.scss:1");
+        expect((await scssRefs(project, "_vars.scss", "$primary")).sites).toEqual(["_buttons.scss:1", "_vars.scss:1"]);
+      },
+    );
+  });
+
+  it.runIf(native)("keeps the inherited scope to @import, and to what the importers prove", async () => {
+    // `@use` runs the file in its own scope: dart-sass reports an undefined variable.
+    await withScssProject(
+      { "main.scss": '$primary: red;\n@use "buttons";\n', "_buttons.scss": ".btn { color: $primary; }\n" },
+      async (project) => {
+        expect(await scssGoto(project, "_buttons.scss", "$primary")).toBe("not_found");
+        expect((await scssRefs(project, "main.scss", "$primary")).sites).toEqual(["main.scss:1"]);
+      },
+    );
+    // Two importers that define the name differently: the partial belongs to both, so go-to-definition
+    // stays unresolved and each variable reports the partial as not proved.
+    await withScssProject(
+      {
+        "_buttons.scss": ".btn { color: $primary; }\n",
+        "m1.scss": '$primary: red;\n@import "buttons";\n',
+        "m2.scss": '$primary: blue;\n@import "buttons";\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "_buttons.scss", "$primary")).toBe("not_found");
+        const refs = await scssRefs(project, "m1.scss", "$primary");
+        expect(refs.sites).toEqual(["m1.scss:1"]);
+        expect(refs.coverage?.state).toBe("partial");
+        expect(refs.coverage?.affectedFiles?.map((file) => project.relative(file))).toEqual(["_buttons.scss"]);
+      },
+    );
+    // One importer defines it and the other does not: the definition is still unique.
+    await withScssProject(
+      {
+        "_buttons.scss": ".btn { color: $primary; }\n",
+        "m1.scss": '$primary: red;\n@import "buttons";\n',
+        "m2.scss": '$other: blue;\n@import "buttons";\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "_buttons.scss", "$primary")).toBe("m1.scss:1");
+      },
+    );
+    // An importer with a load that did not resolve may define the name too.
+    await withScssProject(
+      {
+        "main.scss": '$primary: red;\n@import "missing";\n@import "buttons";\n',
+        "_buttons.scss": ".btn { color: $primary; }\n",
+      },
+      async (project) => {
+        const refs = await scssRefs(project, "main.scss", "$primary");
+        expect(refs.sites).toEqual(["_buttons.scss:1", "main.scss:1"]);
+        expect(refs.coverage?.state).toBe("partial");
+      },
+    );
+  });
+
+  it.runIf(native)("checks every spelling of a member that a module forwards under two prefixes", async () => {
+    const base = {
+      "_c.scss": "$primary: red;\n",
+      "main.scss": '@use "f";\n.a { w: f.$x-primary; h: f.$y-primary; }\n',
+    };
+    // The second spelling `$y-primary` becomes `$y-gap`, which the forwarding module declares.
+    await withScssProject(
+      { ...base, "_f.scss": '@forward "c" as x-*;\n@forward "c" as y-*;\n$y-gap: 1px;\n' },
+      async (project) => {
+        const renamed = await previewScssRename(project, "$primary", "_c.scss", "$gap");
+        expect(renamed.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`)).toEqual([
+          "name_collision:_f.scss",
+        ]);
+        expect((await previewScssRename(project, "$primary", "_c.scss", "$tone")).safe).toBe(true);
+      },
+    );
+    await withScssProject(
+      { ...base, "_f.scss": '@forward "c" as x-*;\n@forward "c" as y-*;\n$x-gap: 1px;\n' },
+      async (project) => {
+        const renamed = await previewScssRename(project, "$primary", "_c.scss", "$gap");
+        expect(renamed.conflicts.map((conflict) => conflict.reason)).toEqual(["name_collision"]);
+      },
+    );
+  });
+
+  it.runIf(native)(
+    "checks a capture by the name the use has after the rename, never for a namespaced use",
+    async () => {
+      // The forward prefix stays: `$theme-primary` becomes `$theme-gap`, which the parameter captures.
+      await withScssProject(
+        {
+          "_c.scss": "$primary: red;\n",
+          "_f.scss": '@forward "c" as theme-*;\n',
+          "main.scss": '@use "f" as *;\n@mixin m($theme-gap) {\n  color: $theme-primary;\n  margin: $theme-gap;\n}\n',
+        },
+        async (project) => {
+          const renamed = await previewScssRename(project, "$primary", "_c.scss", "$gap");
+          expect(renamed.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`)).toEqual([
+            "shadowing:main.scss",
+          ]);
+          expect((await previewScssRename(project, "$primary", "_c.scss", "$tone")).safe).toBe(true);
+        },
+      );
+      // dart-sass compiles `c.$primary` beside a `$gap` parameter to the module variable: the
+      // namespace names the module, so no local variable can capture it.
+      await withScssProject(
+        {
+          "_c.scss": "$primary: red;\n",
+          "main.scss": '@use "c";\n@mixin m($gap) {\n  color: c.$primary;\n  margin: $gap;\n}\n',
+        },
+        async (project) => {
+          const renamed = await previewScssRename(project, "$primary", "_c.scss", "$gap");
+          expect(renamed.conflicts).toEqual([]);
+          expect(renamed.safe).toBe(true);
+        },
+      );
+    },
+  );
+
+  it("reads a custom property value as literal CSS, except for interpolation", () => {
+    // dart-sass: `--literal: $primary` stays the text `$primary`; `#{$primary}` is evaluated.
+    const source = [
+      "$primary: red;",
+      ":root {",
+      "  --literal: $primary;",
+      "  --interp: #{$primary};",
+      "  --call: calc(1px + #{$primary});",
+      "  --object: { a: $primary; };",
+      "  --#{$prefix}name: $primary;",
+      "}",
+      ".a { color: $primary; }",
+      "",
+    ].join("\n");
+    const facts = extractScssFacts(source);
+    // The interpolation in the name of the last property is code too, so `$prefix` is a read.
+    expect(facts.uses.filter((use) => use.kind === "variable").map((use) => lineOf(source, use.nameStart))).toEqual([
+      4, 5, 7, 9,
+    ]);
+    expect(facts.uses.filter((use) => use.kind === "function")).toEqual([]);
+    expect(facts.declarations.map((declaration) => declaration.name)).toEqual(["$primary"]);
+  });
+
+  it.runIf(native)("lists no literal custom property text as a reference", async () => {
+    const source = ":root {\n  --literal: $primary;\n  --interp: #{$primary};\n}\n";
+    await withScssProject(
+      { "_colors.scss": "$primary: red;\n", "main.scss": `@use "colors" as *;\n${source}` },
+      async (project) => {
+        const refs = await scssRefs(project, "_colors.scss", "$primary");
+        expect(refs.sites).toEqual(["_colors.scss:1", "main.scss:4"]);
+      },
+    );
+  });
+
+  it.runIf(native)(
+    "keeps go-to-definition and references in agreement for a variable that a nested block assigns",
+    async () => {
+      // dart-sass compiles this to `.outer .inner { width: 2 } .outer { height: 2 }`: the assignment in
+      // `.inner` changes the variable of `.outer`. Go-to-definition names the nearest assignment (the
+      // one in the same block as `width`), and the references of that definition list the use. Naming
+      // the first assignment instead would leave the references of that assignment without the use.
+      const source = [
+        ".outer {",
+        "  $x: 1;",
+        "  .inner {",
+        "    $x: 2;",
+        "    width: $x;",
+        "  }",
+        "  height: $x;",
+        "}",
+        "",
+      ].join("\n");
+      await withScssProject({ "m.scss": source }, async (project) => {
+        for (const needle of ["width: $x", "height: $x"]) {
+          const position = project.position("m.scss", needle, 0, needle.indexOf("$"));
+          const definition = await goToDefinition(project.index, position);
+          expect(definition.status, needle).toBe("ok");
+          if (definition.status !== "ok") continue;
+          expect(definition.definition.range.start.line, needle).toBe(4);
+          const refs = await findReferences(project.index, { def: definition.definition });
+          expect(refs.status, needle).toBe("ok");
+          if (refs.status !== "ok") continue;
+          expect(
+            refs.references.map((reference) => `${reference.range.start.line}:${reference.range.start.column}`),
+            needle,
+          ).toContain(`${position.line}:${position.column}`);
+        }
+      });
+    },
+  );
+
+  it("reads the variables of a CSS import media query and url() interpolation, not a quoted URL", () => {
+    // dart-sass keeps a quoted URL as raw text, evaluates the interpolation in `url(...)`, and
+    // evaluates the expressions of a media query.
+    const source = [
+      "$bp: 40em;",
+      "$asset: logo;",
+      '@import "print.css" screen and (min-width: $bp);',
+      '@import url("https://example.com/#{$asset}.css");',
+      '@import "https://example.com/#{$asset}.css";',
+      "@import url(https://example.com/#{$asset}.css);",
+      "",
+    ].join("\n");
+    const facts = extractScssFacts(source);
+    expect(facts.uses.filter((use) => use.kind === "variable").map((use) => lineOf(source, use.nameStart))).toEqual([
+      3, 4, 6,
+    ]);
+    expect(facts.loads).toEqual([]);
+  });
+
+  it.runIf(native)("finds the reads inside CSS imports as references", async () => {
+    const source = [
+      "$bp: 40em;",
+      "$asset: logo;",
+      '@import "print.css" screen and (min-width: $bp);',
+      '@import url("https://example.com/#{$asset}.css");',
+      '@import "https://example.com/#{$asset}.css";',
+      "",
+    ].join("\n");
+    await withScssProject({ "m.scss": source }, async (project) => {
+      expect((await scssRefs(project, "m.scss", "$bp:")).sites).toEqual(["m.scss:1", "m.scss:3"]);
+      expect((await scssRefs(project, "m.scss", "$asset:")).sites).toEqual(["m.scss:2", "m.scss:4"]);
+    });
+  });
+
+  it("keeps an assignment to a loop variable off the file variable of the same name", () => {
+    // dart-sass leaves `$x` at 0 after `@each $x in 1, 2 { $x: $x + 1; }`: the assignment changes
+    // the loop variable. `@for` behaves the same.
+    const facts = extractScssFacts(
+      [
+        "$x: 0;",
+        "@each $x in 1, 2 {",
+        "  $x: $x + 1;",
+        "}",
+        "$i: 5;",
+        "@for $i from 1 through 2 {",
+        "  $i: $i * 10;",
+        "}",
+        "@if true {",
+        "  $x: 7;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // The assignment inside `@if` still changes the file variable, as dart-sass does.
+    expect(facts.declarations.map((declaration) => `${declaration.name}@${declaration.range.start.line}`)).toEqual([
+      "$x@1",
+      "$i@5",
+      "$x@10",
+    ]);
+  });
+
+  it.runIf(native)("lists no loop variable assignment as a site of the file variable", async () => {
+    const source = ["$i: 5;", "@for $i from 1 through 2 {", "  $i: $i * 10;", "}", ".z { h: $i; }", ""].join("\n");
+    await withScssProject({ "m.scss": source }, async (project) => {
+      const refs = await scssRefs(project, "m.scss", "$i:");
+      expect(refs.sites).toEqual(["m.scss:1", "m.scss:5"]);
+      const renamed = await previewScssRename(project, "$i", "m.scss", "$n");
+      expect(renamed.edits.map((edit) => edit.range.start.line).sort()).toEqual([1, 5]);
+    });
+  });
+
+  it.runIf(native)("lists an assignment inside @each as a site of the file variable", async () => {
+    // The index holds no definition for an assignment in an `@each` body, yet it changes the file
+    // variable (dart-sass: a flow-control block shares the file scope), so a rename must edit it.
+    const source = ["$x: 0;", "@each $i in 1, 2 {", "  $x: $x + $i;", "}", ".z { w: $x; }", ""].join("\n");
+    await withScssProject({ "m.scss": source }, async (project) => {
+      const refs = await scssRefs(project, "m.scss", "$x:");
+      expect(refs.sites).toEqual(["m.scss:1", "m.scss:3", "m.scss:3", "m.scss:5"]);
+      const renamed = await previewScssRename(project, "$x", "m.scss", "$y");
+      expect(renamed.edits.map((edit) => `${edit.range.start.line}:${edit.range.start.column}`).sort()).toEqual([
+        "1:1",
+        "3:3",
+        "3:7",
+        "5:9",
+      ]);
+    });
+  });
+
+  it.runIf(native)(
+    "reports partial coverage when a file in the same @import scope declares the name again",
+    async () => {
+      // dart-sass compiles this to `.btn { color: blue } .after { color: blue }`: the partial assigns
+      // the variable that its importer declared, so both declarations name one variable.
+      await withScssProject(
+        {
+          "main.scss": '$primary: red;\n@import "buttons";\n.after { color: $primary; }\n',
+          "_buttons.scss": "$primary: blue;\n.btn { color: $primary; }\n",
+        },
+        async (project) => {
+          const refs = await scssRefs(project, "main.scss", "$primary");
+          expect(refs.coverage?.state).toBe("partial");
+          expect(refs.coverage?.affectedFiles?.map((file) => project.relative(file))).toEqual(["_buttons.scss"]);
+          expect((await previewScssRename(project, "$primary", "main.scss", "$accent")).safe).toBe(false);
+        },
+      );
+      // The common override pattern: the file imported first sets the value that `!default` yields to.
+      await withScssProject(
+        {
+          "_vars.scss": "$primary: red !default;\n",
+          "_overrides.scss": "$primary: blue;\n",
+          "main.scss": '@import "overrides";\n@import "vars";\n',
+        },
+        async (project) => {
+          const refs = await scssRefs(project, "_vars.scss", "$primary");
+          expect(refs.coverage?.state).toBe("partial");
+          expect(refs.coverage?.affectedFiles?.map((file) => project.relative(file))).toEqual(["_overrides.scss"]);
+        },
+      );
+      // `@use` keeps the scopes apart: dart-sass compiles this to `color: red; w: blue`.
+      await withScssProject(
+        {
+          "_colors.scss": "$primary: red;\n",
+          "main.scss": '@use "colors";\n$primary: blue;\n.a { color: colors.$primary; w: $primary; }\n',
+        },
+        async (project) => {
+          const refs = await scssRefs(project, "_colors.scss", "$primary");
+          expect(refs.sites).toEqual(["_colors.scss:1", "main.scss:3"]);
+          expect(refs.coverage?.state).toBe("complete");
+        },
+      );
+    },
+  );
 });

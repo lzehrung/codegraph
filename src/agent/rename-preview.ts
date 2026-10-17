@@ -45,8 +45,8 @@ import { TERRAFORM_IDENTIFIER_PATTERN } from "../terraform/syntax.js";
 import {
   isScssFile,
   scssMemberForDefinition,
-  scssRenameCaptures,
   scssRenameCollisions,
+  scssRenameUseConflicts,
   scssReplacementText,
 } from "../scss/resolution.js";
 import { SCSS_IDENTIFIER_PATTERN } from "../scss/syntax.js";
@@ -655,14 +655,14 @@ async function addTerraformConflicts(
 
 /**
  * An SCSS name is a module member. A same-kind member that a scope seeing the renamed one
- * already declares or exposes under the new name collides. A local variable of the new name
- * captures the reference sites in its scope.
+ * already declares or exposes under the new name collides. A local variable that would capture a
+ * use is a shadowing conflict. A new name that starts with `-` or `_` is private, so a use through
+ * `@use` or `@forward` could no longer reach it.
  */
 async function addScssConflicts(
   snapshot: AgentProjectSnapshot,
   target: SymbolDef,
   newName: string,
-  references: readonly Reference[],
   conflicts: RenameConflict[],
 ): Promise<void> {
   for (const collision of await scssRenameCollisions(snapshot.index, target, newName)) {
@@ -675,13 +675,26 @@ async function addScssConflicts(
       message: `A scope that sees "${target.localName}" already uses "${newName}" for another member.`,
     });
   }
-  for (const capture of await scssRenameCaptures(snapshot.index, target, newName, references)) {
+  const { captured, inaccessible } = await scssRenameUseConflicts(snapshot.index, target, newName);
+  for (const capture of captured) {
     const captureFile = normalizeAgentFilePath(snapshot.root, capture.file);
     conflicts.push({
       file: captureFile,
       location: { file: captureFile, range: capture.range },
       reason: "shadowing",
-      message: `A local variable "${newName}" would capture this reference.`,
+      message: `A local variable would capture this reference after the rename to "${newName}".`,
+    });
+  }
+  const reportedFiles = new Set<string>();
+  for (const site of inaccessible) {
+    const siteFile = normalizeAgentFilePath(snapshot.root, site.file);
+    if (reportedFiles.has(siteFile)) continue;
+    reportedFiles.add(siteFile);
+    conflicts.push({
+      file: siteFile,
+      location: { file: siteFile, range: site.range },
+      reason: "invalid_identifier",
+      message: `"${newName}" is private to its module, so this use through @use or @forward could no longer reach it.`,
     });
   }
 }
@@ -699,7 +712,7 @@ async function addScopeConflicts(
   }
   // A selector or a block-level variable is no module member, so the scope checks below apply.
   if (isScssFile(snapshot.index, target.file) && (await scssMemberForDefinition(snapshot.index, target))) {
-    await addScssConflicts(snapshot, target, newName, references, conflicts);
+    await addScssConflicts(snapshot, target, newName, conflicts);
     return;
   }
   const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(target.file));

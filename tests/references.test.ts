@@ -6572,4 +6572,42 @@ describe("Find References: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("finds the use in a partial that an @import runs inside the scope of the declaring file", async () => {
+    const files = {
+      "_vars.scss": "$primary: red;\n",
+      "_buttons.scss": ".btn { color: $primary; }\n",
+      "main.scss": '@import "vars";\n@import "buttons";\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_vars.scss"]!, line: 1, column: 1 },
+        { file: paths["_buttons.scss"]!, line: 1, column: tokenColumn(files["_buttons.scss"], "$primary") },
+      ];
+      const result = await testFindReferences(index, paths["_vars.scss"]!, 1, 1, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when two importers give a partial's name different definitions", async () => {
+    const files = {
+      "_buttons.scss": ".btn { color: $primary; }\n",
+      "m1.scss": '$primary: red;\n@import "buttons";\n',
+      "m2.scss": '$primary: blue;\n@import "buttons";\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["m1.scss"]!, line: 1, column: 1 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.references.map((reference) => reference.file)).toEqual([paths["m1.scss"]]);
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["_buttons.scss"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
