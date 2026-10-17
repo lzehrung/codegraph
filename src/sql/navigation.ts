@@ -11,10 +11,16 @@ import type {
   Reference,
   SymbolDef,
 } from "../indexer/types.js";
+import { SymbolKind } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { extractSqlFactsFromSource } from "./extract-facts.js";
-import { pushSqlLookupValue } from "./lookup.js";
+import {
+  addSqlDefinition,
+  createSqlDefinitionIndex,
+  sqlRoutineNameCandidates,
+  type SqlDefinitionIndex,
+} from "./lookup.js";
 import {
   maskSqlStringsAndComments,
   normalizeSqlObjectName,
@@ -24,6 +30,13 @@ import {
   sqlObjectLookupKey,
   sqlParenDepthAt,
 } from "./lex.js";
+import {
+  findSqlRoutineMentions,
+  sqlRoutineDefinitionNamespace,
+  sqlStatementDropsRoutine,
+  type SqlRoutineMention,
+  type SqlRoutineNamespace,
+} from "./routine-mentions.js";
 import type { SqlStatementFact } from "./types.js";
 
 type SqlStatementNavigationSlice = {
@@ -33,9 +46,19 @@ type SqlStatementNavigationSlice = {
   endLine: number;
 };
 
-type SqlDefinitionLookup = {
-  exact: Map<string, SymbolDef[]>;
-  basename: Map<string, SymbolDef[]>;
+type SqlDefinitionLookup = SqlDefinitionIndex<SymbolDef>;
+
+/** Function, procedure, and trigger definitions. Each has its own name space; none is a table or view. */
+type SqlRoutineLookups = {
+  callable: SqlDefinitionLookup;
+  trigger: SqlDefinitionLookup;
+  namespaceByDefinition: Map<SymbolDef, SqlRoutineNamespace>;
+  definitionByStart: Map<string, SymbolDef>;
+};
+
+type SqlStatementMentions = {
+  statement: SqlStatementNavigationSlice;
+  mentions: readonly SqlRoutineMention[];
 };
 
 function isSqlFile(filePath: string): boolean {
@@ -63,21 +86,20 @@ function getSqlNavigationCache(index: ProjectIndex): NonNullable<ProjectIndex["s
   return index.sqlNavigation;
 }
 
+/** Table, view, and index definitions. Routines resolve through `getSqlRoutineLookups`. */
 function getSqlDefinitionLookup(index: ProjectIndex): SqlDefinitionLookup {
   const cache = getSqlNavigationCache(index);
   if (cache.definitionLookup) return cache.definitionLookup;
-  const exact = new Map<string, SymbolDef[]>();
-  const basename = new Map<string, SymbolDef[]>();
+  const lookup = createSqlDefinitionIndex<SymbolDef>();
   for (const file of sqlFiles(index)) {
     const module = index.byFile.get(fileIdentityKey(file));
     if (!module) continue;
     for (const local of module.locals) {
-      pushSqlLookupValue(exact, sqlObjectLookupKey(local.localName), local);
-      pushSqlLookupValue(basename, sqlObjectBaseNameLookupKey(local.localName), local);
+      if (local.kind !== SymbolKind.Routine) addSqlDefinition(lookup, local.localName, local);
     }
   }
-  cache.definitionLookup = { exact, basename };
-  return cache.definitionLookup;
+  cache.definitionLookup = lookup;
+  return lookup;
 }
 
 function sqlDefinitionsFromLookup(lookup: SqlDefinitionLookup, objectName: string): SymbolDef[] {
@@ -299,7 +321,7 @@ function sqlNameResolvesToDefinition(lookup: SqlDefinitionLookup, name: string, 
   return matches.basename.length === 1 && matches.basename[0] === definition;
 }
 
-function factReferenceRanges(fact: SqlStatementFact, objectName: string): Range[] {
+function factReferenceRanges(fact: SqlStatementFact, objectName: string, claimedStarts?: ReadonlySet<number>): Range[] {
   const statement: SqlStatementNavigationSlice = {
     text: fact.statementText,
     startLine: fact.startLine,
@@ -313,6 +335,7 @@ function factReferenceRanges(fact: SqlStatementFact, objectName: string): Range[
     const token = normalizeSqlObjectName(match[0]);
     if (!token || sqlObjectLookupKey(token) !== objectKey) continue;
     const offset = match.index ?? 0;
+    if (claimedStarts?.has(offset)) continue;
     ranges.push(
       rangeForToken(
         statementLineForOffset(statement, offset),
@@ -328,12 +351,15 @@ function qualifiedReferenceRanges(
   lookup: SqlDefinitionLookup,
   statement: SqlStatementNavigationSlice,
   definition: SymbolDef,
+  claimedStarts?: ReadonlySet<number>,
 ): Range[] {
   const ranges: Range[] = [];
   const maskedStatementText = maskSqlStringsAndComments(statement.text);
   const aliases = sqlAliasMapForStatement(maskedStatementText);
   const cteNames = cteNamesForStatement(maskedStatementText);
   for (const match of maskedStatementText.matchAll(SQL_DOTTED_TOKEN_RE)) {
+    const offset = match.index ?? 0;
+    if (claimedStarts?.has(offset)) continue;
     const token = normalizeSqlObjectName(match[0]);
     if (!token) continue;
     const parts = sqlObjectNameParts(token);
@@ -349,7 +375,6 @@ function qualifiedReferenceRanges(
       matchesPrefix = sqlNameResolvesToDefinition(lookup, candidate, definition);
     }
     if (!matchesAlias && !matchesPrefix) continue;
-    const offset = match.index ?? 0;
     ranges.push(
       rangeForToken(
         statementLineForOffset(statement, offset),
@@ -382,14 +407,165 @@ async function sqlFactsForFile(index: ProjectIndex, filePath: string): Promise<S
   return facts;
 }
 
+const routineLookupsByIndex = new WeakMap<ProjectIndex, Promise<SqlRoutineLookups>>();
+const mentionsByFacts = new WeakMap<readonly SqlStatementFact[], readonly SqlStatementMentions[]>();
+
+function siteKey(file: string, line: number, column: number): string {
+  return `${fileIdentityKey(file)}:${line}:${column}`;
+}
+
+/** The name space of each routine one file defines, by the position where its statement starts. */
+async function routineNamespacesByStart(index: ProjectIndex, file: string): Promise<Map<string, SqlRoutineNamespace>> {
+  const namespaces = new Map<string, SqlRoutineNamespace>();
+  for (const fact of await sqlFactsForFile(index, file)) {
+    if (fact.kind !== "defines_routine") continue;
+    namespaces.set(`${fact.startLine}:${fact.startColumn}`, sqlRoutineDefinitionNamespace(fact.statementText));
+  }
+  return namespaces;
+}
+
+async function buildSqlRoutineLookups(index: ProjectIndex): Promise<SqlRoutineLookups> {
+  const lookups: SqlRoutineLookups = {
+    callable: createSqlDefinitionIndex<SymbolDef>(),
+    trigger: createSqlDefinitionIndex<SymbolDef>(),
+    namespaceByDefinition: new Map(),
+    definitionByStart: new Map(),
+  };
+  for (const file of sqlFiles(index)) {
+    const locals = index.byFile.get(fileIdentityKey(file))?.locals ?? [];
+    const routines = locals.filter((local) => local.kind === SymbolKind.Routine);
+    if (!routines.length) continue;
+    const namespaces = await routineNamespacesByStart(index, file);
+    for (const routine of routines) {
+      const { line, column } = routine.range.start;
+      const namespace = namespaces.get(`${line}:${column}`) ?? "callable";
+      addSqlDefinition(lookups[namespace], routine.localName, routine);
+      lookups.namespaceByDefinition.set(routine, namespace);
+      lookups.definitionByStart.set(siteKey(file, line, column), routine);
+    }
+  }
+  return lookups;
+}
+
+function getSqlRoutineLookups(index: ProjectIndex): Promise<SqlRoutineLookups> {
+  const cached = routineLookupsByIndex.get(index);
+  if (cached) return cached;
+  const lookups = buildSqlRoutineLookups(index);
+  routineLookupsByIndex.set(index, lookups);
+  // A failed build must not stay cached; the next lookup tries again.
+  lookups.catch(() => routineLookupsByIndex.delete(index));
+  return lookups;
+}
+
+/**
+ * The mentions in each statement that name a routine. A keyword mention always does. A bare `name(`
+ * does only when an indexed routine has that name, because `INSERT INTO users (id)` has the same shape.
+ */
+function statementMentions(
+  lookups: SqlRoutineLookups,
+  facts: readonly SqlStatementFact[],
+): readonly SqlStatementMentions[] {
+  const cached = mentionsByFacts.get(facts);
+  if (cached) return cached;
+  const statements: SqlStatementMentions[] = [];
+  for (const statement of sqlStatementSlices(facts)) {
+    const mentions = findSqlRoutineMentions(statement.text).filter(
+      (mention) => !mention.speculative || routineCandidates(lookups, mention).length,
+    );
+    if (mentions.length) statements.push({ statement, mentions });
+  }
+  mentionsByFacts.set(facts, statements);
+  return statements;
+}
+
+function routineCandidates(lookups: SqlRoutineLookups, mention: SqlRoutineMention): readonly SymbolDef[] {
+  return sqlRoutineNameCandidates(lookups[mention.namespace], mention.name, (definition) => definition.localName)
+    .candidates;
+}
+
+/**
+ * Start offsets of the tokens in each statement that name a routine, by statement start. A table or
+ * view reference skips these tokens: a name in a routine position is not a relation.
+ */
+function claimedMentionStarts(
+  lookups: SqlRoutineLookups,
+  facts: readonly SqlStatementFact[],
+): Map<string, ReadonlySet<number>> {
+  const claimed = new Map<string, ReadonlySet<number>>();
+  for (const { statement, mentions } of statementMentions(lookups, facts)) {
+    claimed.set(`${statement.startLine}:${statement.startColumn}`, new Set(mentions.map((mention) => mention.start)));
+  }
+  return claimed;
+}
+
+function mentionRange(statement: SqlStatementNavigationSlice, mention: SqlRoutineMention): Range {
+  return {
+    start: {
+      line: statementLineForOffset(statement, mention.start),
+      column: statementColumnForOffset(statement, mention.start),
+    },
+    end: {
+      line: statementLineForOffset(statement, mention.end),
+      column: statementColumnForOffset(statement, mention.end),
+    },
+  };
+}
+
+function statementOffsetAtPosition(
+  statement: SqlStatementNavigationSlice,
+  line: number,
+  column: number,
+): number | undefined {
+  if (line < statement.startLine || line > statement.endLine) return undefined;
+  let lineStart = 0;
+  for (let current = statement.startLine; current < line; current += 1) {
+    const newline = statement.text.indexOf("\n", lineStart);
+    if (newline < 0) return undefined;
+    lineStart = newline + 1;
+  }
+  return lineStart + column - (line === statement.startLine ? statement.startColumn : 1);
+}
+
+function goToRoutineMention(
+  index: ProjectIndex,
+  lookups: SqlRoutineLookups,
+  file: string,
+  facts: readonly SqlStatementFact[],
+  position: { line: number; column: number },
+): GoToResult | null {
+  for (const statement of sqlStatementSlices(facts)) {
+    const offset = statementOffsetAtPosition(statement, position.line, position.column);
+    // Several statements can share one line, so only the statement that holds the position counts.
+    if (offset === undefined || offset < 0 || offset >= statement.text.length) continue;
+    const mention = findSqlRoutineMentions(statement.text).find((entry) => offset >= entry.start && offset < entry.end);
+    if (!mention) return null;
+    if (mention.kind === "definition") {
+      const definition = lookups.definitionByStart.get(siteKey(file, statement.startLine, statement.startColumn));
+      return definition ? okGoToResult(index, definition, { resolution: "exact", confidence: "high" }) : null;
+    }
+    const candidates = routineCandidates(lookups, mention);
+    const [only] = candidates;
+    if (only && candidates.length === 1) return okGoToResult(index, only, { resolution: "exact", confidence: "high" });
+    if (candidates.length) return { status: "not_found", reason: "Several SQL routines share this name" };
+    // A bare `name(` can name a table or an index; a keyword such as `CALL` or `DROP FUNCTION` names a routine.
+    return mention.speculative ? null : { status: "not_found", reason: "No matching SQL routine definition" };
+  }
+  return null;
+}
+
 export async function goToSqlDefinition(index: ProjectIndex, req: GoToRequest): Promise<GoToResult | null> {
   if (!isSqlFile(req.file)) return null;
   const source = await sourceForFile(req.file, index);
+  const lookup = getSqlDefinitionLookup(index);
+  const routineLookups = await getSqlRoutineLookups(index);
+  const facts = await sqlFactsForFile(index, req.file);
+  if (routineLookups.namespaceByDefinition.size) {
+    const routineResult = goToRoutineMention(index, routineLookups, req.file, facts, req);
+    if (routineResult) return routineResult;
+  }
+  const statement = sqlStatementAtLine(facts, req.line);
   const name = wordAtPosition(source, req.line, req.column);
   if (!name) return { status: "not_found", reason: "No SQL object at position" };
-  const lookup = getSqlDefinitionLookup(index);
-  const facts = await sqlFactsForFile(index, req.file);
-  const statement = sqlStatementAtLine(facts, req.line);
   const resolvedName = resolveQualifiedSqlName(lookup, name, statement?.text ?? null);
   if (!resolvedName) return { status: "not_found", reason: "No matching SQL object definition" };
   const definitions = sqlDefinitionsFromLookup(lookup, resolvedName);
@@ -415,18 +591,23 @@ export async function findSqlReferences(
   const references: Reference[] = [];
   const seen = new Set<string>();
   const lookup = getSqlDefinitionLookup(index);
+  const routineLookups = await getSqlRoutineLookups(index);
+  const routineNamespace = routineLookups.namespaceByDefinition.get(definition);
+  const hasRoutines = !!routineLookups.namespaceByDefinition.size;
   const candidateFiles = sqlFiles(index);
   const scannedFiles: string[] = [];
+  // Files with a mention that several routine definitions could own, so no one definition owns it.
+  const ambiguousFiles: string[] = [];
   const includeDefinition = options?.includeDefinition ?? true;
   const maxReferences =
     typeof options?.maxReferences === "number" && options.maxReferences > 0 ? options.maxReferences : undefined;
   const collectionLimit = maxReferences === undefined ? undefined : maxReferences + 1;
-  const definitionKey = `${fileIdentityKey(definition.file)}:${definition.range.start.line}:${definition.range.start.column}`;
+  const definitionKey = siteKey(definition.file, definition.range.start.line, definition.range.start.column);
   const hasReachedCollectionLimit = (): boolean =>
     collectionLimit !== undefined && references.length >= collectionLimit;
   const addReference = (file: string, range: Range): void => {
     if (hasReachedCollectionLimit()) return;
-    const key = `${fileIdentityKey(file)}:${range.start.line}:${range.start.column}`;
+    const key = siteKey(file, range.start.line, range.start.column);
     if (!includeDefinition && key === definitionKey) return;
     if (seen.has(key)) return;
     seen.add(key);
@@ -437,11 +618,35 @@ export async function findSqlReferences(
     if (hasReachedCollectionLimit()) break;
     scannedFiles.push(file);
     const facts = await sqlFactsForFile(index, file);
+    if (routineNamespace) {
+      for (const { statement, mentions } of statementMentions(routineLookups, facts)) {
+        for (const mention of mentions) {
+          if (hasReachedCollectionLimit()) break;
+          if (mention.namespace !== routineNamespace) continue;
+          if (mention.kind === "definition") {
+            // A definition always names itself, even when several definitions share the name.
+            if (siteKey(file, statement.startLine, statement.startColumn) === definitionKey) {
+              addReference(file, mentionRange(statement, mention));
+            }
+            continue;
+          }
+          const candidates = routineCandidates(routineLookups, mention);
+          if (!candidates.includes(definition)) continue;
+          if (candidates.length === 1) addReference(file, mentionRange(statement, mention));
+          else if (!ambiguousFiles.includes(file)) ambiguousFiles.push(file);
+        }
+      }
+      continue;
+    }
+    const claimedStarts = hasRoutines ? claimedMentionStarts(routineLookups, facts) : undefined;
     for (const fact of facts) {
       if (hasReachedCollectionLimit()) break;
+      // The name in `DROP FUNCTION name` is a routine mention, never a table of the same name.
+      if (fact.kind === "drops_object" && sqlStatementDropsRoutine(fact.statementText)) continue;
+      const claimed = claimedStarts?.get(`${fact.startLine}:${fact.startColumn}`);
       for (const name of [fact.objectName, fact.relatedObjectName]) {
         if (!name || !sqlNameResolvesToDefinition(lookup, name, definition)) continue;
-        for (const range of factReferenceRanges(fact, name)) {
+        for (const range of factReferenceRanges(fact, name, claimed)) {
           addReference(file, range);
         }
       }
@@ -449,7 +654,9 @@ export async function findSqlReferences(
     if (hasReachedCollectionLimit()) break;
     for (const statement of sqlStatementSlices(facts)) {
       if (hasReachedCollectionLimit()) break;
-      for (const range of qualifiedReferenceRanges(lookup, statement, definition)) {
+      if (sqlStatementDropsRoutine(statement.text)) continue;
+      const claimed = claimedStarts?.get(`${statement.startLine}:${statement.startColumn}`);
+      for (const range of qualifiedReferenceRanges(lookup, statement, definition, claimed)) {
         addReference(file, range);
       }
     }
@@ -474,6 +681,7 @@ export async function findSqlReferences(
       candidateFiles,
       scannedFiles,
       truncated,
+      strategyUnavailableFiles: ambiguousFiles,
     }),
   };
 }

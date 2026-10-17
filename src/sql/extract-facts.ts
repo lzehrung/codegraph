@@ -10,6 +10,7 @@ import {
   sqlParenDepthAt,
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
+import { SQL_ROUTINE_DEFINITION_RE } from "./routine-mentions.js";
 import type { SqlFactKind, SqlFileRole, SqlStatementFact } from "./types.js";
 
 export { maskSqlStringsAndComments, normalizeSqlObjectName, sqlObjectBaseName } from "./lex.js";
@@ -443,7 +444,7 @@ function createDefinitionFact(text: string): SqlFactDraft | null {
     };
   }
 
-  const routineName = findObjectAfter(text, /\bcreate\s+(?:or\s+replace\s+)?(?:function|procedure|trigger)\s+/i);
+  const routineName = findObjectAfter(text, SQL_ROUTINE_DEFINITION_RE);
   if (routineName) return { kind: "defines_routine", objectName: routineName, relatedObjectName: null };
 
   return null;

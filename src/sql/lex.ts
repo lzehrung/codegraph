@@ -84,7 +84,15 @@ export function splitTopLevelCommaSeparated(text: string): string[] {
   return parts;
 }
 
-export function maskSqlStringsAndComments(statement: string): string {
+export type SqlMaskOptions = {
+  /**
+   * Keep the body of a dollar-quoted block visible. A routine body is code, so the body keeps its
+   * calls. Strings, comments, and nested dollar-quoted blocks inside the body stay masked.
+   */
+  dollarQuotedCode?: boolean;
+};
+
+export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOptions): string {
   let out = "";
   let i = 0;
   let singleQuoted = false;
@@ -169,10 +177,23 @@ export function maskSqlStringsAndComments(statement: string): string {
     if (char === "[") bracketQuoted = true;
     if (char === "$") {
       const tagMatch = statement.slice(i).match(/^\$[A-Za-z_][\w$]*\$|^\$\$/);
-      if (tagMatch?.[0]) {
-        dollarQuote = tagMatch[0];
-        out += " ".repeat(dollarQuote.length);
-        i += dollarQuote.length;
+      const tag = tagMatch?.[0];
+      if (tag && options?.dollarQuotedCode) {
+        const bodyStart = i + tag.length;
+        const closeIndex = statement.indexOf(tag, bodyStart);
+        const bodyEnd = closeIndex < 0 ? statement.length : closeIndex;
+        out += " ".repeat(tag.length) + maskSqlStringsAndComments(statement.slice(bodyStart, bodyEnd));
+        i = bodyEnd;
+        if (closeIndex >= 0) {
+          out += " ".repeat(tag.length);
+          i += tag.length;
+        }
+        continue;
+      }
+      if (tag) {
+        dollarQuote = tag;
+        out += " ".repeat(tag.length);
+        i += tag.length;
         continue;
       }
     }

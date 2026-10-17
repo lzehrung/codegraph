@@ -7,6 +7,7 @@ import { buildSqlFactCache, buildSqlModuleIndex, collectSqlEdgesForFile } from "
 import { SymbolKind } from "../src/indexer/types.js";
 import { computeFileSymbolHashes } from "../src/util/symbol-hash.js";
 import type { GraphCacheEntry } from "../src/graphs/types.js";
+import type { Graph } from "../src/types.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 const fixtureRoot = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
@@ -652,6 +653,128 @@ describe("SQL artifact graph", () => {
             edge.to.path === schemaFile,
         ),
       ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("links routine calls to routine definitions only and skips ambiguous names", async () => {
+    const root = await mkTmpDir("cg-sql-routine-edge-");
+    try {
+      const sqlFile = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+      const routinesFile = sqlFile("routines.sql");
+      const tablesFile = sqlFile("tables.sql");
+      const archiveFile = sqlFile("archive.sql");
+      const callerFile = sqlFile("caller.sql");
+      const readerFile = sqlFile("reader.sql");
+      const adminFile = sqlFile("admin.sql");
+      const files = [routinesFile, tablesFile, archiveFile, callerFile, readerFile, adminFile];
+      await fsp.writeFile(
+        routinesFile,
+        [
+          "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;",
+          "CREATE FUNCTION app.shared_name() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(tablesFile, "CREATE TABLE normalize_email (id integer);\n", "utf8");
+      await fsp.writeFile(
+        archiveFile,
+        "CREATE FUNCTION archive.shared_name() RETURNS integer AS $$ SELECT 2 $$ LANGUAGE sql;\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        callerFile,
+        "SELECT normalize_email(a), public.normalize_email(a), lower(a), shared_name(), app.shared_name() FROM t;\n",
+        "utf8",
+      );
+      await fsp.writeFile(readerFile, "SELECT id FROM normalize_email;\n", "utf8");
+      await fsp.writeFile(
+        adminFile,
+        "ALTER FUNCTION normalize_email(text) OWNER TO app;\nDROP FUNCTION normalize_email(text);\n",
+        "utf8",
+      );
+
+      const sourceGraph = await collectGraph(root, files);
+      const edgesBetween = (from: string, to: string) =>
+        sourceGraph.edges.filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === to);
+      const rawBetween = (from: string, to: string): string[] =>
+        edgesBetween(from, to)
+          .map((edge) => edge.raw)
+          .sort();
+
+      expect(rawBetween(callerFile, routinesFile)).toEqual([
+        "sql:reads_from:app.shared_name",
+        "sql:reads_from:normalize_email",
+        "sql:reads_from:public.normalize_email",
+      ]);
+      expect(edgesBetween(callerFile, routinesFile)).toContainEqual(
+        expect.objectContaining({ raw: "sql:reads_from:normalize_email", resolved: "precise", confidence: 1 }),
+      );
+      expect(edgesBetween(callerFile, routinesFile)).toContainEqual(
+        expect.objectContaining({
+          raw: "sql:reads_from:public.normalize_email",
+          resolved: "heuristic",
+          confidence: 0.7,
+        }),
+      );
+      // A call never names a table, and the unqualified `shared_name()` fits two schemas, so it links to neither.
+      expect(rawBetween(callerFile, tablesFile)).toEqual([]);
+      expect(rawBetween(callerFile, archiveFile)).toEqual([]);
+      // A table read never names a routine.
+      expect(rawBetween(readerFile, tablesFile)).toEqual(["sql:reads_from:normalize_email"]);
+      expect(rawBetween(readerFile, routinesFile)).toEqual([]);
+      // ALTER and DROP statements follow the table convention: they are references.
+      expect(rawBetween(adminFile, routinesFile)).toEqual([
+        "sql:drops_object:normalize_email",
+        "sql:references_object:normalize_email",
+      ]);
+      expect(rawBetween(adminFile, tablesFile)).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recomputes unchanged SQL call edges when a routine definition is added and removed", async () => {
+    const root = await mkTmpDir("cg-sql-routine-incremental-");
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const callerFile = path.join(root, "caller.sql").replace(/\\/g, "/");
+      const files = [schemaFile, callerFile];
+      const hasCallEdge = (graph: Graph): boolean =>
+        graph.edges.some(
+          (edge) =>
+            edge.from === callerFile &&
+            edge.raw === "sql:reads_from:normalize_email" &&
+            edge.to.type === "file" &&
+            edge.to.path === schemaFile,
+        );
+      await fsp.writeFile(schemaFile, "CREATE TABLE accounts (id integer);\n", "utf8");
+      await fsp.writeFile(callerFile, "SELECT normalize_email(a) FROM accounts;\n", "utf8");
+
+      const initialGraph = await collectGraph(root, files, { allFiles: files });
+      expect(hasCallEdge(initialGraph)).toBe(false);
+
+      await fsp.writeFile(
+        schemaFile,
+        "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;\n",
+        "utf8",
+      );
+      const withRoutine = await collectGraph(root, [schemaFile], {
+        allFiles: files,
+        baseGraph: initialGraph,
+        replaceFiles: new Set([schemaFile]),
+      });
+      expect(hasCallEdge(withRoutine)).toBe(true);
+
+      await fsp.writeFile(schemaFile, "CREATE TABLE accounts (id integer);\n", "utf8");
+      const withoutRoutine = await collectGraph(root, [schemaFile], {
+        allFiles: files,
+        baseGraph: withRoutine,
+        replaceFiles: new Set([schemaFile]),
+      });
+      expect(hasCallEdge(withoutRoutine)).toBe(false);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

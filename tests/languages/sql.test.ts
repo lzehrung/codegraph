@@ -3,14 +3,21 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import {
+  analyzeImpactFromDiff,
   buildProjectIndex,
   buildProjectIndexFromFiles,
   chunkFile,
   extractSqlFactsFromSource,
+  findReferences,
   goToDefinition,
   listSymbols,
   supportForFile,
+  type ProjectIndex,
 } from "../../src/index.js";
+import { previewRenameWithSession } from "../../src/agent/rename-preview.js";
+import { createAgentSession } from "../../src/agent/session.js";
+import { workspaceSymbolsWithSession } from "../../src/agent/workspace-symbols.js";
+import type { FindReferencesResult, GoToResult } from "../../src/indexer/types.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 
@@ -202,5 +209,509 @@ describe("SQL routine symbols", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("SQL routine call sites", () => {
+  type SqlProject = { root: string; file: (name: string) => string; index: ProjectIndex };
+
+  async function withSqlProject(
+    files: Record<string, readonly string[]>,
+    run: (project: SqlProject) => Promise<void>,
+  ): Promise<void> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-routine-calls-"));
+    try {
+      for (const [name, lines] of Object.entries(files)) {
+        await fsp.writeFile(path.join(root, name), [...lines, ""].join("\n"), "utf8");
+      }
+      const index = await buildProjectIndex(root, { cache: "memory" });
+      await run({ root, file: (name) => path.join(root, name).replace(/\\/g, "/"), index });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  function tokenColumn(line: string, token: string, occurrence = 0): number {
+    let fromIndex = 0;
+    for (let found = 0; found <= occurrence; found += 1) {
+      const index = line.indexOf(token, fromIndex);
+      if (index < 0) throw new Error(`Expected ${token} in ${line}`);
+      if (found === occurrence) return index + 1;
+      fromIndex = index + token.length;
+    }
+    throw new Error(`Expected ${token} in ${line}`);
+  }
+
+  /** `file:line:column` of a token, the form `referenceSites` reports. */
+  function siteAt(file: string, lines: readonly string[], line: number, token: string, occurrence = 0): string {
+    return `${file}:${line}:${tokenColumn(lines[line - 1] ?? "", token, occurrence)}`;
+  }
+
+  function okReferences(result: FindReferencesResult): Extract<FindReferencesResult, { status: "ok" }> {
+    if (result.status !== "ok") throw new Error(`Expected references, got ${result.reason}`);
+    return result;
+  }
+
+  function referenceSites(root: string, result: FindReferencesResult): string[] {
+    return okReferences(result)
+      .references.map((reference) => {
+        const file = path.relative(root, reference.file).replace(/\\/g, "/");
+        return `${file}:${reference.range.start.line}:${reference.range.start.column}`;
+      })
+      .sort();
+  }
+
+  function gotoTarget(root: string, result: GoToResult): string {
+    if (result.status !== "ok") return "not_found";
+    return `${path.relative(root, result.definition.file).replace(/\\/g, "/")}:${result.definition.range.start.line}`;
+  }
+
+  async function referencesAt(
+    project: SqlProject,
+    file: string,
+    lines: readonly string[],
+    line: number,
+    token: string,
+    occurrence = 0,
+  ): Promise<FindReferencesResult> {
+    const column = tokenColumn(lines[line - 1] ?? "", token, occurrence);
+    return await findReferences(project.index, { file: project.file(file), line, column });
+  }
+
+  async function gotoAt(
+    project: SqlProject,
+    file: string,
+    lines: readonly string[],
+    line: number,
+    token: string,
+    occurrence = 0,
+  ): Promise<string> {
+    const column = tokenColumn(lines[line - 1] ?? "", token, occurrence);
+    return gotoTarget(project.root, await goToDefinition(project.index, { file: project.file(file), line, column }));
+  }
+
+  it("finds a routine call in a SELECT with complete coverage and goes from the call to the routine", async () => {
+    const schema = ["CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;"];
+    const report = ["SELECT normalize_email(email) FROM users;"];
+    await withSqlProject({ "schema.sql": schema, "report.sql": report }, async (project) => {
+      const result = await referencesAt(project, "schema.sql", schema, 1, "normalize_email");
+
+      expect(referenceSites(project.root, result)).toEqual(
+        [siteAt("schema.sql", schema, 1, "normalize_email"), siteAt("report.sql", report, 1, "normalize_email")].sort(),
+      );
+      expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(await gotoAt(project, "report.sql", report, 1, "normalize_email")).toBe("schema.sql:1");
+    });
+  });
+
+  it("finds CALL, T-SQL EXEC and EXECUTE, and trigger EXECUTE FUNCTION calls", async () => {
+    const defs = [
+      "CREATE PROCEDURE audit_user(id integer) LANGUAGE sql AS $$ SELECT 1 $$;",
+      "CREATE FUNCTION touch_updated() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;",
+    ];
+    const tsql = ["CREATE PROCEDURE dbo.refresh_totals @account_id int AS BEGIN SELECT 1; END;"];
+    const use = [
+      "CALL audit_user(1);",
+      "CREATE TRIGGER users_touch BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION touch_updated();",
+      "EXEC dbo.refresh_totals @account_id = 7;",
+      "EXECUTE dbo.refresh_totals 8;",
+      "EXEC @status = dbo.refresh_totals 9;",
+      "EXEC ('SELECT 1');",
+      "GRANT EXECUTE TO app;",
+    ];
+    await withSqlProject({ "defs.sql": defs, "tsql.sql": tsql, "use.sql": use }, async (project) => {
+      const procedure = await referencesAt(project, "defs.sql", defs, 1, "audit_user");
+      const triggerFunction = await referencesAt(project, "defs.sql", defs, 2, "touch_updated");
+      const tsqlProcedure = await referencesAt(project, "tsql.sql", tsql, 1, "dbo.refresh_totals");
+
+      expect(referenceSites(project.root, procedure)).toEqual(
+        [siteAt("defs.sql", defs, 1, "audit_user"), siteAt("use.sql", use, 1, "audit_user")].sort(),
+      );
+      expect(referenceSites(project.root, triggerFunction)).toEqual(
+        [siteAt("defs.sql", defs, 2, "touch_updated"), siteAt("use.sql", use, 2, "touch_updated")].sort(),
+      );
+      expect(referenceSites(project.root, tsqlProcedure)).toEqual(
+        [
+          siteAt("tsql.sql", tsql, 1, "dbo.refresh_totals"),
+          siteAt("use.sql", use, 3, "dbo.refresh_totals"),
+          siteAt("use.sql", use, 4, "dbo.refresh_totals"),
+          siteAt("use.sql", use, 5, "dbo.refresh_totals"),
+        ].sort(),
+      );
+      expect(await gotoAt(project, "use.sql", use, 1, "audit_user")).toBe("defs.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 2, "touch_updated")).toBe("defs.sql:2");
+      expect(await gotoAt(project, "use.sql", use, 3, "dbo.refresh_totals")).toBe("tsql.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 5, "dbo.refresh_totals")).toBe("tsql.sql:1");
+    });
+  });
+
+  it("finds a call inside a $$ body and inside a BEGIN and END body", async () => {
+    const defs = [
+      "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;",
+      "CREATE FUNCTION wrap_email(e text) RETURNS text AS $body$",
+      "BEGIN",
+      "  RETURN normalize_email(e);",
+      "END",
+      "$body$ LANGUAGE plpgsql;",
+    ];
+    const tsql = [
+      "CREATE PROCEDURE dbo.inner_proc AS BEGIN SELECT 1; END;",
+      "GO",
+      "CREATE PROCEDURE dbo.outer_proc AS",
+      "BEGIN",
+      "  EXEC dbo.inner_proc;",
+      "END;",
+    ];
+    await withSqlProject({ "defs.sql": defs, "tsql.sql": tsql }, async (project) => {
+      const plpgsql = await referencesAt(project, "defs.sql", defs, 1, "normalize_email");
+      const inner = await referencesAt(project, "tsql.sql", tsql, 1, "dbo.inner_proc");
+
+      expect(referenceSites(project.root, plpgsql)).toEqual(
+        [siteAt("defs.sql", defs, 1, "normalize_email"), siteAt("defs.sql", defs, 4, "normalize_email")].sort(),
+      );
+      expect(referenceSites(project.root, inner)).toEqual(
+        [siteAt("tsql.sql", tsql, 1, "dbo.inner_proc"), siteAt("tsql.sql", tsql, 5, "dbo.inner_proc")].sort(),
+      );
+      expect(await gotoAt(project, "defs.sql", defs, 4, "normalize_email")).toBe("defs.sql:1");
+      expect(await gotoAt(project, "tsql.sql", tsql, 5, "dbo.inner_proc")).toBe("tsql.sql:1");
+    });
+  });
+
+  it("does not treat built-ins, same-named columns, strings, comments, or other-language bodies as calls", async () => {
+    const schema = ["CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;"];
+    const decoys = [
+      "SELECT lower(email), normalize_email FROM users;",
+      "SELECT 'normalize_email(email)' AS label FROM users;",
+      "SELECT 1; -- normalize_email(email)",
+      "SELECT /* normalize_email(email) */ 2;",
+      "SELECT $$normalize_email(email)$$;",
+      "CREATE TABLE contacts (normalize_email text);",
+      "CREATE FUNCTION wrap_python(e text) RETURNS text AS $$ return normalize_email(e) $$ LANGUAGE plpython3u;",
+      "SELECT normalize_email(email) FROM users;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "decoys.sql": decoys }, async (project) => {
+      const result = await referencesAt(project, "schema.sql", schema, 1, "normalize_email");
+
+      expect(referenceSites(project.root, result)).toEqual(
+        [siteAt("schema.sql", schema, 1, "normalize_email"), siteAt("decoys.sql", decoys, 8, "normalize_email")].sort(),
+      );
+      expect(await gotoAt(project, "decoys.sql", decoys, 1, "normalize_email")).toBe("not_found");
+      expect(await gotoAt(project, "decoys.sql", decoys, 1, "lower")).toBe("not_found");
+      expect(await gotoAt(project, "decoys.sql", decoys, 2, "normalize_email")).toBe("not_found");
+      expect(await gotoAt(project, "decoys.sql", decoys, 6, "normalize_email")).toBe("not_found");
+      expect(await gotoAt(project, "decoys.sql", decoys, 8, "normalize_email")).toBe("schema.sql:1");
+    });
+  });
+
+  it("keeps a table and a routine with the same name apart", async () => {
+    const schema = [
+      "CREATE TABLE audit_trail (id integer);",
+      "CREATE FUNCTION audit_trail() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;",
+    ];
+    const use = ["SELECT id FROM audit_trail;", "SELECT audit_trail();", "INSERT INTO audit_trail (id) VALUES (1);"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const table = await referencesAt(project, "schema.sql", schema, 1, "audit_trail");
+      const routine = await referencesAt(project, "schema.sql", schema, 2, "audit_trail");
+
+      expect(referenceSites(project.root, table)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "audit_trail"),
+          siteAt("use.sql", use, 1, "audit_trail"),
+          siteAt("use.sql", use, 3, "audit_trail"),
+        ].sort(),
+      );
+      expect(referenceSites(project.root, routine)).toEqual(
+        [siteAt("schema.sql", schema, 2, "audit_trail"), siteAt("use.sql", use, 2, "audit_trail")].sort(),
+      );
+      expect(await gotoAt(project, "use.sql", use, 1, "audit_trail")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 2, "audit_trail")).toBe("schema.sql:2");
+      expect(await gotoAt(project, "use.sql", use, 3, "audit_trail")).toBe("schema.sql:1");
+    });
+  });
+
+  it("resolves schema-qualified calls and keeps other schemas, quoted names, and cases apart", async () => {
+    const schema = [
+      "CREATE FUNCTION app.norm(x text) RETURNS text AS $$ SELECT x $$ LANGUAGE sql;",
+      "CREATE FUNCTION plain(x text) RETURNS text AS $$ SELECT x $$ LANGUAGE sql;",
+    ];
+    const use = [
+      "SELECT app.norm(a), norm(a), other.norm(a) FROM t;",
+      'SELECT public.plain(a), plain(a), "Plain"(a), PLAIN(a) FROM t;',
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const qualified = await referencesAt(project, "schema.sql", schema, 1, "app.norm");
+      const unqualified = await referencesAt(project, "schema.sql", schema, 2, "plain");
+
+      expect(referenceSites(project.root, qualified)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "app.norm"),
+          siteAt("use.sql", use, 1, "app.norm"),
+          siteAt("use.sql", use, 1, "norm(a)", 1),
+        ].sort(),
+      );
+      expect(referenceSites(project.root, unqualified)).toEqual(
+        [
+          siteAt("schema.sql", schema, 2, "plain"),
+          siteAt("use.sql", use, 2, "public.plain"),
+          siteAt("use.sql", use, 2, "plain(a)", 1),
+          siteAt("use.sql", use, 2, "PLAIN"),
+        ].sort(),
+      );
+      expect(await gotoAt(project, "use.sql", use, 1, "other.norm")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 2, '"Plain"')).toBe("not_found");
+    });
+  });
+
+  it("reports partial coverage and no definition for an overloaded routine name", async () => {
+    const defs = [
+      "CREATE FUNCTION pick(a integer) RETURNS integer AS $$ SELECT a $$ LANGUAGE sql;",
+      "CREATE FUNCTION pick(a text) RETURNS text AS $$ SELECT a $$ LANGUAGE sql;",
+      "CREATE FUNCTION unique_pick(a integer) RETURNS integer AS $$ SELECT a $$ LANGUAGE sql;",
+    ];
+    const use = ["SELECT pick(1);", "SELECT unique_pick(2);"];
+    await withSqlProject({ "defs.sql": defs, "use.sql": use }, async (project) => {
+      const integerOverload = await referencesAt(project, "defs.sql", defs, 1, "pick");
+      const textOverload = await referencesAt(project, "defs.sql", defs, 2, "pick");
+      const uniqueRoutine = await referencesAt(project, "defs.sql", defs, 3, "unique_pick");
+
+      expect(referenceSites(project.root, integerOverload)).toEqual([siteAt("defs.sql", defs, 1, "pick")]);
+      expect(referenceSites(project.root, textOverload)).toEqual([siteAt("defs.sql", defs, 2, "pick")]);
+      for (const overload of [integerOverload, textOverload]) {
+        expect(okReferences(overload).referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+          affectedFiles: [project.file("use.sql")],
+        });
+      }
+      expect(await gotoAt(project, "use.sql", use, 1, "pick")).toBe("not_found");
+      expect(await gotoAt(project, "defs.sql", defs, 1, "pick")).toBe("defs.sql:1");
+      expect(await gotoAt(project, "defs.sql", defs, 2, "pick")).toBe("defs.sql:2");
+      expect(referenceSites(project.root, uniqueRoutine)).toEqual(
+        [siteAt("defs.sql", defs, 3, "unique_pick"), siteAt("use.sql", use, 2, "unique_pick")].sort(),
+      );
+      expect(okReferences(uniqueRoutine).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    });
+  });
+
+  it("reports partial coverage for a routine that two files define", async () => {
+    const first = ["CREATE FUNCTION refresh() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;"];
+    const second = ["CREATE OR REPLACE FUNCTION refresh() RETURNS integer AS $$ SELECT 2 $$ LANGUAGE sql;"];
+    const use = ["SELECT refresh();"];
+    await withSqlProject({ "001_first.sql": first, "002_second.sql": second, "use.sql": use }, async (project) => {
+      const result = await referencesAt(project, "001_first.sql", first, 1, "refresh");
+
+      expect(referenceSites(project.root, result)).toEqual([siteAt("001_first.sql", first, 1, "refresh")]);
+      expect(okReferences(result).referenceCoverage.state).toBe("partial");
+      expect(await gotoAt(project, "use.sql", use, 1, "refresh")).toBe("not_found");
+      expect(await gotoAt(project, "002_second.sql", second, 1, "refresh")).toBe("002_second.sql:1");
+    });
+  });
+
+  it("keeps a trigger and the function it runs apart when they share a name", async () => {
+    const schema = [
+      "CREATE FUNCTION set_updated_at() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;",
+      "CREATE TRIGGER set_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION set_updated_at();",
+      "CREATE TRIGGER set_updated_at BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION set_updated_at();",
+      "DROP TRIGGER set_updated_at ON users;",
+    ];
+    await withSqlProject({ "schema.sql": schema }, async (project) => {
+      const routine = await referencesAt(project, "schema.sql", schema, 1, "set_updated_at");
+      const trigger = await referencesAt(project, "schema.sql", schema, 2, "set_updated_at");
+
+      expect(referenceSites(project.root, routine)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "set_updated_at"),
+          siteAt("schema.sql", schema, 2, "set_updated_at", 1),
+          siteAt("schema.sql", schema, 3, "set_updated_at", 1),
+        ].sort(),
+      );
+      expect(okReferences(routine).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(await gotoAt(project, "schema.sql", schema, 2, "set_updated_at", 1)).toBe("schema.sql:1");
+      expect(await gotoAt(project, "schema.sql", schema, 3, "set_updated_at")).toBe("schema.sql:3");
+      // Two triggers carry the name, so `DROP TRIGGER set_updated_at` cannot be tied to one of them.
+      expect(await gotoAt(project, "schema.sql", schema, 4, "set_updated_at")).toBe("not_found");
+      expect(referenceSites(project.root, trigger)).toEqual([siteAt("schema.sql", schema, 2, "set_updated_at")]);
+      expect(okReferences(trigger).referenceCoverage.state).toBe("partial");
+    });
+  });
+
+  it("counts ALTER, COMMENT ON, GRANT, and DROP statements that name a routine as references", async () => {
+    const schema = ["CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;"];
+    const admin = [
+      "ALTER FUNCTION normalize_email(text) OWNER TO app;",
+      "COMMENT ON FUNCTION normalize_email(text) IS 'Lowercases an address.';",
+      "GRANT EXECUTE ON FUNCTION normalize_email(text) TO app;",
+      "DROP FUNCTION IF EXISTS normalize_email(text);",
+      "-- ALTER FUNCTION normalize_email(text) RENAME TO other_name;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "admin.sql": admin }, async (project) => {
+      const result = await referencesAt(project, "schema.sql", schema, 1, "normalize_email");
+
+      expect(referenceSites(project.root, result)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "normalize_email"),
+          siteAt("admin.sql", admin, 1, "normalize_email"),
+          siteAt("admin.sql", admin, 2, "normalize_email"),
+          siteAt("admin.sql", admin, 3, "normalize_email"),
+          siteAt("admin.sql", admin, 4, "normalize_email"),
+        ].sort(),
+      );
+      expect(await gotoAt(project, "admin.sql", admin, 3, "normalize_email")).toBe("schema.sql:1");
+    });
+  });
+
+  it("finds calls when several statements share a line and the file uses CRLF line endings", async () => {
+    const schema = ["CREATE FUNCTION fn_one(a integer) RETURNS integer AS $$ SELECT a $$ LANGUAGE sql;"];
+    const use = ["SELECT 1; SELECT fn_one(1);", "  SELECT", "    fn_one (2)", "  FROM t;"];
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-routine-crlf-"));
+    try {
+      await fsp.writeFile(path.join(root, "schema.sql"), `${schema.join("\r\n")}\r\n`, "utf8");
+      await fsp.writeFile(path.join(root, "use.sql"), `${use.join("\r\n")}\r\n`, "utf8");
+      const index = await buildProjectIndex(root, { cache: "memory" });
+      const project: SqlProject = { root, index, file: (name) => path.join(root, name).replace(/\\/g, "/") };
+
+      const result = await referencesAt(project, "schema.sql", schema, 1, "fn_one");
+
+      expect(referenceSites(root, result)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "fn_one"),
+          siteAt("use.sql", use, 1, "fn_one"),
+          siteAt("use.sql", use, 3, "fn_one"),
+        ].sort(),
+      );
+      expect(await gotoAt(project, "use.sql", use, 1, "fn_one")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 3, "fn_one")).toBe("schema.sql:1");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reaches a calling file in impact, not a file that only reads the table or mentions the name", async () => {
+    const schema = [
+      "CREATE TABLE users (id integer, email text);",
+      "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$",
+      "  SELECT lower(e)",
+      "$$ LANGUAGE sql;",
+    ];
+    const caller = ["SELECT normalize_email('A@B.C');"];
+    const reader = ["SELECT id FROM users;", "SELECT lower('x');"];
+    const lookalike = [
+      "SELECT normalize_email FROM contacts;",
+      "-- normalize_email(x)",
+      "SELECT 'normalize_email(x)';",
+    ];
+    const diff = (hunk: readonly string[]): string =>
+      ["diff --git a/schema.sql b/schema.sql", "--- a/schema.sql", "+++ b/schema.sql", ...hunk, ""].join("\n");
+    const files = { "schema.sql": schema, "caller.sql": caller, "reader.sql": reader, "lookalike.sql": lookalike };
+    await withSqlProject(files, async ({ root, index }) => {
+      const routineChange = await analyzeImpactFromDiff(root, index, {
+        provider: "raw",
+        diffText: diff(["@@ -3,1 +3,1 @@", "-  SELECT lower(e)", "+  SELECT lower(trim(e))"]),
+        includeTests: true,
+      });
+      const tableChange = await analyzeImpactFromDiff(root, index, {
+        provider: "raw",
+        diffText: diff([
+          "@@ -1,1 +1,1 @@",
+          "-CREATE TABLE users (id integer, email text);",
+          "+CREATE TABLE users (id bigint, email text);",
+        ]),
+        includeTests: true,
+      });
+      if ("files" in routineChange || "files" in tableChange) throw new Error("Expected full impact reports");
+
+      expect(routineChange.changedSymbols.map((symbol) => symbol.name)).toEqual(["normalize_email"]);
+      expect(routineChange.impacted.map((item) => item.file)).toEqual(["caller.sql"]);
+      expect(routineChange.impacted[0]).toMatchObject({ symbols: ["normalize_email"], reasons: ["directRef"] });
+      expect(tableChange.changedSymbols.map((symbol) => symbol.name)).toEqual(["users"]);
+      expect(tableChange.impacted.map((item) => item.file)).toEqual(["reader.sql"]);
+    });
+  });
+
+  it("edits routine call sites in a rename preview and leaves same-named lookalikes alone", async () => {
+    const schema = ["CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;"];
+    const report = [
+      "SELECT normalize_email(email) FROM users;",
+      "SELECT normalize_email FROM contacts;",
+      "SELECT 'normalize_email(x)';",
+    ];
+    await withSqlProject({ "schema.sql": schema, "report.sql": report }, async ({ root }) => {
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      try {
+        const symbols = await workspaceSymbolsWithSession(session, { root, query: "normalize_email" });
+        const target = symbols.symbols.find((symbol) => symbol.name === "normalize_email");
+        if (!target) throw new Error("Expected the routine symbol");
+
+        const preview = await previewRenameWithSession(session, {
+          root,
+          handle: target.handle,
+          newName: "normalize_address",
+        });
+
+        expect(
+          preview.edits.map((edit) => `${edit.file}:${edit.range.start.line}:${edit.range.start.column}`).sort(),
+        ).toEqual(
+          [
+            siteAt("schema.sql", schema, 1, "normalize_email"),
+            siteAt("report.sql", report, 1, "normalize_email"),
+          ].sort(),
+        );
+      } finally {
+        session.invalidate();
+      }
+    });
+  });
+
+  it("resolves refs at a call inside a trigger or routine body to the callee, not the enclosing definition", async () => {
+    const schema = [
+      "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;",
+      "CREATE FUNCTION touch_updated() RETURNS trigger AS $$ BEGIN NEW.e = normalize_email(NEW.e); RETURN NEW; END $$ LANGUAGE plpgsql;",
+      "CREATE TRIGGER users_touch BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION touch_updated();",
+    ];
+    await withSqlProject({ "schema.sql": schema }, async (project) => {
+      const triggerCallee = await referencesAt(project, "schema.sql", schema, 3, "touch_updated");
+      const bodyCallee = await referencesAt(project, "schema.sql", schema, 2, "normalize_email");
+      const triggerItself = await referencesAt(project, "schema.sql", schema, 3, "users_touch");
+
+      expect(okReferences(triggerCallee).definition.localName).toBe("touch_updated");
+      expect(referenceSites(project.root, triggerCallee)).toEqual(
+        [siteAt("schema.sql", schema, 2, "touch_updated"), siteAt("schema.sql", schema, 3, "touch_updated")].sort(),
+      );
+      expect(okReferences(bodyCallee).definition.localName).toBe("normalize_email");
+      expect(referenceSites(project.root, bodyCallee)).toEqual(
+        [siteAt("schema.sql", schema, 1, "normalize_email"), siteAt("schema.sql", schema, 2, "normalize_email")].sort(),
+      );
+      // The trigger's own name still finds the trigger.
+      expect(okReferences(triggerItself).definition.localName).toBe("users_touch");
+      expect(referenceSites(project.root, triggerItself)).toEqual([siteAt("schema.sql", schema, 3, "users_touch")]);
+    });
+  });
+
+  it("resolves refs at a table inside a view to the table, and keeps the enclosing definition for other positions", async () => {
+    const schema = [
+      "CREATE TABLE users (id integer, email text);",
+      "CREATE VIEW user_emails AS SELECT id, email FROM users;",
+    ];
+    const use = ["SELECT id FROM users;"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const tableInView = await referencesAt(project, "schema.sql", schema, 2, "users");
+      const column = await referencesAt(project, "schema.sql", schema, 1, "email");
+      const viewItself = await referencesAt(project, "schema.sql", schema, 2, "user_emails");
+      const tableSites = [
+        siteAt("schema.sql", schema, 1, "users"),
+        siteAt("schema.sql", schema, 2, "users"),
+        siteAt("use.sql", use, 1, "users"),
+      ].sort();
+
+      expect(okReferences(tableInView).definition.localName).toBe("users");
+      expect(referenceSites(project.root, tableInView)).toEqual(tableSites);
+      // A column name resolves to no object, so the position keeps the table that holds it.
+      expect(okReferences(column).definition.localName).toBe("users");
+      expect(referenceSites(project.root, column)).toEqual(tableSites);
+      // The view's own name still finds the view, without the table's references.
+      expect(okReferences(viewItself).definition.localName).toBe("user_emails");
+      expect(referenceSites(project.root, viewItself)).toEqual([siteAt("schema.sql", schema, 2, "user_emails")]);
+    });
   });
 });

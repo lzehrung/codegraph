@@ -624,13 +624,19 @@ async function findReferencesInternal(
     provenance = createNavigationProvenance("exact", "high");
   } else {
     const module = index.byFile.get(fileIdentityKey(req.file));
+    // A SQL definition spans its whole statement, so a position inside it can name another object: the
+    // function a trigger runs, a call in a routine body, or a table a view reads. Resolve that name first.
+    const sqlTarget = module ? await goToSqlDefinition(index, req) : null;
     const localAtPosition = module?.locals.find((local) =>
       rangeContains(local.range, {
         row: req.line,
         column: req.column,
       }),
     );
-    if (localAtPosition) {
+    if (sqlTarget?.status === "ok") {
+      def = sqlTarget.definition;
+      provenance = sqlTarget.provenance;
+    } else if (localAtPosition) {
       def = localAtPosition;
       provenance = createNavigationProvenance("exact", "high");
     } else {
