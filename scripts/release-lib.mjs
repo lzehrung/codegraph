@@ -195,6 +195,26 @@ export function assertChangelogPreparedForRelease(changelog, version) {
   }
 }
 
+export function extractChangelogSection(changelog, version) {
+  if (!isSemverLike(version)) {
+    throw new Error(`Unsupported release version: ${version}`);
+  }
+  const releaseHeading = `## [${version}] - `;
+  const lines = changelog.split(/\r?\n/);
+  const headingIndex = lines.findIndex((line) => line.startsWith(releaseHeading));
+  if (headingIndex < 0) {
+    return null;
+  }
+  const bodyLines = [];
+  for (const line of lines.slice(headingIndex + 1)) {
+    if (line.startsWith("## [") || /^\[[^\]]+\]: \S/.test(line)) {
+      break;
+    }
+    bodyLines.push(line);
+  }
+  return bodyLines.join("\n").trim();
+}
+
 export function isAllowedResumePath(filePath) {
   return managedReleasePaths.has(normalizeFilePath(filePath));
 }

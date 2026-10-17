@@ -862,7 +862,21 @@ jobs:
         run: |
           root_tag="v$ROOT_VERSION"
           release_notes=$(mktemp)
+          node --input-type=module <<'NODE' > "$release_notes"
+          import fs from "node:fs";
+          import { extractChangelogSection } from "./scripts/release-lib.mjs";
+
+          const changelog = fs.readFileSync("temp/release-changelog/CHANGELOG.md", "utf8");
+          const section = extractChangelogSection(changelog, process.env.ROOT_VERSION);
+          if (section === null) {
+            throw new Error(`CHANGELOG.md has no section for version ${process.env.ROOT_VERSION}.`);
+          }
+          process.stdout.write(`${section}\n`);
+          NODE
           {
+            echo ""
+            echo "---"
+            echo ""
             echo "Published certified packages:"
             echo ""
             echo "- \`@lzehrung/codegraph@$ROOT_VERSION\`"
@@ -870,7 +884,7 @@ jobs:
             echo "- \`@lzehrung/codegraph-native@$NATIVE_VERSION\`"
             echo ""
             echo "Standalone preview assets are built, smoked, and attached by the final release job."
-          } > "$release_notes"
+          } >> "$release_notes"
           gh release create "$root_tag" \
             temp/release-candidates/packages/*.tgz \
             temp/release-candidates/SHA256SUMS \

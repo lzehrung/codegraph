@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Changed
+
+- GitHub release descriptions now include the changelog section for the released version.
+
 ## [3.0.1] - 2026-10-17
 
 ### Added
