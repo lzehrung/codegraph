@@ -6,9 +6,9 @@ Scope: this counts only the dedicated per-language smoke files, not a language's
 
 Regenerate with `npm run bench:fixtures`. Verify it is current with `npm run bench:fixtures:check`.
 
-Generated: 2026-10-17T00:51:24.123Z (Node v22.16.0)
+Generated: 2026-10-17T01:06:09.000Z (Node v22.16.0)
 
-Total across the 29 language suites: 685 tests, 0 failed.
+Total across the 29 language suites: 686 tests, 0 failed.
 The tests/languages run also executed 95 tests in cross-language files that are not attributed to a language: `tests/languages/callable-consumer-matrix.test.ts`, `tests/languages/chunk-sfc.test.ts`, `tests/languages/cpp-module-incremental.test.ts`, `tests/languages/graph-captures.test.ts`, `tests/languages/import-from-captures.test.ts`, `tests/languages/query-hygiene.test.ts`.
 
 | Language         | Status  | Tests | Test file(s)                         |
@@ -37,7 +37,7 @@ The tests/languages run also executed 95 tests in cross-language files that are 
 | SQL              | passing | 8     | `tests/languages/sql.test.ts`        |
 | Svelte           | passing | 11    | `tests/languages/svelte.test.ts`     |
 | Swift            | passing | 19    | `tests/languages/swift.test.ts`      |
-| Terraform        | passing | 54    | `tests/languages/terraform.test.ts`  |
+| Terraform        | passing | 55    | `tests/languages/terraform.test.ts`  |
 | TSX              | passing | 11    | `tests/languages/tsx.test.ts`        |
 | TypeScript       | passing | 16    | `tests/languages/typescript.test.ts` |
 | Vue              | passing | 12    | `tests/languages/vue.test.ts`        |

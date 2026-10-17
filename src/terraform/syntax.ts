@@ -83,16 +83,36 @@ export type TerraformModuleObjectUse = {
 /** Blocks whose `from` and `to` hold resource addresses, not expressions. */
 const ADDRESS_BLOCKS = new Set(["import", "moved", "removed"]);
 
-function isResourceAddress(variable: SyntaxNodeLike): boolean {
+/** Blocks whose `depends_on` lists dependencies to order, not values to read. */
+const DEPENDS_ON_BLOCKS = new Set(["resource", "data", "module", "output"]);
+
+/**
+ * True when `variable` sits in a meta-argument named one of `attributeNames` of a top-level block
+ * whose type is in `blockTypes`. The nearest enclosing attribute decides, so a nested attribute
+ * that reuses the name does not match.
+ */
+function isBlockMetaArgument(
+  variable: SyntaxNodeLike,
+  attributeNames: readonly string[],
+  blockTypes: ReadonlySet<string>,
+): boolean {
   for (let node = variable.parent; node; node = node.parent) {
     if (node.type !== "attribute") continue;
     const name = attributeNameNode(node)?.text;
     const block = node.parent?.parent;
     return (
-      (name === "to" || name === "from") && block?.type === "block" && ADDRESS_BLOCKS.has(blockTypeName(block) ?? "")
+      name !== undefined &&
+      attributeNames.includes(name) &&
+      block?.type === "block" &&
+      isTopLevelBlock(block) &&
+      blockTypes.has(blockTypeName(block) ?? "")
     );
   }
   return false;
+}
+
+function isResourceAddress(variable: SyntaxNodeLike): boolean {
+  return isBlockMetaArgument(variable, ["to", "from"], ADDRESS_BLOCKS);
 }
 
 /** A `check` block and the `<type>.<name>` addresses of the data sources it declares for itself. */
@@ -470,7 +490,10 @@ function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): 
     // `module.m[*].out` reads `out` from each instance through a splat.
     const output = attribute ?? (next === steps.length ? splatAttribute(end) : undefined);
     if (!output) {
-      facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName) });
+      // `depends_on = [module.net]` orders the call; it reads no output.
+      if (!isBlockMetaArgument(variable, ["depends_on"], DEPENDS_ON_BLOCKS)) {
+        facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName) });
+      }
       return;
     }
     const selection: TerraformOutputSelection = { indexes: next - 1, splat: !attribute };

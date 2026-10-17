@@ -491,6 +491,38 @@ describe("Terraform references", () => {
       expect(rename.safe).toBe(false);
     });
   });
+
+  it("does not count a depends_on module dependency as reading its outputs", async () => {
+    await withCopiedFixture(fixtureRoot, async (root) => {
+      await fsp.writeFile(
+        path.join(root, "order.tf"),
+        'resource "null_resource" "after" {\n  depends_on = [module.network]\n}\n',
+        "utf8",
+      );
+      const vpcIdCoverage = async () => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const references = await findReferences(
+          index,
+          await positionOf(root, "modules/network/outputs.tf", '"vpc_id"', 1),
+        );
+        return references.status === "ok" ? references.referenceCoverage?.state : references.status;
+      };
+      expect(await vpcIdCoverage()).toBe("complete");
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "vpc_id" });
+      const output = symbols.symbols.find((symbol) => symbol.location.file === "modules/network/outputs.tf");
+      const rename = await previewRenameWithSession(session, { root, handle: output!.handle, newName: "network_id" });
+      expect(rename.safe).toBe(true);
+
+      // A nested key that only shares the name still holds the whole module value.
+      await fsp.writeFile(
+        path.join(root, "nested.tf"),
+        "locals {\n  settings = { depends_on = module.network }\n}\n",
+        "utf8",
+      );
+      expect(await vpcIdCoverage()).toBe("partial");
+    });
+  });
 });
 
 describe("Terraform edge forms", () => {
