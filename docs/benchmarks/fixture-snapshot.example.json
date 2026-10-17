@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-17T00:08:41.852Z",
+  "generatedAt": "2026-10-17T00:32:37.666Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 681,
+  "numTotalTests": 682,
   "numFailedTests": 0,
   "languages": [
     {
@@ -275,8 +275,8 @@
       "files": [
         "tests/languages/terraform.test.ts"
       ],
-      "tests": 50,
-      "passed": 50,
+      "tests": 51,
+      "passed": 51,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

@@ -8,9 +8,13 @@ import { calculateTransitiveSeverity, selectStrongerImpactReason } from "./sever
 
 type ImpactEmitter = (item: ImpactItem, phase: "partial" | "final") => void;
 
-function getDependentFiles(index: ProjectIndex, filePath: FileId, reverseDeps?: Map<FileId, Edge[]>): FileId[] {
+/** Incoming file edges by `fileIdentityKey`; impact may derive some edges lazily. */
+export type ReverseDependencyLookup = { get(fileKey: string): readonly Edge[] | undefined };
+
+function getDependentFiles(index: ProjectIndex, filePath: FileId, reverseDeps?: ReverseDependencyLookup): FileId[] {
   if (reverseDeps) {
-    return reverseDeps.get(fileIdentityKey(filePath))?.map((edge) => edge.from) ?? [];
+    const key = fileIdentityKey(filePath);
+    return (reverseDeps.get(key) ?? []).flatMap((edge) => (fileIdentityKey(edge.from) === key ? [] : [edge.from]));
   }
   return index.graph.edges
     .filter((edge) => edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(filePath))
@@ -22,7 +26,7 @@ export function seedTransitiveFromFiles(
   impacted: Map<FileId, ImpactItem>,
   changedFiles: FileChange[],
   options: Partial<ImpactOptions> & { projectRoot?: string },
-  reverseDeps?: Map<FileId, Edge[]>,
+  reverseDeps?: ReverseDependencyLookup,
   emitImpactItem?: ImpactEmitter,
 ): void {
   const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
@@ -128,7 +132,7 @@ export function analyzeTransitiveImpact(
   maxDepth: number,
   options: Partial<ImpactOptions> & { projectRoot?: string },
   isIndexTestFile: (file: FileId) => boolean,
-  reverseDeps: Map<FileId, Edge[]>,
+  reverseDeps: ReverseDependencyLookup,
   emitImpactItem?: ImpactEmitter,
 ): void {
   const { ignoreGlobs = [] } = options;
@@ -144,28 +148,35 @@ export function analyzeTransitiveImpact(
     queue.push({ file, depth: seedDepth, reason: "transitive" });
   }
 
+  // Dependents repeat across edges (a Terraform module is a clique), so decide exclusion once per file.
+  const excludedByFile = new Map<string, boolean>();
+  const isExcluded = (file: FileId, fileKey: string): boolean => {
+    let excluded = excludedByFile.get(fileKey);
+    if (excluded === undefined) {
+      excluded = (!options.includeTests && isIndexTestFile(file)) || isIgnored(file);
+      excludedByFile.set(fileKey, excluded);
+    }
+    return excluded;
+  };
+
   let qi = 0;
   while (qi < queue.length) {
     const { file, depth, reason } = queue[qi++]!;
     if (depth >= maxDepth) continue;
-    const edgesIn = reverseDeps.get(fileIdentityKey(file)) || [];
+    const fileKey = fileIdentityKey(file);
+    const edgesIn = reverseDeps.get(fileKey) || [];
+    const upstreamConfidence = impacted.get(file)?.confidence ?? 0.6;
     for (const edge of edgesIn) {
       const dependentFile = edge.from;
-      if ((!options.includeTests && isIndexTestFile(dependentFile)) || isIgnored(dependentFile)) {
-        continue;
-      }
+      const dependentKey = fileIdentityKey(dependentFile);
+      if (dependentKey === fileKey || isExcluded(dependentFile, dependentKey)) continue;
 
       const nextDepth = depth + 1;
       const knownDepth = bestDepth.get(dependentFile);
       const existing = impacted.get(dependentFile);
-      const reasons = [...(existing?.reasons ?? [])];
-      const addsReason = !reasons.includes(reason);
-      if (addsReason) {
-        reasons.push(reason);
-      }
+      const addsReason = !existing?.reasons.includes(reason);
 
       const severity = calculateTransitiveSeverity(edge, nextDepth, options.severityWeights);
-      const upstreamConfidence = impacted.get(file)?.confidence ?? 0.6;
       const nextConfidence = Math.max(
         0.2,
         Math.min(1, upstreamConfidence * (edge.typeOnly ? 0.75 : 0.85) * Math.pow(0.95, depth)),
@@ -177,7 +188,10 @@ export function analyzeTransitiveImpact(
       if (!improvesDepth && !improvesStrength) {
         continue;
       }
-      const fanIn = reverseDeps.get(fileIdentityKey(dependentFile))?.length || 0;
+      const reasons = [...(existing?.reasons ?? [])];
+      if (addsReason) reasons.push(reason);
+      const incoming = reverseDeps.get(dependentKey) ?? [];
+      const fanIn = incoming.length - (incoming.some((incomingEdge) => incomingEdge.from === dependentFile) ? 1 : 0);
       const resolvedDepth = improvesDepth ? nextDepth : Math.min(existing?.depth ?? nextDepth, nextDepth);
 
       const bestReason = selectStrongerImpactReason(existing?.explain?.reason, reason);

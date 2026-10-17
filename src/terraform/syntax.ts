@@ -68,15 +68,16 @@ export type TerraformReferenceSite = {
 /**
  * A module call value that may read any of its outputs: a whole value (`module.net`) has no
  * `selection`; an output site carries its `selection`, which reads something other than the named
- * output when it does not match the call's instancing. An `address` use is a resource address in
- * `import`, `moved`, or `removed` (`module.net.aws_instance.web`), which names a resource or data
- * source of the called module rather than an output.
+ * output when it does not match the call's instancing. An `addressChain` use is a resource address
+ * in `import`, `moved`, or `removed`, such as `module.parent.module.child.aws_instance.web`; the
+ * chain lists its module call names (`["parent", "child"]`), and the address names those nested
+ * calls and a resource or data source of the last called module rather than an output.
  */
 export type TerraformModuleObjectUse = {
   module: string;
   range: Range;
   selection?: TerraformOutputSelection;
-  address?: true;
+  addressChain?: string[];
 };
 
 /** Blocks whose `from` and `to` hold resource addresses, not expressions. */
@@ -451,7 +452,16 @@ function collectReference(variable: SyntaxNodeLike, facts: TerraformFileFacts): 
     if (!moduleName) return;
     push(moduleName, { kind: "module", name: moduleName.text });
     if (isResourceAddress(variable)) {
-      facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName), address: true });
+      const addressChain = [moduleName.text];
+      let step = 1;
+      for (;;) {
+        while (steps[step]?.kind === "index") step += 1;
+        const nested = firstAttribute(steps, step + 1);
+        if (firstAttribute(steps, step)?.text !== "module" || !nested) break;
+        addressChain.push(nested.text);
+        step += 2;
+      }
+      facts.moduleObjectUses.push({ module: moduleName.text, range: toRange(moduleName), addressChain });
       return;
     }
     let next = 1;

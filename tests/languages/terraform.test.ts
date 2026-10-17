@@ -970,4 +970,45 @@ describe("Terraform edge forms", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps declarations a nested module address names partial, and unrelated ones complete", async () => {
+    const root = await createTempProjectRoot("cg-terraform-nested-address-", [
+      {
+        path: "main.tf",
+        contents: [
+          'module "parent" {',
+          '  source = "./parent"',
+          "}",
+          "import {",
+          "  to = module.parent.module.child.aws_instance.web",
+          '  id = "i-1"',
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        path: "parent/main.tf",
+        contents: 'module "child" {\n  source = "./child"\n}\nmodule "other" {\n  source = "./other"\n}\n',
+      },
+      { path: "parent/child/main.tf", contents: 'resource "aws_instance" "web" {}\n' },
+      // Same resource address in a module the chain does not reach.
+      { path: "parent/other/main.tf", contents: 'resource "aws_instance" "web" {}\n' },
+    ]);
+    try {
+      const index = await buildProjectIndex(root);
+      const coverage = async (file: string, needle: string) =>
+        (await referenceSummary(index, root, file, needle))?.coverage;
+      expect(await coverage("parent/child/main.tf", '"web"')).toBe("partial");
+      expect(await coverage("parent/main.tf", '"child"')).toBe("partial");
+      expect(await coverage("parent/other/main.tf", '"web"')).toBe("complete");
+      expect(await coverage("parent/main.tf", '"other"')).toBe("complete");
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "child" });
+      const child = symbols.symbols.find((symbol) => symbol.kind === "module");
+      const rename = await previewRenameWithSession(session, { root, handle: child!.handle, newName: "inner" });
+      expect(rename.safe).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

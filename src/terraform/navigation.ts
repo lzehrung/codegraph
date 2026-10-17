@@ -15,6 +15,7 @@ import {
   isTerraformFile,
   resolveTerraformTarget,
   TERRAFORM_LANGUAGE_ID,
+  terraformAddressMayName,
   terraformDeclarationForDefinition,
   terraformFactsForFile,
   terraformModuleCallerFiles,
@@ -52,6 +53,9 @@ function siteKey(file: FileId, range: Range): string {
   return `${fileIdentityKey(file)}:${range.start.line}:${range.start.column}`;
 }
 
+/** Declarations another module can name: inputs, outputs, and what a resource address names. */
+const CROSS_MODULE_KINDS = new Set(["variable", "output", "module", "resource", "data"]);
+
 /**
  * References to a Terraform declaration, or null for other languages. Candidates are the files
  * of the declaring module plus, for input variables and outputs, the files that call that module
@@ -67,12 +71,15 @@ export async function findTerraformReferences(
   const declaration = await terraformDeclarationForDefinition(index, def);
   const candidateFiles = terraformModuleFiles(index, def.file);
   const unavailableFiles: FileId[] = [];
-  // Callers name inputs and outputs, and resource addresses name resources and data sources.
-  if (declaration && ["variable", "output", "resource", "data"].includes(declaration.kind)) {
+  if (declaration && CROSS_MODULE_KINDS.has(declaration.kind)) {
     const callers = await terraformModuleCallerFiles(index, def);
-    // A file whose facts cannot load may call this module, so its caller edits are unproven.
+    // A file whose facts cannot load may call this module or hold an address, so it is unproven.
     unavailableFiles.push(...callers.unavailable);
-    for (const caller of callers.files) {
+    // Callers name inputs and outputs; a resource address anywhere can name nested module calls,
+    // resources, and data sources.
+    const callerFiles = declaration.kind === "variable" || declaration.kind === "output" ? callers.files : [];
+    const addressFiles = declaration.kind === "variable" || declaration.kind === "output" ? [] : callers.addressFiles;
+    for (const caller of [...callerFiles, ...addressFiles]) {
       if (!candidateFiles.some((file) => fileIdentityKey(file) === fileIdentityKey(caller))) {
         candidateFiles.push(caller);
       }
@@ -117,11 +124,14 @@ export async function findTerraformReferences(
       }
     }
     // A whole module value (`module.net`), or indexes that do not fit the call's instancing, may
-    // read this output without naming it; a resource address names a resource or data source.
-    const namesResources = declaration?.kind === "resource" || declaration?.kind === "data";
+    // read this output without naming it; a resource address can name a nested module call, a
+    // resource, or a data source that references cannot rewrite yet.
     for (const use of facts.moduleObjectUses) {
-      if (use.address ? !namesResources : declaration?.kind !== "output") continue;
-      if (await terraformModuleUseTargetsDefinition(index, file, use, def)) unprovenUse = true;
+      if (use.addressChain) {
+        if (await terraformAddressMayName(index, file, use.addressChain, def, declaration?.kind)) unprovenUse = true;
+      } else if (declaration?.kind === "output") {
+        if (await terraformModuleUseTargetsDefinition(index, file, use, def)) unprovenUse = true;
+      }
     }
     if (unprovenUse) unavailableFiles.push(file);
   }

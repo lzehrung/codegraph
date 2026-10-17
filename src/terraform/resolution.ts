@@ -369,15 +369,17 @@ export async function isTerraformReservedRename(
 /**
  * Files outside the declaring module that can reference a declaration: every file of each module
  * that calls the declaring directory through a local source. Call arguments name input variables,
- * and `module.<name>.<output>` can appear in any file of the calling module. `unavailable` lists
- * files whose facts could not be loaded, so whether they call the module is unknown.
+ * and `module.<name>.<output>` can appear in any file of the calling module. `addressFiles` lists
+ * every file that holds a module resource address, which can name nested calls at any depth.
+ * `unavailable` lists files whose facts could not be loaded, so what they name is unknown.
  */
 export async function terraformModuleCallerFiles(
   index: ProjectIndex,
   def: SymbolDef,
-): Promise<{ files: FileId[]; unavailable: FileId[] }> {
+): Promise<{ files: FileId[]; addressFiles: FileId[]; unavailable: FileId[] }> {
   const directoryKey = fileIdentityKey(path.dirname(def.file));
   const callers = new Map<string, FileId>();
+  const addressFiles: FileId[] = [];
   const unavailable: FileId[] = [];
   for (const file of indexedTerraformFiles(index)) {
     const facts = await terraformFactsForFile(index, file);
@@ -385,6 +387,7 @@ export async function terraformModuleCallerFiles(
       unavailable.push(file);
       continue;
     }
+    if (facts.moduleObjectUses.some((use) => use.addressChain)) addressFiles.push(file);
     const callsDirectory = facts.declarations.some((declaration) => {
       if (declaration.kind !== "module" || declaration.source === undefined) return false;
       const directory = terraformLocalModuleDirectory(file, declaration.source);
@@ -393,5 +396,35 @@ export async function terraformModuleCallerFiles(
     if (!callsDirectory) continue;
     for (const peer of terraformModuleFiles(index, file)) callers.set(fileIdentityKey(peer), peer);
   }
-  return { files: [...callers.values()], unavailable };
+  return { files: [...callers.values()], addressFiles, unavailable };
+}
+
+/**
+ * True when a module resource address written in `file` may name `def`: a nested module call in
+ * its chain, or a resource or data source of the last called module. Each chain segment resolves
+ * in the module the previous segment calls.
+ */
+export async function terraformAddressMayName(
+  index: ProjectIndex,
+  file: FileId,
+  chain: readonly string[],
+  def: SymbolDef,
+  kind: TerraformDeclarationKind | undefined,
+): Promise<boolean> {
+  let from: FileId | undefined = file;
+  for (const [position, moduleName] of chain.entries()) {
+    if (!from) return false;
+    const called = await calledModuleDirectory(index, from, moduleName);
+    if (called.status !== "ok") {
+      if (kind === "resource" || kind === "data") return terraformResolutionMayName(called, def, () => false);
+      return false;
+    }
+    const nextModule = chain[position + 1];
+    if (nextModule === undefined) {
+      return (kind === "resource" || kind === "data") && isModuleDirectoryOf(called.directory, def);
+    }
+    if (kind === "module" && nextModule === def.localName && isModuleDirectoryOf(called.directory, def)) return true;
+    from = indexedTerraformFileInDirectory(index, called.directory);
+  }
+  return false;
 }
