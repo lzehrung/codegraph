@@ -164,6 +164,50 @@ describe("SQL fact extraction", () => {
     ]);
   });
 
+  /** The distinct statement texts of a file, in order. */
+  function statementTexts(file: string, lines: readonly string[]): string[] {
+    return Array.from(new Set(extractSqlFactsFromSource(file, lines.join("\n")).map((fact) => fact.statementText)));
+  }
+
+  it.each([
+    [
+      "a statement inside a nested comment",
+      ["/* outer /* inner */ SELECT 1 FROM hidden; */", "SELECT 2 FROM shown;"],
+      ["SELECT 2 FROM shown"],
+    ],
+    ["a glob in a comment", ["/* files: src/**/*.sql */", "SELECT 2 FROM shown;"], ["SELECT 2 FROM shown"]],
+    [
+      "a quote inside a nested comment",
+      ["/* outer /* inner */ it's hidden; */", "SELECT 2 FROM shown;"],
+      ["SELECT 2 FROM shown"],
+    ],
+    [
+      "a GO line inside a nested comment",
+      ["SELECT 1 FROM before;", "/* outer /* inner */", "GO", "SELECT 2 FROM hidden; */", "SELECT 3 FROM shown;"],
+      ["SELECT 1 FROM before", "SELECT 3 FROM shown"],
+    ],
+  ])("reads no statement from %s", (_label, lines, expected) => {
+    expect(statementTexts("nested.sql", lines)).toEqual(expected);
+  });
+
+  it("keeps the position of a statement after a nested comment", () => {
+    const facts = extractSqlFactsFromSource(
+      "nested.sql",
+      ["/* outer", "   /* inner */", "   still a comment */", "SELECT 2 FROM shown;"].join("\n"),
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({ kind: "reads_from", objectName: "shown", startLine: 4, startColumn: 1 }),
+    ]);
+  });
+
+  it("ends a comment at its first closing delimiter when nesting would leave it open, as MySQL and SQLite do", () => {
+    expect(statementTexts("mysql.sql", ["/* see /* below */ SELECT 1 FROM one;", "SELECT 2 FROM two;"])).toEqual([
+      "SELECT 1 FROM one",
+      "SELECT 2 FROM two",
+    ]);
+  });
+
   it("splits T-SQL GO batches without splitting BEGIN and END bodies", async () => {
     const filePath = path.join(fixtureRoot, "tsql_batches.sql");
     const facts = extractSqlFactsFromSource(filePath, await readFixture("tsql_batches.sql"));

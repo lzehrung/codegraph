@@ -33,6 +33,7 @@ import {
 import { sqlDefinedNameSpan, sqlObjectMentionCovers } from "./object-mentions.js";
 import {
   findSqlRoutineMentions,
+  findSqlRoutineSources,
   sqlRoutineDefinitionNamespace,
   sqlStatementDropsRoutine,
   type SqlRoutineMention,
@@ -289,8 +290,40 @@ function unambiguousSqlPrefixDefinitionName(lookup: SqlDefinitionLookup, objectN
   return null;
 }
 
+const NO_ROUTINE_SOURCE_NAMES: ReadonlySet<string> = new Set();
+
+/**
+ * Lookup keys of the names that a routine called as a source answers to in the statement: its alias, or
+ * its own name when it has none. In `SELECT get_users.id FROM get_users()`, `get_users` names the
+ * routine's result, not a table of that name. A bare `name(` is such a source only when an indexed
+ * routine has that name: `FROM users (NOLOCK)` has the same shape.
+ */
+function routineSourceNames(lookups: SqlRoutineLookups, statementText: string): ReadonlySet<string> {
+  if (!lookups.namespaceByDefinition.size) return NO_ROUTINE_SOURCE_NAMES;
+  const names = new Set<string>();
+  for (const { mention, alias } of findSqlRoutineSources(statementText)) {
+    if (!routineCandidates(lookups, mention).length) continue;
+    if (alias) {
+      names.add(sqlObjectLookupKey(alias));
+    } else {
+      names.add(sqlObjectLookupKey(mention.name));
+      names.add(sqlObjectBaseNameLookupKey(mention.name));
+    }
+  }
+  return names;
+}
+
+/** True when a qualifier of the dotted name, such as `a` or `a.b` in `a.b.c`, names a routine source. */
+function qualifierNamesRoutineSource(sourceNames: ReadonlySet<string>, parts: readonly string[]): boolean {
+  for (let partCount = parts.length - 1; partCount >= 1; partCount -= 1) {
+    if (sourceNames.has(sqlObjectLookupKey(parts.slice(0, partCount).join(".")))) return true;
+  }
+  return false;
+}
+
 function resolveQualifiedSqlName(
   lookup: SqlDefinitionLookup,
+  routineLookups: SqlRoutineLookups,
   name: string,
   statementText: string | null,
 ): string | null {
@@ -302,6 +335,8 @@ function resolveQualifiedSqlName(
   if (statementText) {
     const maskedStatementText = maskSqlStringsAndComments(statementText);
     if (cteNamesForStatement(maskedStatementText).has(sqlObjectLookupKey(firstPart))) return null;
+    // A qualifier that names a routine in a `FROM` list belongs to that routine, not to a relation.
+    if (qualifierNamesRoutineSource(routineSourceNames(routineLookups, statementText), parts)) return null;
     const aliasTarget = sqlAliasMapForStatement(maskedStatementText).get(sqlObjectLookupKey(firstPart));
     if (aliasTarget && sqlDefinitionsFromLookup(lookup, aliasTarget).length) return aliasTarget;
   }
@@ -375,6 +410,7 @@ function factReferenceRanges(
 
 function qualifiedReferenceRanges(
   lookup: SqlDefinitionLookup,
+  routineLookups: SqlRoutineLookups,
   statement: SqlStatementNavigationSlice,
   definition: SymbolDef,
   claimedStarts?: ReadonlySet<number>,
@@ -383,6 +419,7 @@ function qualifiedReferenceRanges(
   const maskedStatementText = maskSqlStringsAndComments(statement.text);
   const aliases = sqlAliasMapForStatement(maskedStatementText);
   const cteNames = cteNamesForStatement(maskedStatementText);
+  let sourceNames: ReadonlySet<string> | undefined;
   for (const match of maskedStatementText.matchAll(SQL_DOTTED_TOKEN_RE)) {
     const offset = match.index ?? 0;
     if (claimedStarts?.has(offset)) continue;
@@ -393,6 +430,9 @@ function qualifiedReferenceRanges(
     const firstPart = parts[0];
     if (!firstPart) continue;
     if (cteNames.has(sqlObjectLookupKey(firstPart))) continue;
+    // A qualifier that names a routine in a `FROM` list belongs to that routine, not to a relation.
+    sourceNames ??= routineSourceNames(routineLookups, statement.text);
+    if (qualifierNamesRoutineSource(sourceNames, parts)) continue;
     const aliasTarget = aliases.get(sqlObjectLookupKey(firstPart));
     const matchesAlias = aliasTarget ? sqlNameResolvesToDefinition(lookup, aliasTarget, definition) : false;
     let matchesPrefix = false;
@@ -625,7 +665,7 @@ export async function goToSqlDefinition(index: ProjectIndex, req: GoToRequest): 
   const statement = sqlStatementAtLine(facts, req.line);
   const name = wordAtPosition(source, req.line, req.column);
   if (!name) return { status: "not_found", reason: "No SQL object at position" };
-  const resolvedName = resolveQualifiedSqlName(lookup, name, statement?.text ?? null);
+  const resolvedName = resolveQualifiedSqlName(lookup, routineLookups, name, statement?.text ?? null);
   if (!resolvedName) return { status: "not_found", reason: "No matching SQL object definition" };
   const definitions = sqlDefinitionsFromLookup(lookup, resolvedName);
   const preferred = preferredSqlDefinition(definitions, normalizePath(req.file));
@@ -757,7 +797,7 @@ export async function findSqlReferences(
       if (hasReachedCollectionLimit()) break;
       if (sqlStatementDropsRoutine(statement.text)) continue;
       const claimed = claimedStarts?.get(`${statement.startLine}:${statement.startColumn}`);
-      for (const range of qualifiedReferenceRanges(lookup, statement, definition, claimed)) {
+      for (const range of qualifiedReferenceRanges(lookup, routineLookups, statement, definition, claimed)) {
         addReference(file, range);
       }
     }

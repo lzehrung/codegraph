@@ -112,7 +112,13 @@ function statementSlice(
   };
 }
 
-function splitSqlStatements(source: string): SqlStatementSlice[] {
+type SqlStatementScan = { statements: SqlStatementSlice[]; endsInBlockComment: boolean };
+
+/**
+ * Splits SQL text into statements. PostgreSQL and SQL Server let a block comment hold block comments,
+ * which `nestedComments` reads. Without it, a block comment ends at its first closing delimiter.
+ */
+function scanSqlStatements(source: string, nestedComments: boolean): SqlStatementScan {
   const statements: SqlStatementSlice[] = [];
   const lineStarts = lineStartsFor(source);
   let start = 0;
@@ -125,7 +131,7 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
   let backtickQuoted = false;
   let bracketQuoted = false;
   let lineComment = false;
-  let blockComment = false;
+  let commentDepth = 0;
   let dollarQuote: string | null = null;
 
   const pushStatement = (end: number, nextStart = end + 1): void => {
@@ -154,11 +160,16 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
       continue;
     }
 
-    if (blockComment) {
-      if (char === "*" && next === "/") {
-        blockComment = false;
+    if (commentDepth) {
+      if (nestedComments && char === "/" && next === "*") {
+        commentDepth += 1;
         i += 2;
-        if (lookingForStatementStart) {
+        continue;
+      }
+      if (char === "*" && next === "/") {
+        commentDepth -= 1;
+        i += 2;
+        if (!commentDepth && lookingForStatementStart) {
           start = i;
         }
         continue;
@@ -198,7 +209,7 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
         continue;
       }
       if (char === "/" && next === "*") {
-        blockComment = true;
+        commentDepth = 1;
         i += 2;
         continue;
       }
@@ -254,7 +265,7 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
       continue;
     }
     if (char === "/" && next === "*") {
-      blockComment = true;
+      commentDepth = 1;
       i += 2;
       continue;
     }
@@ -305,7 +316,17 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
 
   const tail = statementSlice(source, lineStarts, start, source.length);
   if (tail) statements.push(tail);
-  return statements;
+  return { statements, endsInBlockComment: commentDepth > 0 };
+}
+
+/**
+ * PostgreSQL and SQL Server nest block comments; MySQL, SQLite, and Oracle end one at its first closing
+ * delimiter, and the text does not say which it is. It reads as nested unless a comment then never
+ * closes, which no PostgreSQL or SQL Server text does. Such text reads the way MySQL does.
+ */
+function splitSqlStatements(source: string): SqlStatementSlice[] {
+  const nested = scanSqlStatements(source, true);
+  return nested.endsInBlockComment ? scanSqlStatements(source, false).statements : nested.statements;
 }
 
 const SQL_OBJECT_MODIFIERS = new Set(["lateral", "only"]);

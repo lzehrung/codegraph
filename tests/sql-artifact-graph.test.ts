@@ -1213,6 +1213,7 @@ describe("SQL artifact graph", () => {
       const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
       const schema = file("schema.sql");
       const column = file("column.sql");
+      const commented = file("commented.sql");
       const call = file("call.sql");
       await fsp.writeFile(
         schema,
@@ -1223,9 +1224,19 @@ describe("SQL artifact graph", () => {
         "utf8",
       );
       await fsp.writeFile(column, "SELECT id, call audit_user FROM contacts;\n", "utf8");
+      await fsp.writeFile(
+        commented,
+        [
+          "SELECT /* note */ call audit_user FROM contacts;",
+          "SELECT id, -- note",
+          "  call audit_user FROM contacts;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
       await fsp.writeFile(call, "CALL audit_user();\n", "utf8");
 
-      const sourceGraph = await collectGraph(root, [schema, column, call]);
+      const sourceGraph = await collectGraph(root, [schema, column, commented, call]);
       const rawBetween = (from: string): string[] =>
         sourceGraph.edges
           .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
@@ -1233,7 +1244,38 @@ describe("SQL artifact graph", () => {
           .sort();
 
       expect(rawBetween(column)).toEqual(["sql:reads_from:contacts"]);
+      // A comment between the keyword and the token before it does not make the column a call.
+      expect(rawBetween(commented)).toEqual(["sql:reads_from:contacts"]);
       expect(rawBetween(call)).toEqual(["sql:reads_from:callable:audit_user"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not link a call inside a nested block comment, and links the call after the comment", async () => {
+    const root = await mkTmpDir("cg-sql-nested-comment-");
+    try {
+      const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+      const schema = file("schema.sql");
+      const hidden = file("hidden.sql");
+      const visible = file("visible.sql");
+      await fsp.writeFile(
+        schema,
+        "CREATE FUNCTION norm(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;\n",
+        "utf8",
+      );
+      await fsp.writeFile(hidden, "/* outer /* inner */ SELECT norm(1); */\n", "utf8");
+      await fsp.writeFile(visible, "/* outer /* inner */ SELECT norm(1); */\nSELECT norm(2);\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schema, hidden, visible]);
+      const rawBetween = (from: string): string[] =>
+        sourceGraph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+
+      expect(rawBetween(hidden)).toEqual([]);
+      expect(rawBetween(visible)).toEqual(["sql:reads_from:callable:norm"]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

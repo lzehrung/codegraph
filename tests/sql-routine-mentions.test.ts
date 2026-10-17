@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   findSqlRoutineMentions,
+  findSqlRoutineSources,
   sqlRoutineDefinitionNamespace,
   sqlStatementDropsRoutine,
 } from "../src/sql/routine-mentions.js";
@@ -503,6 +504,14 @@ describe("SQL routine mentions", () => {
     ["in parentheses", "SELECT (call audit_user) FROM contacts"],
     ["in an INSERT query", "INSERT INTO t SELECT call audit_user FROM c"],
     ["after UNION", "SELECT 1 UNION SELECT call audit_user FROM c"],
+    ["after SELECT and a block comment", "SELECT /* note */ call audit_user FROM contacts"],
+    ["after SELECT and a line comment", "SELECT -- note\n call audit_user FROM contacts"],
+    ["after SELECT and two comments", "SELECT /* a */ /* b */ call audit_user FROM contacts"],
+    ["after SELECT and a nested comment", "SELECT /* a /* b */ c */ call audit_user FROM contacts"],
+    ["after a comma and a block comment", "SELECT id, /* note */ call audit_user FROM contacts"],
+    ["after a comma and a line comment", "SELECT id, -- note\n call audit_user FROM contacts"],
+    ["after DISTINCT and a comment", "SELECT DISTINCT /* note */ exec audit_user FROM contacts"],
+    ["in parentheses after a comment", "SELECT (/* note */ call audit_user) FROM contacts"],
   ])("does not read a column named like CALL as a call: %s", (_label, statement) => {
     expect(callMentions(statement).map((call) => call.text)).not.toContain("audit_user");
   });
@@ -520,6 +529,12 @@ describe("SQL routine mentions", () => {
     ["INSERT ... EXEC after a column list", "INSERT INTO t (a) EXEC audit_user 1"],
     ["a MySQL trigger", "CREATE TRIGGER t AFTER INSERT ON u FOR EACH ROW CALL audit_user()"],
     ["a procedure whose body is one statement", "CREATE PROCEDURE dbo.p AS EXEC audit_user"],
+    ["a leading comment", "/* note */ CALL audit_user(1)"],
+    ["a begin block after a comment", "CREATE PROCEDURE w() BEGIN /* note */ CALL audit_user(); END"],
+    ["a T-SQL batch after a string and a comment", "SELECT 'done' /* note */\nEXEC audit_user 1"],
+    ["a T-SQL batch after a comment that holds a comma", "SELECT a /* , */\nEXEC audit_user 1"],
+    ["a T-SQL batch after a comment that holds SELECT", "SELECT a /* select */\nEXEC audit_user 1"],
+    ["a T-SQL batch after a line comment", "SELECT a, b -- note\nEXEC audit_user 1"],
   ])("keeps a CALL or EXEC in %s as a certain call", (_label, statement) => {
     expect(callMentions(statement)).toEqual([{ text: "audit_user", speculative: false }]);
   });
@@ -547,5 +562,53 @@ describe("SQL routine mentions", () => {
     ["CREATE TRIGGER t BEFORE UPDATE ON u FOR EACH ROW EXECUTE FUNCTION f()", "trigger"],
   ])("puts the routine defined by %s in the %s name space", (statement, namespace) => {
     expect(sqlRoutineDefinitionNamespace(statement)).toBe(namespace);
+  });
+});
+
+describe("SQL routine sources", () => {
+  /** `[name, alias]` for each routine the statement calls as a source, with the name as written. */
+  function describeSources(statement: string): Array<[string, string | null]> {
+    return findSqlRoutineSources(statement).map(({ mention, alias }) => [
+      statement.slice(mention.start, mention.end),
+      alias,
+    ]);
+  }
+
+  it.each([
+    ["a function", "SELECT * FROM get_users()", [["get_users", null]]],
+    ["a function with an alias", "SELECT * FROM get_users() AS u", [["get_users", "u"]]],
+    ["a function with an alias and no AS", "SELECT * FROM get_users() u", [["get_users", "u"]]],
+    ["an alias with a column list", "SELECT * FROM get_users() u(id, name)", [["get_users", "u"]]],
+    ["WITH ORDINALITY", "SELECT * FROM unnest(a) WITH ORDINALITY AS t(x, n)", [["unnest", "t"]]],
+    ["a schema-qualified function", "SELECT * FROM public.get_users(1)", [["public.get_users", null]]],
+    ["a JOIN", "SELECT * FROM a JOIN get_users() ON true", [["get_users", null]]],
+    ["a LATERAL source", "SELECT * FROM a, LATERAL get_users(a.id) AS l", [["get_users", "l"]]],
+    ["a T-SQL APPLY", "SELECT * FROM a CROSS APPLY dbo.fn(a.id) AS f", [["dbo.fn", "f"]]],
+    ["a source in a subquery", "SELECT * FROM (SELECT * FROM get_users()) s", [["get_users", null]]],
+    [
+      "every source of a list",
+      "SELECT * FROM a(), b() y, c",
+      [
+        ["a", null],
+        ["b", "y"],
+      ],
+    ],
+    ["a quoted name", 'SELECT * FROM "App"."Get"() AS u', [['"App"."Get"', "u"]]],
+  ])("finds the routine of %s", (_label, statement, expected) => {
+    expect(describeSources(statement)).toEqual(expected);
+  });
+
+  it.each([
+    ["a table", "SELECT * FROM users"],
+    ["a table with an alias", "SELECT * FROM users u"],
+    ["a table with an alias column list", "SELECT * FROM users u(id, name)"],
+    ["a table with hints", "SELECT * FROM users (NOLOCK)"],
+    ["a table with a WITH hint", "SELECT * FROM users u WITH (NOLOCK)"],
+    ["a call in the select list", "SELECT get_users() FROM users"],
+    ["a call in a join condition", "SELECT * FROM a JOIN b ON get_users(a.id) = b.id"],
+    ["a name in a string", "SELECT 'FROM get_users()'"],
+    ["a name in a comment", "SELECT 1 /* FROM get_users() */"],
+  ])("finds no routine source in %s", (_label, statement) => {
+    expect(describeSources(statement)).toEqual([]);
   });
 });

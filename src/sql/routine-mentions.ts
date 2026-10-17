@@ -219,7 +219,29 @@ function nameAt(text: string, index: number): { name: string; start: number; end
   return name ? { name, start, end: start + match[0].length } : null;
 }
 
-/** Skips whitespace and comments, which can sit between `LANGUAGE` and the language name. */
+/** Where the block comment that opens at `start` ends. A block comment can hold block comments. */
+function blockCommentEnd(text: string, start: number): number {
+  let depth = 0;
+  let cursor = start;
+  while (cursor < text.length) {
+    if (text.startsWith("/*", cursor)) {
+      depth += 1;
+      cursor += 2;
+    } else if (text.startsWith("*/", cursor)) {
+      depth -= 1;
+      cursor += 2;
+      if (!depth) return cursor;
+    } else {
+      cursor += 1;
+    }
+  }
+  return text.length;
+}
+
+/**
+ * Skips whitespace and comments, which can sit between two tokens: between `LANGUAGE` and the language
+ * name, or between `SELECT` and a column.
+ */
 function skipTrivia(text: string, index: number): number {
   let cursor = skipWhitespace(text, index);
   while (text.startsWith("--", cursor) || text.startsWith("/*", cursor)) {
@@ -227,8 +249,7 @@ function skipTrivia(text: string, index: number): number {
       const lineEnd = text.indexOf("\n", cursor);
       cursor = lineEnd < 0 ? text.length : lineEnd;
     } else {
-      const blockEnd = text.indexOf("*/", cursor + 2);
-      cursor = blockEnd < 0 ? text.length : blockEnd + 2;
+      cursor = blockCommentEnd(text, cursor);
     }
     cursor = skipWhitespace(text, cursor);
   }
@@ -415,17 +436,22 @@ function excludeHintCallShapes(scan: string, open: number, close: number, exclud
   }
 }
 
+/** A routine that a source calls: where its name is in the scanned text, and where its alias starts. */
+type SourceCall = { start: number; end: number; aliasStart: number | null };
+
 /**
  * Reads one source of a `FROM` list, `JOIN`, or `APPLY`: a name, a function call, or a parenthesized
  * query, then an optional alias with a column list. A parenthesis after the alias opens its column
  * list, and one after a name that holds only table hints opens those hints. Neither is a call; the
- * source's own arguments are. Returns where the source ends, or -1 when no source starts at `from`.
+ * source's own arguments are. Any other parenthesis after the name makes the source a call of that
+ * routine, which `calls` collects. Returns where the source ends, or -1 when no source starts at `from`.
  */
-function excludeSourceItem(scan: string, from: number, excluded: Set<number>): number {
+function excludeSourceItem(scan: string, from: number, excluded: Set<number>, calls?: SourceCall[]): number {
   let cursor = skipWhitespace(scan, from);
   for (let word = wordAt(scan, cursor); hasWord(SOURCE_MODIFIERS, word); word = wordAt(scan, cursor)) {
     cursor = skipWhitespace(scan, cursor + word.length);
   }
+  let called: { start: number; end: number } | null = null;
   if (scan[cursor] === "(") {
     const close = matchingParen(scan, cursor);
     if (close < 0) return -1;
@@ -440,6 +466,8 @@ function excludeSourceItem(scan: string, from: number, excluded: Set<number>): n
       if (isTableHintList(scan.slice(cursor + 1, close))) {
         excluded.add(source.start);
         excludeHintCallShapes(scan, cursor, close, excluded);
+      } else {
+        called = source;
       }
       cursor = close + 1;
     }
@@ -448,8 +476,10 @@ function excludeSourceItem(scan: string, from: number, excluded: Set<number>): n
   WITH_ORDINALITY_RE.lastIndex = cursor;
   if (WITH_ORDINALITY_RE.test(scan)) cursor = skipWhitespace(scan, WITH_ORDINALITY_RE.lastIndex);
   if (wordAt(scan, cursor) === "as") cursor = skipWhitespace(scan, cursor + 2);
-  const alias = nameAt(scan, cursor);
-  if (alias && !hasWord(NON_ALIAS_WORDS, alias.name.toLowerCase())) {
+  const named = nameAt(scan, cursor);
+  const alias = named && !hasWord(NON_ALIAS_WORDS, named.name.toLowerCase()) ? named : null;
+  if (called) calls?.push({ start: called.start, end: called.end, aliasStart: alias?.start ?? null });
+  if (alias) {
     cursor = skipWhitespace(scan, alias.end);
     if (scan[cursor] === "(") {
       // `FROM generate_series(1, 3) g(i)`: the parenthesis opens the alias's column list.
@@ -471,12 +501,12 @@ function excludeSourceItem(scan: string, from: number, excluded: Set<number>): n
   return cursor;
 }
 
-function collectSourceItemExclusions(scan: string, excluded: Set<number>): void {
+function collectSourceItemExclusions(scan: string, excluded: Set<number>, calls?: SourceCall[]): void {
   for (const keyword of scan.matchAll(SOURCE_KEYWORD_RE)) {
     let cursor = (keyword.index ?? 0) + keyword[0].length;
     const takesList = hasWord(SOURCE_LIST_KEYWORDS, (keyword[1] ?? "").toLowerCase());
     for (;;) {
-      cursor = excludeSourceItem(scan, cursor, excluded);
+      cursor = excludeSourceItem(scan, cursor, excluded, calls);
       if (cursor < 0 || !takesList) break;
       cursor = skipWhitespace(scan, cursor);
       if (scan[cursor] !== ",") break;
@@ -565,16 +595,18 @@ function excludedCallShapeStarts(scan: string): Set<number> {
 
 /**
  * `SELECT call audit_user FROM contacts` selects a column named `call` and aliases it. No statement
- * starts right after `SELECT`, a comma, or an opening parenthesis, so a keyword there is a column. This
- * reads the original text: a string literal is blank in the masked text, but `SELECT 'x'` followed by
- * `EXEC p` in a T-SQL script without semicolons does start a statement.
+ * starts right after `SELECT`, a comma, or an opening parenthesis, so a keyword there is a column, and
+ * a comment in between changes nothing. A string does: `masked` blanks strings as well as comments, but
+ * `SELECT 'x'` followed by `EXEC p` in a T-SQL script without semicolons does start a statement. Only
+ * whitespace and comments may sit between the keyword and the token before it.
  */
-function followsExpressionStart(statementText: string, keywordStart: number): boolean {
+function followsExpressionStart(statementText: string, masked: string, keywordStart: number): boolean {
   let cursor = keywordStart;
-  while (cursor > 0 && /\s/.test(statementText[cursor - 1] ?? "")) cursor -= 1;
-  const before = statementText[cursor - 1];
+  while (cursor > 0 && /\s/.test(masked[cursor - 1] ?? "")) cursor -= 1;
+  if (skipTrivia(statementText, cursor) !== keywordStart) return false;
+  const before = masked[cursor - 1];
   if (before === "," || before === "(") return true;
-  const word = previousWord(statementText, keywordStart);
+  const word = previousWord(masked, cursor);
   return word === "select" || word === "distinct";
 }
 
@@ -589,7 +621,7 @@ function collectCallKeywordMentions(
     // `EXECUTE cmd` in a PL/pgSQL body names a variable that holds a command, not a routine.
     if (inBody && hasWord(EXECUTE_WORDS, (match[1] ?? "").toLowerCase())) continue;
     const matchStart = match.index ?? 0;
-    if (followsExpressionStart(statementText, matchStart)) continue;
+    if (followsExpressionStart(statementText, masked, matchStart)) continue;
     const end = matchStart + match[0].length;
     if (!callKeywordMatchAllowsComments(statementText, masked.slice(matchStart, end), matchStart)) continue;
     const start = end - (match[2] ?? "").length;
@@ -636,6 +668,32 @@ export function findSqlRoutineMentions(statementText: string): SqlRoutineMention
   collectCallKeywordMentions(statementText, masked, scan, mentions, inBody);
   collectCallShapeMentions(masked, scan, mentions, inBody);
   return [...mentions.values()].sort((left, right) => left.start - right.start);
+}
+
+/**
+ * A routine that a `FROM` list, `JOIN`, or `APPLY` reads as a source, as `get_users()` does in
+ * `FROM get_users() AS u`. The mention has the shape `name(`, so it names a routine only when an
+ * indexed routine has that name. `alias` is the name that follows the source, if any.
+ */
+export type SqlRoutineSource = { mention: SqlRoutineMention; alias: string | null };
+
+/**
+ * The routines one statement calls as sources. A column qualified with a source's alias, or with its
+ * own name when it has none, as in `SELECT get_users.id FROM get_users()`, belongs to the routine's
+ * result and not to a table of that name.
+ */
+export function findSqlRoutineSources(statementText: string): SqlRoutineSource[] {
+  const { masked } = maskStatementCode(statementText);
+  const calls: SourceCall[] = [];
+  collectSourceItemExclusions(maskSqlQuotedIdentifiers(masked), new Set(), calls);
+  const sources: SqlRoutineSource[] = [];
+  for (const call of calls) {
+    const named = nameAt(masked, call.start);
+    if (!named) continue;
+    const alias = call.aliasStart === null ? null : (nameAt(masked, call.aliasStart)?.name ?? null);
+    sources.push({ mention: { ...named, kind: "call", namespace: "callable", speculative: true }, alias });
+  }
+  return sources;
 }
 
 /** The name space of the routine that a `CREATE FUNCTION`, `CREATE PROCEDURE`, or `CREATE TRIGGER` statement defines. */

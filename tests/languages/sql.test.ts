@@ -1239,4 +1239,90 @@ describe("SQL routine call sites", () => {
       expect(await gotoAt(project, "use.sql", use, 3, "audit_user")).toBe("not_found");
     });
   });
+
+  it("does not resolve a qualifier that names a routine in a FROM list to a table of the same name", async () => {
+    const schema = [
+      "CREATE TABLE get_users (id integer);",
+      "CREATE FUNCTION get_users() RETURNS TABLE (id integer) AS $$ SELECT 1 $$ LANGUAGE sql;",
+      "CREATE TABLE u (id integer);",
+    ];
+    const use = [
+      "SELECT get_users.id FROM get_users();",
+      "SELECT get_users.id FROM get_users;",
+      "SELECT get_users.id FROM get_users, get_users() g;",
+      "SELECT get_users.id FROM get_users() , get_users g2;",
+      "SELECT u.id FROM get_users() u;",
+      "SELECT u.id FROM u;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const table = await referencesAt(project, "schema.sql", schema, 1, "get_users");
+      const routine = await referencesAt(project, "schema.sql", schema, 2, "get_users");
+      const tableNamedLikeAnAlias = await referencesAt(project, "schema.sql", schema, 3, "u");
+
+      // The qualifier names the routine's result on lines 1 and 4, and the table on lines 2 and 3.
+      expect(referenceSites(project.root, table)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "get_users"),
+          siteAt("use.sql", use, 2, "get_users", 0),
+          siteAt("use.sql", use, 2, "get_users", 1),
+          siteAt("use.sql", use, 3, "get_users", 0),
+          siteAt("use.sql", use, 3, "get_users", 1),
+          siteAt("use.sql", use, 4, "get_users", 2),
+        ].sort(),
+      );
+      expect(referenceSites(project.root, routine)).toEqual(
+        [
+          siteAt("schema.sql", schema, 2, "get_users"),
+          siteAt("use.sql", use, 1, "get_users", 1),
+          siteAt("use.sql", use, 3, "get_users", 2),
+          siteAt("use.sql", use, 4, "get_users", 1),
+          siteAt("use.sql", use, 5, "get_users"),
+        ].sort(),
+      );
+      // `u` is the alias of a routine on line 5 and the table itself on line 6.
+      expect(referenceSites(project.root, tableNamedLikeAnAlias)).toEqual(
+        [
+          siteAt("schema.sql", schema, 3, "u"),
+          siteAt("use.sql", use, 6, "u.id"),
+          siteAt("use.sql", use, 6, "u;"),
+        ].sort(),
+      );
+      expect(await gotoAt(project, "use.sql", use, 1, "get_users.id")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 2, "get_users.id")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 3, "get_users.id")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 4, "get_users.id")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 5, "u.id")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 6, "u.id")).toBe("schema.sql:3");
+    });
+  });
+
+  it("reads a nested block comment as one comment, so a call inside it is no call", async () => {
+    const schema = ["CREATE FUNCTION norm(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;"];
+    const use = [
+      "/* outer /* inner */ SELECT norm(1); */",
+      "SELECT norm(2);",
+      "/* files: src/**/*.sql */",
+      "SELECT norm(3);",
+      "/* outer /* inner */ it's SELECT norm(4); */",
+      "SELECT norm(5);",
+    ];
+    // Nesting would leave this comment open, so it is a MySQL or SQLite comment that ends at its first closing delimiter.
+    const mysql = ["/* see /* below */ SELECT norm(6);", "SELECT norm(7);"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use, "mysql.sql": mysql }, async (project) => {
+      const result = await referencesAt(project, "schema.sql", schema, 1, "norm");
+
+      expect(referenceSites(project.root, result)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "norm"),
+          siteAt("use.sql", use, 2, "norm"),
+          siteAt("use.sql", use, 4, "norm"),
+          siteAt("use.sql", use, 6, "norm"),
+          siteAt("mysql.sql", mysql, 1, "norm"),
+          siteAt("mysql.sql", mysql, 2, "norm"),
+        ].sort(),
+      );
+      expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(await gotoAt(project, "use.sql", use, 6, "norm")).toBe("schema.sql:1");
+    });
+  });
 });
