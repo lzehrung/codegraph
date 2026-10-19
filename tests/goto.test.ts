@@ -137,7 +137,7 @@ describe("Go to Definition", () => {
       }
     });
 
-    it("resolves an implicit table qualifier from its source without guessing a bare ambiguous basename", async () => {
+    it("resolves an implicit table qualifier from its source and not from an ambiguous or missing one", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-ambiguous-basename-goto-"));
       try {
         const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
@@ -147,7 +147,11 @@ describe("Go to Definition", () => {
           ["CREATE TABLE schema1.table1 (id integer);", "CREATE TABLE schema2.table1 (id integer);"].join("\n"),
           "utf8",
         );
-        const queries = ["SELECT table1.id FROM schema1.table1;", "SELECT table1.id;"];
+        const queries = [
+          "SELECT table1.id FROM schema1.table1;",
+          "SELECT table1.id;",
+          "SELECT table1.id FROM schema1.table1, schema2.table1;",
+        ];
         await fsp.writeFile(reportFile, queries.join("\n"), "utf8");
         const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
 
@@ -159,6 +163,16 @@ describe("Go to Definition", () => {
           reportFile,
           2,
           queries[1]!.indexOf("table1.id") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+        // Two sources in one list share the basename, so the qualifier names neither.
+        await testGoToDefinition(
+          index,
+          reportFile,
+          3,
+          queries[2]!.indexOf("table1.id") + 1,
           undefined,
           undefined,
           "not_found",

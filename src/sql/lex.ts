@@ -397,7 +397,80 @@ export function sqlQueryScopes(scan: string): {
   };
 }
 
-/** Real FROM/USING/JOIN/APPLY sources at their query level, bounded by their closing parenthesis. */
+/** Where the block comment that ends at `end` opens, or -1 when it never does. `end` is the index just after the closing delimiter. */
+function blockCommentStart(text: string, end: number): number {
+  let depth = 1;
+  let cursor = end - 2;
+  while (cursor > 0) {
+    cursor -= 1;
+    if (text[cursor] === "/" && text[cursor - 1] === "*") {
+      depth += 1;
+      cursor -= 1;
+      continue;
+    }
+    if (text[cursor] === "*" && text[cursor - 1] === "/") {
+      depth -= 1;
+      if (depth === 0) return cursor - 1;
+      cursor -= 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The index after the significant token that ends at `index`. Whitespace, line comments, and block
+ * comments between tokens are skipped, however long they are.
+ */
+function skipTriviaBackward(text: string, index: number): number {
+  let cursor = index;
+  while (cursor > 0) {
+    const previous = text[cursor - 1] ?? "";
+    if (/\s/.test(previous)) {
+      cursor -= 1;
+      continue;
+    }
+    if (previous === "/" && text[cursor - 2] === "*") {
+      const open = blockCommentStart(text, cursor);
+      if (open < 0 || open >= cursor) return cursor;
+      cursor = open;
+      continue;
+    }
+    const lineStart = text.lastIndexOf("\n", cursor - 1) + 1;
+    const lineComment = text.lastIndexOf("--", cursor - 1);
+    if (lineComment >= lineStart) {
+      cursor = lineComment;
+      continue;
+    }
+    return cursor;
+  }
+  return cursor;
+}
+
+function previousSignificantWord(text: string, index: number): { word: string; from: number } | null {
+  const end = skipTriviaBackward(text, index);
+  let start = end;
+  while (start > 0 && /[A-Za-z0-9_$]/.test(text[start - 1] ?? "")) start -= 1;
+  if (start === end) return null;
+  return { word: text.slice(start, end).toLowerCase(), from: start };
+}
+
+/** `IS [NOT] DISTINCT FROM` compares values. The `FROM` is not a table source. */
+function isDistinctFromPredicate(scan: string, fromIndex: number): boolean {
+  const distinct = previousSignificantWord(scan, fromIndex);
+  if (distinct?.word !== "distinct") return false;
+  const middle = previousSignificantWord(scan, distinct.from);
+  if (!middle) return false;
+  if (middle.word === "is") return true;
+  if (middle.word !== "not") return false;
+  return previousSignificantWord(scan, middle.from)?.word === "is";
+}
+
+/**
+ * Real FROM/USING/JOIN/APPLY sources at their query level. A clause stops at the enclosing
+ * parenthesis, at the next clause keyword of the same query, at a statement-ending `;`, and at the
+ * next query (`SELECT`) at the same parenthesis depth. A later statement in a `BEGIN`/`END` body
+ * therefore cannot become part of an earlier source list.
+ */
 export function sqlSourceClauses(scan: string): Array<{
   kind: "from" | "using" | "join" | "apply";
   start: number;
@@ -414,14 +487,13 @@ export function sqlSourceClauses(scan: string): Array<{
     depth: number;
   }> = [];
   const boundaryRe =
-    /\b(?:where|group|order|having|limit|offset|returning|union|intersect|except|join|apply|on|from|using)\b/gi;
+    /\b(?:where|group|order|having|limit|offset|returning|union|intersect|except|join|apply|on|from|using|select)\b|;/gi;
   for (const match of scan.matchAll(/\b(from|using|join|apply)\b/gi)) {
     const start = match.index ?? 0;
     const depth = scopes.depthAt(start);
     if (depth !== scopes.selectDepthAt(start)) continue;
     const kind = match[1]!.toLowerCase() as "from" | "using" | "join" | "apply";
-    // IS [NOT] DISTINCT FROM is an expression, not a table-valued source.
-    if (kind === "from" && /\bis\s+(?:not\s+)?distinct\s*$/i.test(scan.slice(Math.max(0, start - 40), start))) continue;
+    if (kind === "from" && isDistinctFromPredicate(scan, start)) continue;
     const end = start + match[0].length;
     const scope = scopes.at(start);
     let clauseEnd = scopes.enclosingEndAt(start);
@@ -430,7 +502,11 @@ export function sqlSourceClauses(scan: string): Array<{
     while ((boundary = boundaryRe.exec(scan)) !== null) {
       const at = boundary.index;
       if (at >= clauseEnd) break;
-      if (scopes.at(at) === scope && scopes.depthAt(at) === depth) {
+      if (scopes.depthAt(at) !== depth) continue;
+      const token = boundary[0].toLowerCase();
+      // `;` and a sibling `SELECT` end the statement or the query. The SELECT has already changed
+      // scope, so it would not match the clause keyword test below.
+      if (token === ";" || token === "select" || scopes.at(at) === scope) {
         clauseEnd = at;
         break;
       }

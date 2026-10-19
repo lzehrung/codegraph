@@ -497,17 +497,134 @@ function excludeSourceItem(scan: string, from: number, excluded: Set<number>, ca
   }
   return cursor;
 }
+const JOIN_INTRO_WORDS: WordTable = {
+  inner: true,
+  left: true,
+  right: true,
+  full: true,
+  cross: true,
+  natural: true,
+  outer: true,
+};
+// Words that end a join predicate and the surrounding FROM list: `ON a.id = b.id WHERE ...`.
+const ON_END_WORDS: WordTable = {
+  where: true,
+  group: true,
+  order: true,
+  having: true,
+  limit: true,
+  offset: true,
+  fetch: true,
+  returning: true,
+  union: true,
+  intersect: true,
+  except: true,
+  window: true,
+};
+
+function joinIntroCanPrecede(word: string, ahead: string): boolean {
+  if (ahead === "join" || ahead === "apply") return true;
+  if (ahead === "outer") return word === "left" || word === "right" || word === "full" || word === "natural";
+  if (word !== "natural") return false;
+  return ahead === "left" || ahead === "right" || ahead === "full" || ahead === "inner" || ahead === "cross";
+}
+
+/** The `JOIN` or `APPLY` keyword at `index`, including `LEFT OUTER JOIN` and `CROSS APPLY`. */
+function joinKeywordAt(scan: string, index: number): { at: number; end: number } | null {
+  let cursor = skipWhitespace(scan, index);
+  for (;;) {
+    const word = wordAt(scan, cursor);
+    if (word === "join" || word === "apply") return { at: cursor, end: cursor + word.length };
+    const ahead = wordAt(scan, skipWhitespace(scan, cursor + word.length));
+    if (!hasWord(JOIN_INTRO_WORDS, word) || !joinIntroCanPrecede(word, ahead)) return null;
+    cursor = skipWhitespace(scan, cursor + word.length);
+  }
+}
+
+/** Where the `ON` expression ends: a comma, a semicolon, a `)`, or the next clause or join. */
+function skipOnExpression(scan: string, index: number): number {
+  let depth = 0;
+  let cursor = index;
+  while (cursor < scan.length) {
+    const char = scan[cursor] ?? "";
+    if (char === "(") {
+      depth += 1;
+      cursor += 1;
+      continue;
+    }
+    if (char === ")") {
+      if (depth === 0) return cursor;
+      depth -= 1;
+      cursor += 1;
+      continue;
+    }
+    if (depth === 0 && (char === "," || char === ";")) return cursor;
+    if (depth !== 0 || !/[A-Za-z_]/.test(char)) {
+      cursor += 1;
+      continue;
+    }
+    const word = wordAt(scan, cursor);
+    if (!word) {
+      cursor += 1;
+      continue;
+    }
+    if (hasWord(ON_END_WORDS, word) || joinKeywordAt(scan, cursor)) return cursor;
+    cursor += word.length;
+  }
+  return cursor;
+}
+
+function skipJoinPredicate(scan: string, index: number): number {
+  const cursor = skipWhitespace(scan, index);
+  const word = wordAt(scan, cursor);
+  if (word === "on") return skipOnExpression(scan, cursor + word.length);
+  if (word !== "using") return cursor;
+  const open = skipWhitespace(scan, cursor + word.length);
+  if (scan[open] !== "(") return cursor;
+  const close = matchingParen(scan, open);
+  return close < 0 ? scan.length : close + 1;
+}
+
+/**
+ * Consumes `[type] JOIN source [ON expr | USING (...)]` chains that follow one source. Each join
+ * keyword is recorded so its own source clause is not read again. Returns where the chain ends,
+ * which is a comma when another source follows the predicate.
+ */
+function consumeJoinChain(
+  scan: string,
+  index: number,
+  excluded: Set<number>,
+  calls: SourceCall[] | undefined,
+  consumedJoins: Set<number>,
+): number {
+  let cursor = index;
+  for (;;) {
+    const keyword = joinKeywordAt(scan, cursor);
+    if (!keyword) return cursor;
+    const next = excludeSourceItem(scan, keyword.end, excluded, calls);
+    if (next < 0 || next <= keyword.end) return cursor;
+    consumedJoins.add(keyword.at);
+    cursor = skipJoinPredicate(scan, next);
+  }
+}
+
 function collectSourceItemExclusions(scan: string, excluded: Set<number>, calls?: SourceCall[]): void {
+  const consumedJoins = new Set<number>();
   for (const source of sqlSourceClauses(scan)) {
+    if (consumedJoins.has(source.start)) continue;
     let cursor = source.end;
     const takesList = source.kind === "from" || source.kind === "using";
     for (;;) {
-      if (cursor >= source.clauseEnd) break;
-      cursor = excludeSourceItem(scan, cursor, excluded, calls);
-      if (cursor < 0 || !takesList) break;
-      cursor = skipWhitespace(scan, cursor);
-      if (cursor >= source.clauseEnd || scan[cursor] !== ",") break;
-      cursor += 1;
+      if (!takesList && cursor >= source.clauseEnd) break;
+      const next = excludeSourceItem(scan, cursor, excluded, calls);
+      if (next < 0 || next <= cursor) break;
+      cursor = consumeJoinChain(scan, next, excluded, calls, consumedJoins);
+      if (!takesList) break;
+      // `FROM a JOIN b ON a.id = b.id, generate_series(1, 3) norm(i)`: the comma is past the join
+      // keyword that ended the recorded FROM slice, and `norm(i)` is the next source's column list.
+      const after = skipWhitespace(scan, cursor);
+      if (after >= scan.length || scan[after] !== ",") break;
+      cursor = after + 1;
     }
   }
 }

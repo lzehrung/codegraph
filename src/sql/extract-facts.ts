@@ -514,6 +514,74 @@ function extractReadFacts(text: string): SqlFactDraft[] {
   return facts;
 }
 
+/** `END IF`, `END LOOP`, and the other block-ending pairs do not close a routine body. */
+function closesRoutineBlock(text: string, afterEnd: number): boolean {
+  let cursor = afterEnd;
+  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) cursor += 1;
+  return !/^(?:if|loop|case|while|repeat)\b/i.test(text.slice(cursor));
+}
+
+/**
+ * The text between a routine body's `BEGIN` and its matching `END`. A `BEGIN` inside parentheses, as in
+ * a parameter named `begin`, is not the body. `END IF` and the other block-ending pairs are not the
+ * closer. Null when the statement has no such body. A `$$` body is already blank, so only a
+ * `BEGIN`/`END` that the statement splitter kept as one statement is read.
+ */
+function beginEndBody(text: string): string | null {
+  const scan = maskSqlQuotedIdentifiers(text);
+  let parenDepth = 0;
+  let blockDepth = 0;
+  let bodyStart = -1;
+  let cursor = 0;
+  while (cursor < scan.length) {
+    const char = scan[cursor] ?? "";
+    if (char === "(") {
+      parenDepth += 1;
+      cursor += 1;
+      continue;
+    }
+    if (char === ")") {
+      parenDepth = Math.max(0, parenDepth - 1);
+      cursor += 1;
+      continue;
+    }
+    const previous = scan[cursor - 1] ?? "";
+    if (parenDepth === 0 && /[A-Za-z_]/.test(char) && !/[\w@#.]/.test(previous)) {
+      let wordEnd = cursor + 1;
+      while (/[A-Za-z0-9_$]/.test(scan[wordEnd] ?? "")) wordEnd += 1;
+      const word = scan.slice(cursor, wordEnd).toLowerCase();
+      if (word === "begin") {
+        if (blockDepth === 0) bodyStart = wordEnd;
+        blockDepth += 1;
+      } else if (word === "end" && blockDepth > 0 && closesRoutineBlock(scan, wordEnd)) {
+        blockDepth -= 1;
+        if (blockDepth === 0 && bodyStart >= 0) return text.slice(bodyStart, cursor);
+      }
+      cursor = wordEnd;
+      continue;
+    }
+    cursor += 1;
+  }
+  return null;
+}
+
+/** Read facts of the statements inside a `BEGIN`/`END` body, split by the statement splitter. */
+function readsInsideBeginEnd(masked: string): SqlFactDraft[] {
+  const body = beginEndBody(masked);
+  if (body === null) return [];
+  const seen = new Set<string>();
+  const facts: SqlFactDraft[] = [];
+  for (const inner of splitSqlStatements(body)) {
+    for (const fact of extractReadFacts(inner.text)) {
+      const key = `${fact.kind}:${fact.objectName ?? ""}:${fact.relatedObjectName ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      facts.push(fact);
+    }
+  }
+  return facts;
+}
+
 function withoutSelfRead(readFacts: SqlFactDraft[], objectName: string | null): SqlFactDraft[] {
   if (!objectName) return readFacts;
   return readFacts.filter((fact) => fact.objectName !== objectName);
@@ -525,10 +593,12 @@ function extractStatementFactDrafts(statementText: string): SqlFactDraft[] {
   if (definitionFact) {
     const constraintFacts =
       definitionFact.kind === "defines_table" ? extractCreateTableConstraintFacts(text, definitionFact.objectName) : [];
-    const readFacts =
-      definitionFact.kind === "defines_view" || /\bas\s+select\b/i.test(text)
-        ? withoutSelfRead(extractReadFacts(text), definitionFact.objectName)
-        : [];
+    let readFacts: SqlFactDraft[] = [];
+    if (definitionFact.kind === "defines_view" || /\bas\s+select\b/i.test(text)) {
+      readFacts = withoutSelfRead(extractReadFacts(text), definitionFact.objectName);
+    } else if (definitionFact.kind === "defines_routine") {
+      readFacts = readsInsideBeginEnd(text);
+    }
     return [definitionFact, ...constraintFacts, ...readFacts];
   }
 

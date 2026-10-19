@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assertMcpSqliteQueryResourceBounded } from "../src/mcp/sqlite-guard.js";
-import { maskSqlQuotedIdentifiers, maskSqlStringsAndComments } from "../src/sql/lex.js";
+import { maskSqlQuotedIdentifiers, maskSqlStringsAndComments, sqlSourceClauses } from "../src/sql/lex.js";
 
 /** The text with runs of blanks and line breaks folded to one space, so a test names what stays and what goes. */
 function collapse(text: string): string {
@@ -105,5 +105,48 @@ describe("SQL masking of escape strings", () => {
     ["a prefix inside a longer word", "SELECT type'a\\' hex(1)'"],
   ])("keeps the end of a string at its first closing quote when it is no E string: %s", (_label, text) => {
     expect(maskSqlStringsAndComments(text, { escapeStrings: true })).toContain("hex(1)");
+  });
+});
+
+describe("SQL source clause bounds", () => {
+  function sourceTexts(sql: string): string[] {
+    const scan = maskSqlQuotedIdentifiers(
+      maskSqlStringsAndComments(sql, { arrayBrackets: true, nestedBlockComments: true, escapeStrings: true }),
+    );
+    return sqlSourceClauses(scan).map((source) => scan.slice(source.end, source.clauseEnd).replace(/\s+/g, " ").trim());
+  }
+
+  it("ends a source clause at a semicolon and at the next query inside a procedure", () => {
+    const body = "CREATE PROCEDURE p AS BEGIN SELECT u.id FROM users u; SELECT g.id FROM get_users() g; END";
+    const noSemicolon = "CREATE PROCEDURE p AS BEGIN SELECT u.id FROM users u SELECT g.id FROM get_users() g END";
+
+    expect(sourceTexts(body)).toEqual(["users u", "get_users() g"]);
+    const unbound = sourceTexts(noSemicolon);
+    expect(unbound[0]).toBe("users u");
+    expect(unbound[1]?.startsWith("get_users() g")).toBe(true);
+    expect(unbound[0]).not.toContain("get_users");
+  });
+
+  it("does not end an outer source at a semicolon inside a parenthesized query", () => {
+    expect(sourceTexts("SELECT * FROM (SELECT id FROM users u;) x")).toEqual([
+      "(SELECT id FROM users u;) x",
+      "users u",
+    ]);
+  });
+
+  it.each([
+    ["a long block comment", `SELECT 1 WHERE value IS /* ${"c".repeat(80)} */ DISTINCT FROM norm(1)`],
+    ["a long line comment", `SELECT 1 WHERE value IS -- ${"c".repeat(80)}\n DISTINCT FROM norm(1)`],
+    ["whitespace and newlines", `SELECT 1 WHERE value IS${" \n".repeat(30)}DISTINCT${" \n".repeat(30)}FROM norm(1)`],
+    ["IS NOT and a long comment", `SELECT 1 WHERE value IS NOT /* ${"c".repeat(80)} */ DISTINCT FROM norm(1)`],
+  ])("does not read %s between IS and FROM as a source clause", (_label, sql) => {
+    expect(sourceTexts(sql)).toEqual([]);
+    // The same words with the comment still present, not only after it has been blanked.
+    expect(sqlSourceClauses(sql)).toEqual([]);
+  });
+
+  it("still reads the table beside IS DISTINCT FROM when a long comment separates the words", () => {
+    const sql = `SELECT norm.id FROM norm WHERE value IS /* ${"c".repeat(80)} */ DISTINCT FROM norm(1)`;
+    expect(sourceTexts(sql)).toEqual(["norm"]);
   });
 });

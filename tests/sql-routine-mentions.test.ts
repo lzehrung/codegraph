@@ -334,6 +334,9 @@ describe("SQL routine mentions", () => {
     ["a LATERAL join without AS", "SELECT * FROM a JOIN LATERAL f(a.id) norm(i) ON true"],
     ["WITH ORDINALITY", "SELECT * FROM unnest(arr) WITH ORDINALITY norm(x, n)"],
     ["a later source", "SELECT * FROM a, generate_series(1, 3) norm(i), b"],
+    ["a source after a join predicate", "SELECT * FROM a JOIN b ON a.id = b.id, generate_series(1, 3) norm(i)"],
+    ["a source after USING", "SELECT * FROM a JOIN b USING (id), generate_series(1, 3) norm(i)"],
+    ["a source after a predicate comma", "SELECT * FROM a JOIN b ON f(a.id, b.id) = 1, users norm(i)"],
     ["a MERGE source", "MERGE INTO t USING (VALUES (1)) norm(a) ON t.a = norm.a WHEN MATCHED THEN DELETE"],
     ["a quoted alias", 'SELECT * FROM generate_series(1, 3) "Norm"(i)'],
   ])("does not read the alias column list of %s as a routine", (_label, statement) => {
@@ -353,6 +356,27 @@ describe("SQL routine mentions", () => {
     ],
     ["a call after the FROM list", "SELECT * FROM users u WHERE norm(u.id) > 0", ["norm"]],
     ["a call after IS DISTINCT FROM", "SELECT 1 WHERE a IS DISTINCT FROM norm(x)", ["norm"]],
+    [
+      "a call after IS DISTINCT FROM and a long comment",
+      `SELECT 1 WHERE a IS /* ${"c".repeat(80)} */ DISTINCT FROM norm(x)`,
+      ["norm"],
+    ],
+    [
+      "a call after IS DISTINCT FROM and extra whitespace",
+      `SELECT 1 WHERE a IS${" \n".repeat(20)}NOT${" \n".repeat(20)}DISTINCT${" \n".repeat(20)}FROM norm(x)`,
+      ["norm"],
+    ],
+    ["a call in an ON predicate", "SELECT * FROM a JOIN b ON norm(a.id) = b.id", ["norm"]],
+    [
+      "a call in a source argument after a join",
+      "SELECT * FROM a JOIN b ON a.id = b.id, generate_series(1, norm(3)) g(i)",
+      ["generate_series", "norm"],
+    ],
+    [
+      "a call whose arguments hold the comma in an ON predicate",
+      "SELECT * FROM a JOIN b ON f(a.id, b.id) = 1, generate_series(1, 3) norm(i)",
+      ["f", "generate_series"],
+    ],
   ])("keeps the calls of %s", (_label, statement, expected) => {
     expect(mentionTexts(statement)).toEqual(expected);
   });
@@ -594,6 +618,16 @@ describe("SQL routine sources", () => {
       ],
     ],
     ["a quoted name", 'SELECT * FROM "App"."Get"() AS u', [['"App"."Get"', "u"]]],
+    [
+      "a function after a join predicate",
+      "SELECT * FROM a JOIN b ON a.id = b.id, generate_series(1, 3) AS norm(i)",
+      [["generate_series", "norm"]],
+    ],
+    [
+      "each statement of a procedure",
+      "CREATE PROCEDURE p AS BEGIN SELECT u.id FROM users u; SELECT g.id FROM get_users() g; END",
+      [["get_users", "g"]],
+    ],
   ])("finds the routine of %s", (_label, statement, expected) => {
     expect(describeSources(statement)).toEqual(expected);
   });

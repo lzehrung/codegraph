@@ -225,12 +225,16 @@ function cteNamesForStatement(text: string): Set<string> {
   return cteNames;
 }
 
-function parseSqlSourceEntry(entry: string): { objectName: string; aliasName: string | null } | null {
+function parseSqlSourceEntry(
+  entry: string,
+): { objectName: string; aliasName: string | null; objectOffset: number } | null {
+  const leading = entry.length - entry.trimStart().length;
   const trimmed = entry.trim();
   if (!trimmed || trimmed.startsWith("(")) return null;
   const tokenRe = new RegExp(SQL_DOTTED_TOKEN, "gy");
   let cursor = 0;
   let objectName: string | null = null;
+  let objectOffset = -1;
   while (cursor < trimmed.length) {
     tokenRe.lastIndex = cursor;
     const match = tokenRe.exec(trimmed);
@@ -240,11 +244,12 @@ function parseSqlSourceEntry(entry: string): { objectName: string; aliasName: st
     cursor = match.index + match[0].length;
     if (!SQL_SOURCE_MODIFIERS.has(normalized.toLowerCase())) {
       objectName = normalized;
+      objectOffset = leading + match.index;
       break;
     }
     while (cursor < trimmed.length && /\s/.test(trimmed[cursor] ?? "")) cursor += 1;
   }
-  if (!objectName) return null;
+  if (!objectName || objectOffset < 0) return null;
 
   let rest = trimmed.slice(cursor).trimStart();
   if (rest.startsWith(".")) return null;
@@ -252,9 +257,9 @@ function parseSqlSourceEntry(entry: string): { objectName: string; aliasName: st
   const aliasMatch = new RegExp(String.raw`^(${SQL_IDENTIFIER})`, "i").exec(rest);
   const aliasName = normalizeSqlObjectName(aliasMatch?.[1]) ?? null;
   if (!aliasName || SQL_SOURCE_KEYWORDS.has(aliasName.toLowerCase())) {
-    return { objectName, aliasName: null };
+    return { objectName, aliasName: null, objectOffset };
   }
-  return { objectName, aliasName };
+  return { objectName, aliasName, objectOffset };
 }
 
 type SqlSourceBinding = { kind: "relation"; objectName: string } | { kind: "routine" } | { kind: "ambiguous" };
@@ -308,9 +313,11 @@ function sqlSourceBindings(
       if (partStart < 0) continue;
       const partEnd = partStart + part.length;
       nextPartStart = partEnd + 1;
-      if (routineSources.some(({ mention }) => mention.start >= partStart && mention.start < partEnd)) continue;
       const parsed = parseSqlSourceEntry(part);
       if (!parsed) continue;
+      // A routine source owns only its own source item. A later call that merely falls inside this
+      // slice, such as the next statement of a procedure body, must not drop the relation binding.
+      if (routineSources.some(({ mention }) => mention.start === partStart + parsed.objectOffset)) continue;
       const objectKey = sqlObjectLookupKey(parsed.objectName);
       const objectBaseKey = sqlObjectBaseNameLookupKey(parsed.objectName);
       if (cteNames.has(objectKey) || cteNames.has(objectBaseKey)) continue;

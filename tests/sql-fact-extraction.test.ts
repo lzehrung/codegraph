@@ -523,4 +523,22 @@ describe("SQL fact extraction", () => {
       expect.objectContaining({ kind: "defines_table", objectName: "##GlobalTempResults" }),
     ]);
   });
+
+  it("reads relations named by the statements inside a BEGIN/END routine body", () => {
+    const filePath = path.join(fixtureRoot, "reports", "procedure.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      [
+        "CREATE PROCEDURE p AS BEGIN SELECT u.id FROM users u; SELECT g.id FROM get_users() g; END;",
+        "CREATE PROCEDURE q(begin integer) AS BEGIN IF 1 THEN SELECT id FROM accounts; END IF; END;",
+        "CREATE FUNCTION f() RETURNS integer AS $$ BEGIN SELECT id FROM hidden; END $$ LANGUAGE sql;",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "get_users",
+      "accounts",
+    ]);
+  });
 });

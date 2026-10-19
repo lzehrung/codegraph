@@ -1067,6 +1067,42 @@ describe("SQL artifact graph", () => {
     }
   });
 
+  it("does not link an alias column list after a join predicate to a routine of the same name", async () => {
+    const root = await mkTmpDir("cg-sql-join-alias-list-");
+    try {
+      const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+      const schema = file("schema.sql");
+      const alias = file("alias.sql");
+      const predicate = file("predicate.sql");
+      const argument = file("argument.sql");
+      await fsp.writeFile(
+        schema,
+        "CREATE FUNCTION norm(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;\n",
+        "utf8",
+      );
+      await fsp.writeFile(alias, "SELECT * FROM a JOIN b ON a.id = b.id, generate_series(1, 3) norm(i);\n", "utf8");
+      await fsp.writeFile(predicate, "SELECT * FROM a JOIN b ON norm(a.id) = b.id;\n", "utf8");
+      await fsp.writeFile(
+        argument,
+        "SELECT * FROM a JOIN b ON a.id = b.id, generate_series(1, norm(3)) g(i);\n",
+        "utf8",
+      );
+
+      const sourceGraph = await collectGraph(root, [schema, alias, predicate, argument]);
+      const rawBetween = (from: string): string[] =>
+        sourceGraph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+
+      expect(rawBetween(alias)).toEqual([]);
+      expect(rawBetween(predicate)).toEqual(["sql:reads_from:callable:norm"]);
+      expect(rawBetween(argument)).toEqual(["sql:reads_from:callable:norm"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not link the command variable of a PL/pgSQL EXECUTE to a routine of the same name", async () => {
     const root = await mkTmpDir("cg-sql-dynamic-execute-");
     try {
