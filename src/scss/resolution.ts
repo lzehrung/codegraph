@@ -833,6 +833,18 @@ function unresolvedIntroducesMembers(loads: readonly ResolvedLoad[], beforeOffse
 }
 
 /** The local variables that are in scope at `use` and have its name, outermost and earliest first. */
+function coveringCallable(current: ModuleModel, use: ScssUse): boolean {
+  if (use.namespace !== null || (use.kind !== "mixin" && use.kind !== "function")) return false;
+  if (use.syntax !== "include" && use.syntax !== "call") return false;
+  return current.facts.callableLocals.some(
+    (local) =>
+      local.kind === use.kind &&
+      local.canonical === use.canonical &&
+      use.nameStart >= local.from &&
+      use.nameStart < local.to,
+  );
+}
+
 function coveringLocals(current: ModuleModel, use: ScssUse): ScssLocalBinding[] {
   if (use.kind !== "variable") return [];
   const bindings = current.localsByName.get(use.canonical) ?? [];
@@ -982,7 +994,8 @@ function nestedImportUnproven(use: ScssUse): ScssNotFound {
  * file. dart-sass still calls the legacy built-in for that earlier call.
  */
 function legacyGetFunctionBeforeDeclaration(current: ModuleModel, use: ScssUse, member: OwnMember): boolean {
-  if (use.syntax !== "call" || use.namespace !== null || use.canonical !== "get-function") return false;
+  if (use.syntax !== "call" || use.namespace !== null) return false;
+  if (use.canonical !== "get-function" && use.canonical !== "call") return false;
   if (member.kind !== "function") return false;
   const declaredAt = scssOffsetAt(current.facts, member.def.range.start.line, member.def.range.start.column);
   return declaredAt > use.nameStart;
@@ -1020,6 +1033,7 @@ async function hasUnprovenDynamic(index: ProjectIndex, file: ModuleModel): Promi
 }
 
 function resolveUnnamespaced(model: ProjectModel, current: ModuleModel, use: ScssUse): ScssResolution {
+  if (coveringCallable(current, use)) return { status: "shadow", indexed: false };
   const covering = coveringLocals(current, use);
   if (covering.length) {
     const nearest = covering[covering.length - 1]!;

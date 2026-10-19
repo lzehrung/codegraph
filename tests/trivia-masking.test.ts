@@ -293,3 +293,27 @@ describe("existing entry points keep their contracts", () => {
     expect(stripped).toBe("\nimport os\nx = \n");
   });
 });
+
+describe("SCSS loud-comment interpolation and namespaced url calls", () => {
+  it("keeps a loud-comment interpolation visible when holes are requested", () => {
+    const source = '$primary: red;\n/* before #{ $primary } after */\n// #{ $primary }\n/* #{ "$primary" } */\n';
+    const mask = buildTriviaMask(source, "scss", { holes: true, maskCssUrls: true });
+    let code = "";
+    for (let index = 0; index < source.length; index += 1) code += mask[index] ? " " : source[index];
+    expect(code.split("$primary").length - 1).toBe(2);
+    expect(code).not.toContain("before");
+    expect(code).not.toContain("after");
+    const rendered = maskTrivia(source, "scss");
+    expect(rendered).toContain("$primary: red;");
+    expect(rendered).not.toContain("before");
+    expect(rendered.split("$primary").length - 1).toBe(1);
+  });
+  it("does not mask a namespaced url(plain) as an opaque CSS url", () => {
+    const source = ".a { a: lib.url(plain); b: url(plain); }\n";
+    const mask = buildTriviaMask(source, "scss", { holes: true, maskCssUrls: true });
+    let code = "";
+    for (let index = 0; index < source.length; index += 1) code += mask[index] ? " " : source[index];
+    expect(code).toContain("lib.url(plain)");
+    expect(code.split("plain").length - 1).toBe(1);
+  });
+});

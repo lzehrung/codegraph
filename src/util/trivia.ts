@@ -114,7 +114,13 @@ function buildMarkedMask(
     }
     const commentEnd = commentSpanEnd(source, row, index);
     if (commentEnd !== null) {
-      for (let i = index; i < commentEnd; i += 1) mask[i] = 1;
+      const spans: TriviaSpan[] =
+        options.mode === "holes" && row.commentInterpolation
+          ? loudCommentMaskSpans(source, row, index, commentEnd)
+          : [[index, commentEnd]];
+      for (const [start, end] of spans) {
+        for (let i = start; i < end; i += 1) mask[i] = 1;
+      }
       index = commentEnd;
       continue;
     }
@@ -183,6 +189,7 @@ function unquotedCssUrlConstruct(source: string, row: TriviaRow, index: number):
   ) {
     return null;
   }
+  if (index > 0 && source.charCodeAt(index - 1) === 0x2e) return null;
   if (index > 0 && isCssIdentifierUnit(source.charCodeAt(index - 1))) return null;
   const bodyStart = index + 4;
   const holes: TriviaSpan[] = [];
@@ -339,6 +346,39 @@ function nextTriviaConstruct(source: string, row: TriviaRow, index: number): Tri
     return zigMultilineConstruct(source, index);
   }
   return null;
+}
+
+function loudCommentMaskSpans(source: string, row: TriviaRow, index: number, commentEnd: number): TriviaSpan[] {
+  const interpolation = row.commentInterpolation;
+  if (!interpolation || !source.startsWith("/*", index)) return [[index, commentEnd]];
+  const spans: TriviaSpan[] = [];
+  let cursor = index;
+  let segmentStart = index;
+  while (cursor < commentEnd) {
+    if (source.startsWith(interpolation.start, cursor)) {
+      if (segmentStart < cursor) spans.push([segmentStart, cursor]);
+      const inner = collectInterpolationSpans(source, row, cursor, interpolation);
+      const end = Math.min(inner.end, commentEnd);
+      if (end <= cursor) {
+        cursor += 1;
+        segmentStart = cursor;
+        continue;
+      }
+      spans.push([cursor, Math.min(cursor + interpolation.start.length, end)]);
+      for (const span of inner.spans) {
+        const start = Math.max(span[0], cursor);
+        const stop = Math.min(span[1], end);
+        if (start < stop) spans.push([start, stop]);
+      }
+      if (end > cursor && end <= commentEnd && source.charCodeAt(end - 1) === 0x7d) spans.push([end - 1, end]);
+      cursor = end;
+      segmentStart = cursor;
+      continue;
+    }
+    cursor += 1;
+  }
+  if (segmentStart < commentEnd) spans.push([segmentStart, commentEnd]);
+  return spans;
 }
 
 function commentSpanEnd(source: string, row: TriviaRow, index: number): number | null {

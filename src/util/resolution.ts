@@ -172,15 +172,16 @@ export function getGraphOnlyResolutionExtensions(
 
 async function findFirstExistingScssPartialCandidate(base: string): Promise<string | null> {
   const basename = path.basename(base);
-  if (!basename || basename.startsWith("_")) return null;
+  if (!basename) return null;
   const originalExt = path.extname(base);
   const baseExt = originalExt.toLowerCase();
   if (baseExt && baseExt !== ".scss") return null;
-  const partialStem = baseExt ? path.basename(base, originalExt) : basename;
-  const partialBasename = `_${partialStem}.scss`;
-  const partialPath = path.join(path.dirname(base), partialBasename);
-  if (await fileExists(partialPath)) return path.resolve(partialPath);
-  // A directory loads its index partial: `@use "lib"` reaches `lib/_index.scss`.
+  if (!basename.startsWith("_")) {
+    const partialStem = baseExt ? path.basename(base, originalExt) : basename;
+    const partialBasename = "_" + partialStem + ".scss";
+    const partialPath = path.join(path.dirname(base), partialBasename);
+    if (await fileExists(partialPath)) return path.resolve(partialPath);
+  }
   if (baseExt) return null;
   const indexPartial = path.join(base, "_index.scss");
   return (await fileExists(indexPartial)) ? path.resolve(indexPartial) : null;

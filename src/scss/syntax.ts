@@ -121,6 +121,13 @@ export type ScssLocalBinding = {
   range: Range;
 };
 
+export type ScssCallableLocal = {
+  kind: "mixin" | "function";
+  canonical: string;
+  from: number;
+  to: number;
+};
+
 export type ScssDynamicForm =
   | "load-css"
   | "get-function"
@@ -131,14 +138,15 @@ export type ScssDynamicForm =
   | "variable-exists"
   | "global-variable-exists"
   | "function-exists"
-  | "mixin-exists";
+  | "mixin-exists"
+  | "call";
 
 export type ScssDynamic = {
   form: ScssDynamicForm;
   /** String argument, or null when the argument is not a literal. */
   arg: string | null;
   /**
-   * Bare legacy built-in with no `sass:meta` load: `get-function` and the existence predicates.
+   * Bare legacy built-in with no `sass:meta` load: `get-function`, `call`, and the existence predicates.
    * Resolution drops the lookup when a user-defined function of that name, already in scope, is
    * proved to own the call.
    */
@@ -152,6 +160,7 @@ export type ScssFileFacts = {
   loads: ScssModuleLoad[];
   uses: ScssUse[];
   locals: ScssLocalBinding[];
+  callableLocals: ScssCallableLocal[];
   /**
    * File-scope `@if` / `@each` / `@for` / `@while` assignments that follow an `@import`.
    * Each one may reassign an imported variable instead of introducing a local. A provisional
@@ -181,6 +190,7 @@ const DYNAMIC_FORMS = new Set<string>([
   "global-variable-exists",
   "function-exists",
   "mixin-exists",
+  "call",
 ]);
 
 /**
@@ -193,6 +203,7 @@ const LEGACY_BARE_FORMS = new Set<ScssDynamicForm>([
   "global-variable-exists",
   "function-exists",
   "mixin-exists",
+  "call",
 ]);
 
 /** Sass compares identifiers after treating `_` as `-`, and ignores one leading `$` or `%`. */
@@ -248,6 +259,28 @@ export function scssOffsetAt(facts: ScssFileFacts, line: number, column: number)
 
 function isSpaceUnit(unit: number): boolean {
   return unit === 0x20 || unit === 0x09 || unit === 0x0a || unit === 0x0d || unit === 0x0c;
+}
+
+function isHexUnit(unit: number): boolean {
+  return (unit >= 0x30 && unit <= 0x39) || (unit >= 0x41 && unit <= 0x46) || (unit >= 0x61 && unit <= 0x66);
+}
+
+function skipScssEscape(source: string, index: number): number {
+  const next = index + 1;
+  if (next >= source.length) return source.length;
+  const unit = source.charCodeAt(next);
+  if (unit === 0x0a || unit === 0x0c) return next + 1;
+  if (unit === 0x0d) return source.charCodeAt(next + 1) === 0x0a ? next + 2 : next + 1;
+  if (isHexUnit(unit)) {
+    let cursor = next + 1;
+    const limit = Math.min(source.length, next + 6);
+    while (cursor < limit && isHexUnit(source.charCodeAt(cursor))) cursor += 1;
+    const space = source.charCodeAt(cursor);
+    if (space === 0x20 || space === 0x09 || space === 0x0a || space === 0x0c) return cursor + 1;
+    if (space === 0x0d) return source.charCodeAt(cursor + 1) === 0x0a ? cursor + 2 : cursor + 1;
+    return cursor;
+  }
+  return next + 1;
 }
 
 function isIdentStart(unit: number): boolean {
@@ -324,6 +357,7 @@ type ParenFrame = {
 
 type BlockFrame = {
   locals: ScssLocalBinding[];
+  callables: ScssCallableLocal[];
   /** True for the block of `@if`, `@else`, `@each`, `@for`, or `@while`. */
   flow: boolean;
   /** True for the body block of a mixin or function. Calls inside it are deferred. */
@@ -352,6 +386,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
   const loads: ScssModuleLoad[] = [];
   const uses: ScssUse[] = [];
   const locals: ScssLocalBinding[] = [];
+  const callableLocals: ScssCallableLocal[] = [];
   const flowAssignments: ScssFlowAssignment[] = [];
   const dynamics: ScssDynamic[] = [];
   const interpolatedPlaceholderRanges: Range[] = [];
@@ -561,7 +596,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
       callableDepth += 1;
       pendingCallable = false;
     }
-    const frame: BlockFrame = { locals: [], flow, callable };
+    const frame: BlockFrame = { locals: [], callables: [], flow, callable };
     if (!flow) nonFlowBlocks += 1;
     for (const local of pendingLocals) {
       if (local.from < 0) local.from = braceIndex;
@@ -584,6 +619,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
         local.to = braceIndex;
         unbindLocal(local);
       }
+      for (const callable of frame.callables) callable.to = braceIndex;
       if (!frame.flow) nonFlowBlocks -= 1;
       if (frame.callable) callableDepth -= 1;
     }
@@ -630,7 +666,12 @@ export function extractScssFacts(source: string): ScssFileFacts {
     const name = readNameAt(from);
     if (!name) return from;
     consume(name.start, name.end);
-    if (!blocks.length) {
+    const enclosing = blocks[blocks.length - 1];
+    if (enclosing) {
+      const local: ScssCallableLocal = { kind: keyword, canonical: sassCanonical(name.text), from: name.end, to: -1 };
+      enclosing.callables.push(local);
+      callableLocals.push(local);
+    } else {
       declarations.push({
         kind: keyword,
         name: name.text,
@@ -1296,6 +1337,12 @@ export function extractScssFacts(source: string): ScssFileFacts {
       index += 1;
       continue;
     }
+    if (unit === 0x5c) {
+      touch();
+      statementStart = false;
+      index = skipScssEscape(source, index);
+      continue;
+    }
     if (unit === 0x7b) {
       if (source.charCodeAt(index - 1) === 0x23) {
         braces.push(false);
@@ -1428,11 +1475,15 @@ export function extractScssFacts(source: string): ScssFileFacts {
   for (const local of locals) {
     if (local.to < 0) local.to = length;
   }
+  for (const callable of callableLocals) {
+    if (callable.to < 0) callable.to = length;
+  }
   return {
     declarations,
     loads,
     uses,
     locals,
+    callableLocals,
     flowAssignments,
     dynamics,
     interpolatedExtend,

@@ -3855,3 +3855,247 @@ describe("SCSS module navigation: existence predicates and repeated flow assignm
     );
   });
 });
+
+describe("SCSS module navigation: nested callables, legacy call, comments, and escapes", () => {
+  it("excludes a nested mixin include from the outer mixin", async () => {
+    const mixin = [
+      "@mixin pad { color: red; }",
+      ".a {",
+      "  @include pad;",
+      "  @mixin pad { color: blue; }",
+      "  @include pad;",
+      "}",
+      ".b { @include pad; }",
+      "",
+    ].join("\n");
+    const facts = extractScssFacts(mixin);
+    const local = facts.callableLocals[0];
+    expect(facts.callableLocals.map((entry) => entry.canonical)).toEqual(["pad"]);
+    const includes = facts.uses.filter((use) => use.syntax === "include");
+    expect(includes[0]?.nameStart).toBeLessThan(local?.from ?? 0);
+    expect(includes[1]?.nameStart).toBeGreaterThanOrEqual(local?.from ?? 0);
+    await withScssProject({ "main.scss": mixin }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "@mixin pad", 0, "@mixin ".length);
+      expect(refs.sites).toEqual(["main.scss:1", "main.scss:3", "main.scss:7"]);
+      expect(refs.coverage?.state).toBe("complete");
+      expect(await scssGoto(project, "main.scss", "@include pad", 0, "@include ".length)).toBe("main.scss:1");
+      expect(await scssGoto(project, "main.scss", "@include pad", 1, "@include ".length)).toBe("not_found");
+      expect(await scssGoto(project, "main.scss", "@include pad", 2, "@include ".length)).toBe("main.scss:1");
+      const session = createAgentSession({ root: project.root, freshness: { policy: "check" } });
+      try {
+        const symbols = await workspaceSymbolsWithSession(session, { root: project.root, query: "pad" });
+        const pos = project.position("main.scss", "pad", 0);
+        const target = symbols.symbols.find(
+          (symbol) => symbol.location.file.endsWith("main.scss") && symbol.location.range.start.line === pos.line,
+        );
+        if (!target) throw new Error("missing outer mixin");
+        const renamed = await previewRenameWithSession(session, {
+          root: project.root,
+          handle: target.handle,
+          newName: "cushion",
+        });
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => edit.range.start.line).sort()).toEqual([1, 3, 7]);
+      } finally {
+        session.invalidate();
+      }
+    });
+  });
+  it("excludes a nested function call from the outer function", async () => {
+    const source = [
+      "@function pad() { @return 1px; }",
+      ".a {",
+      "  width: pad();",
+      "  @function pad() { @return 2px; }",
+      "  width: pad();",
+      "}",
+      ".b { width: pad(); }",
+      "",
+    ].join("\n");
+    await withScssProject({ "main.scss": source }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "@function pad", 0, "@function ".length);
+      expect(refs.sites).toEqual(["main.scss:1", "main.scss:3", "main.scss:7"]);
+      expect(refs.coverage?.state).toBe("complete");
+      expect(await scssGoto(project, "main.scss", "pad()", 1)).toBe("main.scss:1");
+      expect(await scssGoto(project, "main.scss", "pad()", 3)).toBe("not_found");
+      expect(await scssGoto(project, "main.scss", "pad()", 4)).toBe("main.scss:1");
+    });
+  });
+  it("treats legacy call of a string name as a dynamic lookup", async () => {
+    const dynamic = ["@function pad() { @return 1px; }", '.a { width: call("pad"); }', ""].join("\n");
+    expect(extractScssFacts(dynamic).dynamics.map((entry) => entry.form + ":" + entry.arg)).toEqual(["call:pad"]);
+    const owned = [
+      "@function call($name) { @return 5px; }",
+      "@function pad() { @return 1px; }",
+      '.a { width: call("pad"); }',
+      "",
+    ].join("\n");
+    expect(extractScssFacts(owned).dynamics).toEqual([]);
+    await withScssProject({ "main.scss": dynamic }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "pad");
+      expect(refs.sites).toEqual(["main.scss:1"]);
+      expect(refs.coverage?.state).toBe("partial");
+      expect(refs.coverage?.reasons).toContain("strategy_unavailable");
+      expect((await previewScssRename(project, "pad", "main.scss", "cushion")).safe).toBe(false);
+    });
+    await withScssProject({ "main.scss": owned }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "@function pad", 0, "@function ".length);
+      expect(refs.coverage?.state).toBe("complete");
+      expect((await previewScssRename(project, "pad", "main.scss", "cushion")).safe).toBe(true);
+      expect(await scssGoto(project, "main.scss", "call(")).toBe("main.scss:1");
+    });
+  });
+  it("keeps a later call function from owning the earlier built-in", async () => {
+    const source = [
+      "@function pad() { @return 1px; }",
+      '.a { width: call("pad"); }',
+      "@function call($name) { @return 5px; }",
+      "",
+    ].join("\n");
+    await withScssProject({ "main.scss": source }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "@function pad", 0, "@function ".length);
+      expect(refs.coverage?.state).toBe("partial");
+      expect(await scssGoto(project, "main.scss", "call(")).toBe("not_found");
+      const callRefs = await scssRefs(project, "main.scss", "@function call", 0, "@function ".length);
+      expect(callRefs.sites).toEqual(["main.scss:3"]);
+    });
+  });
+  it("does not flag a member when a star-loaded call function owns the call", async () => {
+    const main = ['@use "fns" as *;', '.a { width: call("pad"); x: pad(); }', ""].join("\n");
+    expect(extractScssFacts(main).dynamics.some((entry) => entry.form === "call" && entry.legacyBare)).toBe(true);
+    await withScssProject(
+      {
+        "_fns.scss": "@function call($name) { @return 9px; }\n@function pad() { @return 1px; }\n",
+        "main.scss": main,
+      },
+      async (project) => {
+        const refs = await scssRefs(project, "_fns.scss", "@function pad", 0, "@function ".length);
+        expect(refs.sites).toEqual(["_fns.scss:2", "main.scss:2"]);
+        expect(refs.coverage?.state).toBe("complete");
+        expect((await previewScssRename(project, "pad", "_fns.scss", "cushion")).safe).toBe(true);
+      },
+    );
+  });
+  it("treats meta.call of a string as a dynamic lookup", async () => {
+    const source = [
+      '@use "sass:meta";',
+      "@function pad() { @return 1px; }",
+      '.a { width: meta.call("pad"); }',
+      "",
+    ].join("\n");
+    expect(extractScssFacts(source).dynamics.some((entry) => entry.form === "call" && entry.arg === "pad")).toBe(true);
+    await withScssProject({ "main.scss": source }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "@function pad", 0, "@function ".length);
+      expect(refs.coverage?.state).toBe("partial");
+      expect((await previewScssRename(project, "pad", "main.scss", "cushion")).safe).toBe(false);
+    });
+  });
+  it("reads interpolation in a loud comment and ignores line comments", async () => {
+    const source = [
+      "$primary: red;",
+      "/* before #{ $primary } after */",
+      "// #{ $primary }",
+      '/* #{ "$primary" } */',
+      ".a { color: $primary; }",
+      "",
+    ].join("\n");
+    const uses = extractScssFacts(source)
+      .uses.filter((use) => use.kind === "variable")
+      .map((use) => use.text);
+    expect(uses).toEqual(["$primary", "$primary"]);
+    await withScssProject({ "main.scss": source }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "$primary");
+      expect(refs.sites).toEqual(["main.scss:1", "main.scss:2", "main.scss:5"]);
+      expect(refs.coverage?.state).toBe("complete");
+      const renamed = await previewScssRename(project, "$primary", "main.scss", "$tone");
+      expect(renamed.safe).toBe(true);
+      expect(renamed.edits.map((edit) => edit.range.start.line).sort()).toEqual([1, 2, 5]);
+    });
+  });
+  it("does not read a dollar escaped by an odd number of backslashes", async () => {
+    const source = [
+      "$x: 1;",
+      ".a {",
+      "  a: \\$x;",
+      "  b: \\\\$x;",
+      "  c: \\\\\\$x;",
+      "  d: \\\\\\\\$x;",
+      "  e: $x;",
+      "}",
+      "",
+    ].join("\n");
+    await withScssProject({ "main.scss": source }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "$x");
+      expect(refs.sites).toEqual(["main.scss:1", "main.scss:4", "main.scss:6", "main.scss:7"]);
+      expect(refs.coverage?.state).toBe("complete");
+      const renamed = await previewScssRename(project, "$x", "main.scss", "$z");
+      expect(renamed.safe).toBe(true);
+      expect(renamed.edits.map((edit) => edit.range.start.line).sort()).toEqual([1, 4, 6, 7]);
+    });
+  });
+  it("resolves an underscore directory index", async () => {
+    await withScssProject(
+      {
+        "_theme/_index.scss": "$tone: red;\n",
+        "main.scss": '@use "./_theme";\n.a { color: theme.$tone; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$tone")).toBe("_theme/_index.scss:1");
+      },
+    );
+    await withScssProject(
+      {
+        "_theme.scss": "$tone: blue;\n",
+        "_theme/_index.scss": "$tone: red;\n",
+        "main.scss": '@use "./_theme";\n.a { color: theme.$tone; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$tone")).toBe("_theme.scss:1");
+      },
+    );
+  });
+  it("records a namespaced url call when the argument is an unquoted token", async () => {
+    const main = [
+      '@use "lib";',
+      ".a {",
+      "  a: lib.url(plain);",
+      "  b: lib.url($arg);",
+      "  c: url(plain);",
+      "}",
+      "$arg: 1;",
+      "",
+    ].join("\n");
+    const calls = extractScssFacts(main).uses.filter((use) => use.kind === "function" && use.text === "url");
+    expect(calls.map((use) => use.namespace)).toEqual(["lib", "lib"]);
+    await withScssProject(
+      {
+        "_lib.scss": "@function url($path) { @return $path; }\n",
+        "main.scss": main,
+      },
+      async (project) => {
+        const refs = await scssRefs(project, "_lib.scss", "url");
+        expect(refs.sites).toEqual(["_lib.scss:1", "main.scss:3", "main.scss:4"]);
+        expect(refs.coverage?.state).toBe("complete");
+        expect((await previewScssRename(project, "url", "_lib.scss", "asset")).safe).toBe(true);
+      },
+    );
+  });
+  it("hides an outer mixin from an underscore spelling of the same nested name", async () => {
+    const source = [
+      "@mixin foo-bar { color: red; }",
+      ".a {",
+      "  @mixin foo_bar { color: blue; }",
+      "  @include foo-bar;",
+      "}",
+      ".b { @include foo_bar; }",
+      "",
+    ].join("\n");
+    await withScssProject({ "main.scss": source }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "@mixin foo-bar", 0, "@mixin ".length);
+      expect(refs.sites).toEqual(["main.scss:1", "main.scss:6"]);
+      expect(refs.coverage?.state).toBe("complete");
+      expect(await scssGoto(project, "main.scss", "@include foo-bar", 0, "@include ".length)).toBe("not_found");
+      expect(await scssGoto(project, "main.scss", "@include foo_bar", 0, "@include ".length)).toBe("main.scss:1");
+    });
+  });
+});
