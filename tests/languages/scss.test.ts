@@ -3076,3 +3076,183 @@ describe("SCSS module navigation: import-only files, defaults, lookups, and sele
     );
   });
 });
+describe("SCSS module navigation: semantic review regressions", () => {
+  const native = isNativeTreeSitterAvailable();
+
+  it.runIf(native)("does not send a differently spelled shadowing local to the module", async () => {
+    for (const [moduleName, localName] of [
+      ["$foo_bar", "$foo-bar"],
+      ["$foo-bar", "$foo_bar"],
+    ]) {
+      await withScssProject(
+        {
+          "_colors.scss": moduleName + ": 1;\n",
+          "main.scss": [
+            '@use "colors" as *;',
+            ".a { " + localName + ": 2; width: " + moduleName + "; }",
+            ".b { width: " + moduleName + "; }",
+            "",
+          ].join("\n"),
+        },
+        async (project) => {
+          expect(await scssGoto(project, "main.scss", "width: " + moduleName, 0, 7)).toBe("not_found");
+          expect(await scssGoto(project, "main.scss", "width: " + moduleName, 1, 7)).toBe("_colors.scss:1");
+          const refs = await scssRefs(project, "_colors.scss", moduleName);
+          expect(refs.sites).toEqual(["_colors.scss:1", "main.scss:3"]);
+          expect(refs.coverage?.state).toBe("complete");
+        },
+      );
+    }
+    for (const [moduleName, localName] of [
+      ["$foo_bar", "$foo-bar"],
+      ["$foo-bar", "$foo_bar"],
+    ]) {
+      await withScssProject(
+        {
+          "same.scss": [
+            moduleName + ": 1;",
+            ".a { " + localName + ": 2; width: " + moduleName + "; }",
+            ".b { width: " + moduleName + "; }",
+            "",
+          ].join("\n"),
+        },
+        async (project) => {
+          expect(await scssGoto(project, "same.scss", "width: " + moduleName, 0, 7)).toBe("not_found");
+          expect(await scssGoto(project, "same.scss", "width: " + moduleName, 1, 7)).toBe("same.scss:1");
+          expect((await scssRefs(project, "same.scss", moduleName)).sites).toEqual(["same.scss:1", "same.scss:3"]);
+        },
+      );
+    }
+  });
+
+  it.runIf(native)("resolves real meta-named modules and inherited sass:meta lookups", async () => {
+    await withScssProject(
+      {
+        "_helpers.scss": "@function get-function($value) { @return $value; }\n",
+        "_meta.scss": "@function get-function($value) { @return $value; }\n",
+        "alias.scss": '@use "helpers" as meta;\n.a { width: meta.get-function(1px); }\n',
+        "default.scss": '@use "meta";\n.a { width: meta.get-function(2px); }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "alias.scss", "meta.get-function", 0, 5)).toBe("_helpers.scss:1");
+        expect(await scssGoto(project, "default.scss", "meta.get-function", 0, 5)).toBe("_meta.scss:1");
+        const helpers = await scssRefs(project, "_helpers.scss", "@function get-function", 0, 10);
+        const meta = await scssRefs(project, "_meta.scss", "@function get-function", 0, 10);
+        expect(helpers.sites).toEqual(["_helpers.scss:1", "alias.scss:2"]);
+        expect(meta.sites).toEqual(["_meta.scss:1", "default.scss:2"]);
+        expect(helpers.coverage?.state).toBe("complete");
+        expect(meta.coverage?.state).toBe("complete");
+      },
+    );
+    await withScssProject(
+      {
+        "_lib.scss": "@function pad() { @return 1px; }\n",
+        "_partial.scss": '.a { width: m.get-function("pad"); }\n',
+        "main.scss": '@use "sass:meta" as m;\n@use "lib";\n@import "partial";\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "_partial.scss", "m.get-function", 0, 2)).toBe("not_found");
+        const refs = await scssRefs(project, "_lib.scss", "@function pad", 0, 10);
+        expect(refs.sites).toEqual(["_lib.scss:1"]);
+        expect(refs.coverage?.state).toBe("partial");
+      },
+    );
+    await withScssProject(
+      {
+        "_lib.scss": "@function pad() { @return 1px; }\n",
+        "_partial.scss": '$lookups: module-functions("lib");\n',
+        "main.scss": '@use "sass:meta" as *;\n@use "lib";\n@import "partial";\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "_partial.scss", "module-functions")).toBe("not_found");
+        const refs = await scssRefs(project, "_lib.scss", "@function pad", 0, 10);
+        expect(refs.sites).toEqual(["_lib.scss:1"]);
+        expect(refs.coverage?.state).toBe("partial");
+      },
+    );
+    await withScssProject(
+      {
+        "_helpers.scss": "@function get-function($value) { @return $value; }\n",
+        "_partial.scss": ".a { width: meta.get-function(1px); }\n",
+        "main.scss": '@use "helpers" as meta;\n@import "partial";\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "_partial.scss", "meta.get-function", 0, 5)).toBe("_helpers.scss:1");
+        const refs = await scssRefs(project, "_helpers.scss", "@function get-function", 0, 10);
+        expect(refs.sites).toEqual(["_helpers.scss:1", "_partial.scss:1"]);
+        expect(refs.coverage?.state).toBe("complete");
+      },
+    );
+  });
+
+  it.runIf(native)("excludes interpolated extend targets and marks both possible placeholders partial", async () => {
+    const text = '@use "base";\n$suffix: "-large";\n.a { @extend %btn#{$suffix}; }\n.b { @extend %btn; }\n';
+    expect(
+      extractScssFacts(text)
+        .uses.filter((use) => use.kind === "placeholder")
+        .map((use) => use.text),
+    ).toEqual(["btn"]);
+    const other = [
+      '$prefix: "x";',
+      ".a { @extend #{$prefix}%btn; }",
+      ".b { @extend %btn/* comment */#{$prefix}; }",
+      "",
+    ].join("\n");
+    expect(extractScssFacts(other).uses.filter((use) => use.kind === "placeholder")).toEqual([]);
+    await withScssProject(
+      { "_base.scss": "%btn { color: red; }\n%btn-large { color: blue; }\n", "main.scss": text },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "%btn#", 0, 1)).toBe("not_found");
+        expect(await scssGoto(project, "main.scss", "%btn;", 0, 1)).toBe("_base.scss:1");
+        const candidates = [
+          ["%btn {", ["_base.scss:1", "main.scss:4"]],
+          ["%btn-large", ["_base.scss:2"]],
+        ] as const;
+        for (const [name, sites] of candidates) {
+          const refs = await scssRefs(project, "_base.scss", name, 0, 1);
+          expect(refs.sites).toEqual(sites);
+          expect(refs.coverage?.state).toBe("partial");
+          expect(refs.coverage?.affectedFiles?.map((file) => project.relative(file))).toEqual(["main.scss"]);
+        }
+        expect((await previewScssRename(project, "btn", "_base.scss", "button")).safe).toBe(false);
+      },
+    );
+  });
+
+  it.runIf(native)("allows forward show and hide member names before with", async () => {
+    await withScssProject(
+      {
+        "_lib.scss": "@mixin show { color: red; }\n@mixin hide { color: blue; }\n$x: 1 !default;\n",
+        "_api.scss": '@forward "lib" show show, hide with ($x: 2);\n',
+        "_single.scss": '@forward "lib" show show with ($x: 2);\n',
+        "_filtered.scss": '@forward "lib" hide hide;\n',
+        "main.scss": [
+          '@use "api";',
+          '@use "filtered";',
+          '@use "single";',
+          ".a { @include api.show; @include api.hide; @include filtered.show; @include single.show; }",
+          "",
+        ].join("\n"),
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "api.show", 0, 4)).toBe("_lib.scss:1");
+        expect(await scssGoto(project, "main.scss", "api.hide", 0, 4)).toBe("_lib.scss:2");
+        expect(await scssGoto(project, "main.scss", "filtered.show", 0, 9)).toBe("_lib.scss:1");
+        expect(await scssGoto(project, "main.scss", "single.show", 0, 7)).toBe("_lib.scss:1");
+        const show = await scssRefs(project, "_lib.scss", "@mixin show", 0, 7);
+        const hide = await scssRefs(project, "_lib.scss", "@mixin hide", 0, 7);
+        expect(show.sites).toEqual([
+          "_api.scss:1",
+          "_lib.scss:1",
+          "_single.scss:1",
+          "main.scss:4",
+          "main.scss:4",
+          "main.scss:4",
+        ]);
+        expect(hide.sites).toEqual(["_api.scss:1", "_filtered.scss:1", "_lib.scss:2", "main.scss:4"]);
+        expect(show.coverage?.state).toBe("complete");
+        expect(hide.coverage?.state).toBe("complete");
+      },
+    );
+  });
+});

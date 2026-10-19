@@ -20,7 +20,7 @@ import {
   scssUseAt,
   scssUseEditRange,
 } from "./resolution.js";
-import type { ScssUse } from "./syntax.js";
+import { scssOffsetAt, type ScssUse } from "./syntax.js";
 
 /**
  * SCSS navigation for Sass module members. Same-file selectors and other symbols the module
@@ -53,13 +53,22 @@ export async function goToScssDefinition(index: ProjectIndex, req: GoToRequest):
   const facts = await scssFactsForFile(index, req.file);
   if (!facts) return null;
   const use = scssUseAt(facts, req.line, req.column);
-  if (!use) return null;
+  if (!use) {
+    const offset = scssOffsetAt(facts, req.line, req.column);
+    if (
+      facts.interpolatedPlaceholderRanges.some(
+        (range) => offset >= (range.start.index ?? -1) && offset < (range.end.index ?? -1),
+      )
+    ) {
+      return { status: "not_found", reason: "An interpolated @extend name has no static placeholder target" };
+    }
+    return null;
+  }
   const resolved = await resolveScssUse(index, req.file, use);
   if (resolved.status === "shadow") {
-    // A local variable owns the name, so a module member is wrong. The generic walker answers for
-    // a variable that a block declares, so go-to-definition agrees with find references there. A
-    // parameter or a loop variable has no definition in the index, and the walker would fall back
-    // to the module member, so the answer is `not_found`.
+    // A local hides the module member. The exact-name generic walker can answer only for an indexed
+    // binding with the same spelling; a parameter, loop variable, or -/_ equivalent block binding
+    // would otherwise fall through to a wrong module member.
     if (resolved.indexed) return null;
     return { status: "not_found", reason: `A local variable hides the SCSS member ${use.text}` };
   }
@@ -125,7 +134,7 @@ export async function findScssReferences(
       continue;
     }
     scanned.push(file);
-    let unproven = false;
+    let unproven = member.kind === "placeholder" && facts.interpolatedExtend;
     const { matches, unproven: unresolvedUse } = await scssMemberUses(index, file, facts, member);
     if (unresolvedUse) unproven = true;
     for (const { use, resolved } of matches) {

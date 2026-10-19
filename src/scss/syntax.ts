@@ -86,11 +86,15 @@ export type ScssUse = {
    * The index refers to `loads` on the same file.
    */
   loadIndex: number | null;
+  /** A lookup-shaped call; only a proven sass:meta binding makes it dynamic. */
+  dynamic?: ScssDynamic;
 };
 
 /** A parameter, a loop variable, or a block variable. It hides a module member of the same name. */
 export type ScssLocalBinding = {
   canonical: string;
+  /** Source spelling; the generic scope walker cannot prove an equivalent differently spelled binding. */
+  spelling: string;
   /** First offset where the binding hides a member. */
   from: number;
   /** Offset after the last character of the block that owns the binding. */
@@ -125,6 +129,10 @@ export type ScssFileFacts = {
   uses: ScssUse[];
   locals: ScssLocalBinding[];
   dynamics: ScssDynamic[];
+  /** Interpolated @extend selectors cannot be assigned a static placeholder target. */
+  interpolatedExtend: boolean;
+  /** Prefix tokens inside an interpolated placeholder; clicks must not use the generic walker. */
+  interpolatedPlaceholderRanges: Range[];
   /** Offsets of line starts, for linear offset-to-position conversion. */
   lineStarts: readonly number[];
 };
@@ -291,10 +299,12 @@ export function extractScssFacts(source: string): ScssFileFacts {
   const uses: ScssUse[] = [];
   const locals: ScssLocalBinding[] = [];
   const dynamics: ScssDynamic[] = [];
+  const interpolatedPlaceholderRanges: Range[] = [];
+  let interpolatedExtend = false;
   const parens: ParenFrame[] = [];
   const braces: boolean[] = [];
   const blocks: BlockFrame[] = [];
-  const metaNamespaces = new Set<string>(["meta"]);
+  const metaNamespaces = new Set<string>();
   let metaStar = false;
   let pendingLocals: ScssLocalBinding[] = [];
   let statementStart = true;
@@ -360,6 +370,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
 
   const makeLocal = (nameStart: number, nameEnd: number, from: number): ScssLocalBinding => ({
     canonical: sassCanonical(source.slice(nameStart + 1, nameEnd)),
+    spelling: source.slice(nameStart, nameEnd),
     from,
     to: -1,
     range: rangeOf(nameStart, nameEnd),
@@ -368,7 +379,12 @@ export function extractScssFacts(source: string): ScssFileFacts {
   const addUse = (use: Omit<ScssUse, "canonical" | "hitStart"> & { hitStart?: number }): void => {
     // Sass folds `_` into `-` for variables, mixins, and functions, but compares a placeholder as written.
     const canonical = use.kind === "placeholder" ? use.text : sassCanonical(use.text);
-    uses.push({ ...use, canonical, hitStart: use.hitStart ?? use.nameStart });
+    const recorded: ScssUse = { ...use, canonical, hitStart: use.hitStart ?? use.nameStart };
+    if (use.syntax === "call" || use.syntax === "include") {
+      const form = dynamicFormOf(use.text);
+      if (form) recorded.dynamic = { form, arg: readCallArgument(use.nameEnd) };
+    }
+    uses.push(recorded);
   };
 
   const addVariableUse = (start: number, end: number, namespace: string | null): void => {
@@ -576,12 +592,18 @@ export function extractScssFacts(source: string): ScssFileFacts {
   const handleExtend = (from: number): number => {
     let cursor = from;
     let interpolation = 0;
+    let interpolatedSelector = false;
     while (cursor < length) {
       if (mask[cursor]) {
         cursor += 1;
         continue;
       }
       const unit = source.charCodeAt(cursor);
+      if (unit === 0x2c && !interpolation) interpolatedSelector = false;
+      if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {
+        interpolatedExtend = true;
+        interpolatedSelector = true;
+      }
       if (unit === 0x3b) break;
       if (unit === 0x7b) {
         if (source.charCodeAt(cursor - 1) !== 0x23) break;
@@ -591,19 +613,25 @@ export function extractScssFacts(source: string): ScssFileFacts {
         if (!interpolation) break;
         interpolation -= 1;
       }
-      if (unit === 0x25) {
+      if (unit === 0x25 && !interpolation) {
         const ident = readIdent(source, cursor + 1);
         if (ident) {
-          addUse({
-            kind: "placeholder",
-            syntax: "extend",
-            namespace: null,
-            text: ident.text,
-            nameStart: cursor + 1,
-            nameEnd: ident.end,
-            hitStart: cursor,
-            loadIndex: null,
-          });
+          const afterName = skipSpaceAndComments(ident.end);
+          const interpolatedSuffix = source.charCodeAt(afterName) === 0x23 && source.charCodeAt(afterName + 1) === 0x7b;
+          if (interpolatedSelector || interpolatedSuffix) {
+            interpolatedPlaceholderRanges.push(rangeOf(cursor, ident.end));
+          } else {
+            addUse({
+              kind: "placeholder",
+              syntax: "extend",
+              namespace: null,
+              text: ident.text,
+              nameStart: cursor + 1,
+              nameEnd: ident.end,
+              hitStart: cursor,
+              loadIndex: null,
+            });
+          }
           consume(cursor, ident.end);
           cursor = ident.end;
           continue;
@@ -668,7 +696,6 @@ export function extractScssFacts(source: string): ScssFileFacts {
       const unit = source.charCodeAt(cursor);
       if (unit === 0x3b || unit === 0x7b || cursor >= length) break;
       const word = readIdent(source, cursor);
-      if (word && (word.text === "with" || word.text === "as" || word.text === "show" || word.text === "hide")) break;
       if (unit === 0x24) {
         const variable = readIdent(source, cursor + 1);
         if (!variable) break;
@@ -686,7 +713,8 @@ export function extractScssFacts(source: string): ScssFileFacts {
       } else {
         break;
       }
-      if (source.charCodeAt(cursor) === 0x2c) cursor += 1;
+      if (source.charCodeAt(cursor) !== 0x2c) break;
+      cursor += 1;
     }
     return { names, end: cursor };
   };
@@ -1265,7 +1293,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
   for (const local of locals) {
     if (local.to < 0) local.to = length;
   }
-  return { declarations, loads, uses, locals, dynamics, lineStarts };
+  return { declarations, loads, uses, locals, dynamics, interpolatedExtend, interpolatedPlaceholderRanges, lineStarts };
 }
 
 /**

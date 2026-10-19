@@ -119,6 +119,8 @@ type ModuleModel = {
   unresolvedStems: Set<string>;
   /** Stems `meta.load-css` names; null stands for a URL that is not a string literal. */
   dynamicStems: Set<string | null>;
+  /** Dynamic calls whose sass:meta load comes from an @import importer. */
+  inheritedDynamics: NonNullable<ScssUse["dynamic"]>[];
 };
 
 type ProjectModel = {
@@ -477,6 +479,7 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
       defAt,
       unresolvedStems,
       dynamicStems,
+      inheritedDynamics: [],
     });
   }
   // An SCSS file whose text could not be read still loads other files, as far as the graph knows. It
@@ -489,7 +492,7 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
     }
   }
   const hosts = hostImports(index);
-  return {
+  const model: ProjectModel = {
     files,
     reverse,
     importers,
@@ -498,6 +501,16 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
     hostsByStem: hosts.byStem,
     hostsByTarget: hosts.byTarget,
   };
+  for (const current of files.values()) {
+    for (const use of current.facts.uses) {
+      if (!use.dynamic || !inheritsMetaLookup(model, current, use)) continue;
+      current.inheritedDynamics.push(use.dynamic);
+      if (use.dynamic.form === "load-css") {
+        current.dynamicStems.add(use.dynamic.arg === null ? null : moduleStem(use.dynamic.arg));
+      }
+    }
+  }
+  return model;
 }
 
 function projectModel(index: ProjectIndex): Promise<ProjectModel> {
@@ -779,6 +792,25 @@ function uniqueTargets(loads: readonly ResolvedLoad[]): ResolvedLoad[] {
   return unique;
 }
 
+/** An @imported partial inherits the caller's @use binding, not the spelling of its namespace. */
+function inheritsMetaLookup(model: ProjectModel, current: ModuleModel, use: ScssUse): boolean {
+  if (!use.dynamic) return false;
+  const importers = importerChain(model, current.key);
+  if (use.namespace === null) {
+    if (current.ownByName.has(use.kind + ":" + use.canonical)) return false;
+    return importers.some((importer) =>
+      importer.loads.some(
+        ({ load, target }) =>
+          load.kind === "use" && load.star && load.url.trim() === "sass:meta" && target.type === "builtin",
+      ),
+    );
+  }
+  const namespace = use.namespace;
+  if (matchingNamespaces(current, namespace).length) return false;
+  const inherited = uniqueTargets(importers.flatMap((importer) => matchingNamespaces(importer, namespace)));
+  return inherited.some(({ load, target }) => load.url.trim() === "sass:meta" && target.type === "builtin");
+}
+
 function resolveNamespaced(model: ProjectModel, current: ModuleModel, use: ScssUse, namespace: string): ScssResolution {
   let namespaces = matchingNamespaces(current, namespace);
   if (!namespaces.length) {
@@ -878,6 +910,7 @@ function legacyGetFunctionUse(at: number): ScssUse {
  * `get-function` is proved when it resolves to a function another file declares.
  */
 async function hasUnprovenDynamic(index: ProjectIndex, file: ModuleModel): Promise<boolean> {
+  if (file.inheritedDynamics.length) return true;
   for (const dynamic of file.facts.dynamics) {
     if (!dynamic.legacyBare) return true;
     const resolved = await resolveScssUse(index, file.file, legacyGetFunctionUse(dynamic.at ?? 0));
@@ -890,9 +923,12 @@ async function hasUnprovenDynamic(index: ProjectIndex, file: ModuleModel): Promi
 function resolveUnnamespaced(model: ProjectModel, current: ModuleModel, use: ScssUse): ScssResolution {
   const covering = coveringLocals(current, use);
   if (covering.length) {
-    const indexed = covering.some((local) =>
-      current.defAt.has(defKey(local.range.start.line, local.range.start.column, local.canonical)),
-    );
+    const nearest = covering[covering.length - 1]!;
+    // The generic scope walker compares names exactly. Let it answer only when it can prove this
+    // binding, not a same-spelled outer module member behind an equivalent -/_ local.
+    const indexed =
+      nearest.spelling === use.text &&
+      current.defAt.has(defKey(nearest.range.start.line, nearest.range.start.column, nearest.canonical));
     return { status: "shadow", indexed };
   }
   if (nestedMembers(model, current, use.kind, use.canonical).length) return nestedImportUnproven(use);
@@ -1024,6 +1060,9 @@ export async function resolveScssUse(index: ProjectIndex, file: FileId, use: Scs
   if (!current) return { status: "not_found", reason: "SCSS file is not indexed", unproven: true };
   if (use.kind === "placeholder") return resolvePlaceholder(model, current, use);
   if (use.loadIndex !== null) return resolveLoadName(model, current, use);
+  if (use.dynamic && current.inheritedDynamics.includes(use.dynamic)) {
+    return { status: "not_found", reason: "An inherited sass:meta lookup is dynamic", unproven: true };
+  }
   if (use.namespace !== null) return resolveNamespaced(model, current, use, use.namespace);
   return resolveUnnamespaced(model, current, use);
 }
