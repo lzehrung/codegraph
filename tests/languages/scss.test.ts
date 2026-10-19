@@ -2492,13 +2492,18 @@ describe("SCSS module navigation: late review follow-ups", () => {
     const hyphen = '@use "sass:meta" as my-meta;\n.a { x: my-meta.get_function("a"); y: my_meta.get_function("b"); }\n';
     expect(lookups(hyphen)).toEqual(["get-function:a"]);
     expect(calls(hyphen)).toEqual(["my_meta.get_function"]);
-    // A bare call is a lookup only when `sass:meta` is loaded with `as *`.
+    // `sass:meta` loaded with `as *` is a lookup, and the call is not also a use. A bare
+    // `get-function` / `get_function` is the legacy built-in too, unless this file already
+    // declared that function.
     const star = extractScssFacts('@use "sass:meta" as *;\n.a { x: get_function("a"); y: module_mixins("b"); }\n');
     expect(star.dynamics.map((dynamic) => `${dynamic.form}:${dynamic.arg}`)).toEqual([
       "get-function:a",
       "module-mixins:b",
     ]);
-    expect(extractScssFacts('.a { x: get_function("a"); }\n').dynamics).toEqual([]);
+    expect(star.uses.filter((use) => use.syntax === "call")).toEqual([]);
+    const bare = extractScssFacts('.a { x: get_function("a"); }\n');
+    expect(bare.dynamics.map((dynamic) => `${dynamic.form}:${dynamic.arg}`)).toEqual(["get-function:a"]);
+    expect(bare.uses.filter((use) => use.syntax === "call").map((use) => use.text)).toEqual(["get_function"]);
   });
 
   it.runIf(native)("reports partial coverage for a file that looks a name up with an underscore spelling", async () => {
@@ -2704,5 +2709,370 @@ describe("SCSS module navigation: late review follow-ups", () => {
     }
     expect(reads("background: url(#{map-get($primary, 'k')}.svg)"), "mixed").toEqual(["map-get@2", "$primary@2"]);
     expect(reads("background: url(#{foo('$primary')}.svg)"), "call").toEqual(["foo@2"]);
+  });
+});
+
+describe("SCSS module navigation: import-only files, defaults, lookups, and selectors", () => {
+  const native = isNativeTreeSitterAvailable();
+
+  function lineOf(source: string, offset: number): number {
+    return source.slice(0, offset).split("\n").length;
+  }
+
+  it("treats a bare get-function as dynamic unless this file already declared it", () => {
+    // dart-sass: a bare get-function is the legacy built-in. A user function declared above the
+    // call overrides it; one declared below does not own that earlier call.
+    const bare = extractScssFacts('.a { x: get-function("pad"); y: get_function("pad"); }\n');
+    expect(bare.dynamics.map((dynamic) => `${dynamic.form}:${dynamic.arg}`)).toEqual([
+      "get-function:pad",
+      "get-function:pad",
+    ]);
+    const before = extractScssFacts('@function get_function($name) { @return 5px; }\n.a { x: get-function("pad"); }\n');
+    expect(before.dynamics).toEqual([]);
+    expect(before.uses.filter((use) => use.syntax === "call").map((use) => use.text)).toEqual(["get-function"]);
+    const after = extractScssFacts('.a { x: get-function("pad"); }\n@function get-function($name) { @return 5px; }\n');
+    expect(after.dynamics.map((dynamic) => `${dynamic.form}:${dynamic.arg}`)).toEqual(["get-function:pad"]);
+    expect(after.uses.filter((use) => use.syntax === "call").map((use) => use.text)).toEqual(["get-function"]);
+  });
+
+  it("keeps the next declaration when // sits inside url() in an interpolation", () => {
+    // dart-sass compiles the rule and the following variable: url(http://...) has no comment.
+    const source = '.x { content: "#{url(http://example.com/x.png)}"; }\n$later: 2;\n';
+    const facts = extractScssFacts(source);
+    expect(facts.declarations.map((declaration) => declaration.name)).toEqual(["$later"]);
+    expect(facts.uses.map((use) => use.text)).toEqual([]);
+    const nested = '$name: "a";\n.x { content: "#{url(http://example.com/#{$name}.png)}"; }\n$later: 2;\n';
+    const nestedFacts = extractScssFacts(nested);
+    expect(nestedFacts.declarations.map((declaration) => declaration.name)).toEqual(["$name", "$later"]);
+    expect(nestedFacts.uses.map((use) => use.text)).toEqual(["$name"]);
+    const hidden = '.x { content: "#{url(http://example.com/#{\"$name\"}.png)}"; }\n$later: 2;\n';
+    const hiddenFacts = extractScssFacts(hidden);
+    expect(hiddenFacts.declarations.map((declaration) => declaration.name)).toEqual(["$later"]);
+    expect(hiddenFacts.uses).toEqual([]);
+  });
+
+  const SUPPORTS_SELECTOR = [
+    "@function has($n) { @return $n; }",
+    "@function selector($n) { @return 1px; }",
+    ".a {",
+    "  @supports selector(:has(*)) { width: has(1); }",
+    "  @supports SELECTOR(:has(*)) { width: has(2); }",
+    "  @supports (selector(:has(*))) { width: has(3); }",
+    "  @supports selector(:is(:has(*))) { width: selector(4); }",
+    "  @supports selector (:has(#{has(5)})) { width: has(6); }",
+    "}",
+    "@if has(7) { .b { w: 1; } }",
+    "@if selector(8) { .c { w: 1; } }",
+    "@media (min-width: has(9)) { .d { w: 1; } }",
+    "",
+  ].join("\n");
+
+  it("does not read a pseudo-class inside @supports selector() as a Sass call", () => {
+    // dart-sass keeps :has and :is inside selector() as CSS, and calls the user functions for
+    // has(1) in the block, has(5) in the interpolation, @if has(7), and @if selector(8).
+    const facts = extractScssFacts(SUPPORTS_SELECTOR);
+    expect(
+      facts.uses
+        .filter((use) => use.kind === "function")
+        .map((use) => `${use.text}@${lineOf(SUPPORTS_SELECTOR, use.nameStart)}`),
+    ).toEqual(["has@4", "has@5", "has@6", "selector@7", "has@8", "has@8", "has@10", "selector@11", "has@12"]);
+  });
+
+  it.runIf(native)("prefers an import-only file for @import and not for @use or @forward", async () => {
+    // dart-sass: @import "lib" and @import "lib.scss" load _lib.import.scss. @use and @forward load
+    // _lib.scss. A directory's _index.import.scss is the same split.
+    await withScssProject(
+      {
+        "_lib.import.scss": "$from-import: 1;\n",
+        "_lib.scss": "$from-use: 2;\n",
+        "legacy.scss": '@import "lib";\n.a { w: $from-import; }\n',
+        "explicit.scss": '@import "lib.scss";\n.a { w: $from-import; }\n',
+        "use.scss": '@use "lib";\n.a { w: lib.$from-use; }\n',
+        "miss.scss": '@use "lib";\n.a { w: lib.$from-import; }\n',
+        "fwd.scss": '@forward "lib";\n',
+        "consumer.scss": '@use "fwd";\n.a { w: fwd.$from-use; }\n',
+        "fwd-miss.scss": '@use "fwd";\n.a { w: fwd.$from-import; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "legacy.scss", "$from-import")).toBe("_lib.import.scss:1");
+        expect(await scssGoto(project, "explicit.scss", "$from-import")).toBe("_lib.import.scss:1");
+        expect(await scssGoto(project, "use.scss", "$from-use")).toBe("_lib.scss:1");
+        expect(await scssGoto(project, "miss.scss", "$from-import")).toBe("not_found");
+        expect(await scssGoto(project, "consumer.scss", "$from-use")).toBe("_lib.scss:1");
+        expect(await scssGoto(project, "fwd-miss.scss", "$from-import")).toBe("not_found");
+        const imported = await scssRefs(project, "_lib.import.scss", "$from-import");
+        expect(imported.sites).toEqual(["_lib.import.scss:1", "explicit.scss:2", "legacy.scss:2"]);
+        expect(imported.coverage?.state).toBe("complete");
+        const used = await scssRefs(project, "_lib.scss", "$from-use");
+        expect(used.sites).toEqual(["_lib.scss:1", "consumer.scss:2", "use.scss:2"]);
+        expect(used.coverage?.state).toBe("complete");
+      },
+    );
+    await withScssProject(
+      {
+        "lib/_index.import.scss": "$from-import: 1;\n",
+        "lib/_index.scss": "$from-use: 2;\n",
+        "legacy.scss": '@import "lib";\n.a { w: $from-import; }\n',
+        "use.scss": '@use "lib";\n.a { w: lib.$from-use; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "legacy.scss", "$from-import"), "index import").toBe("lib/_index.import.scss:1");
+        expect(await scssGoto(project, "use.scss", "$from-use"), "index use").toBe("lib/_index.scss:1");
+      },
+    );
+    // Only the import-only file exists: @import loads it, and @use does not.
+    await withScssProject(
+      {
+        "_only.import.scss": "$only: 1;\n",
+        "legacy.scss": '@import "only";\n.a { w: $only; }\n',
+        "use.scss": '@use "only";\n.a { w: only.$only; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "legacy.scss", "$only"), "only import").toBe("_only.import.scss:1");
+        expect(await scssGoto(project, "use.scss", "$only"), "only use").toBe("not_found");
+        const refs = await scssRefs(project, "_only.import.scss", "$only");
+        expect(refs.sites).toEqual(["_only.import.scss:1", "legacy.scss:2"]);
+        expect(refs.coverage?.state).toBe("complete");
+      },
+    );
+    // Two import-only siblings: Sass cannot choose, so the @import is unresolved and both files
+    // stay partial.
+    await withScssProject(
+      {
+        "_lib.import.scss": "$from-partial: 1;\n",
+        "lib.import.scss": "$from-plain: 2;\n",
+        "main.scss": '@import "lib";\n.a { w: $from-partial; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$from-partial"), "ambiguous").toBe("not_found");
+        const partial = await scssRefs(project, "_lib.import.scss", "$from-partial");
+        expect(partial.sites).toEqual(["_lib.import.scss:1"]);
+        expect(partial.coverage?.state).toBe("partial");
+        expect(partial.coverage?.affectedFiles?.map((file) => project.relative(file))).toEqual(["main.scss"]);
+        const plain = await scssRefs(project, "lib.import.scss", "$from-plain");
+        expect(plain.coverage?.state).toBe("partial");
+        expect(plain.coverage?.affectedFiles?.map((file) => project.relative(file))).toEqual(["main.scss"]);
+      },
+    );
+  });
+
+  it.runIf(native)("treats a variable as configurable when any assignment uses !default", async () => {
+    // dart-sass accepts with ($x: 2) for `$x: null; $x: 1 !default` and for `$x: 1; $x: 2 !default`.
+    // `$y: 1` with no !default is not configurable.
+    await withScssProject(
+      {
+        "_vars.scss": "$x: null;\n$x: 1 !default;\n.a { w: $x; }\n$y: 1;\n",
+        "main.scss": '@use "vars" with ($x: 2, $y: 3);\n.b { w: vars.$x; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "($x", 0, 1)).toBe("_vars.scss:1");
+        expect(await scssGoto(project, "main.scss", "$x", 1)).toBe("_vars.scss:1");
+        expect(await scssGoto(project, "main.scss", "$y")).toBe("not_found");
+        const refs = await scssRefs(project, "_vars.scss", "$x: null");
+        expect(refs.sites).toEqual(["_vars.scss:1", "_vars.scss:2", "_vars.scss:3", "main.scss:1", "main.scss:2"]);
+        expect(refs.coverage?.state).toBe("complete");
+        const fromKey = await scssRefs(project, "main.scss", "($x", 0, 1);
+        expect(fromKey.sites).toEqual(refs.sites);
+        const plain = await scssRefs(project, "_vars.scss", "$y");
+        expect(plain.sites).toEqual(["_vars.scss:4"]);
+        expect(plain.coverage?.state).toBe("complete");
+      },
+    );
+    await withScssProject(
+      {
+        "_vars.scss": "$x: 1;\n$x: 2 !default;\n",
+        "main.scss": '@use "vars" with ($x: 9);\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "($x", 0, 1), "later default").toBe("_vars.scss:1");
+        const refs = await scssRefs(project, "main.scss", "($x", 0, 1);
+        expect(refs.sites).toEqual(["_vars.scss:1", "_vars.scss:2", "main.scss:1"]);
+        expect(refs.coverage?.state).toBe("complete");
+      },
+    );
+  });
+
+  it.runIf(native)("treats a bare get-function as a dynamic lookup unless a user function is proved", async () => {
+    for (const lookup of ['get-function("pad")', 'get_function("pad")']) {
+      await withScssProject(
+        {
+          "_lib.scss": "@function pad() { @return 1px; }\n",
+          "main.scss": `@use "lib";\n.a { w: lib.pad(); x: ${lookup}; }\n`,
+        },
+        async (project) => {
+          const refs = await scssRefs(project, "_lib.scss", "@function pad", 0, "@function ".length);
+          expect(refs.sites, lookup).toEqual(["_lib.scss:1", "main.scss:2"]);
+          expect(refs.coverage?.state, lookup).toBe("partial");
+          expect(
+            refs.coverage?.affectedFiles?.map((file) => project.relative(file)),
+            lookup,
+          ).toEqual(["main.scss"]);
+          const renamed = await previewScssRename(project, "pad", "_lib.scss", "inset");
+          expect(renamed.safe, lookup).toBe(false);
+          expect(
+            renamed.unsafeSites.some((site) => site.reason === "unresolved_reference"),
+            lookup,
+          ).toBe(true);
+        },
+      );
+    }
+    // A function declared above the call owns it, so the string argument is not a lookup of pad.
+    await withScssProject(
+      {
+        "m.scss":
+          '@function get-function($name) { @return 5px; }\n@function pad() { @return 1px; }\n.a { w: get-function("pad"); x: pad(); }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "m.scss", 'get-function("pad")')).toBe("m.scss:1");
+        const pad = await scssRefs(project, "m.scss", "@function pad", 0, "@function ".length);
+        expect(pad.sites).toEqual(["m.scss:2", "m.scss:3"]);
+        expect(pad.coverage?.state).toBe("complete");
+        expect((await previewScssRename(project, "pad", "m.scss", "inset")).safe).toBe(true);
+      },
+    );
+    // A function declared below the call does not own it.
+    await withScssProject(
+      {
+        "m.scss":
+          '@function pad() { @return 1px; }\n.a { w: get-function("pad"); }\n@function get-function($name) { @return 5px; }\n',
+      },
+      async (project) => {
+        const fn = await scssRefs(project, "m.scss", "@function get-function", 0, "@function ".length);
+        expect(fn.sites).toEqual(["m.scss:3"]);
+        const pad = await scssRefs(project, "m.scss", "@function pad", 0, "@function ".length);
+        expect(pad.coverage?.state).toBe("partial");
+      },
+    );
+    // An imported function loaded with as * is proved, so pad's coverage stays complete.
+    await withScssProject(
+      {
+        "_fns.scss": "@function get-function($name) { @return 7px; }\n@function pad() { @return 1px; }\n",
+        "main.scss": '@use "fns" as *;\n.a { w: get_function("pad"); x: pad(); }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "get_function")).toBe("_fns.scss:1");
+        const fn = await scssRefs(project, "_fns.scss", "@function get-function", 0, "@function ".length);
+        expect(fn.sites).toEqual(["_fns.scss:1", "main.scss:2"]);
+        expect(fn.coverage?.state).toBe("complete");
+        const pad = await scssRefs(project, "_fns.scss", "@function pad", 0, "@function ".length);
+        expect(pad.sites).toEqual(["_fns.scss:2", "main.scss:2"]);
+        expect(pad.coverage?.state).toBe("complete");
+        expect((await previewScssRename(project, "pad", "_fns.scss", "inset")).safe).toBe(true);
+      },
+    );
+  });
+
+  it.runIf(native)("does not rename a pseudo-class inside @supports selector()", async () => {
+    await withScssProject({ "m.scss": SUPPORTS_SELECTOR }, async (project) => {
+      const has = await scssRefs(project, "m.scss", "@function has", 0, "@function ".length);
+      expect(has.sites).toEqual([
+        "m.scss:1",
+        "m.scss:10",
+        "m.scss:12",
+        "m.scss:4",
+        "m.scss:5",
+        "m.scss:6",
+        "m.scss:8",
+        "m.scss:8",
+      ]);
+      const selector = await scssRefs(project, "m.scss", "@function selector", 0, "@function ".length);
+      expect(selector.sites).toEqual(["m.scss:11", "m.scss:2", "m.scss:7"]);
+      const renamed = await previewScssRename(project, "has", "m.scss", "contains");
+      expect(renamed.safe).toBe(true);
+      const lines = SUPPORTS_SELECTOR.split("\n");
+      const pseudo = new Set<string>();
+      for (const [index, line] of lines.entries()) {
+        let from = 0;
+        while (from < line.length) {
+          const at = line.indexOf(":has", from);
+          if (at < 0) break;
+          pseudo.add(`${index + 1}:${at + 2}`);
+          from = at + 4;
+        }
+      }
+      expect(renamed.edits.length).toBe(8);
+      for (const edit of renamed.edits) {
+        expect(edit.oldText).toBe("has");
+        expect(pseudo.has(`${edit.range.start.line}:${edit.range.start.column}`)).toBe(false);
+      }
+    });
+  });
+
+  it.runIf(native)("reports a collision when a forward show list newly exposes the renamed member", async () => {
+    // dart-sass: @forward "lib" show $y does not expose $x today. After $x becomes $y the show
+    // entry admits it, and a star-load beside another $y is ambiguous.
+    const collide = {
+      "_lib.scss": "$x: 1;\n",
+      "_agg.scss": '@forward "lib" show $y;\n',
+      "_other.scss": "$y: 2;\n",
+      "main.scss": '@use "agg" as *;\n@use "other" as *;\n.a { w: $x; }\n',
+    };
+    await withScssProject(collide, async (project) => {
+      const renamed = await previewScssRename(project, "$x", "_lib.scss", "$y");
+      expect(renamed.safe).toBe(false);
+      expect(renamed.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`).sort()).toEqual([
+        "name_collision:_other.scss",
+      ]);
+    });
+    await withScssProject(
+      {
+        "_lib.scss": "$foo-baz: 1;\n",
+        "_agg.scss": '@forward "lib" show $foo_bar;\n',
+        "_other.scss": "$foo-bar: 2;\n",
+        "main.scss": '@use "agg" as *;\n@use "other" as *;\n.a { w: $foo-baz; }\n',
+      },
+      async (project) => {
+        const renamed = await previewScssRename(project, "$foo-baz", "_lib.scss", "$foo-bar");
+        expect(renamed.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`)).toEqual([
+          "name_collision:_other.scss",
+        ]);
+      },
+    );
+    await withScssProject(
+      {
+        "_lib.scss": "$x: 1;\n",
+        "_agg.scss": '@forward "lib" as theme-* show $theme-y;\n',
+        "_other.scss": "$theme-y: 2;\n",
+        "main.scss": '@use "agg" as *;\n@use "other" as *;\n.a { w: $theme-x; }\n',
+      },
+      async (project) => {
+        const renamed = await previewScssRename(project, "$x", "_lib.scss", "$y");
+        expect(
+          renamed.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`),
+          "prefix",
+        ).toEqual(["name_collision:_other.scss"]);
+      },
+    );
+    // The show entry already names the member, so the rename edits it and the member stays exposed.
+    await withScssProject(
+      {
+        ...collide,
+        "_agg.scss": '@forward "lib" show $x;\n',
+      },
+      async (project) => {
+        const renamed = await previewScssRename(project, "$x", "_lib.scss", "$y");
+        expect(
+          renamed.conflicts.map((conflict) => `${conflict.reason}:${conflict.file}`),
+          "edited show",
+        ).toEqual(["name_collision:_other.scss"]);
+      },
+    );
+    // A namespaced consumer and a show list that names the new name, with no other $y, stay safe.
+    // The show entry already spells $y, so it is not an edit.
+    await withScssProject(
+      {
+        "_lib.scss": "$x: 1;\n",
+        "_agg.scss": '@forward "lib" show $y;\n',
+        "main.scss": '@use "agg";\n.a { w: agg.$x; }\n',
+      },
+      async (project) => {
+        const renamed = await previewScssRename(project, "$x", "_lib.scss", "$y");
+        expect(renamed.conflicts).toEqual([]);
+        expect(renamed.safe).toBe(true);
+        // `show $y` does not expose `$x` today, so `agg.$x` is not a reference and is not edited.
+        expect(await scssGoto(project, "main.scss", "$x")).toBe("not_found");
+        expect(renamed.edits.map((edit) => edit.file)).toEqual(["_lib.scss"]);
+      },
+    );
   });
 });

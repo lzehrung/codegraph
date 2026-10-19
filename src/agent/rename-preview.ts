@@ -664,7 +664,8 @@ async function addTerraformConflicts(
  * already declares or exposes under the new name collides. A local variable that would capture a
  * use is a shadowing conflict. A new name that starts with `-` or `_` is private, so a use through
  * `@use` or `@forward` could no longer reach it, and a `@forward` hide list that names the new name
- * hides the member from the uses that read it through that forward.
+ * hides the member from the uses that read it through that forward. A show list that already
+ * names the new name can newly expose the member, and that exposure is part of the collision check.
  */
 async function addScssConflicts(
   snapshot: AgentProjectSnapshot,

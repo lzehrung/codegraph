@@ -616,6 +616,17 @@ function collectInterpolationSpans(
   let depth = 1;
   let cursor = start + interpolation.start.length;
   while (cursor < source.length) {
+    // An unquoted `url(...)` is opaque, including inside `#{...}`: `url(http://...)` has no
+    // comment. Nested interpolation in the url stays code, and its strings and comments are trivia.
+    if (row.unquotedCssUrl) {
+      const cssUrl = unquotedCssUrlConstruct(source, row, cursor);
+      if (cssUrl !== null) {
+        // The url shell is opaque here too. Nested `#{...}` stays code.
+        spans.push(...cssUrl.maskSpans);
+        cursor = cssUrl.end;
+        continue;
+      }
+    }
     const ch = source[cursor];
     if (source.startsWith(interpolation.end, cursor)) {
       depth -= 1;

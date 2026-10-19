@@ -239,6 +239,21 @@ describe("trivia masking keeps following code visible per language", () => {
     expect(js).toContain("const next = 1;");
   });
 
+  it("keeps the next declaration when // sits inside url() in an interpolation", () => {
+    // An unquoted url() inside #{...} is opaque, so // in the URL is not a line comment.
+    const source = '.x { content: "#{url(http://example.com/x.png)}"; }\n$later: 2;\n';
+    const masked = maskTrivia(source, "scss");
+    expectOffsetsPreserved(source, masked);
+    expect(masked).toContain("$later: 2;");
+    const nested = '$name: "a";\n.x { content: "#{url(http://example.com/#{$name}.png)}"; }\n$later: 2;\n';
+    const mask = buildTriviaMask(nested, "scss", { holes: true, maskCssUrls: true });
+    let code = "";
+    for (let index = 0; index < nested.length; index += 1) code += mask[index] ? " " : nested.charAt(index);
+    expect(code).toContain("$name");
+    expect(code).toContain("$later: 2;");
+    expect(code).not.toContain('"a"');
+  });
+
   it("preserves offsets across an astral character inside masked trivia", () => {
     const source = "# \u{1F389} don't\nimport os\n";
     const masked = maskPythonCommentsAndStrings(source);

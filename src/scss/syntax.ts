@@ -110,6 +110,13 @@ export type ScssDynamic = {
   form: ScssDynamicForm;
   /** String argument, or null when the argument is not a literal. */
   arg: string | null;
+  /**
+   * Bare legacy `get-function` / `get_function` with no `sass:meta` load. Resolution drops the
+   * lookup when a user-defined function of that name, already in scope, is proved to own the call.
+   */
+  legacyBare?: true;
+  /** Offset of the callee. A `get-function` declared later in the file does not own this call. */
+  at?: number;
 };
 
 export type ScssFileFacts = {
@@ -246,8 +253,11 @@ function isPlainCssImportUrl(url: string): boolean {
 }
 
 type ParenFrame = {
-  /** `call` is a function or mixin argument list, `params` a parameter list, `group` any other parentheses. */
-  mode: "call" | "group" | "params";
+  /**
+   * `call` is a function or mixin argument list, `params` a parameter list, `selector` is the
+   * `selector(...)` argument of an `@supports` head, and `group` is any other parentheses.
+   */
+  mode: "call" | "group" | "params" | "selector";
   /** True at the start of an argument or parameter, before its first token. */
   argStart: boolean;
 };
@@ -294,8 +304,12 @@ export function extractScssFacts(source: string): ScssFileFacts {
   const globalVariables = new Set<string>();
   /** How many bindings of each name are in scope now: parameters, loop variables, and block variables. */
   const localCounts = new Map<string, number>();
+  /** Canonical names of the top-level functions declared so far. A call after one of them is that function. */
+  const declaredFunctions = new Set<string>();
   let paramsParenAt = -1;
   let callParenAt = -1;
+  /** Offset of `(` after `selector` in an `@supports` head, so the paren is selector context. */
+  let selectorParenAt = -1;
   /** Offset where the current statement starts: after the last `;` or block brace. */
   let statementBegin = 0;
   let headCache: { begin: number; styleRule: boolean } | null = null;
@@ -527,6 +541,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
         topLevel: true,
         isDefault: false,
       });
+      if (keyword === "function") declaredFunctions.add(sassCanonical(name.text));
     }
     const paren = skipBlank(name.end);
     if (source.charCodeAt(paren) === 0x28) paramsParenAt = paren;
@@ -1031,6 +1046,16 @@ export function extractScssFacts(source: string): ScssFileFacts {
     return headCache.styleRule;
   };
 
+  /**
+   * True when `:` starts a CSS pseudo, not a Sass call: a style-rule head, or `selector(...)` in
+   * an `@supports` head. Interpolation inside either is an expression, so `#{has(1)}` stays a call.
+   */
+  const inSelectorContext = (): boolean => {
+    if (braces.includes(false)) return false;
+    if (parens.some((frame) => frame.mode === "selector")) return true;
+    return opensStyleRule();
+  };
+
   /** `ns.member` access, a call, or a plain identifier. Returns the offset to continue from. */
   const handleIdentifier = (start: number, ident: { text: string; end: number }): number => {
     if (inInclude && ident.text === "using") {
@@ -1073,15 +1098,39 @@ export function extractScssFacts(source: string): ScssFileFacts {
       // Any other `ns.name` text is a selector, a unit, or a file name, not a module member.
       return member.end;
     }
+    // `@supports selector(...)` takes a selector. The name is CSS, not a Sass function, and so is
+    // `:has(` inside it. A call in an at-rule expression, such as `@if has(1)`, stays a call.
+    if (statementRule === "supports" && !braces.includes(false) && ident.text.toLowerCase() === "selector") {
+      const paren = skipBlank(ident.end);
+      if (source.charCodeAt(paren) === 0x28) {
+        selectorParenAt = paren;
+        return ident.end;
+      }
+    }
     if (source.charCodeAt(ident.end) === 0x28) {
       const bareForm = metaCallForm(null, ident.text);
       if (bareForm) {
         dynamics.push({ form: bareForm, arg: readCallArgument(ident.end) });
         return ident.end;
       }
+      // Legacy `get-function` / `get_function` is a global built-in unless this file already
+      // declared that function. A declaration later in the file does not own the earlier call.
+      if (dynamicFormOf(ident.text) === "get-function" && !declaredFunctions.has("get-function")) {
+        dynamics.push({ form: "get-function", arg: readCallArgument(ident.end), legacyBare: true, at: start });
+        addUse({
+          kind: "function",
+          syntax: "call",
+          namespace: null,
+          text: ident.text,
+          nameStart: start,
+          nameEnd: ident.end,
+          loadIndex: null,
+        });
+        return ident.end;
+      }
       // A CSS functional pseudo-class or pseudo-element in a selector (`:is(`, `:not(`, `::part(`)
-      // is no Sass function call.
-      if (previous === 0x3a && opensStyleRule()) return ident.end;
+      // is no Sass function call. `selector(...)` in an `@supports` head is selector context too.
+      if (previous === 0x3a && inSelectorContext()) return ident.end;
       addUse({
         kind: "function",
         syntax: "call",
@@ -1141,6 +1190,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
     if (unit === 0x28) {
       let mode: ParenFrame["mode"] = "group";
       if (paramsParenAt === index) mode = "params";
+      else if (selectorParenAt === index) mode = "selector";
       else if (callParenAt === index || isIdentPart(source.charCodeAt(index - 1))) mode = "call";
       touch();
       parens.push({ mode, argStart: true });

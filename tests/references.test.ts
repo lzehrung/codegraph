@@ -6766,4 +6766,65 @@ describe("Find References: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  it("finds the import-only member from @import and the ordinary member from @use", async () => {
+    const files = {
+      "_lib.import.scss": "$from-import: 1;\n",
+      "_lib.scss": "$from-use: 2;\n",
+      "legacy.scss": '@import "lib";\n.a { w: $from-import; }\n',
+      "use.scss": '@use "lib";\n.a { w: lib.$from-use; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const imported = await testFindReferences(index, paths["_lib.import.scss"]!, 1, 1, [
+        { file: paths["_lib.import.scss"]!, line: 1, column: 1 },
+        {
+          file: paths["legacy.scss"]!,
+          line: 2,
+          column: tokenColumn(files["legacy.scss"]!.split("\n")[1]!, "$from-import"),
+        },
+      ]);
+      expect(imported.status === "ok" ? imported.referenceCoverage?.state : undefined).toBe("complete");
+      const used = await testFindReferences(index, paths["_lib.scss"]!, 1, 1, [
+        { file: paths["_lib.scss"]!, line: 1, column: 1 },
+        {
+          file: paths["use.scss"]!,
+          line: 2,
+          column: tokenColumn(files["use.scss"]!.split("\n")[1]!, "$from-use"),
+        },
+      ]);
+      expect(used.status === "ok" ? used.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the with key when a later assignment uses !default, and not when none does", async () => {
+    // dart-sass accepts ($x: 2) because the second assignment is !default, and rejects ($y: 3).
+    const files = {
+      "_vars.scss": "$x: null;\n$x: 1 !default;\n.a { w: $x; }\n$y: 1;\n",
+      "main.scss": '@use "vars" with ($x: 2, $y: 3);\n.b { w: vars.$x; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const varsRead = files["_vars.scss"]!.split("\n")[2]!;
+      const main = files["main.scss"]!.split("\n");
+      const expected = [
+        { file: paths["_vars.scss"]!, line: 1, column: 1 },
+        { file: paths["_vars.scss"]!, line: 2, column: 1 },
+        { file: paths["_vars.scss"]!, line: 3, column: tokenColumn(varsRead, "$x") },
+        { file: paths["main.scss"]!, line: 1, column: tokenColumn(main[0]!, "$x") },
+        { file: paths["main.scss"]!, line: 2, column: tokenColumn(main[1]!, "$x") },
+      ];
+      const fromDeclaration = await testFindReferences(index, paths["_vars.scss"]!, 1, 1, expected);
+      expect(fromDeclaration.status === "ok" ? fromDeclaration.referenceCoverage?.state : undefined).toBe("complete");
+      const fromKey = await testFindReferences(index, paths["main.scss"]!, 1, tokenColumn(main[0]!, "$x"), expected);
+      expect(fromKey.status === "ok" ? fromKey.referenceCoverage?.state : undefined).toBe("complete");
+      const plain = await testFindReferences(index, paths["_vars.scss"]!, 4, 1, [
+        { file: paths["_vars.scss"]!, line: 4, column: 1 },
+      ]);
+      expect(plain.status === "ok" ? plain.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

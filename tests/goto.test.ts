@@ -6118,4 +6118,56 @@ describe("Go to Definition: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  it("prefers an import-only partial for @import and the ordinary partial for @use", async () => {
+    // dart-sass loads _lib.import.scss from @import "lib" and _lib.scss from @use "lib".
+    const files = {
+      "_lib.import.scss": "$from-import: 1;\n",
+      "_lib.scss": "$from-use: 2;\n",
+      "legacy.scss": '@import "lib";\n.a { w: $from-import; }\n',
+      "use.scss": '@use "lib";\n.a { w: lib.$from-use; }\n',
+      "miss.scss": '@use "lib";\n.a { w: lib.$from-import; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const legacyLine = files["legacy.scss"]!.split("\n")[1]!;
+      await testGoToDefinition(
+        index,
+        paths["legacy.scss"]!,
+        2,
+        columnOf(legacyLine, "$from-import"),
+        paths["_lib.import.scss"]!,
+        1,
+      );
+      const useLine = files["use.scss"]!.split("\n")[1]!;
+      await testGoToDefinition(index, paths["use.scss"]!, 2, columnOf(useLine, "$from-use"), paths["_lib.scss"]!, 1);
+      const missLine = files["miss.scss"]!.split("\n")[1]!;
+      await testGoToDefinition(
+        index,
+        paths["miss.scss"]!,
+        2,
+        columnOf(missLine, "$from-import"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a with key when a later assignment uses !default, and not when none does", async () => {
+    // dart-sass accepts with ($x: 2) when a later assignment is !default, and rejects ($y: 3).
+    const files = {
+      "_vars.scss": "$x: null;\n$x: 1 !default;\n$y: 1;\n",
+      "main.scss": '@use "vars" with ($x: 2, $y: 3);\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const main = files["main.scss"]!;
+      await testGoToDefinition(index, paths["main.scss"]!, 1, columnOf(main, "$x"), paths["_vars.scss"]!, 1);
+      await testGoToDefinition(index, paths["main.scss"]!, 1, columnOf(main, "$y"), undefined, undefined, "not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

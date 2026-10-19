@@ -214,7 +214,8 @@ const CSS_FAMILY_ROW: TriviaRow = {
 
 // SCSS: `//` comments end at the line break and are read before any quote, so an apostrophe in
 // `// don't` cannot open a string. `#{...}` is code even inside a string. An unquoted `url(...)`
-// is one token, so `url(http://x/y.png)` and `url(//cdn/y.png)` contain no comment.
+// is one token, including inside that interpolation, so `url(http://x/y.png)` and `url(//cdn/y.png)`
+// contain no comment.
 const SCSS_ROW: TriviaRow = {
   lineComments: ["//"],
   blockComments: [SLASH_STAR_COMMENT],

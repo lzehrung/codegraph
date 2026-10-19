@@ -77,7 +77,7 @@ export type ScssDeclaredMember = {
   sites: readonly ScssSite[];
 };
 
-type LoadTarget = { type: "file"; file: FileId } | { type: "builtin" } | { type: "unresolved" };
+type LoadTarget = { type: "file"; file: FileId } | { type: "builtin" } | { type: "unresolved"; extraStems?: string[] };
 
 type ResolvedLoad = { load: ScssModuleLoad; target: LoadTarget };
 
@@ -88,6 +88,7 @@ type OwnMember = {
   sites: ScssSite[];
   /** `defKey` of every site, so a definition that the index reports finds its member. */
   siteKeys: Set<string>;
+  /** True when any top-level assignment of the variable uses `!default`. */
   isDefault: boolean;
 };
 
@@ -152,6 +153,11 @@ type Member = {
   importOnly: boolean;
   /** The `@forward` lists the member passed through, innermost first. */
   filters: readonly ScssForwardFilter[];
+  /**
+   * Exposed name before a rename lens rewrote it. Set only while judging a rename, and only on
+   * the member being renamed, so a `show` or `hide` entry can be read under the new name.
+   */
+  lensFrom?: string;
 };
 
 type Exposure = {
@@ -165,6 +171,9 @@ type Exposure = {
 type LoadMode = "module" | "import";
 
 type Walk = { trail: Set<string>; cuts: number };
+
+/** A proposed rename, used to recompute `@forward` visibility before collision checks. */
+type RenameLens = { def: SymbolDef; from: string; to: string; cache: Map<string, Exposure> };
 
 const HOST_EXTENSIONS = [".vue", ".svelte"];
 
@@ -261,15 +270,75 @@ function hostImports(index: ProjectIndex): {
   return { byStem, byTarget };
 }
 
+function indexedFile(index: ProjectIndex, candidate: string): FileId | undefined {
+  return index.byFile.get(fileIdentityKey(candidate))?.file;
+}
+
+/**
+ * The import-only stylesheet `@import` loads for `url`, if one is indexed.
+ *
+ * Sass tries `_name.import.scss` and `name.import.scss` before the ordinary file, and a
+ * directory's `_index.import.scss` only when no file-level import-only sibling exists. `@use`
+ * and `@forward` never take this path. Two siblings at the same tier are ambiguous: Sass reports
+ * that it is not clear which file to import.
+ */
+function importOnlyTarget(
+  index: ProjectIndex,
+  fromFile: FileId,
+  url: string,
+): { status: "one"; file: FileId } | { status: "ambiguous"; stems: string[] } | { status: "none" } {
+  const trimmed = url.trim();
+  const bare = (trimmed.split(/[?#]/u)[0] ?? "").trim();
+  if (!bare || isSassBuiltinUrl(trimmed)) return { status: "none" };
+  if (/^[a-z][a-z0-9+.-]*:/i.test(bare) && !/^[a-z]:[\\/]/i.test(bare)) return { status: "none" };
+  const base = path.resolve(path.dirname(fromFile), bare);
+  const extension = path.extname(base).toLowerCase();
+  const hasStyleExtension = extension === ".scss" || extension === ".sass" || extension === ".css";
+  let stemPath = hasStyleExtension ? base.slice(0, -extension.length) : base;
+  if (stemPath.toLowerCase().endsWith(".import")) stemPath = stemPath.slice(0, -".import".length);
+  const dir = path.dirname(stemPath);
+  let stem = path.basename(stemPath);
+  if (stem.startsWith("_")) stem = stem.slice(1);
+  const pick = (
+    candidates: readonly string[],
+  ): { status: "one"; file: FileId } | { status: "ambiguous"; stems: string[] } | null => {
+    const found = candidates
+      .map((candidate) => indexedFile(index, candidate))
+      .filter((file): file is FileId => file !== undefined);
+    const unique = [...new Map(found.map((file) => [fileIdentityKey(file), file])).values()];
+    if (unique.length > 1) return { status: "ambiguous", stems: unique.map((file) => moduleStem(file)) };
+    const [only] = unique;
+    return only ? { status: "one", file: only } : null;
+  };
+  if (stem) {
+    const fileLevel = pick([path.join(dir, `_${stem}.import.scss`), path.join(dir, `${stem}.import.scss`)]);
+    if (fileLevel) return fileLevel;
+  }
+  if (!hasStyleExtension && stem) {
+    const directoryIndex = pick([path.join(base, "_index.import.scss"), path.join(base, "index.import.scss")]);
+    if (directoryIndex) return directoryIndex;
+  }
+  return { status: "none" };
+}
+
 function loadTarget(
   targets: ReadonlyMap<string, FileId>,
   importTargets: ReadonlyMap<string, FileId>,
   key: string,
   url: string,
+  kind: ScssModuleLoad["kind"],
+  fromFile: FileId,
+  index: ProjectIndex,
 ): LoadTarget {
   const trimmed = url.trim();
   if (isSassBuiltinUrl(trimmed)) return { type: "builtin" };
   const edge = targets.get(`${key}\0${trimmed}`) ?? importTargets.get(trimmed);
+  // `@import` prefers an import-only file. `@use` and `@forward` keep the ordinary edge.
+  if (kind === "import") {
+    const importOnly = importOnlyTarget(index, fromFile, trimmed);
+    if (importOnly.status === "one") return { type: "file", file: importOnly.file };
+    if (importOnly.status === "ambiguous") return { type: "unresolved", extraStems: importOnly.stems };
+  }
   if (edge) return { type: "file", file: edge };
   return { type: "unresolved" };
 }
@@ -305,6 +374,8 @@ function buildOwnMembers(
       // that skipped it would leave the old name behind.
       assignedBefore.sites.push({ file, range: declaration.range });
       assignedBefore.siteKeys.add(siteKey);
+      // `$x: null; $x: 1 !default` is configurable: `with` is legal when any assignment uses `!default`.
+      if (declaration.isDefault) assignedBefore.isDefault = true;
       continue;
     }
     if (!def) continue;
@@ -370,7 +441,10 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
       const at = defKey(local.range.start.line, local.range.start.column, sassCanonical(local.localName));
       if (!defAt.has(at)) defAt.set(at, local);
     }
-    const loads = facts.loads.map((load) => ({ load, target: loadTarget(targets, importTargets, key, load.url) }));
+    const loads = facts.loads.map((load) => ({
+      load,
+      target: loadTarget(targets, importTargets, key, load.url, load.kind, module.file, index),
+    }));
     const unresolvedStems = new Set<string>();
     for (const resolved of loads) {
       if (resolved.target.type === "file") {
@@ -381,6 +455,7 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
         }
       } else if (resolved.target.type === "unresolved") {
         unresolvedStems.add(moduleStem(resolved.load.url));
+        for (const stem of resolved.target.extraStems ?? []) unresolvedStems.add(stem);
       }
     }
     const dynamicStems = new Set<string | null>();
@@ -448,7 +523,13 @@ function ownAsMember(member: OwnMember, importOnly: boolean): Member {
 
 function withPrefix(member: Member, prefix: string): Member {
   if (!prefix) return member;
-  return { ...member, exposed: sassCanonical(prefix) + member.exposed, prefix: prefix + member.prefix };
+  const canonicalPrefix = sassCanonical(prefix);
+  return {
+    ...member,
+    exposed: canonicalPrefix + member.exposed,
+    prefix: prefix + member.prefix,
+    ...(member.lensFrom !== undefined ? { lensFrom: canonicalPrefix + member.lensFrom } : {}),
+  };
 }
 
 /**
@@ -490,11 +571,13 @@ function listMatches(
   list: readonly { name: string; kind: "variable" | "callable" }[],
   member: Member,
   exposed: string,
+  adjust?: (canonical: string) => string,
 ) {
   return list.some((entry) => {
     const wantsVariable = entry.kind === "variable";
     if (wantsVariable !== (member.kind === "variable")) return false;
-    return sassCanonical(entry.name) === exposed;
+    const name = sassCanonical(entry.name);
+    return (adjust ? adjust(name) : name) === exposed;
   });
 }
 
@@ -504,8 +587,12 @@ function listMatches(
  */
 function passesFilter(member: Member, load: ScssModuleLoad): boolean {
   const exposed = sassCanonical(load.prefix) + member.exposed;
-  if (load.show && !listMatches(load.show, member, exposed)) return false;
-  if (load.hide && listMatches(load.hide, member, exposed)) return false;
+  // A list entry that spells the name the member has today is edited with the rename. Every other
+  // entry stays, so a `show $y` that did not name `$x` admits `$x` once it is renamed to `$y`.
+  const previous = member.lensFrom === undefined ? undefined : sassCanonical(load.prefix) + member.lensFrom;
+  const adjust = previous === undefined ? undefined : (name: string) => (name === previous ? exposed : name);
+  if (load.show && !listMatches(load.show, member, exposed, adjust)) return false;
+  if (load.hide && listMatches(load.hide, member, exposed, adjust)) return false;
   return true;
 }
 
@@ -521,9 +608,19 @@ function finishExposure(members: Member[], incomplete: boolean): Exposure {
  * private declarations too, because `@import` has no privacy. `@use` never passes members on.
  * Results are cached unless a cycle cut the walk short.
  */
-function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk): Exposure {
+function applyLens(member: Member, lens: RenameLens | undefined): Member {
+  if (!lens || member.def !== lens.def || !member.exposed.endsWith(lens.from)) return member;
+  return {
+    ...member,
+    exposed: member.exposed.slice(0, member.exposed.length - lens.from.length) + lens.to,
+    lensFrom: member.exposed,
+  };
+}
+
+function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk, lens?: RenameLens): Exposure {
+  const cache = lens?.cache ?? model.exposures;
   const cacheKey = `${mode}:${key}`;
-  const cached = model.exposures.get(cacheKey);
+  const cached = cache.get(cacheKey);
   if (cached) return cached;
   const current = model.files.get(key);
   if (!current) return finishExposure([], true);
@@ -537,7 +634,7 @@ function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk
   let incomplete = false;
   for (const member of current.own) {
     if (mode === "module" && isPrivateName(member.declared) && member.def !== model.unhide) continue;
-    members.push(ownAsMember(member, mode === "import"));
+    members.push(applyLens(ownAsMember(member, mode === "import"), lens));
   }
   for (const resolved of current.loads) {
     const { load, target } = resolved;
@@ -545,7 +642,7 @@ function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk
     if (target.type === "unresolved") incomplete = true;
     if (target.type !== "file") continue;
     const forwarded = load.kind === "forward";
-    const inner = exposureOf(model, fileIdentityKey(target.file), forwarded ? "module" : "import", walk);
+    const inner = exposureOf(model, fileIdentityKey(target.file), forwarded ? "module" : "import", walk, lens);
     if (inner.incomplete) incomplete = true;
     for (const member of inner.members) {
       if (forwarded) {
@@ -560,7 +657,7 @@ function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk
   }
   walk.trail.delete(key);
   const exposure = finishExposure(members, incomplete);
-  if (walk.cuts === cutsBefore) model.exposures.set(cacheKey, exposure);
+  if (walk.cuts === cutsBefore) cache.set(cacheKey, exposure);
   return exposure;
 }
 
@@ -751,6 +848,45 @@ function nestedImportUnproven(use: ScssUse): ScssNotFound {
   return { status: "not_found", reason: `A nested @import may declare ${use.text} in its own block`, unproven: true };
 }
 
+/**
+ * True when `use` is a bare `get-function` call that precedes the user-defined function in this
+ * file. dart-sass still calls the legacy built-in for that earlier call.
+ */
+function legacyGetFunctionBeforeDeclaration(current: ModuleModel, use: ScssUse, member: OwnMember): boolean {
+  if (use.syntax !== "call" || use.namespace !== null || use.canonical !== "get-function") return false;
+  if (member.kind !== "function") return false;
+  const declaredAt = scssOffsetAt(current.facts, member.def.range.start.line, member.def.range.start.column);
+  return declaredAt > use.nameStart;
+}
+
+function legacyGetFunctionUse(at: number): ScssUse {
+  return {
+    kind: "function",
+    syntax: "call",
+    namespace: null,
+    text: "get-function",
+    canonical: "get-function",
+    nameStart: at,
+    nameEnd: at + "get-function".length,
+    hitStart: at,
+    loadIndex: null,
+  };
+}
+
+/**
+ * True when a dynamic lookup in `file` is not proved to be a user-defined function. A bare legacy
+ * `get-function` is proved when it resolves to a function another file declares.
+ */
+async function hasUnprovenDynamic(index: ProjectIndex, file: ModuleModel): Promise<boolean> {
+  for (const dynamic of file.facts.dynamics) {
+    if (!dynamic.legacyBare) return true;
+    const resolved = await resolveScssUse(index, file.file, legacyGetFunctionUse(dynamic.at ?? 0));
+    if (resolved.status === "ok" && fileIdentityKey(resolved.def.file) !== file.key) continue;
+    return true;
+  }
+  return false;
+}
+
 function resolveUnnamespaced(model: ProjectModel, current: ModuleModel, use: ScssUse): ScssResolution {
   const covering = coveringLocals(current, use);
   if (covering.length) {
@@ -766,7 +902,11 @@ function resolveUnnamespaced(model: ProjectModel, current: ModuleModel, use: Scs
     return { status: "not_found", reason: `More than one SCSS member matches ${use.text}`, unproven: true };
   }
   const [only] = own;
-  if (only) return { status: "ok", def: only.def, prefix: "", access: "own", filters: [] };
+  // A `get-function` declared later in the file does not own an earlier call: that call is still
+  // the legacy built-in. An imported function of the name, loaded above the call, does own it.
+  if (only && !legacyGetFunctionBeforeDeclaration(current, use, only)) {
+    return { status: "ok", def: only.def, prefix: "", access: "own", filters: [] };
+  }
   if (unresolvedIntroducesMembers(current.loads)) {
     return { status: "not_found", reason: "An unresolved SCSS import may also define this name", unproven: true };
   }
@@ -1050,7 +1190,7 @@ export async function scssReferenceCandidates(
     }
     // A load that did not resolve may reach members this scan cannot see.
     const unresolvedLoad = current.loads.some((resolved) => resolved.target.type === "unresolved");
-    if (unresolvedLoad || current.facts.dynamics.length) markUnavailable(file);
+    if (unresolvedLoad || (await hasUnprovenDynamic(index, current))) markUnavailable(file);
     if (member.kind === "variable" && assignsStarVariable(model, current, member.declared)) markUnavailable(file);
   }
   return { files, unavailable };
@@ -1066,16 +1206,22 @@ export function scssUseAt(facts: ScssFileFacts, line: number, column: number): S
  * Members one file sees without a namespace: its own declarations, `@use ... as *`, `@import`, and
  * the scope it inherits from the files that `@import` it.
  */
-function globalScope(model: ProjectModel, current: ModuleModel): Member[] {
+function globalScope(model: ProjectModel, current: ModuleModel, lens?: RenameLens): Member[] {
   const members: Member[] = [];
   for (const file of [current, ...importerChain(model, current.key)]) {
-    for (const own of file.own) members.push(ownAsMember(own, true));
+    for (const own of file.own) members.push(applyLens(ownAsMember(own, true), lens));
     for (const resolved of file.loads) {
       if (resolved.target.type !== "file") continue;
       const star = resolved.load.kind === "use" && resolved.load.star;
       const legacy = resolved.load.kind === "import";
       if (!star && !legacy) continue;
-      const inner = exposureOf(model, fileIdentityKey(resolved.target.file), legacy ? "import" : "module", newWalk());
+      const inner = exposureOf(
+        model,
+        fileIdentityKey(resolved.target.file),
+        legacy ? "import" : "module",
+        newWalk(),
+        lens,
+      );
       members.push(...inner.members);
     }
   }
@@ -1115,7 +1261,10 @@ export async function scssRenameCollisions(index: ProjectIndex, def: SymbolDef, 
     // prefixes), and each spelling takes the new name in its own place.
     for (const exposure of members) {
       if (exposure.def !== member.def) continue;
-      const wanted = exposure.exposed.slice(0, exposure.exposed.length - member.declared.length) + next;
+      const wanted =
+        exposure.lensFrom !== undefined
+          ? exposure.exposed
+          : exposure.exposed.slice(0, exposure.exposed.length - member.declared.length) + next;
       for (const entry of members) {
         if (entry.kind === member.kind && entry.def !== member.def && entry.exposed === wanted) {
           collisions.add(entry.def);
@@ -1127,12 +1276,15 @@ export async function scssRenameCollisions(index: ProjectIndex, def: SymbolDef, 
   // public member joins their scopes, so those scopes must not already use the new name.
   const becomesPublic = isPrivateName(member.declared) && !isPrivateName(next);
   const view: ProjectModel = becomesPublic ? { ...model, exposures: new Map(), unhide: member.def } : model;
+  // Recompute `show` and `hide` under the new name. An entry the rename edits keeps exposing the
+  // member; an entry that already spells the new name can newly expose it or hide it.
+  const lens: RenameLens = { def: member.def, from: member.declared, to: next, cache: new Map() };
   for (const file of files) {
     const current = model.files.get(fileIdentityKey(file));
     if (!current) continue;
-    check(exposureOf(view, current.key, "module", newWalk()).members);
-    check(exposureOf(view, current.key, "import", newWalk()).members);
-    check(globalScope(view, current));
+    check(exposureOf(view, current.key, "module", newWalk(), lens).members);
+    check(exposureOf(view, current.key, "import", newWalk(), lens).members);
+    check(globalScope(view, current, lens));
   }
   return [...collisions];
 }
