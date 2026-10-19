@@ -164,6 +164,50 @@ describe("SQL fact extraction", () => {
     ]);
   });
 
+  /** The distinct statement texts of a file, in order. */
+  function statementTexts(file: string, lines: readonly string[]): string[] {
+    return Array.from(new Set(extractSqlFactsFromSource(file, lines.join("\n")).map((fact) => fact.statementText)));
+  }
+
+  it.each([
+    [
+      "a statement inside a nested comment",
+      ["/* outer /* inner */ SELECT 1 FROM hidden; */", "SELECT 2 FROM shown;"],
+      ["SELECT 2 FROM shown"],
+    ],
+    ["a glob in a comment", ["/* files: src/**/*.sql */", "SELECT 2 FROM shown;"], ["SELECT 2 FROM shown"]],
+    [
+      "a quote inside a nested comment",
+      ["/* outer /* inner */ it's hidden; */", "SELECT 2 FROM shown;"],
+      ["SELECT 2 FROM shown"],
+    ],
+    [
+      "a GO line inside a nested comment",
+      ["SELECT 1 FROM before;", "/* outer /* inner */", "GO", "SELECT 2 FROM hidden; */", "SELECT 3 FROM shown;"],
+      ["SELECT 1 FROM before", "SELECT 3 FROM shown"],
+    ],
+  ])("reads no statement from %s", (_label, lines, expected) => {
+    expect(statementTexts("nested.sql", lines)).toEqual(expected);
+  });
+
+  it("keeps the position of a statement after a nested comment", () => {
+    const facts = extractSqlFactsFromSource(
+      "nested.sql",
+      ["/* outer", "   /* inner */", "   still a comment */", "SELECT 2 FROM shown;"].join("\n"),
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({ kind: "reads_from", objectName: "shown", startLine: 4, startColumn: 1 }),
+    ]);
+  });
+
+  it("ends a comment at its first closing delimiter when nesting would leave it open, as MySQL and SQLite do", () => {
+    expect(statementTexts("mysql.sql", ["/* see /* below */ SELECT 1 FROM one;", "SELECT 2 FROM two;"])).toEqual([
+      "SELECT 1 FROM one",
+      "SELECT 2 FROM two",
+    ]);
+  });
+
   it("splits T-SQL GO batches without splitting BEGIN and END bodies", async () => {
     const filePath = path.join(fixtureRoot, "tsql_batches.sql");
     const facts = extractSqlFactsFromSource(filePath, await readFixture("tsql_batches.sql"));
@@ -192,6 +236,31 @@ describe("SQL fact extraction", () => {
       expect.objectContaining({ kind: "reads_from", objectName: "accounts" }),
       expect.objectContaining({ kind: "reads_from", objectName: "users" }),
     ]);
+  });
+
+  it("records nested EXISTS relation reads without inventing a string source", () => {
+    const facts = extractSqlFactsFromSource(
+      "nested.sql",
+      "SELECT u.id FROM users u WHERE EXISTS (SELECT 1 FROM accounts a) AND 'FROM decoy' <> '';",
+    );
+    expect(facts.map((fact) => [fact.kind, fact.objectName])).toEqual([
+      ["reads_from", "users"],
+      ["reads_from", "accounts"],
+    ]);
+  });
+
+  it("bounds a nested FROM at its closing parenthesis instead of reading outer columns as sources", () => {
+    const facts = extractSqlFactsFromSource("nested.sql", "SELECT (SELECT id FROM users), email FROM accounts;");
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+    ]);
+  });
+
+  it("keeps escaped E-string text out of relation facts after statement splitting", () => {
+    const source = [String.raw`SELECT E'can\'t; FROM hidden';`, "SELECT id FROM users;"].join("\n");
+    const facts = extractSqlFactsFromSource("literal.sql", source);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
   });
 
   it("handles PostgreSQL ONLY table modifiers as syntax instead of object names", () => {
@@ -453,5 +522,126 @@ describe("SQL fact extraction", () => {
       expect.objectContaining({ kind: "reads_from", objectName: "#TempResults" }),
       expect.objectContaining({ kind: "defines_table", objectName: "##GlobalTempResults" }),
     ]);
+  });
+
+  it("reads relations named by the statements inside a BEGIN/END routine body", () => {
+    const filePath = path.join(fixtureRoot, "reports", "procedure.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      [
+        "CREATE PROCEDURE p AS BEGIN SELECT u.id FROM users u; SELECT g.id FROM get_users() g; END;",
+        "CREATE PROCEDURE q(begin integer) AS BEGIN IF 1 THEN SELECT id FROM accounts; END IF; END;",
+        "CREATE FUNCTION f() RETURNS integer AS $$ BEGIN SELECT id FROM hidden; END $$ LANGUAGE sql;",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "get_users",
+      "accounts",
+    ]);
+  });
+
+  it("relates each JOIN to the first source of its own query", () => {
+    const facts = extractSqlFactsFromSource(
+      path.join(fixtureRoot, "reports", "nested-join.sql"),
+      [
+        "SELECT * FROM users JOIN orgs ON orgs.id = users.org_id",
+        "WHERE EXISTS (SELECT 1 FROM accounts a JOIN roles r ON r.id = a.role_id);",
+      ].join("\n"),
+    );
+
+    expect(
+      facts.filter((fact) => fact.kind === "joins").map((fact) => [fact.objectName, fact.relatedObjectName]),
+    ).toEqual([
+      ["orgs", "users"],
+      ["roles", "accounts"],
+    ]);
+  });
+
+  it("keeps relation reads when CASE, IF, and LOOP end inside a BEGIN/END body", () => {
+    const facts = extractSqlFactsFromSource(
+      path.join(fixtureRoot, "reports", "case-end.sql"),
+      [
+        "CREATE PROCEDURE p AS BEGIN SELECT CASE WHEN id = 1 THEN 1 ELSE 0 END AS flag FROM users; END;",
+        "CREATE PROCEDURE q AS BEGIN IF 1 THEN SELECT id FROM accounts; END IF; SELECT id FROM roles; END;",
+        "CREATE PROCEDURE r AS BEGIN LOOP SELECT id FROM orgs; END LOOP; SELECT id FROM teams; END;",
+        "CREATE PROCEDURE s AS BEGIN BEGIN SELECT id FROM projects; END; SELECT id FROM tasks; END;",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+      "roles",
+      "orgs",
+      "teams",
+      "projects",
+      "tasks",
+    ]);
+    const bodyOf = (name: string): string =>
+      facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === name)?.statementText ?? "";
+    expect(bodyOf("p")).toContain("FROM users");
+    expect(bodyOf("q")).toContain("FROM roles");
+    expect(bodyOf("r")).toContain("FROM teams");
+    expect(bodyOf("s")).toContain("FROM tasks");
+  });
+  it("records a JOIN inside a CTE body once", () => {
+    const facts = extractSqlFactsFromSource(
+      "cte-join.sql",
+      "WITH c AS (SELECT * FROM users JOIN accounts ON accounts.id = users.id) SELECT * FROM c",
+    );
+
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
+    expect(
+      facts.filter((fact) => fact.kind === "joins").map((fact) => [fact.objectName, fact.relatedObjectName]),
+    ).toEqual([["accounts", "users"]]);
+  });
+
+  it("splits GO after consecutive T-SQL IF blocks", () => {
+    const facts = extractSqlFactsFromSource(
+      "if-go.sql",
+      [
+        "CREATE PROCEDURE p AS",
+        "BEGIN",
+        "  IF 1 = 1",
+        "  BEGIN",
+        "    SELECT 1",
+        "  END",
+        "  IF 1 = 1",
+        "  BEGIN",
+        "    SELECT 2",
+        "  END",
+        "END",
+        "GO",
+        "CREATE PROCEDURE q AS",
+        "BEGIN",
+        "  SELECT 1",
+        "END",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual(["p", "q"]);
+  });
+
+  it("does not treat a variable or qualified case as a CASE block", () => {
+    const facts = extractSqlFactsFromSource(
+      "case-word.sql",
+      [
+        "CREATE TABLE users (id integer);",
+        "CREATE PROCEDURE p @case int AS",
+        "BEGIN",
+        '  SELECT id FROM users WHERE t.case = :case AND $case = "case" AND [case] = @case;',
+        "END",
+        "GO",
+        "CREATE PROCEDURE q AS",
+        "BEGIN",
+        "  SELECT 1;",
+        "END",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual(["p", "q"]);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
   });
 });

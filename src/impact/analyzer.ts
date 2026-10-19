@@ -2,7 +2,8 @@ import path from "node:path";
 import type { Edge, FileId } from "../types.js";
 import { type ProjectIndex } from "../indexer/types.js";
 import { fileIdentityKey } from "../util/paths.js";
-import { sqlEdgeMatchesChangedObjects } from "../sql/source-graph.js";
+import { sqlChangedSymbolTargets } from "../sql/navigation.js";
+import { sqlEdgeMatchesChangedObjects, type SqlChangedObject } from "../sql/source-graph.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./test-patterns.js";
 import type { ChangedSymbol, ImpactItem, ImpactOptions, FileChange } from "./types.js";
 import { createImpactIgnoreMatcher } from "./path.js";
@@ -134,9 +135,10 @@ export async function analyzeImpact(
     diagnostics,
     fanInByFile,
   );
+  const sqlTargets = await sqlChangedSymbolTargets(index, filteredChangedSymbols);
   const reverseDepsForImpact = terraformImpactDependents(
     index,
-    reverseDepsForSqlChangedObjects(reverseDeps, filteredChangedSymbols),
+    reverseDepsForSqlChangedObjects(reverseDeps, filteredChangedSymbols, sqlTargets),
     changedFiles,
   );
   recordReferenceLookupOmitted(workBudget, filteredChangedSymbols.length - budgetedChangedSymbols.length);
@@ -203,6 +205,7 @@ export async function analyzeImpact(
     seedSqlObjectDependents(
       impacted,
       filteredChangedSymbols,
+      sqlTargets,
       reverseDeps,
       includeTests,
       isIndexTestFile,
@@ -325,26 +328,33 @@ function terraformImpactDependents(
   };
 }
 
+function sqlObjectsForChangedSymbols(
+  changedSymbols: readonly ChangedSymbol[],
+  sqlTargets: ReadonlyMap<ChangedSymbol, SqlChangedObject>,
+): Map<string, SqlChangedObject[]> {
+  const objectsByFile = new Map<string, SqlChangedObject[]>();
+  for (const symbol of changedSymbols) {
+    const fileKey = fileIdentityKey(symbol.file);
+    const target = sqlTargets.get(symbol) ?? { name: symbol.name };
+    const objects = objectsByFile.get(fileKey);
+    if (objects) objects.push(target);
+    else objectsByFile.set(fileKey, [target]);
+  }
+  return objectsByFile;
+}
+
 function reverseDepsForSqlChangedObjects(
   reverseDeps: Map<FileId, Edge[]>,
   changedSymbols: readonly ChangedSymbol[],
+  sqlTargets: ReadonlyMap<ChangedSymbol, SqlChangedObject>,
 ): Map<FileId, Edge[]> {
-  const objectNamesByFile = new Map<string, Set<string>>();
-  for (const symbol of changedSymbols) {
-    const fileKey = fileIdentityKey(symbol.file);
-    const names = objectNamesByFile.get(fileKey);
-    if (names) {
-      names.add(symbol.name);
-      continue;
-    }
-    objectNamesByFile.set(fileKey, new Set([symbol.name]));
-  }
-  if (!objectNamesByFile.size) return reverseDeps;
+  const objectsByFile = sqlObjectsForChangedSymbols(changedSymbols, sqlTargets);
+  if (!objectsByFile.size) return reverseDeps;
 
   const filtered = new Map<FileId, Edge[]>();
   for (const [file, edges] of reverseDeps) {
-    const objectNames = objectNamesByFile.get(file);
-    if (!objectNames) {
+    const objects = objectsByFile.get(file);
+    if (!objects) {
       filtered.set(file, edges);
       continue;
     }
@@ -352,7 +362,7 @@ function reverseDepsForSqlChangedObjects(
       file,
       edges.filter((edge) => {
         if (!edge.raw.startsWith("sql:")) return true;
-        return sqlEdgeMatchesChangedObjects(edge.raw, objectNames);
+        return sqlEdgeMatchesChangedObjects(edge.raw, objects);
       }),
     );
   }
@@ -362,6 +372,7 @@ function reverseDepsForSqlChangedObjects(
 function seedSqlObjectDependents(
   impacted: Map<FileId, ImpactItem>,
   changedSymbols: readonly ChangedSymbol[],
+  sqlTargets: ReadonlyMap<ChangedSymbol, SqlChangedObject>,
   reverseDeps: Map<FileId, Edge[]>,
   includeTests: boolean,
   isIndexTestFile: (file: FileId) => boolean,
@@ -371,9 +382,9 @@ function seedSqlObjectDependents(
   for (const symbol of changedSymbols) {
     const incoming = reverseDeps.get(fileIdentityKey(symbol.file)) ?? [];
     if (!incoming.length) continue;
-    const objectNames = new Set([symbol.name]);
+    const target = sqlTargets.get(symbol) ?? { name: symbol.name };
     for (const edge of incoming) {
-      if (!sqlEdgeMatchesChangedObjects(edge.raw, objectNames)) continue;
+      if (!sqlEdgeMatchesChangedObjects(edge.raw, [target])) continue;
       const dependent = edge.from;
       if (!includeTests && isIndexTestFile(dependent)) continue;
       if (isIgnored(dependent)) continue;

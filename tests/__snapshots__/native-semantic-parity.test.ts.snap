@@ -18,7 +18,7 @@ exports[`native semantic coverage > keeps C++ callable redeclarations connected 
 }
 `;
 
-exports[`native semantic coverage > keeps native SQL ambiguous basename fallback as an explicit non-result 1`] = `
+exports[`native semantic coverage > keeps a genuinely ambiguous SQL basename as an explicit non-result 1`] = `
 {
   "goto": {
     "status": "not_found",
@@ -1210,6 +1210,24 @@ exports[`native semantic coverage > keeps native semantics stable without treati
       "src/shared.rs:1",
       "src/shared.rs:2",
       "src/shared.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > resolves a schema-qualified SQL source when another schema shares the basename 1`] = `
+{
+  "goto": {
+    "file": "schema.sql",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "report.sql:1",
+      "report.sql:1",
+      "schema.sql:1",
     ],
     "status": "ok",
   },

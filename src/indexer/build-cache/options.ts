@@ -40,6 +40,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 87 removes obsolete graph and incremental options from persisted cache identity.
  * Epoch 88 indexes Terraform `.tf` files, adds the resource, data, module, and output symbol kinds,
  * and resolves local module sources to every Terraform file in the source directory.
+ * Epoch 89 adds SQL routine call, alter, and drop edges and resolves SQL routines and relations in
+ * separate namespaces.
  * Epoch 90 masks SCSS `//` comments and unquoted `url(...)` tokens, and resolves a Sass directory
  * load to its `_index.scss`.
  */

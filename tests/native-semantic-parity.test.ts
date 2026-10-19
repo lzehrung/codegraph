@@ -1941,8 +1941,8 @@ nativeDescribe("native semantic coverage", () => {
     await expectNativeSemantics(testCase);
   });
 
-  it("keeps native SQL ambiguous basename fallback as an explicit non-result", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-sql-ambiguous-"));
+  it("resolves a schema-qualified SQL source when another schema shares the basename", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-sql-qualified-basename-"));
     tempDirs.push(root);
     const schemaFile = path.join(root, "schema.sql");
     const reportFile = path.join(root, "report.sql");
@@ -1953,8 +1953,9 @@ nativeDescribe("native semantic coverage", () => {
     );
     const query = "SELECT users.id FROM schema1.users;";
     await fsp.writeFile(reportFile, query, "utf8");
+    const column = query.indexOf("users.id") + 1;
 
-    await expectNativeSemantics({
+    const index = await expectNativeSemantics({
       root,
       files: [schemaFile, reportFile],
       symbols: [
@@ -1979,16 +1980,83 @@ nativeDescribe("native semantic coverage", () => {
       goto: {
         file: reportFile,
         line: 1,
-        column: query.indexOf("users.id") + 1,
+        column,
+        expectedStatus: "ok",
+      },
+      references: {
+        file: reportFile,
+        line: 1,
+        column,
+        expectedStatus: "ok",
+      },
+    });
+    const result = await goToDefinition(index, { file: normalizeFile(reportFile), line: 1, column });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(normalizeFile(result.definition.file)).toBe(normalizeFile(schemaFile));
+    expect(result.definition.localName).toBe("schema1.users");
+    expect(result.definition.range.start.line).toBe(1);
+  });
+
+  it("keeps a genuinely ambiguous SQL basename as an explicit non-result", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-sql-ambiguous-"));
+    tempDirs.push(root);
+    const schemaFile = path.join(root, "schema.sql");
+    const reportFile = path.join(root, "report.sql");
+    await fsp.writeFile(
+      schemaFile,
+      ["CREATE TABLE schema1.users (id integer);", "CREATE TABLE schema2.users (id integer);"].join("\n"),
+      "utf8",
+    );
+    const queries = ["SELECT users.id FROM schema1.users, schema2.users;", "SELECT users.id FROM schema1.orders;"];
+    await fsp.writeFile(reportFile, queries.join("\n"), "utf8");
+    const sharedColumn = queries[0]!.indexOf("users.id") + 1;
+
+    const index = await expectNativeSemantics({
+      root,
+      files: [schemaFile, reportFile],
+      symbols: [
+        {
+          file: schemaFile,
+          names: ["schema1.users", "schema2.users"],
+        },
+      ],
+      sqlFacts: [
+        {
+          file: schemaFile,
+          facts: [
+            { kind: "defines_table", objectName: "schema1.users" },
+            { kind: "defines_table", objectName: "schema2.users" },
+          ],
+        },
+        {
+          file: reportFile,
+          facts: [
+            { kind: "reads_from", objectName: "schema1.users" },
+            { kind: "reads_from", objectName: "schema2.users" },
+          ],
+        },
+      ],
+      goto: {
+        file: reportFile,
+        line: 1,
+        column: sharedColumn,
         expectedStatus: "not_found",
       },
       references: {
         file: reportFile,
         line: 1,
-        column: query.indexOf("users.id") + 1,
+        column: sharedColumn,
         expectedStatus: "not_found",
       },
     });
+    // `users` does not name the FROM source `schema1.orders`, so it is not schema1.users either.
+    const unmatched = await goToDefinition(index, {
+      file: normalizeFile(reportFile),
+      line: 2,
+      column: queries[1]!.indexOf("users.id") + 1,
+    });
+    expect(unmatched.status).toBe("not_found");
   });
 
   it("keeps cross-unit peers and shared owners consistent across a disk-cache reload", async () => {
