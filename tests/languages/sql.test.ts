@@ -1694,4 +1694,95 @@ describe("SQL routine call sites", () => {
       expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
     });
   });
+  it("keeps an UPDATE or DELETE alias apart from the previous statement", async () => {
+    const schema = ["CREATE TABLE users (id integer);", "CREATE TABLE accounts (id integer);"];
+    const use = [
+      "CREATE PROCEDURE p AS BEGIN SELECT u.id FROM users u; UPDATE accounts SET id = u.id FROM accounts u; END;",
+      "CREATE PROCEDURE q AS BEGIN SELECT u.id FROM users u; DELETE FROM roles USING accounts u WHERE u.id = 1; END;",
+      "UPDATE accounts SET id = u.id FROM accounts u WHERE EXISTS (SELECT u.id FROM users WHERE users.id = u.id);",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const users = await referencesAt(project, "schema.sql", schema, 1, "users");
+      const accounts = await referencesAt(project, "schema.sql", schema, 2, "accounts");
+
+      expect(await gotoAt(project, "use.sql", use, 1, "u.id")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 1, "u.id", 1)).toBe("schema.sql:2");
+      expect(await gotoAt(project, "use.sql", use, 2, "u.id")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 2, "u.id", 1)).toBe("schema.sql:2");
+      expect(await gotoAt(project, "use.sql", use, 3, "u.id")).toBe("schema.sql:2");
+      expect(await gotoAt(project, "use.sql", use, 3, "u.id", 1)).toBe("schema.sql:2");
+      expect(await gotoAt(project, "use.sql", use, 3, "users.id")).toBe("schema.sql:1");
+      expect(referenceSites(project.root, users)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "users"),
+          siteAt("use.sql", use, 1, "u.id"),
+          siteAt("use.sql", use, 1, "users"),
+          siteAt("use.sql", use, 2, "u.id"),
+          siteAt("use.sql", use, 2, "users"),
+          siteAt("use.sql", use, 3, "users"),
+          siteAt("use.sql", use, 3, "users.id"),
+        ].sort(),
+      );
+      expect(referenceSites(project.root, accounts)).toEqual(
+        [
+          siteAt("schema.sql", schema, 2, "accounts"),
+          siteAt("use.sql", use, 1, "u.id", 1),
+          siteAt("use.sql", use, 1, "accounts", 1),
+          siteAt("use.sql", use, 2, "accounts"),
+          siteAt("use.sql", use, 2, "u.id", 1),
+          siteAt("use.sql", use, 3, "accounts", 0),
+          siteAt("use.sql", use, 3, "u.id", 0),
+          siteAt("use.sql", use, 3, "accounts", 1),
+          siteAt("use.sql", use, 3, "u.id", 1),
+          siteAt("use.sql", use, 3, "u.id", 2),
+        ].sort(),
+      );
+      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    });
+  });
+
+  it("reads a call in a single-quoted routine body and leaves an ordinary string alone", async () => {
+    const schema = ["CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;"];
+    const use = [
+      "CREATE FUNCTION wrap(e text) RETURNS text AS 'SELECT normalize_email(e)' LANGUAGE sql;",
+      "CREATE FUNCTION note(e text) RETURNS text AS 'SELECT ''normalize_email''(e)' LANGUAGE sql;",
+      "SELECT 'normalize_email(x)';",
+      "CREATE FUNCTION plain(e text) RETURNS text AS 'SELECT normalize_email(e)';",
+      "CREATE FUNCTION defaults(e text DEFAULT 'normalize_email(x)') RETURNS text AS 'SELECT normalize_email(e)' LANGUAGE plpgsql;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const result = await referencesAt(project, "schema.sql", schema, 1, "normalize_email");
+      const sites = [
+        siteAt("schema.sql", schema, 1, "normalize_email"),
+        siteAt("use.sql", use, 1, "normalize_email"),
+        siteAt("use.sql", use, 4, "normalize_email"),
+        siteAt("use.sql", use, 5, "normalize_email", 1),
+      ].sort();
+
+      expect(referenceSites(project.root, result)).toEqual(sites);
+      expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(await gotoAt(project, "use.sql", use, 1, "normalize_email")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 2, "normalize_email")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 3, "normalize_email")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 5, "normalize_email")).toBe("not_found");
+
+      const session = createAgentSession({ root: project.root, freshness: { policy: "check" } });
+      try {
+        const symbols = await workspaceSymbolsWithSession(session, { root: project.root, query: "normalize_email" });
+        const target = symbols.symbols.find((symbol) => symbol.name === "normalize_email");
+        if (!target) throw new Error("Expected the routine symbol");
+        const preview = await previewRenameWithSession(session, {
+          root: project.root,
+          handle: target.handle,
+          newName: "normalize_address",
+        });
+        expect(
+          preview.edits.map((edit) => `${edit.file}:${edit.range.start.line}:${edit.range.start.column}`).sort(),
+        ).toEqual(sites);
+      } finally {
+        session.invalidate();
+      }
+    });
+  });
 });

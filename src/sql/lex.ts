@@ -111,6 +111,13 @@ export type SqlMaskOptions = {
    * string. Off by default: SQLite has no such string, and the read-only query guard relies on that.
    */
   escapeStrings?: boolean;
+  /**
+   * Decides which single-quoted string keeps its body visible. `before` is the masked text ahead of
+   * the opening quote, so a caller can recognize `AS '...'` as a routine body. A doubled quote inside
+   * that body stays two characters: it is an escaped quote, and later offsets do not move. Every other
+   * string stays masked.
+   */
+  keepSingleQuotedBody?: (before: string) => boolean;
 };
 
 // A `[` directly after one of these characters opens an array subscript, not a quoted identifier.
@@ -181,6 +188,40 @@ function opensArrayBracket(statement: string, bracketIndex: number): boolean {
     return !/^\d/.test(word) && !Object.hasOwn(NON_SUBSCRIPT_WORDS, word);
   }
   return ARRAY_KEYWORD_BEFORE_RE.test(statement.slice(Math.max(0, bracketIndex - ARRAY_KEYWORD_WINDOW), bracketIndex));
+}
+
+/**
+ * The body of one single-quoted routine string, masked as SQL and the same length as the source.
+ * `''` becomes a quote and a space, so the inner scan reads an escaped quote without moving offsets.
+ */
+function keepSingleQuotedSqlBody(
+  statement: string,
+  open: number,
+  options: SqlMaskOptions,
+): { masked: string; next: number } {
+  let cursor = open + 1;
+  let body = "";
+  while (cursor < statement.length) {
+    if (statement[cursor] === "'" && statement[cursor + 1] === "'") {
+      body += "' ";
+      cursor += 2;
+      continue;
+    }
+    if (statement[cursor] === "'") break;
+    body += statement[cursor] ?? "";
+    cursor += 1;
+  }
+  const bodyOptions: SqlMaskOptions = {
+    ...(options.arrayBrackets ? { arrayBrackets: true } : {}),
+    ...(options.nestedBlockComments ? { nestedBlockComments: true } : {}),
+    ...(options.escapeStrings ? { escapeStrings: true } : {}),
+  };
+  let masked = " " + maskSqlStringsAndComments(body, bodyOptions);
+  if (statement[cursor] === "'") {
+    masked += " ";
+    cursor += 1;
+  }
+  return { masked, next: cursor };
 }
 
 export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOptions): string {
@@ -273,6 +314,12 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
       continue;
     }
     if (char === "'") {
+      if (options?.keepSingleQuotedBody?.(out)) {
+        const kept = keepSingleQuotedSqlBody(statement, i, options);
+        out += kept.masked;
+        i = kept.next;
+        continue;
+      }
       singleQuoted = true;
       // `E'...'` is a PostgreSQL escape string. A word that merely ends in `e`, as in `date'...'`, is not.
       escapeString =
@@ -344,7 +391,25 @@ export function maskSqlQuotedIdentifiers(masked: string): string {
   return masked.replace(QUOTED_IDENTIFIER_RE, (identifier) => identifier.replace(/[^\n]/g, "_"));
 }
 
-/** Track SELECT scopes and the parentheses enclosing each source clause in one lexical scan. */
+/** A word before UPDATE, DELETE, INSERT, or MERGE that belongs to the surrounding statement. */
+const SQL_NONSTATEMENT_PREDECESSOR = new Set(["after", "before", "for", "instead", "of", "on", "or", "then"]);
+
+/** Keywords that end a source clause because they start another statement. */
+const SQL_STATEMENT_BOUNDARY = new Set(["select", "update", "delete", "insert", "merge"]);
+
+/**
+ * SELECT always opens a binding scope, including a subquery. UPDATE, DELETE, INSERT, and MERGE open
+ * one only as their own statement, so `FOR UPDATE` and `WHEN MATCHED THEN UPDATE` stay in the query
+ * that contains them.
+ */
+function opensSqlBindingScope(scan: string, wordStart: number, word: string): boolean {
+  if (word === "select") return true;
+  if (!SQL_STATEMENT_BOUNDARY.has(word)) return false;
+  const previous = previousSignificantWord(scan, wordStart);
+  return !previous || !SQL_NONSTATEMENT_PREDECESSOR.has(previous.word);
+}
+
+/** Track statement scopes and the parentheses enclosing each source clause in one lexical scan. */
 export function sqlQueryScopes(scan: string): {
   at: (offset: number) => number;
   depthAt: (offset: number) => number;
@@ -371,7 +436,9 @@ export function sqlQueryScopes(scan: string): {
         selectDepth = enclosing.selectDepth;
         changes.push({ start: start + 1, scope, selectDepth, depth: stack.length, open: stack.at(-1)?.open ?? -1 });
       }
-    } else if (match[0].toLowerCase() === "select") {
+    } else if (opensSqlBindingScope(scan, start, match[0].toLowerCase())) {
+      // A new statement or subquery. Its parent is the enclosing query, so a correlated
+      // subquery still sees that statement's aliases and a sibling statement does not.
       scope = start + 1;
       selectDepth = stack.length;
       parent.set(scope, stack.at(-1)?.scope ?? 0);
@@ -468,8 +535,8 @@ function isDistinctFromPredicate(scan: string, fromIndex: number): boolean {
 /**
  * Real FROM/USING/JOIN/APPLY sources at their query level. A clause stops at the enclosing
  * parenthesis, at the next clause keyword of the same query, at a statement-ending `;`, and at the
- * next query (`SELECT`) at the same parenthesis depth. A later statement in a `BEGIN`/`END` body
- * therefore cannot become part of an earlier source list.
+ * next statement (`SELECT`, `UPDATE`, `DELETE`, `INSERT`, or `MERGE`) at the same parenthesis
+ * depth. A later statement in a `BEGIN`/`END` body therefore cannot become part of an earlier source list.
  */
 export function sqlSourceClauses(scan: string): Array<{
   kind: "from" | "using" | "join" | "apply";
@@ -487,7 +554,7 @@ export function sqlSourceClauses(scan: string): Array<{
     depth: number;
   }> = [];
   const boundaryRe =
-    /\b(?:where|group|order|having|limit|offset|returning|union|intersect|except|join|apply|on|from|using|select)\b|;/gi;
+    /\b(?:where|group|order|having|limit|offset|returning|union|intersect|except|join|apply|on|from|using|select|update|delete|insert|merge)\b|;/gi;
   for (const match of scan.matchAll(/\b(from|using|join|apply)\b/gi)) {
     const start = match.index ?? 0;
     const depth = scopes.depthAt(start);
@@ -504,9 +571,9 @@ export function sqlSourceClauses(scan: string): Array<{
       if (at >= clauseEnd) break;
       if (scopes.depthAt(at) !== depth) continue;
       const token = boundary[0].toLowerCase();
-      // `;` and a sibling `SELECT` end the statement or the query. The SELECT has already changed
-      // scope, so it would not match the clause keyword test below.
-      if (token === ";" || token === "select" || scopes.at(at) === scope) {
+      // `;` and the next statement end the clause. That statement has already changed scope, so it
+      // would not match the same-scope test below.
+      if (token === ";" || SQL_STATEMENT_BOUNDARY.has(token) || scopes.at(at) === scope) {
         clauseEnd = at;
         break;
       }

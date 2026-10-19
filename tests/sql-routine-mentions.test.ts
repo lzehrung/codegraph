@@ -657,4 +657,25 @@ describe("SQL routine sources", () => {
     expect(callMentions("SELECT count(*) FILTER (WHERE true)").map((call) => call.text)).not.toContain("FILTER");
     expect(callMentions("SELECT filter(x)")).toEqual([{ text: "filter", speculative: true }]);
   });
+  it("reads a call in a single-quoted routine body without shifting offsets", () => {
+    const quoted = "CREATE FUNCTION wrap(e text) RETURNS text AS 'SELECT ''x'', normalize_email(e)' LANGUAGE sql";
+    const call = findSqlRoutineMentions(quoted).find((mention) => mention.kind === "call");
+    expect(call).toMatchObject({ name: "normalize_email", speculative: true });
+    expect(call?.start).toBe(quoted.indexOf("normalize_email"));
+
+    const plain = "CREATE FUNCTION wrap(e text) RETURNS text AS 'SELECT normalize_email(e)'";
+    expect(callMentions(plain)).toEqual([{ text: "normalize_email", speculative: true }]);
+    const procedure = "CREATE PROCEDURE p() AS 'BEGIN PERFORM normalize_email(1); END' LANGUAGE plpgsql";
+    expect(callMentions(procedure)).toEqual([{ text: "normalize_email", speculative: true }]);
+
+    const hidden = "CREATE FUNCTION wrap(e text) RETURNS text AS 'SELECT ''normalize_email''(e)' LANGUAGE sql";
+    expect(callMentions(hidden)).toEqual([]);
+    const python = "CREATE FUNCTION wrap(e text) RETURNS text AS 'SELECT normalize_email(e)' LANGUAGE python";
+    expect(callMentions(python)).toEqual([]);
+    const ordinary = "SELECT 'normalize_email(e)'";
+    expect(callMentions(ordinary)).toEqual([]);
+    const fallback =
+      "CREATE FUNCTION wrap(e text DEFAULT 'normalize_email(x)') RETURNS text AS 'SELECT 1' LANGUAGE sql";
+    expect(callMentions(fallback)).toEqual([]);
+  });
 });

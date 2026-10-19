@@ -269,6 +269,14 @@ function bodyLanguageIsReadable(statementText: string, scan: string): boolean {
   return !!language && hasWord(BODY_LANGUAGES, language.toLowerCase());
 }
 
+/** The `AS '...'` body of a CREATE FUNCTION or CREATE PROCEDURE. A default or any other string is not. */
+function routineSingleQuotedBody(): (before: string) => boolean {
+  return (before) => {
+    const code = maskSqlQuotedIdentifiers(before);
+    return previousWord(code, code.length) === "as" && !sqlParenDepthAt(code, code.length);
+  };
+}
+
 /** Decides which dollar-quoted block holds the routine body: the one after `AS`, or the first of a `DO` statement. */
 function routineBodyBlock(scan: string): (before: string) => boolean {
   if (DO_STATEMENT_RE.test(scan)) {
@@ -286,18 +294,23 @@ function routineBodyBlock(scan: string): (before: string) => boolean {
 }
 
 /**
- * Masks strings and comments. The `$$` body of a function, procedure, or `DO` block stays visible
- * when its language is SQL or PL/pgSQL. Any other `$$` string stays masked: a parameter default, a
- * setting, or the body of a language Codegraph cannot read. `inBody` is true when a body stays visible.
+ * Masks strings and comments. The `$$` body of a function, procedure, or `DO` block, and the
+ * single-quoted `AS '...'` body of a function or procedure, stay visible when the language is SQL,
+ * PL/pgSQL, or omitted. Any other string stays masked: a parameter default, a setting, an ordinary
+ * literal, or the body of a language Codegraph cannot read. `inBody` is true when a body stays visible.
  */
 function maskStatementCode(statementText: string): { masked: string; inBody: boolean } {
   const masked = maskSqlStringsAndComments(statementText, MASK_OPTIONS);
-  if (!statementText.includes("$") || !CODE_STATEMENT_RE.test(masked)) return { masked, inBody: false };
+  if (!CODE_STATEMENT_RE.test(masked)) return { masked, inBody: false };
   const scan = maskSqlQuotedIdentifiers(masked);
   if (!bodyLanguageIsReadable(statementText, scan)) return { masked, inBody: false };
+  const keepDollar = statementText.includes("$");
+  const keepSingle = statementText.includes("'");
+  if (!keepDollar && !keepSingle) return { masked, inBody: false };
   const withBody = maskSqlStringsAndComments(statementText, {
     ...MASK_OPTIONS,
-    keepDollarQuotedBody: routineBodyBlock(scan),
+    ...(keepDollar ? { keepDollarQuotedBody: routineBodyBlock(scan) } : {}),
+    ...(keepSingle ? { keepSingleQuotedBody: routineSingleQuotedBody() } : {}),
   });
   return { masked: withBody, inBody: withBody !== masked };
 }
