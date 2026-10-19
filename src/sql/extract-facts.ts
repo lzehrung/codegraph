@@ -118,42 +118,281 @@ function statementSlice(
 
 type SqlStatementScan = { statements: SqlStatementSlice[]; endsInBlockComment: boolean };
 
-type SqlBlockFrame = "begin" | "case";
+type SqlBlockFrame = "begin" | "case" | "if" | "loop" | "while" | "repeat";
 
-/** Followers that close IF, LOOP, WHILE, or REPEAT, not a BEGIN block or a CASE expression. */
-const SQL_COMPOUND_END = new Set(["if", "loop", "while", "repeat"]);
+const SQL_BLOCK_WORDS = new Set(["begin", "case", "do", "end", "if", "loop", "repeat", "then", "while"]);
+const SQL_COMPOUND_FOLLOWER = new Set(["case", "if", "loop", "repeat", "while"]);
+const SQL_IF_STOP = new Set(["begin"]);
+const SQL_WHILE_STOP = new Set(["begin", "loop"]);
+const SQL_EXPRESSION_WORDS = new Set([
+  "and",
+  "apply",
+  "as",
+  "by",
+  "from",
+  "group",
+  "having",
+  "into",
+  "join",
+  "lateral",
+  "on",
+  "only",
+  "or",
+  "order",
+  "select",
+  "set",
+  "update",
+  "using",
+  "values",
+  "when",
+  "where",
+]);
 
-/** The next word at `index`, skipping whitespace only. */
-function sqlWordAt(text: string, index: number): { word: string; end: number } | null {
-  let cursor = index;
-  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) cursor += 1;
-  if (!/[A-Za-z_]/.test(text[cursor] ?? "")) return null;
-  let end = cursor + 1;
-  while (/[A-Za-z0-9_$]/.test(text[end] ?? "")) end += 1;
-  return { word: text.slice(cursor, end).toLowerCase(), end };
+function isSqlSpace(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code === 32 || code === 9 || code === 10 || code === 13 || code === 12;
 }
 
-/**
- * Opens a BEGIN block or a CASE expression. `END IF`, `END LOOP`, `END WHILE`, and `END REPEAT`
- * close those statements. `END CASE` closes a CASE statement. A plain `END` closes the innermost
- * CASE before it closes a BEGIN, so a CASE expression cannot end a routine body.
- */
-function noteSqlBlockWord(stack: SqlBlockFrame[], word: string, follower: string | null): void {
+function readBareWord(text: string, index: number): { word: string; end: number } | null {
+  if (!/[A-Za-z_]/.test(text[index] ?? "")) return null;
+  let end = index + 1;
+  while (/[A-Za-z0-9_$]/.test(text[end] ?? "")) end += 1;
+  return { word: text.slice(index, end).toLowerCase(), end };
+}
+
+function sqlNameMark(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (
+    code === 64 || code === 58 || code === 36 || code === 46 || code === 35 || code === 34 || code === 96 || code === 91
+  );
+}
+
+function sqlBlockKeywordAt(text: string, index: number): { word: string; end: number } | null {
+  const previous = text[index - 1] ?? "";
+  if (sqlNameMark(previous) || /[A-Za-z0-9_]/.test(previous)) return null;
+  const read = readBareWord(text, index);
+  if (!read || !SQL_BLOCK_WORDS.has(read.word)) return null;
+  return read;
+}
+function skipQuoted(text: string, index: number, quote: string): number {
+  let cursor = index + 1;
+  while (cursor < text.length) {
+    if (text[cursor] === quote) {
+      if (text[cursor + 1] === quote) {
+        cursor += 2;
+        continue;
+      }
+      return cursor + 1;
+    }
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function skipBlockComment(text: string, index: number): number {
+  let depth = 1;
+  let cursor = index + 2;
+  while (cursor < text.length && depth > 0) {
+    if (text.charCodeAt(cursor) === 47 && text.charCodeAt(cursor + 1) === 42) {
+      depth += 1;
+      cursor += 2;
+      continue;
+    }
+    if (text.charCodeAt(cursor) === 42 && text.charCodeAt(cursor + 1) === 47) {
+      depth -= 1;
+      cursor += 2;
+      continue;
+    }
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function skipSingleQuoted(text: string, index: number): number {
+  const prev = text[index - 1] ?? "";
+  const before = text[index - 2] ?? "";
+  const escape = /[eE]/.test(prev) && !/[A-Za-z0-9_$]/.test(before);
+  let cursor = index + 1;
+  while (cursor < text.length) {
+    const code = text.charCodeAt(cursor);
+    const next = text.charCodeAt(cursor + 1);
+    if (escape && code === 92 && next > 0) {
+      cursor += 2;
+      continue;
+    }
+    if (code === 39 && next === 39) {
+      cursor += 2;
+      continue;
+    }
+    if (code === 39) return cursor + 1;
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function dollarTagAt(text: string, index: number): string | null {
+  if (text.charCodeAt(index) !== 36) return null;
+  if (text.charCodeAt(index + 1) === 36) return "$$";
+  if (!/[A-Za-z_]/.test(text[index + 1] ?? "")) return null;
+  let end = index + 2;
+  while (/[A-Za-z0-9_$]/.test(text[end] ?? "")) end += 1;
+  if (text.charCodeAt(end) !== 36) return null;
+  return text.slice(index, end + 1);
+}
+function skipSqlGap(text: string, index: number): number {
+  let cursor = index;
+  while (cursor < text.length) {
+    const code = text.charCodeAt(cursor);
+    const next = text.charCodeAt(cursor + 1);
+    if (isSqlSpace(text[cursor] ?? "")) {
+      cursor += 1;
+      continue;
+    }
+    if (code === 45 && next === 45) {
+      const newline = text.indexOf(String.fromCharCode(10), cursor + 2);
+      cursor = newline < 0 ? text.length : newline + 1;
+      continue;
+    }
+    if (code === 47 && next === 42) {
+      cursor = skipBlockComment(text, cursor);
+      continue;
+    }
+    if (code === 39) {
+      cursor = skipSingleQuoted(text, cursor);
+      continue;
+    }
+    if (code === 34 || code === 96) {
+      cursor = skipQuoted(text, cursor, text[cursor] ?? "");
+      continue;
+    }
+    if (code === 91) {
+      cursor = skipQuoted(text, cursor, String.fromCharCode(93));
+      continue;
+    }
+    const tag = dollarTagAt(text, cursor);
+    if (tag) {
+      const close = text.indexOf(tag, cursor + tag.length);
+      cursor = close < 0 ? text.length : close + tag.length;
+      continue;
+    }
+    return cursor;
+  }
+  return cursor;
+}
+
+function nextSqlBlockKeyword(text: string, index: number): { word: string; end: number } | null {
+  const keyword = sqlBlockKeywordAt(text, skipSqlGap(text, index));
+  if (!keyword || !SQL_COMPOUND_FOLLOWER.has(keyword.word)) return null;
+  return keyword;
+}
+
+function previousBareWord(text: string, index: number): string | null {
+  let cursor = index;
+  while (cursor > 0 && isSqlSpace(text[cursor - 1] ?? "")) cursor -= 1;
+  const wordEnd = cursor;
+  while (cursor > 0 && /[A-Za-z0-9_$]/.test(text[cursor - 1] ?? "")) cursor -= 1;
+  if (cursor === wordEnd || sqlNameMark(text[cursor - 1] ?? "")) return null;
+  return text.slice(cursor, wordEnd).toLowerCase();
+}
+
+function opensBareBlock(text: string, wordStart: number, wordEnd: number): boolean {
+  if (text.charCodeAt(skipSqlGap(text, wordEnd)) === 40) return false;
+  let cursor = wordStart;
+  while (cursor > 0 && isSqlSpace(text[cursor - 1] ?? "")) cursor -= 1;
+  if (text.charCodeAt(cursor - 1) === 44) return false;
+  const previous = previousBareWord(text, wordStart);
+  return !previous || !SQL_EXPRESSION_WORDS.has(previous);
+}
+function seesCompoundIntroducer(
+  text: string,
+  index: number,
+  introducer: "then" | "do",
+  stops: ReadonlySet<string>,
+): boolean {
+  let parenDepth = 0;
+  let caseDepth = 0;
+  let cursor = index;
+  while (cursor < text.length) {
+    const skipped = skipSqlGap(text, cursor);
+    if (skipped !== cursor) {
+      cursor = skipped;
+      continue;
+    }
+    const code = text.charCodeAt(cursor);
+    if (code === 40) {
+      parenDepth += 1;
+      cursor += 1;
+      continue;
+    }
+    if (code === 41) {
+      parenDepth = Math.max(0, parenDepth - 1);
+      cursor += 1;
+      continue;
+    }
+    if (code === 59 && parenDepth === 0 && caseDepth === 0) return false;
+    if (!/[A-Za-z_]/.test(text[cursor] ?? "")) {
+      cursor += 1;
+      continue;
+    }
+    const keyword = sqlBlockKeywordAt(text, cursor);
+    const wordEnd = keyword?.end ?? readBareWord(text, cursor)?.end ?? cursor + 1;
+    if (!keyword) {
+      cursor = wordEnd;
+      continue;
+    }
+    if (keyword.word === introducer && caseDepth === 0) return true;
+    if (caseDepth === 0 && parenDepth === 0 && (stops.has(keyword.word) || keyword.word === "end")) return false;
+    if (keyword.word === "case") {
+      caseDepth += 1;
+      cursor = wordEnd;
+      continue;
+    }
+    if (keyword.word === "end" && caseDepth > 0) {
+      const follower = nextSqlBlockKeyword(text, wordEnd);
+      if (!follower || follower.word === "case") caseDepth -= 1;
+      const closesCompound = follower !== null && SQL_COMPOUND_FOLLOWER.has(follower.word);
+      cursor = closesCompound ? follower.end : wordEnd;
+      continue;
+    }
+    cursor = wordEnd;
+  }
+  return false;
+}
+
+function advanceSqlBlockWord(text: string, index: number, stack: SqlBlockFrame[]): number {
+  const keyword = sqlBlockKeywordAt(text, index);
+  if (!keyword) return readBareWord(text, index)?.end ?? index + 1;
+  const word = keyword.word;
+  const wordEnd = keyword.end;
   if (word === "begin") {
     stack.push("begin");
-    return;
+    return wordEnd;
   }
   if (word === "case") {
     stack.push("case");
-    return;
+    return wordEnd;
   }
-  if (word !== "end") return;
-  if (follower !== null && SQL_COMPOUND_END.has(follower)) return;
-  if (follower === "case") {
-    if (stack.at(-1) === "case") stack.pop();
-    return;
+  if (word === "loop" || word === "repeat") {
+    if (opensBareBlock(text, index, wordEnd)) stack.push(word);
+    return wordEnd;
   }
-  stack.pop();
+  if (word === "if" && seesCompoundIntroducer(text, wordEnd, "then", SQL_IF_STOP)) {
+    stack.push("if");
+    return wordEnd;
+  }
+  if (word === "while" && seesCompoundIntroducer(text, wordEnd, "do", SQL_WHILE_STOP)) {
+    stack.push("while");
+    return wordEnd;
+  }
+  if (word !== "end") return wordEnd;
+  const follower = nextSqlBlockKeyword(text, wordEnd);
+  const top = stack.at(-1);
+  if (follower && top === follower.word) {
+    stack.pop();
+    return follower.end;
+  }
+  if (top === "case" || top === "begin") stack.pop();
+  return wordEnd;
 }
 
 /**
@@ -350,15 +589,7 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
       }
     }
     if (/[A-Za-z_]/.test(char)) {
-      let wordEnd = i + 1;
-      while (/[A-Za-z0-9_$]/.test(source[wordEnd] ?? "")) {
-        wordEnd += 1;
-      }
-      const word = source.slice(i, wordEnd).toLowerCase();
-      const follower = word === "end" ? sqlWordAt(source, wordEnd) : null;
-      noteSqlBlockWord(openBlocks, word, follower?.word ?? null);
-      const closesWithFollower = follower !== null && (follower.word === "case" || SQL_COMPOUND_END.has(follower.word));
-      i = word === "end" && follower !== null && closesWithFollower ? follower.end : wordEnd;
+      i = advanceSqlBlockWord(source, i, openBlocks);
       continue;
     }
     if (char === ";" && openBlocks.length === 0) {
@@ -558,10 +789,19 @@ function extractReadFacts(text: string): SqlFactDraft[] {
     facts.push({ kind: "reads_from", objectName: fromName, relatedObjectName: null });
   }
   const seenJoins = new Set<string>();
+  const joinKey = (name: string, related: string | null): string => {
+    const relatedKey = related === null ? "" : sqlObjectLookupKey(related);
+    return sqlObjectLookupKey(name) + ":" + relatedKey;
+  };
+  for (const fact of cteReads.facts) {
+    if (fact.kind === "joins" && fact.objectName) {
+      seenJoins.add(joinKey(fact.objectName, fact.relatedObjectName));
+    }
+  }
   for (const join of sources.joins) {
     if (isCteName(join.name)) continue;
     const related = join.scopeFromNames.find((name) => !isCteName(name)) ?? null;
-    const key = `${sqlObjectLookupKey(join.name)}:${related === null ? "" : sqlObjectLookupKey(related)}`;
+    const key = joinKey(join.name, related);
     if (seenJoins.has(key)) continue;
     seenJoins.add(key);
     facts.push({ kind: "joins", objectName: join.name, relatedObjectName: related });
@@ -570,55 +810,55 @@ function extractReadFacts(text: string): SqlFactDraft[] {
 }
 
 /**
- * The text between a routine body's `BEGIN` and its matching `END`. A `BEGIN` inside parentheses, as in
- * a parameter named `begin`, is not the body. A CASE expression and `END IF` or `END LOOP` do not close
- * it. Null when the statement has no such body. A `$$` body is already blank, so only a `BEGIN`/`END`
- * that the statement splitter kept as one statement is read.
+ * The text between a routine body's BEGIN and its matching END. A BEGIN inside parentheses, as in
+ * a parameter named begin, is not the body. A CASE expression, END IF, and END LOOP do not close
+ * it, and a variable or qualified name such as @case or t.case is not a block keyword. Null when the
+ * statement has no such body. A dollar-quoted body is already blank, so only a BEGIN/END that the
+ * statement splitter kept as one statement is read.
  */
 function beginEndBody(text: string): string | null {
   const scan = maskSqlQuotedIdentifiers(text);
   const stack: SqlBlockFrame[] = [];
   let parenDepth = 0;
-  let bodyStart = -1;
   let cursor = 0;
-  while (cursor < scan.length) {
-    const char = scan[cursor] ?? "";
-    if (char === "(") {
+  let bodyStart = -1;
+  while (cursor < scan.length && bodyStart < 0) {
+    const code = scan.charCodeAt(cursor);
+    if (code === 40) {
       parenDepth += 1;
       cursor += 1;
       continue;
     }
-    if (char === ")") {
+    if (code === 41) {
       parenDepth = Math.max(0, parenDepth - 1);
       cursor += 1;
       continue;
     }
-    const previous = scan[cursor - 1] ?? "";
-    if (parenDepth !== 0 || !/[A-Za-z_]/.test(char) || /[\w@#.]/.test(previous)) {
+    if (!/[A-Za-z_]/.test(scan[cursor] ?? "")) {
       cursor += 1;
       continue;
     }
-    let wordEnd = cursor + 1;
-    while (/[A-Za-z0-9_$]/.test(scan[wordEnd] ?? "")) wordEnd += 1;
-    const word = scan.slice(cursor, wordEnd).toLowerCase();
-    if (bodyStart < 0) {
-      if (word === "begin") {
-        bodyStart = wordEnd;
-        stack.push("begin");
-      }
-      cursor = wordEnd;
+    const keyword = parenDepth === 0 ? sqlBlockKeywordAt(scan, cursor) : null;
+    if (keyword?.word === "begin") {
+      bodyStart = keyword.end;
+      stack.push("begin");
+      cursor = keyword.end;
+      break;
+    }
+    cursor = readBareWord(scan, cursor)?.end ?? cursor + 1;
+  }
+  if (bodyStart < 0) return null;
+  while (cursor < scan.length) {
+    if (/[A-Za-z_]/.test(scan[cursor] ?? "")) {
+      const atWord = cursor;
+      cursor = advanceSqlBlockWord(scan, cursor, stack);
+      if (stack.length === 0) return text.slice(bodyStart, atWord);
       continue;
     }
-    const follower = word === "end" ? sqlWordAt(scan, wordEnd) : null;
-    noteSqlBlockWord(stack, word, follower?.word ?? null);
-    if (stack.length === 0) return text.slice(bodyStart, cursor);
-    const closesWithFollower =
-      word === "end" && follower !== null && (follower.word === "case" || SQL_COMPOUND_END.has(follower.word));
-    cursor = follower !== null && closesWithFollower ? follower.end : wordEnd;
+    cursor += 1;
   }
   return null;
 }
-
 /** Read facts of the statements inside a `BEGIN`/`END` body, split by the statement splitter. */
 function readsInsideBeginEnd(masked: string): SqlFactDraft[] {
   const body = beginEndBody(masked);

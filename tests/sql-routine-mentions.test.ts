@@ -653,4 +653,8 @@ describe("SQL routine sources", () => {
     expect(callMentions(distinct)).toContainEqual({ text: "norm", speculative: true });
     expect(callMentions(extract)).toContainEqual({ text: "norm", speculative: true });
   });
+  it("does not read an aggregate FILTER clause as a call, and still reads filter(x)", () => {
+    expect(callMentions("SELECT count(*) FILTER (WHERE true)").map((call) => call.text)).not.toContain("FILTER");
+    expect(callMentions("SELECT filter(x)")).toEqual([{ text: "filter", speculative: true }]);
+  });
 });

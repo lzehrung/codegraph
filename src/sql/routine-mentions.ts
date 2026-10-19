@@ -746,6 +746,13 @@ function collectCallKeywordMentions(
   }
 }
 
+/** `FILTER (WHERE ...)` filters an aggregate. It is not a call of a routine named filter. */
+function isAggregateFilterClause(scan: string, nameEnd: number): boolean {
+  const open = skipWhitespace(scan, nameEnd);
+  if (scan.charCodeAt(open) !== 40) return false;
+  return wordAt(scan, skipWhitespace(scan, open + 1)) === "where";
+}
+
 function collectCallShapeMentions(
   masked: string,
   scan: string,
@@ -763,6 +770,7 @@ function collectCallShapeMentions(
     const end = start + (match[1] ?? "").length;
     const name = normalizeSqlObjectName(masked.slice(start, end));
     if (!name || (!name.includes(".") && hasWord(CALL_KEYWORDS, name.toLowerCase()))) continue;
+    if (!name.includes(".") && name.toLowerCase() === "filter" && isAggregateFilterClause(scan, end)) continue;
     mentions.set(start, { name, start, end, kind: "call", namespace: "callable", speculative: true });
   }
 }

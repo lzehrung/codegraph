@@ -1618,4 +1618,80 @@ describe("SQL routine call sites", () => {
       expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
     });
   });
+  it("indexes the procedure after consecutive T-SQL IF blocks and GO", async () => {
+    const source = [
+      "CREATE PROCEDURE p AS",
+      "BEGIN",
+      "  IF 1 = 1",
+      "  BEGIN",
+      "    SELECT 1",
+      "  END",
+      "  IF 1 = 1",
+      "  BEGIN",
+      "    SELECT 2",
+      "  END",
+      "END",
+      "GO",
+      "CREATE PROCEDURE q AS",
+      "BEGIN",
+      "  SELECT 1",
+      "END",
+      "",
+    ].join("\n");
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-if-go-"));
+    try {
+      const file = path.join(root, "batch.sql").replace(/\\/g, "/");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await buildProjectIndexFromFiles(root, [file]);
+      expect(
+        listSymbols(index, { file })
+          .map((symbol) => symbol.name)
+          .sort(),
+      ).toEqual(["p", "q"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("indexes the next procedure when case is a variable or a qualified identifier", async () => {
+    const source = [
+      "CREATE TABLE users (id integer);",
+      "CREATE PROCEDURE p @case int AS",
+      "BEGIN",
+      '  SELECT id FROM users WHERE t.case = :case AND $case = "case" AND [case] = @case;',
+      "END",
+      "GO",
+      "CREATE PROCEDURE q AS",
+      "BEGIN",
+      "  SELECT 1;",
+      "END",
+      "",
+    ].join("\n");
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-case-word-"));
+    try {
+      const file = path.join(root, "batch.sql").replace(/\\/g, "/");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await buildProjectIndexFromFiles(root, [file]);
+      expect(
+        listSymbols(index, { file })
+          .map((symbol) => symbol.name)
+          .sort(),
+      ).toEqual(["p", "q", "users"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat an aggregate FILTER clause as a call of an indexed routine named filter", async () => {
+    const schema = ["CREATE FUNCTION filter(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;"];
+    const use = ["SELECT count(*) FILTER (WHERE true);", "SELECT filter(1);"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const result = await referencesAt(project, "schema.sql", schema, 1, "filter");
+
+      expect(referenceSites(project.root, result)).toEqual(
+        [siteAt("schema.sql", schema, 1, "filter"), siteAt("use.sql", use, 2, "filter")].sort(),
+      );
+      expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    });
+  });
 });

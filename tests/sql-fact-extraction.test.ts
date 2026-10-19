@@ -586,4 +586,62 @@ describe("SQL fact extraction", () => {
     expect(bodyOf("r")).toContain("FROM teams");
     expect(bodyOf("s")).toContain("FROM tasks");
   });
+  it("records a JOIN inside a CTE body once", () => {
+    const facts = extractSqlFactsFromSource(
+      "cte-join.sql",
+      "WITH c AS (SELECT * FROM users JOIN accounts ON accounts.id = users.id) SELECT * FROM c",
+    );
+
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
+    expect(
+      facts.filter((fact) => fact.kind === "joins").map((fact) => [fact.objectName, fact.relatedObjectName]),
+    ).toEqual([["accounts", "users"]]);
+  });
+
+  it("splits GO after consecutive T-SQL IF blocks", () => {
+    const facts = extractSqlFactsFromSource(
+      "if-go.sql",
+      [
+        "CREATE PROCEDURE p AS",
+        "BEGIN",
+        "  IF 1 = 1",
+        "  BEGIN",
+        "    SELECT 1",
+        "  END",
+        "  IF 1 = 1",
+        "  BEGIN",
+        "    SELECT 2",
+        "  END",
+        "END",
+        "GO",
+        "CREATE PROCEDURE q AS",
+        "BEGIN",
+        "  SELECT 1",
+        "END",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual(["p", "q"]);
+  });
+
+  it("does not treat a variable or qualified case as a CASE block", () => {
+    const facts = extractSqlFactsFromSource(
+      "case-word.sql",
+      [
+        "CREATE TABLE users (id integer);",
+        "CREATE PROCEDURE p @case int AS",
+        "BEGIN",
+        '  SELECT id FROM users WHERE t.case = :case AND $case = "case" AND [case] = @case;',
+        "END",
+        "GO",
+        "CREATE PROCEDURE q AS",
+        "BEGIN",
+        "  SELECT 1;",
+        "END",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual(["p", "q"]);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
+  });
 });
