@@ -397,14 +397,25 @@ const SQL_NONSTATEMENT_PREDECESSOR = new Set(["after", "before", "for", "instead
 /** Keywords that end a source clause because they start another statement. */
 const SQL_STATEMENT_BOUNDARY = new Set(["select", "update", "delete", "insert", "merge"]);
 
+/** A keyword is syntax only as a bare token, not a variable or a part of a dotted identifier. */
+export function isBareSqlKeyword(scan: string, start: number, end: number): boolean {
+  if (/[\w$@#:]/.test(scan[start - 1] ?? "") || /[\w$@#:]/.test(scan[end] ?? "")) return false;
+  let before = start - 1;
+  while (before >= 0 && /\s/.test(scan[before] ?? "")) before -= 1;
+  if (scan[before] === ".") return false;
+  let after = end;
+  while (after < scan.length && /\s/.test(scan[after] ?? "")) after += 1;
+  return scan[after] !== ".";
+}
+
 /**
  * SELECT always opens a binding scope, including a subquery. UPDATE, DELETE, INSERT, and MERGE open
  * one only as their own statement, so `FOR UPDATE` and `WHEN MATCHED THEN UPDATE` stay in the query
  * that contains them.
  */
 function opensSqlBindingScope(scan: string, wordStart: number, word: string): boolean {
+  if (!SQL_STATEMENT_BOUNDARY.has(word) || !isBareSqlKeyword(scan, wordStart, wordStart + word.length)) return false;
   if (word === "select") return true;
-  if (!SQL_STATEMENT_BOUNDARY.has(word)) return false;
   const previous = previousSignificantWord(scan, wordStart);
   return !previous || !SQL_NONSTATEMENT_PREDECESSOR.has(previous.word);
 }
@@ -558,6 +569,7 @@ export function sqlSourceClauses(scan: string): Array<{
   for (const match of scan.matchAll(/\b(from|using|join|apply)\b/gi)) {
     const start = match.index ?? 0;
     const depth = scopes.depthAt(start);
+    if (!isBareSqlKeyword(scan, start, start + match[0].length)) continue;
     if (depth !== scopes.selectDepthAt(start)) continue;
     const kind = match[1]!.toLowerCase() as "from" | "using" | "join" | "apply";
     if (kind === "from" && isDistinctFromPredicate(scan, start)) continue;
@@ -570,6 +582,7 @@ export function sqlSourceClauses(scan: string): Array<{
       const at = boundary.index;
       if (at >= clauseEnd) break;
       if (scopes.depthAt(at) !== depth) continue;
+      if (boundary[0] !== ";" && !isBareSqlKeyword(scan, at, at + boundary[0].length)) continue;
       const token = boundary[0].toLowerCase();
       // `;` and the next statement end the clause. That statement has already changed scope, so it
       // would not match the same-scope test below.

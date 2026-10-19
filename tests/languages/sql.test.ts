@@ -1694,6 +1694,115 @@ describe("SQL routine call sites", () => {
       expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
     });
   });
+
+  it("binds table aliases across variable and qualified keyword-shaped tokens, not to a decoy table", async () => {
+    const schema = ["CREATE TABLE users (id integer);", "CREATE TABLE u (id integer);"];
+    const use = [
+      "SELECT u.id, @update FROM users u;",
+      "SELECT u.id, u.select FROM users u;",
+      "SELECT u.select, u.id FROM users u;",
+      "SELECT u.id, :select, $delete FROM users u WHERE u.where = 1;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const users = await referencesAt(project, "schema.sql", schema, 1, "users");
+      const decoy = await referencesAt(project, "schema.sql", schema, 2, "u");
+      expect(referenceSites(project.root, users)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "users"),
+          siteAt("use.sql", use, 1, "u.id"),
+          siteAt("use.sql", use, 1, "users"),
+          siteAt("use.sql", use, 2, "u.id"),
+          siteAt("use.sql", use, 2, "u.select"),
+          siteAt("use.sql", use, 2, "users"),
+          siteAt("use.sql", use, 3, "u.select"),
+          siteAt("use.sql", use, 3, "u.id"),
+          siteAt("use.sql", use, 3, "users"),
+          siteAt("use.sql", use, 4, "u.id"),
+          siteAt("use.sql", use, 4, "users"),
+          siteAt("use.sql", use, 4, "u.where"),
+        ].sort(),
+      );
+      expect(referenceSites(project.root, decoy)).toEqual([siteAt("schema.sql", schema, 2, "u")]);
+      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      for (const [line, token] of [
+        [1, "u.id"],
+        [2, "u.select"],
+        [3, "u.id"],
+        [4, "u.where"],
+      ] as const) {
+        expect(await gotoAt(project, "use.sql", use, line, token)).toBe("schema.sql:1");
+      }
+      expect(await gotoAt(project, "use.sql", use, 1, "@update")).toBe("not_found");
+    });
+  });
+
+  it("references and renames calls in T-SQL computed columns, but not aliases or CAST types", async () => {
+    const schema = [
+      "CREATE FUNCTION dbo.normalize_email(e text) RETURNS text AS $$ SELECT e $$ LANGUAGE sql;",
+      "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT e $$ LANGUAGE sql;",
+    ];
+    const use = [
+      "CREATE TABLE users (email varchar(100), normalized_email AS dbo.normalize_email(email));",
+      "CREATE TABLE accounts (email varchar(100), normalized AS CAST(email AS normalize_email(20)));",
+      "SELECT dbo.normalize_email(email) AS normalize_email FROM users;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const qualified = await referencesAt(project, "schema.sql", schema, 1, "dbo.normalize_email");
+      const type = await referencesAt(project, "schema.sql", schema, 2, "normalize_email");
+      expect(referenceSites(project.root, qualified)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "dbo.normalize_email"),
+          siteAt("use.sql", use, 1, "dbo.normalize_email"),
+          siteAt("use.sql", use, 3, "dbo.normalize_email"),
+        ].sort(),
+      );
+      expect(referenceSites(project.root, type)).toEqual([siteAt("schema.sql", schema, 2, "normalize_email")]);
+      expect(okReferences(qualified).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(await gotoAt(project, "use.sql", use, 1, "dbo.normalize_email")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 2, "normalize_email")).toBe("not_found");
+      const preview = await previewRenameOf(project, "dbo.normalize_email", "dbo.normalize_address");
+      expect(editSites(preview)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "dbo.normalize_email"),
+          siteAt("use.sql", use, 1, "dbo.normalize_email"),
+          siteAt("use.sql", use, 3, "dbo.normalize_email"),
+        ].sort(),
+      );
+    });
+  });
+
+  it("excludes ON CONFLICT, OVER, FILTER and WITHIN GROUP clauses from references and rename", async () => {
+    const names = ["conflict", "over", "filter", "group"] as const;
+    const schema = names.map(
+      (name) => `CREATE FUNCTION ${name}(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;`,
+    );
+    const use = [
+      "INSERT INTO users (id) VALUES (1) ON CONFLICT (id) DO NOTHING;",
+      "INSERT INTO users (id) VALUES (2) ON CONFLICT ON CONSTRAINT users_pkey DO NOTHING;",
+      "SELECT count(*) OVER (PARTITION BY id), count(*) FILTER (WHERE id > 0) FROM users;",
+      "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY id) FROM users;",
+      "SELECT conflict(id), over(id), filter(id), group(id) FROM users;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      for (const [index, name] of names.entries()) {
+        const result = await referencesAt(project, "schema.sql", schema, index + 1, name);
+        const expected = [
+          siteAt("schema.sql", schema, index + 1, name),
+          siteAt("use.sql", use, 5, `${name}(id)`),
+        ].sort();
+        expect(referenceSites(project.root, result)).toEqual(expected);
+        expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(await gotoAt(project, "use.sql", use, 5, `${name}(id)`)).toBe(`schema.sql:${index + 1}`);
+        const preview = await previewRenameOf(project, name, `${name}_v2`);
+        expect(editSites(preview)).toEqual(expected);
+        expect(unsafeRenameSites(preview).filter((site) => site.startsWith("use.sql:"))).toEqual([]);
+      }
+      expect(await gotoAt(project, "use.sql", use, 1, "CONFLICT")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 3, "OVER")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 3, "FILTER")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 4, "GROUP")).toBe("not_found");
+    });
+  });
   it("keeps an UPDATE or DELETE alias apart from the previous statement", async () => {
     const schema = ["CREATE TABLE users (id integer);", "CREATE TABLE accounts (id integer);"];
     const use = [

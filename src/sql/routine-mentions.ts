@@ -1,5 +1,6 @@
 import {
   createSqlObjectNameRegExp,
+  isBareSqlKeyword,
   maskSqlQuotedIdentifiers,
   maskSqlStringsAndComments,
   normalizeSqlObjectName,
@@ -58,6 +59,10 @@ const NAME_RE = createSqlObjectNameRegExp("y");
 const NAME_BOUNDARY = String.raw`(?<![\w$@#:.])`;
 const CALL_KEYWORD_RE = new RegExp(
   String.raw`${NAME_BOUNDARY}(call|exec(?:ute)?)\s+(?:@[A-Za-z_]\w*\s*=\s*)?(${SQL_OBJECT_NAME_PATTERN})`,
+  "gi",
+);
+const CREATE_TABLE_COLUMNS_RE = new RegExp(
+  String.raw`\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?${SQL_OBJECT_NAME_PATTERN}\s*\(`,
   "gi",
 );
 const CALL_SHAPE_RE = new RegExp(String.raw`${NAME_BOUNDARY}(${SQL_OBJECT_NAME_PATTERN})\s*\(`, "g");
@@ -205,6 +210,16 @@ function previousWord(text: string, index: number): string | undefined {
   let start = end;
   while (start > 0 && /[A-Za-z0-9_$]/.test(text[start - 1] ?? "")) start -= 1;
   return start < end ? text.slice(start, end).toLowerCase() : undefined;
+}
+
+/** A preceding word that is syntax, rather than part of a variable or dotted name. */
+function previousBareSqlWord(scan: string, index: number): string | undefined {
+  let end = index;
+  while (end > 0 && /\s/.test(scan[end - 1] ?? "")) end -= 1;
+  let start = end;
+  while (start > 0 && /[A-Za-z0-9_$]/.test(scan[start - 1] ?? "")) start -= 1;
+  if (start === end || !isBareSqlKeyword(scan, start, end)) return undefined;
+  return scan.slice(start, end).toLowerCase();
 }
 
 function nameAt(text: string, index: number): { name: string; start: number; end: number } | null {
@@ -676,14 +691,49 @@ function excludeInsertTargets(scan: string, excluded: Set<number>): void {
   }
 }
 
+/** Column types are not calls; the expression after a top-level computed-column AS is. */
+function collectCreateTableColumnShapes(scan: string, excluded: Set<number>, computed: Set<number>): void {
+  for (const match of scan.matchAll(CREATE_TABLE_COLUMNS_RE)) {
+    const create = match.index ?? 0;
+    if (!isBareSqlKeyword(scan, create, create + 6)) continue;
+    const open = create + match[0].length - 1;
+    const close = matchingParen(scan, open);
+    if (close < 0) continue;
+    let columnStart = open + 1;
+    let depth = 0;
+    for (let cursor = columnStart; cursor <= close; cursor += 1) {
+      const char = scan[cursor];
+      if (char === "(") depth += 1;
+      if (char === ")" && cursor !== close) depth -= 1;
+      if ((char !== "," || depth) && cursor !== close) continue;
+      const column = nameAt(scan, columnStart);
+      if (column && column.end < cursor) {
+        const next = skipWhitespace(scan, column.end);
+        if (wordAt(scan, next) === "as" && isBareSqlKeyword(scan, next, next + 2)) {
+          const expression = nameAt(scan, next + 2);
+          if (
+            expression &&
+            expression.name.toLowerCase() !== "cast" &&
+            expression.start < cursor &&
+            scan[skipWhitespace(scan, expression.end)] === "("
+          ) {
+            computed.add(expression.start);
+          }
+        } else {
+          const type = nameAt(scan, next);
+          if (type && type.start < cursor && scan[skipWhitespace(scan, type.end)] === "(") excluded.add(type.start);
+        }
+      }
+      columnStart = cursor + 1;
+    }
+  }
+}
+
 /**
- * Call shapes that are no calls. `CREATE INDEX ... ON table (columns)` and `WITH name(columns) AS (`
- * put a parenthesis after a name that is not a call, and so does a source in a `FROM` list with an
- * alias column list or table hints, or the table of an `INSERT` after a modifier. Those false calls
- * hide the index's table and invent a routine reference. Calls in an index expression, a join
- * predicate, a CTE body, a source's arguments, or the query of an `INSERT` are later names and stay.
+ * Call shapes that are no calls. Index, CTE, source alias, and INSERT target parentheses name
+ * non-routines; CREATE TABLE column types do too, unlike computed-column expressions.
  */
-function excludedCallShapeStarts(scan: string): Set<number> {
+function excludedCallShapeStarts(scan: string, computed: Set<number>): Set<number> {
   const excluded = new Set<number>();
   if (/^\s*create\s+(?:unique\s+)?index\b/i.test(scan)) {
     const onRe = /\bon\s+/gi;
@@ -717,6 +767,7 @@ function excludedCallShapeStarts(scan: string): Set<number> {
   }
   collectSourceItemExclusions(scan, excluded);
   excludeInsertTargets(scan, excluded);
+  collectCreateTableColumnShapes(scan, excluded, computed);
   return excluded;
 }
 
@@ -766,24 +817,45 @@ function isAggregateFilterClause(scan: string, nameEnd: number): boolean {
   return wordAt(scan, skipWhitespace(scan, open + 1)) === "where";
 }
 
+/** Clause syntax resembles a call only at its keyword position, never everywhere that name occurs. */
+function isCallShapedClause(scan: string, start: number, end: number, word: string): boolean {
+  if (!word || !isBareSqlKeyword(scan, start, end)) return false;
+  if (word === "conflict") return previousBareSqlWord(scan, start) === "on";
+  if (word === "group") return previousBareSqlWord(scan, start) === "within";
+  if (word === "filter") return isAggregateFilterClause(scan, end);
+  if (word !== "over") return false;
+  let before = start - 1;
+  while (before >= 0 && /\s/.test(scan[before] ?? "")) before -= 1;
+  return scan[before] === ")";
+}
+
 function collectCallShapeMentions(
   masked: string,
   scan: string,
   mentions: Map<number, SqlRoutineMention>,
   inBody: boolean,
 ): void {
-  const excluded = excludedCallShapeStarts(scan);
+  const computed = new Set<number>();
+  const excluded = excludedCallShapeStarts(scan, computed);
   for (const match of scan.matchAll(CALL_SHAPE_RE)) {
     const start = match.index ?? 0;
     if (mentions.has(start) || excluded.has(start)) continue;
-    const previous = previousWord(scan, start);
+    const previous = previousBareSqlWord(scan, start);
     // In a PL/pgSQL body `EXECUTE f(x)` calls `f` to build the command.
     const buildsCommand = inBody && !!previous && hasWord(EXECUTE_WORDS, previous);
-    if (previous && hasWord(NON_CALL_PRECEDING_WORDS, previous) && !buildsCommand) continue;
+    if (
+      previous &&
+      hasWord(NON_CALL_PRECEDING_WORDS, previous) &&
+      !buildsCommand &&
+      !(previous === "as" && computed.has(start))
+    )
+      continue;
     const end = start + (match[1] ?? "").length;
     const name = normalizeSqlObjectName(masked.slice(start, end));
-    if (!name || (!name.includes(".") && hasWord(CALL_KEYWORDS, name.toLowerCase()))) continue;
-    if (!name.includes(".") && name.toLowerCase() === "filter" && isAggregateFilterClause(scan, end)) continue;
+    if (!name) continue;
+    const word = name.includes(".") ? "" : name.toLowerCase();
+    if (word && (hasWord(CALL_KEYWORDS, word) || word === "cast")) continue;
+    if (isCallShapedClause(scan, start, end, word)) continue;
     mentions.set(start, { name, start, end, kind: "call", namespace: "callable", speculative: true });
   }
 }

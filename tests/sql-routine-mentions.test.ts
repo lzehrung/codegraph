@@ -657,6 +657,50 @@ describe("SQL routine sources", () => {
     expect(callMentions("SELECT count(*) FILTER (WHERE true)").map((call) => call.text)).not.toContain("FILTER");
     expect(callMentions("SELECT filter(x)")).toEqual([{ text: "filter", speculative: true }]);
   });
+
+  it("reads a computed CREATE TABLE column call but not SELECT aliases or CAST types", () => {
+    expect(
+      mentionTexts("CREATE TABLE users (email varchar(100), normalized_email AS dbo.normalize_email(email))"),
+    ).toEqual(["dbo.normalize_email"]);
+    expect(
+      mentionTexts("CREATE TABLE users (email varchar(100), normalized_email AS CAST(email AS normalize_email(10)))"),
+    ).toEqual([]);
+    expect(mentionTexts("SELECT email AS normalize_email(10), CAST(email AS normalize_email(10)) FROM users")).toEqual(
+      [],
+    );
+    expect(mentionTexts("SELECT dbo.normalize_email(email) AS normalized_email FROM users")).toEqual([
+      "dbo.normalize_email",
+    ]);
+  });
+
+  it("excludes clause parentheses but keeps same-named routine calls", () => {
+    const clauses = [
+      "INSERT INTO users (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+      "INSERT INTO users (id) VALUES (1) ON CONFLICT ON CONSTRAINT users_pkey DO NOTHING",
+      "SELECT count(*) OVER (PARTITION BY id), count(*) FILTER (WHERE id > 0) FROM users",
+      "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY id) FROM users",
+    ];
+    for (const clause of clauses) {
+      expect(mentionTexts(clause)).not.toContain("CONFLICT");
+      expect(mentionTexts(clause)).not.toContain("OVER");
+      expect(mentionTexts(clause)).not.toContain("FILTER");
+      expect(mentionTexts(clause)).not.toContain("GROUP");
+    }
+    expect(mentionTexts("SELECT conflict(id), over(id), filter(id), group(id) FROM users")).toEqual([
+      "conflict",
+      "over",
+      "filter",
+      "group",
+    ]);
+    expect(
+      mentionTexts("INSERT INTO users (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id = conflict(id)"),
+    ).toContain("conflict");
+    expect(mentionTexts("SELECT dbo.conflict(id), dbo.over(id), dbo.group(id) FROM users")).toEqual([
+      "dbo.conflict",
+      "dbo.over",
+      "dbo.group",
+    ]);
+  });
   it("reads a call in a single-quoted routine body without shifting offsets", () => {
     const quoted = "CREATE FUNCTION wrap(e text) RETURNS text AS 'SELECT ''x'', normalize_email(e)' LANGUAGE sql";
     const call = findSqlRoutineMentions(quoted).find((mention) => mention.kind === "call");

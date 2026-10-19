@@ -736,6 +736,63 @@ describe("SQL artifact graph", () => {
     }
   });
 
+  it("links computed-column calls but not column types or call-shaped SQL clauses", async () => {
+    const root = await mkTmpDir("cg-sql-computed-clause-edge-");
+    try {
+      const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+      const schema = file("routines.sql");
+      const computed = file("computed.sql");
+      const clauses = file("clauses.sql");
+      const calls = file("calls.sql");
+      await fsp.writeFile(
+        schema,
+        [
+          "CREATE FUNCTION dbo.normalize_email(e text) RETURNS text AS $$ SELECT e $$ LANGUAGE sql;",
+          "CREATE FUNCTION varchar(n integer) RETURNS integer AS $$ SELECT n $$ LANGUAGE sql;",
+          "CREATE FUNCTION conflict(n integer) RETURNS integer AS $$ SELECT n $$ LANGUAGE sql;",
+          "CREATE FUNCTION over(n integer) RETURNS integer AS $$ SELECT n $$ LANGUAGE sql;",
+          "CREATE FUNCTION group(n integer) RETURNS integer AS $$ SELECT n $$ LANGUAGE sql;",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(
+        computed,
+        "CREATE TABLE users (email varchar(100), normalized_email AS dbo.normalize_email(email));\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        clauses,
+        [
+          "INSERT INTO users (id) VALUES (1) ON CONFLICT (id) DO NOTHING;",
+          "SELECT count(*) OVER (PARTITION BY id) FROM users;",
+          "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY id) FROM users;",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(
+        calls,
+        "SELECT dbo.normalize_email(email), conflict(id), over(id), group(id) FROM users;\n",
+        "utf8",
+      );
+      const graph = await collectGraph(root, [schema, computed, clauses, calls]);
+      const routineEdges = (from: string): string[] =>
+        graph.edges
+          .filter((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort();
+      expect(routineEdges(computed)).toEqual(["sql:reads_from:callable:dbo.normalize_email"]);
+      expect(routineEdges(clauses)).toEqual([]);
+      expect(routineEdges(calls)).toEqual([
+        "sql:reads_from:callable:conflict",
+        "sql:reads_from:callable:dbo.normalize_email",
+        "sql:reads_from:callable:group",
+        "sql:reads_from:callable:over",
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("recomputes unchanged SQL call edges when a routine definition is added and removed", async () => {
     const root = await mkTmpDir("cg-sql-routine-incremental-");
     try {

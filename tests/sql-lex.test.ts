@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { assertMcpSqliteQueryResourceBounded } from "../src/mcp/sqlite-guard.js";
-import { maskSqlQuotedIdentifiers, maskSqlStringsAndComments, sqlSourceClauses } from "../src/sql/lex.js";
+import {
+  maskSqlQuotedIdentifiers,
+  maskSqlStringsAndComments,
+  sqlQueryScopes,
+  sqlSourceClauses,
+} from "../src/sql/lex.js";
 
 /** The text with runs of blanks and line breaks folded to one space, so a test names what stays and what goes. */
 function collapse(text: string): string {
@@ -148,5 +153,24 @@ describe("SQL source clause bounds", () => {
   it("still reads the table beside IS DISTINCT FROM when a long comment separates the words", () => {
     const sql = `SELECT norm.id FROM norm WHERE value IS /* ${"c".repeat(80)} */ DISTINCT FROM norm(1)`;
     expect(sourceTexts(sql)).toEqual(["norm"]);
+  });
+  it("keeps variable and qualified keyword-shaped identifiers inside the query and source clause", () => {
+    const sql = "SELECT u.id, @update, :select, $insert, u.select FROM users u JOIN orgs o ON u.where = o.id";
+    const scopes = sqlQueryScopes(sql);
+    const query = scopes.at(sql.indexOf("SELECT"));
+    for (const token of ["u.id", "@update", ":select", "$insert", "u.select", "FROM users", "u.where"]) {
+      expect(scopes.at(sql.indexOf(token))).toBe(query);
+    }
+    expect(sourceTexts(sql)).toEqual(["users u", "orgs o"]);
+    expect(sourceTexts("SELECT * FROM users u WHERE u.where = 1")).toEqual(["users u"]);
+    expect(sourceTexts("SELECT * FROM users u, u.where x WHERE x.id = 1")).toEqual(["users u, u.where x"]);
+    const quoted = 'SELECT u.id, select.b, "update", [delete], `merge` FROM users u';
+    const masked = maskSqlQuotedIdentifiers(maskSqlStringsAndComments(quoted));
+    const quotedScopes = sqlQueryScopes(masked);
+    expect(quotedScopes.at(quoted.indexOf("select.b"))).toBe(quotedScopes.at(0));
+    expect(quotedScopes.at(quoted.indexOf("FROM users"))).toBe(quotedScopes.at(0));
+    expect(sqlSourceClauses(masked).map((source) => masked.slice(source.end, source.clauseEnd).trim())).toEqual([
+      "users u",
+    ]);
   });
 });
