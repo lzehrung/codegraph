@@ -413,6 +413,7 @@ describe("certified release workflows", () => {
     expect(publish).toContain("temp/release-candidates/SHA256SUMS");
     expect(publish).toContain("release-candidate-manifest.json");
     expect(publish).toContain("Standalone preview assets are built, smoked, and attached by the final release job.");
+    expect(publish).toContain("extractChangelogSection(changelog, process.env.ROOT_VERSION)");
     expect(preflightIndex).toBeGreaterThan(-1);
     expect(publishIndex).toBeGreaterThan(preflightIndex);
     expect(releaseIndex).toBeGreaterThan(publishIndex);
