@@ -20,6 +20,7 @@ import {
   type ScssLocalBinding,
   type ScssMemberKind,
   type ScssModuleLoad,
+  type ScssDynamic,
   type ScssUse,
 } from "./syntax.js";
 
@@ -987,15 +988,16 @@ function legacyGetFunctionBeforeDeclaration(current: ModuleModel, use: ScssUse, 
   return declaredAt > use.nameStart;
 }
 
-function legacyGetFunctionUse(at: number): ScssUse {
+function legacyBuiltinUse(dynamic: ScssDynamic): ScssUse {
+  const at = dynamic.at ?? 0;
   return {
     kind: "function",
     syntax: "call",
     namespace: null,
-    text: "get-function",
-    canonical: "get-function",
+    text: dynamic.form,
+    canonical: dynamic.form,
     nameStart: at,
-    nameEnd: at + "get-function".length,
+    nameEnd: at + dynamic.form.length,
     hitStart: at,
     loadIndex: null,
   };
@@ -1003,13 +1005,14 @@ function legacyGetFunctionUse(at: number): ScssUse {
 
 /**
  * True when a dynamic lookup in `file` is not proved to be a user-defined function. A bare legacy
- * `get-function` is proved when it resolves to a function another file declares.
+ * built-in (`get-function` or an existence predicate) is proved when it resolves to a function
+ * another file declares.
  */
 async function hasUnprovenDynamic(index: ProjectIndex, file: ModuleModel): Promise<boolean> {
   if (file.inheritedDynamics.length) return true;
   for (const dynamic of file.facts.dynamics) {
     if (!dynamic.legacyBare) return true;
-    const resolved = await resolveScssUse(index, file.file, legacyGetFunctionUse(dynamic.at ?? 0));
+    const resolved = await resolveScssUse(index, file.file, legacyBuiltinUse(dynamic));
     if (resolved.status === "ok" && fileIdentityKey(resolved.def.file) !== file.key) continue;
     return true;
   }
@@ -1248,6 +1251,45 @@ export async function scssFlowLocalUnproven(index: ProjectIndex, def: SymbolDef)
   const model = await projectModel(index);
   const current = model.files.get(fileIdentityKey(def.file));
   return current?.unprovenFlowAssigns.has(sassCanonical(def.localName)) ?? false;
+}
+
+function existenceNamesLocal(dynamic: ScssDynamic, canonical: string, local: ScssLocalBinding | undefined): boolean {
+  if (dynamic.form !== "variable-exists") return false;
+  if (dynamic.arg !== null && sassCanonical(dynamic.arg) !== canonical) return false;
+  const at = dynamic.at;
+  if (local && at !== undefined && (at < local.from || at >= local.to)) return false;
+  return true;
+}
+
+/**
+ * True when a block local, parameter, or loop variable may be the variable `variable-exists`
+ * names. `global-variable-exists` does not see a block local. A proved user function is not the
+ * built-in. Module members are left to {@link hasUnprovenDynamic}.
+ */
+export async function scssBlockLocalExistenceUnproven(index: ProjectIndex, def: SymbolDef): Promise<boolean> {
+  if (!def.localName.startsWith("$")) return false;
+  if (await scssMemberForDefinition(index, def)) return false;
+  const model = await projectModel(index);
+  const current = model.files.get(fileIdentityKey(def.file));
+  if (!current) return false;
+  const canonical = sassCanonical(def.localName);
+  const local = current.facts.locals.find(
+    (entry) => entry.range.start.line === def.range.start.line && entry.range.start.column === def.range.start.column,
+  );
+  for (const dynamic of current.facts.dynamics) {
+    if (!existenceNamesLocal(dynamic, canonical, local)) continue;
+    if (dynamic.legacyBare) {
+      const resolved = await resolveScssUse(index, current.file, legacyBuiltinUse(dynamic));
+      if (resolved.status === "ok" && fileIdentityKey(resolved.def.file) !== current.key) continue;
+    }
+    return true;
+  }
+  for (const use of current.facts.uses) {
+    if (!use.dynamic || !current.inheritedDynamics.includes(use.dynamic)) continue;
+    if (!existenceNamesLocal({ ...use.dynamic, at: use.nameStart }, canonical, local)) continue;
+    return true;
+  }
+  return false;
 }
 
 /** Reference span for a use. Null when a forward prefix cannot be split from the member. */

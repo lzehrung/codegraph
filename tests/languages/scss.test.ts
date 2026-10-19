@@ -3528,3 +3528,330 @@ describe("SCSS module navigation: import order, call timing, flow, and placehold
     });
   });
 });
+
+describe("SCSS module navigation: existence predicates and repeated flow assignments", () => {
+  const native = isNativeTreeSitterAvailable();
+
+  it("records existence predicates, repeated import assignments, and star-flow locals", () => {
+    const meta = [
+      '@use "sass:meta";',
+      ".a {",
+      '  a: meta.function-exists("pad", "lib");',
+      '  b: meta.function_exists("pad", "lib");',
+      '  c: meta.variable-exists("pad");',
+      '  d: meta.variable_exists("pad");',
+      '  e: meta.global-variable-exists("pad", "lib");',
+      '  f: meta.global_variable_exists("pad");',
+      '  g: meta.mixin-exists("pad");',
+      '  h: meta.mixin_exists("pad");',
+      "}",
+      "",
+    ].join("\n");
+    expect(extractScssFacts(meta).dynamics.map((dynamic) => `${dynamic.form}:${dynamic.arg}`)).toEqual([
+      "function-exists:pad",
+      "function-exists:pad",
+      "variable-exists:pad",
+      "variable-exists:pad",
+      "global-variable-exists:pad",
+      "global-variable-exists:pad",
+      "mixin-exists:pad",
+      "mixin-exists:pad",
+    ]);
+    expect(extractScssFacts(meta).uses.filter((use) => use.syntax === "call")).toEqual([]);
+
+    const bare = [
+      ".a {",
+      '  a: variable-exists("pad");',
+      '  b: variable_exists("pad");',
+      '  c: global-variable-exists("pad");',
+      '  d: function-exists("pad");',
+      '  e: function_exists("pad");',
+      '  f: mixin-exists("pad");',
+      '  g: mixin_exists("pad");',
+      "}",
+      "",
+    ].join("\n");
+    const bareFacts = extractScssFacts(bare);
+    expect(bareFacts.dynamics.map((dynamic) => `${dynamic.form}:${dynamic.arg}:${dynamic.legacyBare}`)).toEqual([
+      "variable-exists:pad:true",
+      "variable-exists:pad:true",
+      "global-variable-exists:pad:true",
+      "function-exists:pad:true",
+      "function-exists:pad:true",
+      "mixin-exists:pad:true",
+      "mixin-exists:pad:true",
+    ]);
+    expect(bareFacts.uses.filter((use) => use.syntax === "call").map((use) => use.text)).toEqual([
+      "variable-exists",
+      "variable_exists",
+      "global-variable-exists",
+      "function-exists",
+      "function_exists",
+      "mixin-exists",
+      "mixin_exists",
+    ]);
+
+    const before = ["@function function_exists($name) { @return 5; }", '.a { w: function-exists("pad"); }', ""].join(
+      "\n",
+    );
+    expect(extractScssFacts(before).dynamics).toEqual([]);
+    const after = ['.a { w: mixin_exists("pad"); }', "@function mixin-exists($name) { @return 5; }", ""].join("\n");
+    expect(extractScssFacts(after).dynamics.map((dynamic) => dynamic.form)).toEqual(["mixin-exists"]);
+    const starOverride = [
+      '@use "sass:meta" as *;',
+      "@function variable-exists($name) { @return 5; }",
+      '.a { w: variable-exists("pad"); }',
+      "",
+    ].join("\n");
+    expect(extractScssFacts(starOverride).dynamics).toEqual([]);
+    expect(
+      extractScssFacts(starOverride)
+        .uses.filter((use) => use.syntax === "call")
+        .map((use) => use.text),
+    ).toEqual(["variable-exists"]);
+    const userMeta = ['@use "helpers" as meta;', '.a { w: meta.function-exists("pad"); }', ""].join("\n");
+    expect(extractScssFacts(userMeta).dynamics).toEqual([]);
+    expect(
+      extractScssFacts(userMeta)
+        .uses.filter((use) => use.syntax === "call")
+        .map((use) => use.text),
+    ).toEqual(["function-exists"]);
+
+    const repeated = [
+      '@import "vars";',
+      "@if true {",
+      "  $x: 2;",
+      "  $x: 3;",
+      "}",
+      "@each $x in 1, 2 {",
+      "  $x: 4;",
+      "}",
+      "@each $i in 1, 2 {",
+      "  $x: $i;",
+      "}",
+      "",
+    ].join("\n");
+    const repeatedFacts = extractScssFacts(repeated);
+    expect(repeatedFacts.flowAssignments.map((assignment) => assignment.canonical)).toEqual(["x", "x", "x"]);
+    expect(repeatedFacts.locals.map((local) => local.spelling)).toEqual(["$x", "$x", "$x", "$x", "$i", "$x"]);
+
+    const star = ['@use "vars" as *;', "@if true {", "  $x: 2;", "  $x: 3;", "}", ".b { w: $x; }", ""].join("\n");
+    const starFacts = extractScssFacts(star);
+    expect(starFacts.flowAssignments).toEqual([]);
+    expect(starFacts.locals.map((local) => local.spelling)).toEqual(["$x", "$x"]);
+  });
+
+  it.runIf(native)("joins every file-scope import reassignment and keeps the loop variable", async () => {
+    const main = [
+      '@import "vars";',
+      "@if true {",
+      "  $x: 2;",
+      "  $x: 3;",
+      "  .a { w: $x; }",
+      "}",
+      "@each $x in 1, 2 {",
+      "  $x: 4;",
+      "}",
+      "@each $i in 1, 2 {",
+      "  $x: $i;",
+      "}",
+      ".b { w: $x; }",
+      "",
+    ].join("\n");
+    await withScssProject({ "_vars.scss": "$x: 1;\n", "main.scss": main }, async (project) => {
+      expect(await scssGoto(project, "main.scss", "$x: 2")).toBe("_vars.scss:1");
+      expect(await scssGoto(project, "main.scss", "$x: 3")).toBe("_vars.scss:1");
+      expect(await scssGoto(project, "main.scss", "w: $x", 0, 3)).toBe("_vars.scss:1");
+      expect(await scssGoto(project, "main.scss", "$x: 4")).not.toBe("_vars.scss:1");
+      expect(await scssGoto(project, "main.scss", "$x: $i")).toBe("_vars.scss:1");
+      expect(await scssGoto(project, "main.scss", "w: $x", 1, 3)).toBe("_vars.scss:1");
+      const refs = await scssRefs(project, "_vars.scss", "$x");
+      expect(refs.sites).toEqual(
+        ["_vars.scss:1", "main.scss:3", "main.scss:4", "main.scss:5", "main.scss:11", "main.scss:13"].sort(),
+      );
+      expect(refs.coverage?.state).toBe("complete");
+      const renamed = await previewScssRename(project, "$x", "_vars.scss", "$y");
+      expect(renamed.safe).toBe(true);
+      expect(renamed.edits.map((edit) => edit.file + ":" + edit.range.start.line).sort()).toEqual(refs.sites);
+    });
+  });
+
+  it.runIf(native)("keeps a star-loaded flow assignment as a local", async () => {
+    // dart-sass: the assignment inside @if is a local (inner width 2) and does not change the
+    // module variable (outer width 1, get() stays 1).
+    const main = [
+      '@use "vars" as *;',
+      "@if true {",
+      "  $x: 2;",
+      "  .a { w: $x; }",
+      "}",
+      ".b { w: $x; v: get(); }",
+      "",
+    ].join("\n");
+    await withScssProject(
+      {
+        "_vars.scss": ["$x: 1;", "@function get() { @return $x; }", ""].join("\n"),
+        "main.scss": main,
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$x: 2")).toBe("main.scss:3");
+        expect(await scssGoto(project, "main.scss", "w: $x", 0, 3)).toBe("main.scss:3");
+        expect(await scssGoto(project, "main.scss", "w: $x", 1, 3)).toBe("_vars.scss:1");
+        const moduleRefs = await scssRefs(project, "_vars.scss", "$x");
+        expect(moduleRefs.sites).toEqual(["_vars.scss:1", "_vars.scss:2", "main.scss:6"]);
+        expect(moduleRefs.coverage?.state).toBe("complete");
+        const moduleRename = await previewScssRename(project, "$x", "_vars.scss", "$y");
+        expect(moduleRename.safe).toBe(true);
+        expect(moduleRename.edits.map((edit) => edit.file + ":" + edit.range.start.line).sort()).toEqual(
+          moduleRefs.sites,
+        );
+        const localRefs = await scssRefs(project, "main.scss", "$x: 2");
+        expect(localRefs.sites).toEqual(["main.scss:3", "main.scss:4"]);
+        expect(localRefs.coverage?.state).toBe("complete");
+        const localRename = await previewScssRename(project, "$x", "main.scss", "$z");
+        expect(localRename.safe).toBe(true);
+        expect(localRename.edits.map((edit) => edit.range.start.line).sort()).toEqual([3, 4]);
+      },
+    );
+  });
+
+  it.runIf(native)("marks existence lookups partial for a local variable and a cross-file member", async () => {
+    const block = [".a {", "  $pad: 1px;", '  w: variable-exists("pad");', "  width: $pad;", "}", ""].join("\n");
+    await withScssProject({ "main.scss": block }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "$pad");
+      expect(refs.sites).toEqual(["main.scss:2", "main.scss:4"]);
+      expect(refs.coverage?.state).toBe("partial");
+      expect(refs.coverage?.reasons).toContain("strategy_unavailable");
+      const renamed = await previewScssRename(project, "$pad", "main.scss", "$gap");
+      expect(renamed.safe).toBe(false);
+      expect(renamed.unsafeSites.some((site) => site.reason === "unresolved_reference")).toBe(true);
+    });
+
+    const outside = [
+      ".a {",
+      "  $pad: 1px;",
+      "  width: $pad;",
+      "}",
+      ".b {",
+      '  w: variable-exists("pad");',
+      "}",
+      "",
+    ].join("\n");
+    await withScssProject({ "main.scss": outside }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "$pad");
+      expect(refs.sites).toEqual(["main.scss:2", "main.scss:3"]);
+      expect(refs.coverage?.state).toBe("complete");
+      expect((await previewScssRename(project, "$pad", "main.scss", "$gap")).safe).toBe(true);
+    });
+
+    const globalOnly = [".a {", "  $pad: 1px;", '  w: global-variable-exists("pad");', "  width: $pad;", "}", ""].join(
+      "\n",
+    );
+    await withScssProject({ "main.scss": globalOnly }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "$pad");
+      expect(refs.coverage?.state).toBe("complete");
+      expect((await previewScssRename(project, "$pad", "main.scss", "$gap")).safe).toBe(true);
+    });
+
+    const spelled = [".a {", "  $foo_bar: 1;", '  w: variable-exists("foo-bar");', "  width: $foo_bar;", "}", ""].join(
+      "\n",
+    );
+    await withScssProject({ "main.scss": spelled }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "$foo_bar");
+      expect(refs.coverage?.state).toBe("partial");
+      expect((await previewScssRename(project, "$foo_bar", "main.scss", "$gap")).safe).toBe(false);
+    });
+
+    await withScssProject(
+      { "main.scss": ["$pad: 1px;", '.a { w: variable_exists("pad"); width: $pad; }', ""].join("\n") },
+      async (project) => {
+        const refs = await scssRefs(project, "main.scss", "$pad");
+        expect(refs.sites).toEqual(["main.scss:1", "main.scss:2"]);
+        expect(refs.coverage?.state).toBe("partial");
+        expect((await previewScssRename(project, "$pad", "main.scss", "$gap")).safe).toBe(false);
+      },
+    );
+
+    const metaLocal = [
+      '@use "sass:meta";',
+      ".a {",
+      "  $pad: 1px;",
+      '  w: meta.variable-exists("pad");',
+      "  width: $pad;",
+      "}",
+      "",
+    ].join("\n");
+    await withScssProject({ "main.scss": metaLocal }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "$pad");
+      expect(refs.coverage?.state).toBe("partial");
+      expect((await previewScssRename(project, "$pad", "main.scss", "$gap")).safe).toBe(false);
+    });
+
+    for (const lookup of [
+      'meta.function-exists("pad", "lib")',
+      'meta.function_exists("pad", "lib")',
+      'function-exists("pad")',
+      'function_exists("pad")',
+    ]) {
+      const lines = [];
+      if (lookup.startsWith("meta.")) lines.push('@use "sass:meta";');
+      lines.push('@use "lib";', `.a { w: lib.pad(); x: ${lookup}; }`, "");
+      await withScssProject(
+        {
+          "_lib.scss": "@function pad() { @return 1px; }\n",
+          "main.scss": lines.join("\n"),
+        },
+        async (project) => {
+          const refs = await scssRefs(project, "_lib.scss", "@function pad", 0, "@function ".length);
+          expect(refs.sites, lookup).toContain("_lib.scss:1");
+          expect(
+            refs.sites.some((site) => site.startsWith("main.scss")),
+            lookup,
+          ).toBe(true);
+          expect(refs.coverage?.state, lookup).toBe("partial");
+          expect(refs.coverage?.reasons, lookup).toContain("strategy_unavailable");
+          const renamed = await previewScssRename(project, "pad", "_lib.scss", "inset");
+          expect(renamed.safe, lookup).toBe(false);
+          expect(
+            renamed.unsafeSites.some((site) => site.reason === "unresolved_reference"),
+            lookup,
+          ).toBe(true);
+        },
+      );
+    }
+
+    await withScssProject(
+      {
+        "_fns.scss": ["@function function-exists($name) { @return 7; }", "@function pad() { @return 1px; }", ""].join(
+          "\n",
+        ),
+        "main.scss": ['@use "fns" as *;', '.a { w: function-exists("pad"); x: pad(); }', ""].join("\n"),
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "function-exists")).toBe("_fns.scss:1");
+        const pad = await scssRefs(project, "_fns.scss", "@function pad", 0, "@function ".length);
+        expect(pad.sites).toEqual(["_fns.scss:2", "main.scss:2"]);
+        expect(pad.coverage?.state).toBe("complete");
+        expect((await previewScssRename(project, "pad", "_fns.scss", "inset")).safe).toBe(true);
+      },
+    );
+
+    await withScssProject(
+      {
+        "main.scss": [
+          '@use "sass:meta" as *;',
+          "@function variable-exists($name) { @return 5; }",
+          "$pad: 1;",
+          '.a { w: variable-exists("pad"); width: $pad; }',
+          "",
+        ].join("\n"),
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "variable-exists")).toBe("main.scss:2");
+        const refs = await scssRefs(project, "main.scss", "$pad");
+        expect(refs.coverage?.state).toBe("complete");
+        expect((await previewScssRename(project, "$pad", "main.scss", "$gap")).safe).toBe(true);
+      },
+    );
+  });
+});

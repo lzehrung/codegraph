@@ -108,7 +108,13 @@ import {
 } from "./types.js";
 import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
 import { findScssReferences, goToScssDefinition } from "../scss/navigation.js";
-import { scssFactsForFile, scssFlowLocalUnproven, scssLocalSpellingGap } from "../scss/resolution.js";
+import {
+  scssBlockLocalExistenceUnproven,
+  scssFactsForFile,
+  scssFlowLocalUnproven,
+  scssLocalSpellingGap,
+  scssMemberForDefinition,
+} from "../scss/resolution.js";
 import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
 import {
   createLoadingParsedFileProvider,
@@ -1562,6 +1568,32 @@ async function findReferencesInternal(
     return left.file.localeCompare(right.file);
   });
 
+  // A block local's lexical scope can run past the block. A use the SCSS resolver proves is a
+  // module member is not a reference of that local. The local's own uses stay: they resolve as a
+  // shadow and the generic walker keeps them.
+  if (
+    parsedContext.sup.id === "scss" &&
+    definition.localName.startsWith("$") &&
+    !(await scssMemberForDefinition(index, definition))
+  ) {
+    const kept: Reference[] = [];
+    for (const ref of refs) {
+      if (referenceSiteKey(ref.file, ref.range) === definitionSiteKey) {
+        kept.push(ref);
+        continue;
+      }
+      const resolved = await goToScssDefinition(index, {
+        file: ref.file,
+        line: ref.range.start.line,
+        column: ref.range.start.column,
+      });
+      if (resolved?.status === "ok") continue;
+      kept.push(ref);
+    }
+    refs.length = 0;
+    refs.push(...kept);
+  }
+
   await attachReferenceContext(index, refs, opts);
 
   const scannedFiles = [definitionFile, ...candidateFiles, ...receiverScannedFiles];
@@ -1583,6 +1615,7 @@ async function findReferencesInternal(
     const facts = await scssFactsForFile(index, definition.file);
     if (facts && scssLocalSpellingGap(facts, definition)) markNameEquivalenceGap(index, definition);
     if (await scssFlowLocalUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
+    if (await scssBlockLocalExistenceUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
   }
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,

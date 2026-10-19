@@ -98,8 +98,10 @@ export type ScssUse = {
 };
 
 /**
- * A file-scope flow-control assignment that follows an `@import`. Resolution drops `local` when
- * the assignment reassigns an imported variable, and keeps it when no import declares the name.
+ * A file-scope flow-control assignment that follows an `@import`. Resolution joins `local` to the
+ * imported variable when exactly one import declares the name, and keeps it when none does.
+ * The binding is provisional: it does not count as a loop local, so a later assignment of the
+ * same name in that flow is recorded too. An `@each` or `@for` variable stays a real local.
  */
 export type ScssFlowAssignment = {
   canonical: string;
@@ -125,15 +127,20 @@ export type ScssDynamicForm =
   | "get-mixin"
   | "module-variables"
   | "module-functions"
-  | "module-mixins";
+  | "module-mixins"
+  | "variable-exists"
+  | "global-variable-exists"
+  | "function-exists"
+  | "mixin-exists";
 
 export type ScssDynamic = {
   form: ScssDynamicForm;
   /** String argument, or null when the argument is not a literal. */
   arg: string | null;
   /**
-   * Bare legacy `get-function` / `get_function` with no `sass:meta` load. Resolution drops the
-   * lookup when a user-defined function of that name, already in scope, is proved to own the call.
+   * Bare legacy built-in with no `sass:meta` load: `get-function` and the existence predicates.
+   * Resolution drops the lookup when a user-defined function of that name, already in scope, is
+   * proved to own the call.
    */
   legacyBare?: true;
   /** Offset of the callee. A `get-function` declared later in the file does not own this call. */
@@ -147,7 +154,9 @@ export type ScssFileFacts = {
   locals: ScssLocalBinding[];
   /**
    * File-scope `@if` / `@each` / `@for` / `@while` assignments that follow an `@import`.
-   * Each one may reassign an imported variable instead of introducing a local.
+   * Each one may reassign an imported variable instead of introducing a local. A provisional
+   * binding does not hide the next assignment. `@use ... as *` is not included: Sass creates a
+   * local in that flow block and does not assign the star-loaded variable.
    */
   flowAssignments: ScssFlowAssignment[];
   dynamics: ScssDynamic[];
@@ -168,6 +177,22 @@ const DYNAMIC_FORMS = new Set<string>([
   "module-variables",
   "module-functions",
   "module-mixins",
+  "variable-exists",
+  "global-variable-exists",
+  "function-exists",
+  "mixin-exists",
+]);
+
+/**
+ * Global built-ins that name a member by a string. A bare call is one of these unless a user
+ * function of that name is already declared. `get-mixin` and the `module-*` lookups are not global.
+ */
+const LEGACY_BARE_FORMS = new Set<ScssDynamicForm>([
+  "get-function",
+  "variable-exists",
+  "global-variable-exists",
+  "function-exists",
+  "mixin-exists",
 ]);
 
 /** Sass compares identifiers after treating `_` as `-`, and ignores one leading `$` or `%`. */
@@ -343,8 +368,14 @@ export function extractScssFacts(source: string): ScssFileFacts {
   let statementRule = "";
   let nonFlowBlocks = 0;
   const globalVariables = new Set<string>();
-  /** How many bindings of each name are in scope now: parameters, loop variables, and block variables. */
+  /**
+   * How many genuine bindings of each name are in scope: parameters, loop variables, and block
+   * variables. A provisional import-flow assignment is not counted, so the next assignment in
+   * that flow is not hidden by it.
+   */
   const localCounts = new Map<string, number>();
+  /** Flow-assignment bindings that must not change {@link localCounts}. */
+  const provisionalFlows = new Set<ScssLocalBinding>();
   /** Canonical names of the top-level functions declared so far. A call after one of them is that function. */
   const declaredFunctions = new Set<string>();
   let paramsParenAt = -1;
@@ -506,13 +537,18 @@ export function extractScssFacts(source: string): ScssFileFacts {
     return viaMeta ? form : null;
   };
 
-  const bindLocal = (frame: BlockFrame, local: ScssLocalBinding): void => {
+  const bindLocal = (frame: BlockFrame, local: ScssLocalBinding, provisional = false): void => {
     frame.locals.push(local);
     locals.push(local);
+    if (provisional) {
+      provisionalFlows.add(local);
+      return;
+    }
     localCounts.set(local.canonical, (localCounts.get(local.canonical) ?? 0) + 1);
   };
 
   const unbindLocal = (local: ScssLocalBinding): void => {
+    if (provisionalFlows.delete(local)) return;
     const count = (localCounts.get(local.canonical) ?? 1) - 1;
     if (count > 0) localCounts.set(local.canonical, count);
     else localCounts.delete(local.canonical);
@@ -1063,7 +1099,8 @@ export function extractScssFacts(source: string): ScssFileFacts {
       // A flow-control block that holds no rule or mixin shares the scope of the file: assigning
       // a name the file already declared changes that variable instead of hiding it. A loop
       // variable of the same name is the exception: `@each $x in ...` binds `$x` for the block, so
-      // `$x: $x + 1` changes the loop variable and leaves the file variable alone.
+      // `$x: $x + 1` changes the loop variable and leaves the file variable alone. A provisional
+      // import-flow binding is not such a local, so `$x: 2; $x: 3` records both assignments.
       const boundLocally = localCounts.has(canonical);
       const fileFlow = blocks.length > 0 && nonFlowBlocks === 0 && !boundLocally;
       const reassigns = fileFlow && globalVariables.has(canonical);
@@ -1079,11 +1116,13 @@ export function extractScssFacts(source: string): ScssFileFacts {
         });
       } else if (fileFlow && loads.some((load) => load.kind === "import" && !load.nested)) {
         // A file-scope flow block shares the file scope. An earlier @import may already have
-        // declared this name; resolution joins the assignment to that variable or keeps this local.
+        // declared this name; resolution joins every such assignment or keeps the local.
+        // `@use ... as *` is not an import. Sass creates a local in the flow block, and that
+        // local does not assign or escape to the star-loaded variable.
         const frame = blocks[blocks.length - 1];
         const local = makeLocal(start, end, flags.end);
         flowAssignments.push({ canonical, range: local.range, local });
-        if (frame) bindLocal(frame, local);
+        if (frame) bindLocal(frame, local, true);
       } else {
         // The new variable hides a member only after its own statement, so `$x: $x + 1` reads the member.
         const frame = blocks[blocks.length - 1];
@@ -1164,7 +1203,11 @@ export function extractScssFacts(source: string): ScssFileFacts {
       const isCall = source.charCodeAt(skipBlank(member.end)) === 0x28;
       const dynamicForm = isCall && !isVariable ? metaCallForm(member.namespace, member.member) : null;
       if (dynamicForm) {
-        dynamics.push({ form: dynamicForm, arg: readCallArgument(member.end) });
+        dynamics.push({
+          form: dynamicForm,
+          arg: readCallArgument(member.end),
+          ...(dynamicForm === "variable-exists" ? { at: member.memberStart } : {}),
+        });
       } else if (isVariable) {
         addUse({
           kind: "variable",
@@ -1199,15 +1242,22 @@ export function extractScssFacts(source: string): ScssFileFacts {
       }
     }
     if (source.charCodeAt(ident.end) === 0x28) {
-      const bareForm = metaCallForm(null, ident.text);
+      const folded = dynamicFormOf(ident.text);
+      const legacyForm = folded !== null && LEGACY_BARE_FORMS.has(folded) ? folded : null;
+      // A function this file already declared owns the call, even after `@use "sass:meta" as *`.
+      // A declaration later in the file does not, so the earlier call stays the built-in.
+      const declaredHere = legacyForm !== null && declaredFunctions.has(legacyForm);
+      const bareForm = declaredHere ? null : metaCallForm(null, ident.text);
       if (bareForm) {
-        dynamics.push({ form: bareForm, arg: readCallArgument(ident.end) });
+        dynamics.push({
+          form: bareForm,
+          arg: readCallArgument(ident.end),
+          ...(bareForm === "variable-exists" ? { at: start } : {}),
+        });
         return ident.end;
       }
-      // Legacy `get-function` / `get_function` is a global built-in unless this file already
-      // declared that function. A declaration later in the file does not own the earlier call.
-      if (dynamicFormOf(ident.text) === "get-function" && !declaredFunctions.has("get-function")) {
-        dynamics.push({ form: "get-function", arg: readCallArgument(ident.end), legacyBare: true, at: start });
+      if (legacyForm && !declaredHere) {
+        dynamics.push({ form: legacyForm, arg: readCallArgument(ident.end), legacyBare: true, at: start });
         addUse({
           kind: "function",
           syntax: "call",
