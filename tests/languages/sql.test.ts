@@ -1597,4 +1597,25 @@ describe("SQL routine call sites", () => {
       expect(await gotoAt(project, "use.sql", use, 3, "norm(3)")).toBe("schema.sql:1");
     });
   });
+
+  it("keeps a table read when CASE or END IF closes before the procedure ends", async () => {
+    const schema = ["CREATE TABLE users (id integer);", "CREATE TABLE accounts (id integer);"];
+    const use = [
+      "CREATE PROCEDURE p AS BEGIN SELECT CASE WHEN id = 1 THEN 1 ELSE 0 END AS flag FROM users; END;",
+      "CREATE PROCEDURE q AS BEGIN IF 1 THEN SELECT id FROM accounts; END IF; END;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const users = await referencesAt(project, "schema.sql", schema, 1, "users");
+      const accounts = await referencesAt(project, "schema.sql", schema, 2, "accounts");
+
+      expect(referenceSites(project.root, users)).toEqual(
+        [siteAt("schema.sql", schema, 1, "users"), siteAt("use.sql", use, 1, "users")].sort(),
+      );
+      expect(referenceSites(project.root, accounts)).toEqual(
+        [siteAt("schema.sql", schema, 2, "accounts"), siteAt("use.sql", use, 2, "accounts")].sort(),
+      );
+      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    });
+  });
 });

@@ -10,6 +10,7 @@ import {
   SQL_OBJECT_NAME_PATTERN,
   splitTopLevelCommaSeparated,
   sqlParenDepthAt,
+  sqlQueryScopes,
   sqlSourceClauses,
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
@@ -117,6 +118,44 @@ function statementSlice(
 
 type SqlStatementScan = { statements: SqlStatementSlice[]; endsInBlockComment: boolean };
 
+type SqlBlockFrame = "begin" | "case";
+
+/** Followers that close IF, LOOP, WHILE, or REPEAT, not a BEGIN block or a CASE expression. */
+const SQL_COMPOUND_END = new Set(["if", "loop", "while", "repeat"]);
+
+/** The next word at `index`, skipping whitespace only. */
+function sqlWordAt(text: string, index: number): { word: string; end: number } | null {
+  let cursor = index;
+  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) cursor += 1;
+  if (!/[A-Za-z_]/.test(text[cursor] ?? "")) return null;
+  let end = cursor + 1;
+  while (/[A-Za-z0-9_$]/.test(text[end] ?? "")) end += 1;
+  return { word: text.slice(cursor, end).toLowerCase(), end };
+}
+
+/**
+ * Opens a BEGIN block or a CASE expression. `END IF`, `END LOOP`, `END WHILE`, and `END REPEAT`
+ * close those statements. `END CASE` closes a CASE statement. A plain `END` closes the innermost
+ * CASE before it closes a BEGIN, so a CASE expression cannot end a routine body.
+ */
+function noteSqlBlockWord(stack: SqlBlockFrame[], word: string, follower: string | null): void {
+  if (word === "begin") {
+    stack.push("begin");
+    return;
+  }
+  if (word === "case") {
+    stack.push("case");
+    return;
+  }
+  if (word !== "end") return;
+  if (follower !== null && SQL_COMPOUND_END.has(follower)) return;
+  if (follower === "case") {
+    if (stack.at(-1) === "case") stack.pop();
+    return;
+  }
+  stack.pop();
+}
+
 /**
  * Splits SQL text into statements. PostgreSQL and SQL Server let a block comment hold block comments,
  * which `nestedComments` reads. Without it, a block comment ends at its first closing delimiter.
@@ -128,7 +167,7 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
   let lineStart = 0;
   let i = 0;
   let lookingForStatementStart = true;
-  let blockDepth = 0;
+  const openBlocks: SqlBlockFrame[] = [];
   let singleQuoted = false;
   let escapeString = false;
   let doubleQuoted = false;
@@ -184,7 +223,7 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
 
     if (
       i === lineStart &&
-      !blockDepth &&
+      openBlocks.length === 0 &&
       !singleQuoted &&
       !doubleQuoted &&
       !backtickQuoted &&
@@ -316,12 +355,13 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
         wordEnd += 1;
       }
       const word = source.slice(i, wordEnd).toLowerCase();
-      if (word === "begin") blockDepth += 1;
-      if (word === "end" && blockDepth) blockDepth -= 1;
-      i = wordEnd;
+      const follower = word === "end" ? sqlWordAt(source, wordEnd) : null;
+      noteSqlBlockWord(openBlocks, word, follower?.word ?? null);
+      const closesWithFollower = follower !== null && (follower.word === "case" || SQL_COMPOUND_END.has(follower.word));
+      i = word === "end" && follower !== null && closesWithFollower ? follower.end : wordEnd;
       continue;
     }
-    if (char === ";" && !blockDepth) {
+    if (char === ";" && openBlocks.length === 0) {
       pushStatement(i);
     }
     i += 1;
@@ -388,24 +428,35 @@ function collectObjectsAfterKeywords(
   return Array.from(new Set(names));
 }
 
-function collectReadSources(text: string): { names: string[]; topLevelNames: string[]; joinObjects: string[] } {
+function collectReadSources(text: string): {
+  names: string[];
+  joins: Array<{ name: string; scopeFromNames: readonly string[] }>;
+} {
+  const scan = maskSqlQuotedIdentifiers(text);
+  const scopes = sqlQueryScopes(scan);
   const names: string[] = [];
-  const topLevelNames: string[] = [];
-  const joinObjects: string[] = [];
-  for (const clause of sqlSourceClauses(maskSqlQuotedIdentifiers(text))) {
+  const fromNamesByScope = new Map<number, string[]>();
+  const joins: Array<{ name: string; scope: number }> = [];
+  for (const clause of sqlSourceClauses(scan)) {
+    const scope = scopes.at(clause.start);
     if (clause.kind === "from" || clause.kind === "using") {
       for (const part of splitTopLevelCommaSeparated(text.slice(clause.end, clause.clauseEnd))) {
         const name = objectAt(part, 0);
         if (!name || SQL_KEYWORDS.has(name.toLowerCase())) continue;
         names.push(name);
-        if (!clause.depth) topLevelNames.push(name);
+        const inScope = fromNamesByScope.get(scope);
+        if (inScope) inScope.push(name);
+        else fromNamesByScope.set(scope, [name]);
       }
     } else if (clause.kind === "join") {
       const name = objectAt(text, clause.end);
-      if (name && !SQL_KEYWORDS.has(name.toLowerCase())) joinObjects.push(name);
+      if (name && !SQL_KEYWORDS.has(name.toLowerCase())) joins.push({ name, scope });
     }
   }
-  return { names: Array.from(new Set(names)), topLevelNames, joinObjects: Array.from(new Set(joinObjects)) };
+  return {
+    names: Array.from(new Set(names)),
+    joins: joins.map((join) => ({ name: join.name, scopeFromNames: fromNamesByScope.get(join.scope) ?? [] })),
+  };
 }
 
 function findMatchingParen(text: string, openIndex: number): number {
@@ -495,8 +546,6 @@ function extractReadFacts(text: string): SqlFactDraft[] {
   const isCteName = (name: string): boolean => sqlObjectLookupKeys(name).some((key) => cteReads.names.has(key));
   const sources = collectReadSources(text);
   const fromObjects = sources.names.filter((name) => !isCteName(name));
-  const joinObjects = sources.joinObjects.filter((name) => !isCteName(name));
-  const primaryRead = sources.topLevelNames.find((name) => !isCteName(name)) ?? null;
   const facts: SqlFactDraft[] = [...cteReads.facts];
   const seenReads = new Set<string>();
   for (const fact of cteReads.facts) {
@@ -508,29 +557,28 @@ function extractReadFacts(text: string): SqlFactDraft[] {
     seenReads.add(key);
     facts.push({ kind: "reads_from", objectName: fromName, relatedObjectName: null });
   }
-  for (const joinName of joinObjects) {
-    facts.push({ kind: "joins", objectName: joinName, relatedObjectName: primaryRead });
+  const seenJoins = new Set<string>();
+  for (const join of sources.joins) {
+    if (isCteName(join.name)) continue;
+    const related = join.scopeFromNames.find((name) => !isCteName(name)) ?? null;
+    const key = `${sqlObjectLookupKey(join.name)}:${related === null ? "" : sqlObjectLookupKey(related)}`;
+    if (seenJoins.has(key)) continue;
+    seenJoins.add(key);
+    facts.push({ kind: "joins", objectName: join.name, relatedObjectName: related });
   }
   return facts;
 }
 
-/** `END IF`, `END LOOP`, and the other block-ending pairs do not close a routine body. */
-function closesRoutineBlock(text: string, afterEnd: number): boolean {
-  let cursor = afterEnd;
-  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) cursor += 1;
-  return !/^(?:if|loop|case|while|repeat)\b/i.test(text.slice(cursor));
-}
-
 /**
  * The text between a routine body's `BEGIN` and its matching `END`. A `BEGIN` inside parentheses, as in
- * a parameter named `begin`, is not the body. `END IF` and the other block-ending pairs are not the
- * closer. Null when the statement has no such body. A `$$` body is already blank, so only a
- * `BEGIN`/`END` that the statement splitter kept as one statement is read.
+ * a parameter named `begin`, is not the body. A CASE expression and `END IF` or `END LOOP` do not close
+ * it. Null when the statement has no such body. A `$$` body is already blank, so only a `BEGIN`/`END`
+ * that the statement splitter kept as one statement is read.
  */
 function beginEndBody(text: string): string | null {
   const scan = maskSqlQuotedIdentifiers(text);
+  const stack: SqlBlockFrame[] = [];
   let parenDepth = 0;
-  let blockDepth = 0;
   let bodyStart = -1;
   let cursor = 0;
   while (cursor < scan.length) {
@@ -546,21 +594,27 @@ function beginEndBody(text: string): string | null {
       continue;
     }
     const previous = scan[cursor - 1] ?? "";
-    if (parenDepth === 0 && /[A-Za-z_]/.test(char) && !/[\w@#.]/.test(previous)) {
-      let wordEnd = cursor + 1;
-      while (/[A-Za-z0-9_$]/.test(scan[wordEnd] ?? "")) wordEnd += 1;
-      const word = scan.slice(cursor, wordEnd).toLowerCase();
+    if (parenDepth !== 0 || !/[A-Za-z_]/.test(char) || /[\w@#.]/.test(previous)) {
+      cursor += 1;
+      continue;
+    }
+    let wordEnd = cursor + 1;
+    while (/[A-Za-z0-9_$]/.test(scan[wordEnd] ?? "")) wordEnd += 1;
+    const word = scan.slice(cursor, wordEnd).toLowerCase();
+    if (bodyStart < 0) {
       if (word === "begin") {
-        if (blockDepth === 0) bodyStart = wordEnd;
-        blockDepth += 1;
-      } else if (word === "end" && blockDepth > 0 && closesRoutineBlock(scan, wordEnd)) {
-        blockDepth -= 1;
-        if (blockDepth === 0 && bodyStart >= 0) return text.slice(bodyStart, cursor);
+        bodyStart = wordEnd;
+        stack.push("begin");
       }
       cursor = wordEnd;
       continue;
     }
-    cursor += 1;
+    const follower = word === "end" ? sqlWordAt(scan, wordEnd) : null;
+    noteSqlBlockWord(stack, word, follower?.word ?? null);
+    if (stack.length === 0) return text.slice(bodyStart, cursor);
+    const closesWithFollower =
+      word === "end" && follower !== null && (follower.word === "case" || SQL_COMPOUND_END.has(follower.word));
+    cursor = follower !== null && closesWithFollower ? follower.end : wordEnd;
   }
   return null;
 }

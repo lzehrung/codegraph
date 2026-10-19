@@ -541,4 +541,49 @@ describe("SQL fact extraction", () => {
       "accounts",
     ]);
   });
+
+  it("relates each JOIN to the first source of its own query", () => {
+    const facts = extractSqlFactsFromSource(
+      path.join(fixtureRoot, "reports", "nested-join.sql"),
+      [
+        "SELECT * FROM users JOIN orgs ON orgs.id = users.org_id",
+        "WHERE EXISTS (SELECT 1 FROM accounts a JOIN roles r ON r.id = a.role_id);",
+      ].join("\n"),
+    );
+
+    expect(
+      facts.filter((fact) => fact.kind === "joins").map((fact) => [fact.objectName, fact.relatedObjectName]),
+    ).toEqual([
+      ["orgs", "users"],
+      ["roles", "accounts"],
+    ]);
+  });
+
+  it("keeps relation reads when CASE, IF, and LOOP end inside a BEGIN/END body", () => {
+    const facts = extractSqlFactsFromSource(
+      path.join(fixtureRoot, "reports", "case-end.sql"),
+      [
+        "CREATE PROCEDURE p AS BEGIN SELECT CASE WHEN id = 1 THEN 1 ELSE 0 END AS flag FROM users; END;",
+        "CREATE PROCEDURE q AS BEGIN IF 1 THEN SELECT id FROM accounts; END IF; SELECT id FROM roles; END;",
+        "CREATE PROCEDURE r AS BEGIN LOOP SELECT id FROM orgs; END LOOP; SELECT id FROM teams; END;",
+        "CREATE PROCEDURE s AS BEGIN BEGIN SELECT id FROM projects; END; SELECT id FROM tasks; END;",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+      "roles",
+      "orgs",
+      "teams",
+      "projects",
+      "tasks",
+    ]);
+    const bodyOf = (name: string): string =>
+      facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === name)?.statementText ?? "";
+    expect(bodyOf("p")).toContain("FROM users");
+    expect(bodyOf("q")).toContain("FROM roles");
+    expect(bodyOf("r")).toContain("FROM teams");
+    expect(bodyOf("s")).toContain("FROM tasks");
+  });
 });

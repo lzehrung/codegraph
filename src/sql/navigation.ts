@@ -32,7 +32,13 @@ import {
   sqlQueryScopes,
   sqlSourceClauses,
 } from "./lex.js";
-import { sqlDefinedNameSpan, sqlObjectMentionCovers, sqlRelationReadSpans } from "./object-mentions.js";
+import {
+  sqlDefinedNameSpan,
+  sqlObjectMentionCovers,
+  sqlRelationReadSpans,
+  sqlSpanCovers,
+  sqlSyntacticObjectSpans,
+} from "./object-mentions.js";
 import {
   findSqlRoutineMentions,
   findSqlRoutineSources,
@@ -468,6 +474,8 @@ function qualifiedReferenceRanges(
   const maskedStatementText = maskSqlStringsAndComments(statement.text, { escapeStrings: true });
   const bindings = sqlSourceBindings(routineLookups, statement.text);
   const cteNames = cteNamesForStatement(maskedStatementText);
+  // One scan for the statement. A fresh scan for every qualified name is quadratic.
+  const objectSpans = sqlSyntacticObjectSpans(statement.text);
   for (const match of maskedStatementText.matchAll(SQL_DOTTED_TOKEN_RE)) {
     const offset = match.index ?? 0;
     if (claimedStarts?.has(offset)) continue;
@@ -478,7 +486,7 @@ function qualifiedReferenceRanges(
     const firstPart = parts[0];
     if (!firstPart) continue;
     if (cteNames.has(sqlObjectLookupKey(firstPart))) continue;
-    if (sqlObjectMentionCovers(statement.text, offset)) {
+    if (sqlSpanCovers(objectSpans, offset)) {
       const direct = sqlDefinitionMatches(lookup, token);
       if (!direct.exact.length && direct.basename.length > 1 && direct.basename.includes(definition)) ambiguous = true;
       if (sqlNameResolvesToDefinition(lookup, token, definition)) {

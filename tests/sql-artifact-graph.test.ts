@@ -1362,4 +1362,33 @@ describe("SQL artifact graph", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("links a table read that follows CASE or END LOOP inside a procedure", async () => {
+    const root = await mkTmpDir("cg-sql-case-end-");
+    try {
+      const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+      const schema = file("schema.sql");
+      const body = file("body.sql");
+      await fsp.writeFile(schema, "CREATE TABLE users (id integer);\nCREATE TABLE accounts (id integer);\n", "utf8");
+      await fsp.writeFile(
+        body,
+        [
+          "CREATE PROCEDURE p AS BEGIN SELECT CASE WHEN id = 1 THEN 1 ELSE 0 END AS flag FROM users; END;",
+          "CREATE PROCEDURE q AS BEGIN LOOP SELECT id FROM accounts; END LOOP; END;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const sourceGraph = await collectGraph(root, [schema, body]);
+      const raw = sourceGraph.edges
+        .filter((edge) => edge.from === body && edge.to.type === "file" && edge.to.path === schema)
+        .map((edge) => edge.raw)
+        .sort();
+
+      expect(raw).toEqual(["sql:reads_from:accounts", "sql:reads_from:users"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

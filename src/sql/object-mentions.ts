@@ -222,9 +222,19 @@ function syntacticObjectSpans(statement: string): SqlNameSpan[] {
   return spans;
 }
 
+/** Object-name spans in `statement`. Callers that test many offsets scan the statement once. */
+export function sqlSyntacticObjectSpans(statement: string): SqlNameSpan[] {
+  return syntacticObjectSpans(statement);
+}
+
+/** True when `offset` lies in one of `spans`. */
+export function sqlSpanCovers(spans: readonly SqlNameSpan[], offset: number): boolean {
+  return spans.some((span) => offset >= span.start && offset < span.end);
+}
+
 /** True when `offset` is inside a name SQL syntax uses as an object, not a column. */
 export function sqlObjectMentionCovers(statement: string, offset: number): boolean {
-  return syntacticObjectSpans(statement).some((span) => offset >= span.start && offset < span.end);
+  return sqlSpanCovers(sqlSyntacticObjectSpans(statement), offset);
 }
 
 /** The name a `CREATE` statement defines: `users` in `CREATE TABLE users`, `f` in `CREATE FUNCTION f`. */
