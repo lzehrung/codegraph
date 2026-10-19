@@ -661,8 +661,8 @@ async function addTerraformConflicts(
 
 /**
  * An SCSS name is a module member. A same-kind member that a scope seeing the renamed one
- * already declares or exposes under the new name collides. A local variable that would capture a
- * use is a shadowing conflict. A new name that starts with `-` or `_` is private, so a use through
+ * already declares or exposes under the new name collides. A scoped variable, mixin, or function
+ * that would capture a bare use is a shadowing conflict. A new name that starts with `-` or `_` is private, so a use through
  * `@use` or `@forward` could no longer reach it, and a `@forward` hide list that names the new name
  * hides the member from the uses that read it through that forward. A show list that already
  * names the new name can newly expose the member, and that exposure is part of the collision check.
@@ -690,7 +690,7 @@ async function addScssConflicts(
       file: captureFile,
       location: { file: captureFile, range: capture.range },
       reason: "shadowing",
-      message: `A local variable would capture this reference after the rename to "${newName}".`,
+      message: `A scoped variable or callable would capture this reference after the rename to "${newName}".`,
     });
   }
   const reportedFiles = new Set<string>();

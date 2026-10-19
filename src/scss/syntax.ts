@@ -426,6 +426,16 @@ export function extractScssFacts(source: string): ScssFileFacts {
   let pendingCallable = false;
   /** Nested mixin and function bodies. Calls inside them run when the callable is invoked. */
   let callableDepth = 0;
+  /** A loud-comment interpolation is code, but not part of its surrounding statement. */
+  let commentMask: Uint8Array | undefined;
+  let commentState: {
+    statementStart: boolean;
+    statementBegin: number;
+    statementRule: string;
+    inInclude: boolean;
+    parens: ParenFrame[];
+    headCache: typeof headCache;
+  } | null = null;
 
   const rangeOf = (start: number, end: number): Range => ({
     start: positionAtOffset(lineStarts, start),
@@ -1328,7 +1338,36 @@ export function extractScssFacts(source: string): ScssFileFacts {
 
   let index = 0;
   while (index < length) {
+    if (commentState && commentMask && !commentMask[index]) {
+      statementStart = commentState.statementStart;
+      statementBegin = commentState.statementBegin;
+      statementRule = commentState.statementRule;
+      inInclude = commentState.inInclude;
+      headCache = commentState.headCache;
+      parens.length = 0;
+      parens.push(...commentState.parens);
+      commentState = null;
+    }
     if (mask[index] || consumed[index]) {
+      // The trivia mask exposes the expression of a loud comment but masks its `#{` and `}`.
+      // Save the enclosing declaration and argument state before scanning that expression.
+      if (!commentState && mask[index] && source.charCodeAt(index) === 0x23 && source.charCodeAt(index + 1) === 0x7b) {
+        commentMask ??= buildTriviaMask(source, SCSS_LANGUAGE_ID, { maskStrings: false });
+        if (commentMask[index]) {
+          commentState = {
+            statementStart,
+            statementBegin,
+            statementRule,
+            inInclude,
+            parens: parens.slice(),
+            headCache,
+          };
+          statementStart = false;
+          statementRule = "";
+          inInclude = false;
+          parens.length = 0;
+        }
+      }
       index += 1;
       continue;
     }

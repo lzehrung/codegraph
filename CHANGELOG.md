@@ -21,6 +21,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - SCSS: a directory resolves to its `_index.scss` partial, so `@use "lib"` reaches `lib/_index.scss` as it already reached `lib/index.scss`.
 - SCSS: avoid incorrect local shadowing targets and interpolated placeholder references; resolve project modules named `meta` and forward members named `show`/`hide`, while inherited `sass:meta` lookups keep conservative reference coverage.
+- SCSS: rename preview now reports scoped mixin and function captures, including forwarded names; interpolation in loud comments no longer hides following declarations or changes argument context.
 
 ## [3.0.1] - 2026-10-17
 

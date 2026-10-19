@@ -4098,4 +4098,80 @@ describe("SCSS module navigation: nested callables, legacy call, comments, and e
       expect(await scssGoto(project, "main.scss", "@include foo_bar", 0, "@include ".length)).toBe("main.scss:1");
     });
   });
+  it("keeps declarations after loud-comment interpolation as module members", async () => {
+    await withScssProject(
+      {
+        "_vars.scss": "$x: 1; /* #{$x} */ $y: 2;\n",
+        "main.scss": '@use "vars";\n.a { w: vars.$y; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$y")).toBe("_vars.scss:1");
+        const x = await scssRefs(project, "_vars.scss", "$x");
+        expect(x.sites).toEqual(["_vars.scss:1", "_vars.scss:1"]);
+        expect(x.coverage?.state).toBe("complete");
+        const y = await scssRefs(project, "_vars.scss", "$y");
+        expect(y.sites).toEqual(["_vars.scss:1", "main.scss:2"]);
+        expect(y.coverage?.state).toBe("complete");
+        const renamed = await previewScssRename(project, "$y", "_vars.scss", "$next");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => edit.file + ":" + edit.range.start.line)).toEqual([
+          "_vars.scss:1",
+          "main.scss:2",
+        ]);
+      },
+    );
+  });
+
+  it("keeps block assignments after loud-comment interpolation local while retaining the comment read", async () => {
+    await withScssProject(
+      {
+        "_vars.scss": ["$x: 1;", ".a {", "  /* #{$x} */", "  $x: 2;", "  w: $x;", "}", ".b { w: $x; }", ""].join("\n"),
+        "main.scss": '@use "vars";\n.c { w: vars.$x; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "_vars.scss", "w: $x", 0, 3)).toBe("_vars.scss:4");
+        expect(await scssGoto(project, "main.scss", "$x")).toBe("_vars.scss:1");
+        const refs = await scssRefs(project, "_vars.scss", "$x");
+        expect(refs.sites).toEqual(["_vars.scss:1", "_vars.scss:3", "_vars.scss:7", "main.scss:2"]);
+        expect(refs.coverage?.state).toBe("complete");
+        const renamed = await previewScssRename(project, "$x", "_vars.scss", "$next");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => edit.file + ":" + edit.range.start.line)).toEqual([
+          "_vars.scss:1",
+          "_vars.scss:3",
+          "_vars.scss:7",
+          "main.scss:2",
+        ]);
+      },
+    );
+  });
+  it("keeps keyword arguments distinct from comment interpolation and module-variable reads", async () => {
+    await withScssProject(
+      {
+        "_vars.scss": [
+          "$x: 1;",
+          "$target: 9;",
+          "@function f($target: null) { @return $target; }",
+          ".a { w: f(/* #{$x} */ $target: 2); h: $target; }",
+          "",
+        ].join("\n"),
+        "main.scss": '@use "vars";\n.b { w: vars.$target; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$target")).toBe("_vars.scss:2");
+        const x = await scssRefs(project, "_vars.scss", "$x");
+        expect(x.sites).toEqual(["_vars.scss:1", "_vars.scss:4"]);
+        const target = await scssRefs(project, "_vars.scss", "$target");
+        expect(target.sites).toEqual(["_vars.scss:2", "_vars.scss:4", "main.scss:2"]);
+        expect(target.coverage?.state).toBe("complete");
+        const renamed = await previewScssRename(project, "$target", "_vars.scss", "$size");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => edit.file + ":" + edit.range.start.line)).toEqual([
+          "_vars.scss:2",
+          "_vars.scss:4",
+          "main.scss:2",
+        ]);
+      },
+    );
+  });
 });

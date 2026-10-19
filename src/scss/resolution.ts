@@ -1612,9 +1612,9 @@ function hidesRenamedMember(filters: readonly ScssForwardFilter[], member: ScssD
 
 /**
  * The uses that the new name would break.
- * - A local variable (a parameter, a loop variable, or a block variable) captures a bare variable
- *   use when its name matches the name the use has after the rename: the forward prefix of the
- *   use plus the new name. A namespaced use cannot be captured.
+ * - A block variable captures a bare variable use, or a scoped mixin/function captures a bare
+ *   include/call, when its same-kind name matches the forward prefix plus the proposed name.
+ *   A namespaced use cannot be captured.
  * - A name that starts with `-` or `_` is private to its module, so a use through `@use` or
  *   `@forward` could no longer reach it. `@import` and the declaring file keep access.
  * - A `@forward` with a `hide` list that names the new name (with the forward prefix) hides the
@@ -1633,7 +1633,7 @@ export async function scssRenameUseConflicts(
   const next = sassCanonical(newName);
   if (next === member.declared) return { captured, inaccessible, hidden };
   const becomesPrivate = isPrivateName(next) && !isPrivateName(member.declared);
-  const canBeCaptured = member.kind === "variable";
+  const canBeCaptured = member.kind !== "placeholder";
   // A placeholder is in no `show` or `hide` list, so only a private name can break its uses.
   if (member.kind === "placeholder" && !becomesPrivate) return { captured, inaccessible, hidden };
   const model = await projectModel(index);
@@ -1647,10 +1647,23 @@ export async function scssRenameUseConflicts(
     for (const { use, resolved } of matches) {
       const range = scssUseEditRange(current.facts, use, resolved.prefix);
       if (!range) continue;
-      if (canBeCaptured && use.syntax === "variable" && use.namespace === null) {
+      if (canBeCaptured && use.namespace === null) {
         const spelled = sassCanonical(resolved.prefix) + next;
-        const bindings = current.localsByName.get(spelled);
-        if (bindings?.some((binding) => use.nameStart >= binding.from && use.nameStart < binding.to)) {
+        if (member.kind === "variable" && use.syntax === "variable") {
+          const bindings = current.localsByName.get(spelled);
+          if (bindings?.some((binding) => use.nameStart >= binding.from && use.nameStart < binding.to)) {
+            captured.push({ file, range });
+          }
+        } else if (
+          (use.syntax === "call" || use.syntax === "include") &&
+          current.facts.callableLocals.some(
+            (local) =>
+              local.kind === member.kind &&
+              local.canonical === spelled &&
+              use.nameStart >= local.from &&
+              use.nameStart < local.to,
+          )
+        ) {
           captured.push({ file, range });
         }
       }

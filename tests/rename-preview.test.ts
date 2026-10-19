@@ -923,6 +923,83 @@ describe("rename preview", () => {
     expect(result.omittedCounts.candidateTests).toBeGreaterThan(0);
     expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "limit_exceeded" }));
   });
+  it("reports shadowing for a same-file mixin renamed to a nested mixin", async () => {
+    const root = await mkTmpDir("cg-rename-scss-nested-mixin-");
+    await fsp.writeFile(
+      path.join(root, "main.scss"),
+      [
+        "@mixin pad { color: red; }",
+        ".a {",
+        "  @mixin inset { color: blue; }",
+        "  @include pad;",
+        "}",
+        ".b { @include pad; }",
+        "",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "pad" });
+      const target = symbols.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === "pad");
+      expect(target).toBeDefined();
+      const renamed = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "inset" });
+      expect(renamed.safe).toBe(false);
+      expect(renamed.conflicts.map(({ file, reason, location }) => [file, reason, location?.range.start.line])).toEqual(
+        [["main.scss", "shadowing", 4]],
+      );
+      expect(renamed.edits.map((edit) => edit.range.start.line)).toEqual([1, 4, 6]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("reports only same-kind scoped callable captures after a Sass rename, including forward prefixes", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      for (const prefix of ["", "ui-"]) {
+        const root = await mkTmpDir("cg-rename-scss-callable-");
+        const opposite = kind === "mixin" ? "function" : "mixin";
+        const declaration = kind === "mixin" ? "@mixin pad { color: red; }" : "@function pad() { @return 1px; }";
+        const nested = kind === "mixin" ? "@mixin " : "@function ";
+        const body = kind === "mixin" ? " { color: blue; }" : "() { @return 2px; }";
+        const oppositeBody = kind === "mixin" ? "() { @return 2px; }" : " { color: blue; }";
+        const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+        const main = [
+          `@use "${prefix ? "forward" : "lib"}" as *;`,
+          '@use "lib" as lib;',
+          ".a {",
+          `  ${nested}${prefix}in_set${body}`,
+          `  ${call(prefix + "pad")}`,
+          `  ${call("lib.pad")}`,
+          "}",
+          `.b { ${call(prefix + "pad")} }`,
+          `.c { @${opposite} ${prefix}in_set${oppositeBody} ${call(prefix + "pad")} }`,
+          "",
+        ].join("\n");
+        await fsp.writeFile(path.join(root, "_lib.scss"), declaration + "\n");
+        await fsp.writeFile(path.join(root, "_forward.scss"), '@forward "lib" as ui-*;\n');
+        await fsp.writeFile(path.join(root, "main.scss"), main);
+        const session = createAgentSession({ root, freshness: { policy: "check" } });
+        try {
+          const symbols = await workspaceSymbolsWithSession(session, { root, query: "pad" });
+          const target = symbols.symbols.find(
+            (symbol) => symbol.location.file === "_lib.scss" && symbol.name === "pad",
+          );
+          expect(target, `${kind} ${prefix}`).toBeDefined();
+          const renamed = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "in-set" });
+          expect(renamed.safe, `${kind} ${prefix}`).toBe(false);
+          expect(
+            renamed.conflicts.map(({ file, reason, location }) => [file, reason, location?.range.start.line]),
+          ).toEqual([["main.scss", "shadowing", 5]]);
+          expect(
+            renamed.edits.filter((edit) => edit.file === "main.scss").map((edit) => edit.range.start.line),
+          ).toEqual([5, 6, 8, 9]);
+        } finally {
+          session.invalidate();
+        }
+      }
+    }
+  });
+
   it("O6: correctly handles 100 and 101 candidate test boundaries in rename preview", async () => {
     const root100 = await mkTmpDir("cg-rename-test-100-");
     await fsp.writeFile(path.join(root100, "service.ts"), "export function service(): number { return 1; }\n");
