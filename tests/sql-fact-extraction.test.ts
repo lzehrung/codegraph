@@ -249,6 +249,14 @@ describe("SQL fact extraction", () => {
     ]);
   });
 
+  it("bounds a nested FROM at its closing parenthesis instead of reading outer columns as sources", () => {
+    const facts = extractSqlFactsFromSource("nested.sql", "SELECT (SELECT id FROM users), email FROM accounts;");
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+    ]);
+  });
+
   it("keeps escaped E-string text out of relation facts after statement splitting", () => {
     const source = [String.raw`SELECT E'can\'t; FROM hidden';`, "SELECT id FROM users;"].join("\n");
     const facts = extractSqlFactsFromSource("literal.sql", source);

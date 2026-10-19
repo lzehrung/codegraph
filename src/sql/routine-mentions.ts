@@ -6,6 +6,7 @@ import {
   SQL_OBJECT_NAME_PATTERN,
   splitTopLevelCommaSeparated,
   sqlParenDepthAt,
+  sqlSourceClauses,
   type SqlMaskOptions,
 } from "./lex.js";
 
@@ -62,8 +63,6 @@ const CALL_KEYWORD_RE = new RegExp(
 const CALL_SHAPE_RE = new RegExp(String.raw`${NAME_BOUNDARY}(${SQL_OBJECT_NAME_PATTERN})\s*\(`, "g");
 // `AS (`, `AS MATERIALIZED (`, and `AS NOT MATERIALIZED (` open the body of a common table expression.
 const CTE_BODY_RE = /^\s*as(?:\s+(?:not\s+)?materialized)?\s*\(/i;
-// A source in a `FROM` list, a `JOIN`, a T-SQL `APPLY`, or a `USING` clause.
-const SOURCE_KEYWORD_RE = /\b(from|join|using|apply)\b/gi;
 const WORD_RE = /[A-Za-z_][\w$]*/y;
 const WITH_ORDINALITY_RE = /with\s+ordinality\b/iy;
 // A table hint is a word with an optional argument: `NOLOCK`, `INDEX (ix_users)`, `INDEX = 0`.
@@ -188,8 +187,6 @@ const TABLE_HINTS: WordTable = {
   updlock: true,
   xlock: true,
 };
-// `FROM` and `USING` take a comma-separated list of sources. `JOIN` and `APPLY` take one.
-const SOURCE_LIST_KEYWORDS: WordTable = { from: true, using: true };
 const SOURCE_MODIFIERS: WordTable = { lateral: true, only: true };
 
 function hasWord(table: WordTable, word: string): boolean {
@@ -500,16 +497,16 @@ function excludeSourceItem(scan: string, from: number, excluded: Set<number>, ca
   }
   return cursor;
 }
-
 function collectSourceItemExclusions(scan: string, excluded: Set<number>, calls?: SourceCall[]): void {
-  for (const keyword of scan.matchAll(SOURCE_KEYWORD_RE)) {
-    let cursor = (keyword.index ?? 0) + keyword[0].length;
-    const takesList = hasWord(SOURCE_LIST_KEYWORDS, (keyword[1] ?? "").toLowerCase());
+  for (const source of sqlSourceClauses(scan)) {
+    let cursor = source.end;
+    const takesList = source.kind === "from" || source.kind === "using";
     for (;;) {
+      if (cursor >= source.clauseEnd) break;
       cursor = excludeSourceItem(scan, cursor, excluded, calls);
       if (cursor < 0 || !takesList) break;
       cursor = skipWhitespace(scan, cursor);
-      if (scan[cursor] !== ",") break;
+      if (cursor >= source.clauseEnd || scan[cursor] !== ",") break;
       cursor += 1;
     }
   }

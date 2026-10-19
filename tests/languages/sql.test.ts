@@ -1338,6 +1338,90 @@ describe("SQL routine call sites", () => {
     });
   });
 
+  it("lets an inner unaliased table shadow an outer routine-source alias", async () => {
+    const schema = [
+      "CREATE TABLE users (id integer);",
+      "CREATE FUNCTION get_users() RETURNS TABLE (id integer) AS $$ SELECT 1 $$ LANGUAGE sql;",
+    ];
+    const use = ["SELECT users.id FROM get_users() users WHERE EXISTS (SELECT users.id FROM users);"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const table = await referencesAt(project, "schema.sql", schema, 1, "users");
+      expect(referenceSites(project.root, table)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "users"),
+          siteAt("use.sql", use, 1, "users.id", 1),
+          siteAt("use.sql", use, 1, "users", 4),
+        ].sort(),
+      );
+      expect(okReferences(table).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(await gotoAt(project, "use.sql", use, 1, "users.id")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 1, "users.id", 1)).toBe("schema.sql:1");
+    });
+  });
+
+  it("gives exact object targets priority over source aliases but keeps column alias binding", async () => {
+    const schema = ["CREATE TABLE app.users (id integer);", "CREATE TABLE accounts (id integer);"];
+    const use = ["SELECT a.id FROM app.users a JOIN accounts app ON app.id = a.id;"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const users = await referencesAt(project, "schema.sql", schema, 1, "app.users");
+      const accounts = await referencesAt(project, "schema.sql", schema, 2, "accounts");
+      expect(referenceSites(project.root, users)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "app.users"),
+          siteAt("use.sql", use, 1, "a.id"),
+          siteAt("use.sql", use, 1, "app.users"),
+          siteAt("use.sql", use, 1, "a.id", 1),
+        ].sort(),
+      );
+      expect(referenceSites(project.root, accounts)).toEqual(
+        [
+          siteAt("schema.sql", schema, 2, "accounts"),
+          siteAt("use.sql", use, 1, "accounts"),
+          siteAt("use.sql", use, 1, "app.id"),
+        ].sort(),
+      );
+      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(await gotoAt(project, "use.sql", use, 1, "app.users")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 1, "app.id")).toBe("schema.sql:2");
+      expect(await gotoAt(project, "use.sql", use, 1, "a.id")).toBe("schema.sql:1");
+    });
+  });
+
+  it("does not treat IS DISTINCT FROM or EXTRACT FROM as routine sources", async () => {
+    const schema = [
+      "CREATE TABLE norm (id integer);",
+      "CREATE FUNCTION norm(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;",
+    ];
+    const use = [
+      "SELECT norm.id FROM norm WHERE value IS DISTINCT FROM norm(1);",
+      "SELECT EXTRACT(day FROM norm(2)) FROM norm;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const table = await referencesAt(project, "schema.sql", schema, 1, "norm");
+      const routine = await referencesAt(project, "schema.sql", schema, 2, "norm");
+      expect(referenceSites(project.root, table)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "norm"),
+          siteAt("use.sql", use, 1, "norm.id"),
+          siteAt("use.sql", use, 1, "norm", 1),
+          siteAt("use.sql", use, 2, "norm", 1),
+        ].sort(),
+      );
+      expect(referenceSites(project.root, routine)).toEqual(
+        [
+          siteAt("schema.sql", schema, 2, "norm"),
+          siteAt("use.sql", use, 1, "norm(1)"),
+          siteAt("use.sql", use, 2, "norm(2)"),
+        ].sort(),
+      );
+      expect(await gotoAt(project, "use.sql", use, 1, "norm.id")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 1, "norm(1)")).toBe("schema.sql:2");
+      expect(await gotoAt(project, "use.sql", use, 2, "norm(2)")).toBe("schema.sql:2");
+      expect(okReferences(table).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    });
+  });
+
   it("marks a relation and routine sharing one source alias as unresolved", async () => {
     const schema = [
       "CREATE TABLE users (id integer);",

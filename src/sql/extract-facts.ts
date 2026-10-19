@@ -10,7 +10,7 @@ import {
   SQL_OBJECT_NAME_PATTERN,
   splitTopLevelCommaSeparated,
   sqlParenDepthAt,
-  sqlQueryScopes,
+  sqlSourceClauses,
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
 import { SQL_ROUTINE_DEFINITION_RE } from "./routine-mentions.js";
@@ -388,39 +388,24 @@ function collectObjectsAfterKeywords(
   return Array.from(new Set(names));
 }
 
-function clauseEndIndex(text: string, start: number): number {
-  const rest = text.slice(start);
-  const boundary = rest.search(
-    /\b(?:where|group\s+by|order\s+by|having|limit|offset|returning|union|intersect|except|inner\s+join|left\s+join|right\s+join|full\s+join|cross\s+join|join)\b/i,
-  );
-  return boundary < 0 ? text.length : start + boundary;
-}
-
-function collectCommaSeparatedObjectsAfterKeywords(
-  text: string,
-  keywords: readonly string[],
-): { names: string[]; topLevelNames: string[] } {
+function collectReadSources(text: string): { names: string[]; topLevelNames: string[]; joinObjects: string[] } {
   const names: string[] = [];
   const topLevelNames: string[] = [];
-  const scan = maskSqlQuotedIdentifiers(text);
-  const scopes = sqlQueryScopes(scan);
-  const keywordPattern = keywords.map((keyword) => keyword.replace(/\s+/g, String.raw`\s+`)).join("|");
-  const re = new RegExp(String.raw`\b(?:${keywordPattern})\s+`, "gi");
-  for (const match of scan.matchAll(re)) {
-    const keywordAt = match.index ?? 0;
-    const depth = sqlParenDepthAt(scan, keywordAt);
-    // FROM in EXTRACT(... FROM ...) is an expression, not a nested query source.
-    if (depth !== scopes.selectDepthAt(keywordAt)) continue;
-    const start = keywordAt + match[0].length;
-    const clause = text.slice(start, clauseEndIndex(text, start));
-    for (const part of splitTopLevelCommaSeparated(clause)) {
-      const name = objectAt(part, 0);
-      if (!name || SQL_KEYWORDS.has(name.toLowerCase())) continue;
-      names.push(name);
-      if (!depth) topLevelNames.push(name);
+  const joinObjects: string[] = [];
+  for (const clause of sqlSourceClauses(maskSqlQuotedIdentifiers(text))) {
+    if (clause.kind === "from" || clause.kind === "using") {
+      for (const part of splitTopLevelCommaSeparated(text.slice(clause.end, clause.clauseEnd))) {
+        const name = objectAt(part, 0);
+        if (!name || SQL_KEYWORDS.has(name.toLowerCase())) continue;
+        names.push(name);
+        if (!clause.depth) topLevelNames.push(name);
+      }
+    } else if (clause.kind === "join") {
+      const name = objectAt(text, clause.end);
+      if (name && !SQL_KEYWORDS.has(name.toLowerCase())) joinObjects.push(name);
     }
   }
-  return { names: Array.from(new Set(names)), topLevelNames };
+  return { names: Array.from(new Set(names)), topLevelNames, joinObjects: Array.from(new Set(joinObjects)) };
 }
 
 function findMatchingParen(text: string, openIndex: number): number {
@@ -508,14 +493,10 @@ function extractCreateTableConstraintFacts(text: string, tableName: string | nul
 function extractReadFacts(text: string): SqlFactDraft[] {
   const cteReads = collectCteReads(text);
   const isCteName = (name: string): boolean => sqlObjectLookupKeys(name).some((key) => cteReads.names.has(key));
-  const fromSources = collectCommaSeparatedObjectsAfterKeywords(text, ["from", "using"]);
-  const fromObjects = fromSources.names.filter((name) => !isCteName(name));
-  const joinObjects = collectObjectsAfterKeywords(
-    text,
-    ["join", "inner join", "left join", "right join", "full join", "cross join"],
-    { topLevelOnly: true },
-  ).filter((name) => !isCteName(name));
-  const primaryRead = fromSources.topLevelNames.find((name) => !isCteName(name)) ?? null;
+  const sources = collectReadSources(text);
+  const fromObjects = sources.names.filter((name) => !isCteName(name));
+  const joinObjects = sources.joinObjects.filter((name) => !isCteName(name));
+  const primaryRead = sources.topLevelNames.find((name) => !isCteName(name)) ?? null;
   const facts: SqlFactDraft[] = [...cteReads.facts];
   const seenReads = new Set<string>();
   for (const fact of cteReads.facts) {

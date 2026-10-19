@@ -833,6 +833,52 @@ describe("SQL artifact graph", () => {
     }
   });
 
+  it("does not link an outer projection to an indexed table after a nested FROM", async () => {
+    const root = await mkTmpDir("cg-sql-nested-from-boundary-");
+    try {
+      const schema = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const query = path.join(root, "query.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schema,
+        "CREATE TABLE users (id integer);\nCREATE TABLE accounts (id integer);\nCREATE TABLE email (id integer);\n",
+        "utf8",
+      );
+      await fsp.writeFile(query, "SELECT (SELECT id FROM users), email FROM accounts;\n", "utf8");
+      const graph = await collectGraph(root, [schema, query]);
+      expect(
+        graph.edges
+          .filter((edge) => edge.from === query && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort(),
+      ).toEqual(["sql:reads_from:accounts", "sql:reads_from:users"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes nested routine sources from table edges but keeps real reads in the same statement", async () => {
+    const root = await mkTmpDir("cg-sql-nested-routine-source-");
+    try {
+      const schema = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const query = path.join(root, "query.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schema,
+        "CREATE TABLE get_users (id integer);\nCREATE FUNCTION get_users() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;\nCREATE TABLE accounts (id integer);\n",
+        "utf8",
+      );
+      await fsp.writeFile(query, "SELECT a.id FROM accounts a WHERE EXISTS (SELECT * FROM get_users());\n", "utf8");
+      const graph = await collectGraph(root, [schema, query]);
+      expect(
+        graph.edges
+          .filter((edge) => edge.from === query && edge.to.type === "file" && edge.to.path === schema)
+          .map((edge) => edge.raw)
+          .sort(),
+      ).toEqual(["sql:reads_from:accounts", "sql:reads_from:callable:get_users"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not add a table edge for a routine call in FROM and keeps other reads", async () => {
     const root = await mkTmpDir("cg-sql-from-call-");
     try {

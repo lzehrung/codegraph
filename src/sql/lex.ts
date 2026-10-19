@@ -344,36 +344,41 @@ export function maskSqlQuotedIdentifiers(masked: string): string {
   return masked.replace(QUOTED_IDENTIFIER_RE, (identifier) => identifier.replace(/[^\n]/g, "_"));
 }
 
-/** Track each SELECT's lexical query level, restoring its parent after a subquery closes. */
+/** Track SELECT scopes and the parentheses enclosing each source clause in one lexical scan. */
 export function sqlQueryScopes(scan: string): {
   at: (offset: number) => number;
+  depthAt: (offset: number) => number;
   selectDepthAt: (offset: number) => number;
+  enclosingEndAt: (offset: number) => number;
   parent: ReadonlyMap<number, number>;
 } {
-  const changes = [{ start: 0, scope: 0, selectDepth: 0 }];
+  const changes = [{ start: 0, scope: 0, selectDepth: 0, depth: 0, open: -1 }];
   const parent = new Map<number, number>();
-  const stack: Array<{ scope: number; selectDepth: number }> = [];
+  const closes = new Map<number, number>();
+  const stack: Array<{ scope: number; selectDepth: number; open: number }> = [];
   let scope = 0;
   let selectDepth = 0;
   for (const match of scan.matchAll(/[A-Za-z_][\w$]*|[()]/g)) {
     const start = match.index ?? 0;
     if (match[0] === "(") {
-      stack.push({ scope, selectDepth });
+      stack.push({ scope, selectDepth, open: start });
+      changes.push({ start: start + 1, scope, selectDepth, depth: stack.length, open: start });
     } else if (match[0] === ")") {
       const enclosing = stack.pop();
-      if (enclosing && (scope !== enclosing.scope || selectDepth !== enclosing.selectDepth)) {
+      if (enclosing) {
+        closes.set(enclosing.open, start);
         scope = enclosing.scope;
         selectDepth = enclosing.selectDepth;
-        changes.push({ start: start + 1, scope, selectDepth });
+        changes.push({ start: start + 1, scope, selectDepth, depth: stack.length, open: stack.at(-1)?.open ?? -1 });
       }
     } else if (match[0].toLowerCase() === "select") {
       scope = start + 1;
       selectDepth = stack.length;
       parent.set(scope, stack.at(-1)?.scope ?? 0);
-      changes.push({ start, scope, selectDepth });
+      changes.push({ start, scope, selectDepth, depth: stack.length, open: stack.at(-1)?.open ?? -1 });
     }
   }
-  const changeAt = (offset: number): { scope: number; selectDepth: number } => {
+  const changeAt = (offset: number): (typeof changes)[number] => {
     let low = 0;
     let high = changes.length - 1;
     while (low < high) {
@@ -385,7 +390,52 @@ export function sqlQueryScopes(scan: string): {
   };
   return {
     at: (offset) => changeAt(offset).scope,
+    depthAt: (offset) => changeAt(offset).depth,
     selectDepthAt: (offset) => changeAt(offset).selectDepth,
+    enclosingEndAt: (offset) => closes.get(changeAt(offset).open) ?? scan.length,
     parent,
   };
+}
+
+/** Real FROM/USING/JOIN/APPLY sources at their query level, bounded by their closing parenthesis. */
+export function sqlSourceClauses(scan: string): Array<{
+  kind: "from" | "using" | "join" | "apply";
+  start: number;
+  end: number;
+  clauseEnd: number;
+  depth: number;
+}> {
+  const scopes = sqlQueryScopes(scan);
+  const sources: Array<{
+    kind: "from" | "using" | "join" | "apply";
+    start: number;
+    end: number;
+    clauseEnd: number;
+    depth: number;
+  }> = [];
+  const boundaryRe =
+    /\b(?:where|group|order|having|limit|offset|returning|union|intersect|except|join|apply|on|from|using)\b/gi;
+  for (const match of scan.matchAll(/\b(from|using|join|apply)\b/gi)) {
+    const start = match.index ?? 0;
+    const depth = scopes.depthAt(start);
+    if (depth !== scopes.selectDepthAt(start)) continue;
+    const kind = match[1]!.toLowerCase() as "from" | "using" | "join" | "apply";
+    // IS [NOT] DISTINCT FROM is an expression, not a table-valued source.
+    if (kind === "from" && /\bis\s+(?:not\s+)?distinct\s*$/i.test(scan.slice(Math.max(0, start - 40), start))) continue;
+    const end = start + match[0].length;
+    const scope = scopes.at(start);
+    let clauseEnd = scopes.enclosingEndAt(start);
+    boundaryRe.lastIndex = end;
+    let boundary: RegExpExecArray | null;
+    while ((boundary = boundaryRe.exec(scan)) !== null) {
+      const at = boundary.index;
+      if (at >= clauseEnd) break;
+      if (scopes.at(at) === scope && scopes.depthAt(at) === depth) {
+        clauseEnd = at;
+        break;
+      }
+    }
+    sources.push({ kind, start, end, clauseEnd, depth });
+  }
+  return sources;
 }

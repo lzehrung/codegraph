@@ -30,8 +30,9 @@ import {
   sqlObjectBaseNameLookupKey,
   sqlObjectLookupKey,
   sqlQueryScopes,
+  sqlSourceClauses,
 } from "./lex.js";
-import { sqlDefinedNameSpan, sqlObjectMentionCovers } from "./object-mentions.js";
+import { sqlDefinedNameSpan, sqlObjectMentionCovers, sqlRelationReadSpans } from "./object-mentions.js";
 import {
   findSqlRoutineMentions,
   findSqlRoutineSources,
@@ -158,8 +159,6 @@ const SQL_SOURCE_KEYWORDS = new Set([
   "returning",
 ]);
 const SQL_SOURCE_MODIFIERS = new Set(["only", "lateral"]);
-const SQL_SOURCE_BOUNDARY_RE =
-  /\b(?:where|group\s+by|order\s+by|having|limit|offset|returning|union|intersect|except|on|inner\s+join|left\s+join|right\s+join|full\s+join|cross\s+join|join)\b/i;
 
 function wordAtPosition(source: string, line: number, column: number): string | null {
   const lineText = maskSqlStringsAndComments(source, { escapeStrings: true }).split(/\r?\n/)[line - 1];
@@ -209,11 +208,6 @@ function sqlStatementAtLine(facts: readonly SqlStatementFact[], line: number): S
   return (
     sqlStatementSlices(facts).find((statement) => line >= statement.startLine && line <= statement.endLine) ?? null
   );
-}
-
-function sourceClauseEndIndex(text: string, start: number): number {
-  const boundary = text.slice(start).search(SQL_SOURCE_BOUNDARY_RE);
-  return boundary < 0 ? text.length : start + boundary;
 }
 
 function cteNamesForStatement(text: string): Set<string> {
@@ -303,31 +297,38 @@ function sqlSourceBindings(
   };
 
   const cteNames = cteNamesForStatement(masked);
-  const clauseRe = /\b(?:from|using|join|inner\s+join|left\s+join|right\s+join|full\s+join|cross\s+join)\s+/gi;
-  for (const match of scan.matchAll(clauseRe)) {
-    const start = (match.index ?? 0) + match[0].length;
-    const clause = masked.slice(start, sourceClauseEndIndex(masked, start));
+  const routineSources = lookups.namespaceByDefinition.size
+    ? findSqlRoutineSources(statementText).filter(({ mention }) => routineCandidates(lookups, mention).length > 0)
+    : [];
+  for (const source of sqlSourceClauses(scan)) {
+    const clause = masked.slice(source.end, source.clauseEnd);
+    let nextPartStart = source.end;
     for (const part of splitTopLevelCommaSeparated(clause)) {
+      const partStart = masked.indexOf(part, nextPartStart);
+      if (partStart < 0) continue;
+      const partEnd = partStart + part.length;
+      nextPartStart = partEnd + 1;
+      if (routineSources.some(({ mention }) => mention.start >= partStart && mention.start < partEnd)) continue;
       const parsed = parseSqlSourceEntry(part);
-      if (!parsed?.aliasName) continue;
+      if (!parsed) continue;
       const objectKey = sqlObjectLookupKey(parsed.objectName);
       const objectBaseKey = sqlObjectBaseNameLookupKey(parsed.objectName);
       if (cteNames.has(objectKey) || cteNames.has(objectBaseKey)) continue;
-      addBinding(match.index ?? 0, sqlObjectLookupKey(parsed.aliasName), {
-        kind: "relation",
-        objectName: parsed.objectName,
-      });
+      const relation: SqlSourceBinding = { kind: "relation", objectName: parsed.objectName };
+      if (parsed.aliasName) {
+        addBinding(source.start, sqlObjectLookupKey(parsed.aliasName), relation);
+      } else {
+        addBinding(source.start, objectKey, relation);
+        if (objectBaseKey !== objectKey) addBinding(source.start, objectBaseKey, relation);
+      }
     }
   }
-  if (lookups.namespaceByDefinition.size) {
-    for (const { mention, alias } of findSqlRoutineSources(statementText)) {
-      if (!routineCandidates(lookups, mention).length) continue;
-      if (alias) {
-        addBinding(mention.start, sqlObjectLookupKey(alias), { kind: "routine" });
-      } else {
-        addBinding(mention.start, sqlObjectLookupKey(mention.name), { kind: "routine" });
-        addBinding(mention.start, sqlObjectBaseNameLookupKey(mention.name), { kind: "routine" });
-      }
+  for (const { mention, alias } of routineSources) {
+    if (alias) {
+      addBinding(mention.start, sqlObjectLookupKey(alias), { kind: "routine" });
+    } else {
+      addBinding(mention.start, sqlObjectLookupKey(mention.name), { kind: "routine" });
+      addBinding(mention.start, sqlObjectBaseNameLookupKey(mention.name), { kind: "routine" });
     }
   }
   return {
@@ -362,6 +363,10 @@ function resolveQualifiedSqlName(
   if (statementText && offset !== undefined) {
     const maskedStatementText = maskSqlStringsAndComments(statementText, { escapeStrings: true });
     if (cteNamesForStatement(maskedStatementText).has(sqlObjectLookupKey(firstPart))) return null;
+    if (sqlObjectMentionCovers(statementText, offset)) {
+      const direct = sqlDefinitionMatches(lookup, name);
+      return direct.exact.length || direct.basename.length === 1 ? name : null;
+    }
     const binding = sqlSourceBindings(routineLookups, statementText).at(offset, parts);
     if (binding) {
       if (binding.kind !== "relation") return null;
@@ -419,12 +424,18 @@ function factReferenceRanges(
   };
   const objectKey = sqlObjectLookupKey(objectName);
   const ranges: Range[] = [];
+  const sourceSpans = fact.kind === "reads_from" || fact.kind === "joins" ? sqlRelationReadSpans(statement.text) : null;
   const maskedStatementText = maskSqlStringsAndComments(statement.text, { escapeStrings: true });
   for (const match of maskedStatementText.matchAll(SQL_DOTTED_TOKEN_RE)) {
     const token = normalizeSqlObjectName(match[0]);
     if (!token || sqlObjectLookupKey(token) !== objectKey) continue;
     const offset = match.index ?? 0;
     if (claimedStarts?.has(offset)) continue;
+    if (
+      sourceSpans &&
+      !sourceSpans.some((span) => span.start === offset && sqlObjectLookupKey(span.name) === objectKey)
+    )
+      continue;
     const nameOffset = keepParts ? trailingPartsOffset(match[0], keepParts) : 0;
     ranges.push(
       rangeForToken(
@@ -443,6 +454,7 @@ function qualifiedReferenceRanges(
   statement: SqlStatementNavigationSlice,
   definition: SymbolDef,
   claimedStarts?: ReadonlySet<number>,
+  keepParts = 0,
 ): { ranges: Range[]; ambiguous: boolean } {
   const ranges: Range[] = [];
   let ambiguous = false;
@@ -459,6 +471,21 @@ function qualifiedReferenceRanges(
     const firstPart = parts[0];
     if (!firstPart) continue;
     if (cteNames.has(sqlObjectLookupKey(firstPart))) continue;
+    if (sqlObjectMentionCovers(statement.text, offset)) {
+      const direct = sqlDefinitionMatches(lookup, token);
+      if (!direct.exact.length && direct.basename.length > 1 && direct.basename.includes(definition)) ambiguous = true;
+      if (sqlNameResolvesToDefinition(lookup, token, definition)) {
+        const nameOffset = keepParts ? trailingPartsOffset(match[0], keepParts) : 0;
+        ranges.push(
+          rangeForToken(
+            statementLineForOffset(statement, offset + nameOffset),
+            statementColumnForOffset(statement, offset + nameOffset),
+            match[0].length - nameOffset,
+          ),
+        );
+      }
+      continue;
+    }
     const binding = bindings.at(offset, parts);
     if (binding?.kind === "ambiguous") {
       ambiguous = true;
@@ -832,7 +859,14 @@ export async function findSqlReferences(
       if (hasReachedCollectionLimit()) break;
       if (sqlStatementDropsRoutine(statement.text)) continue;
       const claimed = claimedStarts?.get(`${statement.startLine}:${statement.startColumn}`);
-      const { ranges, ambiguous } = qualifiedReferenceRanges(lookup, routineLookups, statement, definition, claimed);
+      const { ranges, ambiguous } = qualifiedReferenceRanges(
+        lookup,
+        routineLookups,
+        statement,
+        definition,
+        claimed,
+        keepParts,
+      );
       for (const range of ranges) addReference(file, range);
       if (ambiguous && !ambiguousFiles.includes(file)) ambiguousFiles.push(file);
     }

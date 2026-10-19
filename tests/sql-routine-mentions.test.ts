@@ -611,4 +611,12 @@ describe("SQL routine sources", () => {
   ])("finds no routine source in %s", (_label, statement) => {
     expect(describeSources(statement)).toEqual([]);
   });
+  it("does not bind expression FROM operands as routine sources", () => {
+    const distinct = "SELECT norm.id FROM norm WHERE value IS DISTINCT FROM norm(1)";
+    const extract = "SELECT EXTRACT(day FROM norm(2)) FROM users";
+    expect(describeSources(distinct)).toEqual([]);
+    expect(describeSources(extract)).toEqual([]);
+    expect(callMentions(distinct)).toContainEqual({ text: "norm", speculative: true });
+    expect(callMentions(extract)).toContainEqual({ text: "norm", speculative: true });
+  });
 });

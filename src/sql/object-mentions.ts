@@ -1,10 +1,12 @@
 import {
   createSqlObjectNameRegExp,
+  maskSqlQuotedIdentifiers,
   maskSqlStringsAndComments,
   normalizeSqlObjectName,
   SQL_OBJECT_NAME_PATTERN,
   sqlObjectLookupKey,
   sqlParenDepthAt,
+  sqlSourceClauses,
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
 import { findSqlRoutineMentions, type SqlRoutineMention } from "./routine-mentions.js";
@@ -81,10 +83,6 @@ const TARGET_PREFIXES = [
   /\brename\s+to\s+/gi,
   /\breferences\s+/gi,
 ];
-const FROM_RE = /\b(?:from|using)\s+/gi;
-const JOIN_RE = /\b(?:inner\s+join|left\s+join|right\s+join|full\s+join|cross\s+join|join)\s+/gi;
-const CLAUSE_END_RE =
-  /\b(?:where|group\s+by|order\s+by|having|limit|offset|returning|union|intersect|except|inner\s+join|left\s+join|right\s+join|full\s+join|cross\s+join|join)\b/i;
 const CTE_SOURCE = String.raw`(?:\bwith\s+(?:recursive\s+)?|,\s*)(${SQL_OBJECT_NAME_PATTERN})(?:\s*\([^)]*\))?\s+as\s*\(`;
 
 function ctePattern(): RegExp {
@@ -129,11 +127,6 @@ function matchingParen(text: string, openIndex: number): number {
   return -1;
 }
 
-function clauseEnd(text: string, start: number): number {
-  const boundary = text.slice(start).search(CLAUSE_END_RE);
-  return boundary < 0 ? text.length : start + boundary;
-}
-
 function addName(spans: SqlNameSpan[], named: SqlNameSpan | null): void {
   if (named) spans.push(named);
 }
@@ -166,29 +159,20 @@ function collectCteNames(text: string, cteNames: Set<string>): void {
   }
 }
 
-function addFromAndJoin(
-  text: string,
-  base: number,
-  topLevelOnly: boolean,
-  cteNames: ReadonlySet<string>,
-  spans: SqlNameSpan[],
-): void {
-  FROM_RE.lastIndex = 0;
-  for (const match of text.matchAll(FROM_RE)) {
-    const keywordAt = match.index ?? 0;
-    if (topLevelOnly && sqlParenDepthAt(text, keywordAt) > 0) continue;
-    const clauseStart = keywordAt + match[0].length;
-    const clause = text.slice(clauseStart, clauseEnd(text, clauseStart));
+function addFromAndJoin(text: string, cteNames: ReadonlySet<string>, spans: SqlNameSpan[]): void {
+  for (const source of sqlSourceClauses(maskSqlQuotedIdentifiers(text))) {
+    if (source.kind === "join" || source.kind === "apply") {
+      const named = readName(text, source.end);
+      if (named && !isCteName(cteNames, named.name)) spans.push(named);
+      continue;
+    }
+    const clause = text.slice(source.end, source.clauseEnd);
     let partStart = 0;
     let depth = 0;
     const visit = (end: number): void => {
       const named = readName(clause, partStart);
       if (named && !isCteName(cteNames, named.name)) {
-        spans.push({
-          name: named.name,
-          start: base + clauseStart + named.start,
-          end: base + clauseStart + named.end,
-        });
+        spans.push({ name: named.name, start: source.end + named.start, end: source.end + named.end });
       }
       partStart = end + 1;
     };
@@ -200,32 +184,15 @@ function addFromAndJoin(
     }
     visit(clause.length);
   }
-  JOIN_RE.lastIndex = 0;
-  for (const match of text.matchAll(JOIN_RE)) {
-    const keywordAt = match.index ?? 0;
-    if (topLevelOnly && sqlParenDepthAt(text, keywordAt) > 0) continue;
-    const named = readName(text, keywordAt + match[0].length);
-    if (!named || isCteName(cteNames, named.name)) continue;
-    spans.push({ name: named.name, start: base + named.start, end: base + named.end });
-  }
 }
 
-/** FROM/USING/JOIN names fact extraction records: top-level clauses plus CTE bodies, never CTE names. */
+/** Every FROM/USING/JOIN source in the statement's query scopes, never CTE aliases. */
 export function sqlRelationReadSpans(statement: string): SqlNameSpan[] {
-  const masked = maskSqlStringsAndComments(statement);
+  const masked = maskSqlStringsAndComments(statement, { escapeStrings: true });
   const cteNames = new Set<string>();
   collectCteNames(masked, cteNames);
   const spans: SqlNameSpan[] = [];
-  const visit = (text: string, base: number): void => {
-    for (const match of text.matchAll(ctePattern())) {
-      const open = (match.index ?? 0) + match[0].length - 1;
-      const close = matchingParen(text, open);
-      if (close < 0) continue;
-      visit(text.slice(open + 1, close), base + open + 1);
-    }
-    addFromAndJoin(text, base, true, cteNames, spans);
-  };
-  visit(masked, 0);
+  addFromAndJoin(masked, cteNames, spans);
   return spans;
 }
 
@@ -234,7 +201,7 @@ function syntacticObjectSpans(statement: string): SqlNameSpan[] {
   const cteNames = new Set<string>();
   collectCteNames(masked, cteNames);
   const spans: SqlNameSpan[] = [];
-  addFromAndJoin(masked, 0, false, cteNames, spans);
+  addFromAndJoin(masked, cteNames, spans);
   namesAfterPrefixes(masked, DEFINITION_PREFIXES, spans);
   namesAfterPrefixes(masked, TARGET_PREFIXES, spans);
   if (/^\s*create\s+(?:or\s+replace\s+)?trigger\b/i.test(masked)) {
