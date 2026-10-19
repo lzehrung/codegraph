@@ -14,6 +14,7 @@ import {
   computePublishPlan,
   computePublishExecutionSteps,
   detectChangedReleasePackages,
+  extractChangelogSection,
   finalizeChangelogForRelease,
   getReleasePackage,
   hasTagForPackageVersion,
@@ -264,6 +265,47 @@ describe("release script helpers", () => {
     expect(() =>
       finalizeChangelogForRelease(prepared.replace("[2.3.21]:", "[missing]:"), "2.3.21", "2026-09-06"),
     ).toThrow();
+  });
+
+  it("extracts the changelog section for one version without neighbouring headings or the link footer", () => {
+    const changelog = [
+      "# Changelog",
+      "",
+      "## [Unreleased]",
+      "",
+      "## [1.2.10] - 2026-09-03",
+      "",
+      "### Fixed",
+      "",
+      "- Ten.",
+      "",
+      "## [1.2.1] - 2026-09-02",
+      "",
+      "### Added",
+      "",
+      "- One.",
+      "",
+      "## [1.2.0] - 2026-09-01",
+      "",
+      "- Zero.",
+      "",
+      "## Earlier releases",
+      "",
+      "See the GitHub Releases page.",
+      "",
+      "[Unreleased]: https://github.com/lzehrung/codegraph/compare/v1.2.10...HEAD",
+      "[1.2.10]: https://github.com/lzehrung/codegraph/releases/tag/v1.2.10",
+      "[1.2.1]: https://github.com/lzehrung/codegraph/releases/tag/v1.2.1",
+      "[1.2.0]: https://github.com/lzehrung/codegraph/releases/tag/v1.2.0",
+      "",
+    ].join("\n");
+
+    expect(extractChangelogSection(changelog, "1.2.1")).toBe("### Added\n\n- One.");
+    expect(extractChangelogSection(changelog, "1.2.10")).toBe("### Fixed\n\n- Ten.");
+    expect(extractChangelogSection(changelog, "1.2.0")).toBe("- Zero.");
+    expect(extractChangelogSection(changelog, "1.2.2")).toBeNull();
+    expect(extractChangelogSection(changelog.replace("## [1.2.10] - 2026-09-03\n", ""), "1.2.10")).toBeNull();
+    expect(() => extractChangelogSection(changelog, "1.2")).toThrow();
   });
 
   it("prepares the next release changelog from the root package version", () => {
