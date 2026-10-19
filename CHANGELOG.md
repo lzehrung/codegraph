@@ -9,9 +9,13 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Changed
+
+- GitHub release descriptions now include the changelog section for the released version.
+
 ### Fixed
 
-- SQL: a call to a routine is now a reference to it. Find-references and go-to-definition follow `name(` and `schema.name(` in queries and expressions, `CALL name`, T-SQL `EXEC name`, `EXECUTE FUNCTION name()` in `CREATE TRIGGER`, and calls inside `$$` and `BEGIN`/`END` bodies; `DROP`, `ALTER`, `COMMENT ON`, and `GRANT ... ON` statements that name a routine count too. Before, only the definition was found, and coverage said `complete`. Impact now reaches the files that call a changed routine, and rename preview lists the call sites.
+- SQL: a call to a routine is now a reference to it. Find-references and go-to-definition follow `name(` and `schema.name(` in queries and expressions, `CALL name`, T-SQL `EXEC name`, `EXECUTE FUNCTION name()` in `CREATE TRIGGER`, and calls inside `$` and `BEGIN`/`END` bodies; `DROP`, `ALTER`, `COMMENT ON`, and `GRANT ... ON` statements that name a routine count too. Before, only the definition was found, and coverage said `complete`. Impact now reaches the files that call a changed routine, and rename preview lists the call sites.
 - SQL: a routine name that two definitions carry, such as overloads or a repeated `CREATE OR REPLACE`, now gives `not_found` from a call and `partial` reference coverage. A column or table that shares a routine's name no longer resolves to the routine, and a trigger and the function it runs can share a name.
 - SQL: impact analysis now finds the references of a changed SQL object, as it does for other languages. A read or call inside the changed file is found, and the changed file is listed with a `directRef` reason. A reference lookup for a SQL definition that is not in the index now gives `not_found` instead of an empty `complete` result.
 - SQL: rename preview now edits the name in a schema-qualified reference such as `public.users` or `public.f()` and keeps the qualifier. Before, such a reference was left out as an unsafe site, and several references to one name in a file collapsed into one edit.
