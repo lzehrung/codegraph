@@ -151,7 +151,10 @@ export type ScssDynamic = {
    * proved to own the call.
    */
   legacyBare?: true;
-  /** Offset of the callee. A `get-function` declared later in the file does not own this call. */
+  /**
+   * Offset of the callee. A `get-function` declared later in the file does not own this call.
+   * A scoped callable uses it to see whether the lookup sits where that callable is visible.
+   */
   at?: number;
 };
 
@@ -476,7 +479,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
     }
     if (use.syntax === "call" || use.syntax === "include") {
       const form = dynamicFormOf(use.text);
-      if (form) recorded.dynamic = { form, arg: readCallArgument(use.nameEnd) };
+      if (form) recorded.dynamic = { form, arg: readCallArgument(use.nameEnd), at: use.nameStart };
     }
     uses.push(recorded);
   };
@@ -685,7 +688,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
     inInclude = true;
     const dynamicForm = metaCallForm(member.namespace, member.member);
     if (dynamicForm) {
-      dynamics.push({ form: dynamicForm, arg: readCallArgument(member.end) });
+      dynamics.push({ form: dynamicForm, arg: readCallArgument(member.end), at: member.memberStart });
       return member.end;
     }
     addUse({
@@ -1235,7 +1238,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
         dynamics.push({
           form: dynamicForm,
           arg: readCallArgument(member.end),
-          ...(dynamicForm === "variable-exists" ? { at: member.memberStart } : {}),
+          at: member.memberStart,
         });
       } else if (isVariable) {
         addUse({
@@ -1281,7 +1284,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
         dynamics.push({
           form: bareForm,
           arg: readCallArgument(ident.end),
-          ...(bareForm === "variable-exists" ? { at: start } : {}),
+          at: start,
         });
         return ident.end;
       }

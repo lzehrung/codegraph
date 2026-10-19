@@ -22,6 +22,7 @@ import {
   type ScssMemberKind,
   type ScssModuleLoad,
   type ScssDynamic,
+  type ScssDynamicForm,
   type ScssUse,
 } from "./syntax.js";
 
@@ -1616,10 +1617,79 @@ function scopedCallableLocal(facts: ScssFileFacts, def: SymbolDef): ScssCallable
   return facts.callableLocals.find((candidate) => candidate.from === end && candidate.canonical === canonical);
 }
 
+const SCOPED_FUNCTION_LOOKUPS = new Set<ScssDynamicForm>(["function-exists", "get-function", "call"]);
+const SCOPED_MIXIN_LOOKUPS = new Set<ScssDynamicForm>(["mixin-exists", "get-mixin"]);
+
+/**
+ * True when this lookup may name a scoped callable. A non-literal or interpolated argument may
+ * be any name. `-` and `_` are the same character. `call` and `get-function` name functions;
+ * `get-mixin` and `mixin-exists` name mixins.
+ */
+function dynamicMayNameCallable(dynamic: ScssDynamic, local: ScssCallableLocal): boolean {
+  const forms = local.kind === "function" ? SCOPED_FUNCTION_LOOKUPS : SCOPED_MIXIN_LOOKUPS;
+  if (!forms.has(dynamic.form)) return false;
+  if (dynamic.arg === null || dynamic.arg.includes("#{")) return true;
+  return sassCanonical(dynamic.arg) === local.canonical;
+}
+
+/** The lookup sits in the span where `local` is the nearest visible callable of its name. */
+function lookupInCallableScope(facts: ScssFileFacts, local: ScssCallableLocal, at: number | undefined): boolean {
+  if (at === undefined || at < local.from || at >= local.to) return false;
+  return nearestScopedCallable(facts, local.kind, local.canonical, at) === local;
+}
+
+/**
+ * A legacy bare built-in is not a lookup when a user function already owns the call: a scoped
+ * function of that name, or a function proved in another file. A later declaration does not.
+ */
+async function legacyBuiltinOwnedByUser(
+  index: ProjectIndex,
+  current: ModuleModel,
+  dynamic: ScssDynamic,
+): Promise<boolean> {
+  if (!dynamic.legacyBare) return false;
+  const resolved = await resolveScssUse(index, current.file, legacyBuiltinUse(dynamic));
+  if (resolved.status === "shadow") return true;
+  return resolved.status === "ok" && fileIdentityKey(resolved.def.file) !== current.key;
+}
+
+/**
+ * True when a dynamic lookup in the span where `def` is visible may name that scoped mixin or
+ * function. Existence predicates, `call`, and `get-function` name a function; `mixin-exists` and
+ * `get-mixin` name a mixin. The call is a proved `sass:meta` binding or a legacy bare built-in.
+ * A lookup outside the block, or one a user function owns, does not. Static uses stay references.
+ */
+export async function scssScopedCallableDynamicUnproven(index: ProjectIndex, def: SymbolDef): Promise<boolean> {
+  if (!isScssFile(index, def.file) || def.kind !== SymbolKind.Function) return false;
+  const model = await projectModel(index);
+  const current = model.files.get(fileIdentityKey(def.file));
+  if (!current) return false;
+  const local = scopedCallableLocal(current.facts, def);
+  if (!local) return false;
+  for (const dynamic of current.facts.dynamics) {
+    if (!dynamicMayNameCallable(dynamic, local) || !lookupInCallableScope(current.facts, local, dynamic.at)) {
+      continue;
+    }
+    if (await legacyBuiltinOwnedByUser(index, current, dynamic)) continue;
+    return true;
+  }
+  for (const use of current.facts.uses) {
+    if (!use.dynamic || !current.inheritedDynamics.includes(use.dynamic)) continue;
+    // A bare call a scoped user function owns is that function, not the built-in.
+    if (coveringCallable(current, use)) continue;
+    const dynamic = use.dynamic;
+    if (!dynamicMayNameCallable(dynamic, local)) continue;
+    if (!lookupInCallableScope(current.facts, local, dynamic.at ?? use.nameStart)) continue;
+    return true;
+  }
+  return false;
+}
+
 /**
  * Bare same-kind calls and includes a scoped mixin or function owns.
  * Null when `def` is not a scoped callable. `unproven` when the file cannot be scanned, so
- * coverage must not claim to be complete.
+ * coverage must not claim to be complete. A dynamic lookup that may name the callable is reported
+ * separately by {@link scssScopedCallableDynamicUnproven}; these ranges stay the proved uses.
  */
 export async function scssScopedCallableReferences(
   index: ProjectIndex,

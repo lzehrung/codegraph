@@ -4270,4 +4270,466 @@ describe("SCSS module navigation: nested callables, legacy call, comments, and e
       );
     }
   });
+
+  it("records callee offsets for lookups that can name a scoped callable", () => {
+    const inside = [
+      '@use "sass:meta";',
+      ".a {",
+      "  @function inset() { @return 1px; }",
+      '  f: meta.get-function("inset");',
+      "}",
+      "",
+    ].join("\n");
+    const facts = extractScssFacts(inside);
+    const local = facts.callableLocals[0];
+    const dynamic = facts.dynamics.find((entry) => entry.form === "get-function");
+    expect(dynamic?.arg).toBe("inset");
+    expect(dynamic?.at).toBeGreaterThanOrEqual(local?.from ?? 0);
+    expect(dynamic?.at).toBeLessThan(local?.to ?? 0);
+    const outside = [
+      '@use "sass:meta";',
+      ".a {",
+      "  @function inset() { @return 1px; }",
+      "}",
+      '.b { f: meta.get-function("inset"); }',
+      "",
+    ].join("\n");
+    const outFacts = extractScssFacts(outside);
+    const outLocal = outFacts.callableLocals[0];
+    expect(outFacts.dynamics[0]?.at).toBeGreaterThanOrEqual(outLocal?.to ?? 0);
+    const legacy = extractScssFacts('.a {\n  @mixin inset { color: blue; }\n  x: mixin_exists("in_set");\n}\n');
+    const mixin = legacy.callableLocals[0];
+    const lookup = legacy.dynamics[0];
+    expect(lookup?.form).toBe("mixin-exists");
+    expect(lookup?.legacyBare).toBe(true);
+    expect(lookup?.arg).toBe("in_set");
+    expect(lookup?.at).toBeGreaterThanOrEqual(mixin?.from ?? 0);
+    expect(lookup?.at).toBeLessThan(mixin?.to ?? 0);
+  });
+
+  it("marks a scoped callable partial when a dynamic lookup in its block may name it", async () => {
+    const fn = (lookup: string) =>
+      [".a {", "  @function inset() { @return 1px; }", "  width: inset();", `  ${lookup}`, "}", ""].join("\n");
+    const metaFn = (lookup: string) =>
+      [
+        '@use "sass:meta";',
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        `  ${lookup}`,
+        "}",
+        "",
+      ].join("\n");
+    const mixin = (lookup: string) =>
+      [".a {", "  @mixin inset { color: blue; }", "  @include inset;", `  ${lookup}`, "}", ""].join("\n");
+    const files = {
+      "fn-exists.scss": fn('exists: function-exists("inset");'),
+      "fn-call.scss": fn('f: call("inset");'),
+      "fn-meta.scss": metaFn('f: meta.get-function("inset");'),
+      "fn-alias.scss": [
+        '@use "sass:meta" as m;',
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        '  f: m.get_function("inset");',
+        "}",
+        "",
+      ].join("\n"),
+      "fn-star.scss": [
+        '@use "sass:meta" as *;',
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        '  f: get-function("inset");',
+        "}",
+        "",
+      ].join("\n"),
+      "fn-builtin-spell.scss": fn('exists: function_exists("inset");'),
+      "fn-spell.scss": [
+        ".a {",
+        "  @function in-set() { @return 1px; }",
+        "  width: in_set();",
+        '  exists: function_exists("in_set");',
+        "}",
+        "",
+      ].join("\n"),
+      "fn-unknown.scss": fn("exists: function-exists($name);"),
+      "fn-diff.scss": metaFn('exists: function-exists("pad"); f: call("other"); g: meta.get-function("nope");'),
+      "fn-ignore.scss": metaFn('y: variable-exists("inset"); z: meta.load-css("inset");'),
+      "fn-before.scss": [
+        ".a {",
+        '  exists: function-exists("inset");',
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        "}",
+        "",
+      ].join("\n"),
+      "fn-outside.scss": [
+        '@use "sass:meta";',
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        "}",
+        ".b {",
+        '  exists: function-exists("inset");',
+        '  f: call("inset");',
+        '  g: meta.get-function("inset");',
+        "}",
+        "",
+      ].join("\n"),
+      "fn-nested.scss": [
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        "  .b {",
+        "    @function inset() { @return 2px; }",
+        '    x: function-exists("inset");',
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+      "fn-shadow.scss": [
+        ".a {",
+        "  @function function-exists($name) { @return 1; }",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        '  exists: function-exists("inset");',
+        "}",
+        "",
+      ].join("\n"),
+      "_fns.scss": "@function function-exists($name) { @return 7; }\n",
+      "fn-owned.scss": [
+        '@use "fns" as *;',
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        '  exists: function-exists("inset");',
+        "}",
+        "",
+      ].join("\n"),
+      "_m.scss": "@function get-function($name) { @return 1px; }\n",
+      "fn-project-meta.scss": [
+        '@use "m";',
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        '  f: m.get-function("inset");',
+        "}",
+        "",
+      ].join("\n"),
+      "_partial.scss": [
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        '  f: m.get-function("inset");',
+        "}",
+        "",
+      ].join("\n"),
+      "fn-inherited.scss": '@use "sass:meta" as m;\n@import "partial";\n',
+      "mx-exists.scss": mixin('exists: mixin-exists("inset");'),
+      "mx-spell.scss": [
+        ".a {",
+        "  @mixin in-set { color: blue; }",
+        "  @include in_set;",
+        '  exists: mixin_exists("in_set");',
+        "}",
+        "",
+      ].join("\n"),
+      "mx-meta.scss": [
+        '@use "sass:meta";',
+        ".a {",
+        "  @mixin inset { color: blue; }",
+        "  @include inset;",
+        '  f: meta.get-mixin("inset");',
+        "}",
+        "",
+      ].join("\n"),
+      "mx-other.scss": mixin('exists: function-exists("inset"); f: call("inset");'),
+      "mx-outside.scss": [
+        ".a {",
+        "  @mixin inset { color: blue; }",
+        "  @include inset;",
+        "}",
+        ".b {",
+        '  exists: mixin-exists("inset");',
+        "}",
+        "",
+      ].join("\n"),
+      "fn-oneline.scss":
+        '.a { @function inset() { @return 1px; } width: inset(); exists: function-exists("inset"); }\n',
+    };
+
+    await withScssProject(files, async (project) => {
+      const renameAt = async (file: string, line: number, symbolName = "inset") => {
+        const session = createAgentSession({ root: project.root, freshness: { policy: "check" } });
+        try {
+          const symbols = await workspaceSymbolsWithSession(session, { root: project.root, query: symbolName });
+          const target = symbols.symbols.find(
+            (symbol) =>
+              symbol.name === symbolName &&
+              symbol.location.file.endsWith(file) &&
+              symbol.location.range.start.line === line,
+          );
+          if (!target) throw new Error(`missing ${symbolName} in ${file}:${line}`);
+          return await previewRenameWithSession(session, {
+            root: project.root,
+            handle: target.handle,
+            newName: "shift",
+          });
+        } finally {
+          session.invalidate();
+        }
+      };
+
+      const check = async (
+        file: keyof typeof files,
+        spec: {
+          label: string;
+          defNeedle: string;
+          defDelta: number;
+          occurrence?: number;
+          staticOccurrence?: number;
+          staticNeedle?: string;
+          lookups: string[];
+          partial: boolean;
+          rename?: boolean;
+          symbolName?: string;
+        },
+      ) => {
+        const source = files[file];
+        const refs = await scssRefs(project, file, spec.defNeedle, spec.occurrence ?? 0, spec.defDelta);
+        const defLine = modulePosition(source, spec.defNeedle, spec.occurrence ?? 0).line;
+        const staticLine = spec.staticNeedle
+          ? modulePosition(source, spec.staticNeedle, spec.staticOccurrence ?? 0).line
+          : undefined;
+        expect(refs.sites, spec.label).toContain(`${file}:${defLine}`);
+        if (staticLine !== undefined) expect(refs.sites, spec.label).toContain(`${file}:${staticLine}`);
+        for (const lookup of spec.lookups) {
+          const line = modulePosition(source, lookup).line;
+          if (line !== defLine && line !== staticLine) {
+            expect(refs.sites, `${spec.label} ${lookup}`).not.toContain(`${file}:${line}`);
+          }
+        }
+        expect(refs.coverage?.state, spec.label).toBe(spec.partial ? "partial" : "complete");
+        if (spec.partial) expect(refs.coverage?.reasons, spec.label).toContain("strategy_unavailable");
+        if (!spec.rename) return;
+        const renamed = await renameAt(file, defLine, spec.symbolName ?? "inset");
+        expect(renamed.safe, spec.label).toBe(!spec.partial);
+        const editLines = renamed.edits.map((edit) => edit.range.start.line);
+        expect(editLines, spec.label).toContain(defLine);
+        if (staticLine !== undefined) expect(editLines, spec.label).toContain(staticLine);
+        for (const lookup of spec.lookups) {
+          const line = modulePosition(source, lookup).line;
+          if (line !== defLine && line !== staticLine) expect(editLines, spec.label).not.toContain(line);
+        }
+        expect(
+          renamed.edits.every((edit) => !edit.oldText.includes('"') && !edit.oldText.includes("'")),
+          spec.label,
+        ).toBe(true);
+        if (spec.partial) {
+          expect(
+            renamed.unsafeSites.some((site) => site.reason === "unresolved_reference"),
+            spec.label,
+          ).toBe(true);
+        } else {
+          expect(renamed.unsafeSites, spec.label).toEqual([]);
+        }
+      };
+
+      const functionDef = { defNeedle: "@function inset", defDelta: "@function ".length };
+      const mixinDef = { defNeedle: "@mixin inset", defDelta: "@mixin ".length };
+      await check("fn-exists.scss", {
+        ...functionDef,
+        label: "function-exists",
+        staticNeedle: "width: inset()",
+        lookups: ['function-exists("inset")'],
+        partial: true,
+        rename: true,
+      });
+      await check("fn-call.scss", {
+        ...functionDef,
+        label: "call",
+        staticNeedle: "width: inset()",
+        lookups: ['call("inset")'],
+        partial: true,
+        rename: true,
+      });
+      await check("fn-meta.scss", {
+        ...functionDef,
+        label: "meta.get-function",
+        staticNeedle: "width: inset()",
+        lookups: ['meta.get-function("inset")'],
+        partial: true,
+        rename: true,
+      });
+      await check("fn-alias.scss", {
+        ...functionDef,
+        label: "meta alias",
+        staticNeedle: "width: inset()",
+        lookups: ['m.get_function("inset")'],
+        partial: true,
+      });
+      await check("fn-star.scss", {
+        ...functionDef,
+        label: "star get-function",
+        staticNeedle: "width: inset()",
+        lookups: ['get-function("inset")'],
+        partial: true,
+      });
+      await check("fn-builtin-spell.scss", {
+        ...functionDef,
+        label: "builtin underscore",
+        staticNeedle: "width: inset()",
+        lookups: ['function_exists("inset")'],
+        partial: true,
+      });
+      await check("fn-spell.scss", {
+        ...functionDef,
+        label: "hyphen underscore",
+        defNeedle: "@function in-set",
+        symbolName: "in-set",
+        staticNeedle: "width: in_set()",
+        lookups: ['function_exists("in_set")'],
+        partial: true,
+        rename: true,
+      });
+      await check("fn-unknown.scss", {
+        ...functionDef,
+        label: "non-literal",
+        staticNeedle: "width: inset()",
+        lookups: ["function-exists($name)"],
+        partial: true,
+      });
+      await check("fn-diff.scss", {
+        ...functionDef,
+        label: "different name",
+        staticNeedle: "width: inset()",
+        lookups: ['function-exists("pad")', 'call("other")', 'meta.get-function("nope")'],
+        partial: false,
+        rename: true,
+      });
+      await check("fn-ignore.scss", {
+        ...functionDef,
+        label: "unrelated lookup",
+        staticNeedle: "width: inset()",
+        lookups: ['variable-exists("inset")', 'meta.load-css("inset")'],
+        partial: false,
+      });
+      await check("fn-before.scss", {
+        ...functionDef,
+        label: "before declaration",
+        staticNeedle: "width: inset()",
+        lookups: ['function-exists("inset")'],
+        partial: false,
+      });
+      await check("fn-outside.scss", {
+        ...functionDef,
+        label: "outside block",
+        staticNeedle: "width: inset()",
+        lookups: ['function-exists("inset")', 'call("inset")', 'meta.get-function("inset")'],
+        partial: false,
+        rename: true,
+      });
+      await check("fn-nested.scss", {
+        ...functionDef,
+        label: "outer shadowed",
+        staticNeedle: "width: inset()",
+        lookups: ['function-exists("inset")'],
+        partial: false,
+        rename: true,
+      });
+      await check("fn-nested.scss", {
+        ...functionDef,
+        label: "inner lookup",
+        occurrence: 1,
+        lookups: ['function-exists("inset")'],
+        partial: true,
+        rename: true,
+      });
+      await check("fn-shadow.scss", {
+        ...functionDef,
+        label: "scoped user function owns the predicate",
+        staticNeedle: "width: inset()",
+        lookups: ['function-exists("inset")'],
+        partial: false,
+      });
+      await check("fn-owned.scss", {
+        ...functionDef,
+        label: "cross-file user function owns the predicate",
+        staticNeedle: "width: inset()",
+        lookups: ['function-exists("inset")'],
+        partial: false,
+        rename: true,
+      });
+      expect(await scssGoto(project, "fn-owned.scss", "function-exists")).toBe("_fns.scss:1");
+      await check("fn-project-meta.scss", {
+        ...functionDef,
+        label: "project module named like meta",
+        staticNeedle: "width: inset()",
+        lookups: ['m.get-function("inset")'],
+        partial: false,
+      });
+      expect(await scssGoto(project, "fn-project-meta.scss", "m.get-function", 0, 2)).toBe("_m.scss:1");
+      await check("_partial.scss", {
+        ...functionDef,
+        label: "inherited sass:meta",
+        staticNeedle: "width: inset()",
+        lookups: ['m.get-function("inset")'],
+        partial: true,
+        rename: true,
+      });
+      await check("mx-exists.scss", {
+        ...mixinDef,
+        label: "mixin-exists",
+        staticNeedle: "@include inset",
+        lookups: ['mixin-exists("inset")'],
+        partial: true,
+        rename: true,
+      });
+      await check("mx-spell.scss", {
+        ...mixinDef,
+        label: "mixin spelling",
+        defNeedle: "@mixin in-set",
+        symbolName: "in-set",
+        staticNeedle: "@include in_set",
+        lookups: ['mixin_exists("in_set")'],
+        partial: true,
+      });
+      await check("mx-meta.scss", {
+        ...mixinDef,
+        label: "meta.get-mixin",
+        staticNeedle: "@include inset",
+        lookups: ['meta.get-mixin("inset")'],
+        partial: true,
+        rename: true,
+      });
+      await check("mx-other.scss", {
+        ...mixinDef,
+        label: "function lookup does not name a mixin",
+        staticNeedle: "@include inset",
+        lookups: ['function-exists("inset")', 'call("inset")'],
+        partial: false,
+        rename: true,
+      });
+      await check("mx-outside.scss", {
+        ...mixinDef,
+        label: "mixin lookup outside the block",
+        staticNeedle: "@include inset",
+        lookups: ['mixin-exists("inset")'],
+        partial: false,
+        rename: true,
+      });
+
+      const oneline = files["fn-oneline.scss"];
+      const onelineRefs = await findReferences(
+        project.index,
+        project.position("fn-oneline.scss", "@function inset", 0, "@function ".length),
+      );
+      if (onelineRefs.status !== "ok") throw new Error(onelineRefs.reason);
+      const columns = onelineRefs.references.map((reference) => reference.range.start.column).sort((a, b) => a - b);
+      expect(columns).toEqual([modulePosition(oneline, "inset", 0).column, modulePosition(oneline, "inset", 1).column]);
+      expect(columns).not.toContain(modulePosition(oneline, "inset", 2).column);
+      expect(onelineRefs.referenceCoverage?.state).toBe("partial");
+    });
+  });
 });

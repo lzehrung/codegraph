@@ -1118,6 +1118,97 @@ describe("rename preview", () => {
     }
   });
 
+  it("marks a scoped function rename unsafe when a lookup in its block is left unchanged", async () => {
+    const cases = [
+      [
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        '  exists: function-exists("inset");',
+        "}",
+        "",
+      ],
+      [".a {", "  @function inset() { @return 1px; }", "  width: inset();", '  f: call("inset");', "}", ""],
+      [
+        '@use "sass:meta";',
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        '  f: meta.get-function("inset");',
+        "}",
+        "",
+      ],
+      [".a {", "  @mixin inset { color: blue; }", "  @include inset;", '  exists: mixin-exists("inset");', "}", ""],
+    ];
+    for (const lines of cases) {
+      const root = await mkTmpDir("cg-rename-scss-scoped-lookup-");
+      const source = lines.join("\n");
+      await fsp.writeFile(path.join(root, "main.scss"), source);
+      const defLine = lines.findIndex((line) => line.includes("@function inset") || line.includes("@mixin inset")) + 1;
+      const callLine = lines.findIndex((line) => line.includes("width:") || line.includes("@include")) + 1;
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      try {
+        const symbols = await workspaceSymbolsWithSession(session, { root, query: "inset" });
+        const target = symbols.symbols.find(
+          (symbol) => symbol.location.file.endsWith("main.scss") && symbol.name === "inset",
+        );
+        expect(target, source).toBeDefined();
+        const renamed = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "shift" });
+        expect(renamed.safe, source).toBe(false);
+        expect(
+          renamed.unsafeSites.some((site) => site.reason === "unresolved_reference"),
+          source,
+        ).toBe(true);
+        expect(
+          renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText]),
+          source,
+        ).toEqual([
+          ["definition", defLine, "inset", "shift"],
+          ["reference", callLine, "inset", "shift"],
+        ]);
+      } finally {
+        session.invalidate();
+      }
+    }
+  });
+
+  it("keeps a scoped callable rename safe when the lookup is outside its block", async () => {
+    const root = await mkTmpDir("cg-rename-scss-scoped-lookup-out-");
+    await fsp.writeFile(
+      path.join(root, "main.scss"),
+      [
+        '@use "sass:meta";',
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        "}",
+        ".b {",
+        '  exists: function-exists("inset");',
+        '  f: call("inset");',
+        '  g: meta.get-function("inset");',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "inset" });
+      const target = symbols.symbols.find(
+        (symbol) => symbol.location.file.endsWith("main.scss") && symbol.name === "inset",
+      );
+      expect(target).toBeDefined();
+      const renamed = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "shift" });
+      expect(renamed.safe).toBe(true);
+      expect(renamed.unsafeSites).toEqual([]);
+      expect(renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["definition", 3, "inset", "shift"],
+        ["reference", 4, "inset", "shift"],
+      ]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
   it("O6: correctly handles 100 and 101 candidate test boundaries in rename preview", async () => {
     const root100 = await mkTmpDir("cg-rename-test-100-");
     await fsp.writeFile(path.join(root100, "service.ts"), "export function service(): number { return 1; }\n");

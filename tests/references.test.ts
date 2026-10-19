@@ -6873,4 +6873,56 @@ describe("Find References: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps proved scoped calls and marks coverage partial when a lookup in the block may name the callable", async () => {
+    const inside = [
+      ".a {",
+      "  @function inset() { @return 1px; }",
+      "  width: inset();",
+      '  exists: function-exists("inset");',
+      "}",
+      "",
+    ].join("\n");
+    const lines = inside.split("\n");
+    const { root, paths, index } = await scssProject({ "main.scss": inside });
+    try {
+      const expected = [
+        { file: paths["main.scss"]!, line: 2, column: tokenColumn(lines[1]!, "inset") },
+        { file: paths["main.scss"]!, line: 3, column: tokenColumn(lines[2]!, "inset") },
+      ];
+      const result = await testFindReferences(index, paths["main.scss"]!, 2, expected[0]!.column, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("partial");
+      expect(result.status === "ok" ? result.referenceCoverage?.reasons : undefined).toContain("strategy_unavailable");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let a lookup outside a scoped callable's block affect its references", async () => {
+    const outside = [
+      '@use "sass:meta";',
+      ".a {",
+      "  @function inset() { @return 1px; }",
+      "  width: inset();",
+      "}",
+      ".b {",
+      '  exists: function-exists("inset");',
+      '  f: call("inset");',
+      '  g: meta.get-function("inset");',
+      "}",
+      "",
+    ].join("\n");
+    const lines = outside.split("\n");
+    const { root, paths, index } = await scssProject({ "main.scss": outside });
+    try {
+      const expected = [
+        { file: paths["main.scss"]!, line: 3, column: tokenColumn(lines[2]!, "inset") },
+        { file: paths["main.scss"]!, line: 4, column: tokenColumn(lines[3]!, "inset") },
+      ];
+      const result = await testFindReferences(index, paths["main.scss"]!, 3, expected[0]!.column, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

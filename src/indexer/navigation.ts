@@ -114,6 +114,7 @@ import {
   scssFlowLocalUnproven,
   scssLocalSpellingGap,
   scssMemberForDefinition,
+  scssScopedCallableDynamicUnproven,
   scssScopedCallableReferences,
 } from "../scss/resolution.js";
 import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
@@ -1595,6 +1596,9 @@ async function findReferencesInternal(
       refs.length = 0;
       refs.push(...kept);
       for (const range of scoped.ranges) pushRef({ file: definitionFile, range });
+      // Those static uses stay. A lookup in the same span may still name the callable by a
+      // string, which this walk does not edit, so coverage must not claim to be complete.
+      if (await scssScopedCallableDynamicUnproven(index, definition)) scssScopedCallableUnproven = true;
     }
   }
 
