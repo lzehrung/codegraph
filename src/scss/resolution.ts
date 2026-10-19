@@ -1,7 +1,7 @@
 import path from "node:path";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { sameDef } from "../indexer/reference-context.js";
-import type { ModuleIndex, ProjectIndex, SymbolDef } from "../indexer/types.js";
+import { SymbolKind, type ModuleIndex, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isNativeRequiredUnavailableError } from "../native/runtime.js";
 import type { FileId, Range } from "../types.js";
@@ -16,6 +16,7 @@ import {
   SCSS_LANGUAGE_ID,
   scssOffsetAt,
   scssOffsetRange,
+  type ScssCallableLocal,
   type ScssFileFacts,
   type ScssLocalBinding,
   type ScssMemberKind,
@@ -1584,6 +1585,109 @@ function readsMember(use: ScssUse): boolean {
 }
 
 export type ScssRenameSite = { file: FileId; range: Range };
+
+/**
+ * The scoped mixin or function that owns a bare use at `at`.
+ * Scope runs from the end of the name to the end of the containing block. The nearest same-kind
+ * callable with that Sass name (`-` and `_` equivalent) wins. `renamed` treats one local as if it
+ * already had a different name, which is how a rename captures calls.
+ */
+function nearestScopedCallable(
+  facts: ScssFileFacts,
+  kind: ScssCallableLocal["kind"],
+  canonical: string,
+  at: number,
+  renamed?: { local: ScssCallableLocal; canonical: string },
+): ScssCallableLocal | undefined {
+  let best: ScssCallableLocal | undefined;
+  for (const candidate of facts.callableLocals) {
+    if (candidate.kind !== kind) continue;
+    const name = renamed && candidate === renamed.local ? renamed.canonical : candidate.canonical;
+    if (name !== canonical || at < candidate.from || at >= candidate.to) continue;
+    if (!best || candidate.from >= best.from) best = candidate;
+  }
+  return best;
+}
+
+function scopedCallableLocal(facts: ScssFileFacts, def: SymbolDef): ScssCallableLocal | undefined {
+  const end = def.range.end.index;
+  if (end === undefined || def.kind !== SymbolKind.Function) return undefined;
+  const canonical = sassCanonical(def.localName);
+  return facts.callableLocals.find((candidate) => candidate.from === end && candidate.canonical === canonical);
+}
+
+/**
+ * Bare same-kind calls and includes a scoped mixin or function owns.
+ * Null when `def` is not a scoped callable. `unproven` when the file cannot be scanned, so
+ * coverage must not claim to be complete.
+ */
+export async function scssScopedCallableReferences(
+  index: ProjectIndex,
+  def: SymbolDef,
+): Promise<{ ranges: Range[]; unproven: boolean } | null> {
+  if (!isScssFile(index, def.file) || def.kind !== SymbolKind.Function) return null;
+  const facts = await scssFactsForFile(index, def.file);
+  if (!facts || def.range.end.index === undefined) return { ranges: [], unproven: true };
+  const local = scopedCallableLocal(facts, def);
+  if (!local) return null;
+  const syntax = local.kind === "mixin" ? "include" : "call";
+  const ranges: Range[] = [];
+  for (const use of facts.uses) {
+    if (use.namespace !== null || use.kind !== local.kind || use.syntax !== syntax) continue;
+    if (nearestScopedCallable(facts, local.kind, use.canonical, use.nameStart) !== local) continue;
+    ranges.push(scssOffsetRange(facts, use.nameStart, use.nameEnd));
+  }
+  return { ranges, unproven: false };
+}
+
+/**
+ * A scoped callable is not a module member. Check calls the proposed name would capture and calls
+ * of the original name that the reference walk still omitted. Only a use this local owns counts:
+ * a nearer scoped callable of the same kind keeps its own calls. Null means `def` is not a scoped
+ * callable.
+ */
+export async function scssScopedCallableRenameSites(
+  index: ProjectIndex,
+  def: SymbolDef,
+  newName: string,
+  references: readonly Reference[],
+): Promise<{ captured: ScssRenameSite[]; unaccounted: Array<ScssRenameSite & { text: string }> } | null> {
+  const model = await projectModel(index);
+  const current = model.files.get(fileIdentityKey(def.file));
+  if (!current) return null;
+  const local = scopedCallableLocal(current.facts, def);
+  if (!local) return null;
+  const next = sassCanonical(newName);
+  const syntax = local.kind === "mixin" ? "include" : "call";
+  const covered = new Set<number>();
+  for (const reference of references) {
+    if (fileIdentityKey(reference.file) === current.key && reference.range.start.index !== undefined) {
+      covered.add(reference.range.start.index);
+    }
+  }
+  const captured: ScssRenameSite[] = [];
+  const unaccounted: Array<ScssRenameSite & { text: string }> = [];
+  const renamed = { local, canonical: next };
+  for (const use of current.facts.uses) {
+    if (use.namespace !== null || use.kind !== local.kind || use.syntax !== syntax) continue;
+    const range = scssOffsetRange(current.facts, use.nameStart, use.nameEnd);
+    if (
+      next !== local.canonical &&
+      use.canonical === next &&
+      nearestScopedCallable(current.facts, local.kind, next, use.nameStart, renamed) === local
+    ) {
+      captured.push({ file: current.file, range });
+    }
+    if (
+      use.canonical === local.canonical &&
+      nearestScopedCallable(current.facts, local.kind, local.canonical, use.nameStart) === local &&
+      !covered.has(use.nameStart)
+    ) {
+      unaccounted.push({ file: current.file, range, text: use.text });
+    }
+  }
+  return { captured, unaccounted };
+}
 
 /** True when a file that sees `def` forwards it through a `show` or `hide` list. */
 function isForwardedThroughList(model: ProjectModel, files: readonly FileId[], def: SymbolDef): boolean {

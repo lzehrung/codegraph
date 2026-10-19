@@ -6827,4 +6827,50 @@ describe("Find References: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("includes a nested function call and keeps an include outside the block on the outer mixin", async () => {
+    const main = [
+      "@function inset() { @return 1px; }",
+      "@mixin inset { color: red; }",
+      ".a {",
+      "  width: inset();",
+      "  @include inset;",
+      "  @function inset() { @return inset(1); }",
+      "  @mixin inset { color: blue; }",
+      "  width: inset();",
+      "  @include inset;",
+      "}",
+      ".b { width: inset(); @include inset; }",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await scssProject({ "main.scss": main });
+    const lines = main.split("\n");
+    const at = (line: number, token: string, occurrence = 0) => ({
+      file: paths["main.scss"]!,
+      line,
+      column: tokenColumn(lines[line - 1]!, token, occurrence),
+    });
+    try {
+      const nestedFn = [at(6, "inset", 0), at(6, "inset", 1), at(8, "inset")];
+      const fn = await testFindReferences(index, paths["main.scss"]!, 6, nestedFn[0]!.column, nestedFn);
+      expect(fn.status === "ok" ? fn.referenceCoverage?.state : undefined).toBe("complete");
+      const nestedMixin = [at(7, "inset"), at(9, "inset")];
+      const mixin = await testFindReferences(index, paths["main.scss"]!, 7, nestedMixin[0]!.column, nestedMixin);
+      expect(mixin.status === "ok" ? mixin.referenceCoverage?.state : undefined).toBe("complete");
+      const outerFn = [at(1, "inset"), at(4, "inset"), at(11, "inset", 0)];
+      const outerFnResult = await testFindReferences(index, paths["main.scss"]!, 1, outerFn[0]!.column, outerFn);
+      expect(outerFnResult.status === "ok" ? outerFnResult.referenceCoverage?.state : undefined).toBe("complete");
+      const outerMixin = [at(2, "inset"), at(5, "inset"), at(11, "inset", 1)];
+      const outerMixinResult = await testFindReferences(
+        index,
+        paths["main.scss"]!,
+        2,
+        outerMixin[0]!.column,
+        outerMixin,
+      );
+      expect(outerMixinResult.status === "ok" ? outerMixinResult.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

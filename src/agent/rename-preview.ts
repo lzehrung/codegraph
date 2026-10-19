@@ -47,6 +47,7 @@ import {
   scssMemberForDefinition,
   scssRenameCollisions,
   scssRenameUseConflicts,
+  scssScopedCallableRenameSites,
   scssRenamedName,
   scssReplacementText,
 } from "../scss/resolution.js";
@@ -372,10 +373,10 @@ export async function previewRenameInSnapshot(
   const boundedCandidates = boundList(allCandidates, maxEdits);
   const candidateLimitExceeded = boundedCandidates.omitted > 0;
   const candidates = boundedCandidates.items;
-  await addScopeConflicts(snapshot, resolved.def, newName, selectedReferences, conflicts);
+  await addScopeConflicts(snapshot, resolved.def, newName, selectedReferences, conflicts, unsafeSites, provenance);
   for (const definition of semanticDefinitions.values()) {
     if (defNodeId(definition) === resolved.id) continue;
-    await addScopeConflicts(snapshot, definition, newName, [], conflicts);
+    await addScopeConflicts(snapshot, definition, newName, [], conflicts, unsafeSites, provenance);
   }
   // Terraform exports inputs and outputs in separate namespaces; addTerraformConflicts checks them.
   if (!isTerraformFile(snapshot.index, resolved.def.file) && !isScssFile(snapshot.index, resolved.def.file)) {
@@ -725,15 +726,44 @@ async function addScopeConflicts(
   newName: string,
   references: readonly Reference[],
   conflicts: RenameConflict[],
+  unsafeSites: RenameUnsafeSite[],
+  provenance: SemanticProvenance,
 ): Promise<void> {
   if (isTerraformFile(snapshot.index, target.file)) {
     await addTerraformConflicts(snapshot, target, newName, references, conflicts);
     return;
   }
-  // A selector or a block-level variable is no module member, so the scope checks below apply.
-  if (isScssFile(snapshot.index, target.file) && (await scssMemberForDefinition(snapshot.index, target))) {
-    await addScssConflicts(snapshot, target, newName, conflicts);
-    return;
+  if (isScssFile(snapshot.index, target.file)) {
+    if (await scssMemberForDefinition(snapshot.index, target)) {
+      await addScssConflicts(snapshot, target, newName, conflicts);
+      return;
+    }
+    const scoped = await scssScopedCallableRenameSites(snapshot.index, target, newName, references);
+    if (scoped) {
+      for (const capture of scoped.captured) {
+        const file = normalizeAgentFilePath(snapshot.root, capture.file);
+        conflicts.push({
+          file,
+          location: { file, range: capture.range },
+          reason: "shadowing",
+          message: `A scoped callable renamed to "${newName}" would capture this unqualified call.`,
+        });
+      }
+      for (const site of scoped.unaccounted) {
+        const file = normalizeAgentFilePath(snapshot.root, site.file);
+        unsafeSites.push({
+          location: { file, range: site.range },
+          text: site.text,
+          reason: "unresolved_reference",
+          provenance: {
+            ...provenance,
+            confidence: "low",
+            reason: "Scoped callable reference was not included in the semantic rename edits.",
+          },
+        });
+      }
+      return;
+    }
   }
   const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(target.file));
   if (!moduleIndex) return;

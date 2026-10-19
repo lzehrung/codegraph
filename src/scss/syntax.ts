@@ -1,6 +1,6 @@
 import type { Range } from "../types.js";
 import { collectLineStartOffsets, positionAtOffset } from "../util/lines.js";
-import { buildTriviaMask } from "../util/trivia.js";
+import { buildTriviaMask, skipScssEscape } from "../util/trivia.js";
 
 /**
  * SCSS module facts read from source text.
@@ -259,28 +259,6 @@ export function scssOffsetAt(facts: ScssFileFacts, line: number, column: number)
 
 function isSpaceUnit(unit: number): boolean {
   return unit === 0x20 || unit === 0x09 || unit === 0x0a || unit === 0x0d || unit === 0x0c;
-}
-
-function isHexUnit(unit: number): boolean {
-  return (unit >= 0x30 && unit <= 0x39) || (unit >= 0x41 && unit <= 0x46) || (unit >= 0x61 && unit <= 0x66);
-}
-
-function skipScssEscape(source: string, index: number): number {
-  const next = index + 1;
-  if (next >= source.length) return source.length;
-  const unit = source.charCodeAt(next);
-  if (unit === 0x0a || unit === 0x0c) return next + 1;
-  if (unit === 0x0d) return source.charCodeAt(next + 1) === 0x0a ? next + 2 : next + 1;
-  if (isHexUnit(unit)) {
-    let cursor = next + 1;
-    const limit = Math.min(source.length, next + 6);
-    while (cursor < limit && isHexUnit(source.charCodeAt(cursor))) cursor += 1;
-    const space = source.charCodeAt(cursor);
-    if (space === 0x20 || space === 0x09 || space === 0x0a || space === 0x0c) return cursor + 1;
-    if (space === 0x0d) return source.charCodeAt(cursor + 1) === 0x0a ? cursor + 2 : cursor + 1;
-    return cursor;
-  }
-  return next + 1;
 }
 
 function isIdentStart(unit: number): boolean {

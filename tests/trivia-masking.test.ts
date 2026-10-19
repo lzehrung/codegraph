@@ -169,6 +169,21 @@ describe("trivia masking keeps following code visible per language", () => {
     expect(masked).not.toContain(" c ");
     expect(masked).toContain(" d { content: ");
   });
+  it("treats only unescaped SCSS quote and comment starters as trivia", () => {
+    const escaped = ["\\" + '"', "\\" + "'", "\\//icon", "\\".repeat(3) + '"', "\\".repeat(3) + "//icon"];
+    for (const value of escaped) {
+      const source = `$x: 1; .a { content: ${value}; width: $x; }\n$later: 2;\n`;
+      const mask = buildTriviaMask(source, "scss", { holes: true });
+      expect(mask[source.indexOf(value)]).toBe(0);
+      expect(mask[source.indexOf("width: $x") + "width: ".length]).toBe(0);
+      expect(mask[source.indexOf("$later")]).toBe(0);
+    }
+    const even = "$x: 1; .a { content: " + "\\".repeat(2) + '"real"; width: $x; }\n$later: 2;\n';
+    const mask = buildTriviaMask(even, "scss", { holes: true });
+    expect(mask[even.indexOf('"real"')]).toBe(1);
+    expect(mask[even.indexOf("width: $x") + "width: ".length]).toBe(0);
+    expect(mask[even.indexOf("$later")]).toBe(0);
+  });
 
   it("masks an SCSS line comment through the line break, so an apostrophe in it opens no string", () => {
     const source = "// Bootstrap's grid\n$primary: red;\n.a { content: 'x'; } // it's done\n$later: 1;\n";

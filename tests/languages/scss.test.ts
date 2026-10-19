@@ -3921,6 +3921,62 @@ describe("SCSS module navigation: nested callables, legacy call, comments, and e
       expect(await scssGoto(project, "main.scss", "pad()", 4)).toBe("main.scss:1");
     });
   });
+  it("includes nested callable calls inside the declaring block", async () => {
+    const source = [
+      "@function in-set() { @return 1px; }",
+      "@mixin in-set { color: red; }",
+      ".a {",
+      "  width: in-set();",
+      "  @include in-set;",
+      "  @function in-set() { @return in_set(1); }",
+      "  @mixin in-set { color: blue; }",
+      "  width: in_set();",
+      "  width: in-set();",
+      "  @include in_set;",
+      "  @include in-set;",
+      "  .b {",
+      "    @function in_set() { @return 3px; }",
+      "    width: in-set();",
+      "  }",
+      "  width: in_set();",
+      "}",
+      ".c { width: in-set(); @include in-set; }",
+      "",
+    ].join("\n");
+    const linesOf = (sites: string[]): number[] =>
+      sites.map((site) => Number(site.split(":")[1])).sort((left, right) => left - right);
+    await withScssProject({ "main.scss": source }, async (project) => {
+      const fn = await scssRefs(project, "main.scss", "@function in-set", 1, "@function ".length);
+      expect(fn.coverage?.state).toBe("complete");
+      expect(linesOf(fn.sites)).toEqual([6, 6, 8, 9, 16]);
+      const mixin = await scssRefs(project, "main.scss", "@mixin in-set", 1, "@mixin ".length);
+      expect(mixin.coverage?.state).toBe("complete");
+      expect(linesOf(mixin.sites)).toEqual([7, 10, 11]);
+      const inner = await scssRefs(project, "main.scss", "@function in_set", 0, "@function ".length);
+      expect(linesOf(inner.sites)).toEqual([13, 14]);
+      const outerFn = await scssRefs(project, "main.scss", "@function in-set", 0, "@function ".length);
+      expect(outerFn.coverage?.state).toBe("complete");
+      expect(linesOf(outerFn.sites)).toEqual([1, 4, 18]);
+      const outerMixin = await scssRefs(project, "main.scss", "@mixin in-set", 0, "@mixin ".length);
+      expect(linesOf(outerMixin.sites)).toEqual([2, 5, 18]);
+    });
+    const inset = [
+      "@function inset() { @return 1px; }",
+      ".a {",
+      "  @function inset() { @return 2px; }",
+      "  width: inset();",
+      "}",
+      ".b { width: inset(); }",
+      "",
+    ].join("\n");
+    await withScssProject({ "main.scss": inset }, async (project) => {
+      const refs = await scssRefs(project, "main.scss", "@function inset", 1, "@function ".length);
+      expect(refs.coverage?.state).toBe("complete");
+      expect(linesOf(refs.sites)).toEqual([3, 4]);
+      const outer = await scssRefs(project, "main.scss", "@function inset", 0, "@function ".length);
+      expect(linesOf(outer.sites)).toEqual([1, 6]);
+    });
+  });
   it("treats legacy call of a string name as a dynamic lookup", async () => {
     const dynamic = ["@function pad() { @return 1px; }", '.a { width: call("pad"); }', ""].join("\n");
     expect(extractScssFacts(dynamic).dynamics.map((entry) => entry.form + ":" + entry.arg)).toEqual(["call:pad"]);
@@ -4173,5 +4229,45 @@ describe("SCSS module navigation: nested callables, legacy call, comments, and e
         ]);
       },
     );
+  });
+  it("keeps references and later module declarations after escaped SCSS quotes and comment openers", async () => {
+    const cases: Array<[string, string]> = [
+      ["double quote", "\\" + '"'],
+      ["single quote", "\\" + "'"],
+      ["slash", "\\//icon"],
+      ["odd quote escapes", "\\".repeat(3) + '"'],
+      ["even quote escapes", "\\".repeat(2) + '"real"'],
+      ["odd slash escapes", "\\".repeat(3) + "//icon"],
+      ["interpolation quote", "#{" + "\\" + '"}'],
+      ["interpolation slash", '"' + "#{" + "\\//icon}" + '"'],
+    ];
+    for (const [label, value] of cases) {
+      const source = [
+        "$x: 1;",
+        ".a {",
+        `  content: ${value};`,
+        "  width: $x;",
+        "}",
+        "$later: 2;",
+        ".b { width: $later; }",
+        "",
+      ].join("\n");
+      await withScssProject(
+        { "_vars.scss": source, "main.scss": '@use "vars";\n.c { width: vars.$later; }\n' },
+        async (project) => {
+          expect(
+            extractScssFacts(source).declarations.map((declaration) => declaration.name),
+            label,
+          ).toEqual(["$x", "$later"]);
+          expect(await scssGoto(project, "_vars.scss", "width: $x", 0, 7), label).toBe("_vars.scss:1");
+          expect(await scssGoto(project, "main.scss", "$later"), label).toBe("_vars.scss:6");
+          const x = await scssRefs(project, "_vars.scss", "$x");
+          expect(x.sites, label).toEqual(["_vars.scss:1", "_vars.scss:4"]);
+          const later = await scssRefs(project, "_vars.scss", "$later");
+          expect(later.sites, label).toEqual(["_vars.scss:6", "_vars.scss:7", "main.scss:2"]);
+          expect(later.coverage?.state, label).toBe("complete");
+        },
+      );
+    }
   });
 });

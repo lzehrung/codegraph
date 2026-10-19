@@ -73,6 +73,8 @@ export type TriviaRow = {
    * `url(http://x/y.png)` has no comment. The text stays visible unless the caller sets `maskCssUrls`.
    */
   unquotedCssUrl?: boolean;
+  /** SCSS: consume a backslash escape before looking for comments or string delimiters in code. */
+  unquotedEscapes?: boolean;
   /** Interpolation inside a block comment is code. Line comments stay fully masked. */
   commentInterpolation?: TriviaInterpolation;
 };
@@ -227,6 +229,7 @@ const SCSS_ROW: TriviaRow = {
   ],
   unquotedCssUrl: true,
   commentInterpolation: { start: "#{", end: "}", excludeFromMask: true },
+  unquotedEscapes: true,
 };
 
 const C_FAMILY_ROW: TriviaRow = {

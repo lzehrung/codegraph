@@ -999,6 +999,124 @@ describe("rename preview", () => {
       }
     }
   });
+  it("renames a scoped function together with the local calls it owns", async () => {
+    const root = await mkTmpDir("cg-rename-scss-local-function-");
+    await fsp.writeFile(path.join(root, "_lib.scss"), "@function inset() { @return 9px; }\n");
+    await fsp.writeFile(
+      path.join(root, "main.scss"),
+      [
+        '@use "lib" as lib;',
+        ".a {",
+        "  @function inset() { @return 2px; }",
+        "  width: inset();",
+        "  width: lib.inset();",
+        "}",
+        ".b { width: lib.inset(); }",
+        "",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "inset" });
+      const local = symbols.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === "inset");
+      expect(local).toBeDefined();
+      const renamed = await previewRenameWithSession(session, { root, handle: local!.handle, newName: "shift" });
+      expect(renamed.safe).toBe(true);
+      expect(renamed.conflicts).toEqual([]);
+      expect(renamed.unsafeSites).toEqual([]);
+      expect(renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["definition", 3, "inset", "shift"],
+        ["reference", 4, "inset", "shift"],
+      ]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("renames a scoped mixin's underscore include and leaves an include outside the block", async () => {
+    const root = await mkTmpDir("cg-rename-scss-local-mixin-spell-");
+    await fsp.writeFile(
+      path.join(root, "main.scss"),
+      [".a {", "  @mixin in-set { color: blue; }", "  @include in_set;", "}", ".b { @include in-set; }", ""].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "in-set" });
+      const local = symbols.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === "in-set");
+      expect(local).toBeDefined();
+      const renamed = await previewRenameWithSession(session, { root, handle: local!.handle, newName: "shift" });
+      expect(renamed.safe).toBe(true);
+      expect(renamed.unsafeSites).toEqual([]);
+      expect(renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["definition", 2, "in-set", "shift"],
+        ["reference", 3, "in_set", "shift"],
+      ]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("keeps a scoped mixin rename safe when its local include is already proven", async () => {
+    const root = await mkTmpDir("cg-rename-scss-proven-mixin-");
+    await fsp.writeFile(path.join(root, "main.scss"), ".a {\n  @mixin inset { color: blue; }\n  @include inset;\n}\n");
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "inset" });
+      const local = symbols.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === "inset");
+      expect(local).toBeDefined();
+      const renamed = await previewRenameWithSession(session, { root, handle: local!.handle, newName: "shift" });
+      expect(renamed.safe).toBe(true);
+      expect(renamed.edits.map((edit) => [edit.kind, edit.range.start.line])).toEqual([
+        ["definition", 2],
+        ["reference", 3],
+      ]);
+      expect(renamed.unsafeSites).toEqual([]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("rejects an inverse scoped callable rename that captures an existing module call", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      const root = await mkTmpDir("cg-rename-scss-inverse-callable-");
+      const declaration = kind === "mixin" ? "@mixin pad { color: red; }" : "@function pad() { @return 1px; }";
+      const localBody = kind === "mixin" ? " { color: blue; }" : "() { @return 2px; }";
+      const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+      await fsp.writeFile(path.join(root, "_lib.scss"), declaration + "\n");
+      await fsp.writeFile(
+        path.join(root, "main.scss"),
+        [
+          '@use "lib" as *;',
+          '@use "lib" as lib;',
+          ".a {",
+          `  ${call("pad")}`,
+          `  @${kind} inset${localBody}`,
+          `  ${call("inset")}`,
+          `  ${call("pad")}`,
+          `  ${call("lib.pad")}`,
+          "}",
+          `.b { ${call("pad")} }`,
+          "",
+        ].join("\n"),
+      );
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      try {
+        const symbols = await workspaceSymbolsWithSession(session, { root, query: "inset" });
+        const target = symbols.symbols.find(
+          (symbol) => symbol.location.file === "main.scss" && symbol.name === "inset",
+        );
+        expect(target, kind).toBeDefined();
+        const renamed = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "pad" });
+        expect(renamed.safe, kind).toBe(false);
+        expect(
+          renamed.conflicts.map(({ file, reason, location }) => [file, reason, location?.range.start.line]),
+        ).toEqual([["main.scss", "shadowing", 7]]);
+        expect(renamed.edits.map((edit) => edit.range.start.line)).not.toContain(7);
+      } finally {
+        session.invalidate();
+      }
+    }
+  });
 
   it("O6: correctly handles 100 and 101 candidate test boundaries in rename preview", async () => {
     const root100 = await mkTmpDir("cg-rename-test-100-");

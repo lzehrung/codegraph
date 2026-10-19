@@ -114,6 +114,7 @@ import {
   scssFlowLocalUnproven,
   scssLocalSpellingGap,
   scssMemberForDefinition,
+  scssScopedCallableReferences,
 } from "../scss/resolution.js";
 import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
 import {
@@ -1554,6 +1555,32 @@ async function findReferencesInternal(
     }
   }
 
+  // A scoped mixin or function is not a module member. The scope walker misses function calls
+  // (`function_name` is not an identifier) and treats `-` and `_` as different spellings, and a
+  // later include outside the block can attach to the nested mixin. Bare same-kind calls and
+  // includes inside the scanned scope are the references; anything else the walker added is not.
+  let scssScopedCallableUnproven = false;
+  if (parsedContext.sup.id === "scss") {
+    const scoped = await scssScopedCallableReferences(index, definition);
+    if (scoped?.unproven) {
+      scssScopedCallableUnproven = true;
+    } else if (scoped) {
+      const owned = new Set(scoped.ranges.map((range) => referenceSiteKey(definitionFile, range)));
+      const definitionKey = referenceSiteKey(definition.file, definition.range);
+      const kept: Reference[] = [];
+      seenRefs.clear();
+      for (const ref of refs) {
+        const key = referenceSiteKey(ref.file, ref.range);
+        if (key !== definitionSiteKey && key !== definitionKey && !owned.has(key)) continue;
+        seenRefs.set(key, kept.length);
+        kept.push(ref);
+      }
+      refs.length = 0;
+      refs.push(...kept);
+      for (const range of scoped.ranges) pushRef({ file: definitionFile, range });
+    }
+  }
+
   const truncated = maxReferences !== undefined && refs.length > maxReferences;
   if (truncated) {
     refs.length = maxReferences;
@@ -1617,6 +1644,7 @@ async function findReferencesInternal(
     if (await scssFlowLocalUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
     if (await scssBlockLocalExistenceUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
   }
+  if (scssScopedCallableUnproven) strategyUnavailableFiles.push(definition.file);
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,
     def: definition,

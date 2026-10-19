@@ -19,6 +19,29 @@ export type TriviaMaskOptions = {
   maskCssUrls?: boolean;
 };
 
+function isHexUnit(unit: number): boolean {
+  return (unit >= 0x30 && unit <= 0x39) || (unit >= 0x41 && unit <= 0x46) || (unit >= 0x61 && unit <= 0x66);
+}
+
+/** Skip one SCSS escape, including a hex escape's optional whitespace terminator. */
+export function skipScssEscape(source: string, index: number): number {
+  const next = index + 1;
+  if (next >= source.length) return source.length;
+  const unit = source.charCodeAt(next);
+  if (unit === 0x0a || unit === 0x0c) return next + 1;
+  if (unit === 0x0d) return source.charCodeAt(next + 1) === 0x0a ? next + 2 : next + 1;
+  if (isHexUnit(unit)) {
+    let cursor = next + 1;
+    const limit = Math.min(source.length, next + 6);
+    while (cursor < limit && isHexUnit(source.charCodeAt(cursor))) cursor += 1;
+    const space = source.charCodeAt(cursor);
+    if (space === 0x20 || space === 0x09 || space === 0x0a || space === 0x0c) return cursor + 1;
+    if (space === 0x0d) return source.charCodeAt(cursor + 1) === 0x0a ? cursor + 2 : cursor + 1;
+    return cursor;
+  }
+  return next + 1;
+}
+
 /**
  * Builds a UTF-16-unit mask over `source` marking comments and (when `maskStrings`) string
  * literals for `languageId`'s trivia row. With `holes`, only the literal shell of an
@@ -97,6 +120,10 @@ function buildMarkedMask(
   const length = source.length;
   let index = 0;
   while (index < length) {
+    if (row.unquotedEscapes && source.charCodeAt(index) === 0x5c) {
+      index = skipScssEscape(source, index);
+      continue;
+    }
     if (!starters[source.charCodeAt(index)]) {
       index += 1;
       continue;
@@ -668,6 +695,10 @@ function collectInterpolationSpans(
       }
     }
     const ch = source[cursor];
+    if (row.unquotedEscapes && ch === "\\") {
+      cursor = skipScssEscape(source, cursor);
+      continue;
+    }
     if (source.startsWith(interpolation.end, cursor)) {
       depth -= 1;
       if (!depth) return { end: cursor + interpolation.end.length, spans };
