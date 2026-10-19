@@ -44,6 +44,7 @@ import { ensurePhpNamespaceSymbolIndex, phpReferenceRoleMatchesKind } from "./ph
 import {
   buildIndexedCandidateCoverage,
   buildPhpQualifiedNames,
+  markNameEquivalenceGap,
   cppCanonicalStructuralExport,
   describeReferenceStrategies,
   collectVerifiedNamedNodeReferences,
@@ -107,6 +108,7 @@ import {
 } from "./types.js";
 import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
 import { findScssReferences, goToScssDefinition } from "../scss/navigation.js";
+import { scssFactsForFile, scssFlowLocalUnproven, scssLocalSpellingGap } from "../scss/resolution.js";
 import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
 import {
   createLoadingParsedFileProvider,
@@ -1573,6 +1575,15 @@ async function findReferencesInternal(
           parsedContext.sup.id === "csharp" ? { csharpQualifiedName: true } : undefined,
         ).complete
       : await sharedOwnerMemberUnitComplete(index, definition);
+  const strategyUnavailableFiles = [
+    ...receiverProofUnavailableFiles.values(),
+    ...(rubyReopen?.incomplete ? [definition.file] : []),
+  ];
+  if (parsedContext.sup.id === "scss" && definition.localName.startsWith("$")) {
+    const facts = await scssFactsForFile(index, definition.file);
+    if (facts && scssLocalSpellingGap(facts, definition)) markNameEquivalenceGap(index, definition);
+    if (await scssFlowLocalUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
+  }
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,
     def: definition,
@@ -1597,10 +1608,7 @@ async function findReferencesInternal(
         ? { implicitUnitPeers: { applicable: true, executed: implicitUnitComplete } }
         : {}),
     }),
-    strategyUnavailableFiles: [
-      ...receiverProofUnavailableFiles.values(),
-      ...(rubyReopen?.incomplete ? [definition.file] : []),
-    ],
+    strategyUnavailableFiles,
   });
 
   return {

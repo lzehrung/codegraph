@@ -250,6 +250,10 @@ async function phpCanonicalDefinitionNames(index: ProjectIndex, def: SymbolDef):
   return canonicalNames;
 }
 
+export function markNameEquivalenceGap(index: ProjectIndex, def: SymbolDef): void {
+  markPhpNameEquivalenceGap(index, def);
+}
+
 function markPhpNameEquivalenceGap(index: ProjectIndex, def: SymbolDef): void {
   let gaps = phpNameEquivalenceGaps.get(index);
   if (!gaps) {

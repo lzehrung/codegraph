@@ -13,6 +13,7 @@ import { fileIdentityKey } from "../util/paths.js";
 import {
   isScssFile,
   resolveScssUse,
+  scssAssignmentDefinition,
   scssFactsForFile,
   scssMemberForDefinition,
   scssMemberUses,
@@ -54,13 +55,15 @@ export async function goToScssDefinition(index: ProjectIndex, req: GoToRequest):
   if (!facts) return null;
   const use = scssUseAt(facts, req.line, req.column);
   if (!use) {
+    const joined = await scssAssignmentDefinition(index, req.file, req.line, req.column);
+    if (joined) return okGoToResult(index, joined, { resolution: "namespace", confidence: "high" });
     const offset = scssOffsetAt(facts, req.line, req.column);
     if (
       facts.interpolatedPlaceholderRanges.some(
         (range) => offset >= (range.start.index ?? -1) && offset < (range.end.index ?? -1),
       )
     ) {
-      return { status: "not_found", reason: "An interpolated @extend name has no static placeholder target" };
+      return { status: "not_found", reason: "An interpolated placeholder name has no static target" };
     }
     return null;
   }
@@ -134,7 +137,7 @@ export async function findScssReferences(
       continue;
     }
     scanned.push(file);
-    let unproven = member.kind === "placeholder" && facts.interpolatedExtend;
+    let unproven = member.kind === "placeholder" && (facts.interpolatedExtend || facts.interpolatedPlaceholder);
     const { matches, unproven: unresolvedUse } = await scssMemberUses(index, file, facts, member);
     if (unresolvedUse) unproven = true;
     for (const { use, resolved } of matches) {

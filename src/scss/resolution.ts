@@ -121,6 +121,10 @@ type ModuleModel = {
   dynamicStems: Set<string | null>;
   /** Dynamic calls whose sass:meta load comes from an @import importer. */
   inheritedDynamics: NonNullable<ScssUse["dynamic"]>[];
+  /** Names whose file-scope flow assignment could not be joined to one imported variable. */
+  unprovenFlowAssigns: Set<string>;
+  /** Flow assignments joined to an imported variable. A click on either site is that variable. */
+  joinedAssignments: { range: Range; member: OwnMember }[];
 };
 
 type ProjectModel = {
@@ -276,34 +280,42 @@ function indexedFile(index: ProjectIndex, candidate: string): FileId | undefined
   return index.byFile.get(fileIdentityKey(candidate))?.file;
 }
 
+type ImportOnlyHit = { status: "one"; file: FileId } | { status: "ambiguous"; stems: string[] } | { status: "none" };
+
+function importUrlLocation(
+  fromFile: FileId,
+  url: string,
+): { base: string; dir: string; stem: string; hasStyleExtension: boolean } | null {
+  const trimmed = url.trim();
+  const bare = (trimmed.split(/[?#]/u)[0] ?? "").trim();
+  if (!bare || isSassBuiltinUrl(trimmed)) return null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(bare) && !/^[a-z]:[\/]/i.test(bare)) return null;
+  const resolved = path.resolve(path.dirname(fromFile), bare);
+  const extension = path.extname(resolved).toLowerCase();
+  const hasStyleExtension = extension === ".scss" || extension === ".sass" || extension === ".css";
+  let stemPath = hasStyleExtension ? resolved.slice(0, -extension.length) : resolved;
+  if (stemPath.toLowerCase().endsWith(".import")) stemPath = stemPath.slice(0, -".import".length);
+  let stem = path.basename(stemPath);
+  if (stem.startsWith("_")) stem = stem.slice(1);
+  return { base: resolved, dir: path.dirname(stemPath), stem, hasStyleExtension };
+}
+
 /**
- * The import-only stylesheet `@import` loads for `url`, if one is indexed.
+ * One tier of import-only files `@import` tries for `url`.
  *
- * Sass tries `_name.import.scss` and `name.import.scss` before the ordinary file, and a
- * directory's `_index.import.scss` only when no file-level import-only sibling exists. `@use`
- * and `@forward` never take this path. Two siblings at the same tier are ambiguous: Sass reports
- * that it is not clear which file to import.
+ * The order is file import-only sibling, then an ordinary file, then a directory import-only
+ * index, then a directory index. A directory `_index.import.scss` must not hide `lib.scss`.
+ * `@use` and `@forward` never take this path. Two siblings in one tier are ambiguous.
  */
 function importOnlyTarget(
   index: ProjectIndex,
   fromFile: FileId,
   url: string,
-): { status: "one"; file: FileId } | { status: "ambiguous"; stems: string[] } | { status: "none" } {
-  const trimmed = url.trim();
-  const bare = (trimmed.split(/[?#]/u)[0] ?? "").trim();
-  if (!bare || isSassBuiltinUrl(trimmed)) return { status: "none" };
-  if (/^[a-z][a-z0-9+.-]*:/i.test(bare) && !/^[a-z]:[\\/]/i.test(bare)) return { status: "none" };
-  const base = path.resolve(path.dirname(fromFile), bare);
-  const extension = path.extname(base).toLowerCase();
-  const hasStyleExtension = extension === ".scss" || extension === ".sass" || extension === ".css";
-  let stemPath = hasStyleExtension ? base.slice(0, -extension.length) : base;
-  if (stemPath.toLowerCase().endsWith(".import")) stemPath = stemPath.slice(0, -".import".length);
-  const dir = path.dirname(stemPath);
-  let stem = path.basename(stemPath);
-  if (stem.startsWith("_")) stem = stem.slice(1);
-  const pick = (
-    candidates: readonly string[],
-  ): { status: "one"; file: FileId } | { status: "ambiguous"; stems: string[] } | null => {
+  tier: "file" | "directory",
+): ImportOnlyHit {
+  const located = importUrlLocation(fromFile, url);
+  if (!located || !located.stem) return { status: "none" };
+  const pick = (candidates: readonly string[]): ImportOnlyHit | null => {
     const found = candidates
       .map((candidate) => indexedFile(index, candidate))
       .filter((file): file is FileId => file !== undefined);
@@ -312,15 +324,28 @@ function importOnlyTarget(
     const [only] = unique;
     return only ? { status: "one", file: only } : null;
   };
-  if (stem) {
-    const fileLevel = pick([path.join(dir, `_${stem}.import.scss`), path.join(dir, `${stem}.import.scss`)]);
-    if (fileLevel) return fileLevel;
+  if (tier === "file") {
+    return (
+      pick([
+        path.join(located.dir, `_${located.stem}.import.scss`),
+        path.join(located.dir, `${located.stem}.import.scss`),
+      ]) ?? { status: "none" }
+    );
   }
-  if (!hasStyleExtension && stem) {
-    const directoryIndex = pick([path.join(base, "_index.import.scss"), path.join(base, "index.import.scss")]);
-    if (directoryIndex) return directoryIndex;
-  }
-  return { status: "none" };
+  if (located.hasStyleExtension) return { status: "none" };
+  return (
+    pick([path.join(located.base, "_index.import.scss"), path.join(located.base, "index.import.scss")]) ?? {
+      status: "none",
+    }
+  );
+}
+
+/** True when `target` is the directory index of `url`, not a stylesheet file of that name. */
+function isDirectoryIndexFile(fromFile: FileId, url: string, target: FileId): boolean {
+  const located = importUrlLocation(fromFile, url);
+  if (!located || located.hasStyleExtension || !located.stem) return false;
+  const rel = path.relative(located.base, path.resolve(target)).replace(/\\/g, "/");
+  return /^_?index\.(scss|sass|css)$/i.test(rel);
 }
 
 function loadTarget(
@@ -337,9 +362,14 @@ function loadTarget(
   const edge = targets.get(`${key}\0${trimmed}`) ?? importTargets.get(trimmed);
   // `@import` prefers an import-only file. `@use` and `@forward` keep the ordinary edge.
   if (kind === "import") {
-    const importOnly = importOnlyTarget(index, fromFile, trimmed);
-    if (importOnly.status === "one") return { type: "file", file: importOnly.file };
-    if (importOnly.status === "ambiguous") return { type: "unresolved", extraStems: importOnly.stems };
+    const fileLevel = importOnlyTarget(index, fromFile, trimmed, "file");
+    if (fileLevel.status === "one") return { type: "file", file: fileLevel.file };
+    if (fileLevel.status === "ambiguous") return { type: "unresolved", extraStems: fileLevel.stems };
+    // A directory import-only index must not override an ordinary file such as lib.scss.
+    if (edge && !isDirectoryIndexFile(fromFile, trimmed, edge)) return { type: "file", file: edge };
+    const directoryLevel = importOnlyTarget(index, fromFile, trimmed, "directory");
+    if (directoryLevel.status === "one") return { type: "file", file: directoryLevel.file };
+    if (directoryLevel.status === "ambiguous") return { type: "unresolved", extraStems: directoryLevel.stems };
   }
   if (edge) return { type: "file", file: edge };
   return { type: "unresolved" };
@@ -412,6 +442,66 @@ function buildOwnMembers(
   return { own, ownByName, placeholders };
 }
 
+function detachFlowLocal(current: ModuleModel, local: ScssLocalBinding): void {
+  const list = current.localsByName.get(local.canonical);
+  if (list) {
+    const next = list.filter((entry) => entry !== local);
+    if (next.length) current.localsByName.set(local.canonical, next);
+    else current.localsByName.delete(local.canonical);
+  }
+  const index = current.facts.locals.indexOf(local);
+  if (index >= 0) current.facts.locals.splice(index, 1);
+}
+
+/**
+ * A file-scope flow assignment after `@import` updates the imported variable when exactly one
+ * variable of that name is in scope. Several matches, or an import that did not resolve, leave
+ * the name unproven instead of inventing a local. No match keeps the block local.
+ */
+function joinImportedFlowAssignments(model: ProjectModel): void {
+  for (const current of model.files.values()) {
+    for (const assignment of current.facts.flowAssignments) {
+      const found: Member[] = [];
+      let incomplete = false;
+      for (const resolved of current.loads) {
+        if (resolved.load.kind !== "import" || resolved.load.nested) continue;
+        const assignmentAt = assignment.range.start.index;
+        if (assignmentAt !== undefined && resolved.load.at > assignmentAt) continue;
+        if (resolved.target.type !== "file") {
+          incomplete = true;
+          continue;
+        }
+        const inner = exposureOf(model, fileIdentityKey(resolved.target.file), "import", newWalk());
+        if (inner.incomplete) incomplete = true;
+        found.push(...lookup(inner.byName, "variable", assignment.canonical));
+      }
+      const matches = uniqueMembers(found);
+      if (!incomplete && matches.length === 0) continue;
+      detachFlowLocal(current, assignment.local);
+      if (incomplete || matches.length !== 1) {
+        current.unprovenFlowAssigns.add(assignment.canonical);
+        continue;
+      }
+      const member = matches[0]!;
+      const owner = model.files.get(fileIdentityKey(member.def.file));
+      const own = owner?.own.find((entry) => entry.def === member.def);
+      if (!own) {
+        current.unprovenFlowAssigns.add(assignment.canonical);
+        continue;
+      }
+      own.sites.push({ file: current.file, range: assignment.range });
+      current.joinedAssignments.push({ range: assignment.range, member: own });
+    }
+  }
+}
+
+function memberDeclaredAfter(current: ModuleModel, use: ScssUse, member: OwnMember): boolean {
+  if (member.kind !== "function" && member.kind !== "mixin") return false;
+  if (use.kind !== member.kind) return false;
+  const declaredAt = scssOffsetAt(current.facts, member.def.range.start.line, member.def.range.start.column);
+  return declaredAt > use.nameStart;
+}
+
 async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
   const scssModules: { module: ModuleIndex; facts: ScssFileFacts }[] = [];
   const scssKeys = new Set<string>();
@@ -480,6 +570,8 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
       unresolvedStems,
       dynamicStems,
       inheritedDynamics: [],
+      unprovenFlowAssigns: new Set(),
+      joinedAssignments: [],
     });
   }
   // An SCSS file whose text could not be read still loads other files, as far as the graph knows. It
@@ -501,6 +593,7 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
     hostsByStem: hosts.byStem,
     hostsByTarget: hosts.byTarget,
   };
+  joinImportedFlowAssignments(model);
   for (const current of files.values()) {
     for (const use of current.facts.uses) {
       if (!use.dynamic || !inheritsMetaLookup(model, current, use)) continue;
@@ -730,8 +823,9 @@ function choose(
   };
 }
 
-function unresolvedIntroducesMembers(loads: readonly ResolvedLoad[]): boolean {
+function unresolvedIntroducesMembers(loads: readonly ResolvedLoad[], beforeOffset?: number): boolean {
   return loads.some((resolved) => {
+    if (beforeOffset !== undefined && resolved.load.at > beforeOffset) return false;
     if (resolved.target.type !== "unresolved") return false;
     return resolved.load.kind === "import" || (resolved.load.kind === "use" && resolved.load.star);
   });
@@ -847,9 +941,11 @@ function collectLoaded(
   kind: ScssUse["kind"],
   canonical: string,
   into: Member[],
+  beforeOffset?: number,
 ): boolean {
   let incomplete = false;
   for (const resolved of file.loads) {
+    if (beforeOffset !== undefined && resolved.load.at > beforeOffset) continue;
     if (resolved.target.type !== "file" || resolved.load.nested) continue;
     const star = resolved.load.kind === "use" && resolved.load.star;
     const legacy = resolved.load.kind === "import";
@@ -931,6 +1027,13 @@ function resolveUnnamespaced(model: ProjectModel, current: ModuleModel, use: Scs
       current.defAt.has(defKey(nearest.range.start.line, nearest.range.start.column, nearest.canonical));
     return { status: "shadow", indexed };
   }
+  if (use.kind === "variable" && current.unprovenFlowAssigns.has(use.canonical)) {
+    return {
+      status: "not_found",
+      reason: "A flow-control assignment may change an imported variable",
+      unproven: true,
+    };
+  }
   if (nestedMembers(model, current, use.kind, use.canonical).length) return nestedImportUnproven(use);
   const ownKey = `${use.kind}:${use.canonical}`;
   const own = current.ownByName.get(ownKey) ?? [];
@@ -938,16 +1041,25 @@ function resolveUnnamespaced(model: ProjectModel, current: ModuleModel, use: Scs
     return { status: "not_found", reason: `More than one SCSS member matches ${use.text}`, unproven: true };
   }
   const [only] = own;
-  // A `get-function` declared later in the file does not own an earlier call: that call is still
-  // the legacy built-in. An imported function of the name, loaded above the call, does own it.
-  if (only && !legacyGetFunctionBeforeDeclaration(current, use, only)) {
+  const legacyEarly = !!only && legacyGetFunctionBeforeDeclaration(current, use, only);
+  const declaredLater = !!only && memberDeclaredAfter(current, use, only);
+  // A mixin or function body runs when it is invoked. A declaration later in the file may or may
+  // not exist yet, so the call is not a proven reference of either side.
+  if (only && declaredLater && use.deferred && !legacyEarly) {
+    return { status: "not_found", reason: `A deferred call may or may not see ${use.text}`, unproven: true };
+  }
+  // An eager call before the declaration is plain CSS unless a preceding load already supplies the
+  // name. A later `get-function` never owns an earlier call: that call is the legacy built-in.
+  const ignoreOwn = legacyEarly || (declaredLater && !use.deferred);
+  if (only && !ignoreOwn) {
     return { status: "ok", def: only.def, prefix: "", access: "own", filters: [] };
   }
-  if (unresolvedIntroducesMembers(current.loads)) {
+  const before = ignoreOwn ? use.nameStart : undefined;
+  if (unresolvedIntroducesMembers(current.loads, before)) {
     return { status: "not_found", reason: "An unresolved SCSS import may also define this name", unproven: true };
   }
   const found: Member[] = [];
-  let incomplete = collectLoaded(model, current, use.kind, use.canonical, found);
+  let incomplete = collectLoaded(model, current, use.kind, use.canonical, found, before);
   if (!found.length) {
     // `@import` runs a file inside the scope of its importer, so the file reads what the importer
     // declared and loaded. The order of the imports is not modeled.
@@ -1080,8 +1192,62 @@ export async function scssMemberForDefinition(index: ProjectIndex, def: SymbolDe
   const member = current.own.find((entry) => entry.siteKeys.has(at));
   if (member) return member;
   const placeholder = current.placeholders.find((entry) => entry.siteKeys.has(at));
-  if (!placeholder) return null;
-  return { kind: "placeholder", declared: placeholder.declared, def: placeholder.def, sites: placeholder.sites };
+  if (placeholder) {
+    return { kind: "placeholder", declared: placeholder.declared, def: placeholder.def, sites: placeholder.sites };
+  }
+  const joined = current.joinedAssignments.find(
+    (entry) => entry.range.start.line === def.range.start.line && entry.range.start.column === def.range.start.column,
+  );
+  return joined?.member ?? null;
+}
+
+/**
+ * True when an indexed block variable is spelled with a different mix of `-` and `_` than a use it covers.
+ * The exact-name reference walk omits that use, so coverage must not claim to be complete.
+ */
+export function scssLocalSpellingGap(facts: ScssFileFacts, def: SymbolDef): boolean {
+  if (!def.localName.startsWith("$")) return false;
+  const local = facts.locals.find(
+    (entry) => entry.range.start.line === def.range.start.line && entry.range.start.column === def.range.start.column,
+  );
+  if (!local) return false;
+  return facts.uses.some(
+    (use) =>
+      use.kind === "variable" &&
+      use.namespace === null &&
+      use.canonical === local.canonical &&
+      use.text !== local.spelling &&
+      use.nameStart >= local.from &&
+      use.nameStart < local.to,
+  );
+}
+
+/** The imported variable a joined flow-control assignment names, when the click is on that assignment. */
+export async function scssAssignmentDefinition(
+  index: ProjectIndex,
+  file: FileId,
+  line: number,
+  column: number,
+): Promise<SymbolDef | null> {
+  const model = await projectModel(index);
+  const current = model.files.get(fileIdentityKey(file));
+  if (!current) return null;
+  const offset = scssOffsetAt(current.facts, line, column);
+  if (offset < 0) return null;
+  const joined = current.joinedAssignments.find((entry) => {
+    const start = entry.range.start.index;
+    const end = entry.range.end.index;
+    return start !== undefined && end !== undefined && offset >= start && offset < end;
+  });
+  return joined?.member.def ?? null;
+}
+
+/** True when this indexed variable is a file-scope flow assignment that could not be joined. */
+export async function scssFlowLocalUnproven(index: ProjectIndex, def: SymbolDef): Promise<boolean> {
+  if (!def.localName.startsWith("$")) return false;
+  const model = await projectModel(index);
+  const current = model.files.get(fileIdentityKey(def.file));
+  return current?.unprovenFlowAssigns.has(sassCanonical(def.localName)) ?? false;
 }
 
 /** Reference span for a use. Null when a forward prefix cannot be split from the member. */
@@ -1187,6 +1353,7 @@ export async function scssReferenceCandidates(
     for (const key of sharedScope) {
       const other = model.files.get(key);
       if (key !== declaringKey && other?.ownByName.has(ownKey)) markUnavailable(other.file);
+      if (member.kind === "variable" && other?.unprovenFlowAssigns.has(member.declared)) markUnavailable(other.file);
     }
   }
 

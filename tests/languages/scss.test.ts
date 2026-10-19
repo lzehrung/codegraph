@@ -3256,3 +3256,275 @@ describe("SCSS module navigation: semantic review regressions", () => {
     );
   });
 });
+
+describe("SCSS module navigation: import order, call timing, flow, and placeholders", () => {
+  const native = isNativeTreeSitterAvailable();
+
+  it("records flow assignments, deferred calls, bracket lists, and interpolated placeholders", () => {
+    const flow = '@import "vars";\n@if true {\n  $x: 2;\n}\n.a { w: $x; }\n';
+    const flowFacts = extractScssFacts(flow);
+    expect(flowFacts.flowAssignments.map((assignment) => assignment.canonical)).toEqual(["x"]);
+    expect(flowFacts.locals.map((local) => local.spelling)).toEqual(["$x"]);
+    expect(extractScssFacts('@import "vars";\n.a {\n  @if true { $x: 2; }\n  w: $x;\n}\n').flowAssignments).toEqual([]);
+    expect(extractScssFacts('@if true { $x: 2; }\n@import "vars";\n').flowAssignments).toEqual([]);
+
+    const listFacts = extractScssFacts("$size: 2px;\n@mixin box($values: [1, $size]) {\n  width: $size;\n}\n");
+    expect(listFacts.locals.map((local) => local.spelling)).toEqual(["$values"]);
+    expect(listFacts.uses.filter((use) => use.text === "$size")).toHaveLength(2);
+
+    const paramFacts = extractScssFacts("@mixin box($size: [1, $size]) {\n  width: $size;\n}\n");
+    const parameter = paramFacts.locals[0];
+    expect(paramFacts.locals.map((local) => local.spelling)).toEqual(["$size"]);
+    expect(
+      paramFacts.uses
+        .filter((use) => use.text === "$size")
+        .map((use) => parameter !== undefined && use.nameStart < parameter.from),
+    ).toEqual([true, false]);
+
+    expect(
+      extractScssFacts(".a { width: twice(2); }\n@function twice($x) { @return $x * 2; }\n").uses.find(
+        (use) => use.text === "twice",
+      )?.deferred,
+    ).toBeUndefined();
+    expect(
+      extractScssFacts("@mixin m {\n  width: twice(2);\n}\n").uses.find((use) => use.text === "twice")?.deferred,
+    ).toBe(true);
+
+    const placeholderFacts = extractScssFacts("%btn { a: b; }\n%btn#{$suffix} { c: d; }\n#{$prefix}%btn { e: f; }\n");
+    expect(
+      placeholderFacts.declarations
+        .filter((declaration) => declaration.kind === "placeholder")
+        .map((declaration) => declaration.name),
+    ).toEqual(["btn"]);
+    expect(placeholderFacts.interpolatedPlaceholder).toBe(true);
+  });
+
+  it.runIf(native)("marks a differently spelled block local partial and leaves the module rename safe", async () => {
+    for (const [moduleName, localName] of [
+      ["$foo_bar", "$foo-bar"],
+      ["$foo-bar", "$foo_bar"],
+    ] as const) {
+      const source = [
+        moduleName + ": 1;",
+        ".a {",
+        "  " + localName + ": 2;",
+        "  width: " + moduleName + ";",
+        "}",
+        ".b {",
+        "  width: " + moduleName + ";",
+        "}",
+        "",
+      ].join("\n");
+      await withScssProject({ "same.scss": source }, async (project) => {
+        expect(await scssGoto(project, "same.scss", "width: " + moduleName, 0, 7)).toBe("not_found");
+        expect(await scssGoto(project, "same.scss", "width: " + moduleName, 1, 7)).toBe("same.scss:1");
+        const moduleRefs = await scssRefs(project, "same.scss", moduleName);
+        expect(moduleRefs.sites).toEqual(["same.scss:1", "same.scss:7"]);
+        expect(moduleRefs.coverage?.state).toBe("complete");
+        const localRefs = await scssRefs(project, "same.scss", localName);
+        expect(localRefs.sites).toEqual(["same.scss:3"]);
+        expect(localRefs.coverage?.state).toBe("partial");
+        expect(localRefs.coverage?.reasons).toContain("name_equivalence_unavailable");
+        expect((await previewScssRename(project, localName, "same.scss", "$gap")).safe).toBe(false);
+        const renamed = await previewScssRename(project, moduleName, "same.scss", "$kept");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => edit.file + ":" + edit.range.start.line).sort()).toEqual([
+          "same.scss:1",
+          "same.scss:7",
+        ]);
+      });
+    }
+  });
+
+  it.runIf(native)("does not let a directory import-only index override an ordinary file", async () => {
+    await withScssProject(
+      {
+        "lib.scss": "$from-file: 1;\n",
+        "lib/_index.import.scss": "$from-index: 2;\n",
+        "main.scss": '@import "lib";\n.a { w: $from-file; }\n.b { w: $from-index; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$from-file")).toBe("lib.scss:1");
+        expect(await scssGoto(project, "main.scss", "$from-index")).toBe("not_found");
+        const file = await scssRefs(project, "lib.scss", "$from-file");
+        expect(file.sites).toEqual(["lib.scss:1", "main.scss:2"]);
+        expect(file.coverage?.state).toBe("complete");
+        const index = await scssRefs(project, "lib/_index.import.scss", "$from-index");
+        expect(index.sites).toEqual(["lib/_index.import.scss:1"]);
+        expect(index.sites).not.toContain("main.scss:3");
+      },
+    );
+    await withScssProject(
+      {
+        "_lib.scss": "$from-partial: 1;\n",
+        "lib/_index.import.scss": "$from-index: 2;\n",
+        "main.scss": '@import "lib";\n.a { w: $from-partial; }\n.b { w: $from-index; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$from-partial")).toBe("_lib.scss:1");
+        expect(await scssGoto(project, "main.scss", "$from-index")).toBe("not_found");
+        const partial = await scssRefs(project, "_lib.scss", "$from-partial");
+        expect(partial.sites).toEqual(["_lib.scss:1", "main.scss:2"]);
+        expect(partial.coverage?.state).toBe("complete");
+      },
+    );
+  });
+
+  it.runIf(native)("keeps an eager call before a function from owning that later function", async () => {
+    const main = ".a { width: twice(2); }\n@function twice($x) { @return $x * 2; }\n.b { width: twice(2); }\n";
+    await withScssProject({ "main.scss": main }, async (project) => {
+      expect(await scssGoto(project, "main.scss", "twice", 0)).toBe("not_found");
+      expect(await scssGoto(project, "main.scss", "twice", 2)).toBe("main.scss:2");
+      const refs = await scssRefs(project, "main.scss", "@function twice", 0, "@function ".length);
+      expect(refs.sites).toEqual(["main.scss:2", "main.scss:3"]);
+      expect(refs.coverage?.state).toBe("complete");
+      const renamed = await previewScssRename(project, "twice", "main.scss", "double");
+      expect(renamed.safe).toBe(true);
+      expect(renamed.edits.map((edit) => edit.range.start.line).sort()).toEqual([2, 3]);
+    });
+    await withScssProject(
+      {
+        "_lib.scss": "@function twice($x) { @return $x * 3; }\n",
+        "main.scss":
+          '@use "lib" as *;\n.a { width: twice(2); }\n@function twice($x) { @return $x * 2; }\n.b { width: twice(2); }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "twice", 0)).toBe("_lib.scss:1");
+        expect(await scssGoto(project, "main.scss", "twice", 2)).toBe("main.scss:3");
+        const lib = await scssRefs(project, "_lib.scss", "@function twice", 0, "@function ".length);
+        expect(lib.sites).toEqual(["_lib.scss:1", "main.scss:2"]);
+        expect(lib.coverage?.state).toBe("complete");
+        const local = await scssRefs(project, "main.scss", "@function twice", 0, "@function ".length);
+        expect(local.sites).toEqual(["main.scss:3", "main.scss:4"]);
+        expect(local.coverage?.state).toBe("complete");
+      },
+    );
+    await withScssProject(
+      {
+        "_lib.scss": "@function twice($x) { @return $x * 3; }\n",
+        "main.scss":
+          '@import "lib";\n.a { width: twice(2); }\n@function twice($x) { @return $x * 2; }\n.b { width: twice(2); }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "twice", 0)).toBe("_lib.scss:1");
+        expect(await scssGoto(project, "main.scss", "twice", 2)).toBe("main.scss:3");
+        const lib = await scssRefs(project, "_lib.scss", "@function twice", 0, "@function ".length);
+        expect(lib.sites).toContain("main.scss:2");
+        expect(lib.sites).not.toContain("main.scss:4");
+        const local = await scssRefs(project, "main.scss", "@function twice", 0, "@function ".length);
+        expect(local.sites).toEqual(["main.scss:3", "main.scss:4"]);
+        expect(local.sites).not.toContain("main.scss:2");
+        expect(lib.coverage?.state).toBe("partial");
+        expect(local.coverage?.state).toBe("partial");
+      },
+    );
+    await withScssProject(
+      {
+        "main.scss": "@mixin m {\n  width: twice(2);\n}\n.a { @include m; }\n@function twice($x) { @return $x * 2; }\n",
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "twice")).toBe("not_found");
+        const refs = await scssRefs(project, "main.scss", "@function twice", 0, "@function ".length);
+        expect(refs.sites).toEqual(["main.scss:5"]);
+        expect(refs.coverage?.state).toBe("partial");
+      },
+    );
+    await withScssProject(
+      {
+        "main.scss": "@function twice($x) { @return $x * 2; }\n@mixin m {\n  width: twice(2);\n}\n",
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "twice", 1)).toBe("main.scss:1");
+        const refs = await scssRefs(project, "main.scss", "@function twice", 0, "@function ".length);
+        expect(refs.sites).toEqual(["main.scss:1", "main.scss:3"]);
+        expect(refs.coverage?.state).toBe("complete");
+      },
+    );
+    await withScssProject(
+      {
+        "main.scss": "@mixin m($x: twice(1)) {\n  width: $x;\n}\n@function twice($n) { @return $n * 2; }\n",
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "twice", 0)).toBe("not_found");
+        const refs = await scssRefs(project, "main.scss", "@function twice", 0, "@function ".length);
+        expect(refs.sites).toEqual(["main.scss:4"]);
+        expect(refs.coverage?.state).toBe("partial");
+      },
+    );
+  });
+
+  it.runIf(native)("joins a file-scope flow assignment to the imported variable", async () => {
+    await withScssProject(
+      {
+        "_vars.scss": "$x: 1;\n",
+        "main.scss": '@import "vars";\n@if true {\n  $x: 2;\n}\n.a { w: $x; }\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$x", 0)).toBe("_vars.scss:1");
+        expect(await scssGoto(project, "main.scss", "$x", 1)).toBe("_vars.scss:1");
+        const refs = await scssRefs(project, "_vars.scss", "$x");
+        expect(refs.sites).toEqual(["_vars.scss:1", "main.scss:3", "main.scss:5"]);
+        expect(refs.coverage?.state).toBe("complete");
+        const renamed = await previewScssRename(project, "$x", "_vars.scss", "$y");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => edit.file + ":" + edit.range.start.line).sort()).toEqual([
+          "_vars.scss:1",
+          "main.scss:3",
+          "main.scss:5",
+        ]);
+      },
+    );
+    await withScssProject(
+      {
+        "_vars.scss": "$x: 1;\n",
+        "main.scss": '@import "vars";\n.a {\n  @if true { $x: 2; }\n  w: $x;\n}\n',
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$x: 2", 0, 0)).toBe("main.scss:3");
+        expect(await scssGoto(project, "main.scss", "w: $x", 0, 3)).toBe("_vars.scss:1");
+        const refs = await scssRefs(project, "_vars.scss", "$x");
+        expect(refs.sites).toEqual(["_vars.scss:1", "main.scss:4"]);
+        expect(refs.coverage?.state).toBe("complete");
+      },
+    );
+  });
+
+  it.runIf(native)("reads a square-bracket list default as the outer variable", async () => {
+    await withScssProject(
+      {
+        "main.scss": "$size: 2px;\n@mixin box($values: [1, $size]) {\n  width: $size;\n}\n",
+      },
+      async (project) => {
+        expect(await scssGoto(project, "main.scss", "$size", 1)).toBe("main.scss:1");
+        expect(await scssGoto(project, "main.scss", "$size", 2)).toBe("main.scss:1");
+        const refs = await scssRefs(project, "main.scss", "$size");
+        expect(refs.sites).toEqual(["main.scss:1", "main.scss:2", "main.scss:3"]);
+        expect(refs.coverage?.state).toBe("complete");
+        const renamed = await previewScssRename(project, "$size", "main.scss", "$extent");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => edit.range.start.line).sort()).toEqual([1, 2, 3]);
+      },
+    );
+  });
+
+  it.runIf(native)("does not group an interpolated placeholder declaration under its static prefix", async () => {
+    const main = [
+      "%btn { a: b; }",
+      "%btn#{$suffix} { c: d; }",
+      "#{$prefix}%btn { e: f; }",
+      ".x { @extend %btn; }",
+      ".y { @extend %btn-large; }",
+      "",
+    ].join("\n");
+    await withScssProject({ "main.scss": main }, async (project) => {
+      expect(await scssGoto(project, "main.scss", "%btn#", 0, 1)).toBe("not_found");
+      expect(await scssGoto(project, "main.scss", "#{$prefix}%btn", 0, 12)).toBe("not_found");
+      expect(await scssGoto(project, "main.scss", "@extend %btn;", 0, 8)).toBe("main.scss:1");
+      expect(await scssGoto(project, "main.scss", "%btn-large", 0, 1)).toBe("not_found");
+      const refs = await scssRefs(project, "main.scss", "%btn {", 0, 1);
+      expect(refs.sites).toEqual(["main.scss:1", "main.scss:4"]);
+      expect(refs.coverage?.state).toBe("partial");
+      expect((await previewScssRename(project, "btn", "main.scss", "button")).safe).toBe(false);
+    });
+  });
+});

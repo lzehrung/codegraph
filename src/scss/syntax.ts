@@ -64,6 +64,8 @@ export type ScssModuleLoad = {
   withKeys: ScssConfiguredName[];
   /** An `@import` inside a rule or an at-rule block: Sass declares what it imports in that block only. */
   nested: boolean;
+  /** Offset of this load. An eager call only sees loads that precede it. */
+  at: number;
 };
 
 export type ScssUseSyntax = "variable" | "call" | "include" | "extend" | "config" | "show" | "hide";
@@ -88,6 +90,21 @@ export type ScssUse = {
   loadIndex: number | null;
   /** A lookup-shaped call; only a proven sass:meta binding makes it dynamic. */
   dynamic?: ScssDynamic;
+  /**
+   * True when the call or include sits in a mixin or function, including a parameter default.
+   * Those bodies run later, so a declaration after the call in source may still own it.
+   */
+  deferred?: true;
+};
+
+/**
+ * A file-scope flow-control assignment that follows an `@import`. Resolution drops `local` when
+ * the assignment reassigns an imported variable, and keeps it when no import declares the name.
+ */
+export type ScssFlowAssignment = {
+  canonical: string;
+  range: Range;
+  local: ScssLocalBinding;
 };
 
 /** A parameter, a loop variable, or a block variable. It hides a module member of the same name. */
@@ -128,9 +145,16 @@ export type ScssFileFacts = {
   loads: ScssModuleLoad[];
   uses: ScssUse[];
   locals: ScssLocalBinding[];
+  /**
+   * File-scope `@if` / `@each` / `@for` / `@while` assignments that follow an `@import`.
+   * Each one may reassign an imported variable instead of introducing a local.
+   */
+  flowAssignments: ScssFlowAssignment[];
   dynamics: ScssDynamic[];
   /** Interpolated @extend selectors cannot be assigned a static placeholder target. */
   interpolatedExtend: boolean;
+  /** An interpolated placeholder declaration has no proven static name. */
+  interpolatedPlaceholder: boolean;
   /** Prefix tokens inside an interpolated placeholder; clicks must not use the generic walker. */
   interpolatedPlaceholderRanges: Range[];
   /** Offsets of line starts, for linear offset-to-position conversion. */
@@ -263,17 +287,22 @@ function isPlainCssImportUrl(url: string): boolean {
 type ParenFrame = {
   /**
    * `call` is a function or mixin argument list, `params` a parameter list, `selector` is the
-   * `selector(...)` argument of an `@supports` head, and `group` is any other parentheses.
+   * `selector(...)` argument of an `@supports` head, and `group` is any other parentheses or a
+   * square-bracket list.
    */
   mode: "call" | "group" | "params" | "selector";
   /** True at the start of an argument or parameter, before its first token. */
   argStart: boolean;
+  /** True for a `[` group, so a later `]` does not pop a parenthesis. */
+  bracket?: boolean;
 };
 
 type BlockFrame = {
   locals: ScssLocalBinding[];
   /** True for the block of `@if`, `@else`, `@each`, `@for`, or `@while`. */
   flow: boolean;
+  /** True for the body block of a mixin or function. Calls inside it are deferred. */
+  callable: boolean;
 };
 
 /** Blocks of these at-rules share the variable scope that holds them. */
@@ -298,9 +327,11 @@ export function extractScssFacts(source: string): ScssFileFacts {
   const loads: ScssModuleLoad[] = [];
   const uses: ScssUse[] = [];
   const locals: ScssLocalBinding[] = [];
+  const flowAssignments: ScssFlowAssignment[] = [];
   const dynamics: ScssDynamic[] = [];
   const interpolatedPlaceholderRanges: Range[] = [];
   let interpolatedExtend = false;
+  let interpolatedPlaceholder = false;
   const parens: ParenFrame[] = [];
   const braces: boolean[] = [];
   const blocks: BlockFrame[] = [];
@@ -322,7 +353,13 @@ export function extractScssFacts(source: string): ScssFileFacts {
   let selectorParenAt = -1;
   /** Offset where the current statement starts: after the last `;` or block brace. */
   let statementBegin = 0;
-  let headCache: { begin: number; styleRule: boolean } | null = null;
+  let headCache: { begin: number; styleRule: boolean; interpolated: boolean } | null = null;
+  /** Set by {@link opensStyleRule}. The outer scan cannot see the closure write on `headCache`. */
+  let selectorHeadInterpolated = false;
+  /** True from `@mixin` / `@function` until the body brace opens, so parameter defaults are deferred. */
+  let pendingCallable = false;
+  /** Nested mixin and function bodies. Calls inside them run when the callable is invoked. */
+  let callableDepth = 0;
 
   const rangeOf = (start: number, end: number): Range => ({
     start: positionAtOffset(lineStarts, start),
@@ -380,6 +417,9 @@ export function extractScssFacts(source: string): ScssFileFacts {
     // Sass folds `_` into `-` for variables, mixins, and functions, but compares a placeholder as written.
     const canonical = use.kind === "placeholder" ? use.text : sassCanonical(use.text);
     const recorded: ScssUse = { ...use, canonical, hitStart: use.hitStart ?? use.nameStart };
+    if ((use.syntax === "call" || use.syntax === "include") && (callableDepth > 0 || pendingCallable)) {
+      recorded.deferred = true;
+    }
     if (use.syntax === "call" || use.syntax === "include") {
       const form = dynamicFormOf(use.text);
       if (form) recorded.dynamic = { form, arg: readCallArgument(use.nameEnd) };
@@ -480,7 +520,12 @@ export function extractScssFacts(source: string): ScssFileFacts {
 
   const openBlock = (braceIndex: number): void => {
     const flow = FLOW_RULES.has(statementRule);
-    const frame: BlockFrame = { locals: [], flow };
+    const callable = pendingCallable;
+    if (callable) {
+      callableDepth += 1;
+      pendingCallable = false;
+    }
+    const frame: BlockFrame = { locals: [], flow, callable };
     if (!flow) nonFlowBlocks += 1;
     for (const local of pendingLocals) {
       if (local.from < 0) local.from = braceIndex;
@@ -504,6 +549,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
         unbindLocal(local);
       }
       if (!frame.flow) nonFlowBlocks -= 1;
+      if (frame.callable) callableDepth -= 1;
     }
     statementStart = true;
     statementBegin = braceIndex + 1;
@@ -561,6 +607,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
     }
     const paren = skipBlank(name.end);
     if (source.charCodeAt(paren) === 0x28) paramsParenAt = paren;
+    pendingCallable = true;
     return name.end;
   };
 
@@ -770,6 +817,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
       hide: null,
       withKeys: [],
       nested: false,
+      at: from,
     };
     let cursor = url.end;
     let stopAt = cursor;
@@ -870,6 +918,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
           hide: null,
           withKeys: [],
           nested: blocks.length > 0,
+          at: cursor,
         });
       }
       cursor = after;
@@ -1016,7 +1065,8 @@ export function extractScssFacts(source: string): ScssFileFacts {
       // variable of the same name is the exception: `@each $x in ...` binds `$x` for the block, so
       // `$x: $x + 1` changes the loop variable and leaves the file variable alone.
       const boundLocally = localCounts.has(canonical);
-      const reassigns = blocks.length > 0 && nonFlowBlocks === 0 && globalVariables.has(canonical) && !boundLocally;
+      const fileFlow = blocks.length > 0 && nonFlowBlocks === 0 && !boundLocally;
+      const reassigns = fileFlow && globalVariables.has(canonical);
       if (!blocks.length || flags.isGlobal || reassigns) {
         globalVariables.add(canonical);
         declarations.push({
@@ -1027,6 +1077,13 @@ export function extractScssFacts(source: string): ScssFileFacts {
           topLevel: true,
           isDefault: flags.isDefault,
         });
+      } else if (fileFlow && loads.some((load) => load.kind === "import" && !load.nested)) {
+        // A file-scope flow block shares the file scope. An earlier @import may already have
+        // declared this name; resolution joins the assignment to that variable or keeps this local.
+        const frame = blocks[blocks.length - 1];
+        const local = makeLocal(start, end, flags.end);
+        flowAssignments.push({ canonical, range: local.range, local });
+        if (frame) bindLocal(frame, local);
       } else {
         // The new variable hides a member only after its own statement, so `$x: $x + 1` reads the member.
         const frame = blocks[blocks.length - 1];
@@ -1045,16 +1102,21 @@ export function extractScssFacts(source: string): ScssFileFacts {
    * own block. The scan runs once per statement.
    */
   const opensStyleRule = (): boolean => {
-    if (headCache?.begin === statementBegin) return headCache.styleRule;
+    if (headCache?.begin === statementBegin) {
+      selectorHeadInterpolated = headCache.interpolated;
+      return headCache.styleRule;
+    }
     let cursor = skipBlank(statementBegin);
     const isAtRule = source.charCodeAt(cursor) === 0x40;
     const takesSelector = !isAtRule || readIdent(source, cursor + 1)?.text === "at-root";
     let interpolation = 0;
     let block = false;
+    let interpolatedHead = false;
     for (; cursor < length; cursor += 1) {
       if (mask[cursor]) continue;
       const unit = source.charCodeAt(cursor);
       if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {
+        interpolatedHead = true;
         interpolation += 1;
         cursor += 1;
         continue;
@@ -1070,7 +1132,8 @@ export function extractScssFacts(source: string): ScssFileFacts {
       }
       if (unit === 0x7d || unit === 0x3b) break;
     }
-    headCache = { begin: statementBegin, styleRule: block && takesSelector };
+    selectorHeadInterpolated = interpolatedHead;
+    headCache = { begin: statementBegin, styleRule: block && takesSelector, interpolated: interpolatedHead };
     return headCache.styleRule;
   };
 
@@ -1211,7 +1274,22 @@ export function extractScssFacts(source: string): ScssFileFacts {
       inInclude = false;
       statementRule = "";
       pendingLocals = [];
+      pendingCallable = false;
       parens.length = 0;
+      index += 1;
+      continue;
+    }
+    if (unit === 0x5b) {
+      touch();
+      parens.push({ mode: "group", argStart: true, bracket: true });
+      statementStart = false;
+      index += 1;
+      continue;
+    }
+    if (unit === 0x5d) {
+      if (parens[parens.length - 1]?.bracket) parens.pop();
+      touch();
+      statementStart = false;
       index += 1;
       continue;
     }
@@ -1259,14 +1337,21 @@ export function extractScssFacts(source: string): ScssFileFacts {
       // A placeholder in the head of a style rule is a declaration at any depth: Sass extends it
       // wherever its rule sits, in a media query, in another rule, or in a mixin.
       if (placeholder && opensStyleRule()) {
-        declarations.push({
-          kind: "placeholder",
-          name: placeholder.text,
-          canonical: placeholder.text,
-          range: rangeOf(index + 1, placeholder.end),
-          topLevel: true,
-          isDefault: false,
-        });
+        // `%btn#{$suffix}` and `#{$prefix}%btn` are not the static placeholder `btn`. The name
+        // depends on the interpolation, so it stays out of the static group.
+        if (selectorHeadInterpolated) {
+          interpolatedPlaceholder = true;
+          interpolatedPlaceholderRanges.push(rangeOf(index, placeholder.end));
+        } else {
+          declarations.push({
+            kind: "placeholder",
+            name: placeholder.text,
+            canonical: placeholder.text,
+            range: rangeOf(index + 1, placeholder.end),
+            topLevel: true,
+            isDefault: false,
+          });
+        }
       }
       touch();
       statementStart = false;
@@ -1293,7 +1378,18 @@ export function extractScssFacts(source: string): ScssFileFacts {
   for (const local of locals) {
     if (local.to < 0) local.to = length;
   }
-  return { declarations, loads, uses, locals, dynamics, interpolatedExtend, interpolatedPlaceholderRanges, lineStarts };
+  return {
+    declarations,
+    loads,
+    uses,
+    locals,
+    flowAssignments,
+    dynamics,
+    interpolatedExtend,
+    interpolatedPlaceholder,
+    interpolatedPlaceholderRanges,
+    lineStarts,
+  };
 }
 
 /**
