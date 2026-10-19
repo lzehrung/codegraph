@@ -1711,17 +1711,22 @@ export async function scssScopedCallableReferences(
 }
 
 /**
- * A scoped callable is not a module member. Check calls the proposed name would capture and calls
- * of the original name that the reference walk still omitted. Only a use this local owns counts:
- * a nearer scoped callable of the same kind keeps its own calls. Null means `def` is not a scoped
- * callable.
+ * A scoped callable is not a module member. `captured` lists bare calls already spelled with
+ * the proposed name that this local would own, and `shadowed` lists calls this local owns when
+ * a different same-kind scoped callable would own the edited name (`-` and `_` equivalent).
+ * `unaccounted` lists calls of the original name that this local owns and the reference walk
+ * omitted; a nearer scoped callable keeps its own calls. Null means `def` is not a scoped callable.
  */
 export async function scssScopedCallableRenameSites(
   index: ProjectIndex,
   def: SymbolDef,
   newName: string,
   references: readonly Reference[],
-): Promise<{ captured: ScssRenameSite[]; unaccounted: Array<ScssRenameSite & { text: string }> } | null> {
+): Promise<{
+  captured: ScssRenameSite[];
+  shadowed: ScssRenameSite[];
+  unaccounted: Array<ScssRenameSite & { text: string }>;
+} | null> {
   const model = await projectModel(index);
   const current = model.files.get(fileIdentityKey(def.file));
   if (!current) return null;
@@ -1736,11 +1741,15 @@ export async function scssScopedCallableRenameSites(
     }
   }
   const captured: ScssRenameSite[] = [];
+  const shadowed: ScssRenameSite[] = [];
   const unaccounted: Array<ScssRenameSite & { text: string }> = [];
   const renamed = { local, canonical: next };
   for (const use of current.facts.uses) {
     if (use.namespace !== null || use.kind !== local.kind || use.syntax !== syntax) continue;
     const range = scssOffsetRange(current.facts, use.nameStart, use.nameEnd);
+    const ownedByLocal =
+      use.canonical === local.canonical &&
+      nearestScopedCallable(current.facts, local.kind, local.canonical, use.nameStart) === local;
     if (
       next !== local.canonical &&
       use.canonical === next &&
@@ -1748,15 +1757,17 @@ export async function scssScopedCallableRenameSites(
     ) {
       captured.push({ file: current.file, range });
     }
-    if (
-      use.canonical === local.canonical &&
-      nearestScopedCallable(current.facts, local.kind, local.canonical, use.nameStart) === local &&
-      !covered.has(use.nameStart)
-    ) {
+    // The edited reference keeps this local's place. A nearer same-kind callable of the new
+    // name, including an equivalent `-`/`_` spelling, would own the call instead.
+    if (ownedByLocal && next !== local.canonical) {
+      const owner = nearestScopedCallable(current.facts, local.kind, next, use.nameStart, renamed);
+      if (owner && owner !== local) shadowed.push({ file: current.file, range });
+    }
+    if (ownedByLocal && !covered.has(use.nameStart)) {
       unaccounted.push({ file: current.file, range, text: use.text });
     }
   }
-  return { captured, unaccounted };
+  return { captured, shadowed, unaccounted };
 }
 
 /** True when a file that sees `def` forwards it through a `show` or `hide` list. */

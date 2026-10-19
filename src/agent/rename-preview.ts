@@ -749,6 +749,15 @@ async function addScopeConflicts(
           message: `A scoped callable renamed to "${newName}" would capture this unqualified call.`,
         });
       }
+      for (const site of scoped.shadowed) {
+        const file = normalizeAgentFilePath(snapshot.root, site.file);
+        conflicts.push({
+          file,
+          location: { file, range: site.range },
+          reason: "shadowing",
+          message: `A different scoped callable named "${newName}" would capture this reference after the rename.`,
+        });
+      }
       for (const site of scoped.unaccounted) {
         const file = normalizeAgentFilePath(snapshot.root, site.file);
         unsafeSites.push({

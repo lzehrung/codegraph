@@ -1118,6 +1118,207 @@ describe("rename preview", () => {
     }
   });
 
+  async function previewScssScopedRename(files: Record<string, string>, name: string, newName: string, label: string) {
+    const root = await mkTmpDir("cg-rename-scss-scoped-shadow-");
+    for (const [file, source] of Object.entries(files)) {
+      await fsp.writeFile(path.join(root, file), source);
+    }
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: name });
+      const target = symbols.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === name);
+      expect(target, label).toBeDefined();
+      return await previewRenameWithSession(session, { root, handle: target!.handle, newName });
+    } finally {
+      session.invalidate();
+    }
+  }
+
+  it("reports shadowing when an edited scoped reference would be owned by a nearer callable", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      const declaration = (name: string): string =>
+        kind === "mixin" ? `@mixin ${name} { color: red; }` : `@function ${name}() { @return 1px; }`;
+      const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+      const source = [
+        '@use "lib" as lib;',
+        ".a {",
+        `  ${declaration("pad")}`,
+        `  ${call("pad")}`,
+        `  ${call("inset")}`,
+        `  ${call("lib.pad")}`,
+        "  .b {",
+        `    ${declaration("inset")}`,
+        `    ${call("pad")}`,
+        "  }",
+        "}",
+        ".c {",
+        `  ${declaration("inset")}`,
+        "}",
+        "",
+      ].join("\n");
+      const renamed = await previewScssScopedRename(
+        { "main.scss": source, "_lib.scss": "@mixin pad { color: red; }\n@function pad() { @return 1px; }\n" },
+        "pad",
+        "inset",
+        kind,
+      );
+      expect(renamed.safe, kind).toBe(false);
+      expect(renamed.unsafeSites, kind).toEqual([]);
+      expect(
+        renamed.conflicts
+          .map(({ file, reason, message, location }) => [file, reason, location?.range.start.line, message])
+          .sort((left, right) => Number(left[2]) - Number(right[2])),
+        kind,
+      ).toEqual([
+        ["main.scss", "shadowing", 5, 'A scoped callable renamed to "inset" would capture this unqualified call.'],
+        [
+          "main.scss",
+          "shadowing",
+          9,
+          'A different scoped callable named "inset" would capture this reference after the rename.',
+        ],
+      ]);
+      expect(
+        renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText]),
+        kind,
+      ).toEqual([
+        ["definition", 3, "pad", "inset"],
+        ["reference", 4, "pad", "inset"],
+        ["reference", 9, "pad", "inset"],
+      ]);
+    }
+  });
+
+  it("reports shadowing when the nearer scoped callable spells the new name with a hyphen or underscore", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      const declaration = (name: string): string =>
+        kind === "mixin" ? `@mixin ${name} { color: red; }` : `@function ${name}() { @return 1px; }`;
+      const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+      for (const spelling of [
+        { inner: "in_set", next: "in-set", unrelated: "in-set" },
+        { inner: "in-set", next: "in_set", unrelated: "in_set" },
+      ]) {
+        const label = `${kind} ${spelling.inner} -> ${spelling.next}`;
+        const source = [
+          ".a {",
+          `  ${declaration("foo-bar")}`,
+          `  ${call("foo_bar")}`,
+          "  .b {",
+          `    ${declaration(spelling.inner)}`,
+          `    ${call("foo-bar")}`,
+          "  }",
+          "}",
+          ".c {",
+          `  ${declaration(spelling.unrelated)}`,
+          "}",
+          "",
+        ].join("\n");
+        const renamed = await previewScssScopedRename({ "main.scss": source }, "foo-bar", spelling.next, label);
+        expect(renamed.safe, label).toBe(false);
+        expect(renamed.unsafeSites, label).toEqual([]);
+        expect(
+          renamed.conflicts.map(({ file, reason, location }) => [file, reason, location?.range.start.line]),
+          label,
+        ).toEqual([["main.scss", "shadowing", 6]]);
+        expect(
+          renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText]),
+          label,
+        ).toEqual([
+          ["definition", 2, "foo-bar", spelling.next],
+          ["reference", 3, "foo_bar", spelling.next],
+          ["reference", 6, "foo-bar", spelling.next],
+        ]);
+      }
+    }
+  });
+
+  it("does not report shadowing when another scoped callable cannot own the edited reference", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      const declaration = (name: string): string =>
+        kind === "mixin" ? `@mixin ${name} { color: red; }` : `@function ${name}() { @return 1px; }`;
+      const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+      const opposite = kind === "mixin" ? "function" : "mixin";
+      const oppositeDecl = (name: string): string =>
+        opposite === "mixin" ? `@mixin ${name} { color: blue; }` : `@function ${name}() { @return 2px; }`;
+      const unrelated = [
+        ".a {",
+        `  ${declaration("pad")}`,
+        `  ${call("pad")}`,
+        "}",
+        ".c {",
+        `  ${declaration("inset")}`,
+        "}",
+        "",
+      ].join("\n");
+      const outside = [
+        ".a {",
+        `  ${declaration("pad")}`,
+        "}",
+        ".b {",
+        `  ${declaration("inset")}`,
+        `  ${call("pad")}`,
+        "}",
+        "",
+      ].join("\n");
+      const nearer = [
+        ".a {",
+        `  ${declaration("inset")}`,
+        "  .b {",
+        `    ${declaration("pad")}`,
+        `    ${call("pad")}`,
+        "  }",
+        "}",
+        "",
+      ].join("\n");
+      const otherKind = [
+        ".a {",
+        `  ${declaration("pad")}`,
+        `  ${call("pad")}`,
+        "  .b {",
+        `    ${oppositeDecl("inset")}`,
+        `    ${call("pad")}`,
+        "  }",
+        "}",
+        "",
+      ].join("\n");
+      const free = await previewScssScopedRename({ "main.scss": unrelated }, "pad", "inset", `${kind} unrelated`);
+      expect(free.safe, `${kind} unrelated`).toBe(true);
+      expect(free.conflicts, `${kind} unrelated`).toEqual([]);
+      expect(free.unsafeSites, `${kind} unrelated`).toEqual([]);
+      expect(
+        free.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText]),
+        `${kind} unrelated`,
+      ).toEqual([
+        ["definition", 2, "pad", "inset"],
+        ["reference", 3, "pad", "inset"],
+      ]);
+      const leftBehind = await previewScssScopedRename({ "main.scss": outside }, "pad", "inset", `${kind} outside`);
+      expect(leftBehind.safe, `${kind} outside`).toBe(true);
+      expect(leftBehind.conflicts, `${kind} outside`).toEqual([]);
+      expect(
+        leftBehind.edits.map((edit) => [edit.range.start.line, edit.oldText]),
+        `${kind} outside`,
+      ).toEqual([[2, "pad"]]);
+      const innerWins = await previewScssScopedRename({ "main.scss": nearer }, "pad", "inset", `${kind} nearer`);
+      expect(innerWins.safe, `${kind} nearer`).toBe(true);
+      expect(innerWins.conflicts, `${kind} nearer`).toEqual([]);
+      expect(
+        innerWins.edits.map((edit) => [edit.kind, edit.range.start.line]),
+        `${kind} nearer`,
+      ).toEqual([
+        ["definition", 4],
+        ["reference", 5],
+      ]);
+      const other = await previewScssScopedRename({ "main.scss": otherKind }, "pad", "inset", `${kind} other kind`);
+      expect(other.safe, `${kind} other kind`).toBe(true);
+      expect(other.conflicts, `${kind} other kind`).toEqual([]);
+      expect(
+        other.edits.map((edit) => edit.range.start.line),
+        `${kind} other kind`,
+      ).toEqual([2, 3, 6]);
+    }
+  });
+
   it("marks a scoped function rename unsafe when a lookup in its block is left unchanged", async () => {
     const cases = [
       [

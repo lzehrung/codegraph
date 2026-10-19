@@ -4732,4 +4732,105 @@ describe("SCSS module navigation: nested callables, legacy call, comments, and e
       expect(onelineRefs.referenceCoverage?.state).toBe("partial");
     });
   });
+
+  it("reports shadowing when an edited scoped call would be owned by a nearer callable", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      const declaration = (name: string): string =>
+        kind === "mixin" ? `@mixin ${name} { color: red; }` : `@function ${name}() { @return 1px; }`;
+      const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+      const shadowed = [
+        ".a {",
+        `  ${declaration("pad")}`,
+        `  ${call("pad")}`,
+        "  .b {",
+        `    ${declaration("inset")}`,
+        `    ${call("pad")}`,
+        "  }",
+        "}",
+        ".c {",
+        `  ${declaration("inset")}`,
+        "}",
+        "",
+      ].join("\n");
+      await withScssProject({ "main.scss": shadowed }, async (project) => {
+        const renamed = await previewScssRename(project, "pad", "main.scss", "inset");
+        expect(renamed.safe, kind).toBe(false);
+        expect(renamed.unsafeSites, kind).toEqual([]);
+        expect(
+          renamed.conflicts.map((conflict) => [conflict.file, conflict.reason, conflict.location?.range.start.line]),
+          kind,
+        ).toEqual([["main.scss", "shadowing", 6]]);
+        expect(
+          renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText]),
+          kind,
+        ).toEqual([
+          ["definition", 2, "pad", "inset"],
+          ["reference", 3, "pad", "inset"],
+          ["reference", 6, "pad", "inset"],
+        ]);
+      });
+
+      for (const spelling of [
+        { inner: "in_set", next: "in-set", unrelated: "in-set" },
+        { inner: "in-set", next: "in_set", unrelated: "in_set" },
+      ]) {
+        const label = `${kind} ${spelling.inner} -> ${spelling.next}`;
+        const spelled = [
+          ".a {",
+          `  ${declaration("foo-bar")}`,
+          `  ${call("foo_bar")}`,
+          "  .b {",
+          `    ${declaration(spelling.inner)}`,
+          `    ${call("foo-bar")}`,
+          "  }",
+          "}",
+          ".c {",
+          `  ${declaration(spelling.unrelated)}`,
+          "}",
+          "",
+        ].join("\n");
+        await withScssProject({ "main.scss": spelled }, async (project) => {
+          const renamed = await previewScssRename(project, "foo-bar", "main.scss", spelling.next);
+          expect(renamed.safe, label).toBe(false);
+          expect(renamed.unsafeSites, label).toEqual([]);
+          expect(
+            renamed.conflicts.map((conflict) => [conflict.reason, conflict.location?.range.start.line]),
+            label,
+          ).toEqual([["shadowing", 6]]);
+          expect(
+            renamed.edits.map((edit) => [edit.range.start.line, edit.oldText, edit.newText]),
+            label,
+          ).toEqual([
+            [2, "foo-bar", spelling.next],
+            [3, "foo_bar", spelling.next],
+            [6, "foo-bar", spelling.next],
+          ]);
+        });
+      }
+
+      const unrelated = [
+        ".a {",
+        `  ${declaration("pad")}`,
+        `  ${call("pad")}`,
+        "}",
+        ".c {",
+        `  ${declaration("inset")}`,
+        "}",
+        "",
+      ].join("\n");
+      await withScssProject({ "main.scss": unrelated }, async (project) => {
+        const renamed = await previewScssRename(project, "pad", "main.scss", "inset");
+        expect(renamed.safe, `${kind} unrelated`).toBe(true);
+        expect(renamed.conflicts, `${kind} unrelated`).toEqual([]);
+        expect(renamed.unsafeSites, `${kind} unrelated`).toEqual([]);
+        expect(
+          renamed.edits.map((edit) => [edit.range.start.line, edit.oldText, edit.newText]),
+          `${kind} unrelated`,
+        ).toEqual([
+          [2, "pad", "inset"],
+          [3, "pad", "inset"],
+        ]);
+      });
+    }
+  });
 });
