@@ -3,11 +3,14 @@ import { normalizePath } from "../util/paths.js";
 import { classifySqlFile } from "./classify-sql-file.js";
 import {
   createSqlObjectNameRegExp,
+  maskSqlQuotedIdentifiers,
   maskSqlStringsAndComments,
   normalizeSqlObjectName,
+  sqlObjectLookupKey,
   SQL_OBJECT_NAME_PATTERN,
   splitTopLevelCommaSeparated,
   sqlParenDepthAt,
+  sqlQueryScopes,
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
 import { SQL_ROUTINE_DEFINITION_RE } from "./routine-mentions.js";
@@ -127,6 +130,7 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
   let lookingForStatementStart = true;
   let blockDepth = 0;
   let singleQuoted = false;
+  let escapeString = false;
   let doubleQuoted = false;
   let backtickQuoted = false;
   let bracketQuoted = false;
@@ -228,11 +232,18 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
     }
 
     if (singleQuoted) {
+      if (escapeString && char === "\\" && next) {
+        i += 2;
+        continue;
+      }
       if (char === "'" && next === "'") {
         i += 2;
         continue;
       }
-      if (char === "'") singleQuoted = false;
+      if (char === "'") {
+        singleQuoted = false;
+        escapeString = false;
+      }
       i += 1;
       continue;
     }
@@ -271,6 +282,8 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
     }
     if (char === "'") {
       singleQuoted = true;
+      // Only PostgreSQL E'...' strings give backslashes special meaning.
+      escapeString = /[eE]/.test(source[i - 1] ?? "") && !/[\w$]/.test(source[i - 2] ?? "");
       i += 1;
       continue;
     }
@@ -383,20 +396,31 @@ function clauseEndIndex(text: string, start: number): number {
   return boundary < 0 ? text.length : start + boundary;
 }
 
-function collectCommaSeparatedObjectsAfterKeywords(text: string, keywords: readonly string[]): string[] {
+function collectCommaSeparatedObjectsAfterKeywords(
+  text: string,
+  keywords: readonly string[],
+): { names: string[]; topLevelNames: string[] } {
   const names: string[] = [];
+  const topLevelNames: string[] = [];
+  const scan = maskSqlQuotedIdentifiers(text);
+  const scopes = sqlQueryScopes(scan);
   const keywordPattern = keywords.map((keyword) => keyword.replace(/\s+/g, String.raw`\s+`)).join("|");
   const re = new RegExp(String.raw`\b(?:${keywordPattern})\s+`, "gi");
-  for (const match of text.matchAll(re)) {
-    if (sqlParenDepthAt(text, match.index ?? 0) > 0) continue;
-    const start = (match.index ?? 0) + match[0].length;
+  for (const match of scan.matchAll(re)) {
+    const keywordAt = match.index ?? 0;
+    const depth = sqlParenDepthAt(scan, keywordAt);
+    // FROM in EXTRACT(... FROM ...) is an expression, not a nested query source.
+    if (depth !== scopes.selectDepthAt(keywordAt)) continue;
+    const start = keywordAt + match[0].length;
     const clause = text.slice(start, clauseEndIndex(text, start));
     for (const part of splitTopLevelCommaSeparated(clause)) {
       const name = objectAt(part, 0);
-      if (name && !SQL_KEYWORDS.has(name.toLowerCase())) names.push(name);
+      if (!name || SQL_KEYWORDS.has(name.toLowerCase())) continue;
+      names.push(name);
+      if (!depth) topLevelNames.push(name);
     }
   }
-  return Array.from(new Set(names));
+  return { names: Array.from(new Set(names)), topLevelNames };
 }
 
 function findMatchingParen(text: string, openIndex: number): number {
@@ -484,17 +508,23 @@ function extractCreateTableConstraintFacts(text: string, tableName: string | nul
 function extractReadFacts(text: string): SqlFactDraft[] {
   const cteReads = collectCteReads(text);
   const isCteName = (name: string): boolean => sqlObjectLookupKeys(name).some((key) => cteReads.names.has(key));
-  const fromObjects = collectCommaSeparatedObjectsAfterKeywords(text, ["from", "using"]).filter(
-    (name) => !isCteName(name),
-  );
+  const fromSources = collectCommaSeparatedObjectsAfterKeywords(text, ["from", "using"]);
+  const fromObjects = fromSources.names.filter((name) => !isCteName(name));
   const joinObjects = collectObjectsAfterKeywords(
     text,
     ["join", "inner join", "left join", "right join", "full join", "cross join"],
     { topLevelOnly: true },
   ).filter((name) => !isCteName(name));
-  const primaryRead = fromObjects[0] ?? null;
+  const primaryRead = fromSources.topLevelNames.find((name) => !isCteName(name)) ?? null;
   const facts: SqlFactDraft[] = [...cteReads.facts];
+  const seenReads = new Set<string>();
+  for (const fact of cteReads.facts) {
+    if (fact.kind === "reads_from" && fact.objectName) seenReads.add(sqlObjectLookupKey(fact.objectName));
+  }
   for (const fromName of fromObjects) {
+    const key = sqlObjectLookupKey(fromName);
+    if (seenReads.has(key)) continue;
+    seenReads.add(key);
     facts.push({ kind: "reads_from", objectName: fromName, relatedObjectName: null });
   }
   for (const joinName of joinObjects) {
@@ -509,7 +539,7 @@ function withoutSelfRead(readFacts: SqlFactDraft[], objectName: string | null): 
 }
 
 function extractStatementFactDrafts(statementText: string): SqlFactDraft[] {
-  const text = maskSqlStringsAndComments(statementText);
+  const text = maskSqlStringsAndComments(statementText, { escapeStrings: true });
   const definitionFact = createDefinitionFact(text);
   if (definitionFact) {
     const constraintFacts =

@@ -1296,6 +1296,90 @@ describe("SQL routine call sites", () => {
     });
   });
 
+  it("scopes routine-result aliases to their query for goto and table references", async () => {
+    const schema = [
+      "CREATE TABLE users (id integer);",
+      "CREATE FUNCTION get_users() RETURNS TABLE (id integer) AS $$ SELECT 1 $$ LANGUAGE sql;",
+    ];
+    const use = [
+      "SELECT u.id FROM users u",
+      "WHERE EXISTS (SELECT u.id FROM get_users() u)",
+      "AND EXISTS (SELECT u.id FROM users u);",
+      "SELECT u.id FROM get_users() u WHERE EXISTS (SELECT u.id FROM users u);",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const table = await referencesAt(project, "schema.sql", schema, 1, "users");
+      const routine = await referencesAt(project, "schema.sql", schema, 2, "get_users");
+
+      expect(referenceSites(project.root, table)).toEqual(
+        [
+          siteAt("schema.sql", schema, 1, "users"),
+          siteAt("use.sql", use, 1, "u.id"),
+          siteAt("use.sql", use, 1, "users"),
+          siteAt("use.sql", use, 3, "u.id"),
+          siteAt("use.sql", use, 3, "users"),
+          siteAt("use.sql", use, 4, "u.id", 1),
+          siteAt("use.sql", use, 4, "users", 1),
+        ].sort(),
+      );
+      expect(okReferences(table).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(referenceSites(project.root, routine)).toEqual(
+        [
+          siteAt("schema.sql", schema, 2, "get_users"),
+          siteAt("use.sql", use, 2, "get_users"),
+          siteAt("use.sql", use, 4, "get_users"),
+        ].sort(),
+      );
+      expect(await gotoAt(project, "use.sql", use, 1, "u.id")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 2, "u.id")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 3, "u.id")).toBe("schema.sql:1");
+      expect(await gotoAt(project, "use.sql", use, 4, "u.id")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 4, "u.id", 1)).toBe("schema.sql:1");
+    });
+  });
+
+  it("marks a relation and routine sharing one source alias as unresolved", async () => {
+    const schema = [
+      "CREATE TABLE users (id integer);",
+      "CREATE FUNCTION get_users() RETURNS TABLE (id integer) AS $$ SELECT 1 $$ LANGUAGE sql;",
+    ];
+    const use = ["SELECT u.id FROM users u, get_users() u;"];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const table = await referencesAt(project, "schema.sql", schema, 1, "users");
+      expect(referenceSites(project.root, table)).toEqual(
+        [siteAt("schema.sql", schema, 1, "users"), siteAt("use.sql", use, 1, "users")].sort(),
+      );
+      expect(okReferences(table).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["strategy_unavailable"],
+        affectedFiles: [project.file("use.sql")],
+      });
+      expect(await gotoAt(project, "use.sql", use, 1, "u.id")).toBe("not_found");
+    });
+  });
+
+  it("keeps escaped E-string semicolons and calls out of routine references", async () => {
+    const schema = ["CREATE FUNCTION norm(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;"];
+    const use = [
+      String.raw`SELECT E'can\'t; norm(1)';`,
+      String.raw`SELECT e'can\'t; norm(3)';`,
+      "SELECT 'can''t; norm(4)';",
+      "SELECT norm(2);",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      const result = await referencesAt(project, "schema.sql", schema, 1, "norm");
+      expect(referenceSites(project.root, result)).toEqual(
+        [siteAt("schema.sql", schema, 1, "norm"), siteAt("use.sql", use, 4, "norm")].sort(),
+      );
+      expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(await gotoAt(project, "use.sql", use, 1, "norm")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 2, "norm")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 3, "norm")).toBe("not_found");
+      expect(await gotoAt(project, "use.sql", use, 4, "norm")).toBe("schema.sql:1");
+    });
+  });
+
   it("reads a nested block comment as one comment, so a call inside it is no call", async () => {
     const schema = ["CREATE FUNCTION norm(x integer) RETURNS integer AS $$ SELECT x $$ LANGUAGE sql;"];
     const use = [

@@ -238,6 +238,23 @@ describe("SQL fact extraction", () => {
     ]);
   });
 
+  it("records nested EXISTS relation reads without inventing a string source", () => {
+    const facts = extractSqlFactsFromSource(
+      "nested.sql",
+      "SELECT u.id FROM users u WHERE EXISTS (SELECT 1 FROM accounts a) AND 'FROM decoy' <> '';",
+    );
+    expect(facts.map((fact) => [fact.kind, fact.objectName])).toEqual([
+      ["reads_from", "users"],
+      ["reads_from", "accounts"],
+    ]);
+  });
+
+  it("keeps escaped E-string text out of relation facts after statement splitting", () => {
+    const source = [String.raw`SELECT E'can\'t; FROM hidden';`, "SELECT id FROM users;"].join("\n");
+    const facts = extractSqlFactsFromSource("literal.sql", source);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
+  });
+
   it("handles PostgreSQL ONLY table modifiers as syntax instead of object names", () => {
     const filePath = path.join(fixtureRoot, "migrations", "20240510120100_only.sql");
     const facts = extractSqlFactsFromSource(
