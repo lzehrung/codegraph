@@ -105,7 +105,7 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
-import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
+import { findSqlReferences, goToSqlDefinition, sqlPositionIsProvenObjectOrRoutineMention } from "../sql/navigation.js";
 import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
 import {
   createLoadingParsedFileProvider,
@@ -624,13 +624,27 @@ async function findReferencesInternal(
     provenance = createNavigationProvenance("exact", "high");
   } else {
     const module = index.byFile.get(fileIdentityKey(req.file));
+    // A SQL definition spans its whole statement, so a position inside it can name another object: the
+    // function a trigger runs, a call in a routine body, or a table a view reads. Resolve that name first.
+    const sqlTarget = module ? await goToSqlDefinition(index, req) : null;
     const localAtPosition = module?.locals.find((local) =>
       rangeContains(local.range, {
         row: req.line,
         column: req.column,
       }),
     );
-    if (localAtPosition) {
+    // A column can share a table's name. Only a syntactically proven object or routine mention
+    // overrides the definition that encloses the position; a column stays on that definition.
+    const namesObject =
+      sqlTarget && localAtPosition ? await sqlPositionIsProvenObjectOrRoutineMention(index, req) : false;
+    // A proven mention that no single definition owns, such as an overloaded callee, is unresolved.
+    // It is not a reference to the definition around it.
+    if (namesObject && sqlTarget?.status === "not_found") return { status: "not_found", reason: sqlTarget.reason };
+    const sqlMention = sqlTarget?.status === "ok" && (!localAtPosition || namesObject);
+    if (sqlMention && sqlTarget?.status === "ok") {
+      def = sqlTarget.definition;
+      provenance = sqlTarget.provenance;
+    } else if (localAtPosition) {
       def = localAtPosition;
       provenance = createNavigationProvenance("exact", "high");
     } else {
@@ -659,7 +673,10 @@ async function findReferencesInternal(
   const maxReferences =
     typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
   const sqlReferences = await findSqlReferences(index, def, {
-    includeDefinition: collectionMode === "all",
+    // A SQL definition spans its whole statement, so rename finds the declaration's name through here.
+    includeDefinition: collectionMode !== "usages",
+    // Rename edits the name in `public.f`, not the qualifier that comes with it.
+    renameRanges: collectionMode === "rename",
     ...(maxReferences === undefined ? {} : { maxReferences }),
   });
   if (sqlReferences) return sqlReferences;
