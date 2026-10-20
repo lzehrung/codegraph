@@ -44,8 +44,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * separate namespaces.
  * Epoch 90 masks SCSS `//` comments and unquoted `url(...)` tokens, and resolves a Sass directory
  * load to its `_index.scss`.
+ * Epoch 91 keeps qualified `case` names and `loop`/`repeat` identifiers out of SQL block tracking.
  */
-export const CORE_ALGORITHM_EPOCH = 90;
+export const CORE_ALGORITHM_EPOCH = 91;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

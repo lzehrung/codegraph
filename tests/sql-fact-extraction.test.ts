@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resetSqlTriviaClassificationShape, sqlTriviaClassificationShape } from "../src/sql/lex.js";
 import { classifySqlFile, extractSqlFactsFromSource } from "../src/sql/index.js";
 
 const fixtureRoot = path.resolve(process.cwd(), "tests", "samples", "sql", "facts");
@@ -644,4 +645,410 @@ describe("SQL fact extraction", () => {
     expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual(["p", "q"]);
     expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
   });
+
+  it("keeps both procedures and the table read when case is qualified across space or a comment", () => {
+    const facts = extractSqlFactsFromSource(
+      "case-qualified.sql",
+      [
+        "CREATE PROCEDURE p AS",
+        "BEGIN",
+        "  SELECT t . case FROM users t;",
+        "END",
+        "GO",
+        "CREATE PROCEDURE q AS",
+        "BEGIN",
+        "  SELECT t. /* note */ case FROM accounts t;",
+        "END",
+        "GO",
+        "CREATE PROCEDURE r AS",
+        "BEGIN",
+        "  SELECT t. -- note",
+        "    case FROM roles t;",
+        "END",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual([
+      "p",
+      "q",
+      "r",
+    ]);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+      "roles",
+    ]);
+  });
+
+  it("does not let a column or parameter named loop or repeat swallow the next statement", () => {
+    const tables = extractSqlFactsFromSource(
+      "loop-column.sql",
+      [
+        "CREATE TABLE a (repeat integer);",
+        "CREATE TABLE b (id integer);",
+        "CREATE TABLE c (loop integer);",
+        "CREATE TABLE d (id integer, repeat integer, loop integer);",
+      ].join("\n"),
+    );
+    expect(tables.filter((fact) => fact.kind === "defines_table").map((fact) => fact.objectName)).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+    ]);
+
+    const routines = extractSqlFactsFromSource(
+      "loop-param.sql",
+      [
+        "CREATE PROCEDURE p(repeat integer, loop integer) AS",
+        "BEGIN",
+        "  SELECT id FROM users;",
+        "END",
+        "GO",
+        "CREATE PROCEDURE q AS",
+        "BEGIN",
+        "  SELECT t . loop FROM accounts;",
+        "  SELECT t. /* note */ repeat FROM roles;",
+        "END",
+      ].join("\n"),
+    );
+    expect(routines.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual([
+      "p",
+      "q",
+    ]);
+    expect(routines.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+      "roles",
+    ]);
+    const body =
+      routines.find((fact) => fact.kind === "defines_routine" && fact.objectName === "q")?.statementText ?? "";
+    expect(body).toContain("FROM roles");
+  });
+
+  it("keeps LOOP, REPEAT, and labeled loop bodies inside the routine", () => {
+    const facts = extractSqlFactsFromSource(
+      "loop-body.sql",
+      [
+        "CREATE PROCEDURE p AS BEGIN",
+        "  LOOP",
+        "    SELECT id FROM orgs;",
+        "  END LOOP;",
+        "  SELECT id FROM teams;",
+        "END;",
+        "CREATE PROCEDURE q AS BEGIN",
+        "  REPEAT",
+        "    SELECT id FROM users;",
+        "  UNTIL 1 = 1",
+        "  END REPEAT;",
+        "  SELECT id FROM accounts;",
+        "END;",
+        "CREATE PROCEDURE s AS BEGIN",
+        "  lbl: LOOP",
+        "    SELECT id FROM roles;",
+        "  END LOOP lbl;",
+        "  SELECT id FROM projects;",
+        "END;",
+        "CREATE PROCEDURE w AS BEGIN",
+        "  WHILE id < 10 LOOP",
+        "    SELECT id FROM tasks;",
+        "  END LOOP;",
+        "  SELECT id FROM logs;",
+        "END;",
+        "CREATE PROCEDURE f AS BEGIN",
+        "  FOR i IN 1..10 LOOP",
+        "    SELECT id FROM events;",
+        "  END LOOP;",
+        "  SELECT id FROM seats;",
+        "END;",
+        "CREATE PROCEDURE e AS BEGIN",
+        "  SELECT CASE WHEN id = 1 THEN loop ELSE 0 END AS flag FROM flags;",
+        "  SELECT id FROM marks;",
+        "END;",
+      ].join("\n"),
+    );
+
+    const bodyOf = (name: string): string =>
+      facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === name)?.statementText ?? "";
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual([
+      "p",
+      "q",
+      "s",
+      "w",
+      "f",
+      "e",
+    ]);
+    expect(bodyOf("p")).toContain("FROM teams");
+    expect(bodyOf("q")).toContain("FROM accounts");
+    expect(bodyOf("s")).toContain("FROM projects");
+    expect(bodyOf("w")).toContain("FROM logs");
+    expect(bodyOf("f")).toContain("FROM seats");
+    expect(bodyOf("e")).toContain("FROM marks");
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "orgs",
+      "teams",
+      "users",
+      "accounts",
+      "roles",
+      "projects",
+      "tasks",
+      "logs",
+      "events",
+      "seats",
+      "flags",
+      "marks",
+    ]);
+  });
+
+  it("keeps both procedures when while is qualified across space or a comment", () => {
+    const facts = extractSqlFactsFromSource(
+      "while-qualified.sql",
+      [
+        "CREATE PROCEDURE p AS",
+        "BEGIN",
+        "  SELECT t . while, loop FROM users t;",
+        "END",
+        "GO",
+        "CREATE PROCEDURE q AS",
+        "BEGIN",
+        "  SELECT t. /* x */ while, loop FROM accounts t;",
+        "END",
+        "GO",
+        "CREATE PROCEDURE r AS",
+        "BEGIN",
+        "  SELECT id FROM roles;",
+        "END",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual([
+      "p",
+      "q",
+      "r",
+    ]);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+      "roles",
+    ]);
+  });
+
+  it("keeps both reads when a string holds a line-comment marker before LOOP", () => {
+    const facts = extractSqlFactsFromSource(
+      "string-comment-loop.sql",
+      "CREATE PROCEDURE p AS BEGIN SELECT '--'; LOOP SELECT id FROM users; END LOOP; SELECT id FROM accounts; END",
+    );
+
+    const body = facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === "p")?.statementText ?? "";
+    expect(body).toContain("FROM users");
+    expect(body).toContain("FROM accounts");
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+    ]);
+  });
+
+  it("keeps the read after a procedural CASE that contains LOOP or REPEAT", () => {
+    const facts = extractSqlFactsFromSource(
+      "case-stmt.sql",
+      [
+        "CREATE PROCEDURE p AS BEGIN",
+        "  CASE 1 WHEN 1 THEN LOOP SELECT id FROM users; END LOOP; END CASE;",
+        "  SELECT id FROM tail_users;",
+        "END;",
+        "CREATE PROCEDURE q AS BEGIN",
+        "  CASE 1 WHEN 1 THEN REPEAT SELECT id FROM accounts; UNTIL 1 = 1 END REPEAT; END CASE;",
+        "  SELECT id FROM tail_accounts;",
+        "END;",
+        "CREATE PROCEDURE e AS BEGIN",
+        "  SELECT CASE WHEN loop = 1 THEN 1 END FROM flags;",
+        "  SELECT id FROM marks;",
+        "END;",
+      ].join("\n"),
+    );
+
+    const bodyOf = (name: string): string =>
+      facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === name)?.statementText ?? "";
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual([
+      "p",
+      "q",
+      "e",
+    ]);
+    expect(bodyOf("p")).toContain("FROM tail_users");
+    expect(bodyOf("q")).toContain("FROM tail_accounts");
+    expect(bodyOf("e")).toContain("FROM marks");
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "tail_users",
+      "accounts",
+      "tail_accounts",
+      "flags",
+      "marks",
+    ]);
+  });
+
+  it("keeps the routine body when CASE is followed by a decimal literal", () => {
+    const facts = extractSqlFactsFromSource(
+      "case-decimal.sql",
+      "CREATE PROCEDURE p AS BEGIN SELECT CASE .5 WHEN .5 THEN 1 ELSE 0 END AS flag FROM users; END",
+    );
+
+    const body = facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === "p")?.statementText ?? "";
+    expect(body).toContain("CASE .5");
+    expect(body).toContain("FROM users");
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
+  });
+
+  it("keeps the routine and its trailing read after a PL/pgSQL or quoted loop label", () => {
+    const plpgsql = "BEGIN <<retry>> LOOP NULL; END LOOP retry; SELECT id FROM users; END";
+    const mysql = "BEGIN `retry`: LOOP NULL; END LOOP `retry`; SELECT id FROM accounts; END";
+    const facts = extractSqlFactsFromSource(
+      "loop-label.sql",
+      [`CREATE PROCEDURE p AS ${plpgsql};`, `CREATE PROCEDURE q AS ${mysql};`].join("\n"),
+    );
+
+    const bodyOf = (name: string): string =>
+      facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === name)?.statementText ?? "";
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual(["p", "q"]);
+    expect(bodyOf("p")).toContain(plpgsql);
+    expect(bodyOf("q")).toContain(mysql);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+    ]);
+  });
+
+  it("keeps the tail read when CASE is inside a WHILE condition", () => {
+    const facts = extractSqlFactsFromSource(
+      "while-case.sql",
+      [
+        "CREATE PROCEDURE p AS BEGIN",
+        "  WHILE CASE WHEN 1 = 1 THEN 1 ELSE 0 END = 1 LOOP",
+        "    SELECT id FROM inner_users;",
+        "  END LOOP;",
+        "  SELECT id FROM tail_users;",
+        "END;",
+      ].join("\n"),
+    );
+
+    const body = facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === "p")?.statementText ?? "";
+    expect(body).toContain("FROM tail_users");
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "inner_users",
+      "tail_users",
+    ]);
+  });
+
+  it("indexes both tables after a BEGIN that selects columns named while and loop", () => {
+    const facts = extractSqlFactsFromSource(
+      "while-column.sql",
+      [
+        "BEGIN",
+        "  SELECT while, loop FROM users;",
+        "END;",
+        "CREATE TABLE a (id integer);",
+        "CREATE TABLE b (id integer);",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "defines_table").map((fact) => fact.objectName)).toEqual(["a", "b"]);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
+  });
+
+  it("indexes both procedures when repeat is an operand in a loop condition", () => {
+    const facts = extractSqlFactsFromSource(
+      "repeat-operand.sql",
+      [
+        "CREATE PROCEDURE p AS BEGIN",
+        "  WHILE repeat < 10 LOOP",
+        "    SELECT id FROM users;",
+        "  END LOOP;",
+        "END;",
+        "CREATE PROCEDURE q AS BEGIN",
+        "  SELECT id FROM accounts;",
+        "END;",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual(["p", "q"]);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+    ]);
+  });
+
+  it("keeps both procedures and the read after MySQL DO CASE", () => {
+    const facts = extractSqlFactsFromSource(
+      "do-case.sql",
+      [
+        "CREATE PROCEDURE p() BEGIN",
+        "  DO CASE WHEN 1 THEN 1 ELSE 0 END;",
+        "  SELECT id FROM users;",
+        "END;",
+        "CREATE PROCEDURE q() BEGIN",
+        "  SELECT id FROM accounts;",
+        "END;",
+      ].join("\n"),
+    );
+
+    const body = facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === "p")?.statementText ?? "";
+    expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual(["p", "q"]);
+    expect(body).toContain("FROM users");
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+    ]);
+  });
+
+  it("treats T-SQL END IF without a semicolon as a plain END", () => {
+    const facts = extractSqlFactsFromSource(
+      "end-if-var.sql",
+      [
+        "BEGIN",
+        "  SELECT id FROM kept;",
+        "END IF @x = 1",
+        "BEGIN",
+        "  SELECT id FROM users;",
+        "END;",
+        "CREATE TABLE accounts (id integer);",
+        "CREATE TABLE roles (id integer);",
+      ].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "defines_table").map((fact) => fact.objectName)).toEqual([
+      "accounts",
+      "roles",
+    ]);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "kept",
+      "users",
+    ]);
+  });
+
+  it("ends the batch at GO while a BEGIN is still open", () => {
+    const facts = extractSqlFactsFromSource(
+      "open-go.sql",
+      ["BEGIN", "  SELECT id FROM users", "GO", "CREATE TABLE accounts (id integer);"].join("\n"),
+    );
+
+    expect(facts.filter((fact) => fact.kind === "defines_table").map((fact) => fact.objectName)).toEqual(["accounts"]);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
+  });
+
+  it("classifies qualified keywords from one trivia table per scan", () => {
+    const statements = 20_000;
+    const reads = Array.from({ length: statements }, (_, index) => `  SELECT t. /* x */ case FROM t${index};`);
+    const source = ["CREATE PROCEDURE p AS BEGIN", ...reads, "  SELECT id FROM users;", "END"].join("\n");
+    resetSqlTriviaClassificationShape();
+    const facts = extractSqlFactsFromSource("wide-case.sql", source);
+    const shape = sqlTriviaClassificationShape();
+    const body = facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === "p")?.statementText ?? "";
+
+    expect(shape.uncachedSkips).toBe(0);
+    // One table for the file, one for the routine body, one for its split, then one per inner statement.
+    expect(shape.builds).toBeLessThanOrEqual(statements + 32);
+    expect(body).toContain("t. /* x */ case");
+    expect(body).toContain("FROM users");
+    expect(facts.some((fact) => fact.kind === "reads_from" && fact.objectName === "users")).toBe(true);
+  }, 60_000);
 });

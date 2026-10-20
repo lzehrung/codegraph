@@ -3,6 +3,7 @@ import { normalizePath } from "../util/paths.js";
 import { classifySqlFile } from "./classify-sql-file.js";
 import {
   createSqlObjectNameRegExp,
+  isBareSqlKeyword,
   maskSqlQuotedIdentifiers,
   maskSqlStringsAndComments,
   normalizeSqlObjectName,
@@ -12,6 +13,8 @@ import {
   sqlParenDepthAt,
   sqlQueryScopes,
   sqlSourceClauses,
+  sqlTriviaBoundaries,
+  type SqlTriviaBoundaries,
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
 import { SQL_ROUTINE_DEFINITION_RE } from "./routine-mentions.js";
@@ -118,40 +121,10 @@ function statementSlice(
 
 type SqlStatementScan = { statements: SqlStatementSlice[]; endsInBlockComment: boolean };
 
-type SqlBlockFrame = "begin" | "case" | "if" | "loop" | "while" | "repeat";
+type SqlBlockFrame = "begin" | "case";
 
-const SQL_BLOCK_WORDS = new Set(["begin", "case", "do", "end", "if", "loop", "repeat", "then", "while"]);
-const SQL_COMPOUND_FOLLOWER = new Set(["case", "if", "loop", "repeat", "while"]);
-const SQL_IF_STOP = new Set(["begin"]);
-const SQL_WHILE_STOP = new Set(["begin", "loop"]);
-const SQL_EXPRESSION_WORDS = new Set([
-  "and",
-  "apply",
-  "as",
-  "by",
-  "from",
-  "group",
-  "having",
-  "into",
-  "join",
-  "lateral",
-  "on",
-  "only",
-  "or",
-  "order",
-  "select",
-  "set",
-  "update",
-  "using",
-  "values",
-  "when",
-  "where",
-]);
-
-function isSqlSpace(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return code === 32 || code === 9 || code === 10 || code === 13 || code === 12;
-}
+/** Words that can follow END in `END LOOP` or `END CASE`. Anything else is a plain END. */
+const SQL_END_FOLLOWER = new Set(["case", "for", "if", "loop", "repeat", "while"]);
 
 function readBareWord(text: string, index: number): { word: string; end: number } | null {
   if (!/[A-Za-z_]/.test(text[index] ?? "")) return null;
@@ -160,239 +133,104 @@ function readBareWord(text: string, index: number): { word: string; end: number 
   return { word: text.slice(index, end).toLowerCase(), end };
 }
 
-function sqlNameMark(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return (
-    code === 64 || code === 58 || code === 36 || code === 46 || code === 35 || code === 34 || code === 96 || code === 91
-  );
+function nextSignificant(trivia: SqlTriviaBoundaries, index: number): number {
+  const table = trivia.forward;
+  if (index < 0) return table[0] ?? 0;
+  if (index >= table.length) return table[table.length - 1] ?? index;
+  return table[index] ?? index;
 }
 
-function sqlBlockKeywordAt(text: string, index: number): { word: string; end: number } | null {
-  const previous = text[index - 1] ?? "";
-  if (sqlNameMark(previous) || /[A-Za-z0-9_]/.test(previous)) return null;
-  const read = readBareWord(text, index);
-  if (!read || !SQL_BLOCK_WORDS.has(read.word)) return null;
-  return read;
-}
-function skipQuoted(text: string, index: number, quote: string): number {
-  let cursor = index + 1;
-  while (cursor < text.length) {
-    if (text[cursor] === quote) {
-      if (text[cursor + 1] === quote) {
+/** A bare or quoted identifier: the optional label in `END LOOP label` or `END CASE label`. */
+function identifierEnd(text: string, index: number): number | null {
+  const open = text[index] ?? "";
+  if (open === '"' || open === "`" || open === "[") {
+    const close = open === "[" ? "]" : open;
+    let cursor = index + 1;
+    while (cursor < text.length) {
+      if ((text[cursor] ?? "") !== close) {
+        cursor += 1;
+        continue;
+      }
+      if ((text[cursor + 1] ?? "") === close) {
         cursor += 2;
         continue;
       }
       return cursor + 1;
     }
-    cursor += 1;
+    return null;
   }
-  return cursor;
-}
-
-function skipBlockComment(text: string, index: number): number {
-  let depth = 1;
-  let cursor = index + 2;
-  while (cursor < text.length && depth > 0) {
-    if (text.charCodeAt(cursor) === 47 && text.charCodeAt(cursor + 1) === 42) {
-      depth += 1;
-      cursor += 2;
-      continue;
-    }
-    if (text.charCodeAt(cursor) === 42 && text.charCodeAt(cursor + 1) === 47) {
-      depth -= 1;
-      cursor += 2;
-      continue;
-    }
-    cursor += 1;
-  }
-  return cursor;
-}
-
-function skipSingleQuoted(text: string, index: number): number {
-  const prev = text[index - 1] ?? "";
-  const before = text[index - 2] ?? "";
-  const escape = /[eE]/.test(prev) && !/[A-Za-z0-9_$]/.test(before);
-  let cursor = index + 1;
-  while (cursor < text.length) {
-    const code = text.charCodeAt(cursor);
-    const next = text.charCodeAt(cursor + 1);
-    if (escape && code === 92 && next > 0) {
-      cursor += 2;
-      continue;
-    }
-    if (code === 39 && next === 39) {
-      cursor += 2;
-      continue;
-    }
-    if (code === 39) return cursor + 1;
-    cursor += 1;
-  }
-  return cursor;
-}
-
-function dollarTagAt(text: string, index: number): string | null {
-  if (text.charCodeAt(index) !== 36) return null;
-  if (text.charCodeAt(index + 1) === 36) return "$$";
-  if (!/[A-Za-z_]/.test(text[index + 1] ?? "")) return null;
-  let end = index + 2;
+  if (!/[A-Za-z_]/.test(open)) return null;
+  let end = index + 1;
   while (/[A-Za-z0-9_$]/.test(text[end] ?? "")) end += 1;
-  if (text.charCodeAt(end) !== 36) return null;
-  return text.slice(index, end + 1);
-}
-function skipSqlGap(text: string, index: number): number {
-  let cursor = index;
-  while (cursor < text.length) {
-    const code = text.charCodeAt(cursor);
-    const next = text.charCodeAt(cursor + 1);
-    if (isSqlSpace(text[cursor] ?? "")) {
-      cursor += 1;
-      continue;
-    }
-    if (code === 45 && next === 45) {
-      const newline = text.indexOf(String.fromCharCode(10), cursor + 2);
-      cursor = newline < 0 ? text.length : newline + 1;
-      continue;
-    }
-    if (code === 47 && next === 42) {
-      cursor = skipBlockComment(text, cursor);
-      continue;
-    }
-    if (code === 39) {
-      cursor = skipSingleQuoted(text, cursor);
-      continue;
-    }
-    if (code === 34 || code === 96) {
-      cursor = skipQuoted(text, cursor, text[cursor] ?? "");
-      continue;
-    }
-    if (code === 91) {
-      cursor = skipQuoted(text, cursor, String.fromCharCode(93));
-      continue;
-    }
-    const tag = dollarTagAt(text, cursor);
-    if (tag) {
-      const close = text.indexOf(tag, cursor + tag.length);
-      cursor = close < 0 ? text.length : close + tag.length;
-      continue;
-    }
-    return cursor;
-  }
-  return cursor;
+  return end;
 }
 
-function nextSqlBlockKeyword(text: string, index: number): { word: string; end: number } | null {
-  const keyword = sqlBlockKeywordAt(text, skipSqlGap(text, index));
-  if (!keyword || !SQL_COMPOUND_FOLLOWER.has(keyword.word)) return null;
-  return keyword;
+/** `;`, or no further significant token, completes `END LOOP [label]` and `END CASE [label]`. */
+function finishesCompound(text: string, index: number, trivia: SqlTriviaBoundaries): boolean {
+  const next = nextSignificant(trivia, index);
+  return next >= text.length || (text[next] ?? "") === ";";
 }
 
-function previousBareWord(text: string, index: number): string | null {
-  let cursor = index;
-  while (cursor > 0 && isSqlSpace(text[cursor - 1] ?? "")) cursor -= 1;
-  const wordEnd = cursor;
-  while (cursor > 0 && /[A-Za-z0-9_$]/.test(text[cursor - 1] ?? "")) cursor -= 1;
-  if (cursor === wordEnd || sqlNameMark(text[cursor - 1] ?? "")) return null;
-  return text.slice(cursor, wordEnd).toLowerCase();
+/** `GO` on its own line is a batch separator, not the label of an `END LOOP`. */
+function isOwnLineGo(text: string, index: number): boolean {
+  if (readBareWord(text, index)?.word !== "go") return false;
+  let lineStart = index;
+  while (lineStart > 0 && (text[lineStart - 1] ?? "") !== "\n") lineStart -= 1;
+  return /^[\t ]*go(?:[\t ]*(?:--[^\r\n]*)?)?(?:\r?\n|$)/i.test(text.slice(lineStart));
 }
 
-function opensBareBlock(text: string, wordStart: number, wordEnd: number): boolean {
-  if (text.charCodeAt(skipSqlGap(text, wordEnd)) === 40) return false;
-  let cursor = wordStart;
-  while (cursor > 0 && isSqlSpace(text[cursor - 1] ?? "")) cursor -= 1;
-  if (text.charCodeAt(cursor - 1) === 44) return false;
-  const previous = previousBareWord(text, wordStart);
-  return !previous || !SQL_EXPRESSION_WORDS.has(previous);
-}
-function seesCompoundIntroducer(
+/**
+ * `END IF|LOOP|WHILE|REPEAT|FOR [label]` then `;` or the end of the text closes nothing.
+ * `END CASE [label]` in that same shape closes the innermost CASE. Any other END, including
+ * T-SQL `END IF @x` with no semicolon after IF, closes the innermost frame. The returned index
+ * stops before the semicolon so the statement scan can still split on it.
+ */
+function classifyEnd(
   text: string,
-  index: number,
-  introducer: "then" | "do",
-  stops: ReadonlySet<string>,
-): boolean {
-  let parenDepth = 0;
-  let caseDepth = 0;
-  let cursor = index;
-  while (cursor < text.length) {
-    const skipped = skipSqlGap(text, cursor);
-    if (skipped !== cursor) {
-      cursor = skipped;
-      continue;
-    }
-    const code = text.charCodeAt(cursor);
-    if (code === 40) {
-      parenDepth += 1;
-      cursor += 1;
-      continue;
-    }
-    if (code === 41) {
-      parenDepth = Math.max(0, parenDepth - 1);
-      cursor += 1;
-      continue;
-    }
-    if (code === 59 && parenDepth === 0 && caseDepth === 0) return false;
-    if (!/[A-Za-z_]/.test(text[cursor] ?? "")) {
-      cursor += 1;
-      continue;
-    }
-    const keyword = sqlBlockKeywordAt(text, cursor);
-    const wordEnd = keyword?.end ?? readBareWord(text, cursor)?.end ?? cursor + 1;
-    if (!keyword) {
-      cursor = wordEnd;
-      continue;
-    }
-    if (keyword.word === introducer && caseDepth === 0) return true;
-    if (caseDepth === 0 && parenDepth === 0 && (stops.has(keyword.word) || keyword.word === "end")) return false;
-    if (keyword.word === "case") {
-      caseDepth += 1;
-      cursor = wordEnd;
-      continue;
-    }
-    if (keyword.word === "end" && caseDepth > 0) {
-      const follower = nextSqlBlockKeyword(text, wordEnd);
-      if (!follower || follower.word === "case") caseDepth -= 1;
-      const closesCompound = follower !== null && SQL_COMPOUND_FOLLOWER.has(follower.word);
-      cursor = closesCompound ? follower.end : wordEnd;
-      continue;
-    }
-    cursor = wordEnd;
+  endWordEnd: number,
+  trivia: SqlTriviaBoundaries,
+): { action: "noop" | "case" | "close"; resume: number } {
+  const close = { action: "close" as const, resume: endWordEnd };
+  const keywordAt = nextSignificant(trivia, endWordEnd);
+  if (isOwnLineGo(text, keywordAt)) return close;
+  const keyword = readBareWord(text, keywordAt);
+  if (!keyword || !SQL_END_FOLLOWER.has(keyword.word)) return close;
+  if (!isBareSqlKeyword(text, keywordAt, keyword.end, trivia)) return close;
+  if (finishesCompound(text, keyword.end, trivia)) {
+    return { action: keyword.word === "case" ? "case" : "noop", resume: keyword.end };
   }
-  return false;
+  const labelAt = nextSignificant(trivia, keyword.end);
+  if (isOwnLineGo(text, labelAt)) return close;
+  const labelEnd = identifierEnd(text, labelAt);
+  if (labelEnd === null || !finishesCompound(text, labelEnd, trivia)) return close;
+  return { action: keyword.word === "case" ? "case" : "noop", resume: labelEnd };
 }
 
-function advanceSqlBlockWord(text: string, index: number, stack: SqlBlockFrame[]): number {
-  const keyword = sqlBlockKeywordAt(text, index);
-  if (!keyword) return readBareWord(text, index)?.end ?? index + 1;
-  const word = keyword.word;
-  const wordEnd = keyword.end;
-  if (word === "begin") {
-    stack.push("begin");
-    return wordEnd;
+function closeInnermostCase(stack: SqlBlockFrame[]): void {
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    if (stack[index] !== "case") continue;
+    stack.length = index;
+    return;
   }
-  if (word === "case") {
-    stack.push("case");
-    return wordEnd;
+}
+
+/**
+ * Bare BEGIN and bare CASE open a frame. The bare-keyword check, using this scan's trivia
+ * table, leaves `t.case`, `@case`, a quoted name, and `CASE .5` as ordinary tokens.
+ */
+function advanceSqlBlockWord(text: string, index: number, stack: SqlBlockFrame[], trivia: SqlTriviaBoundaries): number {
+  const read = readBareWord(text, index);
+  if (!read) return index + 1;
+  if (!isBareSqlKeyword(text, index, read.end, trivia)) return read.end;
+  if (read.word === "begin" || read.word === "case") {
+    stack.push(read.word);
+    return read.end;
   }
-  if (word === "loop" || word === "repeat") {
-    if (opensBareBlock(text, index, wordEnd)) stack.push(word);
-    return wordEnd;
-  }
-  if (word === "if" && seesCompoundIntroducer(text, wordEnd, "then", SQL_IF_STOP)) {
-    stack.push("if");
-    return wordEnd;
-  }
-  if (word === "while" && seesCompoundIntroducer(text, wordEnd, "do", SQL_WHILE_STOP)) {
-    stack.push("while");
-    return wordEnd;
-  }
-  if (word !== "end") return wordEnd;
-  const follower = nextSqlBlockKeyword(text, wordEnd);
-  const top = stack.at(-1);
-  if (follower && top === follower.word) {
-    stack.pop();
-    return follower.end;
-  }
-  if (top === "case" || top === "begin") stack.pop();
-  return wordEnd;
+  if (read.word !== "end") return read.end;
+  const classified = classifyEnd(text, read.end, trivia);
+  if (classified.action === "case") closeInnermostCase(stack);
+  else if (classified.action === "close") stack.pop();
+  return classified.resume;
 }
 
 /**
@@ -400,6 +238,13 @@ function advanceSqlBlockWord(text: string, index: number, stack: SqlBlockFrame[]
  * which `nestedComments` reads. Without it, a block comment ends at its first closing delimiter.
  */
 function scanSqlStatements(source: string, nestedComments: boolean): SqlStatementScan {
+  // Block keywords use trivia boundaries from this mask, so each look is one table read.
+  // A dash-dash inside a quote is already blank and cannot be read as a line comment.
+  const masked = maskSqlStringsAndComments(source, {
+    nestedBlockComments: nestedComments,
+    escapeStrings: true,
+  });
+  const trivia = sqlTriviaBoundaries(masked);
   const statements: SqlStatementSlice[] = [];
   const lineStarts = lineStartsFor(source);
   let start = 0;
@@ -460,18 +305,11 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
       continue;
     }
 
-    if (
-      i === lineStart &&
-      openBlocks.length === 0 &&
-      !singleQuoted &&
-      !doubleQuoted &&
-      !backtickQuoted &&
-      !bracketQuoted &&
-      !dollarQuote
-    ) {
+    if (i === lineStart && !singleQuoted && !doubleQuoted && !backtickQuoted && !bracketQuoted && !dollarQuote) {
       const batchSeparator = source.slice(i).match(/^[\t ]*GO(?:[\t ]*(?:--[^\r\n]*)?)?(?:\r?\n|$)/i);
       if (batchSeparator?.[0]) {
         const nextStart = i + batchSeparator[0].length;
+        openBlocks.length = 0;
         pushStatement(i, nextStart);
         i = nextStart;
         lineStart = nextStart;
@@ -589,7 +427,7 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
       }
     }
     if (/[A-Za-z_]/.test(char)) {
-      i = advanceSqlBlockWord(source, i, openBlocks);
+      i = advanceSqlBlockWord(masked, i, openBlocks, trivia);
       continue;
     }
     if (char === ";" && openBlocks.length === 0) {
@@ -664,11 +502,12 @@ function collectReadSources(text: string): {
   joins: Array<{ name: string; scopeFromNames: readonly string[] }>;
 } {
   const scan = maskSqlQuotedIdentifiers(text);
-  const scopes = sqlQueryScopes(scan);
+  const trivia = sqlTriviaBoundaries(scan);
+  const scopes = sqlQueryScopes(scan, trivia);
   const names: string[] = [];
   const fromNamesByScope = new Map<number, string[]>();
   const joins: Array<{ name: string; scope: number }> = [];
-  for (const clause of sqlSourceClauses(scan)) {
+  for (const clause of sqlSourceClauses(scan, trivia)) {
     const scope = scopes.at(clause.start);
     if (clause.kind === "from" || clause.kind === "using") {
       for (const part of splitTopLevelCommaSeparated(text.slice(clause.end, clause.clauseEnd))) {
@@ -811,13 +650,15 @@ function extractReadFacts(text: string): SqlFactDraft[] {
 
 /**
  * The text between a routine body's BEGIN and its matching END. A BEGIN inside parentheses, as in
- * a parameter named begin, is not the body. A CASE expression, END IF, and END LOOP do not close
- * it, and a variable or qualified name such as @case or t.case is not a block keyword. Null when the
- * statement has no such body. A dollar-quoted body is already blank, so only a BEGIN/END that the
- * statement splitter kept as one statement is read.
+ * a parameter named begin, is not the body. Bare CASE opens a frame and `END CASE` closes that
+ * frame. `END IF`, `END LOOP`, `END WHILE`, `END REPEAT`, and `END FOR` close nothing, and any
+ * other END closes the innermost frame. A variable or qualified name such as `@case` or `t . case`
+ * is not a block keyword. Null when the statement has no such body. A dollar-quoted body is already
+ * blank, so only a BEGIN/END that the statement splitter kept as one statement is read.
  */
 function beginEndBody(text: string): string | null {
   const scan = maskSqlQuotedIdentifiers(text);
+  const trivia = sqlTriviaBoundaries(scan);
   const stack: SqlBlockFrame[] = [];
   let parenDepth = 0;
   let cursor = 0;
@@ -838,20 +679,20 @@ function beginEndBody(text: string): string | null {
       cursor += 1;
       continue;
     }
-    const keyword = parenDepth === 0 ? sqlBlockKeywordAt(scan, cursor) : null;
-    if (keyword?.word === "begin") {
-      bodyStart = keyword.end;
+    const word = readBareWord(scan, cursor);
+    if (parenDepth === 0 && word?.word === "begin" && isBareSqlKeyword(scan, cursor, word.end, trivia)) {
+      bodyStart = word.end;
       stack.push("begin");
-      cursor = keyword.end;
+      cursor = word.end;
       break;
     }
-    cursor = readBareWord(scan, cursor)?.end ?? cursor + 1;
+    cursor = word?.end ?? cursor + 1;
   }
   if (bodyStart < 0) return null;
   while (cursor < scan.length) {
     if (/[A-Za-z_]/.test(scan[cursor] ?? "")) {
       const atWord = cursor;
-      cursor = advanceSqlBlockWord(scan, cursor, stack);
+      cursor = advanceSqlBlockWord(scan, cursor, stack, trivia);
       if (stack.length === 0) return text.slice(bodyStart, atWord);
       continue;
     }
