@@ -1,0 +1,11 @@
+@use "colors";
+@use "colors" as c;
+
+.button {
+  color: colors.$primary;
+  background: colors.$primary_color;
+  @include c.pad;
+  width: c.double(2);
+  // colors.$primary
+  /* colors.$primary */
+}

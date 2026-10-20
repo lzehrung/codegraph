@@ -1,0 +1,11 @@
+$primary: blue;
+$primary-color: green;
+@mixin pad {
+  padding: 0;
+}
+%ph {
+  color: blue;
+}
+@function div($n) {
+  @return $n;
+}

@@ -923,6 +923,540 @@ describe("rename preview", () => {
     expect(result.omittedCounts.candidateTests).toBeGreaterThan(0);
     expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "limit_exceeded" }));
   });
+  it("reports shadowing for a same-file mixin renamed to a nested mixin", async () => {
+    const root = await mkTmpDir("cg-rename-scss-nested-mixin-");
+    await fsp.writeFile(
+      path.join(root, "main.scss"),
+      [
+        "@mixin pad { color: red; }",
+        ".a {",
+        "  @mixin inset { color: blue; }",
+        "  @include pad;",
+        "}",
+        ".b { @include pad; }",
+        "",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "pad" });
+      const target = symbols.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === "pad");
+      expect(target).toBeDefined();
+      const renamed = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "inset" });
+      expect(renamed.safe).toBe(false);
+      expect(renamed.conflicts.map(({ file, reason, location }) => [file, reason, location?.range.start.line])).toEqual(
+        [["main.scss", "shadowing", 4]],
+      );
+      expect(renamed.edits.map((edit) => edit.range.start.line)).toEqual([1, 4, 6]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("reports only same-kind scoped callable captures after a Sass rename, including forward prefixes", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      for (const prefix of ["", "ui-"]) {
+        const root = await mkTmpDir("cg-rename-scss-callable-");
+        const opposite = kind === "mixin" ? "function" : "mixin";
+        const declaration = kind === "mixin" ? "@mixin pad { color: red; }" : "@function pad() { @return 1px; }";
+        const nested = kind === "mixin" ? "@mixin " : "@function ";
+        const body = kind === "mixin" ? " { color: blue; }" : "() { @return 2px; }";
+        const oppositeBody = kind === "mixin" ? "() { @return 2px; }" : " { color: blue; }";
+        const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+        const main = [
+          `@use "${prefix ? "forward" : "lib"}" as *;`,
+          '@use "lib" as lib;',
+          ".a {",
+          `  ${nested}${prefix}in_set${body}`,
+          `  ${call(prefix + "pad")}`,
+          `  ${call("lib.pad")}`,
+          "}",
+          `.b { ${call(prefix + "pad")} }`,
+          `.c { @${opposite} ${prefix}in_set${oppositeBody} ${call(prefix + "pad")} }`,
+          "",
+        ].join("\n");
+        await fsp.writeFile(path.join(root, "_lib.scss"), declaration + "\n");
+        await fsp.writeFile(path.join(root, "_forward.scss"), '@forward "lib" as ui-*;\n');
+        await fsp.writeFile(path.join(root, "main.scss"), main);
+        const session = createAgentSession({ root, freshness: { policy: "check" } });
+        try {
+          const symbols = await workspaceSymbolsWithSession(session, { root, query: "pad" });
+          const target = symbols.symbols.find(
+            (symbol) => symbol.location.file === "_lib.scss" && symbol.name === "pad",
+          );
+          expect(target, `${kind} ${prefix}`).toBeDefined();
+          const renamed = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "in-set" });
+          expect(renamed.safe, `${kind} ${prefix}`).toBe(false);
+          expect(
+            renamed.conflicts.map(({ file, reason, location }) => [file, reason, location?.range.start.line]),
+          ).toEqual([["main.scss", "shadowing", 5]]);
+          expect(
+            renamed.edits.filter((edit) => edit.file === "main.scss").map((edit) => edit.range.start.line),
+          ).toEqual([5, 6, 8, 9]);
+        } finally {
+          session.invalidate();
+        }
+      }
+    }
+  });
+  it("renames a scoped function together with the local calls it owns", async () => {
+    const root = await mkTmpDir("cg-rename-scss-local-function-");
+    await fsp.writeFile(path.join(root, "_lib.scss"), "@function inset() { @return 9px; }\n");
+    await fsp.writeFile(
+      path.join(root, "main.scss"),
+      [
+        '@use "lib" as lib;',
+        ".a {",
+        "  @function inset() { @return 2px; }",
+        "  width: inset();",
+        "  width: lib.inset();",
+        "}",
+        ".b { width: lib.inset(); }",
+        "",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "inset" });
+      const local = symbols.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === "inset");
+      expect(local).toBeDefined();
+      const renamed = await previewRenameWithSession(session, { root, handle: local!.handle, newName: "shift" });
+      expect(renamed.safe).toBe(true);
+      expect(renamed.conflicts).toEqual([]);
+      expect(renamed.unsafeSites).toEqual([]);
+      expect(renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["definition", 3, "inset", "shift"],
+        ["reference", 4, "inset", "shift"],
+      ]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("renames a scoped meta name and a user mixin that owns the bare include", async () => {
+    const root = await mkTmpDir("cg-rename-scss-meta-owner-");
+    await fsp.writeFile(
+      path.join(root, "main.scss"),
+      [
+        '@use "sass:meta" as *;',
+        ".a {",
+        "  @function get-function($name) { @return 1; }",
+        '  w: get-function("x");',
+        "  @mixin load-css($url) { color: red; }",
+        '  @include load-css("x");',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "get-function" });
+      const fn = symbols.symbols.find(
+        (symbol) => symbol.location.file === "main.scss" && symbol.name === "get-function",
+      );
+      expect(fn).toBeDefined();
+      const renamedFn = await previewRenameWithSession(session, { root, handle: fn!.handle, newName: "pick" });
+      expect(renamedFn.safe).toBe(true);
+      expect(renamedFn.unsafeSites).toEqual([]);
+      expect(renamedFn.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["definition", 3, "get-function", "pick"],
+        ["reference", 4, "get-function", "pick"],
+      ]);
+      const mixins = await workspaceSymbolsWithSession(session, { root, query: "load-css" });
+      const mixin = mixins.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === "load-css");
+      expect(mixin).toBeDefined();
+      const renamedMixin = await previewRenameWithSession(session, {
+        root,
+        handle: mixin!.handle,
+        newName: "paint",
+      });
+      expect(renamedMixin.safe).toBe(true);
+      expect(renamedMixin.unsafeSites).toEqual([]);
+      expect(renamedMixin.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["definition", 5, "load-css", "paint"],
+        ["reference", 6, "load-css", "paint"],
+      ]);
+    } finally {
+      session.invalidate();
+    }
+  });
+  it("renames a scoped mixin's underscore include and leaves an include outside the block", async () => {
+    const root = await mkTmpDir("cg-rename-scss-local-mixin-spell-");
+    await fsp.writeFile(
+      path.join(root, "main.scss"),
+      [".a {", "  @mixin in-set { color: blue; }", "  @include in_set;", "}", ".b { @include in-set; }", ""].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "in-set" });
+      const local = symbols.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === "in-set");
+      expect(local).toBeDefined();
+      const renamed = await previewRenameWithSession(session, { root, handle: local!.handle, newName: "shift" });
+      expect(renamed.safe).toBe(true);
+      expect(renamed.unsafeSites).toEqual([]);
+      expect(renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["definition", 2, "in-set", "shift"],
+        ["reference", 3, "in_set", "shift"],
+      ]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("keeps a scoped mixin rename safe when its local include is already proven", async () => {
+    const root = await mkTmpDir("cg-rename-scss-proven-mixin-");
+    await fsp.writeFile(path.join(root, "main.scss"), ".a {\n  @mixin inset { color: blue; }\n  @include inset;\n}\n");
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "inset" });
+      const local = symbols.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === "inset");
+      expect(local).toBeDefined();
+      const renamed = await previewRenameWithSession(session, { root, handle: local!.handle, newName: "shift" });
+      expect(renamed.safe).toBe(true);
+      expect(renamed.edits.map((edit) => [edit.kind, edit.range.start.line])).toEqual([
+        ["definition", 2],
+        ["reference", 3],
+      ]);
+      expect(renamed.unsafeSites).toEqual([]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
+  it("rejects an inverse scoped callable rename that captures an existing module call", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      const root = await mkTmpDir("cg-rename-scss-inverse-callable-");
+      const declaration = kind === "mixin" ? "@mixin pad { color: red; }" : "@function pad() { @return 1px; }";
+      const localBody = kind === "mixin" ? " { color: blue; }" : "() { @return 2px; }";
+      const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+      await fsp.writeFile(path.join(root, "_lib.scss"), declaration + "\n");
+      await fsp.writeFile(
+        path.join(root, "main.scss"),
+        [
+          '@use "lib" as *;',
+          '@use "lib" as lib;',
+          ".a {",
+          `  ${call("pad")}`,
+          `  @${kind} inset${localBody}`,
+          `  ${call("inset")}`,
+          `  ${call("pad")}`,
+          `  ${call("lib.pad")}`,
+          "}",
+          `.b { ${call("pad")} }`,
+          "",
+        ].join("\n"),
+      );
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      try {
+        const symbols = await workspaceSymbolsWithSession(session, { root, query: "inset" });
+        const target = symbols.symbols.find(
+          (symbol) => symbol.location.file === "main.scss" && symbol.name === "inset",
+        );
+        expect(target, kind).toBeDefined();
+        const renamed = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "pad" });
+        expect(renamed.safe, kind).toBe(false);
+        expect(
+          renamed.conflicts.map(({ file, reason, location }) => [file, reason, location?.range.start.line]),
+        ).toEqual([["main.scss", "shadowing", 7]]);
+        expect(renamed.edits.map((edit) => edit.range.start.line)).not.toContain(7);
+      } finally {
+        session.invalidate();
+      }
+    }
+  });
+
+  async function previewScssScopedRename(files: Record<string, string>, name: string, newName: string, label: string) {
+    const root = await mkTmpDir("cg-rename-scss-scoped-shadow-");
+    for (const [file, source] of Object.entries(files)) {
+      await fsp.writeFile(path.join(root, file), source);
+    }
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: name });
+      const target = symbols.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === name);
+      expect(target, label).toBeDefined();
+      return await previewRenameWithSession(session, { root, handle: target!.handle, newName });
+    } finally {
+      session.invalidate();
+    }
+  }
+
+  it("reports shadowing when an edited scoped reference would be owned by a nearer callable", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      const declaration = (name: string): string =>
+        kind === "mixin" ? `@mixin ${name} { color: red; }` : `@function ${name}() { @return 1px; }`;
+      const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+      const source = [
+        '@use "lib" as lib;',
+        ".a {",
+        `  ${declaration("pad")}`,
+        `  ${call("pad")}`,
+        `  ${call("inset")}`,
+        `  ${call("lib.pad")}`,
+        "  .b {",
+        `    ${declaration("inset")}`,
+        `    ${call("pad")}`,
+        "  }",
+        "}",
+        ".c {",
+        `  ${declaration("inset")}`,
+        "}",
+        "",
+      ].join("\n");
+      const renamed = await previewScssScopedRename(
+        { "main.scss": source, "_lib.scss": "@mixin pad { color: red; }\n@function pad() { @return 1px; }\n" },
+        "pad",
+        "inset",
+        kind,
+      );
+      expect(renamed.safe, kind).toBe(false);
+      expect(renamed.unsafeSites, kind).toEqual([]);
+      expect(
+        renamed.conflicts
+          .map(({ file, reason, message, location }) => [file, reason, location?.range.start.line, message])
+          .sort((left, right) => Number(left[2]) - Number(right[2])),
+        kind,
+      ).toEqual([
+        ["main.scss", "shadowing", 5, 'A scoped callable renamed to "inset" would capture this unqualified call.'],
+        [
+          "main.scss",
+          "shadowing",
+          9,
+          'A different scoped callable named "inset" would capture this reference after the rename.',
+        ],
+      ]);
+      expect(
+        renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText]),
+        kind,
+      ).toEqual([
+        ["definition", 3, "pad", "inset"],
+        ["reference", 4, "pad", "inset"],
+        ["reference", 9, "pad", "inset"],
+      ]);
+    }
+  });
+
+  it("reports shadowing when the nearer scoped callable spells the new name with a hyphen or underscore", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      const declaration = (name: string): string =>
+        kind === "mixin" ? `@mixin ${name} { color: red; }` : `@function ${name}() { @return 1px; }`;
+      const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+      for (const spelling of [
+        { inner: "in_set", next: "in-set", unrelated: "in-set" },
+        { inner: "in-set", next: "in_set", unrelated: "in_set" },
+      ]) {
+        const label = `${kind} ${spelling.inner} -> ${spelling.next}`;
+        const source = [
+          ".a {",
+          `  ${declaration("foo-bar")}`,
+          `  ${call("foo_bar")}`,
+          "  .b {",
+          `    ${declaration(spelling.inner)}`,
+          `    ${call("foo-bar")}`,
+          "  }",
+          "}",
+          ".c {",
+          `  ${declaration(spelling.unrelated)}`,
+          "}",
+          "",
+        ].join("\n");
+        const renamed = await previewScssScopedRename({ "main.scss": source }, "foo-bar", spelling.next, label);
+        expect(renamed.safe, label).toBe(false);
+        expect(renamed.unsafeSites, label).toEqual([]);
+        expect(
+          renamed.conflicts.map(({ file, reason, location }) => [file, reason, location?.range.start.line]),
+          label,
+        ).toEqual([["main.scss", "shadowing", 6]]);
+        expect(
+          renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText]),
+          label,
+        ).toEqual([
+          ["definition", 2, "foo-bar", spelling.next],
+          ["reference", 3, "foo_bar", spelling.next],
+          ["reference", 6, "foo-bar", spelling.next],
+        ]);
+      }
+    }
+  });
+
+  it("does not report shadowing when another scoped callable cannot own the edited reference", async () => {
+    for (const kind of ["mixin", "function"] as const) {
+      const declaration = (name: string): string =>
+        kind === "mixin" ? `@mixin ${name} { color: red; }` : `@function ${name}() { @return 1px; }`;
+      const call = (name: string): string => (kind === "mixin" ? `@include ${name};` : `width: ${name}();`);
+      const opposite = kind === "mixin" ? "function" : "mixin";
+      const oppositeDecl = (name: string): string =>
+        opposite === "mixin" ? `@mixin ${name} { color: blue; }` : `@function ${name}() { @return 2px; }`;
+      const unrelated = [
+        ".a {",
+        `  ${declaration("pad")}`,
+        `  ${call("pad")}`,
+        "}",
+        ".c {",
+        `  ${declaration("inset")}`,
+        "}",
+        "",
+      ].join("\n");
+      const outside = [
+        ".a {",
+        `  ${declaration("pad")}`,
+        "}",
+        ".b {",
+        `  ${declaration("inset")}`,
+        `  ${call("pad")}`,
+        "}",
+        "",
+      ].join("\n");
+      const nearer = [
+        ".a {",
+        `  ${declaration("inset")}`,
+        "  .b {",
+        `    ${declaration("pad")}`,
+        `    ${call("pad")}`,
+        "  }",
+        "}",
+        "",
+      ].join("\n");
+      const otherKind = [
+        ".a {",
+        `  ${declaration("pad")}`,
+        `  ${call("pad")}`,
+        "  .b {",
+        `    ${oppositeDecl("inset")}`,
+        `    ${call("pad")}`,
+        "  }",
+        "}",
+        "",
+      ].join("\n");
+      const free = await previewScssScopedRename({ "main.scss": unrelated }, "pad", "inset", `${kind} unrelated`);
+      expect(free.safe, `${kind} unrelated`).toBe(true);
+      expect(free.conflicts, `${kind} unrelated`).toEqual([]);
+      expect(free.unsafeSites, `${kind} unrelated`).toEqual([]);
+      expect(
+        free.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText]),
+        `${kind} unrelated`,
+      ).toEqual([
+        ["definition", 2, "pad", "inset"],
+        ["reference", 3, "pad", "inset"],
+      ]);
+      const leftBehind = await previewScssScopedRename({ "main.scss": outside }, "pad", "inset", `${kind} outside`);
+      expect(leftBehind.safe, `${kind} outside`).toBe(true);
+      expect(leftBehind.conflicts, `${kind} outside`).toEqual([]);
+      expect(
+        leftBehind.edits.map((edit) => [edit.range.start.line, edit.oldText]),
+        `${kind} outside`,
+      ).toEqual([[2, "pad"]]);
+      const innerWins = await previewScssScopedRename({ "main.scss": nearer }, "pad", "inset", `${kind} nearer`);
+      expect(innerWins.safe, `${kind} nearer`).toBe(true);
+      expect(innerWins.conflicts, `${kind} nearer`).toEqual([]);
+      expect(
+        innerWins.edits.map((edit) => [edit.kind, edit.range.start.line]),
+        `${kind} nearer`,
+      ).toEqual([
+        ["definition", 4],
+        ["reference", 5],
+      ]);
+      const other = await previewScssScopedRename({ "main.scss": otherKind }, "pad", "inset", `${kind} other kind`);
+      expect(other.safe, `${kind} other kind`).toBe(true);
+      expect(other.conflicts, `${kind} other kind`).toEqual([]);
+      expect(
+        other.edits.map((edit) => edit.range.start.line),
+        `${kind} other kind`,
+      ).toEqual([2, 3, 6]);
+    }
+  });
+
+  it("marks a scoped function rename unsafe when a lookup in its block is left unchanged", async () => {
+    const cases = [
+      [
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        '  exists: function-exists("inset");',
+        "}",
+        "",
+      ],
+      [".a {", "  @function inset() { @return 1px; }", "  width: inset();", '  f: call("inset");', "}", ""],
+      [
+        '@use "sass:meta";',
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        '  f: meta.get-function("inset");',
+        "}",
+        "",
+      ],
+      [".a {", "  @mixin inset { color: blue; }", "  @include inset;", '  exists: mixin-exists("inset");', "}", ""],
+    ];
+    for (const lines of cases) {
+      const root = await mkTmpDir("cg-rename-scss-scoped-lookup-");
+      const source = lines.join("\n");
+      await fsp.writeFile(path.join(root, "main.scss"), source);
+      const defLine = lines.findIndex((line) => line.includes("@function inset") || line.includes("@mixin inset")) + 1;
+      const callLine = lines.findIndex((line) => line.includes("width:") || line.includes("@include")) + 1;
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      try {
+        const symbols = await workspaceSymbolsWithSession(session, { root, query: "inset" });
+        const target = symbols.symbols.find(
+          (symbol) => symbol.location.file.endsWith("main.scss") && symbol.name === "inset",
+        );
+        expect(target, source).toBeDefined();
+        const renamed = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "shift" });
+        expect(renamed.safe, source).toBe(false);
+        expect(
+          renamed.unsafeSites.some((site) => site.reason === "unresolved_reference"),
+          source,
+        ).toBe(true);
+        expect(
+          renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText]),
+          source,
+        ).toEqual([
+          ["definition", defLine, "inset", "shift"],
+          ["reference", callLine, "inset", "shift"],
+        ]);
+      } finally {
+        session.invalidate();
+      }
+    }
+  });
+
+  it("keeps a scoped callable rename safe when the lookup is outside its block", async () => {
+    const root = await mkTmpDir("cg-rename-scss-scoped-lookup-out-");
+    await fsp.writeFile(
+      path.join(root, "main.scss"),
+      [
+        '@use "sass:meta";',
+        ".a {",
+        "  @function inset() { @return 1px; }",
+        "  width: inset();",
+        "}",
+        ".b {",
+        '  exists: function-exists("inset");',
+        '  f: call("inset");',
+        '  g: meta.get-function("inset");',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "inset" });
+      const target = symbols.symbols.find(
+        (symbol) => symbol.location.file.endsWith("main.scss") && symbol.name === "inset",
+      );
+      expect(target).toBeDefined();
+      const renamed = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "shift" });
+      expect(renamed.safe).toBe(true);
+      expect(renamed.unsafeSites).toEqual([]);
+      expect(renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["definition", 3, "inset", "shift"],
+        ["reference", 4, "inset", "shift"],
+      ]);
+    } finally {
+      session.invalidate();
+    }
+  });
+
   it("O6: correctly handles 100 and 101 candidate test boundaries in rename preview", async () => {
     const root100 = await mkTmpDir("cg-rename-test-100-");
     await fsp.writeFile(path.join(root100, "service.ts"), "export function service(): number { return 1; }\n");

@@ -5870,3 +5870,349 @@ describe("Shared-owner member navigation (C# partials, Swift extensions, Zig imp
     }
   });
 });
+
+describe("Go to Definition: SCSS Sass modules", () => {
+  async function scssProject(files: Record<string, string>) {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-goto-"));
+    const paths: Record<string, string> = {};
+    for (const [name, text] of Object.entries(files)) {
+      paths[name] = path.join(root, name).replace(/\\/g, "/");
+      await fsp.writeFile(paths[name], text, "utf8");
+    }
+    const index = await createTestIndexFromFiles(root, Object.values(paths));
+    return { root, paths, index };
+  }
+
+  function columnOf(source: string, needle: string, delta = 0): number {
+    const at = source.indexOf(needle);
+    if (at < 0) throw new Error(`Expected ${needle} in ${source}`);
+    return at - (source.lastIndexOf("\n", at - 1) + 1) + 1 + delta;
+  }
+
+  it("resolves namespaced, unnamespaced star, and imported members to the declaring partial", async () => {
+    const files = {
+      "_colors.scss": "$primary: red;\n@mixin pad { padding: 1px; }\n",
+      "main.scss": '@use "colors";\n.a { color: colors.$primary; @include colors.pad; }\n',
+      "star.scss": '@use "colors" as *;\n.a { color: $primary; @include pad; }\n',
+      "legacy.scss": '@import "colors";\n.a { color: $primary; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const colors = paths["_colors.scss"]!;
+      const mainLine = files["main.scss"].split("\n")[1]!;
+      await testGoToDefinition(index, paths["main.scss"]!, 2, columnOf(mainLine, "$primary"), colors, 1);
+      await testGoToDefinition(index, paths["main.scss"]!, 2, columnOf(mainLine, "colors.pad", 7), colors, 2);
+      const starLine = files["star.scss"].split("\n")[1]!;
+      await testGoToDefinition(index, paths["star.scss"]!, 2, columnOf(starLine, "$primary"), colors, 1);
+      await testGoToDefinition(index, paths["star.scss"]!, 2, columnOf(starLine, "pad"), colors, 2);
+      const legacyLine = files["legacy.scss"].split("\n")[1]!;
+      await testGoToDefinition(index, paths["legacy.scss"]!, 2, columnOf(legacyLine, "$primary"), colors, 1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("never resolves a parameter, loop variable, or keyword name to a module member", async () => {
+    const files = {
+      "_vars.scss": "$size: 1px;\n@mixin box($w, $size: 2px) { width: $w; height: $size; }\n",
+      "star.scss":
+        '@use "vars" as *;\n.a { @include box(1px, $size: 3px); width: $size; @each $size in 1px, 2px { margin: $size; } }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const starLine = files["star.scss"].split("\n")[1]!;
+      // The plain use resolves to the module member.
+      await testGoToDefinition(
+        index,
+        paths["star.scss"]!,
+        2,
+        columnOf(starLine, "width: $size", 7),
+        paths["_vars.scss"]!,
+        1,
+      );
+      const hidden: Array<[string, number, number]> = [
+        ["_vars.scss", 2, columnOf(files["_vars.scss"].split("\n")[1]!, "height: $size", 8)],
+        ["star.scss", 2, columnOf(starLine, "$size: 3px")],
+        ["star.scss", 2, columnOf(starLine, "margin: $size", 8)],
+      ];
+      for (const [name, line, column] of hidden) {
+        const result = await goToDefinition(index, { file: paths[name]!, line, column });
+        const resolvedToModule =
+          result.status === "ok" &&
+          result.definition.file === paths["_vars.scss"] &&
+          result.definition.range.start.line === 1;
+        expect(resolvedToModule, `${name}:${line}:${column}`).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("matches forward show names with the prefix and keeps the first of two assignments", async () => {
+    const files = {
+      "_source.scss": "$ink: black !default;\n$ink: white;\n@mixin pad { padding: 1px; }\n",
+      "agg.scss": '@forward "source" as theme-* show $theme-ink, theme-pad;\n',
+      "user.scss": '@use "agg";\n.a { color: agg.$theme-ink; @include agg.theme-pad; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const userLine = files["user.scss"].split("\n")[1]!;
+      await testGoToDefinition(
+        index,
+        paths["user.scss"]!,
+        2,
+        columnOf(userLine, "$theme-ink"),
+        paths["_source.scss"]!,
+        1,
+      );
+      await testGoToDefinition(
+        index,
+        paths["user.scss"]!,
+        2,
+        columnOf(userLine, "theme-pad"),
+        paths["_source.scss"]!,
+        3,
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves what a partial reads from the file that imports it, and not from a file that uses it", async () => {
+    // dart-sass runs an imported partial inside the scope of its importer, and a used module in its own.
+    const files = {
+      "_vars.scss": "$primary: red;\n@mixin pad { padding: 1px; }\n",
+      "_buttons.scss": ".btn { color: $primary; @include pad; }\n",
+      "main.scss": '@import "vars";\n@import "buttons";\n',
+      "_card.scss": ".card { color: $primary; }\n",
+      "other.scss": '@use "vars" as *;\n@use "card";\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const buttonsLine = files["_buttons.scss"].split("\n")[0]!;
+      await testGoToDefinition(
+        index,
+        paths["_buttons.scss"]!,
+        1,
+        columnOf(buttonsLine, "$primary"),
+        paths["_vars.scss"]!,
+        1,
+      );
+      await testGoToDefinition(
+        index,
+        paths["_buttons.scss"]!,
+        1,
+        columnOf(buttonsLine, "pad"),
+        paths["_vars.scss"]!,
+        2,
+      );
+      await testGoToDefinition(
+        index,
+        paths["_card.scss"]!,
+        1,
+        columnOf(files["_card.scss"], "$primary"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a name that a nested @import brings in unresolved, and keeps the variable of the next import", async () => {
+    // dart-sass declares what `.a { @import "vars"; }` imports inside `.a` only.
+    const nested = { "_vars.scss": "$x: 1;\n", "main.scss": '.a { @import "vars"; w: $x; }\n' };
+    const first = await scssProject(nested);
+    try {
+      await testGoToDefinition(
+        first.index,
+        first.paths["main.scss"]!,
+        1,
+        columnOf(nested["main.scss"], "$x"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(first.root, { recursive: true, force: true });
+    }
+    // The `$x` that `_lib.scss` imports inside `.a` is no global: `.b` reads the variable of `_other.scss`.
+    const files = {
+      "_vars.scss": "$x: 1;\n",
+      "_lib.scss": '.a { @import "vars"; }\n',
+      "_other.scss": "$x: 2;\n",
+      "main.scss": '@import "lib";\n@import "other";\n.b { w: $x; }\n',
+    };
+    const second = await scssProject(files);
+    try {
+      const mainLine = files["main.scss"].split("\n")[2]!;
+      await testGoToDefinition(
+        second.index,
+        second.paths["main.scss"]!,
+        3,
+        columnOf(mainLine, "$x"),
+        second.paths["_other.scss"]!,
+        1,
+      );
+    } finally {
+      await fsp.rm(second.root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the module variable in the default of a parameter with its name, and the parameter in the body", async () => {
+    // dart-sass: `@mixin box($size: $size)` reads the module `$size` in its default.
+    const files = {
+      "_vars.scss": "$size: 1px;\n",
+      "star.scss": '@use "vars" as *;\n@mixin box($size: $size) { width: $size; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const line = files["star.scss"].split("\n")[1]!;
+      await testGoToDefinition(
+        index,
+        paths["star.scss"]!,
+        2,
+        columnOf(line, "$size: $size", 7),
+        paths["_vars.scss"]!,
+        1,
+      );
+      await testGoToDefinition(
+        index,
+        paths["star.scss"]!,
+        2,
+        columnOf(line, "width: $size", 7),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("compares a placeholder as written, so %foo-bar and %foo_bar are two placeholders", async () => {
+    // dart-sass: `@extend %foo_bar` finds no target when only `%foo-bar` exists.
+    const files = {
+      "_ph.scss": "%foo-bar { color: red; }\n",
+      "main.scss": '@use "ph";\n.a { @extend %foo-bar; }\n.b { @extend %foo_bar; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const lines = files["main.scss"].split("\n");
+      await testGoToDefinition(index, paths["main.scss"]!, 2, columnOf(lines[1]!, "foo-bar"), paths["_ph.scss"]!, 1);
+      await testGoToDefinition(
+        index,
+        paths["main.scss"]!,
+        3,
+        columnOf(lines[2]!, "foo_bar"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves @extend to a placeholder that a media query or a rule declares, here and in a used module", async () => {
+    // dart-sass extends a placeholder wherever its rule sits.
+    const files = {
+      "_lib.scss": "@media screen {\n  %in-media { a: b; }\n}\n.rule { %in-rule { c: d; } }\n",
+      "main.scss": '@use "lib";\n.a { @extend %in-rule; }\n@media screen { .b { @extend %in-media; } }\n',
+      "alone.scss": "@media screen {\n  %ph { color: red; }\n  .a { @extend %ph; }\n}\n",
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const main = files["main.scss"].split("\n");
+      await testGoToDefinition(index, paths["main.scss"]!, 2, columnOf(main[1]!, "in-rule"), paths["_lib.scss"]!, 4);
+      await testGoToDefinition(index, paths["main.scss"]!, 3, columnOf(main[2]!, "in-media"), paths["_lib.scss"]!, 2);
+      const alone = files["alone.scss"].split("\n");
+      await testGoToDefinition(index, paths["alone.scss"]!, 3, columnOf(alone[2]!, "ph"), paths["alone.scss"]!, 2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("prefers an import-only partial for @import and the ordinary partial for @use", async () => {
+    // dart-sass loads _lib.import.scss from @import "lib" and _lib.scss from @use "lib".
+    const files = {
+      "_lib.import.scss": "$from-import: 1;\n",
+      "_lib.scss": "$from-use: 2;\n",
+      "legacy.scss": '@import "lib";\n.a { w: $from-import; }\n',
+      "use.scss": '@use "lib";\n.a { w: lib.$from-use; }\n',
+      "miss.scss": '@use "lib";\n.a { w: lib.$from-import; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const legacyLine = files["legacy.scss"]!.split("\n")[1]!;
+      await testGoToDefinition(
+        index,
+        paths["legacy.scss"]!,
+        2,
+        columnOf(legacyLine, "$from-import"),
+        paths["_lib.import.scss"]!,
+        1,
+      );
+      const useLine = files["use.scss"]!.split("\n")[1]!;
+      await testGoToDefinition(index, paths["use.scss"]!, 2, columnOf(useLine, "$from-use"), paths["_lib.scss"]!, 1);
+      const missLine = files["miss.scss"]!.split("\n")[1]!;
+      await testGoToDefinition(
+        index,
+        paths["miss.scss"]!,
+        2,
+        columnOf(missLine, "$from-import"),
+        undefined,
+        undefined,
+        "not_found",
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a with key when a later assignment uses !default, and not when none does", async () => {
+    // dart-sass accepts with ($x: 2) when a later assignment is !default, and rejects ($y: 3).
+    const files = {
+      "_vars.scss": "$x: null;\n$x: 1 !default;\n$y: 1;\n",
+      "main.scss": '@use "vars" with ($x: 2, $y: 3);\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const main = files["main.scss"]!;
+      await testGoToDefinition(index, paths["main.scss"]!, 1, columnOf(main, "$x"), paths["_vars.scss"]!, 1);
+      await testGoToDefinition(index, paths["main.scss"]!, 1, columnOf(main, "$y"), undefined, undefined, "not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a scoped mixin include and a scoped function call to the nearest indexed owner", async () => {
+    const main = [
+      ".a {",
+      "  @mixin inset { color: blue; }",
+      "  @include inset;",
+      "  .b {",
+      "    @mixin in_set { color: red; }",
+      "    @include in-set;",
+      "    @include inset;",
+      "  }",
+      "  @function to-ne() { @return 1px; }",
+      "  width: to-ne();",
+      "  width: to_ne();",
+      "}",
+      "",
+    ].join("\n");
+    const lines = main.split("\n");
+    const { root, paths, index } = await scssProject({ "main.scss": main });
+    try {
+      const file = paths["main.scss"]!;
+      await testGoToDefinition(index, file, 3, columnOf(lines[2]!, "inset"), file, 2);
+      await testGoToDefinition(index, file, 6, columnOf(lines[5]!, "in-set"), file, 5);
+      await testGoToDefinition(index, file, 7, columnOf(lines[6]!, "inset"), file, 2);
+      await testGoToDefinition(index, file, 10, columnOf(lines[9]!, "to-ne"), file, 9);
+      await testGoToDefinition(index, file, 11, columnOf(lines[10]!, "to_ne"), file, 9);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -1,0 +1,7 @@
+$ink: black !default;
+@mixin pad {
+  padding: 1px;
+}
+@mixin skip {
+  margin: 0;
+}

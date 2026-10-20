@@ -11,7 +11,36 @@ export type TriviaMaskOptions = {
   maskStrings?: boolean;
   /** Leave interpolation expression content unmarked (JS template holes for literal masks). */
   holes?: boolean;
+  /**
+   * Also mark the content of an unquoted CSS `url(...)` like a string literal body. By default the
+   * content stays visible, because import specifiers can sit inside it. Only rows with
+   * `unquotedCssUrl` have such tokens.
+   */
+  maskCssUrls?: boolean;
 };
+
+function isHexUnit(unit: number): boolean {
+  return (unit >= 0x30 && unit <= 0x39) || (unit >= 0x41 && unit <= 0x46) || (unit >= 0x61 && unit <= 0x66);
+}
+
+/** Skip one SCSS escape, including a hex escape's optional whitespace terminator. */
+export function skipScssEscape(source: string, index: number): number {
+  const next = index + 1;
+  if (next >= source.length) return source.length;
+  const unit = source.charCodeAt(next);
+  if (unit === 0x0a || unit === 0x0c) return next + 1;
+  if (unit === 0x0d) return source.charCodeAt(next + 1) === 0x0a ? next + 2 : next + 1;
+  if (isHexUnit(unit)) {
+    let cursor = next + 1;
+    const limit = Math.min(source.length, next + 6);
+    while (cursor < limit && isHexUnit(source.charCodeAt(cursor))) cursor += 1;
+    const space = source.charCodeAt(cursor);
+    if (space === 0x20 || space === 0x09 || space === 0x0a || space === 0x0c) return cursor + 1;
+    if (space === 0x0d) return source.charCodeAt(cursor + 1) === 0x0a ? cursor + 2 : cursor + 1;
+    return cursor;
+  }
+  return next + 1;
+}
 
 /**
  * Builds a UTF-16-unit mask over `source` marking comments and (when `maskStrings`) string
@@ -23,6 +52,7 @@ export type TriviaMaskOptions = {
 export function buildTriviaMask(source: string, languageId: string, options?: TriviaMaskOptions): Uint8Array {
   return buildMarkedMask(source, languageId, {
     maskStrings: options?.maskStrings ?? true,
+    maskCssUrls: options?.maskCssUrls ?? false,
     mode: options?.holes ? "holes" : "full",
   });
 }
@@ -35,6 +65,7 @@ export function buildTriviaMask(source: string, languageId: string, options?: Tr
 export function maskTrivia(source: string, languageId: string, options?: TriviaMaskOptions): string {
   const mask = buildMarkedMask(source, languageId, {
     maskStrings: options?.maskStrings ?? true,
+    maskCssUrls: options?.maskCssUrls ?? false,
     mode: "render",
   });
   // Copy unmasked runs as slices and masked runs as space runs that keep `\r` and `\n`; a
@@ -63,6 +94,7 @@ export function maskTrivia(source: string, languageId: string, options?: TriviaM
 export function stripTrivia(source: string, languageId: string, options?: TriviaMaskOptions): string {
   const mask = buildMarkedMask(source, languageId, {
     maskStrings: options?.maskStrings ?? true,
+    maskCssUrls: options?.maskCssUrls ?? false,
     mode: "full",
   });
   let out = "";
@@ -80,7 +112,7 @@ type TriviaMarkMode = "render" | "full" | "holes";
 function buildMarkedMask(
   source: string,
   languageId: string,
-  options: { maskStrings: boolean; mode: TriviaMarkMode },
+  options: { maskStrings: boolean; maskCssUrls: boolean; mode: TriviaMarkMode },
 ): Uint8Array {
   const row = triviaRowFor(languageId);
   const mask = new Uint8Array(source.length);
@@ -88,13 +120,34 @@ function buildMarkedMask(
   const length = source.length;
   let index = 0;
   while (index < length) {
+    if (row.unquotedEscapes && source.charCodeAt(index) === 0x5c) {
+      index = skipScssEscape(source, index);
+      continue;
+    }
     if (!starters[source.charCodeAt(index)]) {
       index += 1;
       continue;
     }
+    // An unquoted `url(...)` is read before comments and strings: its content is opaque.
+    const cssUrl = row.unquotedCssUrl ? unquotedCssUrlConstruct(source, row, index) : null;
+    if (cssUrl !== null) {
+      if (options.maskCssUrls && options.maskStrings) {
+        for (const [start, end] of constructSpans(cssUrl, options.mode)) {
+          for (let i = start; i < end; i += 1) mask[i] = 1;
+        }
+      }
+      index = cssUrl.end;
+      continue;
+    }
     const commentEnd = commentSpanEnd(source, row, index);
     if (commentEnd !== null) {
-      for (let i = index; i < commentEnd; i += 1) mask[i] = 1;
+      const spans: TriviaSpan[] =
+        options.mode === "holes" && row.commentInterpolation
+          ? loudCommentMaskSpans(source, row, index, commentEnd)
+          : [[index, commentEnd]];
+      for (const [start, end] of spans) {
+        for (let i = start; i < end; i += 1) mask[i] = 1;
+      }
       index = commentEnd;
       continue;
     }
@@ -128,6 +181,98 @@ function constructSpans(construct: TriviaConstruct, mode: TriviaMarkMode): Trivi
   return construct.maskSpans;
 }
 
+function isCssIdentifierUnit(unit: number): boolean {
+  const isLetterOrDigit =
+    (unit >= 0x30 && unit <= 0x39) || (unit >= 0x41 && unit <= 0x5a) || (unit >= 0x61 && unit <= 0x7a);
+  return isLetterOrDigit || unit === 0x5f || unit === 0x2d || unit === 0x5c || unit >= 0x80;
+}
+
+function isCssSpaceUnit(unit: number): boolean {
+  return unit === 0x20 || unit === 0x09 || unit === 0x0a || unit === 0x0d || unit === 0x0c;
+}
+
+/**
+ * The `#{...}` interpolation of an unquoted `url(...)`. Its expression is code, so a string or a
+ * comment inside it is trivia, and a `}` inside one closes nothing.
+ */
+const CSS_URL_INTERPOLATION: NonNullable<TriviaStringForm["interpolation"]> = {
+  start: "#{",
+  end: "}",
+  excludeFromMask: true,
+};
+
+/**
+ * Reads an unquoted `url(...)` that starts at `index`, with the Sass rule for such a token: after
+ * `url(` and optional space, a run of URL characters, escapes, and `#{...}` interpolations, then
+ * optional space and `)`. A quote, a `$`, a `(`, or a space that does not end the token means the
+ * text is an ordinary function call, so this returns null and the normal rules apply.
+ */
+function unquotedCssUrlConstruct(source: string, row: TriviaRow, index: number): TriviaConstruct | null {
+  if (
+    source.charCodeAt(index + 3) !== 0x28 ||
+    (source.charCodeAt(index) | 0x20) !== 0x75 ||
+    (source.charCodeAt(index + 1) | 0x20) !== 0x72 ||
+    (source.charCodeAt(index + 2) | 0x20) !== 0x6c
+  ) {
+    return null;
+  }
+  if (index > 0 && source.charCodeAt(index - 1) === 0x2e) return null;
+  if (index > 0 && isCssIdentifierUnit(source.charCodeAt(index - 1))) return null;
+  const bodyStart = index + 4;
+  const holes: TriviaSpan[] = [];
+  const holeTrivia: TriviaSpan[] = [];
+  let cursor = bodyStart;
+  while (cursor < source.length && isCssSpaceUnit(source.charCodeAt(cursor))) cursor += 1;
+  while (cursor < source.length) {
+    const unit = source.charCodeAt(cursor);
+    if (unit === 0x29) {
+      const maskSpans: TriviaSpan[] = [[index, bodyStart]];
+      let segmentStart = bodyStart;
+      for (const [holeStart, holeEnd] of holes) {
+        if (segmentStart < holeStart) maskSpans.push([segmentStart, holeStart]);
+        segmentStart = holeEnd;
+      }
+      if (segmentStart < cursor) maskSpans.push([segmentStart, cursor]);
+      for (const span of holeTrivia) maskSpans.push(span);
+      maskSpans.push([cursor, cursor + 1]);
+      return {
+        start: index,
+        end: cursor + 1,
+        renderSpans: bodyStart < cursor ? [[bodyStart, cursor]] : [],
+        maskSpans,
+        delimitersAreTrivia: false,
+      };
+    }
+    if (isCssSpaceUnit(unit)) {
+      while (cursor < source.length && isCssSpaceUnit(source.charCodeAt(cursor))) cursor += 1;
+      if (source.charCodeAt(cursor) !== 0x29) return null;
+      continue;
+    }
+    if (unit === 0x5c) {
+      // A hex escape is up to six digits plus optional whitespace, so `\20 ` and `\68 ` stay in the URL.
+      cursor = skipScssEscape(source, cursor);
+      continue;
+    }
+    if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {
+      const hole = collectInterpolationSpans(source, row, cursor, CSS_URL_INTERPOLATION);
+      holes.push([cursor, hole.end]);
+      for (const span of hole.spans) holeTrivia.push(span);
+      cursor = hole.end;
+      continue;
+    }
+    const isUrlUnit =
+      unit === 0x21 ||
+      unit === 0x25 ||
+      unit === 0x26 ||
+      unit === 0x23 ||
+      (unit >= 0x2a && unit <= 0x7e) ||
+      unit >= 0x80;
+    if (!isUrlUnit) return null;
+    cursor += 1;
+  }
+  return null;
+}
+
 type TriviaSpan = [start: number, end: number];
 
 const starterCache = new WeakMap<TriviaRow, Uint8Array>();
@@ -158,6 +303,10 @@ function rowStarterCodes(row: TriviaRow): Uint8Array {
     for (const heredoc of row.heredocs) add(heredoc.opener);
   }
   if (row.percentLiterals) add("%");
+  if (row.unquotedCssUrl) {
+    add("u");
+    add("U");
+  }
   if (row.zigMultiline) add("\\");
   starterCache.set(row, starters);
   return starters;
@@ -225,6 +374,39 @@ function nextTriviaConstruct(source: string, row: TriviaRow, index: number): Tri
     return zigMultilineConstruct(source, index);
   }
   return null;
+}
+
+function loudCommentMaskSpans(source: string, row: TriviaRow, index: number, commentEnd: number): TriviaSpan[] {
+  const interpolation = row.commentInterpolation;
+  if (!interpolation || !source.startsWith("/*", index)) return [[index, commentEnd]];
+  const spans: TriviaSpan[] = [];
+  let cursor = index;
+  let segmentStart = index;
+  while (cursor < commentEnd) {
+    if (source.startsWith(interpolation.start, cursor)) {
+      if (segmentStart < cursor) spans.push([segmentStart, cursor]);
+      const inner = collectInterpolationSpans(source, row, cursor, interpolation);
+      const end = Math.min(inner.end, commentEnd);
+      if (end <= cursor) {
+        cursor += 1;
+        segmentStart = cursor;
+        continue;
+      }
+      spans.push([cursor, Math.min(cursor + interpolation.start.length, end)]);
+      for (const span of inner.spans) {
+        const start = Math.max(span[0], cursor);
+        const stop = Math.min(span[1], end);
+        if (start < stop) spans.push([start, stop]);
+      }
+      if (end > cursor && end <= commentEnd && source.charCodeAt(end - 1) === 0x7d) spans.push([end - 1, end]);
+      cursor = end;
+      segmentStart = cursor;
+      continue;
+    }
+    cursor += 1;
+  }
+  if (segmentStart < commentEnd) spans.push([segmentStart, commentEnd]);
+  return spans;
 }
 
 function commentSpanEnd(source: string, row: TriviaRow, index: number): number | null {
@@ -361,8 +543,8 @@ function quotedStringConstruct(
 }
 
 /** Walks a literal body and returns the index just past the close delimiter plus the body
- * segments a span mask marks. Excluded interpolation expressions stay unmasked; the close
- * delimiter itself is never part of the segments. */
+ * segments a span mask marks. Excluded interpolation expressions stay unmasked, except for the
+ * strings and comments inside them; the close delimiter itself is never part of the segments. */
 function collectQuotedBody(
   source: string,
   row: TriviaRow,
@@ -394,6 +576,7 @@ function collectQuotedBody(
         if (interpolation.excludeFromMask) {
           pushSegment(cursor);
           const inner = collectInterpolationSpans(source, row, cursor, interpolation);
+          for (const span of inner.spans) segments.push(span);
           cursor = inner.end;
           segmentStart = cursor;
           continue;
@@ -501,7 +684,22 @@ function collectInterpolationSpans(
   let depth = 1;
   let cursor = start + interpolation.start.length;
   while (cursor < source.length) {
+    // An unquoted `url(...)` is opaque, including inside `#{...}`: `url(http://...)` has no
+    // comment. Nested interpolation in the url stays code, and its strings and comments are trivia.
+    if (row.unquotedCssUrl) {
+      const cssUrl = unquotedCssUrlConstruct(source, row, cursor);
+      if (cssUrl !== null) {
+        // The url shell is opaque here too. Nested `#{...}` stays code.
+        spans.push(...cssUrl.maskSpans);
+        cursor = cssUrl.end;
+        continue;
+      }
+    }
     const ch = source[cursor];
+    if (row.unquotedEscapes && ch === "\\") {
+      cursor = skipScssEscape(source, cursor);
+      continue;
+    }
     if (source.startsWith(interpolation.end, cursor)) {
       depth -= 1;
       if (!depth) return { end: cursor + interpolation.end.length, spans };

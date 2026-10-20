@@ -1,0 +1,7 @@
+@use "sass:meta";
+@use "colors";
+
+.a {
+  color: colors.$primary;
+  @include meta.load-css("extra");
+}

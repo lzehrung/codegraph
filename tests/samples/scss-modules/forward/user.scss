@@ -1,0 +1,6 @@
+@use "agg";
+
+.a {
+  color: agg.$theme-ink;
+  @include agg.theme-pad;
+}

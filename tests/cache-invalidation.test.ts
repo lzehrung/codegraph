@@ -3645,6 +3645,53 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("re-resolves a cached unresolved SCSS @use when a directory index partial appears", async () => {
+    for (const entry of ["_index.scss", "index.scss"] as const) {
+      const root = await mkTmpDir(`dg-scss-dir-index-${entry.replace(/\./g, "-")}-`);
+      runGit(root, ["init"]);
+      runGit(root, ["config", "user.email", "tests@example.com"]);
+      runGit(root, ["config", "user.name", "Tests"]);
+      const main = path.join(root, "main.scss");
+      const source = '@use "lib";\n.a { color: lib.$tone; }\n';
+      await fsp.writeFile(main, source, "utf8");
+      runGit(root, ["add", "."]);
+      runGit(root, ["commit", "-m", "base"]);
+      const cached = await buildProjectIndex(root, { cache: "disk" });
+      const column = source.split("\n")[1]!.indexOf("$tone") + 1;
+      const before = await goToDefinition(cached, { file: main, line: 2, column });
+      expect(before.status, entry).toBe("not_found");
+
+      const partial = path.join(root, "lib", entry);
+      await fsp.mkdir(path.dirname(partial), { recursive: true });
+      await fsp.writeFile(partial, "$tone: blue;\n", "utf8");
+      const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+      try {
+        const warm = await buildProjectIndexIncremental(root, { cache: "disk" });
+        expect(scanSpy, entry).not.toHaveBeenCalled();
+        const cold = await buildProjectIndex(root, { cache: "off" });
+        const warmGoto = await goToDefinition(warm, { file: main, line: 2, column });
+        const coldGoto = await goToDefinition(cold, { file: main, line: 2, column });
+        const site = (result: typeof warmGoto) =>
+          result.status === "ok"
+            ? {
+                status: result.status,
+                file: result.definition.file.replace(/\\/g, "/"),
+                line: result.definition.range.start.line,
+                localName: result.definition.localName,
+              }
+            : { status: result.status };
+        expect(site(warmGoto), entry).toEqual(site(coldGoto));
+        expect(warmGoto.status, entry).toBe("ok");
+        if (warmGoto.status === "ok") {
+          expect(warmGoto.definition.file.replace(/\\/g, "/"), entry).toContain(`/lib/${entry}`);
+          expect(warmGoto.definition.localName, entry).toBe("$tone");
+        }
+      } finally {
+        scanSpy.mockRestore();
+      }
+    }
+  });
+
   it("skips full signature validation on a warm run when an already-indexed untracked file is unchanged", async () => {
     const root = await mkTmpDir("dg-incremental-untracked-warm-");
     runGit(root, ["init"]);

@@ -1,0 +1,5 @@
+@use "hider";
+
+.b {
+  @include hider.skip;
+}

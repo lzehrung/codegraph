@@ -1,0 +1,6 @@
+@use "colors";
+@use "missing";
+
+.a {
+  color: colors.$primary;
+}

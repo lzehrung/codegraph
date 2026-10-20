@@ -1,0 +1,24 @@
+$primary: red !default;
+$primary-color: blue !default;
+$-secret: 1;
+@mixin pad {
+  padding: 1px;
+}
+@mixin _hidden {
+  margin: 0;
+}
+@function double($n) {
+  @return $n * 2;
+}
+@function div($n) {
+  @return $n;
+}
+%ph {
+  color: $primary;
+}
+.swatch {
+  color: $primary;
+  content: "#{$primary}";
+  // $primary
+  /* $primary */
+}

@@ -1,0 +1,6 @@
+@import "colors";
+
+.old {
+  color: $primary;
+  @include pad;
+}

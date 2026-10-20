@@ -6476,3 +6476,483 @@ describe("Find References: implicit compilation-unit peers", () => {
     }
   });
 });
+
+describe("Find References: SCSS Sass modules", () => {
+  async function scssProject(files: Record<string, string>) {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-scss-references-"));
+    const paths: Record<string, string> = {};
+    for (const [name, text] of Object.entries(files)) {
+      paths[name] = path.join(root, name).replace(/\\/g, "/");
+      await fsp.writeFile(paths[name], text, "utf8");
+    }
+    const index = await createTestIndexFromFiles(root, Object.values(paths));
+    return { root, paths, index };
+  }
+
+  it("finds the uses of a variable from either of two top-level assignments, with complete coverage", async () => {
+    const files = {
+      "_theme.scss": "$accent: 10px !default;\n$accent: $accent * 2;\n",
+      "main.scss": '@use "theme";\n.a { width: theme.$accent; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_theme.scss"]!, line: 1, column: 1 },
+        { file: paths["_theme.scss"]!, line: 2, column: 1 },
+        { file: paths["_theme.scss"]!, line: 2, column: tokenColumn("$accent: $accent * 2;", "$accent", 1) },
+        { file: paths["main.scss"]!, line: 2, column: tokenColumn(".a { width: theme.$accent; }", "$accent") },
+      ];
+      for (const line of [1, 2]) {
+        const result = await testFindReferences(index, paths["_theme.scss"]!, line, 1, expected);
+        expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lists no parameter, loop variable, or keyword name as a use of the module variable", async () => {
+    const files = {
+      "_vars.scss": "$size: 1px;\n@mixin box($w, $size: 2px) { width: $w; height: $size; }\n",
+      "star.scss":
+        '@use "vars" as *;\n.a { @include box(1px, $size: 3px); width: $size; @each $size in 1px, 2px { margin: $size; } }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_vars.scss"]!, line: 1, column: 1 },
+        {
+          file: paths["star.scss"]!,
+          line: 2,
+          column: tokenColumn(".a { @include box(1px, $size: 3px); width: $size;", "$size", 1),
+        },
+      ];
+      const result = await testFindReferences(index, paths["_vars.scss"]!, 1, 1, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps declarations that follow an apostrophe in a // comment", async () => {
+    const files = {
+      "_colors.scss": "// Bootstrap's palette\n$primary: red;\n.swatch { color: $primary; }\n",
+      "main.scss": '@use "colors";\n.a { color: colors.$primary; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_colors.scss"]!, line: 2, column: 1 },
+        { file: paths["_colors.scss"]!, line: 3, column: tokenColumn(".swatch { color: $primary; }", "$primary") },
+        { file: paths["main.scss"]!, line: 2, column: tokenColumn(".a { color: colors.$primary; }", "$primary") },
+      ];
+      const result = await testFindReferences(index, paths["_colors.scss"]!, 2, 1, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when a Vue style block may load the declaring module", async () => {
+    const files = {
+      "_colors.scss": "$primary: red;\n",
+      "main.scss": '@use "colors";\n.a { color: colors.$primary; }\n',
+      "Comp.vue":
+        '<template><div /></template>\n<style lang="scss">\n@use "./colors";\n.a { color: colors.$primary; }\n</style>\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_colors.scss"]!, line: 1, column: 1 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.reasons).toContain("strategy_unavailable");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["Comp.vue"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the use in a partial that an @import runs inside the scope of the declaring file", async () => {
+    const files = {
+      "_vars.scss": "$primary: red;\n",
+      "_buttons.scss": ".btn { color: $primary; }\n",
+      "main.scss": '@import "vars";\n@import "buttons";\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_vars.scss"]!, line: 1, column: 1 },
+        { file: paths["_buttons.scss"]!, line: 1, column: tokenColumn(files["_buttons.scss"], "$primary") },
+      ];
+      const result = await testFindReferences(index, paths["_vars.scss"]!, 1, 1, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when two importers give a partial's name different definitions", async () => {
+    const files = {
+      "_buttons.scss": ".btn { color: $primary; }\n",
+      "m1.scss": '$primary: red;\n@import "buttons";\n',
+      "m2.scss": '$primary: blue;\n@import "buttons";\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["m1.scss"]!, line: 1, column: 1 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.references.map((reference) => reference.file)).toEqual([paths["m1.scss"]]);
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["_buttons.scss"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when a file assigns a variable that its `as *` module declares", async () => {
+    // dart-sass compiles this to `.a { width: 2 }`: the assignment assigns the variable of the module.
+    const files = {
+      "_vars.scss": "$x: 1;\n",
+      "main.scss": '@use "vars" as *;\n$x: 2;\n.a { width: $x; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_vars.scss"]!, line: 1, column: 1 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["main.scss"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the with key that configures a private variable of the module", async () => {
+    // dart-sass accepts `with ($-accent: blue)` for a private `!default` variable.
+    const files = {
+      "_c.scss": "$-accent: red !default;\n.x { w: $-accent; }\n",
+      "main.scss": '@use "c" with ($-accent: blue);\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_c.scss"]!, line: 1, column: 1 },
+        { file: paths["_c.scss"]!, line: 2, column: tokenColumn(".x { w: $-accent; }", "$-accent") },
+        { file: paths["main.scss"]!, line: 1, column: tokenColumn(files["main.scss"], "$-accent") },
+      ];
+      const result = await testFindReferences(index, paths["_c.scss"]!, 1, 1, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when an @import nested in a rule may declare the name in its own block", async () => {
+    // dart-sass declares what `.a { @import "vars"; }` imports inside `.a` only, and this scan does
+    // not follow blocks, so the use in `.a` is not proved.
+    const files = { "_vars.scss": "$x: 1;\n", "main.scss": '.a { @import "vars"; w: $x; }\n' };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_vars.scss"]!, line: 1, column: 1 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["main.scss"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the read in the default of a parameter with the member's name, and not the read of the parameter", async () => {
+    const files = {
+      "_vars.scss": "$size: 1px;\n",
+      "star.scss": '@use "vars" as *;\n@mixin box($size: $size) { width: $size; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const line = files["star.scss"].split("\n")[1]!;
+      const expected = [
+        { file: paths["_vars.scss"]!, line: 1, column: 1 },
+        { file: paths["star.scss"]!, line: 2, column: tokenColumn(line, "$size", 1) },
+      ];
+      const result = await testFindReferences(index, paths["_vars.scss"]!, 1, 1, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage when a style block loads a forwarding module by an unresolved URL", async () => {
+    // The graph reads the URL of a style block as `external`, and `_theme.scss` forwards the declaring
+    // module, so the block reaches `$primary` through the stem `theme`, not `colors`.
+    const files = {
+      "_colors.scss": "$primary: red;\n",
+      "_theme.scss": '@forward "colors";\n',
+      "main.scss": '@use "theme";\n.a { color: theme.$primary; }\n',
+      "Comp.vue":
+        '<template><div /></template>\n<style lang="scss">\n@use "./theme";\n.a { color: theme.$primary; }\n</style>\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_colors.scss"]!, line: 1, column: 1 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["Comp.vue"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage for a file that looks a mixin up by name", async () => {
+    const files = {
+      "_lib.scss": "@mixin pad { padding: 1px; }\n",
+      "main.scss": '@use "sass:meta";\n@use "lib";\n.a { @include lib.pad; x: meta.get-mixin("pad", "lib"); }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_lib.scss"]!, line: 1, column: 8 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["main.scss"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds every declaration of a placeholder and the use in another module, with complete coverage", async () => {
+    // dart-sass: `.x { @extend %btn }` extends the rule in the media query too.
+    const files = {
+      "_lib.scss": "%btn { a: b; }\n@media screen { %btn { c: d; } }\n",
+      "main.scss": '@use "lib";\n.x { @extend %btn; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const expected = [
+        { file: paths["_lib.scss"]!, line: 1, column: 2 },
+        { file: paths["_lib.scss"]!, line: 2, column: tokenColumn(files["_lib.scss"].split("\n")[1]!, "btn") },
+        { file: paths["main.scss"]!, line: 2, column: tokenColumn(files["main.scss"].split("\n")[1]!, "btn") },
+      ];
+      for (const [line, column] of [
+        [1, 2],
+        [2, expected[1]!.column],
+      ] as const) {
+        const result = await testFindReferences(index, paths["_lib.scss"]!, line, column, expected);
+        expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial coverage for a file that looks a function up with an underscore spelling", async () => {
+    // dart-sass reads `_` as `-` in a function name, so `meta.get_function` is `meta.get-function`.
+    const files = {
+      "_lib.scss": "@function pad() { @return 1px; }\n",
+      "main.scss":
+        '@use "sass:meta";\n@use "lib";\n.a { w: lib.pad(); x: meta.get_function("pad", $module: "lib"); }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const result = await indexer.findReferences(index, { file: paths["_lib.scss"]!, line: 1, column: 11 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.referenceCoverage?.state).toBe("partial");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([paths["main.scss"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("finds the import-only member from @import and the ordinary member from @use", async () => {
+    const files = {
+      "_lib.import.scss": "$from-import: 1;\n",
+      "_lib.scss": "$from-use: 2;\n",
+      "legacy.scss": '@import "lib";\n.a { w: $from-import; }\n',
+      "use.scss": '@use "lib";\n.a { w: lib.$from-use; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const imported = await testFindReferences(index, paths["_lib.import.scss"]!, 1, 1, [
+        { file: paths["_lib.import.scss"]!, line: 1, column: 1 },
+        {
+          file: paths["legacy.scss"]!,
+          line: 2,
+          column: tokenColumn(files["legacy.scss"]!.split("\n")[1]!, "$from-import"),
+        },
+      ]);
+      expect(imported.status === "ok" ? imported.referenceCoverage?.state : undefined).toBe("complete");
+      const used = await testFindReferences(index, paths["_lib.scss"]!, 1, 1, [
+        { file: paths["_lib.scss"]!, line: 1, column: 1 },
+        {
+          file: paths["use.scss"]!,
+          line: 2,
+          column: tokenColumn(files["use.scss"]!.split("\n")[1]!, "$from-use"),
+        },
+      ]);
+      expect(used.status === "ok" ? used.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the with key when a later assignment uses !default, and not when none does", async () => {
+    // dart-sass accepts ($x: 2) because the second assignment is !default, and rejects ($y: 3).
+    const files = {
+      "_vars.scss": "$x: null;\n$x: 1 !default;\n.a { w: $x; }\n$y: 1;\n",
+      "main.scss": '@use "vars" with ($x: 2, $y: 3);\n.b { w: vars.$x; }\n',
+    };
+    const { root, paths, index } = await scssProject(files);
+    try {
+      const varsRead = files["_vars.scss"]!.split("\n")[2]!;
+      const main = files["main.scss"]!.split("\n");
+      const expected = [
+        { file: paths["_vars.scss"]!, line: 1, column: 1 },
+        { file: paths["_vars.scss"]!, line: 2, column: 1 },
+        { file: paths["_vars.scss"]!, line: 3, column: tokenColumn(varsRead, "$x") },
+        { file: paths["main.scss"]!, line: 1, column: tokenColumn(main[0]!, "$x") },
+        { file: paths["main.scss"]!, line: 2, column: tokenColumn(main[1]!, "$x") },
+      ];
+      const fromDeclaration = await testFindReferences(index, paths["_vars.scss"]!, 1, 1, expected);
+      expect(fromDeclaration.status === "ok" ? fromDeclaration.referenceCoverage?.state : undefined).toBe("complete");
+      const fromKey = await testFindReferences(index, paths["main.scss"]!, 1, tokenColumn(main[0]!, "$x"), expected);
+      expect(fromKey.status === "ok" ? fromKey.referenceCoverage?.state : undefined).toBe("complete");
+      const plain = await testFindReferences(index, paths["_vars.scss"]!, 4, 1, [
+        { file: paths["_vars.scss"]!, line: 4, column: 1 },
+      ]);
+      expect(plain.status === "ok" ? plain.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes a nested function call and keeps an include outside the block on the outer mixin", async () => {
+    const main = [
+      "@function inset() { @return 1px; }",
+      "@mixin inset { color: red; }",
+      ".a {",
+      "  width: inset();",
+      "  @include inset;",
+      "  @function inset() { @return inset(1); }",
+      "  @mixin inset { color: blue; }",
+      "  width: inset();",
+      "  @include inset;",
+      "}",
+      ".b { width: inset(); @include inset; }",
+      "",
+    ].join("\n");
+    const { root, paths, index } = await scssProject({ "main.scss": main });
+    const lines = main.split("\n");
+    const at = (line: number, token: string, occurrence = 0) => ({
+      file: paths["main.scss"]!,
+      line,
+      column: tokenColumn(lines[line - 1]!, token, occurrence),
+    });
+    try {
+      const nestedFn = [at(6, "inset", 0), at(6, "inset", 1), at(8, "inset")];
+      const fn = await testFindReferences(index, paths["main.scss"]!, 6, nestedFn[0]!.column, nestedFn);
+      expect(fn.status === "ok" ? fn.referenceCoverage?.state : undefined).toBe("complete");
+      const nestedMixin = [at(7, "inset"), at(9, "inset")];
+      const mixin = await testFindReferences(index, paths["main.scss"]!, 7, nestedMixin[0]!.column, nestedMixin);
+      expect(mixin.status === "ok" ? mixin.referenceCoverage?.state : undefined).toBe("complete");
+      const outerFn = [at(1, "inset"), at(4, "inset"), at(11, "inset", 0)];
+      const outerFnResult = await testFindReferences(index, paths["main.scss"]!, 1, outerFn[0]!.column, outerFn);
+      expect(outerFnResult.status === "ok" ? outerFnResult.referenceCoverage?.state : undefined).toBe("complete");
+      const outerMixin = [at(2, "inset"), at(5, "inset"), at(11, "inset", 1)];
+      const outerMixinResult = await testFindReferences(
+        index,
+        paths["main.scss"]!,
+        2,
+        outerMixin[0]!.column,
+        outerMixin,
+      );
+      expect(outerMixinResult.status === "ok" ? outerMixinResult.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps proved scoped calls and marks coverage partial when a lookup in the block may name the callable", async () => {
+    const inside = [
+      ".a {",
+      "  @function inset() { @return 1px; }",
+      "  width: inset();",
+      '  exists: function-exists("inset");',
+      "}",
+      "",
+    ].join("\n");
+    const lines = inside.split("\n");
+    const { root, paths, index } = await scssProject({ "main.scss": inside });
+    try {
+      const expected = [
+        { file: paths["main.scss"]!, line: 2, column: tokenColumn(lines[1]!, "inset") },
+        { file: paths["main.scss"]!, line: 3, column: tokenColumn(lines[2]!, "inset") },
+      ];
+      const result = await testFindReferences(index, paths["main.scss"]!, 2, expected[0]!.column, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("partial");
+      expect(result.status === "ok" ? result.referenceCoverage?.reasons : undefined).toContain("strategy_unavailable");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let a lookup outside a scoped callable's block affect its references", async () => {
+    const outside = [
+      '@use "sass:meta";',
+      ".a {",
+      "  @function inset() { @return 1px; }",
+      "  width: inset();",
+      "}",
+      ".b {",
+      '  exists: function-exists("inset");',
+      '  f: call("inset");',
+      '  g: meta.get-function("inset");',
+      "}",
+      "",
+    ].join("\n");
+    const lines = outside.split("\n");
+    const { root, paths, index } = await scssProject({ "main.scss": outside });
+    try {
+      const expected = [
+        { file: paths["main.scss"]!, line: 3, column: tokenColumn(lines[2]!, "inset") },
+        { file: paths["main.scss"]!, line: 4, column: tokenColumn(lines[3]!, "inset") },
+      ];
+      const result = await testFindReferences(index, paths["main.scss"]!, 3, expected[0]!.column, expected);
+      expect(result.status === "ok" ? result.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds a scoped mixin from its include and a scoped function from its call", async () => {
+    const main = [
+      ".a {",
+      "  @mixin inset { color: blue; }",
+      "  @include inset;",
+      "  @function to-ne() { @return 1px; }",
+      "  width: to-ne();",
+      "  width: to_ne();",
+      "}",
+      "",
+    ].join("\n");
+    const lines = main.split("\n");
+    const { root, paths, index } = await scssProject({ "main.scss": main });
+    const at = (line: number, token: string) => ({
+      file: paths["main.scss"]!,
+      line,
+      column: tokenColumn(lines[line - 1]!, token),
+    });
+    try {
+      const mixin = [at(2, "inset"), at(3, "inset")];
+      const mixinResult = await testFindReferences(index, paths["main.scss"]!, 3, mixin[1]!.column, mixin);
+      expect(mixinResult.status === "ok" ? mixinResult.referenceCoverage?.state : undefined).toBe("complete");
+      const fn = [at(4, "to-ne"), at(5, "to-ne"), at(6, "to_ne")];
+      const fnResult = await testFindReferences(index, paths["main.scss"]!, 6, fn[2]!.column, fn);
+      expect(fnResult.status === "ok" ? fnResult.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

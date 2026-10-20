@@ -44,6 +44,7 @@ import { ensurePhpNamespaceSymbolIndex, phpReferenceRoleMatchesKind } from "./ph
 import {
   buildIndexedCandidateCoverage,
   buildPhpQualifiedNames,
+  markNameEquivalenceGap,
   cppCanonicalStructuralExport,
   describeReferenceStrategies,
   collectVerifiedNamedNodeReferences,
@@ -106,6 +107,17 @@ import {
   SymbolKind,
 } from "./types.js";
 import { findSqlReferences, goToSqlDefinition, sqlPositionIsProvenObjectOrRoutineMention } from "../sql/navigation.js";
+import { findScssReferences, goToScssDefinition } from "../scss/navigation.js";
+import {
+  scssBlockLocalExistenceUnproven,
+  scssFactsForFile,
+  scssFlowLocalUnproven,
+  scssLocalSpellingGap,
+  scssMemberForDefinition,
+  scssNearerEquivalentLocal,
+  scssScopedCallableDynamicUnproven,
+  scssScopedCallableReferences,
+} from "../scss/resolution.js";
 import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
 import {
   createLoadingParsedFileProvider,
@@ -136,6 +148,8 @@ export async function goToDefinition(
   if (sqlResult) return sqlResult;
   const terraformResult = await goToTerraformDefinition(index, req);
   if (terraformResult) return terraformResult;
+  const scssResult = await goToScssDefinition(index, req);
+  if (scssResult) return scssResult;
 
   const context =
     parsedContext ??
@@ -687,6 +701,14 @@ async function findReferencesInternal(
   if (terraformReferences) {
     if (terraformReferences.status === "ok") await attachReferenceContext(index, terraformReferences.references, opts);
     return terraformReferences;
+  }
+  const scssReferences = await findScssReferences(index, def, {
+    includeDefinition: collectionMode === "all",
+    ...(maxReferences === undefined ? {} : { maxReferences }),
+  });
+  if (scssReferences) {
+    if (scssReferences.status === "ok") await attachReferenceContext(index, scssReferences.references, opts);
+    return scssReferences;
   }
 
   const definitionFile = def.file;
@@ -1552,6 +1574,35 @@ async function findReferencesInternal(
     }
   }
 
+  // A scoped mixin or function is not a module member. The scope walker misses function calls
+  // (`function_name` is not an identifier) and treats `-` and `_` as different spellings, and a
+  // later include outside the block can attach to the nested mixin. Bare same-kind calls and
+  // includes inside the scanned scope are the references; anything else the walker added is not.
+  let scssScopedCallableUnproven = false;
+  if (parsedContext.sup.id === "scss") {
+    const scoped = await scssScopedCallableReferences(index, definition);
+    if (scoped?.unproven) {
+      scssScopedCallableUnproven = true;
+    } else if (scoped) {
+      const owned = new Set(scoped.ranges.map((range) => referenceSiteKey(definitionFile, range)));
+      const definitionKey = referenceSiteKey(definition.file, definition.range);
+      const kept: Reference[] = [];
+      seenRefs.clear();
+      for (const ref of refs) {
+        const key = referenceSiteKey(ref.file, ref.range);
+        if (key !== definitionSiteKey && key !== definitionKey && !owned.has(key)) continue;
+        seenRefs.set(key, kept.length);
+        kept.push(ref);
+      }
+      refs.length = 0;
+      refs.push(...kept);
+      for (const range of scoped.ranges) pushRef({ file: definitionFile, range });
+      // Those static uses stay. A lookup in the same span may still name the callable by a
+      // string, which this walk does not edit, so coverage must not claim to be complete.
+      if (await scssScopedCallableDynamicUnproven(index, definition)) scssScopedCallableUnproven = true;
+    }
+  }
+
   const truncated = maxReferences !== undefined && refs.length > maxReferences;
   if (truncated) {
     refs.length = maxReferences;
@@ -1566,6 +1617,44 @@ async function findReferencesInternal(
     return left.file.localeCompare(right.file);
   });
 
+  // A block local's lexical scope can run past the block. A use the SCSS resolver proves is a
+  // module member is not a reference of that local. The local's own uses stay: they resolve as a
+  // shadow and the generic walker keeps them. A nearer binding with the same Sass name and a
+  // different `-`/`_` spelling owns the read; the exact-name walk would keep it on this declaration.
+  let scssNearerSpellingDropped = false;
+  if (
+    parsedContext.sup.id === "scss" &&
+    definition.localName.startsWith("$") &&
+    !(await scssMemberForDefinition(index, definition))
+  ) {
+    const facts = await scssFactsForFile(index, definition.file);
+    const definitionKey = fileIdentityKey(definition.file);
+    const kept: Reference[] = [];
+    for (const ref of refs) {
+      if (referenceSiteKey(ref.file, ref.range) === definitionSiteKey) {
+        kept.push(ref);
+        continue;
+      }
+      const resolved = await goToScssDefinition(index, {
+        file: ref.file,
+        line: ref.range.start.line,
+        column: ref.range.start.column,
+      });
+      if (resolved?.status === "ok") continue;
+      if (
+        facts &&
+        fileIdentityKey(ref.file) === definitionKey &&
+        scssNearerEquivalentLocal(facts, definition, ref.range.start)
+      ) {
+        scssNearerSpellingDropped = true;
+        continue;
+      }
+      kept.push(ref);
+    }
+    refs.length = 0;
+    refs.push(...kept);
+  }
+
   await attachReferenceContext(index, refs, opts);
 
   const scannedFiles = [definitionFile, ...candidateFiles, ...receiverScannedFiles];
@@ -1579,6 +1668,19 @@ async function findReferencesInternal(
           parsedContext.sup.id === "csharp" ? { csharpQualifiedName: true } : undefined,
         ).complete
       : await sharedOwnerMemberUnitComplete(index, definition);
+  const strategyUnavailableFiles = [
+    ...receiverProofUnavailableFiles.values(),
+    ...(rubyReopen?.incomplete ? [definition.file] : []),
+  ];
+  if (parsedContext.sup.id === "scss" && definition.localName.startsWith("$")) {
+    const facts = await scssFactsForFile(index, definition.file);
+    if (scssNearerSpellingDropped || (facts && scssLocalSpellingGap(facts, definition))) {
+      markNameEquivalenceGap(index, definition);
+    }
+    if (await scssFlowLocalUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
+    if (await scssBlockLocalExistenceUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
+  }
+  if (scssScopedCallableUnproven) strategyUnavailableFiles.push(definition.file);
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,
     def: definition,
@@ -1603,10 +1705,7 @@ async function findReferencesInternal(
         ? { implicitUnitPeers: { applicable: true, executed: implicitUnitComplete } }
         : {}),
     }),
-    strategyUnavailableFiles: [
-      ...receiverProofUnavailableFiles.values(),
-      ...(rubyReopen?.incomplete ? [definition.file] : []),
-    ],
+    strategyUnavailableFiles,
   });
 
   return {

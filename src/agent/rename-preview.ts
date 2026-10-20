@@ -42,6 +42,16 @@ import {
   terraformScopedDataCaptures,
 } from "../terraform/resolution.js";
 import { TERRAFORM_IDENTIFIER_PATTERN } from "../terraform/syntax.js";
+import {
+  isScssFile,
+  scssMemberForDefinition,
+  scssRenameCollisions,
+  scssRenameUseConflicts,
+  scssScopedCallableRenameSites,
+  scssRenamedName,
+  scssReplacementText,
+} from "../scss/resolution.js";
+import { sassCanonical, SCSS_IDENTIFIER_PATTERN } from "../scss/syntax.js";
 
 export type RenamePreviewRequest = {
   root: string;
@@ -190,6 +200,11 @@ export async function previewRenameInSnapshot(
   const maxEdits = normalizeMaxEdits(request.maxEdits);
   const provenance = semanticRenameProvenance(snapshot);
   const conflicts = validateNewName(snapshot, resolved.def, request.newName);
+  // An SCSS edit writes the name with the sigil of the symbol (`$y` for a request of `y`), so the
+  // scope checks and the textual edits use that spelling.
+  const newName = isScssFile(snapshot.index, resolved.def.file)
+    ? scssRenamedName(resolved.def.localName, request.newName)
+    : request.newName;
   const semanticReferences: Reference[] = [];
   let referenceFailure: string | undefined;
   try {
@@ -338,9 +353,10 @@ export async function previewRenameInSnapshot(
   );
   // Terraform exports are its `variable` and `output` declarations, which the definition and
   // reference edits already cover; the ECMAScript export-text scan would match comments.
-  const exportDeclarations: ExportDeclarationScan = isTerraformFile(snapshot.index, resolved.def.file)
-    ? { candidates: [], missingFiles: [] }
-    : await collectExportDeclarationCandidates(snapshot, resolved.def, loadSource);
+  const exportDeclarations: ExportDeclarationScan =
+    isTerraformFile(snapshot.index, resolved.def.file) || isScssFile(snapshot.index, resolved.def.file)
+      ? { candidates: [], missingFiles: [] }
+      : await collectExportDeclarationCandidates(snapshot, resolved.def, loadSource);
   const allCandidates: CandidateEdit[] = [
     ...definitionCandidates,
     ...importDeclarations.candidates,
@@ -357,13 +373,13 @@ export async function previewRenameInSnapshot(
   const boundedCandidates = boundList(allCandidates, maxEdits);
   const candidateLimitExceeded = boundedCandidates.omitted > 0;
   const candidates = boundedCandidates.items;
-  await addScopeConflicts(snapshot, resolved.def, request.newName, selectedReferences, conflicts);
+  await addScopeConflicts(snapshot, resolved.def, newName, selectedReferences, conflicts, unsafeSites, provenance);
   for (const definition of semanticDefinitions.values()) {
     if (defNodeId(definition) === resolved.id) continue;
-    await addScopeConflicts(snapshot, definition, request.newName, [], conflicts);
+    await addScopeConflicts(snapshot, definition, newName, [], conflicts, unsafeSites, provenance);
   }
   // Terraform exports inputs and outputs in separate namespaces; addTerraformConflicts checks them.
-  if (!isTerraformFile(snapshot.index, resolved.def.file)) {
+  if (!isTerraformFile(snapshot.index, resolved.def.file) && !isScssFile(snapshot.index, resolved.def.file)) {
     addExportDeclarationConflicts(snapshot, semanticDefinitions, request.newName, conflicts);
   }
 
@@ -398,7 +414,24 @@ export async function previewRenameInSnapshot(
     ) {
       continue;
     }
-    if (oldText !== resolved.def.localName) {
+    let newText = request.newName;
+    if (isScssFile(snapshot.index, resolved.def.file)) {
+      const replaced = scssReplacementText(resolved.def.localName, oldText, request.newName);
+      if (replaced === null) {
+        unsafeSites.push({
+          location: { file: loaded.displayPath, range: candidate.range },
+          text: oldText,
+          reason: "unresolved_reference",
+          provenance: {
+            ...provenance,
+            confidence: "low",
+            reason: "Live source no longer matches indexed symbol text.",
+          },
+        });
+        continue;
+      }
+      newText = replaced;
+    } else if (oldText !== resolved.def.localName) {
       unsafeSites.push({
         location: { file: loaded.displayPath, range: candidate.range },
         text: oldText,
@@ -411,7 +444,7 @@ export async function previewRenameInSnapshot(
       file: loaded.displayPath,
       range: candidate.range,
       oldText,
-      newText: request.newName,
+      newText,
       kind: candidate.kind,
       provenance,
     });
@@ -422,7 +455,7 @@ export async function previewRenameInSnapshot(
       snapshot,
       realRoot,
       oldName: resolved.def.localName,
-      newName: request.newName,
+      newName,
       includeComments: request.includeComments ?? false,
       includeStrings: request.includeStrings ?? false,
       remaining: Math.max(0, maxEdits - edits.length),
@@ -565,6 +598,7 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   let identifierPattern = /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
   if (allowsDollar) identifierPattern = /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u;
   else if (support?.id === "terraform") identifierPattern = TERRAFORM_IDENTIFIER_PATTERN;
+  else if (support?.id === "scss") identifierPattern = SCSS_IDENTIFIER_PATTERN;
   if (!newName || invalidPathCharacters || !identifierPattern.test(newName)) {
     const displaySupport = supportForFile(def.file, snapshot.index.languageExtensions);
     conflicts.push({
@@ -626,21 +660,129 @@ async function addTerraformConflicts(
   }
 }
 
+/**
+ * An SCSS name is a module member. A same-kind member that a scope seeing the renamed one
+ * already declares or exposes under the new name collides. A scoped variable, mixin, or function
+ * that would capture a bare use is a shadowing conflict. A new name that starts with `-` or `_` is private, so a use through
+ * `@use` or `@forward` could no longer reach it, and a `@forward` hide list that names the new name
+ * hides the member from the uses that read it through that forward. A show list that already
+ * names the new name can newly expose the member, and that exposure is part of the collision check.
+ */
+async function addScssConflicts(
+  snapshot: AgentProjectSnapshot,
+  target: SymbolDef,
+  newName: string,
+  conflicts: RenameConflict[],
+): Promise<void> {
+  for (const collision of await scssRenameCollisions(snapshot.index, target, newName)) {
+    const collisionFile = normalizeAgentFilePath(snapshot.root, collision.file);
+    conflicts.push({
+      file: collisionFile,
+      location: { file: collisionFile, range: collision.range },
+      reason: "name_collision",
+      existingHandle: semanticSymbolFromDef(snapshot, collision).handle,
+      message: `A scope that sees this member after the rename already uses "${newName}" for another member.`,
+    });
+  }
+  const { captured, inaccessible, hidden } = await scssRenameUseConflicts(snapshot.index, target, newName);
+  for (const capture of captured) {
+    const captureFile = normalizeAgentFilePath(snapshot.root, capture.file);
+    conflicts.push({
+      file: captureFile,
+      location: { file: captureFile, range: capture.range },
+      reason: "shadowing",
+      message: `A scoped variable or callable would capture this reference after the rename to "${newName}".`,
+    });
+  }
+  const reportedFiles = new Set<string>();
+  for (const site of inaccessible) {
+    const siteFile = normalizeAgentFilePath(snapshot.root, site.file);
+    if (reportedFiles.has(siteFile)) continue;
+    reportedFiles.add(siteFile);
+    conflicts.push({
+      file: siteFile,
+      location: { file: siteFile, range: site.range },
+      reason: "invalid_identifier",
+      message: `"${newName}" is private to its module, so this use through @use or @forward could no longer reach it.`,
+    });
+  }
+  const hiddenFiles = new Set<string>();
+  for (const site of hidden) {
+    const siteFile = normalizeAgentFilePath(snapshot.root, site.file);
+    if (hiddenFiles.has(siteFile)) continue;
+    hiddenFiles.add(siteFile);
+    conflicts.push({
+      file: siteFile,
+      location: { file: siteFile, range: site.range },
+      reason: "invalid_identifier",
+      message: `A @forward hide list would hide "${newName}" from this use after the rename.`,
+    });
+  }
+}
+
 async function addScopeConflicts(
   snapshot: AgentProjectSnapshot,
   target: SymbolDef,
   newName: string,
   references: readonly Reference[],
   conflicts: RenameConflict[],
+  unsafeSites: RenameUnsafeSite[],
+  provenance: SemanticProvenance,
 ): Promise<void> {
   if (isTerraformFile(snapshot.index, target.file)) {
     await addTerraformConflicts(snapshot, target, newName, references, conflicts);
     return;
   }
+  if (isScssFile(snapshot.index, target.file)) {
+    if (await scssMemberForDefinition(snapshot.index, target)) {
+      await addScssConflicts(snapshot, target, newName, conflicts);
+      return;
+    }
+    const scoped = await scssScopedCallableRenameSites(snapshot.index, target, newName, references);
+    if (scoped) {
+      // Includes a bare dynamic callee of the new name. A namespaced meta call is not a capture.
+      for (const capture of scoped.captured) {
+        const file = normalizeAgentFilePath(snapshot.root, capture.file);
+        conflicts.push({
+          file,
+          location: { file, range: capture.range },
+          reason: "shadowing",
+          message: `A scoped callable renamed to "${newName}" would capture this unqualified call.`,
+        });
+      }
+      for (const site of scoped.shadowed) {
+        const file = normalizeAgentFilePath(snapshot.root, site.file);
+        conflicts.push({
+          file,
+          location: { file, range: site.range },
+          reason: "shadowing",
+          message: `A different scoped callable named "${newName}" would capture this reference after the rename.`,
+        });
+      }
+      for (const site of scoped.unaccounted) {
+        const file = normalizeAgentFilePath(snapshot.root, site.file);
+        unsafeSites.push({
+          location: { file, range: site.range },
+          text: site.text,
+          reason: "unresolved_reference",
+          provenance: {
+            ...provenance,
+            confidence: "low",
+            reason: "Scoped callable reference was not included in the semantic rename edits.",
+          },
+        });
+      }
+      return;
+    }
+  }
   const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(target.file));
   if (!moduleIndex) return;
   const file = normalizeAgentFilePath(snapshot.root, target.file);
   let localCollision: SymbolDef | undefined;
+  // Sass folds `_` into `-` in a variable name, so `$a_b` and `$a-b` are one variable.
+  const foldsName = isScssFile(snapshot.index, target.file) && target.localName.startsWith("$");
+  const sameName = (name: string): boolean =>
+    name === newName || (foldsName && sassCanonical(name) === sassCanonical(newName));
   try {
     const parsed = await ensureParsedContext(
       target.file,
@@ -658,15 +800,20 @@ async function addScopeConflicts(
     const targetScope = targetBinding
       ? scopeIndex.allScopes.find((scope) => scope.map.get(canonicalTargetName) === targetBinding)
       : undefined;
-    const collisionBinding = targetScope?.map.get(parsed.sup.normalizeIdentifier(newName));
-    if (collisionBinding?.def) {
+    let collisionBinding = targetScope?.map.get(parsed.sup.normalizeIdentifier(newName));
+    if (!collisionBinding && foldsName) {
+      collisionBinding = [...(targetScope?.map.values() ?? [])].find(
+        (binding) => binding !== targetBinding && sameName(binding.name),
+      );
+    }
+    const collisionDef = collisionBinding?.def;
+    if (collisionDef) {
       localCollision = moduleIndex.locals.find(
-        (candidate) =>
-          candidate.localName === newName && candidate.range.start.index === collisionBinding.def?.start.index,
+        (candidate) => sameName(candidate.localName) && candidate.range.start.index === collisionDef.start.index,
       );
     }
   } catch {
-    localCollision = moduleIndex.locals.find((candidate) => candidate !== target && candidate.localName === newName);
+    localCollision = moduleIndex.locals.find((candidate) => candidate !== target && sameName(candidate.localName));
   }
   if (localCollision) {
     conflicts.push({

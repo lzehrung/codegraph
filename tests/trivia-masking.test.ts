@@ -6,7 +6,7 @@ import {
   stripPythonCommentsAndStrings,
 } from "../src/util/comments.js";
 import { maskImportBindingTrivia } from "../src/indexer/imports/binding-ranges.js";
-import { maskTrivia } from "../src/util/trivia.js";
+import { buildTriviaMask, maskTrivia } from "../src/util/trivia.js";
 
 /** Asserts the masked output keeps every UTF-16 offset (equal length, astral-safe). */
 function expectOffsetsPreserved(source: string, masked: string): void {
@@ -169,6 +169,122 @@ describe("trivia masking keeps following code visible per language", () => {
     expect(masked).not.toContain(" c ");
     expect(masked).toContain(" d { content: ");
   });
+  it("treats only unescaped SCSS quote and comment starters as trivia", () => {
+    const escaped = ["\\" + '"', "\\" + "'", "\\//icon", "\\".repeat(3) + '"', "\\".repeat(3) + "//icon"];
+    for (const value of escaped) {
+      const source = `$x: 1; .a { content: ${value}; width: $x; }\n$later: 2;\n`;
+      const mask = buildTriviaMask(source, "scss", { holes: true });
+      expect(mask[source.indexOf(value)]).toBe(0);
+      expect(mask[source.indexOf("width: $x") + "width: ".length]).toBe(0);
+      expect(mask[source.indexOf("$later")]).toBe(0);
+    }
+    const even = "$x: 1; .a { content: " + "\\".repeat(2) + '"real"; width: $x; }\n$later: 2;\n';
+    const mask = buildTriviaMask(even, "scss", { holes: true });
+    expect(mask[even.indexOf('"real"')]).toBe(1);
+    expect(mask[even.indexOf("width: $x") + "width: ".length]).toBe(0);
+    expect(mask[even.indexOf("$later")]).toBe(0);
+  });
+
+  it("masks an SCSS line comment through the line break, so an apostrophe in it opens no string", () => {
+    const source = "// Bootstrap's grid\n$primary: red;\n.a { content: 'x'; } // it's done\n$later: 1;\n";
+    const masked = maskTrivia(source, "scss");
+    expectOffsetsPreserved(source, masked);
+    expect(masked).not.toContain("Bootstrap");
+    expect(masked).not.toContain("it's done");
+    expect(masked).not.toContain("'x'");
+    expect(masked).toContain("$primary: red;");
+    expect(masked).toContain("$later: 1;");
+  });
+
+  it("reads an unquoted SCSS url(...) as one opaque token and leaves url($path) to the ordinary rules", () => {
+    const source = ".a { b: url(http://x/y.png); c: url(a/*b.png); d: url(//cdn/z.png); }\n$later: 1;\n";
+    const rendered = maskTrivia(source, "scss");
+    expectOffsetsPreserved(source, rendered);
+    expect(rendered).toContain("url(http://x/y.png)");
+    expect(rendered).toContain("url(a/*b.png)");
+    expect(rendered).toContain("url(//cdn/z.png)");
+    expect(rendered).toContain("$later: 1;");
+    const code = maskTrivia(source, "scss", { maskCssUrls: true });
+    expectOffsetsPreserved(source, code);
+    expect(code).not.toContain("http://x");
+    expect(code).not.toContain("cdn");
+    expect(code).toContain("$later: 1;");
+    const call = maskTrivia('.a { b: url($path); c: url("//q/r"); }\n', "scss", { maskCssUrls: true });
+    expect(call).toContain("url($path)");
+    expect(call).not.toContain("//q/r");
+  });
+
+  it("keeps a hex escape inside an unquoted SCSS url and the code after it on the line", () => {
+    const source =
+      ".a { b: url(http://cdn/a\\20 b.svg); width: $local; c: url(\\68 ttp://example.com/x); width: $next; }\n";
+    const rendered = maskTrivia(source, "scss");
+    expectOffsetsPreserved(source, rendered);
+    expect(rendered).toContain("url(http://cdn/a\\20 b.svg)");
+    expect(rendered).toContain("url(\\68 ttp://example.com/x)");
+    expect(rendered).toContain("width: $local");
+    expect(rendered).toContain("width: $next");
+    const masked = maskTrivia(source, "scss", { maskCssUrls: true });
+    expectOffsetsPreserved(source, masked);
+    expect(masked).not.toContain("cdn/a");
+    expect(masked).not.toContain("example.com");
+    expect(masked).toContain("width: $local");
+    expect(masked).toContain("width: $next");
+  });
+
+  it("masks a string or comment inside the interpolation of an unquoted SCSS url(...), and keeps the expression", () => {
+    // The SCSS scanner reads the expression of `#{...}` as code: only the strings and comments in it are trivia.
+    const source =
+      "$a: 1;\n.a { b: url(#{'$str'}.svg); c: url(#{$base}/a.svg); d: url(#{'}'}x.svg); e: url(#{/* } */ 1}.svg); }\n$later: 2;\n";
+    const mask = buildTriviaMask(source, "scss", { holes: true, maskCssUrls: true });
+    let code = "";
+    for (let index = 0; index < source.length; index += 1) code += mask[index] ? " " : source.charAt(index);
+    expect(code).not.toContain("$str");
+    expect(code).toContain("#{$base}");
+    expect(code).not.toContain("x.svg");
+    expect(code).not.toContain("} */");
+    expect(code).toContain("$later: 2;");
+  });
+
+  it("masks a string or comment inside the interpolation of a quoted string, and keeps the expression", () => {
+    // The expression of `#{...}` in a quoted SCSS string is code: only the strings and comments in it are trivia.
+    const visible = (source: string, languageId: string): string => {
+      const mask = buildTriviaMask(source, languageId, { holes: true, maskCssUrls: true });
+      let code = "";
+      for (let index = 0; index < source.length; index += 1) code += mask[index] ? " " : source.charAt(index);
+      return code;
+    };
+    const scss = visible(
+      '$a: 1;\n.a { c: "#{\'$str\'}"; d: "x #{$base} y"; e: "#{/* $note */ 1}"; f: "a #{ "b #{\'$deep\'} c" } d"; }\n$later: 2;\n',
+      "scss",
+    );
+    expect(scss).not.toContain("$str");
+    expect(scss).not.toContain("$note");
+    expect(scss).not.toContain("$deep");
+    expect(scss).toContain("#{$base}");
+    expect(scss).toContain("$later: 2;");
+    // A template literal behaves the same: the hole shows `call(`, and its string and comment are trivia.
+    const js = visible('const t = `a ${ call("lit") /* note */ } b ${ keep } c`;\nconst next = 1;\n', "js");
+    expect(js).not.toContain("lit");
+    expect(js).not.toContain("note");
+    expect(js).toContain("call(");
+    expect(js).toContain("${ keep }");
+    expect(js).toContain("const next = 1;");
+  });
+
+  it("keeps the next declaration when // sits inside url() in an interpolation", () => {
+    // An unquoted url() inside #{...} is opaque, so // in the URL is not a line comment.
+    const source = '.x { content: "#{url(http://example.com/x.png)}"; }\n$later: 2;\n';
+    const masked = maskTrivia(source, "scss");
+    expectOffsetsPreserved(source, masked);
+    expect(masked).toContain("$later: 2;");
+    const nested = '$name: "a";\n.x { content: "#{url(http://example.com/#{$name}.png)}"; }\n$later: 2;\n';
+    const mask = buildTriviaMask(nested, "scss", { holes: true, maskCssUrls: true });
+    let code = "";
+    for (let index = 0; index < nested.length; index += 1) code += mask[index] ? " " : nested.charAt(index);
+    expect(code).toContain("$name");
+    expect(code).toContain("$later: 2;");
+    expect(code).not.toContain('"a"');
+  });
 
   it("preserves offsets across an astral character inside masked trivia", () => {
     const source = "# \u{1F389} don't\nimport os\n";
@@ -207,5 +323,29 @@ describe("existing entry points keep their contracts", () => {
     const source = "# don't\nimport os\nx = 'value'\n";
     const stripped = stripPythonCommentsAndStrings(source);
     expect(stripped).toBe("\nimport os\nx = \n");
+  });
+});
+
+describe("SCSS loud-comment interpolation and namespaced url calls", () => {
+  it("keeps a loud-comment interpolation visible when holes are requested", () => {
+    const source = '$primary: red;\n/* before #{ $primary } after */\n// #{ $primary }\n/* #{ "$primary" } */\n';
+    const mask = buildTriviaMask(source, "scss", { holes: true, maskCssUrls: true });
+    let code = "";
+    for (let index = 0; index < source.length; index += 1) code += mask[index] ? " " : source[index];
+    expect(code.split("$primary").length - 1).toBe(2);
+    expect(code).not.toContain("before");
+    expect(code).not.toContain("after");
+    const rendered = maskTrivia(source, "scss");
+    expect(rendered).toContain("$primary: red;");
+    expect(rendered).not.toContain("before");
+    expect(rendered.split("$primary").length - 1).toBe(1);
+  });
+  it("does not mask a namespaced url(plain) as an opaque CSS url", () => {
+    const source = ".a { a: lib.url(plain); b: url(plain); }\n";
+    const mask = buildTriviaMask(source, "scss", { holes: true, maskCssUrls: true });
+    let code = "";
+    for (let index = 0; index < source.length; index += 1) code += mask[index] ? " " : source[index];
+    expect(code).toContain("lib.url(plain)");
+    expect(code.split("plain").length - 1).toBe(1);
   });
 });
