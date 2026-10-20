@@ -6925,4 +6925,34 @@ describe("Find References: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("finds a scoped mixin from its include and a scoped function from its call", async () => {
+    const main = [
+      ".a {",
+      "  @mixin inset { color: blue; }",
+      "  @include inset;",
+      "  @function to-ne() { @return 1px; }",
+      "  width: to-ne();",
+      "  width: to_ne();",
+      "}",
+      "",
+    ].join("\n");
+    const lines = main.split("\n");
+    const { root, paths, index } = await scssProject({ "main.scss": main });
+    const at = (line: number, token: string) => ({
+      file: paths["main.scss"]!,
+      line,
+      column: tokenColumn(lines[line - 1]!, token),
+    });
+    try {
+      const mixin = [at(2, "inset"), at(3, "inset")];
+      const mixinResult = await testFindReferences(index, paths["main.scss"]!, 3, mixin[1]!.column, mixin);
+      expect(mixinResult.status === "ok" ? mixinResult.referenceCoverage?.state : undefined).toBe("complete");
+      const fn = [at(4, "to-ne"), at(5, "to-ne"), at(6, "to_ne")];
+      const fnResult = await testFindReferences(index, paths["main.scss"]!, 6, fn[2]!.column, fn);
+      expect(fnResult.status === "ok" ? fnResult.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

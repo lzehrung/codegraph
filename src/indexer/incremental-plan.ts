@@ -171,6 +171,8 @@ export function pythonImportersOfPackageInits(
 }
 
 const RESOLUTION_ENTRY_STEMS = new Set(["index", "__init__", "mod", "package"]);
+/** Sass loads `dir/_index.scss` for `@use "dir"`, the same directory role as `dir/index.scss`. */
+const SCSS_PARTIAL_INDEX_STEM = "_index";
 /** `.d.ts` and similar: a resolver probes `foo` + `.d.ts`, so `foo.d.ts` satisfies stem `foo`. */
 const MULTI_PART_RESOLUTION_EXTENSIONS = DEFAULT_RESOLUTION_EXTENSIONS.filter(
   (extension) => extension.lastIndexOf(".") > 0,
@@ -227,7 +229,12 @@ export function addedResolutionStems(addedFiles: readonly string[], languageId =
     for (const stem of fileStems) {
       if (stem) stems.add(stem);
     }
-    if (!rule.importNamesDirectory && !fileStems.some((stem) => RESOLUTION_ENTRY_STEMS.has(stem))) continue;
+    const directoryEntry = fileStems.some(
+      (stem) =>
+        RESOLUTION_ENTRY_STEMS.has(stem) ||
+        (languageId === "scss" && stem === SCSS_PARTIAL_INDEX_STEM && path.extname(file).toLowerCase() === ".scss"),
+    );
+    if (!rule.importNamesDirectory && !directoryEntry) continue;
     let directory = path.dirname(file);
     while (directory !== path.dirname(directory)) {
       stems.add(path.basename(directory));

@@ -392,8 +392,13 @@ export function extractScssFacts(source: string): ScssFileFacts {
   const localCounts = new Map<string, number>();
   /** Flow-assignment bindings that must not change {@link localCounts}. */
   const provisionalFlows = new Set<ScssLocalBinding>();
-  /** Canonical names of the top-level functions declared so far. A call after one of them is that function. */
+  /**
+   * Canonical names of the top-level functions and mixins declared so far. A later bare call or
+   * include of that name is the user callable, not a `sass:meta` lookup. A scoped callable lives
+   * on its block instead, and a declaration later in the file does not own an earlier use.
+   */
   const declaredFunctions = new Set<string>();
+  const declaredMixins = new Set<string>();
   let paramsParenAt = -1;
   let callParenAt = -1;
   /** Offset of `(` after `selector` in an `@supports` head, so the paren is selector context. */
@@ -563,6 +568,24 @@ export function extractScssFacts(source: string): ScssFileFacts {
     return viaMeta ? form : null;
   };
 
+  /**
+   * True when a mixin or function of this name is already in scope: a top-level declaration seen
+   * earlier, or a scoped callable in an open block. `-` and `_` are the same character.
+   */
+  const callableAlreadyDeclared = (kind: "mixin" | "function", name: string, at: number): boolean => {
+    const canonical = sassCanonical(name);
+    if (kind === "function" ? declaredFunctions.has(canonical) : declaredMixins.has(canonical)) return true;
+    for (let frameIndex = blocks.length - 1; frameIndex >= 0; frameIndex -= 1) {
+      const frame = blocks[frameIndex];
+      if (!frame) continue;
+      for (let callableIndex = frame.callables.length - 1; callableIndex >= 0; callableIndex -= 1) {
+        const local = frame.callables[callableIndex];
+        if (local && local.kind === kind && local.canonical === canonical && at >= local.from) return true;
+      }
+    }
+    return false;
+  };
+
   const bindLocal = (frame: BlockFrame, local: ScssLocalBinding, provisional = false): void => {
     frame.locals.push(local);
     locals.push(local);
@@ -672,6 +695,7 @@ export function extractScssFacts(source: string): ScssFileFacts {
         isDefault: false,
       });
       if (keyword === "function") declaredFunctions.add(sassCanonical(name.text));
+      else declaredMixins.add(sassCanonical(name.text));
     }
     const paren = skipBlank(name.end);
     if (source.charCodeAt(paren) === 0x28) paramsParenAt = paren;
@@ -687,7 +711,13 @@ export function extractScssFacts(source: string): ScssFileFacts {
     if (source.charCodeAt(after) === 0x28) callParenAt = after;
     inInclude = true;
     const dynamicForm = metaCallForm(member.namespace, member.member);
-    if (dynamicForm) {
+    // A user mixin already declared owns a bare include, including `load-css` after `@use "sass:meta" as *`.
+    // A namespaced `meta.load-css` stays a lookup, and a mixin declared later does not own this include.
+    const ownedByMixin =
+      dynamicForm !== null &&
+      member.namespace === null &&
+      callableAlreadyDeclared("mixin", member.member, member.memberStart);
+    if (dynamicForm && !ownedByMixin) {
       dynamics.push({ form: dynamicForm, arg: readCallArgument(member.end), at: member.memberStart });
       return member.end;
     }
@@ -1046,8 +1076,9 @@ export function extractScssFacts(source: string): ScssFileFacts {
   /**
    * The value of a custom property (`--name: value`) is literal CSS, and only `#{...}` is code. The
    * text from `from` to the end of the declaration is consumed, so a `$name` or a call in it is no
-   * use, and a brace in it opens no block. The declaration ends at a `;` or at the `}` of its
-   * block, outside any bracket.
+   * use, and a brace in it opens no block. An escape is one token before any of those checks,
+   * including a hex escape of up to six digits and its optional whitespace, so `\}` does not close
+   * the block. The declaration ends at a `;` or at the `}` of its block, outside any bracket.
    */
   const skipCustomPropertyValue = (from: number): void => {
     let depth = 0;
@@ -1058,6 +1089,14 @@ export function extractScssFacts(source: string): ScssFileFacts {
         continue;
       }
       const unit = source.charCodeAt(cursor);
+      if (unit === 0x5c) {
+        const end = skipScssEscape(source, cursor);
+        while (cursor < end) {
+          consumed[cursor] = 1;
+          cursor += 1;
+        }
+        continue;
+      }
       if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {
         const end = interpolationEnd(cursor + 1);
         if (end < 0) return;
@@ -1276,9 +1315,10 @@ export function extractScssFacts(source: string): ScssFileFacts {
     if (source.charCodeAt(ident.end) === 0x28) {
       const folded = dynamicFormOf(ident.text);
       const legacyForm = folded !== null && LEGACY_BARE_FORMS.has(folded) ? folded : null;
-      // A function this file already declared owns the call, even after `@use "sass:meta" as *`.
-      // A declaration later in the file does not, so the earlier call stays the built-in.
-      const declaredHere = legacyForm !== null && declaredFunctions.has(legacyForm);
+      // A same-kind function already declared owns the call, at the top level or in a block, even
+      // after `@use "sass:meta" as *` and for names that are not legacy built-ins. A declaration
+      // later in the file does not, so the earlier call stays the built-in.
+      const declaredHere = folded !== null && callableAlreadyDeclared("function", ident.text, start);
       const bareForm = declaredHere ? null : metaCallForm(null, ident.text);
       if (bareForm) {
         dynamics.push({

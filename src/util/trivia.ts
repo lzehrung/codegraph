@@ -249,7 +249,8 @@ function unquotedCssUrlConstruct(source: string, row: TriviaRow, index: number):
       continue;
     }
     if (unit === 0x5c) {
-      cursor += 2;
+      // A hex escape is up to six digits plus optional whitespace, so `\20 ` and `\68 ` stay in the URL.
+      cursor = skipScssEscape(source, cursor);
       continue;
     }
     if (unit === 0x23 && source.charCodeAt(cursor + 1) === 0x7b) {

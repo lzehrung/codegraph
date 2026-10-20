@@ -214,6 +214,23 @@ describe("trivia masking keeps following code visible per language", () => {
     expect(call).not.toContain("//q/r");
   });
 
+  it("keeps a hex escape inside an unquoted SCSS url and the code after it on the line", () => {
+    const source =
+      ".a { b: url(http://cdn/a\\20 b.svg); width: $local; c: url(\\68 ttp://example.com/x); width: $next; }\n";
+    const rendered = maskTrivia(source, "scss");
+    expectOffsetsPreserved(source, rendered);
+    expect(rendered).toContain("url(http://cdn/a\\20 b.svg)");
+    expect(rendered).toContain("url(\\68 ttp://example.com/x)");
+    expect(rendered).toContain("width: $local");
+    expect(rendered).toContain("width: $next");
+    const masked = maskTrivia(source, "scss", { maskCssUrls: true });
+    expectOffsetsPreserved(source, masked);
+    expect(masked).not.toContain("cdn/a");
+    expect(masked).not.toContain("example.com");
+    expect(masked).toContain("width: $local");
+    expect(masked).toContain("width: $next");
+  });
+
   it("masks a string or comment inside the interpolation of an unquoted SCSS url(...), and keeps the expression", () => {
     // The SCSS scanner reads the expression of `#{...}` as code: only the strings and comments in it are trivia.
     const source =

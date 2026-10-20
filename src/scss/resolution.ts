@@ -60,9 +60,10 @@ export type ScssResolved = {
 };
 
 /**
- * `shadow`: a local variable owns the name, so module lookup must not claim it. `indexed` is true
- * when the index holds a definition for one of those locals (a variable that a block declares);
- * a parameter or a loop variable has none.
+ * `shadow`: a local owns the name, so module lookup must not claim it. `indexed` is true when the
+ * index holds a definition the exact-name walker can prove (a block variable whose spelling
+ * matches). A parameter, a loop variable, or an unindexed scoped mixin or function has none.
+ * An indexed scoped mixin or function resolves directly instead of using this miss.
  */
 export type ScssResolution = ScssResolved | { status: "shadow"; indexed: boolean } | ScssNotFound;
 
@@ -834,17 +835,41 @@ function unresolvedIntroducesMembers(loads: readonly ResolvedLoad[], beforeOffse
   });
 }
 
-/** The local variables that are in scope at `use` and have its name, outermost and earliest first. */
+/**
+ * The scoped mixin or function that owns a bare include or call, using the same nearest-owner
+ * rule as reference collection. Null when no same-kind callable covers the use.
+ */
+function scopedCallableOwner(current: ModuleModel, use: ScssUse): ScssCallableLocal | undefined {
+  if (use.namespace !== null || (use.kind !== "mixin" && use.kind !== "function")) return undefined;
+  if (use.syntax !== "include" && use.syntax !== "call") return undefined;
+  return nearestScopedCallable(current.facts, use.kind, use.canonical, use.nameStart);
+}
+
+/** True when a scoped mixin or function of the same kind and name covers this bare use. */
 function coveringCallable(current: ModuleModel, use: ScssUse): boolean {
-  if (use.namespace !== null || (use.kind !== "mixin" && use.kind !== "function")) return false;
-  if (use.syntax !== "include" && use.syntax !== "call") return false;
-  return current.facts.callableLocals.some(
-    (local) =>
-      local.kind === use.kind &&
-      local.canonical === use.canonical &&
-      use.nameStart >= local.from &&
-      use.nameStart < local.to,
-  );
+  return scopedCallableOwner(current, use) !== undefined;
+}
+
+/** The indexed symbol for a scoped callable, matched by the name's end offset and Sass spelling. */
+function indexedScopedCallable(current: ModuleModel, local: ScssCallableLocal): SymbolDef | undefined {
+  for (const def of current.defAt.values()) {
+    if (def.kind !== SymbolKind.Function || def.range.end.index !== local.from) continue;
+    if (sassCanonical(def.localName) !== local.canonical) continue;
+    return def;
+  }
+  return undefined;
+}
+
+/**
+ * An indexed scoped mixin or function is the target of the bare include or call it owns.
+ * An unindexed one stays a shadow, so module lookup cannot claim the name.
+ */
+function resolveCoveringCallable(current: ModuleModel, use: ScssUse): ScssResolution | null {
+  const owner = scopedCallableOwner(current, use);
+  if (!owner) return null;
+  const def = indexedScopedCallable(current, owner);
+  if (!def) return { status: "shadow", indexed: false };
+  return { status: "ok", def, prefix: "", access: "own", filters: [] };
 }
 
 function coveringLocals(current: ModuleModel, use: ScssUse): ScssLocalBinding[] {
@@ -1035,7 +1060,8 @@ async function hasUnprovenDynamic(index: ProjectIndex, file: ModuleModel): Promi
 }
 
 function resolveUnnamespaced(model: ProjectModel, current: ModuleModel, use: ScssUse): ScssResolution {
-  if (coveringCallable(current, use)) return { status: "shadow", indexed: false };
+  const covered = resolveCoveringCallable(current, use);
+  if (covered) return covered;
   const covering = coveringLocals(current, use);
   if (covering.length) {
     const nearest = covering[covering.length - 1]!;
@@ -1650,7 +1676,11 @@ async function legacyBuiltinOwnedByUser(
   if (!dynamic.legacyBare) return false;
   const resolved = await resolveScssUse(index, current.file, legacyBuiltinUse(dynamic));
   if (resolved.status === "shadow") return true;
-  return resolved.status === "ok" && fileIdentityKey(resolved.def.file) !== current.key;
+  if (resolved.status !== "ok") return false;
+  if (fileIdentityKey(resolved.def.file) !== current.key) return true;
+  // A same-file scoped function owns the bare name; a top-level function in this file does not
+  // reach here, because a declaration above the call is not recorded as a legacy built-in.
+  return scopedCallableLocal(current.facts, resolved.def) !== undefined;
 }
 
 /**

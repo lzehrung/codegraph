@@ -1639,6 +1639,39 @@ describe("SCSS module navigation: review follow-ups", () => {
     expect(facts.declarations.map((declaration) => declaration.name)).toEqual(["$primary"]);
   });
 
+  it("keeps a block variable local when a custom property escapes its closer", () => {
+    const escaped = ".a { --close: \\}; $local: 1; width: $local; }\n";
+    const hex = ".a { --close: \\00007d; $local: 1; width: $local; }\n";
+    const paren = ".a { --close: \\(; $local: 1; width: $local; }\n";
+    for (const [label, source] of [
+      ["brace", escaped],
+      ["hex", hex],
+      ["paren", paren],
+    ] as const) {
+      const facts = extractScssFacts(source);
+      expect(
+        facts.declarations.map((declaration) => declaration.name),
+        label,
+      ).toEqual([]);
+      expect(
+        facts.locals.map((local) => local.spelling),
+        label,
+      ).toEqual(["$local"]);
+      expect(
+        facts.uses.filter((use) => use.kind === "variable").map((use) => use.text),
+        label,
+      ).toEqual(["$local"]);
+    }
+  });
+
+  it.runIf(native)("resolves the block variable after an escaped custom-property closer", async () => {
+    const source = "$local: 0;\n.a { --close: \\}; $local: 1; width: $local; }\n";
+    await withScssProject({ "main.scss": source }, async (project) => {
+      // The block binding is real, but this grammar does not index it, so the file variable must not win.
+      expect(await scssGoto(project, "main.scss", "$local", 2)).toBe("not_found");
+    });
+  });
+
   it.runIf(native)("lists no literal custom property text as a reference", async () => {
     const source = ":root {\n  --literal: $primary;\n  --interp: #{$primary};\n}\n";
     await withScssProject(
@@ -2735,6 +2768,104 @@ describe("SCSS module navigation: import-only files, defaults, lookups, and sele
     expect(after.uses.filter((use) => use.syntax === "call").map((use) => use.text)).toEqual(["get-function"]);
   });
 
+  it("lets an already declared callable own a bare sass:meta name", () => {
+    const scopedFunction = [
+      '@use "sass:meta" as *;',
+      ".a {",
+      "  @function get-function($name) { @return 1; }",
+      '  w: get-function("x");',
+      "}",
+      "",
+    ].join("\n");
+    const scopedFacts = extractScssFacts(scopedFunction);
+    expect(scopedFacts.dynamics, "scoped get-function").toEqual([]);
+    expect(scopedFacts.uses.filter((use) => use.syntax === "call").map((use) => use.text)).toEqual(["get-function"]);
+
+    const nonLegacy = [
+      '@use "sass:meta" as *;',
+      ".a {",
+      "  @function get-mixin($name) { @return 1; }",
+      '  w: get-mixin("x");',
+      "}",
+      "",
+    ].join("\n");
+    const nonLegacyFacts = extractScssFacts(nonLegacy);
+    expect(nonLegacyFacts.dynamics, "scoped get-mixin").toEqual([]);
+    expect(nonLegacyFacts.uses.filter((use) => use.syntax === "call").map((use) => use.text)).toEqual(["get-mixin"]);
+
+    const mixin = [
+      '@use "sass:meta" as *;',
+      ".a {",
+      "  @mixin load-css($url) { color: red; }",
+      '  @include load-css("x");',
+      "}",
+      "",
+    ].join("\n");
+    const mixinFacts = extractScssFacts(mixin);
+    expect(mixinFacts.dynamics, "scoped load-css").toEqual([]);
+    expect(mixinFacts.uses.filter((use) => use.syntax === "include").map((use) => use.text)).toEqual(["load-css"]);
+
+    const topLevelMixin = [
+      '@use "sass:meta" as *;',
+      "@mixin load_css($url) { color: red; }",
+      '.a { @include load-css("x"); }',
+      "",
+    ].join("\n");
+    const topFacts = extractScssFacts(topLevelMixin);
+    expect(topFacts.dynamics, "top-level load-css").toEqual([]);
+    expect(topFacts.uses.filter((use) => use.syntax === "include").map((use) => use.text)).toEqual(["load-css"]);
+
+    const later = [
+      '@use "sass:meta" as *;',
+      ".a {",
+      '  w: get-function("x");',
+      "  @function get-function($name) { @return 1; }",
+      "}",
+      '@include load-css("y");',
+      "@mixin load-css($url) { color: red; }",
+      "",
+    ].join("\n");
+    const laterFacts = extractScssFacts(later);
+    expect(
+      laterFacts.dynamics.map((dynamic) => dynamic.form),
+      "later declarations",
+    ).toEqual(["get-function", "load-css"]);
+
+    const namespaced = [
+      '@use "sass:meta";',
+      "@mixin load-css($url) { color: red; }",
+      '.a { @include meta.load-css("x"); }',
+      "",
+    ].join("\n");
+    expect(
+      extractScssFacts(namespaced).dynamics.map((dynamic) => dynamic.form),
+      "namespaced",
+    ).toEqual(["load-css"]);
+  });
+
+  it.runIf(native)("resolves a bare meta name to the callable already declared in the file", async () => {
+    const source = [
+      '@use "sass:meta" as *;',
+      ".a {",
+      "  @function get-function($name) { @return 1; }",
+      '  w: get-function("x");',
+      "  @mixin load-css($url) { color: red; }",
+      '  @include load-css("x");',
+      "}",
+      "",
+    ].join("\n");
+    await withScssProject({ "main.scss": source }, async (project) => {
+      expect(await scssGoto(project, "main.scss", 'get-function("x")')).toBe("main.scss:3");
+      expect(await scssGoto(project, "main.scss", "@include load-css", 0, "@include ".length)).toBe("main.scss:5");
+      const fn = await scssRefs(project, "main.scss", 'get-function("x")');
+      expect(fn.sites).toEqual(["main.scss:3", "main.scss:4"]);
+      expect(fn.coverage?.state).toBe("complete");
+      const mixin = await scssRefs(project, "main.scss", "@include load-css", 0, "@include ".length);
+      expect(mixin.sites).toEqual(["main.scss:5", "main.scss:6"]);
+      expect(mixin.coverage?.state).toBe("complete");
+    });
+  });
+
   it("keeps the next declaration when // sits inside url() in an interpolation", () => {
     // dart-sass compiles the rule and the following variable: url(http://...) has no comment.
     const source = '.x { content: "#{url(http://example.com/x.png)}"; }\n$later: 2;\n';
@@ -2749,6 +2880,14 @@ describe("SCSS module navigation: import-only files, defaults, lookups, and sele
     const hiddenFacts = extractScssFacts(hidden);
     expect(hiddenFacts.declarations.map((declaration) => declaration.name)).toEqual(["$later"]);
     expect(hiddenFacts.uses).toEqual([]);
+  });
+
+  it("keeps the code after a hex escape inside an unquoted url", () => {
+    const source =
+      ".a { b: url(http://cdn/a\\20 b.svg); width: $local; c: url(\\68 ttp://example.com/x); width: $next; }\n";
+    const facts = extractScssFacts(source);
+    expect(facts.uses.map((use) => use.text)).toEqual(["$local", "$next"]);
+    expect(facts.declarations).toEqual([]);
   });
 
   const SUPPORTS_SELECTOR = [
@@ -3879,7 +4018,7 @@ describe("SCSS module navigation: nested callables, legacy call, comments, and e
       expect(refs.sites).toEqual(["main.scss:1", "main.scss:3", "main.scss:7"]);
       expect(refs.coverage?.state).toBe("complete");
       expect(await scssGoto(project, "main.scss", "@include pad", 0, "@include ".length)).toBe("main.scss:1");
-      expect(await scssGoto(project, "main.scss", "@include pad", 1, "@include ".length)).toBe("not_found");
+      expect(await scssGoto(project, "main.scss", "@include pad", 1, "@include ".length)).toBe("main.scss:4");
       expect(await scssGoto(project, "main.scss", "@include pad", 2, "@include ".length)).toBe("main.scss:1");
       const session = createAgentSession({ root: project.root, freshness: { policy: "check" } });
       try {
@@ -3917,7 +4056,7 @@ describe("SCSS module navigation: nested callables, legacy call, comments, and e
       expect(refs.sites).toEqual(["main.scss:1", "main.scss:3", "main.scss:7"]);
       expect(refs.coverage?.state).toBe("complete");
       expect(await scssGoto(project, "main.scss", "pad()", 1)).toBe("main.scss:1");
-      expect(await scssGoto(project, "main.scss", "pad()", 3)).toBe("not_found");
+      expect(await scssGoto(project, "main.scss", "pad()", 3)).toBe("main.scss:4");
       expect(await scssGoto(project, "main.scss", "pad()", 4)).toBe("main.scss:1");
     });
   });
@@ -4150,7 +4289,7 @@ describe("SCSS module navigation: nested callables, legacy call, comments, and e
       const refs = await scssRefs(project, "main.scss", "@mixin foo-bar", 0, "@mixin ".length);
       expect(refs.sites).toEqual(["main.scss:1", "main.scss:6"]);
       expect(refs.coverage?.state).toBe("complete");
-      expect(await scssGoto(project, "main.scss", "@include foo-bar", 0, "@include ".length)).toBe("not_found");
+      expect(await scssGoto(project, "main.scss", "@include foo-bar", 0, "@include ".length)).toBe("main.scss:3");
       expect(await scssGoto(project, "main.scss", "@include foo_bar", 0, "@include ".length)).toBe("main.scss:1");
     });
   });
@@ -4306,6 +4445,37 @@ describe("SCSS module navigation: nested callables, legacy call, comments, and e
     expect(lookup?.at).toBeGreaterThanOrEqual(mixin?.from ?? 0);
     expect(lookup?.at).toBeLessThan(mixin?.to ?? 0);
   });
+
+  it.runIf(isNativeTreeSitterAvailable())(
+    "resolves an indexed scoped mixin or function to its nearest owner",
+    async () => {
+      const source = [
+        ".a {",
+        "  @mixin inset { color: blue; }",
+        "  @include inset;",
+        "  .b {",
+        "    @mixin in_set { color: red; }",
+        "    @include in-set;",
+        "    @include inset;",
+        "  }",
+        "  @function to-ne() { @return 1px; }",
+        "  width: to-ne();",
+        "  width: to_ne();",
+        "}",
+        "",
+      ].join("\n");
+      await withScssProject({ "main.scss": source }, async (project) => {
+        expect(await scssGoto(project, "main.scss", "@include inset", 0, "@include ".length)).toBe("main.scss:2");
+        expect(await scssGoto(project, "main.scss", "@include in-set", 0, "@include ".length)).toBe("main.scss:5");
+        expect(await scssGoto(project, "main.scss", "@include inset", 1, "@include ".length)).toBe("main.scss:2");
+        expect(await scssGoto(project, "main.scss", "to-ne()")).toBe("main.scss:9");
+        expect(await scssGoto(project, "main.scss", "to_ne()")).toBe("main.scss:9");
+        const refs = await scssRefs(project, "main.scss", "@include inset", 0, "@include ".length);
+        expect(refs.sites).toEqual(["main.scss:2", "main.scss:3", "main.scss:7"]);
+        expect(refs.coverage?.state).toBe("complete");
+      });
+    },
+  );
 
   it("marks a scoped callable partial when a dynamic lookup in its block may name it", async () => {
     const fn = (lookup: string) =>

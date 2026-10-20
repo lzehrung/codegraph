@@ -183,6 +183,8 @@ async function findFirstExistingScssPartialCandidate(base: string): Promise<stri
     if (await fileExists(partialPath)) return path.resolve(partialPath);
   }
   if (baseExt) return null;
+  // `index.scss` is already an ordinary directory index candidate. This partial is the Sass
+  // `_index.scss` form. Incremental rebuilds treat both as the directory's entry file.
   const indexPartial = path.join(base, "_index.scss");
   return (await fileExists(indexPartial)) ? path.resolve(indexPartial) : null;
 }

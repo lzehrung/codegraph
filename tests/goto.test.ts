@@ -6185,4 +6185,34 @@ describe("Go to Definition: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves a scoped mixin include and a scoped function call to the nearest indexed owner", async () => {
+    const main = [
+      ".a {",
+      "  @mixin inset { color: blue; }",
+      "  @include inset;",
+      "  .b {",
+      "    @mixin in_set { color: red; }",
+      "    @include in-set;",
+      "    @include inset;",
+      "  }",
+      "  @function to-ne() { @return 1px; }",
+      "  width: to-ne();",
+      "  width: to_ne();",
+      "}",
+      "",
+    ].join("\n");
+    const lines = main.split("\n");
+    const { root, paths, index } = await scssProject({ "main.scss": main });
+    try {
+      const file = paths["main.scss"]!;
+      await testGoToDefinition(index, file, 3, columnOf(lines[2]!, "inset"), file, 2);
+      await testGoToDefinition(index, file, 6, columnOf(lines[5]!, "in-set"), file, 5);
+      await testGoToDefinition(index, file, 7, columnOf(lines[6]!, "inset"), file, 2);
+      await testGoToDefinition(index, file, 10, columnOf(lines[9]!, "to-ne"), file, 9);
+      await testGoToDefinition(index, file, 11, columnOf(lines[10]!, "to_ne"), file, 9);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

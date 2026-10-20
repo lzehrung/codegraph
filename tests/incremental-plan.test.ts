@@ -401,4 +401,19 @@ describe("added-file specifier stems", () => {
     expect(externalSpecifierMatchesAddedStem("p.Widget", "kotlin", stems, [], files)).toBe(false);
     expect(externalSpecifierMatchesAddedStem("p.Widget", "kotlin", stems, [], files, () => undefined)).toBe(false);
   });
+
+  it("treats an SCSS directory index partial as the directory it loads", () => {
+    const partial = addedResolutionStems(["/proj/lib/_index.scss"], "scss");
+    expect(partial.has("_index")).toBe(true);
+    expect(partial.has("lib")).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("lib", "scss", partial)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("./lib", "scss", partial)).toBe(true);
+    const index = addedResolutionStems(["/proj/lib/index.scss"], "scss");
+    expect(externalSpecifierMatchesAddedStem("lib", "scss", index)).toBe(true);
+    expect(externalSpecifierMatchesAddedStem("./lib", "scss", index)).toBe(true);
+    // A non-SCSS importer does not treat `_index.scss` as that directory's entry file.
+    const typescript = addedResolutionStems(["/proj/lib/_index.scss"], "ts");
+    expect(externalSpecifierMatchesAddedStem("lib", "ts", typescript)).toBe(false);
+    expect(externalSpecifierMatchesAddedStem("_index", "ts", typescript)).toBe(true);
+  });
 });

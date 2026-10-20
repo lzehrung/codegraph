@@ -1033,6 +1033,53 @@ describe("rename preview", () => {
     }
   });
 
+  it("renames a scoped meta name and a user mixin that owns the bare include", async () => {
+    const root = await mkTmpDir("cg-rename-scss-meta-owner-");
+    await fsp.writeFile(
+      path.join(root, "main.scss"),
+      [
+        '@use "sass:meta" as *;',
+        ".a {",
+        "  @function get-function($name) { @return 1; }",
+        '  w: get-function("x");',
+        "  @mixin load-css($url) { color: red; }",
+        '  @include load-css("x");',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "get-function" });
+      const fn = symbols.symbols.find(
+        (symbol) => symbol.location.file === "main.scss" && symbol.name === "get-function",
+      );
+      expect(fn).toBeDefined();
+      const renamedFn = await previewRenameWithSession(session, { root, handle: fn!.handle, newName: "pick" });
+      expect(renamedFn.safe).toBe(true);
+      expect(renamedFn.unsafeSites).toEqual([]);
+      expect(renamedFn.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["definition", 3, "get-function", "pick"],
+        ["reference", 4, "get-function", "pick"],
+      ]);
+      const mixins = await workspaceSymbolsWithSession(session, { root, query: "load-css" });
+      const mixin = mixins.symbols.find((symbol) => symbol.location.file === "main.scss" && symbol.name === "load-css");
+      expect(mixin).toBeDefined();
+      const renamedMixin = await previewRenameWithSession(session, {
+        root,
+        handle: mixin!.handle,
+        newName: "paint",
+      });
+      expect(renamedMixin.safe).toBe(true);
+      expect(renamedMixin.unsafeSites).toEqual([]);
+      expect(renamedMixin.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["definition", 5, "load-css", "paint"],
+        ["reference", 6, "load-css", "paint"],
+      ]);
+    } finally {
+      session.invalidate();
+    }
+  });
   it("renames a scoped mixin's underscore include and leaves an include outside the block", async () => {
     const root = await mkTmpDir("cg-rename-scss-local-mixin-spell-");
     await fsp.writeFile(
