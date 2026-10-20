@@ -106,6 +106,26 @@ using syntax and facts proven from source. It must not emulate the full language
 - Include this bar in review acceptance criteria, so reviewers report wrong answers and
   common-code misses, not every language-specification gap.
 
+## Parsing and Language Support
+
+- Tree-sitter is the only parser. Do not write TypeScript that decides whether text is a string,
+  comment, escape, or block; those are tree nodes.
+- Extract facts with tree-sitter queries (`.scm`). Prefer the upstream capture conventions
+  (`tags.scm`: `@definition.*`, `@reference.*`; `locals.scm`: `@local.scope`, `@local.definition`,
+  `@local.reference`). Limit per-language TypeScript to what queries cannot express, such as module
+  path mapping and package units. That code works on nodes, never raw text.
+- Before writing code for a syntax form, check whether the grammar parses it (ERROR/MISSING census).
+  A clean parse: use the tree. An ERROR in a rare form: give the conservative answer (`partial`,
+  `not_found`, rename unsafe). An ERROR in the feature's core syntax: choose explicitly between a
+  pinned grammar fork (as with `tree-sitter-cpp`) and a scanner. A new text scanner needs explicit
+  approval.
+- A review fix must not add a new mechanism (a new scope model, classifier, or scanner) to cover a
+  rare form. Use the conservative answer and add the form to the language's sample/edge corpus.
+- Check semantics against the language's reference implementation (compiler, interpreter, or
+  database) where one exists.
+- Gate every change with `npm run check`, not a subset. `npm run test:fast` skips the native parity
+  suites.
+
 ## Path, Cache, and Review Safety
 
 - Path-bearing code MUST keep the requested logical root, resolved physical root, and owning Git
