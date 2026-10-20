@@ -82,6 +82,7 @@ pub(crate) struct ProjectedColumns {
     pub kind_ids: Vec<u32>,
     pub parent_ids: Vec<i32>,
     pub named: Vec<u8>,
+    pub is_missing: Vec<u8>,
     pub start_row: Vec<u32>,
     pub start_column: Vec<u32>,
     pub start_index: Vec<u32>,
@@ -108,6 +109,7 @@ struct Builder {
     kind_ids: Vec<u32>,
     parent_ids: Vec<i32>,
     named: Vec<u8>,
+    is_missing: Vec<u8>,
     start_row: Vec<u32>,
     start_column: Vec<u32>,
     start_index: Vec<u32>,
@@ -135,6 +137,7 @@ impl Builder {
             kind_ids: Vec::new(),
             parent_ids: Vec::new(),
             named: Vec::new(),
+            is_missing: Vec::new(),
             start_row: Vec::new(),
             start_column: Vec::new(),
             start_index: Vec::new(),
@@ -168,6 +171,7 @@ impl Builder {
         self.kind_ids.push(kind_id);
         self.parent_ids.push(parent_id);
         self.named.push(u8::from(node.is_named()));
+        self.is_missing.push(u8::from(node.is_missing()));
         self.start_row.push(start.row as u32);
         self.start_column.push(start.column as u32);
         self.start_index.push(node.start_byte() as u32);
@@ -266,7 +270,13 @@ pub(crate) fn project_columns(
             0
         };
 
-        let child_id = builder.push(child, parent_id as i32, child_slot, named_child_slot, field_name_id);
+        let child_id = builder.push(
+            child,
+            parent_id as i32,
+            child_slot,
+            named_child_slot,
+            field_name_id,
+        );
         stack.push(Frame {
             node: child,
             node_id: child_id,
@@ -305,6 +315,7 @@ pub(crate) fn project_columns(
         kind_ids: builder.kind_ids,
         parent_ids: builder.parent_ids,
         named: builder.named,
+        is_missing: builder.is_missing,
         start_row: builder.start_row,
         start_column: builder.start_column,
         start_index: builder.start_index,
@@ -347,8 +358,8 @@ mod tests {
     #[test]
     fn projects_ordinary_files_within_defaults() {
         let tree = parse_js("function helper() { return 1; }\n");
-        let columns =
-            project_columns(tree.root_node(), ProjectionLimits::default()).expect("ordinary file should project");
+        let columns = project_columns(tree.root_node(), ProjectionLimits::default())
+            .expect("ordinary file should project");
         assert_eq!(columns.root_id, 0);
         assert!(columns.node_count() > 1);
         assert!(columns.node_count() < 1_000);
@@ -364,9 +375,24 @@ mod tests {
     }
 
     #[test]
+    fn records_missing_nodes() {
+        let tree = parse_js("function incomplete() {\n");
+        let columns = project_columns(tree.root_node(), ProjectionLimits::default())
+            .expect("missing node should project");
+        let missing_id = columns
+            .is_missing
+            .iter()
+            .position(|is_missing| *is_missing != 0)
+            .expect("tree should contain a missing node");
+        let kind_id = columns.kind_ids[missing_id] as usize;
+        assert_eq!(columns.kinds[kind_id], "}");
+    }
+
+    #[test]
     fn interns_kinds_and_field_names_once() {
         let tree = parse_js("function a() { return 1; }\nfunction b() { return 2; }\n");
-        let columns = project_columns(tree.root_node(), ProjectionLimits::default()).expect("should project");
+        let columns =
+            project_columns(tree.root_node(), ProjectionLimits::default()).expect("should project");
         // The table holds distinct kinds only, so it is far smaller than the node count.
         assert!(columns.kinds.len() < columns.node_count() as usize);
         let mut sorted = columns.kinds.clone();
@@ -374,13 +400,17 @@ mod tests {
         let before = sorted.len();
         sorted.dedup();
         assert_eq!(sorted.len(), before, "kind table must not repeat a kind");
-        assert_eq!(columns.field_names[0], "", "field name id 0 is the empty name");
+        assert_eq!(
+            columns.field_names[0], "",
+            "field name id 0 is the empty name"
+        );
     }
 
     #[test]
     fn child_lists_preserve_source_order_and_named_subset() {
         let tree = parse_js("function helper(a, b) { return a; }\n");
-        let columns = project_columns(tree.root_node(), ProjectionLimits::default()).expect("should project");
+        let columns =
+            project_columns(tree.root_node(), ProjectionLimits::default()).expect("should project");
 
         for id in 0..columns.node_count() as usize {
             let children = children_of(&columns, id);
@@ -407,7 +437,8 @@ mod tests {
     #[test]
     fn resolves_field_names_to_the_matching_child() {
         let tree = parse_js("function helper() { return 1; }\n");
-        let columns = project_columns(tree.root_node(), ProjectionLimits::default()).expect("should project");
+        let columns =
+            project_columns(tree.root_node(), ProjectionLimits::default()).expect("should project");
 
         // The function declaration exposes a `name` field pointing at its identifier.
         let declaration = (0..columns.node_count() as usize)
@@ -425,7 +456,10 @@ mod tests {
             .find(|slot| columns.child_field_name_ids[*slot] == name_id)
             .expect("declaration should carry a name field");
         let name_node = columns.child_ids[slot] as usize;
-        assert_eq!(columns.kinds[columns.kind_ids[name_node] as usize], "identifier");
+        assert_eq!(
+            columns.kinds[columns.kind_ids[name_node] as usize],
+            "identifier"
+        );
     }
 
     #[test]

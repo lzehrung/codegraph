@@ -26,7 +26,7 @@ import {
   sqliteTableColumns,
   type SqliteTableColumn,
 } from "../../util/sqlite-schema.js";
-import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex } from "../types.js";
+import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex, ParseErrorRange } from "../types.js";
 import { callableIdentityWithFile, isCallableIdentity } from "../callable-identity.js";
 import type { Pos, Range } from "../../types.js";
 import {
@@ -442,6 +442,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     exports?: unknown;
     imports?: unknown;
     locals?: unknown;
+    parseErrorRanges?: unknown;
   };
   return (
     typeof mod.file === "string" &&
@@ -451,11 +452,28 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     mod.imports.every(hasValidImportBindingRanges) &&
     Array.isArray(mod.locals) &&
     mod.locals.every(hasValidCallableSymbol) &&
+    (mod.parseErrorRanges === undefined ||
+      (Array.isArray(mod.parseErrorRanges) && mod.parseErrorRanges.every(hasValidParseErrorRange))) &&
     mod.exports.every((entry: unknown) => {
       if (!entry || typeof entry !== "object") return false;
       const local = entry as { type?: unknown; target?: unknown };
       return local.type !== "local" || hasValidCallableSymbol(local.target);
     })
+  );
+}
+
+function hasValidParseErrorRange(value: unknown): value is ParseErrorRange {
+  if (!value || typeof value !== "object") return false;
+  const range = value as { startIndex?: unknown; endIndex?: unknown; text?: unknown };
+  return (
+    typeof range.startIndex === "number" &&
+    Number.isSafeInteger(range.startIndex) &&
+    typeof range.endIndex === "number" &&
+    Number.isSafeInteger(range.endIndex) &&
+    range.startIndex >= 0 &&
+    range.endIndex >= range.startIndex &&
+    typeof range.text === "string" &&
+    range.text.length === range.endIndex - range.startIndex
   );
 }
 

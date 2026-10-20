@@ -1132,6 +1132,7 @@ export function getCachedReferenceCandidateFiles(
  */
 export const REFERENCE_COVERAGE_REASON_ORDER: readonly ReferenceCoverageReason[] = [
   "parser_degraded",
+  "parse_error",
   "unresolved_import",
   "strategy_unavailable",
   "name_equivalence_unavailable",
@@ -1375,6 +1376,16 @@ function parserDegradedCandidateFiles(
   return { files: affected, hasUnlistedCandidate };
 }
 
+function containsIdentifierToken(text: string, identifier: string): boolean {
+  if (!identifier) return false;
+  const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const pattern = new RegExp(
+    `(?<![\\p{ID_Continue}$_\\u200c\\u200d])${escaped}(?![\\p{ID_Continue}$_\\u200c\\u200d])`,
+    "u",
+  );
+  return pattern.test(text);
+}
+
 export function buildIndexedCandidateCoverage(args: {
   index: ProjectIndex;
   def: SymbolDef;
@@ -1417,6 +1428,18 @@ export function buildIndexedCandidateCoverage(args: {
   if (degraded.files.length || degraded.hasUnlistedCandidate) {
     reasons.push("parser_degraded");
     for (const file of degraded.files) addAffected(file);
+  }
+
+  const parseErrorFiles: FileId[] = [];
+  for (const candidateFile of candidateFiles) {
+    const moduleIndex = index.byFile.get(fileIdentityKey(candidateFile));
+    if (moduleIndex?.parseErrorRanges?.some((range) => containsIdentifierToken(range.text, def.localName))) {
+      parseErrorFiles.push(candidateFile);
+    }
+  }
+  if (parseErrorFiles.length) {
+    reasons.push("parse_error");
+    for (const file of parseErrorFiles) addAffected(file);
   }
 
   const unresolvedFiles: FileId[] = [];

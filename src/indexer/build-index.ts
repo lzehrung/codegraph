@@ -117,6 +117,7 @@ import {
   type ParserBackendDegradationReport,
   type ProjectIndex,
   type ProjectIndexManifestEntry,
+  type ParseErrorRange,
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
@@ -223,7 +224,33 @@ function isConfinedFileReadError(error: unknown): boolean {
   );
 }
 function createEmptyModuleIndex(file: string): ModuleIndex {
-  return { file, exports: [], imports: [], locals: [] };
+  return { file, exports: [], imports: [], locals: [], parseErrorRanges: [] };
+}
+
+function collectParseErrorRanges(source: string, tree: ProjectedSyntaxTree): ParseErrorRange[] {
+  const columns = tree.columns;
+  const isParseErrorNode = (nodeId: number): boolean => {
+    const kind = columns.kinds[columns.kindIds[nodeId]!]!;
+    return kind === "ERROR" || columns.isMissing[nodeId] !== 0;
+  };
+  const ranges: ParseErrorRange[] = [];
+  for (let nodeId = 0; nodeId < columns.nodeCount; nodeId += 1) {
+    if (!isParseErrorNode(nodeId)) continue;
+    let parentId = columns.parentIds[nodeId]!;
+    let hasErrorAncestor = false;
+    while (parentId >= 0) {
+      if (isParseErrorNode(parentId)) {
+        hasErrorAncestor = true;
+        break;
+      }
+      parentId = columns.parentIds[parentId]!;
+    }
+    if (hasErrorAncestor) continue;
+    const startIndex = tree.stringIndexForByte(columns.startIndex[nodeId]!);
+    const endIndex = tree.stringIndexForByte(columns.endIndex[nodeId]!);
+    ranges.push({ startIndex, endIndex, text: source.slice(startIndex, endIndex) });
+  }
+  return ranges;
 }
 
 /**
@@ -588,6 +615,7 @@ async function buildIndexedModuleForFile(args: {
     });
   }
   mod.imports = imports;
+  mod.parseErrorRanges = tree instanceof ProjectedSyntaxTree ? collectParseErrorRanges(source, tree) : [];
   if (sup.id === "cpp") {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;

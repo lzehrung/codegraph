@@ -79,6 +79,7 @@ fn to_native_syntax_tree(columns: ProjectedColumns) -> NativeSyntaxTree {
         kind_ids: Uint32Array::new(columns.kind_ids),
         parent_ids: Int32Array::new(columns.parent_ids),
         named: Uint8Array::new(columns.named),
+        is_missing: Uint8Array::new(columns.is_missing),
         start_row: Uint32Array::new(columns.start_row),
         start_column: Uint32Array::new(columns.start_column),
         start_index: Uint32Array::new(columns.start_index),

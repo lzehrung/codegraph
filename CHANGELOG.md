@@ -16,6 +16,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Changed
 
 - GitHub release descriptions now include the changelog section for the released version.
+- Find-references coverage now reports `parse_error` when an outermost Tree-sitter `ERROR` or `MISSING` region in a candidate file contains the target identifier; unrelated parse errors do not degrade coverage.
 
 ### Fixed
 

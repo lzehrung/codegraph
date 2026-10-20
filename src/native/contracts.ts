@@ -49,6 +49,7 @@ export type NativeSyntaxTree = {
   /** -1 for the root node. */
   parentIds: Int32Array;
   named: Uint8Array;
+  isMissing: Uint8Array;
   startRow: Uint32Array;
   startColumn: Uint32Array;
   /** UTF-8 byte offset, matching Tree-sitter's `start_byte()`. */

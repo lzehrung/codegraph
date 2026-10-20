@@ -111,6 +111,7 @@ pub struct NativeSyntaxTree {
     /// -1 for the root node.
     pub parent_ids: Int32Array,
     pub named: Uint8Array,
+    pub is_missing: Uint8Array,
     pub start_row: Uint32Array,
     pub start_column: Uint32Array,
     /// UTF-8 byte offset, matching Tree-sitter's `start_byte()`.
