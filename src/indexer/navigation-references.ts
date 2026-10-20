@@ -58,6 +58,8 @@ import {
 import type { ImportBinding } from "./import-types.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, foldPhpIdentifierCase } from "../util/identifiers.js";
 import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../util/bloom-filter.js";
+import { createSqlObjectNameRegExp } from "../sql/lex.js";
+import { sqlObjectNamesMatchConservatively } from "../sql/lookup.js";
 
 const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
 const NAMESPACE_EXPORT_PATTERN = new RegExp(
@@ -1376,8 +1378,23 @@ function parserDegradedCandidateFiles(
   return { files: affected, hasUnlistedCandidate };
 }
 
-function containsIdentifierToken(text: string, identifier: string): boolean {
+const SQL_IDENTIFIER_CONTINUATION = /[\p{ID_Continue}$#\u200c\u200d]/u;
+
+function containsIdentifierToken(text: string, identifier: string, languageId: string): boolean {
   if (!identifier) return false;
+  if (languageId === "sql") {
+    const pattern = createSqlObjectNameRegExp("gu");
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text))) {
+      const start = match.index;
+      const end = start + match[0].length;
+      const hasIdentifierBefore = start > 0 && SQL_IDENTIFIER_CONTINUATION.test(text[start - 1]!);
+      const hasIdentifierAfter = end < text.length && SQL_IDENTIFIER_CONTINUATION.test(text[end]!);
+      if (hasIdentifierBefore || hasIdentifierAfter) continue;
+      if (sqlObjectNamesMatchConservatively(match[0], identifier)) return true;
+    }
+    return false;
+  }
   const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   const pattern = new RegExp(
     `(?<![\\p{ID_Continue}$_\\u200c\\u200d])${escaped}(?![\\p{ID_Continue}$_\\u200c\\u200d])`,
@@ -1430,16 +1447,40 @@ export function buildIndexedCandidateCoverage(args: {
     for (const file of degraded.files) addAffected(file);
   }
 
-  const parseErrorFiles: FileId[] = [];
-  for (const candidateFile of candidateFiles) {
-    const moduleIndex = index.byFile.get(fileIdentityKey(candidateFile));
-    if (moduleIndex?.parseErrorRanges?.some((range) => containsIdentifierToken(range.text, def.localName))) {
-      parseErrorFiles.push(candidateFile);
+  if (languageId !== "scss") {
+    // tree-sitter-scss reports ERROR on supported module syntax; revisit after the planned grammar fork.
+    const parseErrorCandidates = new Map<string, FileId>();
+    for (const file of candidateFiles) parseErrorCandidates.set(fileIdentityKey(file), file);
+    for (const file of scannedFiles) parseErrorCandidates.set(fileIdentityKey(file), file);
+
+    const parseErrorFiles: FileId[] = [];
+    for (const candidateFile of parseErrorCandidates.values()) {
+      const moduleIndex = index.byFile.get(fileIdentityKey(candidateFile));
+      const parseErrorRanges = moduleIndex?.parseErrorRanges;
+      if (!moduleIndex || !parseErrorRanges?.length) continue;
+
+      const names = new Set([def.localName]);
+      for (const imp of moduleIndex.imports) {
+        if (
+          (imp.kind === "named" || imp.kind === "default") &&
+          importCanReferenceDefinition(index, imp, def, exportedNames, languageId)
+        ) {
+          names.add(imp.local);
+        }
+      }
+      const referenceNames = [...names];
+      if (
+        parseErrorRanges.some((range) =>
+          referenceNames.some((name) => containsIdentifierToken(range.text, name, languageId)),
+        )
+      ) {
+        parseErrorFiles.push(candidateFile);
+      }
     }
-  }
-  if (parseErrorFiles.length) {
-    reasons.push("parse_error");
-    for (const file of parseErrorFiles) addAffected(file);
+    if (parseErrorFiles.length) {
+      reasons.push("parse_error");
+      for (const file of parseErrorFiles) addAffected(file);
+    }
   }
 
   const unresolvedFiles: FileId[] = [];

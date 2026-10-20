@@ -246,8 +246,26 @@ function collectParseErrorRanges(source: string, tree: ProjectedSyntaxTree): Par
       parentId = columns.parentIds[parentId]!;
     }
     if (hasErrorAncestor) continue;
-    const startIndex = tree.stringIndexForByte(columns.startIndex[nodeId]!);
-    const endIndex = tree.stringIndexForByte(columns.endIndex[nodeId]!);
+    // MISSING nodes are zero-width; prefer a containing statement/declaration, then the nearest non-empty ancestor.
+    let rangeNodeId = nodeId;
+    if (columns.isMissing[nodeId] !== 0) {
+      let ancestorId = columns.parentIds[nodeId]!;
+      let nearestNonZeroAncestorId = -1;
+      while (ancestorId >= 0) {
+        if (columns.startIndex[ancestorId] !== columns.endIndex[ancestorId]) {
+          if (nearestNonZeroAncestorId < 0) nearestNonZeroAncestorId = ancestorId;
+          const kind = columns.kinds[columns.kindIds[ancestorId]!]!;
+          if (kind === "statement" || kind.endsWith("_statement") || kind.endsWith("_declaration")) {
+            rangeNodeId = ancestorId;
+            break;
+          }
+        }
+        ancestorId = columns.parentIds[ancestorId]!;
+      }
+      if (rangeNodeId === nodeId && nearestNonZeroAncestorId >= 0) rangeNodeId = nearestNonZeroAncestorId;
+    }
+    const startIndex = tree.stringIndexForByte(columns.startIndex[rangeNodeId]!);
+    const endIndex = tree.stringIndexForByte(columns.endIndex[rangeNodeId]!);
     ranges.push({ startIndex, endIndex, text: source.slice(startIndex, endIndex) });
   }
   return ranges;
