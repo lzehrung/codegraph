@@ -5003,4 +5003,209 @@ describe("SCSS module navigation: nested callables, legacy call, comments, and e
       });
     }
   });
+
+  it.runIf(isNativeTreeSitterAvailable())(
+    "reports shadowing when a scoped callable is renamed to a bare dynamic callee in its scope",
+    async () => {
+      const cases = [
+        {
+          label: "get-function",
+          next: "get-function",
+          source: [
+            '@use "sass:meta" as *;',
+            ".a {",
+            "  @function pad() { @return 1px; }",
+            '  x: get-function("other");',
+            "}",
+            "",
+          ].join("\n"),
+        },
+        {
+          label: "get_function",
+          next: "get-function",
+          source: [
+            '@use "sass:meta" as *;',
+            ".a {",
+            "  @function pad() { @return 1px; }",
+            '  x: get_function("other");',
+            "}",
+            "",
+          ].join("\n"),
+        },
+        {
+          label: "load-css",
+          next: "load-css",
+          source: [
+            '@use "sass:meta" as *;',
+            ".a {",
+            "  @mixin pad { color: red; }",
+            '  @include load-css("lib");',
+            "}",
+            "",
+          ].join("\n"),
+        },
+        {
+          label: "call",
+          next: "call",
+          source: [
+            '@use "sass:meta" as *;',
+            ".a {",
+            "  @function pad() { @return 1px; }",
+            '  x: call("other");',
+            "}",
+            "",
+          ].join("\n"),
+        },
+      ];
+      for (const { label, next, source } of cases) {
+        await withScssProject({ "main.scss": source }, async (project) => {
+          const renamed = await previewScssRename(project, "pad", "main.scss", next);
+          expect(renamed.safe, label).toBe(false);
+          expect(
+            renamed.conflicts.map((conflict) => [conflict.file, conflict.reason, conflict.location?.range.start.line]),
+            label,
+          ).toEqual([["main.scss", "shadowing", 4]]);
+          expect(
+            renamed.edits.map((edit) => [edit.kind, edit.range.start.line, edit.oldText]),
+            label,
+          ).toEqual([["definition", 3, "pad"]]);
+        });
+      }
+    },
+  );
+
+  it.runIf(isNativeTreeSitterAvailable())(
+    "does not conflict when the dynamic callee is namespaced or outside the scoped callable",
+    async () => {
+      const namespaced = [
+        '@use "sass:meta";',
+        ".a {",
+        "  @function pad() { @return 1px; }",
+        '  x: meta.get-function("other");',
+        "}",
+        "",
+      ].join("\n");
+      const outside = [
+        '@use "sass:meta" as *;',
+        ".a {",
+        "  @function pad() { @return 1px; }",
+        "}",
+        'x: get-function("other");',
+        "",
+      ].join("\n");
+      await withScssProject({ "main.scss": namespaced }, async (project) => {
+        const renamed = await previewScssRename(project, "pad", "main.scss", "get-function");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.conflicts).toEqual([]);
+        expect(renamed.unsafeSites).toEqual([]);
+      });
+      await withScssProject({ "main.scss": outside }, async (project) => {
+        const renamed = await previewScssRename(project, "pad", "main.scss", "get-function");
+        expect(renamed.safe).toBe(true);
+        expect(renamed.conflicts).toEqual([]);
+        expect(renamed.unsafeSites).toEqual([]);
+      });
+    },
+  );
+
+  it.runIf(isNativeTreeSitterAvailable())(
+    "omits an outer variable read covered by a nearer Sass-equivalent spelling",
+    async () => {
+      for (const [outer, inner] of [
+        ["$foo-bar", "$foo_bar"],
+        ["$foo_bar", "$foo-bar"],
+      ] as const) {
+        const source = [
+          ".a {",
+          `  ${outer}: 1;`,
+          "  .b {",
+          `    ${inner}: 2;`,
+          `    width: ${outer};`,
+          "  }",
+          `  width: ${outer};`,
+          "}",
+          "",
+        ].join("\n");
+        await withScssProject({ "main.scss": source }, async (project) => {
+          const refs = await scssRefs(project, "main.scss", outer);
+          expect(refs.sites, outer).toEqual(["main.scss:2", "main.scss:7"]);
+          expect(refs.coverage?.state, outer).toBe("partial");
+          expect(refs.coverage?.reasons, outer).toContain("name_equivalence_unavailable");
+        });
+      }
+    },
+  );
+
+  it.runIf(isNativeTreeSitterAvailable())(
+    "keeps an outer variable read that no nearer equivalent binding covers",
+    async () => {
+      const source = [".a {", "  $foo-bar: 1;", "  .b {", "    width: $foo-bar;", "  }", "}", ""].join("\n");
+      await withScssProject({ "main.scss": source }, async (project) => {
+        const refs = await scssRefs(project, "main.scss", "$foo-bar");
+        expect(refs.sites).toEqual(["main.scss:2", "main.scss:4"]);
+        expect(refs.coverage?.state).toBe("complete");
+      });
+    },
+  );
+
+  it.runIf(isNativeTreeSitterAvailable())(
+    "treats a namespaced meta lookup through a forwarded sass:meta module as dynamic",
+    async () => {
+      await withScssProject(
+        {
+          "_inner.scss": '@forward "sass:meta";\n',
+          "_helpers.scss": '@forward "inner";\n',
+          "_lib.scss": "@function pad() { @return 1px; }\n",
+          "main.scss": '@use "helpers";\n@use "lib";\n.a { x: helpers.get-function("pad"); w: lib.pad(); }\n',
+        },
+        async (project) => {
+          expect(await scssGoto(project, "main.scss", "helpers.get-function", 0, "helpers.".length)).toBe("not_found");
+          const refs = await scssRefs(project, "_lib.scss", "@function pad", 0, "@function ".length);
+          expect(refs.sites).toEqual(["_lib.scss:1", "main.scss:3"]);
+          expect(refs.coverage?.state).toBe("partial");
+          const renamed = await previewScssRename(project, "pad", "_lib.scss", "shift");
+          expect(renamed.safe).toBe(false);
+          expect(renamed.edits.map((edit) => edit.file + ":" + edit.range.start.line).sort()).toEqual([
+            "_lib.scss:1",
+            "main.scss:3",
+          ]);
+        },
+      );
+      await withScssProject(
+        {
+          "_lib.scss": "@function pad() { @return 1px; }\n",
+          "_tone.scss": '@forward "sass:color";\n',
+          "main.scss": '@use "tone";\n@use "lib";\n.a { w: tone.pad(); }\n',
+        },
+        async (project) => {
+          const refs = await scssRefs(project, "_lib.scss", "@function pad", 0, "@function ".length);
+          expect(refs.sites).toEqual(["_lib.scss:1"]);
+          expect(refs.coverage?.state).toBe("partial");
+          expect(refs.coverage?.affectedFiles?.map((file) => project.relative(file))).toEqual(["main.scss"]);
+        },
+      );
+    },
+  );
+
+  it.runIf(isNativeTreeSitterAvailable())(
+    "keeps a user get-function complete when a different module forwards sass:meta",
+    async () => {
+      await withScssProject(
+        {
+          "_helpers.scss": "@function get-function($value) { @return $value; }\n",
+          "_meta.scss": '@forward "sass:meta";\n',
+          "main.scss": '@use "helpers";\n@use "meta";\n.a { width: helpers.get-function(1px); }\n',
+        },
+        async (project) => {
+          expect(await scssGoto(project, "main.scss", "helpers.get-function", 0, "helpers.".length)).toBe(
+            "_helpers.scss:1",
+          );
+          const refs = await scssRefs(project, "_helpers.scss", "@function get-function", 0, "@function ".length);
+          expect(refs.sites).toEqual(["_helpers.scss:1", "main.scss:3"]);
+          expect(refs.coverage?.state).toBe("complete");
+          expect((await previewScssRename(project, "get-function", "_helpers.scss", "pick")).safe).toBe(true);
+        },
+      );
+    },
+  );
 });

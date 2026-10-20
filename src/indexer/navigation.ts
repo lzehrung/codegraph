@@ -114,6 +114,7 @@ import {
   scssFlowLocalUnproven,
   scssLocalSpellingGap,
   scssMemberForDefinition,
+  scssNearerEquivalentLocal,
   scssScopedCallableDynamicUnproven,
   scssScopedCallableReferences,
 } from "../scss/resolution.js";
@@ -1618,12 +1619,16 @@ async function findReferencesInternal(
 
   // A block local's lexical scope can run past the block. A use the SCSS resolver proves is a
   // module member is not a reference of that local. The local's own uses stay: they resolve as a
-  // shadow and the generic walker keeps them.
+  // shadow and the generic walker keeps them. A nearer binding with the same Sass name and a
+  // different `-`/`_` spelling owns the read; the exact-name walk would keep it on this declaration.
+  let scssNearerSpellingDropped = false;
   if (
     parsedContext.sup.id === "scss" &&
     definition.localName.startsWith("$") &&
     !(await scssMemberForDefinition(index, definition))
   ) {
+    const facts = await scssFactsForFile(index, definition.file);
+    const definitionKey = fileIdentityKey(definition.file);
     const kept: Reference[] = [];
     for (const ref of refs) {
       if (referenceSiteKey(ref.file, ref.range) === definitionSiteKey) {
@@ -1636,6 +1641,14 @@ async function findReferencesInternal(
         column: ref.range.start.column,
       });
       if (resolved?.status === "ok") continue;
+      if (
+        facts &&
+        fileIdentityKey(ref.file) === definitionKey &&
+        scssNearerEquivalentLocal(facts, definition, ref.range.start)
+      ) {
+        scssNearerSpellingDropped = true;
+        continue;
+      }
       kept.push(ref);
     }
     refs.length = 0;
@@ -1661,7 +1674,9 @@ async function findReferencesInternal(
   ];
   if (parsedContext.sup.id === "scss" && definition.localName.startsWith("$")) {
     const facts = await scssFactsForFile(index, definition.file);
-    if (facts && scssLocalSpellingGap(facts, definition)) markNameEquivalenceGap(index, definition);
+    if (scssNearerSpellingDropped || (facts && scssLocalSpellingGap(facts, definition))) {
+      markNameEquivalenceGap(index, definition);
+    }
     if (await scssFlowLocalUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
     if (await scssBlockLocalExistenceUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
   }

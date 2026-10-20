@@ -7,6 +7,7 @@ import { isNativeRequiredUnavailableError } from "../native/runtime.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
+  dynamicFormOf,
   extractScssFacts,
   isSassBuiltinUrl,
   memberEditSpan,
@@ -123,7 +124,10 @@ type ModuleModel = {
   unresolvedStems: Set<string>;
   /** Stems `meta.load-css` names; null stands for a URL that is not a string literal. */
   dynamicStems: Set<string | null>;
-  /** Dynamic calls whose sass:meta load comes from an @import importer. */
+  /**
+   * Dynamic calls proved to be `sass:meta`: a binding inherited through `@import`, or a namespaced
+   * lookup through a module that forwards `sass:meta`.
+   */
   inheritedDynamics: NonNullable<ScssUse["dynamic"]>[];
   /** Names whose file-scope flow assignment could not be joined to one imported variable. */
   unprovenFlowAssigns: Set<string>;
@@ -600,7 +604,13 @@ async function buildProjectModel(index: ProjectIndex): Promise<ProjectModel> {
   joinImportedFlowAssignments(model);
   for (const current of files.values()) {
     for (const use of current.facts.uses) {
-      if (!use.dynamic || !inheritsMetaLookup(model, current, use)) continue;
+      if (!use.dynamic) continue;
+      // A file that `@use`s a module which forwards `sass:meta` sees that module's namespace.
+      // The lookup is not inherited: the namespace is declared here, and it is not `sass:meta` itself.
+      const proved =
+        inheritsMetaLookup(model, current, use) ||
+        (use.namespace !== null && namespaceForwardsSassMeta(model, current, use.namespace));
+      if (!proved) continue;
       current.inheritedDynamics.push(use.dynamic);
       if (use.dynamic.form === "load-css") {
         current.dynamicStems.add(use.dynamic.arg === null ? null : moduleStem(use.dynamic.arg));
@@ -750,6 +760,8 @@ function exposureOf(model: ProjectModel, key: string, mode: LoadMode, walk: Walk
     const { load, target } = resolved;
     if (load.kind === "use" || load.nested) continue;
     if (target.type === "unresolved") incomplete = true;
+    // `@forward "sass:color"` exposes built-in members this scan does not list. A miss is unproven.
+    if (load.kind === "forward" && target.type === "builtin") incomplete = true;
     if (target.type !== "file") continue;
     const forwarded = load.kind === "forward";
     const inner = exposureOf(model, fileIdentityKey(target.file), forwarded ? "module" : "import", walk, lens);
@@ -943,6 +955,48 @@ function inheritsMetaLookup(model: ProjectModel, current: ModuleModel, use: Scss
   if (matchingNamespaces(current, namespace).length) return false;
   const inherited = uniqueTargets(importers.flatMap((importer) => matchingNamespaces(importer, namespace)));
   return inherited.some(({ load, target }) => load.url.trim() === "sass:meta" && target.type === "builtin");
+}
+
+/** True when `key` forwards `sass:meta`, directly or through another `@forward`. */
+function moduleForwardsSassMeta(model: ProjectModel, key: string, seen: Set<string>): boolean {
+  if (seen.has(key)) return false;
+  seen.add(key);
+  const current = model.files.get(key);
+  if (!current) return false;
+  for (const resolved of current.loads) {
+    if (resolved.load.kind !== "forward") continue;
+    if (resolved.target.type === "builtin") {
+      if (resolved.load.url.trim() === "sass:meta") return true;
+      continue;
+    }
+    if (resolved.target.type === "file" && moduleForwardsSassMeta(model, fileIdentityKey(resolved.target.file), seen)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when `namespace` is a `@use` whose module forwards `sass:meta`. The file's own `@use` wins.
+ * A partial with no such `@use` sees the namespace of a file that `@import`s it, same as other lookups.
+ */
+function namespaceForwardsSassMeta(model: ProjectModel, current: ModuleModel, namespace: string): boolean {
+  let namespaces = matchingNamespaces(current, namespace);
+  if (!namespaces.length) {
+    namespaces = uniqueTargets(
+      importerChain(model, current.key).flatMap((importer) => matchingNamespaces(importer, namespace)),
+    );
+  }
+  for (const resolved of namespaces) {
+    if (resolved.target.type === "builtin" && resolved.load.url.trim() === "sass:meta") return true;
+    if (
+      resolved.target.type === "file" &&
+      moduleForwardsSassMeta(model, fileIdentityKey(resolved.target.file), new Set())
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function resolveNamespaced(model: ProjectModel, current: ModuleModel, use: ScssUse, namespace: string): ScssResolution {
@@ -1265,6 +1319,27 @@ export function scssLocalSpellingGap(facts: ScssFileFacts, def: SymbolDef): bool
       use.nameStart >= local.from &&
       use.nameStart < local.to,
   );
+}
+
+/**
+ * True when a scanned local nearer than `def` covers `at` and spells the same Sass variable with a
+ * different mix of `-` and `_`. The exact-name walk would keep that read on `def`.
+ */
+export function scssNearerEquivalentLocal(facts: ScssFileFacts, def: SymbolDef, at: Range["start"]): boolean {
+  if (!def.localName.startsWith("$")) return false;
+  const offset = at.index ?? scssOffsetAt(facts, at.line, at.column);
+  if (offset < 0) return false;
+  const canonical = sassCanonical(def.localName);
+  const own = facts.locals.find(
+    (entry) => entry.range.start.line === def.range.start.line && entry.range.start.column === def.range.start.column,
+  );
+  if (!own) return false;
+  let nearest: ScssLocalBinding | undefined;
+  for (const local of facts.locals) {
+    if (local.canonical !== canonical || offset < local.from || offset >= local.to) continue;
+    if (!nearest || local.from >= nearest.from) nearest = local;
+  }
+  return nearest !== undefined && nearest !== own && nearest.spelling !== own.spelling;
 }
 
 /** The imported variable a joined flow-control assignment names, when the click is on that assignment. */
@@ -1745,7 +1820,10 @@ export async function scssScopedCallableReferences(
  * the proposed name that this local would own, and `shadowed` lists calls this local owns when
  * a different same-kind scoped callable would own the edited name (`-` and `_` equivalent).
  * `unaccounted` lists calls of the original name that this local owns and the reference walk
- * omitted; a nearer scoped callable keeps its own calls. Null means `def` is not a scoped callable.
+ * omitted; a nearer scoped callable keeps its own calls. A bare dynamic callee (`get-function`,
+ * `call`, `get-mixin`, `load-css`, the other meta lookups, or a `_` spelling) whose name is the
+ * proposed name is captured too: the rename would make that call invoke this callable. A namespaced
+ * dynamic call is not. Null means `def` is not a scoped callable.
  */
 export async function scssScopedCallableRenameSites(
   index: ProjectIndex,
@@ -1795,6 +1873,28 @@ export async function scssScopedCallableRenameSites(
     }
     if (ownedByLocal && !covered.has(use.nameStart)) {
       unaccounted.push({ file: current.file, range, text: use.text });
+    }
+  }
+  // A `sass:meta as *` lookup is only a dynamic, not a use, so the loop above misses it. The
+  // proposed name is the callee (`get-function`, `load-css`, ...), folded so `_` matches `-`.
+  const nextForm = dynamicFormOf(newName);
+  if (nextForm && next !== local.canonical) {
+    const parsed = await ensureParsedContext(
+      current.file,
+      index.parsed?.get(fileIdentityKey(current.file)),
+      index.languageExtensions,
+    );
+    const source = parsed.source;
+    const seen = new Set(captured.map((site) => site.range.start.index));
+    for (const dynamic of current.facts.dynamics) {
+      if (dynamic.form !== nextForm || dynamic.at === undefined) continue;
+      const at = dynamic.at;
+      if (at < local.from || at >= local.to) continue;
+      if (source.charCodeAt(at - 1) === 0x2e) continue;
+      if (nearestScopedCallable(current.facts, local.kind, next, at, renamed) !== local) continue;
+      if (seen.has(at)) continue;
+      seen.add(at);
+      captured.push({ file: current.file, range: scssOffsetRange(current.facts, at, at + nextForm.length) });
     }
   }
   return { captured, shadowed, unaccounted };

@@ -308,7 +308,7 @@ function isDynamicForm(name: string): name is ScssDynamicForm {
  * The dynamic lookup that a function or mixin name spells, or null. Sass reads `_` as `-` in such
  * a name, so `get_function` and `get-function` are one function.
  */
-function dynamicFormOf(name: string): ScssDynamicForm | null {
+export function dynamicFormOf(name: string): ScssDynamicForm | null {
   const folded = name.replace(/_/g, "-");
   return isDynamicForm(folded) ? folded : null;
 }
@@ -559,7 +559,9 @@ export function extractScssFacts(source: string): ScssFileFacts {
   /**
    * The lookup that a call through `sass:meta` names, or null. The name folds `_` into `-`, and the
    * namespace compares as written, so `meta.get_function` is a lookup and `my-meta.get-function` is
-   * not when the module is bound to `my_meta`.
+   * not when the module is bound to `my_meta`. This pass does not load files, so a namespace whose
+   * module `@forward`s `sass:meta` (directly or through another forward) is classified later, when
+   * resolution can see that load.
    */
   const metaCallForm = (namespace: string | null, member: string): ScssDynamicForm | null => {
     const form = dynamicFormOf(member);

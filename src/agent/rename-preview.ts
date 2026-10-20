@@ -740,6 +740,7 @@ async function addScopeConflicts(
     }
     const scoped = await scssScopedCallableRenameSites(snapshot.index, target, newName, references);
     if (scoped) {
+      // Includes a bare dynamic callee of the new name. A namespaced meta call is not a capture.
       for (const capture of scoped.captured) {
         const file = normalizeAgentFilePath(snapshot.root, capture.file);
         conflicts.push({
