@@ -247,6 +247,179 @@ function advanceSqlBlockWord(text: string, index: number, stack: SqlBlockFrame[]
   return classified.resume;
 }
 
+/** MySQL allows one compound statement, with no BEGIN, as the body of a routine. */
+const COMPOUND_BODY_WORDS = new Set(["case", "if", "loop", "repeat", "while"]);
+/**
+ * Words that can sit between the parameter list and that body: `RETURNS integer`,
+ * `DETERMINISTIC`, `LANGUAGE SQL`, and the other MySQL characteristics.
+ */
+const ROUTINE_CHARACTERISTICS = new Set([
+  "comment",
+  "contains",
+  "data",
+  "definer",
+  "deterministic",
+  "invoker",
+  "modifies",
+  "no",
+  "not",
+  "null",
+  "reads",
+  "security",
+  "sql",
+]);
+/** A nested compound of the same keyword starts after one of these, or after a semicolon. */
+const COMPOUND_NEST_WORDS = new Set(["begin", "do", "else", "elseif", "loop", "repeat", "then"]);
+/** Words that mean the body is not a bare compound statement. */
+const ROUTINE_BODY_STOP = new Set(["as", "begin", "call", "declare", "delete", "insert", "perform", "return", "select", "update"]);
+
+type RoutineCompound = { keywordEnd: number; depth: number };
+type RoutineHead =
+  | "start"
+  | "create"
+  | "or"
+  | "replace"
+  | "name"
+  | "after-name"
+  | "params"
+  | "chars"
+  | "language"
+  | "type"
+  | "body";
+
+/**
+ * When a CREATE PROCEDURE or FUNCTION has a parameter list and the next bare token, after
+ * characteristics, is IF, LOOP, REPEAT, WHILE, or CASE, `depth` counts that keyword only.
+ * `END` plus the same keyword closes one level. Null when this routine has no such body.
+ */
+function scanRoutineCompound(
+  code: string,
+  trivia: SqlTriviaBoundaries,
+  start: number,
+  end: number,
+): RoutineCompound | null {
+  let phase: RoutineHead = "start";
+  let paramDepth = 0;
+  let typeDepth = 0;
+  let keyword = "";
+  let keywordEnd = -1;
+  let depth = 0;
+  let prevWord = "";
+  let prevWasSemi = false;
+  let index = start;
+
+  while (index < end) {
+    const char = code[index] ?? "";
+    if (char === "(") {
+      if (phase === "name" || phase === "after-name") {
+        phase = "params";
+        paramDepth = 1;
+      } else if (phase === "params") paramDepth += 1;
+      else if (phase === "type") typeDepth += 1;
+      index += 1;
+      continue;
+    }
+    if (char === ")") {
+      if (phase === "params" && paramDepth > 0) {
+        paramDepth -= 1;
+        if (paramDepth === 0) phase = "chars";
+      } else if (phase === "type" && typeDepth > 0) typeDepth -= 1;
+      index += 1;
+      continue;
+    }
+    if (char === ";") {
+      prevWasSemi = true;
+      prevWord = "";
+      index += 1;
+      continue;
+    }
+    if (char === "." && phase === "after-name") {
+      phase = "name";
+      index += 1;
+      continue;
+    }
+    if (!/[A-Za-z_]/.test(char)) {
+      index += 1;
+      continue;
+    }
+    const read = readBareWord(code, index);
+    if (!read) {
+      index += 1;
+      continue;
+    }
+    if (phase === "name") {
+      phase = "after-name";
+      index = read.end;
+      continue;
+    }
+    if (!isBareSqlKeyword(code, index, read.end, trivia)) {
+      index = read.end;
+      continue;
+    }
+    const word = read.word;
+    index = read.end;
+    if (phase === "params") continue;
+    if (phase === "language") {
+      phase = "chars";
+      prevWord = word;
+      prevWasSemi = false;
+      continue;
+    }
+    if (phase === "type" && typeDepth > 0) continue;
+    if (phase === "chars" || phase === "type") {
+      if (typeDepth === 0 && COMPOUND_BODY_WORDS.has(word)) {
+        keyword = word;
+        keywordEnd = index;
+        depth = 1;
+        phase = "body";
+      } else if (word === "returns") phase = "type";
+      else if (word === "language") phase = "language";
+      else if (ROUTINE_CHARACTERISTICS.has(word)) phase = "chars";
+      else if (phase === "type" && !ROUTINE_BODY_STOP.has(word)) {
+        // A type word: integer, unsigned, varying, precision.
+      } else return null;
+      prevWord = word;
+      prevWasSemi = false;
+      continue;
+    }
+    if (phase === "body") {
+      if (word === "end") {
+        const followerAt = nextSignificant(trivia, index);
+        const follower = followerAt < end ? readBareWord(code, followerAt) : null;
+        if (
+          follower &&
+          follower.end <= end &&
+          follower.word === keyword &&
+          isBareSqlKeyword(code, followerAt, follower.end, trivia)
+        ) {
+          depth -= 1;
+          index = follower.end;
+          prevWord = follower.word;
+          prevWasSemi = false;
+          continue;
+        }
+      } else if (word === keyword && (prevWasSemi || COMPOUND_NEST_WORDS.has(prevWord))) {
+        depth += 1;
+      }
+      prevWord = word;
+      prevWasSemi = false;
+      continue;
+    }
+    if (phase === "start") phase = word === "create" ? "create" : "start";
+    else if (phase === "create") {
+      if (word === "or") phase = "or";
+      else if (word === "procedure" || word === "function") phase = "name";
+      else return null;
+    } else if (phase === "or") phase = word === "replace" ? "replace" : "start";
+    else if (phase === "replace") phase = word === "procedure" || word === "function" ? "name" : "start";
+    if (phase === "start" || phase === "after-name") return null;
+    prevWord = word;
+    prevWasSemi = false;
+  }
+  if (phase !== "body" || keywordEnd < 0) return null;
+  return { keywordEnd, depth };
+}
+
 /**
  * Splits SQL text into statements. PostgreSQL and SQL Server let a block comment hold block comments,
  * which `nestedComments` reads. Without it, a block comment ends at its first closing delimiter.
@@ -258,6 +431,7 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
     nestedBlockComments: nestedComments,
     escapeStrings: true,
   });
+  const code = maskSqlQuotedIdentifiers(masked);
   const trivia = sqlTriviaBoundaries(masked);
   const statements: SqlStatementSlice[] = [];
   const lineStarts = lineStartsFor(source);
@@ -444,8 +618,11 @@ function scanSqlStatements(source: string, nestedComments: boolean): SqlStatemen
       i = advanceSqlBlockWord(masked, i, openBlocks, trivia);
       continue;
     }
+    // A compound routine body stays one statement until its own END keyword. BEGIN and CASE
+    // frames are unchanged, and a qualified name such as t.if is not that keyword.
     if (char === ";" && openBlocks.length === 0) {
-      pushStatement(i);
+      const compound = scanRoutineCompound(code, trivia, start, i);
+      if (!compound || compound.depth <= 0) pushStatement(i);
     }
     i += 1;
   }
@@ -715,10 +892,8 @@ function beginEndBody(text: string): string | null {
   }
   return null;
 }
-/** Read facts of the statements inside a `BEGIN`/`END` body, split by the statement splitter. */
-function readsInsideBeginEnd(masked: string): SqlFactDraft[] {
-  const body = beginEndBody(masked);
-  if (body === null) return [];
+/** Read facts of statements split out of a routine body. */
+function readsOfStatements(body: string): SqlFactDraft[] {
   const seen = new Set<string>();
   const facts: SqlFactDraft[] = [];
   for (const inner of splitSqlStatements(body)) {
@@ -730,6 +905,24 @@ function readsInsideBeginEnd(masked: string): SqlFactDraft[] {
     }
   }
   return facts;
+}
+
+/** Read facts of the statements inside a `BEGIN`/`END` body, split by the statement splitter. */
+function readsInsideBeginEnd(masked: string): SqlFactDraft[] {
+  const body = beginEndBody(masked);
+  if (body === null) return [];
+  return readsOfStatements(body);
+}
+
+/**
+ * Read facts inside a compound routine body the same way as a BEGIN/END body.
+ * Null when the routine body is not that single compound statement.
+ */
+function readsInsideCompoundRoutine(masked: string): SqlFactDraft[] | null {
+  const code = maskSqlQuotedIdentifiers(masked);
+  const found = scanRoutineCompound(code, sqlTriviaBoundaries(masked), 0, code.length);
+  if (!found) return null;
+  return readsOfStatements(masked.slice(found.keywordEnd));
 }
 
 function withoutSelfRead(readFacts: SqlFactDraft[], objectName: string | null): SqlFactDraft[] {
@@ -747,7 +940,7 @@ function extractStatementFactDrafts(statementText: string): SqlFactDraft[] {
     if (definitionFact.kind === "defines_view" || /\bas\s+select\b/i.test(text)) {
       readFacts = withoutSelfRead(extractReadFacts(text), definitionFact.objectName);
     } else if (definitionFact.kind === "defines_routine") {
-      readFacts = readsInsideBeginEnd(text);
+      readFacts = readsInsideCompoundRoutine(text) ?? readsInsideBeginEnd(text);
     }
     return [definitionFact, ...constraintFacts, ...readFacts];
   }

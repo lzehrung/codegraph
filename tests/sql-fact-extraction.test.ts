@@ -543,6 +543,29 @@ describe("SQL fact extraction", () => {
     ]);
   });
 
+  it("reads MySQL single-statement compound routine bodies", () => {
+    const source = [
+      "CREATE PROCEDURE q() IF 1 THEN SELECT id FROM users; ELSE SELECT id FROM accounts; END IF;",
+      "CREATE PROCEDURE p() LOOP CALL tick(); CALL tock(); END LOOP;",
+      "CREATE TABLE z (id integer);",
+    ].join("\n");
+    const facts = extractSqlFactsFromSource(path.join(fixtureRoot, "mysql.sql"), source);
+    const routines = facts.filter((fact) => fact.kind === "defines_routine");
+
+    expect(routines.map((fact) => fact.objectName)).toEqual(["q", "p"]);
+    expect(routines.map((fact) => fact.statementText)).toEqual(
+      source
+        .split("\n")
+        .slice(0, 2)
+        .map((line) => line.slice(0, -1)),
+    );
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+    ]);
+    expect(facts).toContainEqual(expect.objectContaining({ kind: "defines_table", objectName: "z" }));
+  });
+
   it("relates each JOIN to the first source of its own query", () => {
     const facts = extractSqlFactsFromSource(
       path.join(fixtureRoot, "reports", "nested-join.sql"),

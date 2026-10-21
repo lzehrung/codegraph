@@ -330,6 +330,41 @@ describe("SQL routine call sites", () => {
       .sort();
   }
 
+  it("indexes MySQL single-statement compound routines and their contained reads and calls", async () => {
+    const schema = [
+      "CREATE TABLE users (id integer);",
+      "CREATE TABLE accounts (id integer);",
+      "CREATE PROCEDURE tick() BEGIN SELECT 1; END;",
+      "CREATE PROCEDURE tock() BEGIN SELECT 1; END;",
+    ];
+    const mysql = [
+      "CREATE PROCEDURE q() IF 1 THEN SELECT id FROM users; ELSE SELECT id FROM accounts; END IF;",
+      "CREATE PROCEDURE p() LOOP CALL tick(); CALL tock(); END LOOP;",
+      "CREATE TABLE z (id integer);",
+    ];
+    await withSqlProject({ "schema.sql": schema, "mysql.sql": mysql }, async (project) => {
+      const symbols = listSymbols(project.index, { file: project.file("mysql.sql") });
+      const q = symbols.find((symbol) => symbol.name === "q");
+      const p = symbols.find((symbol) => symbol.name === "p");
+      expect(q?.range?.end.line).toBe(1);
+      expect(q?.range?.end.column).toBe(mysql[0]!.length);
+      expect(p?.range?.end.line).toBe(2);
+      expect(p?.range?.end.column).toBe(mysql[1]!.length);
+      expect(symbols).toContainEqual(expect.objectContaining({ name: "z", kind: "table" }));
+
+      for (const table of ["users", "accounts"]) {
+        const refs = okReferences(await referencesAt(project, "schema.sql", schema, table === "users" ? 1 : 2, table));
+        expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(referenceSites(project.root, refs)).toContain(siteAt("mysql.sql", mysql, 1, table));
+      }
+      for (const name of ["tick", "tock"]) {
+        const definitionLine = name === "tick" ? 3 : 4;
+        const refs = okReferences(await referencesAt(project, "schema.sql", schema, definitionLine, name));
+        expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(referenceSites(project.root, refs)).toContain(siteAt("mysql.sql", mysql, 2, name));
+      }
+    });
+  });
   it("finds a routine call in a SELECT with complete coverage and goes from the call to the routine", async () => {
     const schema = ["CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT lower(e) $$ LANGUAGE sql;"];
     const report = ["SELECT normalize_email(email) FROM users;"];
