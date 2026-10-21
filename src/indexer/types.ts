@@ -53,10 +53,18 @@ export type SymbolDef = {
   complexity?: number;
 };
 
+export type ParseErrorIdentifier = {
+  startIndex: number;
+  endIndex: number;
+  text: string;
+};
+
 export type ParseErrorRange = {
   startIndex: number;
   endIndex: number;
   text: string;
+  identifiers: ParseErrorIdentifier[];
+  opaque?: boolean;
 };
 
 export type ExportEntry =

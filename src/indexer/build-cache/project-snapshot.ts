@@ -1842,18 +1842,45 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   );
 }
 
+function isValidParseErrorIdentifier(value: unknown, rangeStartIndex: number, rangeEndIndex: number): boolean {
+  if (!value || typeof value !== "object") return false;
+  const identifier = value as { startIndex?: unknown; endIndex?: unknown; text?: unknown };
+  return (
+    typeof identifier.startIndex === "number" &&
+    Number.isSafeInteger(identifier.startIndex) &&
+    typeof identifier.endIndex === "number" &&
+    Number.isSafeInteger(identifier.endIndex) &&
+    identifier.startIndex >= rangeStartIndex &&
+    identifier.endIndex >= identifier.startIndex &&
+    identifier.endIndex <= rangeEndIndex &&
+    typeof identifier.text === "string" &&
+    identifier.text.length === identifier.endIndex - identifier.startIndex
+  );
+}
+
 function isParseErrorRange(value: unknown): value is ParseErrorRange {
   if (!value || typeof value !== "object") return false;
-  const range = value as Partial<ParseErrorRange>;
+  const range = value as {
+    startIndex?: unknown;
+    endIndex?: unknown;
+    text?: unknown;
+    identifiers?: unknown;
+    opaque?: unknown;
+  };
+  const startIndex = range.startIndex;
+  const endIndex = range.endIndex;
+  const identifiers = range.identifiers;
+  if (typeof startIndex !== "number" || typeof endIndex !== "number") return false;
+  if (!Array.isArray(identifiers)) return false;
   return (
-    typeof range.startIndex === "number" &&
-    Number.isSafeInteger(range.startIndex) &&
-    typeof range.endIndex === "number" &&
-    Number.isSafeInteger(range.endIndex) &&
-    range.startIndex >= 0 &&
-    range.endIndex >= range.startIndex &&
+    Number.isSafeInteger(startIndex) &&
+    Number.isSafeInteger(endIndex) &&
+    startIndex >= 0 &&
+    endIndex >= startIndex &&
     typeof range.text === "string" &&
-    range.text.length === range.endIndex - range.startIndex
+    range.text.length === endIndex - startIndex &&
+    (range.opaque === undefined || typeof range.opaque === "boolean") &&
+    identifiers.every((identifier: unknown) => isValidParseErrorIdentifier(identifier, startIndex, endIndex))
   );
 }
 

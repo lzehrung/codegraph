@@ -31,6 +31,9 @@ export const SQL_DEF: LanguageDefinition = {
     locals: "",
     importBindings: "",
   },
+  nodeTypes: {
+    identifier: ["identifier", "keyword_name"],
+  },
   supportsCrossModuleSymbols: false,
 };
 

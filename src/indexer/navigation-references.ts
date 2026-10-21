@@ -64,6 +64,8 @@ import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../util/bloom-filter.js";
 import { createSqlObjectNameRegExp } from "../sql/lex.js";
 import { sqlObjectNamesMatchConservatively } from "../sql/lookup.js";
 
+// SQL ERROR text matching goes away when #408 moves SQL parse-error coverage tree-first.
+const SQL_PARSE_ERROR_NAME_RE = createSqlObjectNameRegExp("gu");
 const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
 const NAMESPACE_EXPORT_PATTERN = new RegExp(
   String.raw`\bexport\s*\*\s*as\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*from\s*(["'])([^"']+)\2`,
@@ -1381,50 +1383,29 @@ function parserDegradedCandidateFiles(
   return { files: affected, hasUnlistedCandidate };
 }
 
-const SQL_IDENTIFIER_CONTINUATION = /[\p{ID_Continue}$#\u200c\u200d]/u;
-
-function containsIdentifierToken(text: string, identifier: string, languageId: string, symbolKind: string): boolean {
-  if (!identifier) return false;
-  if (languageId === "sql") {
-    const pattern = createSqlObjectNameRegExp("gu");
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(text))) {
-      const start = match.index;
-      const end = start + match[0].length;
-      const hasIdentifierBefore = start > 0 && SQL_IDENTIFIER_CONTINUATION.test(text[start - 1]!);
-      const hasIdentifierAfter = end < text.length && SQL_IDENTIFIER_CONTINUATION.test(text[end]!);
-      if (hasIdentifierBefore || hasIdentifierAfter) continue;
-      if (sqlObjectNamesMatchConservatively(match[0], identifier)) return true;
-    }
-    return false;
-  }
-  // PHP class, function, and method names are case-insensitive; Terraform names may contain `-`.
-  const foldCase = languageId === "php" && isPhpCaseInsensitiveSymbolKind(symbolKind);
-  const normalize = getLanguageById(languageId)?.normalizeIdentifier ?? ((name: string) => name);
-  const normalizeForMatch = (name: string): string => {
-    const normalized = normalize(name);
-    return foldCase ? foldPhpIdentifierCase(normalized) : normalized;
-  };
-  const target = normalizeForMatch(identifier);
-  const continuation =
-    languageId === "terraform" ? "\\p{ID_Continue}$_\\u200c\\u200d-" : "\\p{ID_Continue}$_\\u200c\\u200d";
-  const ruby = languageId === "ruby";
-  const csharp = languageId === "csharp";
-  const tokens = new RegExp(
-    `${csharp ? "@?" : ""}[\\p{ID_Start}_$][${continuation}]*${ruby ? "(?:[?!](?!=))?" : ""}`,
-    "gu",
-  );
+function parseErrorSqlRangeMatches(text: string, spelling: string): boolean {
+  SQL_PARSE_ERROR_NAME_RE.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = tokens.exec(text))) {
-    const token = normalizeForMatch(match[0]);
-    if (token === target) return true;
-    if (ruby && target.endsWith("=") && token === target.slice(0, -1)) {
-      let next = match.index + match[0].length;
-      while (next < text.length && /\s/u.test(text[next]!)) next++;
-      if (text[next] === "=") return true;
-    }
+  while ((match = SQL_PARSE_ERROR_NAME_RE.exec(text)) !== null) {
+    if (sqlObjectNamesMatchConservatively(match[0], spelling)) return true;
   }
   return false;
+}
+
+function parseErrorIdentifierMatches(
+  identifier: string,
+  spelling: string,
+  languageId: string,
+  symbolKind: string,
+): boolean {
+  if (languageId === "sql") return sqlObjectNamesMatchConservatively(identifier, spelling);
+  const normalizeIdentifier = getLanguageById(languageId)?.normalizeIdentifier ?? ((name: string) => name);
+  const normalizedIdentifier = normalizeIdentifier(identifier);
+  const normalizedSpelling = normalizeIdentifier(spelling);
+  if (languageId === "php" && isPhpCaseInsensitiveSymbolKind(symbolKind)) {
+    return foldPhpIdentifierCase(normalizedIdentifier) === foldPhpIdentifierCase(normalizedSpelling);
+  }
+  return normalizedIdentifier === normalizedSpelling;
 }
 
 export function buildIndexedCandidateCoverage(args: {
@@ -1484,6 +1465,7 @@ export function buildIndexedCandidateCoverage(args: {
       if (!moduleIndex || !parseErrorRanges?.length) continue;
 
       const names = new Set([def.localName]);
+      if (languageId === "ruby" && def.localName.endsWith("=")) names.add(def.localName.slice(0, -1));
       for (const imp of moduleIndex.imports) {
         if (
           (imp.kind === "named" || imp.kind === "default") &&
@@ -1521,9 +1503,17 @@ export function buildIndexedCandidateCoverage(args: {
       }
       const referenceNames = [...names];
       if (
-        parseErrorRanges.some((range) =>
-          referenceNames.some((name) => containsIdentifierToken(range.text, name, languageId, def.kind)),
-        )
+        parseErrorRanges.some((range) => {
+          if (languageId === "sql" && range.opaque) {
+            return referenceNames.some((name) => parseErrorSqlRangeMatches(range.text, name));
+          }
+          return (
+            range.opaque ||
+            range.identifiers.some((identifier) =>
+              referenceNames.some((name) => parseErrorIdentifierMatches(identifier.text, name, languageId, def.kind)),
+            )
+          );
+        })
       ) {
         parseErrorFiles.push(candidateFile);
       }
