@@ -1035,6 +1035,77 @@ describe("SQL fact extraction", () => {
     expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual(["users"]);
   });
 
+  it("indexes the next table when a trigger CASE ends with the alias loop, while, or for", () => {
+    for (const alias of ["loop", "while", "for"]) {
+      const facts = extractSqlFactsFromSource(
+        "trigger-case-alias.sql",
+        [
+          `CREATE TRIGGER t AFTER INSERT ON a BEGIN SELECT CASE WHEN NEW.id = 1 THEN 1 ELSE 0 END ${alias}; END;`,
+          "CREATE TABLE b (id integer);",
+        ].join("\n"),
+      );
+
+      expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual(["t"]);
+      expect(facts.filter((fact) => fact.kind === "defines_table").map((fact) => fact.objectName)).toEqual(["b"]);
+      expect(facts.find((fact) => fact.kind === "defines_table")).toMatchObject({
+        statementText: "CREATE TABLE b (id integer)",
+        startLine: 2,
+      });
+    }
+  });
+
+  it("keeps the read after ORDER BY CASE ends at FOR UPDATE or FOR SHARE", () => {
+    for (const clause of ["FOR UPDATE", "FOR SHARE"]) {
+      const facts = extractSqlFactsFromSource(
+        "case-for-update.sql",
+        [
+          "CREATE PROCEDURE p AS BEGIN",
+          `  SELECT id FROM users ORDER BY CASE WHEN id = 1 THEN 0 ELSE 1 END ${clause};`,
+          "  SELECT id FROM accounts;",
+          "END;",
+          "CREATE PROCEDURE q AS BEGIN",
+          "  SELECT id FROM roles;",
+          "END;",
+        ].join("\n"),
+      );
+
+      expect(facts.filter((fact) => fact.kind === "defines_routine").map((fact) => fact.objectName)).toEqual([
+        "p",
+        "q",
+      ]);
+      expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+        "users",
+        "accounts",
+        "roles",
+      ]);
+    }
+  });
+
+  it("leaves a BEGIN open when END LOOP is the compound terminator", () => {
+    const facts = extractSqlFactsFromSource(
+      "end-loop-begin.sql",
+      [
+        "CREATE PROCEDURE p AS BEGIN",
+        "  LOOP",
+        "    SELECT id FROM users;",
+        "  END LOOP;",
+        "  SELECT id FROM accounts;",
+        "END;",
+        "CREATE TABLE b (id integer);",
+      ].join("\n"),
+    );
+
+    const body = facts.find((fact) => fact.kind === "defines_routine" && fact.objectName === "p")?.statementText ?? "";
+    expect(body).toContain("END LOOP");
+    expect(body).toContain("FROM accounts");
+    expect(body).not.toContain("CREATE TABLE b");
+    expect(facts.filter((fact) => fact.kind === "defines_table").map((fact) => fact.objectName)).toEqual(["b"]);
+    expect(facts.filter((fact) => fact.kind === "reads_from").map((fact) => fact.objectName)).toEqual([
+      "users",
+      "accounts",
+    ]);
+  });
+
   it("classifies qualified keywords from one trivia table per scan", () => {
     const statements = 20_000;
     const reads = Array.from({ length: statements }, (_, index) => `  SELECT t. /* x */ case FROM t${index};`);

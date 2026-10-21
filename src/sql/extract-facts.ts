@@ -180,8 +180,20 @@ function isOwnLineGo(text: string, index: number): boolean {
 }
 
 /**
- * `END IF|LOOP|WHILE|REPEAT|FOR [label]` then `;` or the end of the text closes nothing.
- * `END CASE [label]` in that same shape closes the innermost CASE. Any other END, including
+ * `END CASE` closes a CASE wherever it sits. `END IF|LOOP|WHILE|REPEAT|FOR` closes nothing
+ * only when the innermost frame is BEGIN or the stack is empty. An open CASE makes the same
+ * words the end of that expression: `END loop` is an alias, and `END FOR UPDATE` is a clause.
+ */
+function compoundEndAction(keyword: string, innermost: SqlBlockFrame | undefined): "noop" | "case" | "close" {
+  if (keyword === "case") return "case";
+  if (innermost === "case") return "close";
+  return "noop";
+}
+
+/**
+ * `END CASE [label]` then `;` or the end of the text closes the innermost CASE. The same shape of
+ * `END IF|LOOP|WHILE|REPEAT|FOR [label]` closes nothing when the innermost frame is BEGIN or the
+ * stack is empty, and closes the CASE when that is the innermost frame. Any other END, including
  * T-SQL `END IF @x` with no semicolon after IF, closes the innermost frame. The returned index
  * stops before the semicolon so the statement scan can still split on it.
  */
@@ -189,6 +201,7 @@ function classifyEnd(
   text: string,
   endWordEnd: number,
   trivia: SqlTriviaBoundaries,
+  innermost: SqlBlockFrame | undefined,
 ): { action: "noop" | "case" | "close"; resume: number } {
   const close = { action: "close" as const, resume: endWordEnd };
   const keywordAt = nextSignificant(trivia, endWordEnd);
@@ -196,14 +209,15 @@ function classifyEnd(
   const keyword = readBareWord(text, keywordAt);
   if (!keyword || !SQL_END_FOLLOWER.has(keyword.word)) return close;
   if (!isBareSqlKeyword(text, keywordAt, keyword.end, trivia)) return close;
+  const action = compoundEndAction(keyword.word, innermost);
   if (finishesCompound(text, keyword.end, trivia)) {
-    return { action: keyword.word === "case" ? "case" : "noop", resume: keyword.end };
+    return { action, resume: keyword.end };
   }
   const labelAt = nextSignificant(trivia, keyword.end);
   if (isOwnLineGo(text, labelAt)) return close;
   const labelEnd = identifierEnd(text, labelAt);
   if (labelEnd === null || !finishesCompound(text, labelEnd, trivia)) return close;
-  return { action: keyword.word === "case" ? "case" : "noop", resume: labelEnd };
+  return { action, resume: labelEnd };
 }
 
 function closeInnermostCase(stack: SqlBlockFrame[]): void {
@@ -227,7 +241,7 @@ function advanceSqlBlockWord(text: string, index: number, stack: SqlBlockFrame[]
     return read.end;
   }
   if (read.word !== "end") return read.end;
-  const classified = classifyEnd(text, read.end, trivia);
+  const classified = classifyEnd(text, read.end, trivia, stack[stack.length - 1]);
   if (classified.action === "case") closeInnermostCase(stack);
   else if (classified.action === "close") stack.pop();
   return classified.resume;
@@ -650,9 +664,10 @@ function extractReadFacts(text: string): SqlFactDraft[] {
 
 /**
  * The text between a routine body's BEGIN and its matching END. A BEGIN inside parentheses, as in
- * a parameter named begin, is not the body. Bare CASE opens a frame and `END CASE` closes that
- * frame. `END IF`, `END LOOP`, `END WHILE`, `END REPEAT`, and `END FOR` close nothing, and any
- * other END closes the innermost frame. A variable or qualified name such as `@case` or `t . case`
+ * a parameter named begin, is not the body. Bare CASE opens a frame and `END CASE` closes the
+ * innermost CASE. `END IF`, `END LOOP`, `END WHILE`, `END REPEAT`, and `END FOR` close nothing
+ * when the innermost frame is BEGIN, and close a CASE when that is the innermost frame. Any other
+ * END closes the innermost frame. A variable or qualified name such as `@case` or `t . case`
  * is not a block keyword. Null when the statement has no such body. A dollar-quoted body is already
  * blank, so only a BEGIN/END that the statement splitter kept as one statement is read.
  */

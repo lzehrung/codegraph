@@ -2069,4 +2069,70 @@ describe("SQL routine call sites", () => {
       expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
     });
   });
+
+  it("indexes the table after a trigger CASE ends with the alias loop, while, or for", async () => {
+    for (const alias of ["loop", "while", "for"]) {
+      const use = [
+        `CREATE TRIGGER t AFTER INSERT ON a BEGIN SELECT CASE WHEN NEW.id = 1 THEN 1 ELSE 0 END ${alias}; END;`,
+        "CREATE TABLE b (id integer);",
+      ];
+      await withSqlProject({ "use.sql": use }, async (project) => {
+        const symbols = listSymbols(project.index, { file: project.file("use.sql") });
+        expect(symbols.map((symbol) => symbol.name).sort()).toEqual(["b", "t"]);
+        expect(symbols.find((symbol) => symbol.name === "b")?.range?.start.line).toBe(2);
+      });
+    }
+  });
+
+  it("keeps the read after a procedure CASE ends at FOR UPDATE", async () => {
+    const schema = ["CREATE TABLE users (id integer);", "CREATE TABLE accounts (id integer);"];
+    const use = [
+      "CREATE PROCEDURE p AS BEGIN",
+      "  SELECT id FROM users ORDER BY CASE WHEN id = 1 THEN 0 ELSE 1 END FOR UPDATE;",
+      "  SELECT id FROM accounts;",
+      "END;",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      expect(
+        listSymbols(project.index, { file: project.file("use.sql") })
+          .map((symbol) => symbol.name)
+          .sort(),
+      ).toEqual(["p"]);
+      const users = await referencesAt(project, "schema.sql", schema, 1, "users");
+      const accounts = await referencesAt(project, "schema.sql", schema, 2, "accounts");
+      expect(referenceSites(project.root, users)).toEqual(
+        [siteAt("schema.sql", schema, 1, "users"), siteAt("use.sql", use, 2, "users")].sort(),
+      );
+      expect(referenceSites(project.root, accounts)).toEqual(
+        [siteAt("schema.sql", schema, 2, "accounts"), siteAt("use.sql", use, 3, "accounts")].sort(),
+      );
+      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    });
+  });
+
+  it("keeps the tail read when END LOOP inside BEGIN closes nothing", async () => {
+    const schema = ["CREATE TABLE users (id integer);", "CREATE TABLE accounts (id integer);"];
+    const use = [
+      "CREATE PROCEDURE p AS BEGIN",
+      "  LOOP",
+      "    SELECT id FROM users;",
+      "  END LOOP;",
+      "  SELECT id FROM accounts;",
+      "END;",
+      "CREATE TABLE b (id integer);",
+    ];
+    await withSqlProject({ "schema.sql": schema, "use.sql": use }, async (project) => {
+      expect(
+        listSymbols(project.index, { file: project.file("use.sql") })
+          .map((symbol) => symbol.name)
+          .sort(),
+      ).toEqual(["b", "p"]);
+      const accounts = await referencesAt(project, "schema.sql", schema, 2, "accounts");
+      expect(referenceSites(project.root, accounts)).toEqual(
+        [siteAt("schema.sql", schema, 2, "accounts"), siteAt("use.sql", use, 5, "accounts")].sort(),
+      );
+      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    });
+  });
 });
