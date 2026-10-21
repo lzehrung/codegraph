@@ -185,14 +185,14 @@ describe("codegraph MCP handlers", () => {
 
       try {
         await server.connect(transport);
-        input.end(
+        input.write(
           [
             "",
             "\r",
             "{bad}\r",
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}\r',
             '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}',
-          ].join("\n"),
+          ].join("\n") + "\n",
         );
         await vi.waitFor(() => {
           const responses = frames
@@ -207,6 +207,7 @@ describe("codegraph MCP handlers", () => {
             expect.arrayContaining([expect.objectContaining({ id: 2, result: expect.anything() })]),
           );
         });
+        input.end();
       } finally {
         await server.close();
         await fs.rm(root, { recursive: true, force: true });
