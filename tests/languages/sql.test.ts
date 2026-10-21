@@ -360,7 +360,10 @@ describe("SQL routine call sites", () => {
       for (const name of ["tick", "tock"]) {
         const definitionLine = name === "tick" ? 3 : 4;
         const refs = okReferences(await referencesAt(project, "schema.sql", schema, definitionLine, name));
-        expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        // tree-sitter-sequel parses neither the bodiless MySQL routine nor these procedure
+        // definitions, so the ERROR ranges that hold the names make coverage partial.
+        expect(refs.referenceCoverage).toMatchObject({ state: "partial", reasons: ["parse_error"] });
+        expect(refs.referenceCoverage?.affectedFiles).toContain(project.file("mysql.sql"));
         expect(referenceSites(project.root, refs)).toContain(siteAt("mysql.sql", mysql, 2, name));
       }
     });
@@ -1760,7 +1763,13 @@ describe("SQL routine call sites", () => {
           siteAt("use.sql", use, 3, "users"),
         ].sort(),
       );
-      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      // The T-SQL procedure bodies are ERROR regions in tree-sitter-sequel, so coverage is partial.
+      expect(okReferences(users).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
     });
   });
 
