@@ -271,7 +271,18 @@ const ROUTINE_CHARACTERISTICS = new Set([
 /** A nested compound of the same keyword starts after one of these, or after a semicolon. */
 const COMPOUND_NEST_WORDS = new Set(["begin", "do", "else", "elseif", "loop", "repeat", "then"]);
 /** Words that mean the body is not a bare compound statement. */
-const ROUTINE_BODY_STOP = new Set(["as", "begin", "call", "declare", "delete", "insert", "perform", "return", "select", "update"]);
+const ROUTINE_BODY_STOP = new Set([
+  "as",
+  "begin",
+  "call",
+  "declare",
+  "delete",
+  "insert",
+  "perform",
+  "return",
+  "select",
+  "update",
+]);
 
 type RoutineCompound = { keywordEnd: number; depth: number };
 type RoutineHead =

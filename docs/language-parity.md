@@ -212,6 +212,7 @@ Vue and Svelte show `Partial` for the native addon because the addon parses thei
 - SQL PR impact mapping is object level. A changed `CREATE TABLE users` becomes a changed symbol, and only files that read that object are impacted, with a symbol-level `directRef` reason; the changed file itself is listed too, as for other languages, and a file that reads a different object in the same changed file is not impacted. A routine call counts as a read of the routine, so a changed `CREATE FUNCTION` reaches the files that call it. A changed `.sql` file whose statements cannot be mapped still falls back to `fileLevelChange`. Call compatibility stays out of scope because SQL has no callables.
 - Application-code strings are not globally linked to SQL objects. The review-context bridge examines only SQL-shaped string or template literal content, so source comments and ordinary identifiers do not surface SQL facts.
 - A nested procedural `CASE` containing an `IF` inside a `BEGIN` inside a `CASE` truncates the routine range; references are still found.
+- A MySQL routine body without `BEGIN` (a bare `IF`, `LOOP`, `REPEAT`, `WHILE`, or `CASE`) is matched by nesting depth only: a scalar `IF(...)` or `REPEAT(...)` call inside it can extend the routine past its end, and a long body of this kind scans slowly. Tree-first SQL extraction (#408) replaces this tracker.
 
 ### Terraform
 
