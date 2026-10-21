@@ -34,11 +34,13 @@ import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import {
+  directModuleValueEntry,
   javaKotlinFunctionOverloadIncludes,
   javaStaticNamedImportIncludes,
   resolveExport,
   resolveImported,
 } from "./navigation-resolve.js";
+import { getLanguageById } from "../languages/registry.js";
 import { isAmbiguousResolutionReason } from "./ambiguous-resolution.js";
 import {
   ensurePhpNamespaceSymbolIndex,
@@ -1398,13 +1400,18 @@ function containsIdentifierToken(text: string, identifier: string, languageId: s
   }
   // PHP class, function, and method names are case-insensitive; Terraform names may contain `-`.
   const foldCase = languageId === "php" && isPhpCaseInsensitiveSymbolKind(symbolKind);
-  const haystack = foldCase ? foldPhpIdentifierCase(text) : text;
-  const needle = foldCase ? foldPhpIdentifierCase(identifier) : identifier;
-  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const normalize = getLanguageById(languageId)?.normalizeIdentifier ?? ((name: string) => name);
+  const normalizeForMatch = (name: string): string => {
+    const normalized = normalize(name);
+    return foldCase ? foldPhpIdentifierCase(normalized) : normalized;
+  };
+  const target = normalizeForMatch(identifier);
   const continuation =
     languageId === "terraform" ? "\\p{ID_Continue}$_\\u200c\\u200d-" : "\\p{ID_Continue}$_\\u200c\\u200d";
-  const pattern = new RegExp(`(?<![${continuation}])${escaped}(?![${continuation}])`, "u");
-  return pattern.test(haystack);
+  const tokens = new RegExp(`@?[\\p{ID_Start}_$][${continuation}]*`, "gu");
+  let match: RegExpExecArray | null;
+  while ((match = tokens.exec(text))) if (normalizeForMatch(match[0]) === target) return true;
+  return false;
 }
 
 export function buildIndexedCandidateCoverage(args: {
@@ -1470,11 +1477,21 @@ export function buildIndexedCandidateCoverage(args: {
           importCanReferenceDefinition(index, imp, def, exportedNames, languageId)
         ) {
           names.add(imp.local);
-        } else if (
-          (imp.kind === "namespace" || imp.kind === "star") &&
-          importCanReferenceDefinition(index, imp, def, exportedNames, languageId)
-        ) {
-          // `ns.visible` or a star-imported name uses the exported spelling, not the local one.
+        } else if (imp.kind === "namespace") {
+          const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
+          const targetModule = targetFile ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
+          const directValue =
+            imp.mechanism === "cjs" && targetModule ? directModuleValueEntry(targetModule) : undefined;
+          if (directValue && sameDef(directValue.target, def, index.languageExtensions)) names.add(imp.localNS);
+          if (importCanReferenceDefinition(index, imp, def, exportedNames, languageId)) {
+            // `ns.visible` uses the exported spelling, not the local namespace binding.
+            for (const exportedName of exportedNames) if (exportedName !== "default") names.add(exportedName);
+          }
+          const defaultExport = targetFile ? resolveExport(index, targetFile, "default") : undefined;
+          if (defaultExport?.kind === "resolved" && sameDef(defaultExport.def, def, index.languageExtensions)) {
+            names.add("default");
+          }
+        } else if (imp.kind === "star" && importCanReferenceDefinition(index, imp, def, exportedNames, languageId)) {
           for (const exportedName of exportedNames) if (exportedName !== "default") names.add(exportedName);
         }
       }

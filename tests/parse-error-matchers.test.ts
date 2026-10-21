@@ -114,6 +114,85 @@ describe("parse-error coverage name matching", () => {
     });
   });
 
+  describe("normalized ERROR identifiers", () => {
+    it("matches C# verbatim identifiers with their normalized spelling", async () => {
+      const { coverage, file } = await findCoverage(
+        {
+          "widget.cs": "class Widget {}\n",
+          "broken.cs": "class Broken { void M() { @Widget ???; } }\n",
+        },
+        { file: "widget.cs", name: "Widget" },
+      );
+      expect(coverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [file("broken.cs")],
+      });
+    });
+
+    it("matches PHP property identifiers without folding property case", async () => {
+      const { coverage, file } = await findCoverage(
+        {
+          "box.php": "<?php\nclass Box { public $field; }\n",
+          "broken.php": "<?php\n$box->field( ; }\n",
+        },
+        { file: "box.php", name: "$field" },
+      );
+      expect(coverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [file("broken.php")],
+      });
+    });
+  });
+
+  describe("namespace default values", () => {
+    it("matches a CommonJS require binding of a directly exported module value", async () => {
+      const { coverage, file } = await findCoverage(
+        {
+          "definition.js": "function target() {}\nmodule.exports = target;\n",
+          "use.js": 'const alias = require("./definition");\nconst broken = <alias;\n',
+        },
+        { file: "definition.js", name: "target" },
+      );
+      expect(coverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [file("use.js")],
+      });
+    });
+
+    it("matches ns.default only when default resolves to the target", async () => {
+      const { coverage, file } = await findCoverage(
+        {
+          "definition.ts": "function target() {}\nexport default target;\n",
+          "use.ts": 'import * as ns from "./definition";\nconst broken = <ns.default;\n',
+        },
+        { file: "definition.ts", name: "target" },
+      );
+      expect(coverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [file("use.ts")],
+      });
+    });
+
+    it("does not match an unrelated default export or unrelated namespace import", async () => {
+      const { coverage } = await findCoverage(
+        {
+          "definition.ts": "function target() {}\nexport function other() {}\n",
+          "other.ts": "function unrelated() {}\nexport default unrelated;\n",
+          "use.ts": 'import * as ns from "./other";\nconst broken = <ns.default;\n',
+        },
+        { file: "definition.ts", name: "target" },
+      );
+      expect(coverage).toEqual(complete);
+    });
+  });
   describe("TypeScript namespace imports", () => {
     const lib = "function internal() {}\nexport { internal as visible };\nexport function other() {}\n";
 
