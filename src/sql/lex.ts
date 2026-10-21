@@ -198,6 +198,8 @@ function keepSingleQuotedSqlBody(
   statement: string,
   open: number,
   options: SqlMaskOptions,
+  spans: Array<[number, number]> | null,
+  base: number,
 ): { masked: string; next: number } {
   let cursor = open + 1;
   let body = "";
@@ -216,7 +218,7 @@ function keepSingleQuotedSqlBody(
     ...(options.nestedBlockComments ? { nestedBlockComments: true } : {}),
     ...(options.escapeStrings ? { escapeStrings: true } : {}),
   };
-  let masked = " " + maskSqlStringsAndComments(body, bodyOptions);
+  let masked = " " + maskSqlStringsAndComments(body, bodyOptions, spans, base + open + 1);
   if (statement[cursor] === "'") {
     masked += " ";
     cursor += 1;
@@ -224,7 +226,16 @@ function keepSingleQuotedSqlBody(
   return { masked, next: cursor };
 }
 
-export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOptions): string {
+/**
+ * Blanks strings and comments without moving later offsets. When spans is set, each comment
+ * range is stored as base plus its index in statement. Omit both arguments to mask only.
+ */
+export function maskSqlStringsAndComments(
+  statement: string,
+  options?: SqlMaskOptions,
+  spans: Array<[number, number]> | null = null,
+  base = 0,
+): string {
   let out = "";
   let i = 0;
   let singleQuoted = false;
@@ -234,7 +245,9 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
   let bracketQuoted = false;
   let arrayDepth = 0;
   let lineComment = false;
+  let lineCommentStart = -1;
   let blockDepth = 0;
+  let blockOpen = -1;
   let dollarQuote: string | null = null;
 
   while (i < statement.length) {
@@ -242,7 +255,9 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
     const next = statement[i + 1] ?? "";
 
     if (char === "\n") {
+      if (lineComment && spans && lineCommentStart >= 0) spans.push([base + lineCommentStart, base + i]);
       lineComment = false;
+      lineCommentStart = -1;
       out += "\n";
       i += 1;
       continue;
@@ -257,6 +272,10 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
       }
       if (blockDepth && char === "*" && next === "/") {
         blockDepth -= 1;
+        if (blockDepth === 0 && spans && blockOpen >= 0) {
+          spans.push([base + blockOpen, base + i + 2]);
+          blockOpen = -1;
+        }
         out += "  ";
         i += 2;
         continue;
@@ -303,11 +322,13 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
 
     if (char === "-" && next === "-") {
       lineComment = true;
+      lineCommentStart = i;
       out += "  ";
       i += 2;
       continue;
     }
     if (char === "/" && next === "*") {
+      blockOpen = i;
       blockDepth = 1;
       out += "  ";
       i += 2;
@@ -315,7 +336,7 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
     }
     if (char === "'") {
       if (options?.keepSingleQuotedBody?.(out)) {
-        const kept = keepSingleQuotedSqlBody(statement, i, options);
+        const kept = keepSingleQuotedSqlBody(statement, i, options, spans, base);
         out += kept.masked;
         i = kept.next;
         continue;
@@ -358,7 +379,8 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
           ...(options.nestedBlockComments ? { nestedBlockComments: true } : {}),
           ...(options.escapeStrings ? { escapeStrings: true } : {}),
         };
-        out += " ".repeat(tag.length) + maskSqlStringsAndComments(statement.slice(bodyStart, bodyEnd), bodyOptions);
+        const bodyText = statement.slice(bodyStart, bodyEnd);
+        out += " ".repeat(tag.length) + maskSqlStringsAndComments(bodyText, bodyOptions, spans, base + bodyStart);
         i = bodyEnd;
         if (closeIndex >= 0) {
           out += " ".repeat(tag.length);
@@ -376,6 +398,8 @@ export function maskSqlStringsAndComments(statement: string, options?: SqlMaskOp
     out += char;
     i += 1;
   }
+  if (spans && lineComment && lineCommentStart >= 0) spans.push([base + lineCommentStart, base + statement.length]);
+  if (spans && blockDepth > 0 && blockOpen >= 0) spans.push([base + blockOpen, base + statement.length]);
   return out;
 }
 
@@ -397,15 +421,19 @@ const SQL_NONSTATEMENT_PREDECESSOR = new Set(["after", "before", "for", "instead
 /** Keywords that end a source clause because they start another statement. */
 const SQL_STATEMENT_BOUNDARY = new Set(["select", "update", "delete", "insert", "merge"]);
 
-/** A keyword is syntax only as a bare token, not a variable or a part of a dotted identifier. */
-export function isBareSqlKeyword(scan: string, start: number, end: number): boolean {
+/**
+ * A keyword is syntax only as a bare token, not a variable or a part of a dotted identifier.
+ * Whitespace and comments do not break the qualification, as in `t . where` or a dot, a comment, then `where`.
+ * A dot that starts a decimal literal, as in `CASE .5`, does not qualify the word before it.
+ * `trivia`, when passed, is the forward mask's boundary table for this text, so each look is one read.
+ */
+export function isBareSqlKeyword(scan: string, start: number, end: number, trivia?: SqlTriviaBoundaries): boolean {
   if (/[\w$@#:]/.test(scan[start - 1] ?? "") || /[\w$@#:]/.test(scan[end] ?? "")) return false;
-  let before = start - 1;
-  while (before >= 0 && /\s/.test(scan[before] ?? "")) before -= 1;
-  if (scan[before] === ".") return false;
-  let after = end;
-  while (after < scan.length && /\s/.test(scan[after] ?? "")) after += 1;
-  return scan[after] !== ".";
+  const before = skipTriviaBackward(scan, start, trivia);
+  if ((scan[before - 1] ?? "") === ".") return false;
+  const after = skipTriviaForward(scan, end, trivia);
+  if ((scan[after] ?? "") !== ".") return true;
+  return /\d/.test(scan[after + 1] ?? "");
 }
 
 /**
@@ -413,21 +441,27 @@ export function isBareSqlKeyword(scan: string, start: number, end: number): bool
  * one only as their own statement, so `FOR UPDATE` and `WHEN MATCHED THEN UPDATE` stay in the query
  * that contains them.
  */
-function opensSqlBindingScope(scan: string, wordStart: number, word: string): boolean {
-  if (!SQL_STATEMENT_BOUNDARY.has(word) || !isBareSqlKeyword(scan, wordStart, wordStart + word.length)) return false;
+function opensSqlBindingScope(scan: string, wordStart: number, word: string, trivia: SqlTriviaBoundaries): boolean {
+  if (!SQL_STATEMENT_BOUNDARY.has(word) || !isBareSqlKeyword(scan, wordStart, wordStart + word.length, trivia)) {
+    return false;
+  }
   if (word === "select") return true;
-  const previous = previousSignificantWord(scan, wordStart);
+  const previous = previousSignificantWord(scan, wordStart, trivia);
   return !previous || !SQL_NONSTATEMENT_PREDECESSOR.has(previous.word);
 }
 
 /** Track statement scopes and the parentheses enclosing each source clause in one lexical scan. */
-export function sqlQueryScopes(scan: string): {
+export function sqlQueryScopes(
+  scan: string,
+  trivia?: SqlTriviaBoundaries,
+): {
   at: (offset: number) => number;
   depthAt: (offset: number) => number;
   selectDepthAt: (offset: number) => number;
   enclosingEndAt: (offset: number) => number;
   parent: ReadonlyMap<number, number>;
 } {
+  const bounds = trivia ?? sqlTriviaBoundaries(scan);
   const changes = [{ start: 0, scope: 0, selectDepth: 0, depth: 0, open: -1 }];
   const parent = new Map<number, number>();
   const closes = new Map<number, number>();
@@ -436,10 +470,11 @@ export function sqlQueryScopes(scan: string): {
   let selectDepth = 0;
   for (const match of scan.matchAll(/[A-Za-z_][\w$]*|[()]/g)) {
     const start = match.index ?? 0;
-    if (match[0] === "(") {
+    const token = match[0] ?? "";
+    if (token === "(") {
       stack.push({ scope, selectDepth, open: start });
       changes.push({ start: start + 1, scope, selectDepth, depth: stack.length, open: start });
-    } else if (match[0] === ")") {
+    } else if (token === ")") {
       const enclosing = stack.pop();
       if (enclosing) {
         closes.set(enclosing.open, start);
@@ -447,7 +482,7 @@ export function sqlQueryScopes(scan: string): {
         selectDepth = enclosing.selectDepth;
         changes.push({ start: start + 1, scope, selectDepth, depth: stack.length, open: stack.at(-1)?.open ?? -1 });
       }
-    } else if (opensSqlBindingScope(scan, start, match[0].toLowerCase())) {
+    } else if (opensSqlBindingScope(scan, start, token.toLowerCase(), bounds)) {
       // A new statement or subquery. Its parent is the enclosing query, so a correlated
       // subquery still sees that statement's aliases and a sibling statement does not.
       scope = start + 1;
@@ -475,57 +510,127 @@ export function sqlQueryScopes(scan: string): {
   };
 }
 
-/** Where the block comment that ends at `end` opens, or -1 when it never does. `end` is the index just after the closing delimiter. */
-function blockCommentStart(text: string, end: number): number {
-  let depth = 1;
-  let cursor = end - 2;
-  while (cursor > 0) {
-    cursor -= 1;
-    if (text[cursor] === "/" && text[cursor - 1] === "*") {
-      depth += 1;
-      cursor -= 1;
-      continue;
-    }
-    if (text[cursor] === "*" && text[cursor - 1] === "/") {
-      depth -= 1;
-      if (depth === 0) return cursor - 1;
-      cursor -= 1;
-    }
+/**
+ * Where whitespace and comments sit in `text`. Built once from the forward mask, then each
+ * backward or forward skip is a table read. Comment spans come from that same mask, so a `--`
+ * inside a string or a quoted identifier is not a line comment.
+ */
+export type SqlTriviaBoundaries = {
+  /** Index `skipTriviaBackward` returns for each offset. Length is `text.length + 1`. */
+  readonly backward: Uint32Array;
+  /** Next non-trivia index at or after each offset. Length is `text.length + 1`. */
+  readonly forward: Uint32Array;
+};
+
+let triviaBuilds = 0;
+let triviaUncachedSkips = 0;
+let cachedTriviaText: string | null = null;
+let cachedTriviaKey = "";
+let cachedTrivia: SqlTriviaBoundaries | null = null;
+
+/** Counts of boundary tables built, and backward skips that were not given one. */
+export function sqlTriviaClassificationShape(): { readonly builds: number; readonly uncachedSkips: number } {
+  return { builds: triviaBuilds, uncachedSkips: triviaUncachedSkips };
+}
+
+export function resetSqlTriviaClassificationShape(): void {
+  triviaBuilds = 0;
+  triviaUncachedSkips = 0;
+}
+
+function maskOptionsKey(options?: SqlMaskOptions): string | null {
+  if (options?.keepDollarQuotedBody || options?.keepSingleQuotedBody) return null;
+  const array = options?.arrayBrackets ? "a" : "";
+  const nested = options?.nestedBlockComments ? "n" : "";
+  const escape = options?.escapeStrings ? "e" : "";
+  return array + nested + escape;
+}
+
+function triviaFromSpans(text: string, comments: readonly (readonly [number, number])[]): SqlTriviaBoundaries {
+  triviaBuilds += 1;
+  const length = text.length;
+  const trivia = new Uint8Array(length);
+  for (let index = 0; index < length; index += 1) {
+    if (/\s/.test(text[index] ?? "")) trivia[index] = 1;
   }
-  return -1;
+  for (const [start, end] of comments) {
+    const from = start > 0 ? start : 0;
+    const to = end < length ? end : length;
+    for (let index = from; index < to; index += 1) trivia[index] = 1;
+  }
+  const backward = new Uint32Array(length + 1);
+  let runStart = 0;
+  for (let index = 0; index <= length; index += 1) {
+    const previous = index > 0 ? trivia[index - 1] : 0;
+    if (previous !== 1) runStart = index;
+    backward[index] = runStart;
+  }
+  const forward = new Uint32Array(length + 1);
+  let nextCode = length;
+  forward[length] = length;
+  for (let index = length - 1; index >= 0; index -= 1) {
+    if (trivia[index] !== 1) nextCode = index;
+    forward[index] = nextCode;
+  }
+  return { backward, forward };
+}
+
+/** Trivia boundaries for `text`, from one forward mask. Offsets match `text` because the mask keeps length. */
+export function sqlTriviaBoundaries(text: string, options?: SqlMaskOptions): SqlTriviaBoundaries {
+  const spans: Array<[number, number]> = [];
+  maskSqlStringsAndComments(text, options, spans, 0);
+  return triviaFromSpans(text, spans);
+}
+
+function cachedTriviaBoundaries(text: string, options?: SqlMaskOptions): SqlTriviaBoundaries {
+  const key = maskOptionsKey(options);
+  if (key !== null && cachedTrivia && cachedTriviaText === text && cachedTriviaKey === key) return cachedTrivia;
+  const built = sqlTriviaBoundaries(text, options);
+  if (key !== null) {
+    cachedTriviaText = text;
+    cachedTriviaKey = key;
+    cachedTrivia = built;
+  }
+  return built;
+}
+
+function atBackward(trivia: SqlTriviaBoundaries, index: number): number {
+  const table = trivia.backward;
+  if (index <= 0) return 0;
+  if (index >= table.length) return table[table.length - 1] ?? 0;
+  return table[index] ?? index;
+}
+
+function atForward(trivia: SqlTriviaBoundaries, index: number): number {
+  const table = trivia.forward;
+  if (index < 0) return table[0] ?? 0;
+  if (index >= table.length) return table[table.length - 1] ?? index;
+  return table[index] ?? index;
 }
 
 /**
- * The index after the significant token that ends at `index`. Whitespace, line comments, and block
- * comments between tokens are skipped, however long they are.
+ * The index after the significant token that ends at `index`. Whitespace and comments between tokens
+ * are skipped. With `trivia` from one forward mask, the skip is one table read.
  */
-function skipTriviaBackward(text: string, index: number): number {
-  let cursor = index;
-  while (cursor > 0) {
-    const previous = text[cursor - 1] ?? "";
-    if (/\s/.test(previous)) {
-      cursor -= 1;
-      continue;
-    }
-    if (previous === "/" && text[cursor - 2] === "*") {
-      const open = blockCommentStart(text, cursor);
-      if (open < 0 || open >= cursor) return cursor;
-      cursor = open;
-      continue;
-    }
-    const lineStart = text.lastIndexOf("\n", cursor - 1) + 1;
-    const lineComment = text.lastIndexOf("--", cursor - 1);
-    if (lineComment >= lineStart) {
-      cursor = lineComment;
-      continue;
-    }
-    return cursor;
+export function skipTriviaBackward(text: string, index: number, trivia?: SqlTriviaBoundaries): number {
+  if (!trivia) {
+    triviaUncachedSkips += 1;
+    return atBackward(cachedTriviaBoundaries(text), index);
   }
-  return cursor;
+  return atBackward(trivia, index);
 }
 
-function previousSignificantWord(text: string, index: number): { word: string; from: number } | null {
-  const end = skipTriviaBackward(text, index);
+/** The index of the next significant token at or after `index`. Whitespace and comments between tokens are skipped. */
+function skipTriviaForward(text: string, index: number, trivia?: SqlTriviaBoundaries): number {
+  return atForward(trivia ?? cachedTriviaBoundaries(text), index);
+}
+
+function previousSignificantWord(
+  text: string,
+  index: number,
+  trivia: SqlTriviaBoundaries,
+): { word: string; from: number } | null {
+  const end = skipTriviaBackward(text, index, trivia);
   let start = end;
   while (start > 0 && /[A-Za-z0-9_$]/.test(text[start - 1] ?? "")) start -= 1;
   if (start === end) return null;
@@ -533,14 +638,14 @@ function previousSignificantWord(text: string, index: number): { word: string; f
 }
 
 /** `IS [NOT] DISTINCT FROM` compares values. The `FROM` is not a table source. */
-function isDistinctFromPredicate(scan: string, fromIndex: number): boolean {
-  const distinct = previousSignificantWord(scan, fromIndex);
+function isDistinctFromPredicate(scan: string, fromIndex: number, trivia: SqlTriviaBoundaries): boolean {
+  const distinct = previousSignificantWord(scan, fromIndex, trivia);
   if (distinct?.word !== "distinct") return false;
-  const middle = previousSignificantWord(scan, distinct.from);
+  const middle = previousSignificantWord(scan, distinct.from, trivia);
   if (!middle) return false;
   if (middle.word === "is") return true;
   if (middle.word !== "not") return false;
-  return previousSignificantWord(scan, middle.from)?.word === "is";
+  return previousSignificantWord(scan, middle.from, trivia)?.word === "is";
 }
 
 /**
@@ -549,14 +654,18 @@ function isDistinctFromPredicate(scan: string, fromIndex: number): boolean {
  * next statement (`SELECT`, `UPDATE`, `DELETE`, `INSERT`, or `MERGE`) at the same parenthesis
  * depth. A later statement in a `BEGIN`/`END` body therefore cannot become part of an earlier source list.
  */
-export function sqlSourceClauses(scan: string): Array<{
+export function sqlSourceClauses(
+  scan: string,
+  trivia?: SqlTriviaBoundaries,
+): Array<{
   kind: "from" | "using" | "join" | "apply";
   start: number;
   end: number;
   clauseEnd: number;
   depth: number;
 }> {
-  const scopes = sqlQueryScopes(scan);
+  const bounds = trivia ?? sqlTriviaBoundaries(scan);
+  const scopes = sqlQueryScopes(scan, bounds);
   const sources: Array<{
     kind: "from" | "using" | "join" | "apply";
     start: number;
@@ -569,11 +678,12 @@ export function sqlSourceClauses(scan: string): Array<{
   for (const match of scan.matchAll(/\b(from|using|join|apply)\b/gi)) {
     const start = match.index ?? 0;
     const depth = scopes.depthAt(start);
-    if (!isBareSqlKeyword(scan, start, start + match[0].length)) continue;
+    const keyword = match[0] ?? "";
+    if (!isBareSqlKeyword(scan, start, start + keyword.length, bounds)) continue;
     if (depth !== scopes.selectDepthAt(start)) continue;
-    const kind = match[1]!.toLowerCase() as "from" | "using" | "join" | "apply";
-    if (kind === "from" && isDistinctFromPredicate(scan, start)) continue;
-    const end = start + match[0].length;
+    const kind = (match[1] ?? "").toLowerCase() as "from" | "using" | "join" | "apply";
+    if (kind === "from" && isDistinctFromPredicate(scan, start, bounds)) continue;
+    const end = start + keyword.length;
     const scope = scopes.at(start);
     let clauseEnd = scopes.enclosingEndAt(start);
     boundaryRe.lastIndex = end;
@@ -582,11 +692,12 @@ export function sqlSourceClauses(scan: string): Array<{
       const at = boundary.index;
       if (at >= clauseEnd) break;
       if (scopes.depthAt(at) !== depth) continue;
-      if (boundary[0] !== ";" && !isBareSqlKeyword(scan, at, at + boundary[0].length)) continue;
-      const token = boundary[0].toLowerCase();
+      const token = boundary[0] ?? "";
+      if (token !== ";" && !isBareSqlKeyword(scan, at, at + token.length, bounds)) continue;
+      const lower = token.toLowerCase();
       // `;` and the next statement end the clause. That statement has already changed scope, so it
       // would not match the same-scope test below.
-      if (token === ";" || SQL_STATEMENT_BOUNDARY.has(token) || scopes.at(at) === scope) {
+      if (lower === ";" || SQL_STATEMENT_BOUNDARY.has(lower) || scopes.at(at) === scope) {
         clauseEnd = at;
         break;
       }

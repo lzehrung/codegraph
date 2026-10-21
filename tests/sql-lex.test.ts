@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { assertMcpSqliteQueryResourceBounded } from "../src/mcp/sqlite-guard.js";
 import {
+  isBareSqlKeyword,
   maskSqlQuotedIdentifiers,
   maskSqlStringsAndComments,
+  skipTriviaBackward,
   sqlQueryScopes,
   sqlSourceClauses,
+  sqlTriviaBoundaries,
 } from "../src/sql/lex.js";
 
 /** The text with runs of blanks and line breaks folded to one space, so a test names what stays and what goes. */
@@ -172,5 +175,26 @@ describe("SQL source clause bounds", () => {
     expect(sqlSourceClauses(masked).map((source) => masked.slice(source.end, source.clauseEnd).trim())).toEqual([
       "users u",
     ]);
+  });
+});
+
+describe("SQL trivia boundaries", () => {
+  it("skips a comment between a qualifier and a keyword in one table read", () => {
+    const block = `SELECT t. /* ${"x".repeat(300)} */ case FROM users`;
+    const trivia = sqlTriviaBoundaries(block);
+    const caseAt = block.lastIndexOf("case");
+    expect(block[skipTriviaBackward(block, caseAt, trivia) - 1]).toBe(".");
+    expect(isBareSqlKeyword(block, caseAt, caseAt + 4, trivia)).toBe(false);
+    expect(isBareSqlKeyword(block, caseAt, caseAt + 4)).toBe(false);
+
+    const line = "SELECT t.\n-- note\ncase FROM users";
+    const lineTrivia = sqlTriviaBoundaries(line);
+    const lineCase = line.lastIndexOf("case");
+    expect(line[skipTriviaBackward(line, lineCase, lineTrivia) - 1]).toBe(".");
+    expect(isBareSqlKeyword(line, lineCase, lineCase + 4, lineTrivia)).toBe(false);
+
+    const masked = maskSqlStringsAndComments(block);
+    const maskedTrivia = sqlTriviaBoundaries(masked);
+    expect(isBareSqlKeyword(masked, caseAt, caseAt + 4, maskedTrivia)).toBe(false);
   });
 });
