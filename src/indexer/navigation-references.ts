@@ -19,6 +19,7 @@ import {
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
   isInsidePhpUseDeclaration,
+  isPhpCaseInsensitiveSymbolKind,
   isPhpQualifiedReferenceNode,
   phpLastIdentifierSegment,
   readPhpNamespaceFromRange,
@@ -1380,7 +1381,7 @@ function parserDegradedCandidateFiles(
 
 const SQL_IDENTIFIER_CONTINUATION = /[\p{ID_Continue}$#\u200c\u200d]/u;
 
-function containsIdentifierToken(text: string, identifier: string, languageId: string): boolean {
+function containsIdentifierToken(text: string, identifier: string, languageId: string, symbolKind: string): boolean {
   if (!identifier) return false;
   if (languageId === "sql") {
     const pattern = createSqlObjectNameRegExp("gu");
@@ -1395,12 +1396,15 @@ function containsIdentifierToken(text: string, identifier: string, languageId: s
     }
     return false;
   }
-  const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const pattern = new RegExp(
-    `(?<![\\p{ID_Continue}$_\\u200c\\u200d])${escaped}(?![\\p{ID_Continue}$_\\u200c\\u200d])`,
-    "u",
-  );
-  return pattern.test(text);
+  // PHP class, function, and method names are case-insensitive; Terraform names may contain `-`.
+  const foldCase = languageId === "php" && isPhpCaseInsensitiveSymbolKind(symbolKind);
+  const haystack = foldCase ? foldPhpIdentifierCase(text) : text;
+  const needle = foldCase ? foldPhpIdentifierCase(identifier) : identifier;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const continuation =
+    languageId === "terraform" ? "\\p{ID_Continue}$_\\u200c\\u200d-" : "\\p{ID_Continue}$_\\u200c\\u200d";
+  const pattern = new RegExp(`(?<![${continuation}])${escaped}(?![${continuation}])`, "u");
+  return pattern.test(haystack);
 }
 
 export function buildIndexedCandidateCoverage(args: {
@@ -1466,12 +1470,18 @@ export function buildIndexedCandidateCoverage(args: {
           importCanReferenceDefinition(index, imp, def, exportedNames, languageId)
         ) {
           names.add(imp.local);
+        } else if (
+          (imp.kind === "namespace" || imp.kind === "star") &&
+          importCanReferenceDefinition(index, imp, def, exportedNames, languageId)
+        ) {
+          // `ns.visible` or a star-imported name uses the exported spelling, not the local one.
+          for (const exportedName of exportedNames) if (exportedName !== "default") names.add(exportedName);
         }
       }
       const referenceNames = [...names];
       if (
         parseErrorRanges.some((range) =>
-          referenceNames.some((name) => containsIdentifierToken(range.text, name, languageId)),
+          referenceNames.some((name) => containsIdentifierToken(range.text, name, languageId, def.kind)),
         )
       ) {
         parseErrorFiles.push(candidateFile);

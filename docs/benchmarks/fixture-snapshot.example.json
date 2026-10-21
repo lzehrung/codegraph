@@ -1,10 +1,10 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-21T05:37:07.980Z",
+  "generatedAt": "2026-10-21T07:21:36.082Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
   "numTotalTests": 876,
-  "numFailedTests": 2,
+  "numFailedTests": 0,
   "languages": [
     {
       "language": "AsciiDoc",
@@ -243,10 +243,10 @@
         "tests/languages/sql.test.ts"
       ],
       "tests": 73,
-      "passed": 71,
-      "failed": 2,
+      "passed": 73,
+      "failed": 0,
       "skipped": 0,
-      "status": "failing"
+      "status": "passing"
     },
     {
       "language": "Svelte",
