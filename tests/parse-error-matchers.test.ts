@@ -223,4 +223,83 @@ describe("parse-error coverage name matching", () => {
       expect(coverage).toEqual(complete);
     });
   });
+  describe("language-specific ERROR spellings", () => {
+    it("matches Python decorators and excludes unrelated decorator names", async () => {
+      const matched = await findCoverage(
+        {
+          "module.py": "def target(): pass\ndef unrelated(): pass\n",
+          "use.py": "from module import target\n@target( ;\ndef broken(): pass\n",
+        },
+        { file: "module.py", name: "target" },
+      );
+      expect(matched.coverage.state).toBe("partial");
+      const unrelated = await findCoverage(
+        {
+          "module.py": "def target(): pass\ndef unrelated(): pass\n",
+          "use.py": "from module import target\n@unrelated( ;\ndef broken(): pass\n",
+        },
+        { file: "module.py", name: "target" },
+      );
+      expect(unrelated.coverage).toEqual(complete);
+    });
+    it("matches Java annotation identifiers", async () => {
+      const { coverage } = await findCoverage(
+        { "Marker.java": "@interface AnnotatedMarker {}\n", "Use.java": "@AnnotatedMarker( ;\nclass Use {}\n" },
+        { file: "Marker.java", name: "AnnotatedMarker" },
+      );
+      expect(coverage.state).toBe("partial");
+    });
+    it("matches Ruby predicate, bang, and setter names but not near misses", async () => {
+      const ready = await findCoverage(
+        { "definition.rb": "def ready?; end\ndef m\n  ready?(1\nend\n" },
+        { file: "definition.rb", name: "ready?" },
+      );
+      const bang = await findCoverage(
+        { "definition.rb": "def save!; end\nfoo(1, save!(\n" },
+        { file: "definition.rb", name: "save!" },
+      );
+      const setter = await findCoverage(
+        { "definition.rb": "def foo=(v); end\ndef m\n  self.foo = \nend\n" },
+        { file: "definition.rb", name: "foo=" },
+      );
+      expect([ready.coverage.state, bang.coverage.state, setter.coverage.state]).toEqual([
+        "partial",
+        "partial",
+        "partial",
+      ]);
+      const unsuffixed = await findCoverage(
+        { "definition.rb": "def ready; end\ndef m\n  ready?(1\nend\n" },
+        { file: "definition.rb", name: "ready" },
+      );
+      const suffixed = await findCoverage(
+        { "definition.rb": "def ready?; end\ndef m\n  ready(1\nend\n" },
+        { file: "definition.rb", name: "ready?" },
+      );
+      const operator = await findCoverage(
+        { "definition.rb": "def a!; end\nfoo(1, a != b\n" },
+        { file: "definition.rb", name: "a!" },
+      );
+      expect([unsuffixed.coverage, suffixed.coverage, operator.coverage]).toEqual([complete, complete, complete]);
+    });
+  });
+  describe("renamed barrel namespace imports", () => {
+    const base = {
+      "source.ts": "export function target() {}\n",
+      "barrel.ts": 'export { target as visible } from "./source";\nexport function unrelated() {}\n',
+    };
+    it("matches the renamed export", async () => {
+      const { coverage } = await findCoverage(
+        { ...base, "use.ts": 'import * as ns from "./barrel";\nconst broken = <ns.visible;\n' },
+        { file: "source.ts", name: "target" },
+      );
+      expect(coverage.state).toBe("partial");
+    });
+    it("excludes an unrelated barrel export", async () => {
+      const { coverage } = await findCoverage(
+        { ...base, "use.ts": 'import * as ns from "./barrel";\nconst broken = <ns.unrelated;\n' },
+        { file: "source.ts", name: "target" },
+      );
+      expect(coverage).toEqual(complete);
+    });
+  });
 });

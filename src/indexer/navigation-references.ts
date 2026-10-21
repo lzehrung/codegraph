@@ -1408,9 +1408,22 @@ function containsIdentifierToken(text: string, identifier: string, languageId: s
   const target = normalizeForMatch(identifier);
   const continuation =
     languageId === "terraform" ? "\\p{ID_Continue}$_\\u200c\\u200d-" : "\\p{ID_Continue}$_\\u200c\\u200d";
-  const tokens = new RegExp(`@?[\\p{ID_Start}_$][${continuation}]*`, "gu");
+  const ruby = languageId === "ruby";
+  const csharp = languageId === "csharp";
+  const tokens = new RegExp(
+    `${csharp ? "@?" : ""}[\\p{ID_Start}_$][${continuation}]*${ruby ? "(?:[?!](?!=))?" : ""}`,
+    "gu",
+  );
   let match: RegExpExecArray | null;
-  while ((match = tokens.exec(text))) if (normalizeForMatch(match[0]) === target) return true;
+  while ((match = tokens.exec(text))) {
+    const token = normalizeForMatch(match[0]);
+    if (token === target) return true;
+    if (ruby && target.endsWith("=") && token === target.slice(0, -1)) {
+      let next = match.index + match[0].length;
+      while (next < text.length && /\s/u.test(text[next]!)) next++;
+      if (text[next] === "=") return true;
+    }
+  }
   return false;
 }
 
@@ -1486,6 +1499,17 @@ export function buildIndexedCandidateCoverage(args: {
           if (importCanReferenceDefinition(index, imp, def, exportedNames, languageId)) {
             // `ns.visible` uses the exported spelling, not the local namespace binding.
             for (const exportedName of exportedNames) if (exportedName !== "default") names.add(exportedName);
+          }
+          if (targetModule) {
+            for (const entry of targetModule.exports) {
+              if (entry.type === "exportStar") continue;
+              const exportedName = entry.exportedAs;
+              if (exportedName === "default") continue;
+              const resolved = resolveExport(index, targetModule.file, exportedName);
+              if (resolved?.kind === "resolved" && sameDef(resolved.def, def, index.languageExtensions)) {
+                names.add(exportedName);
+              }
+            }
           }
           const defaultExport = targetFile ? resolveExport(index, targetFile, "default") : undefined;
           if (defaultExport?.kind === "resolved" && sameDef(defaultExport.def, def, index.languageExtensions)) {
