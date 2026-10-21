@@ -160,7 +160,7 @@
   "description": "Multi-language repository map for agents and humans: MCP tools, dependency graphs, symbol indexes, impact review, and bounded source evidence.",
   "devDependencies": {
     "@eslint/js": "^9.39.2",
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.3.1",
     "@napi-rs/cli": "^3.5.1",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@types/node": "~22.16.0",
@@ -183,8 +183,8 @@
   "dependencies": {
     "@lzehrung/codegraph-core": "3.0.1",
     "@lzehrung/codegraph-native": "^2.0.1",
-    "@modelcontextprotocol/node": "^2.0.0",
-    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.1.1",
+    "@modelcontextprotocol/server": "^2.3.1",
     "jsonc-parser": "^3.3.1",
     "picomatch": "^4.0.3",
     "piscina": "^4.9.4",

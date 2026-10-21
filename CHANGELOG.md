@@ -38,6 +38,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - SCSS: find references on a mixin or function declared inside a block includes the bare calls and includes in that scope (`-` and `_` are the same character) and does not include a later use outside the block. Rename edits those local calls and is safe when the new name captures nothing.
 - SCSS: a dynamic lookup in the block where a scoped function or mixin is visible (`function-exists`, `get-function`, or `call` for a function; `mixin-exists` or `get-mixin` for a mixin; proved `sass:meta` or a legacy built-in; `-` and `_` equivalent) now makes reference coverage `partial` and rename unsafe. Proved calls and includes are still edited, and the lookup string is left unchanged. A lookup outside that block does not.
 
+### Security
+
+- Update the MCP SDK to `@modelcontextprotocol/server` 2.3.1 and `@modelcontextprotocol/node` 2.1.1 to fix GHSA-jm63-cq47-j5jp (shared HTTP transports could deliver one client's messages to another), GHSA-46jr-4wx8-v453 (one request could exhaust server memory during validation), and GHSA-rvq5-wwqv-78pq (bearer tokens for another service were accepted). With this SDK, a stdio server closes when stdin ends, so a request still unanswered at that moment gets no reply; clients that keep stdin open are unaffected.
+
 ## [3.0.1] - 2026-10-17
 
 ### Added
