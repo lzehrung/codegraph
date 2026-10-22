@@ -573,8 +573,24 @@ async function buildIndexedModuleForFile(args: {
     if (parsed) {
       tree = parsed.tree;
       setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
+    } else {
+      recordParserBackendDegradation(args.report, {
+        file: args.file,
+        languageId: sup.id,
+        ...(parseAttempt.nativeFallbackReason ? { nativeFallbackReason: parseAttempt.nativeFallbackReason } : {}),
+        ...(parseAttempt.nativeError ? { nativeError: parseAttempt.nativeError } : {}),
+      });
     }
   }
+  if (sup.id === "sql" && !tree) {
+    recordParserBackendDegradation(args.report, {
+      file: args.file,
+      languageId: sup.id,
+      ...(prepared.nativeFallbackReason ? { nativeFallbackReason: prepared.nativeFallbackReason } : {}),
+      ...(prepared.nativeError ? { nativeError: prepared.nativeError } : {}),
+    });
+  }
+
   const lacksParserContext = !graphOnlyLanguage && !nativeQueries;
 
   if (args.bloomFilterCache && !nativeSourceLimitSkip) {

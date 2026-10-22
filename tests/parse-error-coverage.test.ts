@@ -1,8 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndexFromFiles, findReferences, type BuildReport } from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexFromFiles, findReferences, type BuildReport } from "../src/index.js";
+import {
+  __resetNativeTreeSitterBindingForTests,
+  __setNativeTreeSitterBindingForTests,
+} from "../src/native/tree-sitter-native.js";
+import { loadBinding } from "../src/native/runtime.js";
+import { createStubNativeSyntaxTree } from "./helpers/native.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 
 const languages = [
@@ -78,6 +84,9 @@ async function findCoverage(
 }
 
 describe("parse-error reference coverage", () => {
+  afterEach(() => {
+    __resetNativeTreeSitterBindingForTests();
+  });
   it.each(languages.filter((language) => language.name !== "SCSS"))(
     "marks an affected $name file partial when it has an ERROR/MISSING range",
     async (language) => {
@@ -181,6 +190,64 @@ describe("parse-error reference coverage", () => {
     if (result.status !== "ok") return;
     expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
     expect(result.references.some((reference) => reference.file === consumerFile)).toBe(true);
+  });
+
+  it("marks SQL coverage parser-degraded when native parse-error projection is unavailable, including warm cache", async () => {
+    const loaded = loadBinding();
+    if (!loaded.loaded) throw new Error("Native addon required for SQL projection fallback test");
+    const originalExtractLanguage = loaded.binding.extractLanguage;
+    const legacyTree = createStubNativeSyntaxTree();
+    Reflect.deleteProperty(legacyTree, "isMissing");
+    __setNativeTreeSitterBindingForTests({
+      ...loaded,
+      binding: {
+        ...loaded.binding,
+        extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+          const extraction = originalExtractLanguage(
+            source,
+            languageId,
+            importsQuery,
+            exportsQuery,
+            localsQuery,
+            importBindingsQuery,
+          );
+          return languageId === "sql" && source.startsWith("SELECT normalize_email")
+            ? { ...extraction, syntaxTree: legacyTree }
+            : extraction;
+        },
+      },
+    });
+
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-parse-error-sql-legacy-"));
+    const definitionFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+    const consumerFile = path.join(root, "query.sql").replace(/\\/g, "/");
+    const definition = "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT e $$ LANGUAGE sql;\n";
+    const consumer = "SELECT normalize_email(email) FROM users;\nSELECT ( FROM users;\n";
+    const options = { cache: "disk" as const, threads: 1, useNativeWorkers: false };
+    try {
+      await fsp.writeFile(definitionFile, definition, "utf8");
+      await fsp.writeFile(consumerFile, consumer, "utf8");
+      for (const cacheState of ["cold", "warm"] as const) {
+        const report: BuildReport = { timings: {} };
+        const index = await buildProjectIndex(root, { ...options, report });
+        const result = await findReferences(index, {
+          file: definitionFile,
+          line: 1,
+          column: definition.indexOf("normalize_email") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["parser_degraded"],
+          affectedFiles: [consumerFile],
+        });
+        if (cacheState === "warm") expect(report.cache?.hits).toBeGreaterThan(0);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("preserves parse-error coverage through a warm per-file cache", async () => {
