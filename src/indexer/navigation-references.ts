@@ -1351,20 +1351,33 @@ function isUnresolvedIndexedImport(
 
 function parserDegradedCandidateFiles(
   index: ProjectIndex,
+  candidateFiles: readonly string[],
   scannedFiles: readonly string[],
 ): { files: FileId[]; hasUnlistedCandidate: boolean } {
   const report = index.buildReport?.backend?.parser;
-  if (!report) return { files: [], hasUnlistedCandidate: false };
   const scanned = new Set(scannedFiles.map((file) => fileIdentityKey(file)));
-  const listed = new Set(report.files.map((entry) => fileIdentityKey(entry.file)));
+  const listed = new Set(report?.files.map((entry) => fileIdentityKey(entry.file)) ?? []);
   const affected: FileId[] = [];
   const seen = new Set<string>();
-  for (const entry of report.files) {
-    const key = fileIdentityKey(entry.file);
-    if (!scanned.has(key) || seen.has(key)) continue;
-    seen.add(key);
-    affected.push(entry.file);
+  if (report) {
+    for (const entry of report.files) {
+      const key = fileIdentityKey(entry.file);
+      if (!scanned.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      affected.push(entry.file);
+    }
   }
+  const relevantFiles = new Map<string, FileId>();
+  for (const file of candidateFiles) relevantFiles.set(fileIdentityKey(file), file);
+  for (const file of scannedFiles) relevantFiles.set(fileIdentityKey(file), file);
+  for (const [key, file] of relevantFiles) {
+    const moduleIndex = index.byFile.get(key);
+    if (!moduleIndex || moduleIndex.parseErrorRanges !== undefined || seen.has(key)) continue;
+    seen.add(key);
+    affected.push(file);
+  }
+  if (!report) return { files: affected, hasUnlistedCandidate: false };
+
   let hasUnlistedCandidate = false;
   if (report.total > report.files.length) {
     for (const fileKey of scanned) {
@@ -1414,7 +1427,7 @@ export function buildIndexedCandidateCoverage(args: {
     affectedFiles.push(file);
   };
 
-  const degraded = parserDegradedCandidateFiles(index, scannedFiles);
+  const degraded = parserDegradedCandidateFiles(index, candidateFiles, scannedFiles);
   if (degraded.files.length || degraded.hasUnlistedCandidate) {
     reasons.push("parser_degraded");
     for (const file of degraded.files) addAffected(file);

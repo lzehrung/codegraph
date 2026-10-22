@@ -2,7 +2,13 @@ import { afterEach, describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, buildProjectIndexFromFiles, findReferences, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
+  findReferences,
+  type BuildReport,
+} from "../src/index.js";
 import {
   __resetNativeTreeSitterBindingForTests,
   __setNativeTreeSitterBindingForTests,
@@ -227,9 +233,16 @@ describe("parse-error reference coverage", () => {
     try {
       await fsp.writeFile(definitionFile, definition, "utf8");
       await fsp.writeFile(consumerFile, consumer, "utf8");
-      for (const cacheState of ["cold", "warm"] as const) {
+      await fsp.writeFile(path.join(root, "unrelated.sql"), "SELECT 1;\n", "utf8");
+      for (const cacheState of ["cold", "incremental"] as const) {
+        if (cacheState === "incremental") {
+          await fsp.writeFile(path.join(root, "unrelated.sql"), "SELECT 2;\n", "utf8");
+        }
         const report: BuildReport = { timings: {} };
-        const index = await buildProjectIndex(root, { ...options, report });
+        const index =
+          cacheState === "cold"
+            ? await buildProjectIndex(root, { ...options, report })
+            : await buildProjectIndexIncremental(root, { ...options, report });
         const result = await findReferences(index, {
           file: definitionFile,
           line: 1,
@@ -243,7 +256,10 @@ describe("parse-error reference coverage", () => {
           reasons: ["parser_degraded"],
           affectedFiles: [consumerFile],
         });
-        if (cacheState === "warm") expect(report.cache?.hits).toBeGreaterThan(0);
+        if (cacheState === "incremental") {
+          expect(report.manifest?.reused).toBe(true);
+          expect(report.backend?.parser).toBeUndefined();
+        }
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

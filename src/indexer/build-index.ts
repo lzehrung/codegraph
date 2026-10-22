@@ -649,7 +649,9 @@ async function buildIndexedModuleForFile(args: {
     });
   }
   mod.imports = imports;
-  mod.parseErrorRanges = tree instanceof ProjectedSyntaxTree ? collectParseErrorRanges(tree) : [];
+  if (tree instanceof ProjectedSyntaxTree) mod.parseErrorRanges = collectParseErrorRanges(tree);
+  else if (graphOnlyLanguage) mod.parseErrorRanges = [];
+  else delete mod.parseErrorRanges;
   if (sup.id === "cpp") {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
