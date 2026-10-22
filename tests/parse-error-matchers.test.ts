@@ -193,6 +193,77 @@ describe("parse-error coverage name matching", () => {
       expect(coverage).toEqual(complete);
     });
   });
+  describe("shorthand property identifiers", () => {
+    it("matches shorthand properties in JavaScript ERROR regions and excludes unrelated names", async () => {
+      const sources = {
+        "definition.js": "export function target() {}\nexport function other() {}\n",
+      };
+      const matched = await findCoverage(
+        { ...sources, "use.js": 'import { target } from "./definition";\nconst broken = ({ target } + ;\n' },
+        { file: "definition.js", name: "target" },
+      );
+      expect(matched.coverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [matched.file("use.js")],
+      });
+      const unrelated = await findCoverage(
+        { ...sources, "use.js": 'import { target } from "./definition";\nconst broken = ({ other } + ;\n' },
+        { file: "definition.js", name: "target" },
+      );
+      expect(unrelated.coverage).toEqual(complete);
+    });
+
+    it("matches shorthand properties in TypeScript ERROR regions and excludes unrelated names", async () => {
+      const sources = {
+        "definition.ts": "export function target() {}\nexport function other() {}\n",
+      };
+      const matched = await findCoverage(
+        { ...sources, "use.ts": 'import { target } from "./definition";\nconst broken = ({ target } + ;\n' },
+        { file: "definition.ts", name: "target" },
+      );
+      expect(matched.coverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [matched.file("use.ts")],
+      });
+      const unrelated = await findCoverage(
+        { ...sources, "use.ts": 'import { target } from "./definition";\nconst broken = ({ other } + ;\n' },
+        { file: "definition.ts", name: "target" },
+      );
+      expect(unrelated.coverage).toEqual(complete);
+    });
+  });
+
+  describe("CommonJS default-only bindings", () => {
+    it("matches a default-only module value required through CommonJS and excludes unrelated modules", async () => {
+      const matched = await findCoverage(
+        {
+          "definition.ts": "export default function target() {}\n",
+          "use.js": 'const alias = require("./definition");\nconst broken = <alias;\n',
+        },
+        { file: "definition.ts", name: "target" },
+      );
+      expect(matched.coverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [matched.file("use.js")],
+      });
+
+      const unrelated = await findCoverage(
+        {
+          "definition.ts": "export default function target() {}\n",
+          "other.ts": "export default function unrelated() {}\n",
+          "use.js": 'const alias = require("./other");\nconst broken = <alias;\n',
+        },
+        { file: "definition.ts", name: "target" },
+      );
+      expect(unrelated.coverage).toEqual(complete);
+    });
+  });
   describe("TypeScript namespace imports", () => {
     const lib = "function internal() {}\nexport { internal as visible };\nexport function other() {}\n";
 

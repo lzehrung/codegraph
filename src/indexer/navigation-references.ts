@@ -34,7 +34,7 @@ import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import {
-  directModuleValueEntry,
+  cjsRequireValueBinding,
   javaKotlinFunctionOverloadIncludes,
   javaStaticNamedImportIncludes,
   resolveExport,
@@ -1476,8 +1476,8 @@ export function buildIndexedCandidateCoverage(args: {
           const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
           const targetModule = targetFile ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
           const directValue =
-            imp.mechanism === "cjs" && targetModule ? directModuleValueEntry(targetModule) : undefined;
-          if (directValue && sameDef(directValue.target, def, index.languageExtensions)) names.add(imp.localNS);
+            imp.mechanism === "cjs" && targetFile ? cjsRequireValueBinding(index, targetFile) : undefined;
+          if (directValue && sameDef(directValue, def, index.languageExtensions)) names.add(imp.localNS);
           if (importCanReferenceDefinition(index, imp, def, exportedNames, languageId)) {
             // `ns.visible` uses the exported spelling, not the local namespace binding.
             for (const exportedName of exportedNames) if (exportedName !== "default") names.add(exportedName);

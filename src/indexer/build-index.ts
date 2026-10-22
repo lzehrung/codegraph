@@ -240,6 +240,7 @@ function collectParseErrorRanges(source: string, tree: ProjectedSyntaxTree, sup:
   const columns = tree.columns;
   const identifierTypes = new Set(sup.nodeTypes?.identifier ?? []);
   for (const type of sup.nodeTypes?.propertyIdentifier ?? []) identifierTypes.add(type);
+  for (const type of sup.nodeTypes?.shorthandPropertyIdentifier ?? []) identifierTypes.add(type);
   const isParseErrorNode = (nodeId: number): boolean => {
     const kind = columns.kinds[columns.kindIds[nodeId]!]!;
     return kind === "ERROR" || columns.isMissing[nodeId] !== 0;
