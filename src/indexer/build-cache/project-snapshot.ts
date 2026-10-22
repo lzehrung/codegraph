@@ -25,6 +25,7 @@ import type {
   ProjectIndex,
   SymbolDef,
   BuildReport,
+  ParseErrorRange,
 } from "../types.js";
 import {
   buildSymbolGraph,
@@ -954,6 +955,7 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     locals: [...mod.locals],
     ...(mod.docstringsChecked ? { docstringsChecked: true } : {}),
     ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
+    ...(mod.parseErrorRanges ? { parseErrorRanges: mod.parseErrorRanges } : {}),
   };
 }
 
@@ -1834,7 +1836,20 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     Array.isArray(moduleIndex.imports) &&
     moduleIndex.imports.every(isImportBinding) &&
     Array.isArray(moduleIndex.exports) &&
-    moduleIndex.exports.every(isExportEntry)
+    moduleIndex.exports.every(isExportEntry) &&
+    (moduleIndex.parseErrorRanges === undefined ||
+      (Array.isArray(moduleIndex.parseErrorRanges) && moduleIndex.parseErrorRanges.every(isParseErrorRange)))
+  );
+}
+
+function isParseErrorRange(value: unknown): value is ParseErrorRange {
+  if (!value || typeof value !== "object") return false;
+  const range = value as { startIndex?: unknown; endIndex?: unknown };
+  const startIndex = range.startIndex;
+  const endIndex = range.endIndex;
+  if (typeof startIndex !== "number" || typeof endIndex !== "number") return false;
+  return (
+    Number.isSafeInteger(startIndex) && Number.isSafeInteger(endIndex) && startIndex >= 0 && endIndex >= startIndex
   );
 }
 

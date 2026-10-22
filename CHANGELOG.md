@@ -16,6 +16,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Changed
 
 - GitHub release descriptions now include the changelog section for the released version.
+- For non-SCSS definitions, any candidate or scanned file with an outermost Tree-sitter `ERROR` or `MISSING` range makes find-references coverage `partial` with `parse_error` and marks that file affected, regardless of the range contents. SCSS remains exempt because its grammar reports `ERROR` on supported module syntax. Files without a usable native syntax-tree projection are also marked `parser_degraded`, including on warm-cache rebuilds.
 
 ### Fixed
 

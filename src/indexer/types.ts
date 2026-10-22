@@ -53,6 +53,11 @@ export type SymbolDef = {
   complexity?: number;
 };
 
+export type ParseErrorRange = {
+  startIndex: number;
+  endIndex: number;
+};
+
 export type ExportEntry =
   | {
       type: "local";
@@ -98,6 +103,8 @@ export type ModuleIndex = {
    * consumers whose imports name a container this build changed.
    */
   declaredContainers?: string[];
+  /** Outermost Tree-sitter ERROR/MISSING ranges. */
+  parseErrorRanges?: ParseErrorRange[];
 };
 
 export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "namespace"; file: FileId };
@@ -451,6 +458,7 @@ export type ReferenceCoverageReason =
   | "unresolved_import"
   | "strategy_unavailable"
   | "name_equivalence_unavailable"
+  | "parse_error"
   | "truncated";
 
 export type ReferenceCoverage = {

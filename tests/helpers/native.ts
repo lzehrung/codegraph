@@ -16,6 +16,7 @@ export function createStubNativeSyntaxTree(kind: string = "program"): NativeSynt
     kindIds: Uint32Array.of(0),
     parentIds: Int32Array.of(-1),
     named: Uint8Array.of(1),
+    isMissing: Uint8Array.of(0),
     startRow: Uint32Array.of(0),
     startColumn: Uint32Array.of(0),
     startIndex: Uint32Array.of(0),

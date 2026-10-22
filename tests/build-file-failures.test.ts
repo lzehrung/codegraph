@@ -29,5 +29,8 @@ describe("default build file failures", () => {
         message: "injected extraction failure",
       },
     ]);
+    expect(
+      [...index.byFile.values()].find((module) => module.file === file.replace(/\\/g, "/"))?.parseErrorRanges,
+    ).toBeUndefined();
   });
 });

@@ -24,6 +24,11 @@ describe("isColumnarSyntaxTree", () => {
     expect(isColumnarSyntaxTree(withoutNodeCount)).toBe(false);
   });
 
+  it("rejects a columnar tree without missing-node flags", () => {
+    const tree = createStubNativeSyntaxTree();
+    expect(isColumnarSyntaxTree({ ...tree, isMissing: undefined })).toBe(false);
+  });
+
   it("rejects non-object and null values", () => {
     expect(isColumnarSyntaxTree(null)).toBe(false);
     expect(isColumnarSyntaxTree(undefined)).toBe(false);

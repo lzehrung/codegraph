@@ -1132,6 +1132,7 @@ export function getCachedReferenceCandidateFiles(
  */
 export const REFERENCE_COVERAGE_REASON_ORDER: readonly ReferenceCoverageReason[] = [
   "parser_degraded",
+  "parse_error",
   "unresolved_import",
   "strategy_unavailable",
   "name_equivalence_unavailable",
@@ -1350,20 +1351,33 @@ function isUnresolvedIndexedImport(
 
 function parserDegradedCandidateFiles(
   index: ProjectIndex,
+  candidateFiles: readonly string[],
   scannedFiles: readonly string[],
 ): { files: FileId[]; hasUnlistedCandidate: boolean } {
   const report = index.buildReport?.backend?.parser;
-  if (!report) return { files: [], hasUnlistedCandidate: false };
   const scanned = new Set(scannedFiles.map((file) => fileIdentityKey(file)));
-  const listed = new Set(report.files.map((entry) => fileIdentityKey(entry.file)));
+  const listed = new Set(report?.files.map((entry) => fileIdentityKey(entry.file)) ?? []);
   const affected: FileId[] = [];
   const seen = new Set<string>();
-  for (const entry of report.files) {
-    const key = fileIdentityKey(entry.file);
-    if (!scanned.has(key) || seen.has(key)) continue;
-    seen.add(key);
-    affected.push(entry.file);
+  if (report) {
+    for (const entry of report.files) {
+      const key = fileIdentityKey(entry.file);
+      if (!scanned.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      affected.push(entry.file);
+    }
   }
+  const relevantFiles = new Map<string, FileId>();
+  for (const file of candidateFiles) relevantFiles.set(fileIdentityKey(file), file);
+  for (const file of scannedFiles) relevantFiles.set(fileIdentityKey(file), file);
+  for (const [key, file] of relevantFiles) {
+    const moduleIndex = index.byFile.get(key);
+    if (!moduleIndex || moduleIndex.parseErrorRanges !== undefined || seen.has(key)) continue;
+    seen.add(key);
+    affected.push(file);
+  }
+  if (!report) return { files: affected, hasUnlistedCandidate: false };
+
   let hasUnlistedCandidate = false;
   if (report.total > report.files.length) {
     for (const fileKey of scanned) {
@@ -1413,10 +1427,30 @@ export function buildIndexedCandidateCoverage(args: {
     affectedFiles.push(file);
   };
 
-  const degraded = parserDegradedCandidateFiles(index, scannedFiles);
+  const degraded = parserDegradedCandidateFiles(index, candidateFiles, scannedFiles);
   if (degraded.files.length || degraded.hasUnlistedCandidate) {
     reasons.push("parser_degraded");
     for (const file of degraded.files) addAffected(file);
+  }
+
+  if (languageId !== "scss") {
+    // tree-sitter-scss reports ERROR on supported module syntax; revisit after the planned grammar fork.
+    const parseErrorCandidates = new Map<string, FileId>();
+    for (const file of candidateFiles) parseErrorCandidates.set(fileIdentityKey(file), file);
+    for (const file of scannedFiles) parseErrorCandidates.set(fileIdentityKey(file), file);
+
+    const parseErrorFiles: FileId[] = [];
+    for (const candidateFile of parseErrorCandidates.values()) {
+      const moduleIndex = index.byFile.get(fileIdentityKey(candidateFile));
+      const parseErrorRanges = moduleIndex?.parseErrorRanges;
+      if (!moduleIndex || !parseErrorRanges?.length) continue;
+
+      parseErrorFiles.push(candidateFile);
+    }
+    if (parseErrorFiles.length) {
+      reasons.push("parse_error");
+      for (const file of parseErrorFiles) addAffected(file);
+    }
   }
 
   const unresolvedFiles: FileId[] = [];

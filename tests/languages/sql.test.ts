@@ -354,13 +354,21 @@ describe("SQL routine call sites", () => {
 
       for (const table of ["users", "accounts"]) {
         const refs = okReferences(await referencesAt(project, "schema.sql", schema, table === "users" ? 1 : 2, table));
-        expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(refs.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["parse_error"],
+          affectedFiles: [project.file("mysql.sql"), project.file("schema.sql")],
+        });
         expect(referenceSites(project.root, refs)).toContain(siteAt("mysql.sql", mysql, 1, table));
       }
       for (const name of ["tick", "tock"]) {
         const definitionLine = name === "tick" ? 3 : 4;
         const refs = okReferences(await referencesAt(project, "schema.sql", schema, definitionLine, name));
-        expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        // tree-sitter-sequel parses neither the bodiless MySQL routine nor these procedure
+        // definitions, so the ERROR ranges that hold the names make coverage partial.
+        expect(refs.referenceCoverage).toMatchObject({ state: "partial", reasons: ["parse_error"] });
+        expect(refs.referenceCoverage?.affectedFiles).toContain(project.file("mysql.sql"));
         expect(referenceSites(project.root, refs)).toContain(siteAt("mysql.sql", mysql, 2, name));
       }
     });
@@ -601,7 +609,12 @@ describe("SQL routine call sites", () => {
           siteAt("schema.sql", schema, 3, "set_updated_at", 1),
         ].sort(),
       );
-      expect(okReferences(routine).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(routine).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("schema.sql")],
+      });
       expect(await gotoAt(project, "schema.sql", schema, 2, "set_updated_at", 1)).toBe("schema.sql:1");
       expect(await gotoAt(project, "schema.sql", schema, 3, "set_updated_at")).toBe("schema.sql:3");
       // Two triggers carry the name, so `DROP TRIGGER set_updated_at` cannot be tied to one of them.
@@ -1524,7 +1537,12 @@ describe("SQL routine call sites", () => {
           siteAt("mysql.sql", mysql, 2, "norm"),
         ].sort(),
       );
-      expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(result).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
       expect(await gotoAt(project, "use.sql", use, 6, "norm")).toBe("schema.sql:1");
     });
   });
@@ -1558,8 +1576,18 @@ describe("SQL routine call sites", () => {
           siteAt("use.sql", use, 2, "get_users"),
         ].sort(),
       );
-      expect(okReferences(table).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
-      expect(okReferences(routine).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(table).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
+      expect(okReferences(routine).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
       expect(await gotoAt(project, "use.sql", use, 1, "u.id")).toBe("schema.sql:1");
       expect(await gotoAt(project, "use.sql", use, 1, "g.id")).toBe("not_found");
       expect(await gotoAt(project, "use.sql", use, 2, "u.id")).toBe("schema.sql:1");
@@ -1626,7 +1654,12 @@ describe("SQL routine call sites", () => {
           siteAt("use.sql", use, 3, "norm(3)"),
         ].sort(),
       );
-      expect(okReferences(routine).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(routine).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
       expect(await gotoAt(project, "use.sql", use, 1, "norm(i)")).toBe("not_found");
       expect(await gotoAt(project, "use.sql", use, 2, "norm(a.id)")).toBe("schema.sql:1");
       expect(await gotoAt(project, "use.sql", use, 3, "norm(3)")).toBe("schema.sql:1");
@@ -1649,8 +1682,18 @@ describe("SQL routine call sites", () => {
       expect(referenceSites(project.root, accounts)).toEqual(
         [siteAt("schema.sql", schema, 2, "accounts"), siteAt("use.sql", use, 2, "accounts")].sort(),
       );
-      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
-      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(users).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
+      expect(okReferences(accounts).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
     });
   });
   it("indexes the procedure after consecutive T-SQL IF blocks and GO", async () => {
@@ -1740,7 +1783,13 @@ describe("SQL routine call sites", () => {
           siteAt("use.sql", use, 3, "users"),
         ].sort(),
       );
-      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      // The T-SQL procedure bodies are ERROR regions in tree-sitter-sequel, so coverage is partial.
+      expect(okReferences(users).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
     });
   });
 
@@ -1800,7 +1849,12 @@ describe("SQL routine call sites", () => {
         ].sort(),
       );
       expect(referenceSites(project.root, decoy)).toEqual([siteAt("schema.sql", schema, 2, "u")]);
-      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(users).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
       for (const [line, token] of [
         [1, "u.id"],
         [2, "u.select"],
@@ -1834,7 +1888,12 @@ describe("SQL routine call sites", () => {
         ].sort(),
       );
       expect(referenceSites(project.root, type)).toEqual([siteAt("schema.sql", schema, 2, "normalize_email")]);
-      expect(okReferences(qualified).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(qualified).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
       expect(await gotoAt(project, "use.sql", use, 1, "dbo.normalize_email")).toBe("schema.sql:1");
       expect(await gotoAt(project, "use.sql", use, 2, "normalize_email")).toBe("not_found");
       const preview = await previewRenameOf(project, "dbo.normalize_email", "dbo.normalize_address");
@@ -1868,7 +1927,12 @@ describe("SQL routine call sites", () => {
           siteAt("use.sql", use, 5, `${name}(id)`),
         ].sort();
         expect(referenceSites(project.root, result)).toEqual(expected);
-        expect(okReferences(result).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(okReferences(result).referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["parse_error"],
+          affectedFiles: [project.file("use.sql")],
+        });
         expect(await gotoAt(project, "use.sql", use, 5, `${name}(id)`)).toBe(`schema.sql:${index + 1}`);
         const preview = await previewRenameOf(project, name, `${name}_v2`);
         expect(editSites(preview)).toEqual(expected);
@@ -1923,8 +1987,18 @@ describe("SQL routine call sites", () => {
           siteAt("use.sql", use, 3, "u.id", 2),
         ].sort(),
       );
-      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
-      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(users).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
+      expect(okReferences(accounts).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
     });
   });
 
@@ -2010,8 +2084,18 @@ describe("SQL routine call sites", () => {
       expect(referenceSites(project.root, accounts)).toEqual(
         [siteAt("schema.sql", schema, 2, "accounts"), siteAt("use.sql", use, 3, "accounts")].sort(),
       );
-      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
-      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(users).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
+      expect(okReferences(accounts).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
     });
   });
 
@@ -2034,7 +2118,12 @@ describe("SQL routine call sites", () => {
       expect(referenceSites(project.root, tail)).toEqual(
         [siteAt("schema.sql", schema, 1, "tail_users"), siteAt("use.sql", use, 5, "tail_users")].sort(),
       );
-      expect(okReferences(tail).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(tail).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
     });
   });
 
@@ -2100,8 +2189,18 @@ describe("SQL routine call sites", () => {
       expect(referenceSites(project.root, accounts)).toEqual(
         [siteAt("schema.sql", schema, 2, "accounts"), siteAt("use.sql", use, 6, "accounts")].sort(),
       );
-      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
-      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(users).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
+      expect(okReferences(accounts).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
     });
   });
 
@@ -2141,8 +2240,18 @@ describe("SQL routine call sites", () => {
       expect(referenceSites(project.root, accounts)).toEqual(
         [siteAt("schema.sql", schema, 2, "accounts"), siteAt("use.sql", use, 3, "accounts")].sort(),
       );
-      expect(okReferences(users).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
-      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(users).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
+      expect(okReferences(accounts).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
     });
   });
 
@@ -2167,7 +2276,12 @@ describe("SQL routine call sites", () => {
       expect(referenceSites(project.root, accounts)).toEqual(
         [siteAt("schema.sql", schema, 2, "accounts"), siteAt("use.sql", use, 5, "accounts")].sort(),
       );
-      expect(okReferences(accounts).referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(okReferences(accounts).referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [project.file("use.sql")],
+      });
     });
   });
 });

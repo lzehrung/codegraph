@@ -153,7 +153,10 @@ describe("native extraction worker", () => {
     // The tree failed to project, but the query results came from the same extractLanguage
     // call and are unaffected by the tree's shape, so they should still come back.
     expect(output.nativeResults).toEqual(results);
-    expect(output.error).toContain(`@lzehrung/codegraph-native >= ${REQUIRED_NATIVE_EXTRACTION_VERSION}`);
+    expect(output.error).toContain(
+      "The @lzehrung/codegraph-native version that ships with your Codegraph release is required",
+    );
+    expect(output.error).not.toContain(REQUIRED_NATIVE_EXTRACTION_VERSION);
     expect(output.error).toContain("legacy syntax-tree shape");
   });
 
