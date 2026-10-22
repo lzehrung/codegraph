@@ -1,10 +1,10 @@
 import type { NativeSyntaxTree } from "./contracts.js";
 
 /**
- * Minimum native package version that returns the projected syntax tree shape used here.
+ * Version cited when the installed binary does not export `extractLanguage`.
  *
- * Older binaries may still export the same functions while returning either a legacy
- * node list or columnar trees without the missing-node flags needed for parse coverage.
+ * Not a floor for the projected syntax tree. The `isMissing` column is newer than
+ * this, so a shape mismatch must not advertise it as sufficient.
  */
 export const REQUIRED_NATIVE_EXTRACTION_VERSION = "1.10.0";
 
@@ -13,7 +13,8 @@ export const REQUIRED_NATIVE_EXTRACTION_VERSION = "1.10.0";
  * Checks `kindIds` is specifically a `Uint32Array` rather than any ArrayBuffer view --
  * `ArrayBuffer.isView` also accepts a `DataView`, which does not support indexed
  * access the way the columns do -- and that `nodeCount` is present, since the legacy
- * shape has no such field.
+ * shape has no such field. `isMissing` must be a `Uint8Array` of that length; columnar
+ * binaries from before that column are the same mismatch.
  */
 export function isColumnarSyntaxTree(tree: unknown): tree is NativeSyntaxTree {
   if (typeof tree !== "object" || tree === null) return false;
@@ -28,7 +29,7 @@ export function isColumnarSyntaxTree(tree: unknown): tree is NativeSyntaxTree {
 
 export function nativeShapeMismatchMessage(): string {
   return (
-    `@lzehrung/codegraph-native >= ${REQUIRED_NATIVE_EXTRACTION_VERSION} is required; ` +
+    "The @lzehrung/codegraph-native version that ships with your Codegraph release is required; " +
     "the installed native binary returns the legacy syntax-tree shape without required projected syntax-tree columns. Reinstall the native package."
   );
 }
