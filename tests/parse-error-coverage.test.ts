@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -15,8 +15,11 @@ import {
 } from "../src/native/tree-sitter-native.js";
 import { loadBinding } from "../src/native/runtime.js";
 import { createStubNativeSyntaxTree } from "./helpers/native.js";
+import * as filePrep from "../src/languages/file-prep.js";
+import { previewRenameWithSession } from "../src/agent/rename-preview.js";
+import { createAgentSession } from "../src/agent/session.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
-
+import { workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 const languages = [
   {
     name: "TypeScript",
@@ -293,6 +296,87 @@ describe("parse-error reference coverage", () => {
         reasons: ["parse_error"],
         affectedFiles: [consumerFile],
       });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("marks a failed SQL candidate parser-degraded on cold and incremental builds", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-parse-error-failed-sql-"));
+    const definitionFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+    const candidateFile = path.join(root, "query.sql").replace(/\\/g, "/");
+    const unrelatedFile = path.join(root, "unrelated.sql");
+    const definition = "CREATE FUNCTION normalize_email(e text) RETURNS text AS $$ SELECT e $$ LANGUAGE sql;\n";
+    const originalPrepare = filePrep.prepareSourceInput;
+    const options = { cache: "disk" as const, threads: 1, useNativeWorkers: false };
+    try {
+      await fsp.writeFile(definitionFile, definition, "utf8");
+      await fsp.writeFile(candidateFile, "SELECT normalize_email(email) FROM users;\n", "utf8");
+      await fsp.writeFile(unrelatedFile, "SELECT 1;\n", "utf8");
+      vi.spyOn(filePrep, "prepareSourceInput").mockImplementation(async (file, prepOptions) => {
+        if (file.replace(/\\/g, "/") === candidateFile) throw new Error("injected SQL extraction failure");
+        return await originalPrepare(file, prepOptions);
+      });
+      for (const incremental of [false, true]) {
+        if (incremental) await fsp.writeFile(unrelatedFile, "SELECT 2;\n", "utf8");
+        const index = incremental
+          ? await buildProjectIndexIncremental(root, options)
+          : await buildProjectIndex(root, options);
+        const result = await findReferences(index, {
+          file: definitionFile,
+          line: 1,
+          column: definition.indexOf("normalize_email") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["parser_degraded"],
+          affectedFiles: [candidateFile],
+        });
+      }
+    } finally {
+      vi.restoreAllMocks();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps JSON-import member reference coverage complete and rename preview safe", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-parse-error-json-import-"));
+    const definitionFile = path.join(root, "service.ts").replace(/\\/g, "/");
+    const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+    const jsonFile = path.join(root, "settings.json").replace(/\\/g, "/");
+    const definition = "export function service() { return 1; }\n";
+    try {
+      await fsp.writeFile(definitionFile, definition, "utf8");
+      await fsp.writeFile(jsonFile, JSON.stringify({ enabled: true }), "utf8");
+      await fsp.writeFile(
+        consumerFile,
+        `import { service } from "./service.js";\nimport settings from "./settings.json" with { type: "json" };\nexport const value = settings.enabled ? service() : 0;\n`,
+        "utf8",
+      );
+      const index = await buildProjectIndex(root);
+      const jsonModule = [...index.byFile.values()].find((module) => module.file === jsonFile);
+      expect(jsonModule?.parseErrorRanges).toEqual([]);
+      const result = await findReferences(index, {
+        file: definitionFile,
+        line: 1,
+        column: definition.indexOf("service") + 1,
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.references.some((reference) => reference.file === consumerFile)).toBe(true);
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "service", exportedOnly: true });
+      const target = symbols.symbols.find((symbol) => symbol.name === "service");
+      expect(target).toBeDefined();
+      const preview = await previewRenameWithSession(session, {
+        root,
+        handle: target!.handle,
+        newName: "renamedService",
+      });
+      expect(preview.safe).toBe(true);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

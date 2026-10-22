@@ -223,8 +223,14 @@ function isConfinedFileReadError(error: unknown): boolean {
     )
   );
 }
+/** A placeholder module. `parseErrorRanges` stays unset: no parser ran, so its parse state is unknown. */
 function createEmptyModuleIndex(file: string): ModuleIndex {
-  return { file, exports: [], imports: [], locals: [], parseErrorRanges: [] };
+  return { file, exports: [], imports: [], locals: [] };
+}
+
+/** A file with no language support: nothing is parsed, so it has no parse errors. */
+function unparsedModuleIndex(file: string): ModuleIndex {
+  return { ...createEmptyModuleIndex(file), parseErrorRanges: [] };
 }
 
 function collectParseErrorRanges(tree: ProjectedSyntaxTree): ParseErrorRange[] {
@@ -717,6 +723,7 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): 
     file: normalized,
     exports: [{ type: "local", exportedAs: "default", target: symbol }],
     imports: [],
+    parseErrorRanges: [],
     locals: [symbol],
   });
 }
@@ -1844,7 +1851,7 @@ async function buildIndexFromFileListShared(
         }
         if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
         const support = supportForFile(file, opts?.languageExtensions);
-        if (!support) return [file, createEmptyModuleIndex(file), [], undefined] as const;
+        if (!support) return [file, unparsedModuleIndex(file), [], undefined] as const;
         ensureBuildProgressStarted();
         let graphContext: IndexedFileGraphContext | undefined;
         let cacheWrite: PendingModuleCacheWrite | undefined;
@@ -2982,7 +2989,7 @@ export async function buildProjectIndexIncremental(
           try {
             if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
             const support = supportForFile(file, opts?.languageExtensions);
-            if (!support) return [file, createEmptyModuleIndex(file)] as const;
+            if (!support) return [file, unparsedModuleIndex(file)] as const;
             const matchPath =
               support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
             const built = await buildIndexedModuleForFile({
