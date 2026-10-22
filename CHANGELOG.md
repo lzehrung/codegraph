@@ -16,7 +16,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Changed
 
 - GitHub release descriptions now include the changelog section for the released version.
-- Find-references coverage reports `parse_error` for non-SCSS definitions when an outermost Tree-sitter `ERROR` range, or the nearest enclosing non-empty statement/declaration range (falling back to the nearest non-empty ancestor) of a `MISSING` node, contains the target name or a resolved named/default import alias in a candidate or scanned file. SQL matching is case-insensitive for unquoted names and also recognizes an unqualified basename of a qualified definition; unrelated identifiers do not degrade coverage. SCSS is excluded until the planned grammar fork because its pinned grammar reports `ERROR` for supported module syntax.
+- For non-SCSS definitions, any candidate or scanned file with an outermost Tree-sitter `ERROR` or `MISSING` range makes find-references coverage `partial` with `parse_error` and marks that file affected, regardless of the range contents. SCSS remains exempt because its grammar reports `ERROR` on supported module syntax.
 
 ### Fixed
 

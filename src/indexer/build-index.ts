@@ -117,7 +117,6 @@ import {
   type ParserBackendDegradationReport,
   type ProjectIndex,
   type ProjectIndexManifestEntry,
-  type ParseErrorIdentifier,
   type ParseErrorRange,
   type SymbolDef,
   SymbolKind,
@@ -228,19 +227,8 @@ function createEmptyModuleIndex(file: string): ModuleIndex {
   return { file, exports: [], imports: [], locals: [], parseErrorRanges: [] };
 }
 
-const PARSE_ERROR_IDENTIFIER_CHARACTER_RE = /[\p{ID_Continue}$]/gu;
-
-function hasIdentifierCharacterInRange(source: string, startIndex: number, endIndex: number): boolean {
-  PARSE_ERROR_IDENTIFIER_CHARACTER_RE.lastIndex = startIndex;
-  const match = PARSE_ERROR_IDENTIFIER_CHARACTER_RE.exec(source);
-  return match !== null && match.index < endIndex;
-}
-
-function collectParseErrorRanges(source: string, tree: ProjectedSyntaxTree, sup: LanguageSupport): ParseErrorRange[] {
+function collectParseErrorRanges(tree: ProjectedSyntaxTree): ParseErrorRange[] {
   const columns = tree.columns;
-  const identifierTypes = new Set(sup.nodeTypes?.identifier ?? []);
-  for (const type of sup.nodeTypes?.propertyIdentifier ?? []) identifierTypes.add(type);
-  for (const type of sup.nodeTypes?.shorthandPropertyIdentifier ?? []) identifierTypes.add(type);
   const isParseErrorNode = (nodeId: number): boolean => {
     const kind = columns.kinds[columns.kindIds[nodeId]!]!;
     return kind === "ERROR" || columns.isMissing[nodeId] !== 0;
@@ -278,46 +266,7 @@ function collectParseErrorRanges(source: string, tree: ProjectedSyntaxTree, sup:
     }
     const startIndex = tree.stringIndexForByte(columns.startIndex[rangeNodeId]!);
     const endIndex = tree.stringIndexForByte(columns.endIndex[rangeNodeId]!);
-    const subtreeNodeIds = [rangeNodeId];
-    const identifiers: ParseErrorIdentifier[] = [];
-    let coveredEndIndex = startIndex;
-    let opaque = false;
-    while (subtreeNodeIds.length) {
-      const subtreeNodeId = subtreeNodeIds.pop()!;
-      const kind = columns.kinds[columns.kindIds[subtreeNodeId]!]!;
-      if (identifierTypes.has(kind)) {
-        const identifierStartIndex = tree.stringIndexForByte(columns.startIndex[subtreeNodeId]!);
-        const identifierEndIndex = tree.stringIndexForByte(columns.endIndex[subtreeNodeId]!);
-        identifiers.push({
-          startIndex: identifierStartIndex,
-          endIndex: identifierEndIndex,
-          text: source.slice(identifierStartIndex, identifierEndIndex),
-        });
-      }
-      const firstChild = columns.childOffsets[subtreeNodeId]!;
-      const afterLastChild = columns.childOffsets[subtreeNodeId + 1]!;
-      if (firstChild === afterLastChild && kind !== "ERROR" && columns.isMissing[subtreeNodeId] === 0) {
-        const leafStartIndex = tree.stringIndexForByte(columns.startIndex[subtreeNodeId]!);
-        const leafEndIndex = tree.stringIndexForByte(columns.endIndex[subtreeNodeId]!);
-        if (leafEndIndex > leafStartIndex) {
-          if (hasIdentifierCharacterInRange(source, coveredEndIndex, leafStartIndex)) opaque = true;
-          coveredEndIndex = Math.max(coveredEndIndex, leafEndIndex);
-        }
-      }
-      for (let childIndex = afterLastChild - 1; childIndex >= firstChild; childIndex -= 1) {
-        subtreeNodeIds.push(columns.childIds[childIndex]!);
-      }
-    }
-    const hasOpaqueErrorText =
-      columns.kinds[columns.kindIds[nodeId]!]! === "ERROR" &&
-      (opaque || hasIdentifierCharacterInRange(source, coveredEndIndex, endIndex));
-    ranges.push({
-      startIndex,
-      endIndex,
-      text: source.slice(startIndex, endIndex),
-      identifiers,
-      ...(hasOpaqueErrorText ? { opaque: true } : {}),
-    });
+    ranges.push({ startIndex, endIndex });
   }
   return ranges;
 }
@@ -684,7 +633,7 @@ async function buildIndexedModuleForFile(args: {
     });
   }
   mod.imports = imports;
-  mod.parseErrorRanges = tree instanceof ProjectedSyntaxTree ? collectParseErrorRanges(source, tree, sup) : [];
+  mod.parseErrorRanges = tree instanceof ProjectedSyntaxTree ? collectParseErrorRanges(tree) : [];
   if (sup.id === "cpp") {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;

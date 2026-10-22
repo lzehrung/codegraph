@@ -53,18 +53,9 @@ export type SymbolDef = {
   complexity?: number;
 };
 
-export type ParseErrorIdentifier = {
-  startIndex: number;
-  endIndex: number;
-  text: string;
-};
-
 export type ParseErrorRange = {
   startIndex: number;
   endIndex: number;
-  text: string;
-  identifiers: ParseErrorIdentifier[];
-  opaque?: boolean;
 };
 
 export type ExportEntry =
@@ -112,7 +103,7 @@ export type ModuleIndex = {
    * consumers whose imports name a container this build changed.
    */
   declaredContainers?: string[];
-  /** Outermost Tree-sitter ERROR/MISSING ranges, with their source text for coverage checks. */
+  /** Outermost Tree-sitter ERROR/MISSING ranges. */
   parseErrorRanges?: ParseErrorRange[];
 };
 

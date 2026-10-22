@@ -19,7 +19,6 @@ import {
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
   isInsidePhpUseDeclaration,
-  isPhpCaseInsensitiveSymbolKind,
   isPhpQualifiedReferenceNode,
   phpLastIdentifierSegment,
   readPhpNamespaceFromRange,
@@ -34,13 +33,11 @@ import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import {
-  cjsRequireValueBinding,
   javaKotlinFunctionOverloadIncludes,
   javaStaticNamedImportIncludes,
   resolveExport,
   resolveImported,
 } from "./navigation-resolve.js";
-import { getLanguageById } from "../languages/registry.js";
 import { isAmbiguousResolutionReason } from "./ambiguous-resolution.js";
 import {
   ensurePhpNamespaceSymbolIndex,
@@ -61,11 +58,7 @@ import {
 import type { ImportBinding } from "./import-types.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, foldPhpIdentifierCase } from "../util/identifiers.js";
 import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../util/bloom-filter.js";
-import { createSqlObjectNameRegExp } from "../sql/lex.js";
-import { sqlObjectNamesMatchConservatively } from "../sql/lookup.js";
 
-// SQL ERROR text matching goes away when #408 moves SQL parse-error coverage tree-first.
-const SQL_PARSE_ERROR_NAME_RE = createSqlObjectNameRegExp("gu");
 const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
 const NAMESPACE_EXPORT_PATTERN = new RegExp(
   String.raw`\bexport\s*\*\s*as\s*(${ECMASCRIPT_IDENTIFIER_SOURCE})\s*from\s*(["'])([^"']+)\2`,
@@ -1383,31 +1376,6 @@ function parserDegradedCandidateFiles(
   return { files: affected, hasUnlistedCandidate };
 }
 
-function parseErrorSqlRangeMatches(text: string, spelling: string): boolean {
-  SQL_PARSE_ERROR_NAME_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = SQL_PARSE_ERROR_NAME_RE.exec(text)) !== null) {
-    if (sqlObjectNamesMatchConservatively(match[0], spelling)) return true;
-  }
-  return false;
-}
-
-function parseErrorIdentifierMatches(
-  identifier: string,
-  spelling: string,
-  languageId: string,
-  symbolKind: string,
-): boolean {
-  if (languageId === "sql") return sqlObjectNamesMatchConservatively(identifier, spelling);
-  const normalizeIdentifier = getLanguageById(languageId)?.normalizeIdentifier ?? ((name: string) => name);
-  const normalizedIdentifier = normalizeIdentifier(identifier);
-  const normalizedSpelling = normalizeIdentifier(spelling);
-  if (languageId === "php" && isPhpCaseInsensitiveSymbolKind(symbolKind)) {
-    return foldPhpIdentifierCase(normalizedIdentifier) === foldPhpIdentifierCase(normalizedSpelling);
-  }
-  return normalizedIdentifier === normalizedSpelling;
-}
-
 export function buildIndexedCandidateCoverage(args: {
   index: ProjectIndex;
   def: SymbolDef;
@@ -1464,57 +1432,7 @@ export function buildIndexedCandidateCoverage(args: {
       const parseErrorRanges = moduleIndex?.parseErrorRanges;
       if (!moduleIndex || !parseErrorRanges?.length) continue;
 
-      const names = new Set([def.localName]);
-      if (languageId === "ruby" && def.localName.endsWith("=")) names.add(def.localName.slice(0, -1));
-      for (const imp of moduleIndex.imports) {
-        if (
-          (imp.kind === "named" || imp.kind === "default") &&
-          importCanReferenceDefinition(index, imp, def, exportedNames, languageId)
-        ) {
-          names.add(imp.local);
-        } else if (imp.kind === "namespace") {
-          const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
-          const targetModule = targetFile ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
-          const directValue =
-            imp.mechanism === "cjs" && targetFile ? cjsRequireValueBinding(index, targetFile) : undefined;
-          if (directValue && sameDef(directValue, def, index.languageExtensions)) names.add(imp.localNS);
-          if (importCanReferenceDefinition(index, imp, def, exportedNames, languageId)) {
-            // `ns.visible` uses the exported spelling, not the local namespace binding.
-            for (const exportedName of exportedNames) if (exportedName !== "default") names.add(exportedName);
-          }
-          if (targetModule) {
-            for (const exportedName of moduleExportProbeNames(index, targetModule, exportedNames)) {
-              if (exportedName === "default") continue;
-              const resolved = resolveExport(index, targetModule.file, exportedName);
-              if (resolved?.kind === "resolved" && sameDef(resolved.def, def, index.languageExtensions)) {
-                names.add(exportedName);
-              }
-            }
-          }
-          const defaultExport = targetFile ? resolveExport(index, targetFile, "default") : undefined;
-          if (defaultExport?.kind === "resolved" && sameDef(defaultExport.def, def, index.languageExtensions)) {
-            names.add("default");
-          }
-        } else if (imp.kind === "star" && importCanReferenceDefinition(index, imp, def, exportedNames, languageId)) {
-          for (const exportedName of exportedNames) if (exportedName !== "default") names.add(exportedName);
-        }
-      }
-      const referenceNames = [...names];
-      if (
-        parseErrorRanges.some((range) => {
-          if (languageId === "sql" && range.opaque) {
-            return referenceNames.some((name) => parseErrorSqlRangeMatches(range.text, name));
-          }
-          return (
-            range.opaque ||
-            range.identifiers.some((identifier) =>
-              referenceNames.some((name) => parseErrorIdentifierMatches(identifier.text, name, languageId, def.kind)),
-            )
-          );
-        })
-      ) {
-        parseErrorFiles.push(candidateFile);
-      }
+      parseErrorFiles.push(candidateFile);
     }
     if (parseErrorFiles.length) {
       reasons.push("parse_error");
