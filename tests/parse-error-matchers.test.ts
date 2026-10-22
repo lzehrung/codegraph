@@ -264,6 +264,32 @@ describe("parse-error coverage name matching", () => {
       expect(unrelated.coverage).toEqual(complete);
     });
   });
+  describe("star-forwarded renamed namespace exports", () => {
+    const sources = {
+      "source.ts": "export function target() {}\nexport function other() {}\n",
+      "renamed.ts": 'export { target as visible, other as unrelated } from "./source";\n',
+      "barrel.ts": 'export * from "./renamed";\n',
+    };
+
+    it("matches a renamed star-forwarded export and excludes an unrelated forwarded export", async () => {
+      const matched = await findCoverage(
+        { ...sources, "use.ts": 'import * as ns from "./barrel";\nconst broken = <ns.visible;\n' },
+        { file: "source.ts", name: "target" },
+      );
+      expect(matched.coverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["parse_error"],
+        affectedFiles: [matched.file("use.ts")],
+      });
+
+      const unrelated = await findCoverage(
+        { ...sources, "use.ts": 'import * as ns from "./barrel";\nconst broken = <ns.unrelated;\n' },
+        { file: "source.ts", name: "target" },
+      );
+      expect(unrelated.coverage).toEqual(complete);
+    });
+  });
   describe("TypeScript namespace imports", () => {
     const lib = "function internal() {}\nexport { internal as visible };\nexport function other() {}\n";
 

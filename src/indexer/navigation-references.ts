@@ -1483,9 +1483,7 @@ export function buildIndexedCandidateCoverage(args: {
             for (const exportedName of exportedNames) if (exportedName !== "default") names.add(exportedName);
           }
           if (targetModule) {
-            for (const entry of targetModule.exports) {
-              if (entry.type === "exportStar") continue;
-              const exportedName = entry.exportedAs;
+            for (const exportedName of moduleExportProbeNames(index, targetModule, exportedNames)) {
               if (exportedName === "default") continue;
               const resolved = resolveExport(index, targetModule.file, exportedName);
               if (resolved?.kind === "resolved" && sameDef(resolved.def, def, index.languageExtensions)) {
