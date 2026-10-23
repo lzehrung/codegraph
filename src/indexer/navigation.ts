@@ -819,7 +819,8 @@ async function findReferencesInternal(
     }
     return false;
   };
-  for (const candidateModule of index.byFile.values()) {
+  // Alias uncertainty only affects rename safety; reference and usage queries skip the scan.
+  for (const candidateModule of collectionMode === "rename" ? index.byFile.values() : []) {
     if (await hasExplicitExportAliasForDefinition(candidateModule)) {
       explicitNamespaceMemberAliasFiles.add(fileIdentityKey(candidateModule.file));
     }
