@@ -3456,7 +3456,8 @@ async function resolvePythonReceiverMember(
 ): Promise<SymbolDef | undefined> {
   const classRef = await pythonReceiverClassRef(index, mod, node, obj, source, sup, resolveExpression, proof);
   if (!classRef) return undefined;
-  return lookupPythonClassMember(index, classRef.ref, member, classRef.startAtSupertype);
+  const preferInstanceAttributes = obj.type === "identifier" && sliceText(obj, source) === "self";
+  return lookupPythonClassMember(index, classRef.ref, member, classRef.startAtSupertype, preferInstanceAttributes);
 }
 
 type PythonReceiverClassRef = { ref: PythonClassRef; startAtSupertype: boolean };
@@ -3531,8 +3532,24 @@ async function pythonClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promi
   return { def, container: current, context, module };
 }
 
-function pythonMembersOnClass(classRef: PythonClassRef, member: string): SymbolDef[] {
+function pythonMembersOnClass(classRef: PythonClassRef, member: string, preferInstanceAttributes = false): SymbolDef[] {
   const normalizeIdentifier = classRef.context.sup.normalizeIdentifier;
+  if (preferInstanceAttributes) {
+    const instanceAttributes = findPythonInstanceAttributesWithinClass(
+      classRef.module.locals,
+      member,
+      classRef.container,
+      classRef.context,
+      normalizeIdentifier,
+      "self",
+    );
+    const selectedInstanceAttribute = preferredPythonInstanceAttribute(
+      instanceAttributes,
+      classRef.container,
+      classRef.context,
+    );
+    if (selectedInstanceAttribute) return [selectedInstanceAttribute];
+  }
   const direct = findDirectLocalsWithinNode(
     classRef.module.locals,
     member,
@@ -3556,6 +3573,7 @@ function findPythonInstanceAttributesWithinClass(
   container: SyntaxNodeLike,
   targetContext: ParsedFileContext,
   normalizeIdentifier: (name: string) => string,
+  receiver?: "self" | "cls",
 ): SymbolDef[] {
   const matches: SymbolDef[] = [];
   const containerStart = container.startIndex;
@@ -3579,9 +3597,60 @@ function findPythonInstanceAttributesWithinClass(
       column: start.column - 1,
     };
     const nameNode = targetContext.tree.rootNode.descendantForPosition(position, position);
-    if (isPythonReceiverAttributeAssignmentName(nameNode)) matches.push(local);
+    if (!isPythonReceiverAttributeAssignmentName(nameNode)) continue;
+    const object = nameNode.parent?.childForFieldName("object");
+    if (receiver && object?.text !== receiver) continue;
+    matches.push(local);
   }
   return matches;
+}
+
+function preferredPythonInstanceAttribute(
+  attributes: readonly SymbolDef[],
+  container: SyntaxNodeLike,
+  context: ParsedFileContext,
+): SymbolDef | undefined {
+  let firstMethodAssignment: SymbolDef | undefined;
+  let firstMethodStartIndex: number | undefined;
+  let initializerAssignment: SymbolDef | undefined;
+  let initializerStartIndex: number | undefined;
+  for (const attribute of attributes) {
+    const startIndex = attribute.range.start.index;
+    if (startIndex === undefined) continue;
+    const start = attribute.range.start;
+    const position = {
+      row: start.line - 1,
+      column: start.column - 1,
+    };
+    let current: SyntaxNodeLike | null = context.tree.rootNode.descendantForPosition(position, position);
+    let method: SyntaxNodeLike | null = null;
+    let invalidMethodScope = false;
+    while (current && current.id !== container.id) {
+      if (current.type === "class_definition") {
+        invalidMethodScope = true;
+        break;
+      }
+      if (current.type === "function_definition") {
+        if (method) {
+          invalidMethodScope = true;
+          break;
+        }
+        method = current;
+      }
+      current = current.parent;
+    }
+    if (invalidMethodScope || current?.id !== container.id || !method) continue;
+    if (firstMethodStartIndex === undefined || startIndex < firstMethodStartIndex) {
+      firstMethodAssignment = attribute;
+      firstMethodStartIndex = startIndex;
+    }
+    if (method.childForFieldName("name")?.text !== "__init__") continue;
+    if (initializerStartIndex === undefined || startIndex < initializerStartIndex) {
+      initializerAssignment = attribute;
+      initializerStartIndex = startIndex;
+    }
+  }
+  return initializerAssignment ?? firstMethodAssignment;
 }
 
 function pythonBaseIdentifierNodes(classNode: SyntaxNodeLike): SyntaxNodeLike[] {
@@ -3655,6 +3724,7 @@ async function lookupPythonClassMember(
   start: PythonClassRef,
   member: string,
   startAtSupertype = false,
+  preferInstanceAttributes = false,
 ): Promise<SymbolDef | undefined> {
   const membersByOwner = new Map<string, SymbolDef[]>();
   const parentsByOwner = new Map<string, PythonClassRef[]>();
@@ -3663,7 +3733,7 @@ async function lookupPythonClassMember(
   for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
     let named = false;
     for (const ref of level) {
-      const members = startAtSupertype && !depth ? [] : pythonMembersOnClass(ref, member);
+      const members = startAtSupertype && !depth ? [] : pythonMembersOnClass(ref, member, preferInstanceAttributes);
       membersByOwner.set(pythonClassKey(ref.def), members);
       if (members.length) named = true;
     }

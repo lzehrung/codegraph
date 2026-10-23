@@ -1285,6 +1285,101 @@ describe("Python receiver member navigation", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  it("resolves instance attributes ahead of class attributes and keeps references separate", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-shadowed-attribute-"));
+    const file = path.join(root, "models.py").replace(/\\/g, "/");
+    const source = [
+      "class Counter:",
+      "    count = 0",
+      "    def assign_before_init(self):",
+      "        self.count = -1",
+      "    def __init__(self):",
+      "        self.count = 0",
+      "    def add(self, amount):",
+      "        Counter.count += amount",
+      "        self.count += amount",
+      "        return self.count",
+      "",
+      "class ClassOnly:",
+      "    count = 0",
+      "    def read(self):",
+      "        return self.count",
+      "",
+      "class FirstWrite:",
+      "    count = 0",
+      "    def set_first(self):",
+      "        self.count = 1",
+      "    def set_later(self):",
+      "        self.count = 2",
+      "    def read(self):",
+      "        return self.count",
+    ].join("\n");
+    await fsp.writeFile(file, source, "utf8");
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const lines = source.split("\n");
+      const columnOf = (line: number, token: string): number => {
+        const indexOf = lines[line - 1]!.indexOf(token);
+        if (indexOf < 0) throw new Error("Expected token " + token + " on fixture line " + line);
+        return indexOf + 1;
+      };
+
+      for (const line of [9, 10]) {
+        const result = await goToDefinition(index, { file, line, column: columnOf(line, "count") });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.range.start.line).toBe(6);
+      }
+
+      const classAttribute = await goToDefinition(index, { file, line: 8, column: columnOf(8, "count") });
+      expect(classAttribute.status).toBe("ok");
+      if (classAttribute.status === "ok") expect(classAttribute.definition.range.start.line).toBe(2);
+
+      const classOnly = await goToDefinition(index, { file, line: 15, column: columnOf(15, "count") });
+      expect(classOnly.status).toBe("ok");
+      if (classOnly.status === "ok") expect(classOnly.definition.range.start.line).toBe(13);
+
+      const firstWrite = await goToDefinition(index, { file, line: 24, column: columnOf(24, "count") });
+      expect(firstWrite.status).toBe("ok");
+      if (firstWrite.status === "ok") expect(firstWrite.definition.range.start.line).toBe(20);
+
+      const instanceReferences = await findReferences(index, { file, line: 6, column: columnOf(6, "count") });
+      expect(instanceReferences.status).toBe("ok");
+      if (instanceReferences.status === "ok") {
+        const hits = instanceReferences.references.map((reference) => reference.range.start.line);
+        expect(hits).toEqual(expect.arrayContaining([4, 6, 9, 10]));
+        expect(hits).not.toContain(2);
+        expect(hits).not.toContain(8);
+      }
+
+      const classReferences = await findReferences(index, { file, line: 2, column: columnOf(2, "count") });
+      expect(classReferences.status).toBe("ok");
+      if (classReferences.status === "ok") {
+        const hits = classReferences.references.map((reference) => reference.range.start.line);
+        expect(hits).toEqual(expect.arrayContaining([2, 8]));
+        expect(hits).not.toContain(4);
+        expect(hits).not.toContain(6);
+        expect(hits).not.toContain(9);
+        expect(hits).not.toContain(10);
+      }
+
+      const classOnlyReferences = await findReferences(index, { file, line: 13, column: columnOf(13, "count") });
+      expect(classOnlyReferences.status).toBe("ok");
+      if (classOnlyReferences.status === "ok") {
+        const hits = classOnlyReferences.references.map((reference) => reference.range.start.line);
+        expect(hits).toEqual(expect.arrayContaining([13, 15]));
+      }
+
+      const firstWriteReferences = await findReferences(index, { file, line: 20, column: columnOf(20, "count") });
+      expect(firstWriteReferences.status).toBe("ok");
+      if (firstWriteReferences.status === "ok") {
+        const hits = firstWriteReferences.references.map((reference) => reference.range.start.line);
+        expect(hits).toEqual(expect.arrayContaining([20, 22, 24]));
+        expect(hits).not.toContain(18);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Python failed relative imports", () => {
