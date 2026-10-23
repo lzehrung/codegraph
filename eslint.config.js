@@ -10,6 +10,7 @@ export default tseslint.config(
       "packages/codegraph-native/**",
       "tests/samples/**",
       "tests/languages/samples/**",
+      "tests/edge-corpus/**",
     ],
   },
   js.configs.recommended,
