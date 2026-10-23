@@ -80,6 +80,7 @@ import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import {
+  collectMemberAccessChain,
   getMemberAccessParts,
   isMemberAccessNode,
   isMemberObjectIdentifier,
@@ -718,6 +719,7 @@ async function findReferencesInternal(
     if (collectionMode === "all") return true;
     if (ref.via?.reexport || referenceSiteKey(ref.file, ref.range) === definitionSiteKey) return false;
     if (collectionMode === "usages") return ref.via?.importBinding === undefined;
+    if (ref.via?.namespaceMember) return ref.via.namespaceMember === def.localName;
     const binding = ref.via?.import;
     if (!binding || binding.kind === "star" || binding.kind === "namespace") return true;
     if (ref.via?.importBinding === "imported" && binding.kind === "named" && binding.imported === def.localName) {
@@ -1223,22 +1225,18 @@ async function findReferencesInternal(
           // binds the whole module. Other namespaces use their local name directly.
           const namespaceSearchName =
             imp.mechanism === "python" && imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS;
-          if (!matchesDef) {
-            const targetModule = index.byFile.get(fileIdentityKey(targetFile));
-            if (
-              !targetModule?.exports.some(
-                (entry) =>
-                  entry.type === "namespaceReexport" || entry.type === "exportStar" || entry.type === "reexport",
-              )
-            ) {
-              continue;
-            }
+          const targetModule = index.byFile.get(fileIdentityKey(targetFile));
+          if (
+            targetModule?.exports.some(
+              (entry) => entry.type === "namespaceReexport" || entry.type === "exportStar" || entry.type === "reexport",
+            )
+          ) {
             // A forwarded namespace can expose a member at paths such as W.helpers.helper,
             // not as a bare export of the intermediate module. Follow only export-proven
             // namespace edges, then verify each use through the same goto resolver.
             await scanNamespaceMemberPaths(imp, [{ file: targetFile, name: namespaceSearchName, depth: 0 }]);
-            continue;
           }
+          if (!matchesDef) continue;
           const parsed = await ensureCandidateParsed();
           const ranges = await collectNamespaceMemberRefs(
             fileId,
@@ -2196,6 +2194,7 @@ export async function collectNamespaceMemberRefs(
   // Identifier equality follows the language rule, so C# `@X::@Target` matches alias `X` member `Target`.
   const normalize = sup.normalizeIdentifier;
   const normalizedNs = normalize(ns);
+  const namespaceSegments = normalizedNs.includes(".") ? normalizedNs.split(".") : undefined;
   const normalizedMember = normalize(member);
   let effectivePythonBinding: ImportBinding | undefined;
   if (sup.id === "python" && importBinding && imports) {
@@ -2218,13 +2217,24 @@ export async function collectNamespaceMemberRefs(
       if (obj && prop && isMemberReferencePropertyIdentifier(sup, prop.type)) {
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
-        // A python multi-segment dotted import (`import a.b`) binds only the first segment;
-        // the source only ever repeats the whole dotted phrase to reach the resolved leaf
-        // module again, so `ns` can be that literal phrase and `obj` a compound chain rather
-        // than the single bare identifier every other caller passes.
-        const objectMatches = normalizedNs.includes(".")
-          ? normalize(objectName) === normalizedNs
-          : isMemberObjectIdentifier(obj.type) && normalize(objectName) === normalizedNs;
+        let objectMatches = false;
+        if (namespaceSegments) {
+          const chain = collectMemberAccessChain({ sup, source, chainNode: obj });
+          if (
+            chain &&
+            isMemberObjectIdentifier(chain.base.type) &&
+            chain.names.length === namespaceSegments.length - 1
+          ) {
+            objectMatches = normalize(sliceText(chain.base, source)) === namespaceSegments[0];
+            for (let segmentIndex = 0; objectMatches && segmentIndex < chain.names.length; segmentIndex += 1) {
+              objectMatches =
+                normalize(chain.names[segmentIndex]!) ===
+                namespaceSegments[namespaceSegments.length - 1 - segmentIndex];
+            }
+          }
+        } else {
+          objectMatches = isMemberObjectIdentifier(obj.type) && normalize(objectName) === normalizedNs;
+        }
         if (objectMatches && normalize(propertyName) === normalizedMember) {
           let receiver = obj;
           while (!isMemberObjectIdentifier(receiver.type) && receiver.namedChildren.length) {

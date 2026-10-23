@@ -2258,13 +2258,11 @@ describe("Find References", () => {
         expect(result.status).toBe("ok");
         if (result.status === "ok") {
           expect(
-            result.references.some(
-              (reference) =>
-                reference.file === outerUseFile &&
-                reference.range.start.line === 2 &&
-                reference.via?.namespaceMember === "value",
-            ),
-          ).toBe(true);
+            result.references
+              .filter((reference) => reference.file === outerUseFile && reference.via?.namespaceMember === "value")
+              .map((reference) => reference.range.start.line)
+              .sort((left, right) => left - right),
+          ).toEqual([2]);
           expect(
             result.references.some(
               (reference) =>
@@ -2273,6 +2271,81 @@ describe("Find References", () => {
                 reference.via?.namespaceMember === "value",
             ),
           ).toBe(true);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds both direct and nested namespace members from the same barrel", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-direct-and-nested-namespace-"));
+      try {
+        const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+        const files = new Map([
+          ["source.ts", "export function value() {}\n"],
+          ["barrel.ts", ['export { value } from "./source";', 'export * as nested from "./source";', ""].join("\n")],
+          ["use.ts", ['import * as ns from "./barrel";', "ns.value();", "ns.nested.value();", ""].join("\n")],
+        ]);
+        await Promise.all([...files].map(([name, source]) => fsp.writeFile(file(name), source, "utf8")));
+
+        const sourceFile = file("source.ts");
+        const useFile = file("use.ts");
+        const index = await createTestIndexFromPath(root);
+        const result = await testFindReferences(index, sourceFile, 1, 17, 1);
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(
+            result.references
+              .filter((reference) => reference.file === useFile && reference.via?.namespaceMember === "value")
+              .map((reference) => reference.range.start.line)
+              .sort((left, right) => left - right),
+          ).toEqual([2, 3]);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("matches formatted namespace member chains and excludes a same-named decoy", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-formatted-namespace-chain-"));
+      try {
+        const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+        const files = new Map([
+          ["source.ts", "export function value() {}\n"],
+          ["base.ts", 'export * as nested from "./source";\n'],
+          ["outer.ts", 'export * as outer from "./base";\n'],
+          [
+            "use.ts",
+            [
+              'import { outer } from "./outer";',
+              "outer.nested.value();",
+              "outer . nested.value();",
+              "outer",
+              "  .nested.value();",
+              "outer /* c */ .nested.value();",
+              "function decoy(outer: { nested: { value(): void } }) {",
+              "  outer . nested.value();",
+              "}",
+              "",
+            ].join("\n"),
+          ],
+        ]);
+        await Promise.all([...files].map(([name, source]) => fsp.writeFile(file(name), source, "utf8")));
+
+        const sourceFile = file("source.ts");
+        const useFile = file("use.ts");
+        const index = await createTestIndexFromPath(root);
+        const result = await testFindReferences(index, sourceFile, 1, 17, 1);
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(
+            result.references
+              .filter((reference) => reference.file === useFile && reference.via?.namespaceMember === "value")
+              .map((reference) => reference.range.start.line)
+              .sort((left, right) => left - right),
+          ).toEqual([2, 3, 5, 6]);
         }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });

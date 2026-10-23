@@ -408,9 +408,11 @@ export async function previewRenameInSnapshot(
     const loaded = await loadRenameFile(snapshot, realRoot, candidate.file, loadedFiles, unsafeSites, provenance);
     if (!loaded) continue;
     const oldText = textAtRange(loaded.source, candidate.range);
+    const reference = candidate.reference;
     if (
-      candidate.reference?.via?.import &&
-      isPreservedImportAlias(candidate.reference, oldText, resolved.def.localName)
+      reference?.via?.import &&
+      !reference.via.namespaceMember &&
+      isPreservedImportAlias(reference, oldText, resolved.def.localName)
     ) {
       continue;
     }
