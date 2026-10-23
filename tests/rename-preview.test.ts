@@ -132,6 +132,71 @@ describe("rename preview", () => {
       session.invalidate();
     }
   });
+  it("keeps getter-local Python rename references complete", async () => {
+    const root = await mkTmpDir("cg-rename-python-getter-local-");
+    const file = path.join(root, "models.py");
+    await fsp.writeFile(
+      file,
+      [
+        "class Counter:",
+        "    @property",
+        "    def count(self):",
+        "        value = self._count",
+        "        return value",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "value" });
+      const local = symbols.symbols.find(
+        (symbol) => symbol.location.file === "models.py" && symbol.location.range.start.line === 4,
+      );
+      expect(local).toBeDefined();
+      const result = await previewRenameWithSession(session, { root, handle: local!.handle, newName: "current" });
+      expect(result.safe).toBe(true);
+      expect(result.unsafeSites).toEqual([]);
+      expect(result.edits.map((edit) => [edit.range.start.line, edit.oldText])).toEqual([
+        [4, "value"],
+        [5, "value"],
+      ]);
+    } finally {
+      session.invalidate();
+    }
+  });
+  it("marks rename from a Python property deleter unsafe", async () => {
+    const root = await mkTmpDir("cg-rename-python-property-deleter-");
+    const file = path.join(root, "models.py");
+    await fsp.writeFile(
+      file,
+      [
+        "class Counter:",
+        "    @property",
+        "    def count(self):",
+        "        return self._count",
+        "    @count.deleter",
+        "    def count(self):",
+        "        del self._count",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "count" });
+      const deleter = symbols.symbols.find(
+        (symbol) => symbol.location.file === "models.py" && symbol.location.range.start.line === 6,
+      );
+      expect(deleter).toBeDefined();
+      const result = await previewRenameWithSession(session, { root, handle: deleter!.handle, newName: "total" });
+      expect(result.safe).toBe(false);
+      expect(result.unsafeSites).toContainEqual(
+        expect.objectContaining({
+          reason: "unresolved_reference",
+          provenance: expect.objectContaining({ reason: expect.stringContaining("strategy_unavailable") }),
+        }),
+      );
+    } finally {
+      session.invalidate();
+    }
+  });
 
   it("renames Python instance attributes from a later write through the preferred initializer", async () => {
     const root = await mkTmpDir("cg-rename-python-later-write-");

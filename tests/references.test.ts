@@ -101,10 +101,14 @@ describe("Find References", () => {
         "class Decorated:",
         "    @property",
         "    def count(self):",
-        "        return self._count",
+        "        value = self._count",
+        "        return value",
         "    @count.setter",
         "    def count(self, value):",
         "        self._count = value",
+        "    @count.deleter",
+        "    def count(self):",
+        "        del self._count",
         "    def read(self):",
         "        return self.count",
         "",
@@ -117,18 +121,41 @@ describe("Find References", () => {
       ].join("\n");
       await fsp.writeFile(file, source, "utf8");
       const index = await createTestIndexFromFiles(root, [file]);
-      const lines = source.split("\n");
-      for (const line of [3, 6, 16]) {
-        const result = await indexer.findReferences(index, {
-          file,
-          line,
-          column: tokenColumn(lines[line - 1]!, "count"),
-        });
+      for (const line of [3, 7, 20]) {
+        const definition = index.byFile
+          .get(fileIdentityKey(file))
+          ?.locals.find((local) => local.localName === "count" && local.range.start.line === line);
+        expect(definition).toBeDefined();
+        if (!definition) throw new Error(`Expected property definition at line ${line}`);
+        const result = await indexer.findReferences(index, { def: definition });
         expect(result.status).toBe("ok");
         if (result.status !== "ok") continue;
         expect(result.referenceCoverage?.state).toBe("partial");
         expect(result.referenceCoverage?.reasons).toContain("strategy_unavailable");
         expect(result.referenceCoverage?.affectedFiles).toEqual([file]);
+      }
+      const getterLocalDefinition = index.byFile
+        .get(fileIdentityKey(file))
+        ?.locals.find((local) => local.localName === "value" && local.range.start.line === 4);
+      expect(getterLocalDefinition).toBeDefined();
+      if (!getterLocalDefinition) throw new Error("Expected getter-local value definition");
+      const getterLocal = await indexer.findReferences(index, { def: getterLocalDefinition });
+      expect(getterLocal.status).toBe("ok");
+      if (getterLocal.status === "ok") {
+        expect(getterLocal.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(getterLocal.references.map((reference) => reference.range.start.line)).toEqual([4, 5]);
+      }
+      const deleterDefinition = index.byFile
+        .get(fileIdentityKey(file))
+        ?.locals.find((local) => local.localName === "count" && local.range.start.line === 10);
+      expect(deleterDefinition).toBeDefined();
+      if (!deleterDefinition) throw new Error("Expected property deleter definition");
+      const deleter = await indexer.findReferences(index, { def: deleterDefinition });
+      expect(deleter.status).toBe("ok");
+      if (deleter.status === "ok") {
+        expect(deleter.referenceCoverage?.state).toBe("partial");
+        expect(deleter.referenceCoverage?.reasons).toContain("strategy_unavailable");
+        expect(deleter.referenceCoverage?.affectedFiles).toEqual([file]);
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

@@ -1780,12 +1780,16 @@ function pythonPropertyAccessorNeedsPartialCoverage(parsedContext: ParsedFileCon
   let functionNode: SyntaxNodeLike | null = nameNode;
   while (functionNode && functionNode.type !== "function_definition") functionNode = functionNode.parent;
   if (functionNode?.type !== "function_definition") return false;
+  const functionName = functionNode.childForFieldName("name");
+  if (functionName?.startIndex !== nameNode.startIndex || functionName.endIndex !== nameNode.endIndex) return false;
   const decoratedDefinition = functionNode.parent;
   if (decoratedDefinition?.type !== "decorated_definition") return false;
   return decoratedDefinition.namedChildren.some(
     (child) =>
       child.type === "decorator" &&
-      (child.text.trim() === "@property" || child.text.trim() === "@" + definition.localName + ".setter"),
+      (child.text.trim() === "@property" ||
+        child.text.trim() === "@" + definition.localName + ".setter" ||
+        child.text.trim() === "@" + definition.localName + ".deleter"),
   );
 }
 
