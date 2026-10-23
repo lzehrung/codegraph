@@ -7024,3 +7024,58 @@ describe("Find References: SCSS Sass modules", () => {
     }
   });
 });
+
+describe("Find References: Python formatted property accessors", () => {
+  it.each([
+    {
+      name: "formatted decorators",
+      source: [
+        "class Counter:",
+        "    @ property",
+        "    def count(self):",
+        "        return self._count",
+        "    @count . setter",
+        "    def count(self, value):",
+        "        self._count = value",
+        "    def __init__(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ].join("\n"),
+      setterLine: 6,
+    },
+    {
+      name: "owner-qualified setter",
+      source: [
+        "class Base:",
+        "    @property",
+        "    def count(self):",
+        "        return self._count",
+        "class Child(Base):",
+        "    @Base.count.setter",
+        "    def count(self, value):",
+        "        self._count = value",
+        "    def __init__(self):",
+        "        self.count = 3",
+      ].join("\n"),
+      setterLine: 7,
+    },
+  ])("reports partial coverage for $name setter references", async ({ source, setterLine }) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-formatted-property-refs-"));
+    try {
+      const file = path.join(root, "models.py").replace(/\\/g, "/");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const definition = index.byFile
+        .get(fileIdentityKey(file))
+        ?.locals.find((local) => local.localName === "count" && local.range.start.line === setterLine);
+      expect(definition).toBeDefined();
+      if (!definition) throw new Error("Expected property setter definition");
+      const result = await indexer.findReferences(index, { def: definition });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") expect(result.referenceCoverage?.state).toBe("partial");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

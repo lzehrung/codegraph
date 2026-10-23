@@ -1,4 +1,5 @@
 import { CSHARP_SUPPORT, supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
+import { pythonPropertyDecorator } from "./python-property-decorator.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -3669,9 +3670,12 @@ function pythonPropertyDescriptorMembers(
     const decorated = functionNode.parent;
     if (decorated?.type !== "decorated_definition") continue;
     const decorators = decorated.namedChildren.filter((child) => child.type === "decorator");
-    if (decorators.some((decorator) => decorator.text.trim() === "@property")) {
+    const kinds = decorators.map(pythonPropertyDecorator);
+    if (kinds.some((kind) => kind?.kind === "property")) {
       propertyGetter = local;
-    } else if (decorators.some((decorator) => decorator.text.trim() === `@${member}.setter`)) {
+    } else if (
+      kinds.some((kind) => kind?.kind === "accessor" && kind.accessor === "setter" && kind.propertyName === member)
+    ) {
       propertySetter = local;
     }
   }

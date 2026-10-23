@@ -1610,3 +1610,58 @@ describe("Python failed relative imports", () => {
     }
   });
 });
+
+describe("Python formatted property accessor navigation regressions", () => {
+  it("resolves formatted property reads to the getter instead of __init__ writes", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-formatted-property-goto-"));
+    try {
+      const file = path.join(root, "models.py").replace(/\\/g, "/");
+      const source = [
+        "class Counter:",
+        "    @ property",
+        "    def count(self):",
+        "        return self._count",
+        "    @count . setter",
+        "    def count(self, value):",
+        "        self._count = value",
+        "    def __init__(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const navigation = await goToDefinition(index, { file, line: 11, column: 21 });
+      expect(navigation.status).toBe("ok");
+      if (navigation.status === "ok") expect(navigation.definition.range.start.line).toBe(3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat owner-qualified setters as Child instance attributes", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-qualified-property-goto-"));
+    try {
+      const file = path.join(root, "models.py").replace(/\\/g, "/");
+      const source = [
+        "class Base:",
+        "    @property",
+        "    def count(self):",
+        "        return self._count",
+        "class Child(Base):",
+        "    @Base.count.setter",
+        "    def count(self, value):",
+        "        self._count = value",
+        "    def __init__(self):",
+        "        self.count = 3",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const navigation = await goToDefinition(index, { file, line: 10, column: 14 });
+      expect(navigation.status).toBe("ok");
+      if (navigation.status === "ok") expect(navigation.definition.range.start.line).not.toBe(10);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

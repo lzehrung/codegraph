@@ -1,4 +1,5 @@
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
+import { pythonPropertyDecorator } from "./python-property-decorator.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
@@ -1784,13 +1785,15 @@ function pythonPropertyAccessorNeedsPartialCoverage(parsedContext: ParsedFileCon
   if (functionName?.startIndex !== nameNode.startIndex || functionName.endIndex !== nameNode.endIndex) return false;
   const decoratedDefinition = functionNode.parent;
   if (decoratedDefinition?.type !== "decorated_definition") return false;
-  return decoratedDefinition.namedChildren.some(
-    (child) =>
-      child.type === "decorator" &&
-      (child.text.trim() === "@property" ||
-        child.text.trim() === "@" + definition.localName + ".setter" ||
-        child.text.trim() === "@" + definition.localName + ".deleter"),
-  );
+  return decoratedDefinition.namedChildren.some((child) => {
+    const decorator = pythonPropertyDecorator(child);
+    if (decorator?.kind === "property") return true;
+    return (
+      decorator?.kind === "accessor" &&
+      decorator.propertyName === definition.localName &&
+      (decorator.accessor === "setter" || decorator.accessor === "deleter")
+    );
+  });
 }
 
 function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDef): SyntaxNodeLike {
