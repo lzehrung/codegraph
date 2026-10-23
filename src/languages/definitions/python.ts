@@ -166,10 +166,12 @@ export const PYTHON_DEF: LanguageDefinition = {
       (assignment left: [(pattern_list (identifier) @name) (tuple_pattern (identifier) @name)])
       ;; Instance / class attributes declared as \`self.x = ...\` or \`cls.x = ...\`.
       ((assignment
-        left: (attribute object: (identifier) @receiver attribute: (identifier) @name))
+        left: (attribute object: (identifier) @receiver attribute: (identifier) @name)
+        right: (_))
         (#eq? @receiver "self"))
       ((assignment
-        left: (attribute object: (identifier) @receiver attribute: (identifier) @name))
+        left: (attribute object: (identifier) @receiver attribute: (identifier) @name)
+        right: (_))
         (#eq? @receiver "cls"))
       (named_expression name: (identifier) @name)
       (type_alias_statement left: (type [(identifier) @name (generic_type (identifier) @name)]))

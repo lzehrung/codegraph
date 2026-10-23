@@ -5,7 +5,7 @@ import { boundList } from "../presentation/bounds.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { shapeCandidateTests, type RenameCandidateTest } from "./candidate-tests.js";
 export type { RenameCandidateTest };
-import { findRenameReferences } from "../indexer/navigation.js";
+import { canonicalizePythonReceiverAttributeDefinition, findRenameReferences } from "../indexer/navigation.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
 import { findImplementations as queryImplementations } from "../indexer/type-hierarchy.js";
@@ -196,7 +196,11 @@ export async function previewRenameInSnapshot(
   request: Omit<RenamePreviewRequest, "buildOptions">,
   freshness: AgentFreshnessResult = { state: "fresh" },
 ): Promise<RenamePreviewResponse> {
-  const resolved = requireSemanticSymbol(snapshot, request.handle);
+  let resolved = requireSemanticSymbol(snapshot, request.handle);
+  const canonical = await canonicalizePythonReceiverAttributeDefinition(snapshot.index, resolved.def);
+  if (canonical?.status === "ok") {
+    resolved = { id: defNodeId(canonical.definition), def: canonical.definition };
+  }
   const maxEdits = normalizeMaxEdits(request.maxEdits);
   const provenance = semanticRenameProvenance(snapshot);
   const conflicts = validateNewName(snapshot, resolved.def, request.newName);

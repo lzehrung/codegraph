@@ -93,6 +93,47 @@ function markCandidateParserDegraded(index: indexer.ProjectIndex, file: string):
 }
 
 describe("Find References", () => {
+  it("marks Python property accessors as strategy-unavailable", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-property-references-"));
+    try {
+      const file = path.join(root, "models.py").replace(/\\/g, "/");
+      const source = [
+        "class Decorated:",
+        "    @property",
+        "    def count(self):",
+        "        return self._count",
+        "    @count.setter",
+        "    def count(self, value):",
+        "        self._count = value",
+        "    def read(self):",
+        "        return self.count",
+        "",
+        "class Assigned:",
+        "    def get_count(self):",
+        "        return self._count",
+        "    def set_count(self, value):",
+        "        self._count = value",
+        "    count = property(get_count, set_count)",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const lines = source.split("\n");
+      for (const line of [3, 6, 16]) {
+        const result = await indexer.findReferences(index, {
+          file,
+          line,
+          column: tokenColumn(lines[line - 1]!, "count"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(result.referenceCoverage?.state).toBe("partial");
+        expect(result.referenceCoverage?.reasons).toContain("strategy_unavailable");
+        expect(result.referenceCoverage?.affectedFiles).toEqual([file]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
   it("narrows candidate files to importers that can resolve the definition", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-reference-candidates-"));
     try {

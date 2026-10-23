@@ -1464,6 +1464,17 @@ describe("Python receiver member navigation", () => {
         const hits = annotatedReferences.references.map((reference) => reference.range.start.line);
         expect(hits).toEqual(expect.arrayContaining([27, 29, 31]));
       }
+      const annotationStartedReferences = await findReferences(index, {
+        file,
+        line: 29,
+        column: columnOf(29, "count"),
+      });
+      expect(annotationStartedReferences.status).toBe("ok");
+      if (annotationStartedReferences.status === "ok") {
+        expect(annotationStartedReferences.definition.range.start.line).toBe(27);
+        const hits = annotationStartedReferences.references.map((reference) => reference.range.start.line);
+        expect(hits).toEqual(expect.arrayContaining([27, 31]));
+      }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -1506,6 +1517,22 @@ describe("Python receiver member navigation", () => {
       writeLine: 8,
       readLine: 10,
     },
+    {
+      name: "a one-argument property() assignment",
+      source: [
+        "class Counter:",
+        "    def get_count(self):",
+        "        return self._count",
+        "    count = property(get_count)",
+        "    def write(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ].join("\n"),
+      propertyLine: 4,
+      writeLine: 6,
+      readLine: 8,
+    },
   ])("keeps instance writes behind $name descriptors", async ({ source, propertyLine, writeLine, readLine }) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-property-descriptor-"));
     try {
@@ -1547,6 +1574,9 @@ describe("Python receiver member navigation", () => {
       expect(propertyReferences.status).toBe("ok");
       if (writeReferences.status === "ok" && propertyReferences.status === "ok") {
         expect(writeReferences.references).toEqual(propertyReferences.references);
+        expect(writeReferences.references.map((reference) => reference.range.start.line)).toEqual(
+          expect.arrayContaining([propertyLine, writeLine, readLine]),
+        );
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

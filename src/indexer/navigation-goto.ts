@@ -3656,7 +3656,7 @@ function pythonPropertyDescriptorMembers(
       const value = assignment.childForFieldName("right");
       const propertyName = value?.childForFieldName("function");
       const argumentsNode = value?.childForFieldName("arguments");
-      if (propertyName?.text === "property" && (argumentsNode?.namedChildren.length ?? 0) >= 2) {
+      if (propertyName?.text === "property" && (argumentsNode?.namedChildren.length ?? 0) >= 1) {
         propertyAssignment = local;
         continue;
       }
