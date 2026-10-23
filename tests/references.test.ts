@@ -93,6 +93,74 @@ function markCandidateParserDegraded(index: indexer.ProjectIndex, file: string):
 }
 
 describe("Find References", () => {
+  it("marks Python property accessors as strategy-unavailable", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-property-references-"));
+    try {
+      const file = path.join(root, "models.py").replace(/\\/g, "/");
+      const source = [
+        "class Decorated:",
+        "    @property",
+        "    def count(self):",
+        "        value = self._count",
+        "        return value",
+        "    @count.setter",
+        "    def count(self, value):",
+        "        self._count = value",
+        "    @count.deleter",
+        "    def count(self):",
+        "        del self._count",
+        "    def read(self):",
+        "        return self.count",
+        "",
+        "class Assigned:",
+        "    def get_count(self):",
+        "        return self._count",
+        "    def set_count(self, value):",
+        "        self._count = value",
+        "    count = property(get_count, set_count)",
+      ].join("\n");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      for (const line of [3, 7, 20]) {
+        const definition = index.byFile
+          .get(fileIdentityKey(file))
+          ?.locals.find((local) => local.localName === "count" && local.range.start.line === line);
+        expect(definition).toBeDefined();
+        if (!definition) throw new Error(`Expected property definition at line ${line}`);
+        const result = await indexer.findReferences(index, { def: definition });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(result.referenceCoverage?.state).toBe("partial");
+        expect(result.referenceCoverage?.reasons).toContain("strategy_unavailable");
+        expect(result.referenceCoverage?.affectedFiles).toEqual([file]);
+      }
+      const getterLocalDefinition = index.byFile
+        .get(fileIdentityKey(file))
+        ?.locals.find((local) => local.localName === "value" && local.range.start.line === 4);
+      expect(getterLocalDefinition).toBeDefined();
+      if (!getterLocalDefinition) throw new Error("Expected getter-local value definition");
+      const getterLocal = await indexer.findReferences(index, { def: getterLocalDefinition });
+      expect(getterLocal.status).toBe("ok");
+      if (getterLocal.status === "ok") {
+        expect(getterLocal.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(getterLocal.references.map((reference) => reference.range.start.line)).toEqual([4, 5]);
+      }
+      const deleterDefinition = index.byFile
+        .get(fileIdentityKey(file))
+        ?.locals.find((local) => local.localName === "count" && local.range.start.line === 10);
+      expect(deleterDefinition).toBeDefined();
+      if (!deleterDefinition) throw new Error("Expected property deleter definition");
+      const deleter = await indexer.findReferences(index, { def: deleterDefinition });
+      expect(deleter.status).toBe("ok");
+      if (deleter.status === "ok") {
+        expect(deleter.referenceCoverage?.state).toBe("partial");
+        expect(deleter.referenceCoverage?.reasons).toContain("strategy_unavailable");
+        expect(deleter.referenceCoverage?.affectedFiles).toEqual([file]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
   it("narrows candidate files to importers that can resolve the definition", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-reference-candidates-"));
     try {
@@ -6951,6 +7019,61 @@ describe("Find References: SCSS Sass modules", () => {
       const fn = [at(4, "to-ne"), at(5, "to-ne"), at(6, "to_ne")];
       const fnResult = await testFindReferences(index, paths["main.scss"]!, 6, fn[2]!.column, fn);
       expect(fnResult.status === "ok" ? fnResult.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: Python formatted property accessors", () => {
+  it.each([
+    {
+      name: "formatted decorators",
+      source: [
+        "class Counter:",
+        "    @ property",
+        "    def count(self):",
+        "        return self._count",
+        "    @count . setter",
+        "    def count(self, value):",
+        "        self._count = value",
+        "    def __init__(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ].join("\n"),
+      setterLine: 6,
+    },
+    {
+      name: "owner-qualified setter",
+      source: [
+        "class Base:",
+        "    @property",
+        "    def count(self):",
+        "        return self._count",
+        "class Child(Base):",
+        "    @Base.count.setter",
+        "    def count(self, value):",
+        "        self._count = value",
+        "    def __init__(self):",
+        "        self.count = 3",
+      ].join("\n"),
+      setterLine: 7,
+    },
+  ])("reports partial coverage for $name setter references", async ({ source, setterLine }) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-formatted-property-refs-"));
+    try {
+      const file = path.join(root, "models.py").replace(/\\/g, "/");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      const definition = index.byFile
+        .get(fileIdentityKey(file))
+        ?.locals.find((local) => local.localName === "count" && local.range.start.line === setterLine);
+      expect(definition).toBeDefined();
+      if (!definition) throw new Error("Expected property setter definition");
+      const result = await indexer.findReferences(index, { def: definition });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") expect(result.referenceCoverage?.state).toBe("partial");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

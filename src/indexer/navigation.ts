@@ -1,4 +1,5 @@
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
+import { pythonPropertyDecorator } from "./python-property-decorator.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
@@ -15,6 +16,7 @@ import {
   sharedOwnerMemberUnitComplete,
   supportsReceiverMemberNavigation,
 } from "./navigation-goto.js";
+import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import {
   findClosestBinding,
   findClosestScopeBinding,
@@ -625,6 +627,28 @@ async function attachReferenceContext(
   }
 }
 
+export async function canonicalizePythonReceiverAttributeDefinition(
+  index: ProjectIndex,
+  def: SymbolDef,
+  position: Pick<GoToRequest, "file" | "line" | "column"> = {
+    file: def.file,
+    line: def.range.start.line,
+    column: def.range.start.column,
+  },
+): Promise<GoToResult | null> {
+  if (supportForFileWithoutHeaderSample(position.file, index.languageExtensions)?.id !== "python") return null;
+  const context = await ensureParsedContext(
+    position.file,
+    index.parsed?.get(fileIdentityKey(position.file)),
+    index.languageExtensions,
+  );
+  if (context.sup.id !== "python") return null;
+  const nodePosition = { row: position.line - 1, column: position.column - 1 };
+  const node = context.tree.rootNode.descendantForPosition(nodePosition, nodePosition);
+  if (!isPythonReceiverAttributeAssignmentName(node)) return null;
+  return await goToDefinition(index, position, context);
+}
+
 async function findReferencesInternal(
   index: ProjectIndex,
   req: FindReferencesRequest,
@@ -636,6 +660,11 @@ async function findReferencesInternal(
   if ("def" in req) {
     def = req.def;
     provenance = createNavigationProvenance("exact", "high");
+    const canonical = await canonicalizePythonReceiverAttributeDefinition(index, def);
+    if (canonical?.status === "ok") {
+      def = canonical.definition;
+      provenance = canonical.provenance;
+    }
   } else {
     const module = index.byFile.get(fileIdentityKey(req.file));
     // A SQL definition spans its whole statement, so a position inside it can name another object: the
@@ -661,6 +690,15 @@ async function findReferencesInternal(
     } else if (localAtPosition) {
       def = localAtPosition;
       provenance = createNavigationProvenance("exact", "high");
+      const canonical = await canonicalizePythonReceiverAttributeDefinition(index, def, {
+        file: req.file,
+        line: req.line,
+        column: req.column,
+      });
+      if (canonical?.status === "ok") {
+        def = canonical.definition;
+        provenance = canonical.provenance;
+      }
     } else {
       const gotoResult = await goToDefinition(index, req);
       if (gotoResult.status === "ok") {
@@ -1680,6 +1718,9 @@ async function findReferencesInternal(
     if (await scssFlowLocalUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
     if (await scssBlockLocalExistenceUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
   }
+  if (parsedContext.sup.id === "python" && pythonPropertyAccessorNeedsPartialCoverage(parsedContext, definition)) {
+    strategyUnavailableFiles.push(definition.file);
+  }
   if (scssScopedCallableUnproven) strategyUnavailableFiles.push(definition.file);
   const referenceCoverage = buildIndexedCandidateCoverage({
     index,
@@ -1715,6 +1756,44 @@ async function findReferencesInternal(
     referenceCoverage,
     ...(provenance ? { provenance } : {}),
   };
+}
+
+function pythonPropertyAccessorNeedsPartialCoverage(parsedContext: ParsedFileContext, definition: SymbolDef): boolean {
+  const nameNode = syntaxNodeForDefinition(parsedContext, definition);
+  if (nameNode.type !== "identifier") return false;
+  const assignment = nameNode.parent;
+  if (assignment?.type === "assignment" && assignment.childForFieldName("left")?.id === nameNode.id) {
+    const value = assignment.childForFieldName("right");
+    const argumentsNode = value?.childForFieldName("arguments");
+    if (value?.type === "call" && value.childForFieldName("function")?.text === "property" && argumentsNode) {
+      const positionalArguments = argumentsNode.namedChildren.filter(
+        (argument) => argument.type !== "keyword_argument",
+      );
+      if (positionalArguments[1] && positionalArguments[1].text !== "None") return true;
+      return argumentsNode.namedChildren.some(
+        (argument) =>
+          argument.type === "keyword_argument" &&
+          argument.childForFieldName("name")?.text === "fset" &&
+          argument.childForFieldName("value")?.text !== "None",
+      );
+    }
+  }
+  let functionNode: SyntaxNodeLike | null = nameNode;
+  while (functionNode && functionNode.type !== "function_definition") functionNode = functionNode.parent;
+  if (functionNode?.type !== "function_definition") return false;
+  const functionName = functionNode.childForFieldName("name");
+  if (functionName?.startIndex !== nameNode.startIndex || functionName.endIndex !== nameNode.endIndex) return false;
+  const decoratedDefinition = functionNode.parent;
+  if (decoratedDefinition?.type !== "decorated_definition") return false;
+  return decoratedDefinition.namedChildren.some((child) => {
+    const decorator = pythonPropertyDecorator(child);
+    if (decorator?.kind === "property") return true;
+    return (
+      decorator?.kind === "accessor" &&
+      decorator.propertyName === definition.localName &&
+      (decorator.accessor === "setter" || decorator.accessor === "deleter")
+    );
+  });
 }
 
 function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDef): SyntaxNodeLike {
