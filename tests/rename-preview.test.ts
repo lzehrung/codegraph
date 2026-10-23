@@ -384,6 +384,64 @@ describe("rename preview", () => {
     ]);
     expect(result.edits.some((edit) => edit.file === "consumer.ts" && edit.kind === "import")).toBe(false);
   });
+  it("does not edit namespace imports whose exported name matches the renamed member", async () => {
+    const root = await mkTmpDir("cg-rename-namespace-name-match-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function value(): number { return 1; }\n");
+    await fsp.writeFile(path.join(root, "barrel.ts"), 'export * as value from "./service.js";\n');
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      [
+        'import { value as ns } from "./barrel.js";',
+        "ns.value();",
+        'import { value } from "./barrel.js";',
+        "value.value();",
+        "",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "value", exportedOnly: true });
+    const target = symbols.symbols.find(
+      (symbol) => symbol.name === "value" && symbol.location.file.endsWith("service.ts"),
+    );
+    expect(target).toBeDefined();
+    const result = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "renamedValue" });
+
+    expect(result.safe).toBe(true);
+    expect(
+      result.edits
+        .filter((edit) => edit.file === "consumer.ts" && edit.kind === "reference")
+        .map((edit) => [edit.range.start.line, edit.oldText, edit.newText]),
+    ).toEqual([
+      [2, "value", "renamedValue"],
+      [4, "value", "renamedValue"],
+    ]);
+    expect(result.edits.some((edit) => edit.file === "consumer.ts" && edit.kind === "import")).toBe(false);
+  });
+  it("does not report namespace-member bindings as renamed import collisions", async () => {
+    const root = await mkTmpDir("cg-rename-namespace-import-conflict-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function value(): number { return 1; }\n");
+    await fsp.writeFile(path.join(root, "barrel.ts"), 'export * as group from "./service.js";\n');
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      ['import { group as value } from "./barrel.js";', "const renamedValue = 0;", "value.value();", ""].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "value", exportedOnly: true });
+    const target = symbols.symbols.find(
+      (symbol) => symbol.name === "value" && symbol.location.file.endsWith("service.ts"),
+    );
+    expect(target).toBeDefined();
+    const result = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "renamedValue" });
+
+    expect(result.safe).toBe(true);
+    expect(result.conflicts).toEqual([]);
+    expect(
+      result.edits
+        .filter((edit) => edit.file === "consumer.ts")
+        .map((edit) => [edit.file, edit.oldText, edit.newText, edit.kind]),
+    ).toEqual([["consumer.ts", "value", "renamedValue", "reference"]]);
+  });
+
   it("does not charge preserved alias sites against the edit limit", async () => {
     const root = await mkTmpDir("cg-rename-alias-bound-");
     await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n");

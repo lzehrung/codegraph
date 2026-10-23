@@ -864,6 +864,7 @@ async function addScopeConflicts(
 
   const seenImportFiles = new Set<string>();
   for (const reference of references) {
+    if (reference.via?.namespaceMember) continue;
     const activeImport = reference.via?.import;
     const localImportWillChange = activeImport?.kind === "named" && activeImport.local === target.localName;
     if (!activeImport || !localImportWillChange || seenImportFiles.has(fileIdentityKey(reference.file))) continue;
@@ -1153,6 +1154,7 @@ async function collectImportDeclarationCandidates(
     }
   }
   for (const reference of references) {
+    if (reference.via?.namespaceMember) continue;
     const binding = reference.via?.import;
     if (!binding || binding.kind !== "named" || binding.imported !== oldName) continue;
     const key = namedImportBindingKey(reference.file, binding);
