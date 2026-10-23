@@ -1,9 +1,9 @@
 // @def identity @coverage identity complete
 export function identity<
-  T // @def identityT @coverage identityT complete @known-gap generic_type_parameters_not_indexed
+  T // @def identityT @coverage identityT complete @known-gap generic_type_parameters_not_indexed observed=not_found
 >(
-  value: T // @ref identityT @known-gap generic_type_parameter_reference_missing
-): T { // @ref identityT @known-gap generic_type_parameter_reference_missing
+  value: T // @ref identityT @known-gap generic_type_parameter_reference_missing observed=none
+): T { // @ref identityT @known-gap generic_type_parameter_reference_missing observed=none
   return value;
 }
 

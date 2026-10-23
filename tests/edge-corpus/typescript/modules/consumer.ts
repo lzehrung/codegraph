@@ -6,7 +6,7 @@ import * as sourceNS from "./source";
 const direct = sourceNS.original; // @ref original @goto original
 const aliased = localAlias; // @ref original
 const starred = starValue; // @ref starValue
-const namespaced = nested.namespaceValue; // @ref namespaceValue @known-gap namespace_reexport_member_reference_missing
+const namespaced = nested.namespaceValue; // @ref namespaceValue @known-gap namespace_reexport_member_reference_missing observed=none
 const namespaceGoto = nested.namespaceValue; // @goto namespaceValue
 const widget = new Widget(); // @ref Widget @goto Widget
 const decoyText = "original";

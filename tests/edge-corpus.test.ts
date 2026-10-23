@@ -15,6 +15,7 @@ type Marker = {
   file: string;
   line: number;
   state?: CoverageState;
+  observed?: string;
 };
 type ParsedSource = Awaited<ReturnType<typeof parseFile>>;
 type DefinitionSite = { file: string; line: number; column: number; name: string };
@@ -86,12 +87,14 @@ function extractMarkers(parsed: ParsedSource, file: string, commentPrefix: strin
       const id = match[2] ?? "";
       const followingText = body.slice((match.index ?? 0) + match[0].length).trimStart();
       const stateMatch = kind === "coverage" ? /^(complete|partial)\b/.exec(followingText) : null;
+      const observedMatch = kind === "known-gap" ? /(?:^|\s)observed=([\w.-]+)/.exec(followingText) : null;
       markers.push({
         kind,
         id,
         file,
         line: siteRow + 1,
         ...(stateMatch ? { state: stateMatch[1] as CoverageState } : {}),
+        ...(observedMatch ? { observed: observedMatch[1] } : {}),
       });
     }
   });
@@ -182,9 +185,14 @@ describe("Tree-sitter edge corpus", () => {
       for (const [id, definition] of definitions) {
         referencesById.set(id, await findReferences(index, definition));
       }
-      const knownGapReasons = new Map<string, string>();
+      const knownGapsBySite = new Map<string, Marker>();
       for (const marker of markers.filter((entry) => entry.kind === "known-gap")) {
-        knownGapReasons.set(`${marker.file}:${marker.line}`, marker.id);
+        knownGapsBySite.set(`${marker.file}:${marker.line}`, marker);
+        if (!marker.observed) {
+          failures.push(
+            `${relativeFile(marker.file)}:${marker.line} @known-gap ${marker.id}: expected observed=<value>`,
+          );
+        }
       }
 
       for (const marker of markers) {
@@ -192,7 +200,8 @@ describe("Tree-sitter edge corpus", () => {
         assertionCounts.set(scenario.language, (assertionCounts.get(scenario.language) ?? 0) + 1);
         const location = `${relativeFile(marker.file)}:${marker.line}`;
         const sourceLine = (sourceByFile.get(marker.file)?.split(/\r?\n/)[marker.line - 1] ?? "").trim();
-        const gapReason = knownGapReasons.get(`${marker.file}:${marker.line}`);
+        const knownGap = knownGapsBySite.get(`${marker.file}:${marker.line}`);
+        const gapReason = knownGap?.id;
         const references = referencesById.get(marker.id);
 
         if (marker.kind === "goto") {
@@ -219,18 +228,25 @@ describe("Tree-sitter edge corpus", () => {
           }
           const result = await goToDefinition(index, { file: marker.file, line: marker.line, column });
           if (gapReason) {
-            let matchesExpectedTarget = false;
-            if (result.status === "ok") {
-              if (sameFile(result.definition.file, target.file)) {
-                matchesExpectedTarget = result.definition.range.start.line === target.line;
-              }
-            }
-            if (matchesExpectedTarget) {
-              failures.push(`${location} @goto ${marker.id} @known-gap ${gapReason}: current miss disappeared`);
-            }
             let observed: string = result.status;
-            if (result.status === "ok")
-              observed = `${relativeFile(result.definition.file)}:${result.definition.range.start.line}`;
+            if (result.status === "ok") {
+              observed =
+                [...definitions].find(
+                  ([, definition]) =>
+                    sameFile(result.definition.file, definition.file) &&
+                    result.definition.range.start.line === definition.line,
+                )?.[0] ?? `${relativeFile(result.definition.file)}:${result.definition.range.start.line}`;
+            }
+            if (observed !== knownGap?.observed)
+              failures.push(
+                `${location} @goto ${marker.id} @known-gap ${gapReason}: expected observed=${knownGap?.observed}, got ${observed}`,
+              );
+            if (
+              result.status === "ok" &&
+              sameFile(result.definition.file, target.file) &&
+              result.definition.range.start.line === target.line
+            )
+              failures.push(`${location} @goto ${marker.id} @known-gap ${gapReason}: gap disappeared`);
             knownGaps.push(
               `${scenario.language}: ${location} input=${JSON.stringify(sourceLine)}; expected goto to ${relativeFile(target.file)}:${target.line}; observed ${observed}; reason=${gapReason}`,
             );
@@ -258,6 +274,16 @@ describe("Tree-sitter edge corpus", () => {
           continue;
         }
         if (references.status !== "ok") {
+          if (gapReason && marker.kind === "coverage" && knownGap?.observed !== references.status) {
+            failures.push(
+              `${location} @coverage ${marker.id} @known-gap ${gapReason}: expected observed=${knownGap?.observed}, got ${references.status}`,
+            );
+          }
+          if (gapReason && marker.kind === "ref" && knownGap?.observed !== "none") {
+            failures.push(
+              `${location} @ref ${marker.id} @known-gap ${gapReason}: expected observed=${knownGap?.observed}, got none`,
+            );
+          }
           if (gapReason && references.status === "not_found" && marker.kind === "coverage") {
             knownGaps.push(
               `${scenario.language}: ${location} input=${JSON.stringify(sourceLine)}; expected ${marker.state ?? "coverage"}; observed not_found; reason=${gapReason}`,
@@ -284,6 +310,14 @@ describe("Tree-sitter edge corpus", () => {
         if (marker.kind === "coverage") {
           if (!marker.state) {
             failures.push(`${location} @coverage ${marker.id}: expected complete or partial`);
+          } else if (gapReason) {
+            const observed = references.referenceCoverage?.state ?? "unknown";
+            if (observed === marker.state)
+              failures.push(`${location} @coverage ${marker.id} @known-gap ${gapReason}: gap disappeared`);
+            if (observed !== knownGap?.observed)
+              failures.push(
+                `${location} @coverage ${marker.id} @known-gap ${gapReason}: expected observed=${knownGap?.observed}, got ${observed}`,
+              );
           } else if (references.referenceCoverage?.state !== marker.state) {
             failures.push(
               `${location} @coverage ${marker.id}: expected ${marker.state}, observed ${references.referenceCoverage?.state ?? "unknown"}`,
@@ -291,13 +325,15 @@ describe("Tree-sitter edge corpus", () => {
           }
         } else if (marker.kind === "ref") {
           if (gapReason) {
-            if (matchingReferences.length) {
+            const observed = matchingReferences.length ? marker.id : "none";
+            if (observed !== knownGap?.observed)
               failures.push(
-                `${location} @ref ${marker.id} @known-gap ${gapReason}: expected current miss, observed a reference`,
+                `${location} @ref ${marker.id} @known-gap ${gapReason}: expected observed=${knownGap?.observed}, got ${observed}`,
               );
-            }
+            if (matchingReferences.length)
+              failures.push(`${location} @ref ${marker.id} @known-gap ${gapReason}: gap disappeared`);
             knownGaps.push(
-              `${scenario.language}: ${location} input=${JSON.stringify(sourceLine)}; expected reference to ${marker.id}; observed no reference; reason=${gapReason}`,
+              `${scenario.language}: ${location} input=${JSON.stringify(sourceLine)}; expected reference to ${marker.id}; observed ${observed}; reason=${gapReason}`,
             );
           } else if (!matchingReferences.length) {
             failures.push(
@@ -326,7 +362,7 @@ describe("Tree-sitter edge corpus", () => {
 
     for (const language of Object.keys(commentPrefixes)) {
       const count = assertionCounts.get(language) ?? 0;
-      if (count < 25 || count > 40) failures.push(`${language}: expected 25-40 edge assertions, observed ${count}`);
+      if (count < 25 || count > 45) failures.push(`${language}: expected 25-45 edge assertions, observed ${count}`);
     }
     if (knownGaps.length) {
       process.stdout.write(`Known edge-corpus gaps:\n${knownGaps.join("\n")}\n`);
