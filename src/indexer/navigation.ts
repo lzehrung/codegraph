@@ -721,7 +721,8 @@ async function findReferencesInternal(
     if (ref.via?.reexport || referenceSiteKey(ref.file, ref.range) === definitionSiteKey) return false;
     if (collectionMode === "usages") return ref.via?.importBinding === undefined;
     if (ref.via?.namespaceMember) {
-      return ref.via.namespaceMember === def.localName && !namespaceBindingHasExplicitAlias(ref.via.import);
+      const hasExplicitAlias = namespaceBindingHasExplicitAlias(ref.via.import);
+      return ref.via.namespaceMember === def.localName && !hasExplicitAlias;
     }
     const binding = ref.via?.import;
     if (!binding || binding.kind === "star" || binding.kind === "namespace") return true;
@@ -794,52 +795,65 @@ async function findReferencesInternal(
   const matchesReferenceDefinition = (candidate: SymbolDef): boolean =>
     sameDef(candidate, definition, index.languageExtensions) ||
     equivalentDefinitions.some((equivalent) => sameDef(candidate, equivalent, index.languageExtensions));
-  const hasExplicitSameNameExportAlias = (context: ParsedFileContext): boolean => {
-    const pending: SyntaxNodeLike[] = [context.tree.rootNode];
-    while (pending.length) {
-      const node = pending.pop()!;
-      if (node.type === "export_specifier" && node.childForFieldName("alias")?.text === def.localName) {
-        return true;
+  const hasExplicitExportAliasForDefinition = async (candidateModule: ModuleIndex): Promise<boolean> => {
+    const definitionExportNames = new Set<string>();
+    for (const entry of candidateModule.exports) {
+      if (!("exportedAs" in entry)) continue;
+      const hit = resolveExport(index, candidateModule.file, entry.exportedAs, exportOptions);
+      if (hit?.kind === "resolved" && matchesReferenceDefinition(hit.def)) {
+        definitionExportNames.add(entry.exportedAs);
       }
-      pending.push(...node.namedChildren);
     }
-    return false;
-  };
-  for (const candidateModule of index.byFile.values()) {
-    if (!candidateModule.exports.some((entry) => "exportedAs" in entry && entry.exportedAs === def.localName)) continue;
-    const hit = resolveExport(index, candidateModule.file, def.localName, exportOptions);
-    if (hit?.kind !== "resolved" || !matchesReferenceDefinition(hit.def)) continue;
+    if (!definitionExportNames.size) return false;
     const parsedModule = await ensureParsedContext(
       candidateModule.file,
       index.parsed?.get(fileIdentityKey(candidateModule.file)),
       index.languageExtensions,
     );
-    if (hasExplicitSameNameExportAlias(parsedModule)) {
+    const pending: SyntaxNodeLike[] = [parsedModule.tree.rootNode];
+    while (pending.length) {
+      const node = pending.pop()!;
+      const alias = node.type === "export_specifier" ? node.childForFieldName("alias") : undefined;
+      if (alias && definitionExportNames.has(alias.text)) return true;
+      pending.push(...node.namedChildren);
+    }
+    return false;
+  };
+  for (const candidateModule of index.byFile.values()) {
+    if (await hasExplicitExportAliasForDefinition(candidateModule)) {
       explicitNamespaceMemberAliasFiles.add(fileIdentityKey(candidateModule.file));
     }
   }
+  let namespaceExportAliasUncertainty = false;
   const namespaceBindingHasExplicitAlias = (binding: ImportBinding | undefined): boolean => {
     if (!binding) return false;
-    const pending: string[] = [];
+    const namespaceFiles: string[] = [];
     if (binding.kind === "namespace" && typeof binding.resolved === "string") {
-      pending.push(binding.resolved);
+      namespaceFiles.push(binding.resolved);
     } else if (binding.kind === "named" && typeof binding.resolved === "string") {
       const target = resolveExport(index, binding.resolved, binding.imported);
-      if (target?.kind === "namespace") pending.push(target.file);
+      if (target?.kind === "namespace") namespaceFiles.push(target.file);
     }
     const visited = new Set<string>();
-    while (pending.length) {
-      const file = pending.pop()!;
+    const modulePathHasAlias = (file: string): boolean => {
       const fileKey = fileIdentityKey(file);
-      if (visited.has(fileKey)) continue;
+      if (visited.has(fileKey)) return false;
       visited.add(fileKey);
       if (explicitNamespaceMemberAliasFiles.has(fileKey)) return true;
       const targetModule = index.byFile.get(fileKey);
       for (const entry of targetModule?.exports ?? []) {
-        if (entry.type === "namespaceReexport") pending.push(entry.fromModule);
+        if (entry.type === "namespaceReexport" && modulePathHasAlias(entry.fromModule)) return true;
+        if (entry.type !== "reexport") continue;
+        const hit = resolveExport(index, file, entry.exportedAs, exportOptions);
+        if (hit?.kind === "resolved" && matchesReferenceDefinition(hit.def) && modulePathHasAlias(entry.fromModule)) {
+          return true;
+        }
       }
-    }
-    return false;
+      return false;
+    };
+    const hasAlias = namespaceFiles.some(modulePathHasAlias);
+    if (hasAlias) namespaceExportAliasUncertainty = true;
+    return hasAlias;
   };
 
   const exportedNames: string[] = [];
@@ -1748,6 +1762,7 @@ async function findReferencesInternal(
   const strategyUnavailableFiles = [
     ...receiverProofUnavailableFiles.values(),
     ...(rubyReopen?.incomplete ? [definition.file] : []),
+    ...(namespaceExportAliasUncertainty ? [definition.file] : []),
   ];
   if (parsedContext.sup.id === "scss" && definition.localName.startsWith("$")) {
     const facts = await scssFactsForFile(index, definition.file);
