@@ -4094,6 +4094,107 @@ describe("Find References", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("finds member uses through export * as, including a star import and not an unrelated namespace", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ns-reexport-refs-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const decoyFile = path.join(root, "decoy.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const passthroughFile = path.join(root, "passthrough.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        const starConsumerFile = path.join(root, "star-consumer.ts").replace(/\\/g, "/");
+        const indirectFile = path.join(root, "indirect.ts").replace(/\\/g, "/");
+        const decoyConsumerFile = path.join(root, "decoy-consumer.ts").replace(/\\/g, "/");
+        const idleFile = path.join(root, "idle.ts").replace(/\\/g, "/");
+        const source = "export const namespaceValue = 1;\n";
+        const consumer = ['import { nested } from "./barrel";', "const namespaced = nested.namespaceValue;", ""].join(
+          "\n",
+        );
+        const starConsumer = [
+          'import * as ns from "./barrel";',
+          "const namespaced = ns.nested.namespaceValue;",
+          "",
+        ].join("\n");
+        const indirect = [
+          'import { nested as bundle } from "./passthrough";',
+          "const namespaced = bundle.namespaceValue;",
+          "",
+        ].join("\n");
+        const decoyConsumer = [
+          'import { other } from "./barrel";',
+          "const missed = other.namespaceValue;",
+          "const unrelated = other.unrelated;",
+          "",
+        ].join("\n");
+        await fsp.writeFile(sourceFile, source, "utf8");
+        await fsp.writeFile(decoyFile, "export const unrelated = 2;\n", "utf8");
+        await fsp.writeFile(
+          barrelFile,
+          ['export * as nested from "./source";', 'export * as other from "./decoy";', ""].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(passthroughFile, 'export { nested } from "./barrel";\n', "utf8");
+        await fsp.writeFile(consumerFile, consumer, "utf8");
+        await fsp.writeFile(starConsumerFile, starConsumer, "utf8");
+        await fsp.writeFile(indirectFile, indirect, "utf8");
+        await fsp.writeFile(decoyConsumerFile, decoyConsumer, "utf8");
+        await fsp.writeFile(idleFile, "const namespaceValue = 0;\n", "utf8");
+
+        const index = await createTestIndexFromFiles(root, [
+          sourceFile,
+          decoyFile,
+          barrelFile,
+          passthroughFile,
+          consumerFile,
+          starConsumerFile,
+          indirectFile,
+          decoyConsumerFile,
+          idleFile,
+        ]);
+        const def = index.byFile
+          .get(fileIdentityKey(sourceFile))
+          ?.locals.find((local) => local.localName === "namespaceValue");
+        if (!def) throw new Error("Expected namespaceValue definition");
+        const candidates = getCachedReferenceCandidateFiles(index, def, ["namespaceValue"], false, "ts");
+        expect(candidates).toContain(consumerFile);
+        expect(candidates).toContain(starConsumerFile);
+        expect(candidates).toContain(indirectFile);
+        expect(candidates).not.toContain(decoyFile);
+        expect(candidates).not.toContain(idleFile);
+
+        const definitionColumn = tokenColumn(source, "namespaceValue");
+        const consumerColumn = tokenColumn(consumer.split("\n")[1] ?? "", "namespaceValue");
+        const starColumn = tokenColumn(starConsumer.split("\n")[1] ?? "", "namespaceValue");
+        const indirectColumn = tokenColumn(indirect.split("\n")[1] ?? "", "namespaceValue");
+        const namedGoto = await goToDefinition(index, { file: consumerFile, line: 2, column: consumerColumn });
+        const starGoto = await goToDefinition(index, { file: starConsumerFile, line: 2, column: starColumn });
+        expect(namedGoto.status).toBe("ok");
+        expect(starGoto.status).toBe("ok");
+        if (namedGoto.status === "ok") expect(namedGoto.definition.localName).toBe("namespaceValue");
+        if (starGoto.status === "ok") expect(starGoto.definition.localName).toBe("namespaceValue");
+
+        const result = await testFindReferences(index, sourceFile, 1, definitionColumn, [
+          { file: sourceFile, line: 1, column: definitionColumn },
+          { file: consumerFile, line: 2, column: consumerColumn },
+          { file: starConsumerFile, line: 2, column: starColumn },
+          { file: indirectFile, line: 2, column: indirectColumn },
+        ]);
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+          expect(result.references.some((reference) => reference.file === decoyConsumerFile)).toBe(false);
+          expect(result.references).toContainEqual(
+            expect.objectContaining({
+              file: consumerFile,
+              via: expect.objectContaining({ namespaceMember: "namespaceValue" }),
+            }),
+          );
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 });
 

@@ -1,4 +1,5 @@
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
@@ -1033,6 +1034,65 @@ async function findReferencesInternal(
       return scopeIndex;
     };
 
+    const scanNamespaceMemberPaths = async (
+      memberName: string,
+      importBinding: ImportBinding,
+      namespacePaths: Array<{ file: FileId; name: string; depth: number }>,
+    ): Promise<void> => {
+      for (let pathIndex = 0; pathIndex < namespacePaths.length; pathIndex++) {
+        if (hasReachedCollectionLimit()) return;
+        if (pathIndex >= MAX_REFERENCE_NAMESPACE_PATHS) {
+          receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
+          return;
+        }
+        const namespacePath = namespacePaths[pathIndex]!;
+        if (namespacePath.depth) {
+          const nestedHit = resolveExport(index, namespacePath.file, memberName, {
+            allowLocalFallback: false,
+            ...(exportOptions ?? {}),
+          });
+          if (nestedHit?.kind === "resolved" && matchesReferenceDefinition(nestedHit.def)) {
+            const parsed = await ensureCandidateParsed();
+            const ranges = await collectNamespaceMemberRefs(
+              fileId,
+              namespacePath.name,
+              memberName,
+              parsed,
+              index.languageExtensions,
+              importBinding,
+              module.imports,
+              await ensureScope(),
+            );
+            for (const range of ranges) {
+              if (hasReachedCollectionLimit()) return;
+              const proof = await goToDefinition(
+                index,
+                { file: fileId, line: range.start.line, column: range.start.column },
+                parsed,
+              );
+              if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
+              pushRef({ file: fileId, range, via: { import: importBinding, namespaceMember: memberName } });
+            }
+          }
+        }
+        const namespaceExports = resolveModuleExports(index, namespacePath.file, { allowLocalFallback: false });
+        if (namespacePath.depth >= MAX_REFERENCE_NAMESPACE_DEPTH) {
+          if ([...namespaceExports.values()].some((entry) => entry.kind === "namespace")) {
+            receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
+          }
+          continue;
+        }
+        for (const [alias, entry] of namespaceExports) {
+          if (entry.kind !== "namespace") continue;
+          namespacePaths.push({
+            file: entry.file,
+            name: `${namespacePath.name}.${alias}`,
+            depth: namespacePath.depth + 1,
+          });
+        }
+      }
+    };
+
     if (supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.supportsExportFromReferences) {
       for (const entry of module.exports) {
         if (hasReachedCollectionLimit()) break;
@@ -1167,60 +1227,9 @@ async function findReferencesInternal(
             // A namespace re-export exposes a member at paths such as W.helpers.helper,
             // not as a bare export of the intermediate module. Follow only export-proven
             // namespace edges, then verify each use through the same goto resolver.
-            const namespacePaths: Array<{ file: FileId; name: string; depth: number }> = [
+            await scanNamespaceMemberPaths(exportedName, imp, [
               { file: targetFile, name: namespaceSearchName, depth: 0 },
-            ];
-            for (let pathIndex = 0; pathIndex < namespacePaths.length; pathIndex++) {
-              if (pathIndex >= MAX_REFERENCE_NAMESPACE_PATHS) {
-                receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
-                break;
-              }
-              const namespacePath = namespacePaths[pathIndex]!;
-              if (namespacePath.depth) {
-                const nestedHit = resolveExport(index, namespacePath.file, exportedName, {
-                  allowLocalFallback: false,
-                  ...(exportOptions ?? {}),
-                });
-                if (nestedHit?.kind === "resolved" && matchesReferenceDefinition(nestedHit.def)) {
-                  const parsed = await ensureCandidateParsed();
-                  const ranges = await collectNamespaceMemberRefs(
-                    fileId,
-                    namespacePath.name,
-                    exportedName,
-                    parsed,
-                    index.languageExtensions,
-                    imp,
-                    module.imports,
-                    await ensureScope(),
-                  );
-                  for (const range of ranges) {
-                    if (hasReachedCollectionLimit()) break;
-                    const proof = await goToDefinition(
-                      index,
-                      { file: fileId, line: range.start.line, column: range.start.column },
-                      parsed,
-                    );
-                    if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
-                    pushRef({ file: fileId, range, via: { import: imp, namespaceMember: exportedName } });
-                  }
-                }
-              }
-              const exports = resolveModuleExports(index, namespacePath.file, { allowLocalFallback: false });
-              if (namespacePath.depth >= MAX_REFERENCE_NAMESPACE_DEPTH) {
-                if ([...exports.values()].some((entry) => entry.kind === "namespace")) {
-                  receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
-                }
-                continue;
-              }
-              for (const [alias, entry] of exports) {
-                if (entry.kind !== "namespace") continue;
-                namespacePaths.push({
-                  file: entry.file,
-                  name: `${namespacePath.name}.${alias}`,
-                  depth: namespacePath.depth + 1,
-                });
-              }
-            }
+            ]);
             continue;
           }
           const parsed = await ensureCandidateParsed();
@@ -1370,6 +1379,19 @@ async function findReferencesInternal(
               }
               continue;
             }
+          }
+          const candidateLanguage = supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.id;
+          if (
+            !matchesDef &&
+            imp.kind === "named" &&
+            hit?.kind === "namespace" &&
+            candidateLanguage &&
+            isJsTsLanguage(candidateLanguage)
+          ) {
+            // `import { nested }` binds the namespace object. Member lookup starts in that
+            // module; `import * as ns` still starts at the barrel and descends. Goto proves the site.
+            await scanNamespaceMemberPaths(exportedName, imp, [{ file: hit.file, name: imp.local, depth: 1 }]);
+            continue;
           }
           if (!matchesDef) {
             // The requested export slot itself does not exist at all (as opposed to existing
