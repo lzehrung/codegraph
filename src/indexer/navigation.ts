@@ -1034,11 +1034,16 @@ async function findReferencesInternal(
       return scopeIndex;
     };
 
+    const scannedNamespaceMemberRoots = new Set<string>();
     const scanNamespaceMemberPaths = async (
-      memberName: string,
       importBinding: ImportBinding,
       namespacePaths: Array<{ file: FileId; name: string; depth: number }>,
     ): Promise<void> => {
+      const rootPath = namespacePaths[0];
+      if (!rootPath) return;
+      const rootKey = fileIdentityKey(rootPath.file) + "::" + rootPath.name;
+      if (scannedNamespaceMemberRoots.has(rootKey)) return;
+      scannedNamespaceMemberRoots.add(rootKey);
       for (let pathIndex = 0; pathIndex < namespacePaths.length; pathIndex++) {
         if (hasReachedCollectionLimit()) return;
         if (pathIndex >= MAX_REFERENCE_NAMESPACE_PATHS) {
@@ -1046,17 +1051,15 @@ async function findReferencesInternal(
           return;
         }
         const namespacePath = namespacePaths[pathIndex]!;
+        const namespaceExports = resolveModuleExports(index, namespacePath.file, { allowLocalFallback: false });
         if (namespacePath.depth) {
-          const nestedHit = resolveExport(index, namespacePath.file, memberName, {
-            allowLocalFallback: false,
-            ...(exportOptions ?? {}),
-          });
-          if (nestedHit?.kind === "resolved" && matchesReferenceDefinition(nestedHit.def)) {
+          for (const [visibleMemberName, nestedHit] of namespaceExports) {
+            if (nestedHit.kind !== "resolved" || !matchesReferenceDefinition(nestedHit.def)) continue;
             const parsed = await ensureCandidateParsed();
             const ranges = await collectNamespaceMemberRefs(
               fileId,
               namespacePath.name,
-              memberName,
+              visibleMemberName,
               parsed,
               index.languageExtensions,
               importBinding,
@@ -1071,11 +1074,14 @@ async function findReferencesInternal(
                 parsed,
               );
               if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
-              pushRef({ file: fileId, range, via: { import: importBinding, namespaceMember: memberName } });
+              pushRef({
+                file: fileId,
+                range,
+                via: { import: importBinding, namespaceMember: visibleMemberName },
+              });
             }
           }
         }
-        const namespaceExports = resolveModuleExports(index, namespacePath.file, { allowLocalFallback: false });
         if (namespacePath.depth >= MAX_REFERENCE_NAMESPACE_DEPTH) {
           if ([...namespaceExports.values()].some((entry) => entry.kind === "namespace")) {
             receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
@@ -1220,16 +1226,17 @@ async function findReferencesInternal(
           if (!matchesDef) {
             const targetModule = index.byFile.get(fileIdentityKey(targetFile));
             if (
-              !targetModule?.exports.some((entry) => entry.type === "namespaceReexport" || entry.type === "exportStar")
+              !targetModule?.exports.some(
+                (entry) =>
+                  entry.type === "namespaceReexport" || entry.type === "exportStar" || entry.type === "reexport",
+              )
             ) {
               continue;
             }
-            // A namespace re-export exposes a member at paths such as W.helpers.helper,
+            // A forwarded namespace can expose a member at paths such as W.helpers.helper,
             // not as a bare export of the intermediate module. Follow only export-proven
             // namespace edges, then verify each use through the same goto resolver.
-            await scanNamespaceMemberPaths(exportedName, imp, [
-              { file: targetFile, name: namespaceSearchName, depth: 0 },
-            ]);
+            await scanNamespaceMemberPaths(imp, [{ file: targetFile, name: namespaceSearchName, depth: 0 }]);
             continue;
           }
           const parsed = await ensureCandidateParsed();
@@ -1390,7 +1397,7 @@ async function findReferencesInternal(
           ) {
             // `import { nested }` binds the namespace object. Member lookup starts in that
             // module; `import * as ns` still starts at the barrel and descends. Goto proves the site.
-            await scanNamespaceMemberPaths(exportedName, imp, [{ file: hit.file, name: imp.local, depth: 1 }]);
+            await scanNamespaceMemberPaths(imp, [{ file: hit.file, name: imp.local, depth: 1 }]);
             continue;
           }
           if (!matchesDef) {

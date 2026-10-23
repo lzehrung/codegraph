@@ -2233,6 +2233,101 @@ describe("Find References", () => {
         });
       }
     });
+
+    it("finds namespace member references through forwarded namespace exports", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-forwarded-namespace-"));
+      try {
+        const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+        const files = new Map([
+          ["source.ts", "export function value() {}\n"],
+          ["base.ts", 'export * as nested from "./source";\n'],
+          ["forwarded-named.ts", 'export { nested } from "./base";\n'],
+          ["forwarded-star.ts", 'export * from "./base";\n'],
+          ["outer.ts", 'export * as outer from "./forwarded-named";\n'],
+          ["outer-use.ts", 'import { outer } from "./outer";\nouter.nested.value();\n'],
+          ["namespace-use.ts", 'import * as ns from "./forwarded-star";\nns.nested.value();\n'],
+        ]);
+        await Promise.all([...files].map(([name, source]) => fsp.writeFile(file(name), source, "utf8")));
+
+        const sourceFile = file("source.ts");
+        const outerUseFile = file("outer-use.ts");
+        const namespaceUseFile = file("namespace-use.ts");
+        const index = await createTestIndexFromPath(root);
+        const result = await testFindReferences(index, sourceFile, 1, 17, 1);
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(
+            result.references.some(
+              (reference) =>
+                reference.file === outerUseFile &&
+                reference.range.start.line === 2 &&
+                reference.via?.namespaceMember === "value",
+            ),
+          ).toBe(true);
+          expect(
+            result.references.some(
+              (reference) =>
+                reference.file === namespaceUseFile &&
+                reference.range.start.line === 2 &&
+                reference.via?.namespaceMember === "value",
+            ),
+          ).toBe(true);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds aliased namespace members without including a same-named decoy", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-aliased-namespace-"));
+      try {
+        const file = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+        const files = new Map([
+          ["source.ts", "export function value() {}\n"],
+          ["renamed.ts", 'export { value as renamed } from "./source";\n'],
+          ["nested.ts", 'export * as nested from "./renamed";\n'],
+          ["decoy.ts", "export function renamed() {}\n"],
+          [
+            "use.ts",
+            [
+              'import { nested } from "./nested";',
+              'import { renamed } from "./decoy";',
+              "nested.renamed();",
+              "renamed();",
+              "",
+            ].join("\n"),
+          ],
+        ]);
+        await Promise.all([...files].map(([name, source]) => fsp.writeFile(file(name), source, "utf8")));
+
+        const sourceFile = file("source.ts");
+        const useFile = file("use.ts");
+        const index = await createTestIndexFromPath(root);
+        const result = await testFindReferences(index, sourceFile, 1, 17, 1);
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(
+            result.references.some(
+              (reference) =>
+                reference.file === useFile &&
+                reference.range.start.line === 3 &&
+                reference.via?.namespaceMember === "renamed",
+            ),
+          ).toBe(true);
+          expect(
+            result.references.some((reference) => reference.file === useFile && reference.range.start.line === 4),
+          ).toBe(false);
+        }
+
+        const goto = await goToDefinition(index, { file: useFile, line: 3, column: 8 });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(sourceFile));
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("TSX", () => {

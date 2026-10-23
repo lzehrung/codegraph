@@ -846,7 +846,7 @@ function referenceCandidateCacheKey(index: ProjectIndex, def: SymbolDef, exporte
 
 /**
  * True when `namespaceFile` is the definition's module, re-exports it, or reaches it through
- * further `export * as` edges. A named import of that namespace can spell the symbol as a member.
+ * forwarded namespace exports. A named import of that namespace can spell the symbol as a member.
  */
 function jsNamespaceFileExportsDefinition(
   index: ProjectIndex,
@@ -860,17 +860,17 @@ function jsNamespaceFileExportsDefinition(
   seen.add(key);
   if (!exportedNames.length) return false;
   if (key === fileIdentityKey(def.file)) return true;
-  for (const exportedName of exportedNames) {
-    const hit = resolveExport(index, namespaceFile, exportedName, { allowLocalFallback: false });
-    if (hit?.kind === "resolved" && sameDef(hit.def, def, index.languageExtensions)) return true;
-  }
   const moduleIndex = index.byFile.get(key);
   if (!moduleIndex) return false;
-  for (const entry of moduleIndex.exports) {
-    if (entry.type !== "namespaceReexport") continue;
-    const visible = resolveExport(index, namespaceFile, entry.exportedAs, { allowLocalFallback: false });
-    if (visible?.kind !== "namespace") continue;
-    if (jsNamespaceFileExportsDefinition(index, visible.file, def, exportedNames, seen)) return true;
+  for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
+    const visible = resolveExport(index, namespaceFile, exportedName, { allowLocalFallback: false });
+    if (visible?.kind === "resolved" && sameDef(visible.def, def, index.languageExtensions)) return true;
+    if (
+      visible?.kind === "namespace" &&
+      jsNamespaceFileExportsDefinition(index, visible.file, def, exportedNames, seen)
+    ) {
+      return true;
+    }
   }
   return false;
 }
@@ -895,9 +895,8 @@ function jsNamespaceImportReachesDefinition(
   const moduleIndex = index.byFile.get(fileIdentityKey(targetFile));
   if (!moduleIndex) return false;
   const seen = new Set<string>();
-  for (const entry of moduleIndex.exports) {
-    if (entry.type !== "namespaceReexport") continue;
-    const visible = resolveExport(index, targetFile, entry.exportedAs, { allowLocalFallback: false });
+  for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
+    const visible = resolveExport(index, targetFile, exportedName, { allowLocalFallback: false });
     if (visible?.kind !== "namespace") continue;
     if (jsNamespaceFileExportsDefinition(index, visible.file, def, exportedNames, seen)) return true;
   }
@@ -989,14 +988,16 @@ function filesExportingDefinition(
   const files = new Map<string, string>([[fileIdentityKey(def.file), def.file]]);
   const namespaceLinks: Array<{ sourceFile: string; exportedAs: string; targetFile: string }> = [];
   for (const moduleIndex of index.byFile.values()) {
+    if (!moduleIndex.exports.length) continue;
     const fileId = moduleIndex.file;
-    for (const entry of moduleIndex.exports) {
-      if (entry.type === "namespaceReexport") {
-        namespaceLinks.push({ sourceFile: fileId, exportedAs: entry.exportedAs, targetFile: entry.fromModule });
-      }
+    const visibleExportNames = moduleExportProbeNames(index, moduleIndex, exportedNames);
+    for (const exportedName of visibleExportNames) {
+      const visible = resolveExport(index, fileId, exportedName, { allowLocalFallback: false });
+      if (visible?.kind !== "namespace") continue;
+      namespaceLinks.push({ sourceFile: fileId, exportedAs: exportedName, targetFile: visible.file });
     }
-    if (fileIdentityKey(fileId) === fileIdentityKey(def.file) || !moduleIndex.exports.length) continue;
-    for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
+    if (fileIdentityKey(fileId) === fileIdentityKey(def.file)) continue;
+    for (const exportedName of visibleExportNames) {
       const resolved = resolveExport(index, fileId, exportedName);
       if (resolved?.kind === "resolved" && sameDef(resolved.def, def, index.languageExtensions)) {
         files.set(fileIdentityKey(fileId), fileId);
@@ -1018,9 +1019,9 @@ function filesExportingDefinition(
       files.set(fileIdentityKey(fileId), fileId);
     }
   }
-  // A namespace re-export can expose an inner symbol through a member chain even
-  // though it does not export that symbol under its own name. Include consumers
-  // only when the visible namespace alias really targets the exporting module.
+  // Visible namespace exports can expose an inner symbol through a member chain even
+  // though they do not export that symbol under its own name. Include consumers
+  // only when the visible namespace export really targets the exporting module.
   let grew = true;
   while (grew) {
     grew = false;
