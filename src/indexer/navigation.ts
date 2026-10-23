@@ -715,11 +715,14 @@ async function findReferencesInternal(
 
   const definitionFile = def.file;
   const definitionSiteKey = referenceSiteKey(definitionFile, def.range);
+  const explicitNamespaceMemberAliasFiles = new Set<string>();
   const includeReference = (ref: Reference): boolean => {
     if (collectionMode === "all") return true;
     if (ref.via?.reexport || referenceSiteKey(ref.file, ref.range) === definitionSiteKey) return false;
     if (collectionMode === "usages") return ref.via?.importBinding === undefined;
-    if (ref.via?.namespaceMember) return ref.via.namespaceMember === def.localName;
+    if (ref.via?.namespaceMember) {
+      return ref.via.namespaceMember === def.localName && !namespaceBindingHasExplicitAlias(ref.via.import);
+    }
     const binding = ref.via?.import;
     if (!binding || binding.kind === "star" || binding.kind === "namespace") return true;
     if (ref.via?.importBinding === "imported" && binding.kind === "named" && binding.imported === def.localName) {
@@ -791,6 +794,53 @@ async function findReferencesInternal(
   const matchesReferenceDefinition = (candidate: SymbolDef): boolean =>
     sameDef(candidate, definition, index.languageExtensions) ||
     equivalentDefinitions.some((equivalent) => sameDef(candidate, equivalent, index.languageExtensions));
+  const hasExplicitSameNameExportAlias = (context: ParsedFileContext): boolean => {
+    const pending: SyntaxNodeLike[] = [context.tree.rootNode];
+    while (pending.length) {
+      const node = pending.pop()!;
+      if (node.type === "export_specifier" && node.childForFieldName("alias")?.text === def.localName) {
+        return true;
+      }
+      pending.push(...node.namedChildren);
+    }
+    return false;
+  };
+  for (const candidateModule of index.byFile.values()) {
+    if (!candidateModule.exports.some((entry) => "exportedAs" in entry && entry.exportedAs === def.localName)) continue;
+    const hit = resolveExport(index, candidateModule.file, def.localName, exportOptions);
+    if (hit?.kind !== "resolved" || !matchesReferenceDefinition(hit.def)) continue;
+    const parsedModule = await ensureParsedContext(
+      candidateModule.file,
+      index.parsed?.get(fileIdentityKey(candidateModule.file)),
+      index.languageExtensions,
+    );
+    if (hasExplicitSameNameExportAlias(parsedModule)) {
+      explicitNamespaceMemberAliasFiles.add(fileIdentityKey(candidateModule.file));
+    }
+  }
+  const namespaceBindingHasExplicitAlias = (binding: ImportBinding | undefined): boolean => {
+    if (!binding) return false;
+    const pending: string[] = [];
+    if (binding.kind === "namespace" && typeof binding.resolved === "string") {
+      pending.push(binding.resolved);
+    } else if (binding.kind === "named" && typeof binding.resolved === "string") {
+      const target = resolveExport(index, binding.resolved, binding.imported);
+      if (target?.kind === "namespace") pending.push(target.file);
+    }
+    const visited = new Set<string>();
+    while (pending.length) {
+      const file = pending.pop()!;
+      const fileKey = fileIdentityKey(file);
+      if (visited.has(fileKey)) continue;
+      visited.add(fileKey);
+      if (explicitNamespaceMemberAliasFiles.has(fileKey)) return true;
+      const targetModule = index.byFile.get(fileKey);
+      for (const entry of targetModule?.exports ?? []) {
+        if (entry.type === "namespaceReexport") pending.push(entry.fromModule);
+      }
+    }
+    return false;
+  };
 
   const exportedNames: string[] = [];
   for (const candidate of [definition, ...equivalentDefinitions]) {
