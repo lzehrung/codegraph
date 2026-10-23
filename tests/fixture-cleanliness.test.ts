@@ -136,7 +136,7 @@ describe("fixture cleanliness gate", () => {
       expect(cleanReport).toEqual({
         schemaVersion: 1,
         status: "pass",
-        fixtureRoots: ["tests/samples", "tests/fixtures", "tests/languages/samples"],
+        fixtureRoots: ["tests/samples", "tests/fixtures", "tests/languages/samples", "tests/edge-corpus"],
         violations: [],
       });
 

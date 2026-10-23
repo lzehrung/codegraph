@@ -2,7 +2,12 @@ import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-export const DEFAULT_FIXTURE_ROOTS = ["tests/samples", "tests/fixtures", "tests/languages/samples"];
+export const DEFAULT_FIXTURE_ROOTS = [
+  "tests/samples",
+  "tests/fixtures",
+  "tests/languages/samples",
+  "tests/edge-corpus",
+];
 
 const forbiddenCacheNames = {
   ".codegraph": true,
