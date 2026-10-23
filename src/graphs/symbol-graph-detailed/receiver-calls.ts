@@ -51,6 +51,8 @@ export type ReceiverCallCandidate = {
   site: NonNullable<SymbolGraph["edges"][number]["site"]>;
   /** Required static/instance scope; omitted candidates are classified from site. */
   memberScope?: ReceiverMemberScope;
+  /** Python receiver syntax that can resolve to an instance-assigned attribute. */
+  pythonInstanceReceiver?: boolean;
   /** Free function to use only if a Swift receiver has no matching member. */
   fallbackTargetId?: string | undefined;
 };

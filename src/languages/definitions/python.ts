@@ -35,7 +35,7 @@ export function isPythonReceiverAttributeAssignmentName(node: SyntaxNodeLike): b
   if (!object || !isPythonImplicitReceiverName(object.text)) return false;
   const assignment = attr.parent;
   if (assignment?.type !== "assignment") return false;
-  return assignment.childForFieldName("left")?.id === attr.id;
+  return assignment.childForFieldName("left")?.id === attr.id && !!assignment.childForFieldName("right");
 }
 
 /** `self.x = ...` / `cls.x = ...` inside a `class_definition`, treated as a type member. */

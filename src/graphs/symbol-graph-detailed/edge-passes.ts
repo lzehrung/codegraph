@@ -1255,6 +1255,10 @@ export async function emitFunctionBodyEdges(
           hasLexicalBinding,
           classifyImport,
         );
+      const pythonInstanceReceiver =
+        context.sup.id === "python" &&
+        ((binding.kind === "own-type" && sliceText(access.receiver, context.source) === "self") ||
+          (binding.kind === "named-type" && binding.proof !== "static-type"));
       if (binding.kind === "module-import" || binding.kind === "unknown") return;
 
       const site = { file: context.moduleEntry.file, range: toRange(access.property) };
@@ -1274,6 +1278,7 @@ export async function emitFunctionBodyEdges(
           argumentCount,
           site,
           memberScope: forcedMemberScope ?? binding.memberScope,
+          ...(pythonInstanceReceiver ? { pythonInstanceReceiver: true } : {}),
           ...(context.sup.id === "go" && !isGoExportedMemberName(context.sup.id, memberName)
             ? { goPackagePeerFiles: getCompilationUnitPeers(context.index, context.moduleEntry.file).files }
             : {}),
@@ -1319,6 +1324,7 @@ export async function emitFunctionBodyEdges(
         argumentCount,
         site,
         memberScope: binding.memberScope,
+        ...(pythonInstanceReceiver ? { pythonInstanceReceiver: true } : {}),
         caseInsensitiveMemberName: phpCaseInsensitive,
       });
     };

@@ -15,6 +15,7 @@ import {
   sharedOwnerMemberUnitComplete,
   supportsReceiverMemberNavigation,
 } from "./navigation-goto.js";
+import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import {
   findClosestBinding,
   findClosestScopeBinding,
@@ -661,6 +662,24 @@ async function findReferencesInternal(
     } else if (localAtPosition) {
       def = localAtPosition;
       provenance = createNavigationProvenance("exact", "high");
+      if (module && supportForFileWithoutHeaderSample(req.file)?.id === "python") {
+        const context = await ensureParsedContext(
+          req.file,
+          index.parsed?.get(fileIdentityKey(req.file)),
+          index.languageExtensions,
+        );
+        if (context.sup.id === "python") {
+          const position = { row: req.line - 1, column: req.column - 1 };
+          const node = context.tree.rootNode.descendantForPosition(position, position);
+          if (isPythonReceiverAttributeAssignmentName(node)) {
+            const canonical = await goToDefinition(index, req);
+            if (canonical.status === "ok") {
+              def = canonical.definition;
+              provenance = canonical.provenance;
+            }
+          }
+        }
+      }
     } else {
       const gotoResult = await goToDefinition(index, req);
       if (gotoResult.status === "ok") {

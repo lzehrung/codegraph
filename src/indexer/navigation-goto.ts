@@ -920,9 +920,13 @@ export async function resolveMemberAccessDefinition(params: {
           return null;
         })
       : null;
+  const pythonInstanceReceiver =
+    sup.id === "python" &&
+    ((receiverProof?.kind === "own-type" && obj?.type === "identifier" && sliceText(obj, source) === "self") ||
+      (receiverProof?.kind === "named-type" && receiverProof.proof !== "static-type"));
   const chain = await resolveExpression(memberNode);
   if (chain && prop && node.id === prop.id) {
-    if (chain.kind === "resolved") {
+    if (chain.kind === "resolved" && !pythonInstanceReceiver) {
       return okGoToResult(index, chain.def, {
         via: { exportedName: sliceText(prop, source) },
         resolution: "member-access",
@@ -3456,11 +3460,16 @@ async function resolvePythonReceiverMember(
 ): Promise<SymbolDef | undefined> {
   const classRef = await pythonReceiverClassRef(index, mod, node, obj, source, sup, resolveExpression, proof);
   if (!classRef) return undefined;
-  const preferInstanceAttributes = obj.type === "identifier" && sliceText(obj, source) === "self";
-  return lookupPythonClassMember(index, classRef.ref, member, classRef.startAtSupertype, preferInstanceAttributes);
+  return lookupPythonClassMember(
+    index,
+    classRef.ref,
+    member,
+    classRef.startAtSupertype,
+    classRef.preferInstanceAttributes,
+  );
 }
 
-type PythonReceiverClassRef = { ref: PythonClassRef; startAtSupertype: boolean };
+type PythonReceiverClassRef = { ref: PythonClassRef; startAtSupertype: boolean; preferInstanceAttributes: boolean };
 
 async function pythonReceiverClassRef(
   index: ProjectIndex,
@@ -3493,11 +3502,13 @@ async function pythonReceiverClassRef(
     });
     if (!def) return null;
     const ref = await pythonClassRefFromDef(index, def);
-    return ref ? { ref, startAtSupertype: receiver.kind === "supertype" } : null;
+    const preferInstanceAttributes = receiver.kind === "own-type" && sliceText(obj, source) === "self";
+    return ref ? { ref, startAtSupertype: receiver.kind === "supertype", preferInstanceAttributes } : null;
   }
 
   let classDef: SymbolDef | undefined;
   const constructor = receiver.kind === "named-type" && receiver.proof !== "static-type" ? receiver.typeNode : null;
+  const preferInstanceAttributes = receiver.kind === "named-type" && receiver.proof !== "static-type";
   if (constructor) {
     const result = await resolveExpression(constructor);
     if (result?.kind === "resolved" && result.def.kind === SymbolKind.Class) {
@@ -3512,7 +3523,7 @@ async function pythonReceiverClassRef(
   }
   if (!classDef) return null;
   const ref = await pythonClassRefFromDef(index, classDef);
-  return ref ? { ref, startAtSupertype: false } : null;
+  return ref ? { ref, startAtSupertype: false, preferInstanceAttributes } : null;
 }
 
 async function pythonClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promise<PythonClassRef | null> {

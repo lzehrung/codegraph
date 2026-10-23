@@ -46,8 +46,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * load to its `_index.scss`.
  * Epoch 91 keeps qualified `case` names and `loop`/`repeat` identifiers out of SQL block tracking.
  * Epoch 92 records tree-sitter ERROR/MISSING ranges per file for `parse_error` reference coverage.
+ * Epoch 93 stops indexing an annotation-only Python `self.x: T` as an instance attribute declaration.
  */
-export const CORE_ALGORITHM_EPOCH = 92;
+export const CORE_ALGORITHM_EPOCH = 93;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

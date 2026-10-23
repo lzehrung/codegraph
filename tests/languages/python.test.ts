@@ -1313,6 +1313,17 @@ describe("Python receiver member navigation", () => {
       "        self.count = 2",
       "    def read(self):",
       "        return self.count",
+      "",
+      "class AnnotatedOnly:",
+      "    count = 7",
+      "    def __init__(self):",
+      "        self.count: int",
+      "    def read(self):",
+      "        return self.count",
+      "",
+      "def read_counter():",
+      "    counter = Counter()",
+      "    return counter.count",
     ].join("\n");
     await fsp.writeFile(file, source, "utf8");
     try {
@@ -1342,11 +1353,15 @@ describe("Python receiver member navigation", () => {
       expect(firstWrite.status).toBe("ok");
       if (firstWrite.status === "ok") expect(firstWrite.definition.range.start.line).toBe(20);
 
+      const constructed = await goToDefinition(index, { file, line: 35, column: lines[34]!.lastIndexOf("count") + 1 });
+      expect(constructed.status).toBe("ok");
+      if (constructed.status === "ok") expect(constructed.definition.range.start.line).toBe(6);
+
       const instanceReferences = await findReferences(index, { file, line: 6, column: columnOf(6, "count") });
       expect(instanceReferences.status).toBe("ok");
       if (instanceReferences.status === "ok") {
         const hits = instanceReferences.references.map((reference) => reference.range.start.line);
-        expect(hits).toEqual(expect.arrayContaining([4, 6, 9, 10]));
+        expect(hits).toEqual(expect.arrayContaining([4, 6, 9, 10, 35]));
         expect(hits).not.toContain(2);
         expect(hits).not.toContain(8);
       }
@@ -1360,6 +1375,7 @@ describe("Python receiver member navigation", () => {
         expect(hits).not.toContain(6);
         expect(hits).not.toContain(9);
         expect(hits).not.toContain(10);
+        expect(hits).not.toContain(35);
       }
 
       const classOnlyReferences = await findReferences(index, { file, line: 13, column: columnOf(13, "count") });
@@ -1375,6 +1391,20 @@ describe("Python receiver member navigation", () => {
         const hits = firstWriteReferences.references.map((reference) => reference.range.start.line);
         expect(hits).toEqual(expect.arrayContaining([20, 22, 24]));
         expect(hits).not.toContain(18);
+      }
+
+      const laterWriteReferences = await findReferences(index, { file, line: 22, column: columnOf(22, "count") });
+      expect(laterWriteReferences).toEqual(firstWriteReferences);
+
+      const annotatedOnly = await goToDefinition(index, { file, line: 31, column: columnOf(31, "count") });
+      expect(annotatedOnly.status).toBe("ok");
+      if (annotatedOnly.status === "ok") expect(annotatedOnly.definition.range.start.line).toBe(27);
+
+      const annotatedReferences = await findReferences(index, { file, line: 27, column: columnOf(27, "count") });
+      expect(annotatedReferences.status).toBe("ok");
+      if (annotatedReferences.status === "ok") {
+        const hits = annotatedReferences.references.map((reference) => reference.range.start.line);
+        expect(hits).toEqual(expect.arrayContaining([27, 29, 31]));
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

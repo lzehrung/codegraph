@@ -544,6 +544,23 @@ nativeDescribe("receiver method call edge language parity", () => {
     const run = nodeIn(graph, "pyexample.py", "py_run");
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["py_helper"]);
   });
+  it("does not attribute Python instance-shadowed calls to class methods", async () => {
+    const files: Record<string, string> = {
+      "pyexample.py": [
+        "class PyExample:",
+        "    def py_helper(self):",
+        "        return 1",
+        "    def py_run(self, callback):",
+        "        self.py_helper = callback",
+        "        return self.py_helper()",
+      ].join("\n"),
+    };
+    const graph = await buildFixture("cg-receiver-py-instance-shadow-", files);
+    const helper = nodeIn(graph, "pyexample.py", "py_helper");
+    const run = nodeIn(graph, "pyexample.py", "py_run");
+    expect(callsiteTexts(graph, helper, run, files)).toBeNull();
+    expect(outgoingCallCount(graph, run)).toBe(0);
+  });
 
   it("records calls edges for C# this receivers", async () => {
     const files: Record<string, string> = {
