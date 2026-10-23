@@ -9,6 +9,8 @@ import {
   collectImportsForFile,
   collectLocalsAndExportsFromSource,
   parseFile,
+  findReferencesById,
+  symbolId,
   SymbolKind,
 } from "../../src/indexer.js";
 import { expectFileInIndex, findSymbolsByName } from "../test-utils.js";
@@ -1324,6 +1326,29 @@ describe("Python receiver member navigation", () => {
       "def read_counter():",
       "    counter = Counter()",
       "    return counter.count",
+      "",
+      "class DecoratedProperty:",
+      "    @property",
+      "    def count(self):",
+      "        return self._count",
+      "    @count.setter",
+      "    def count(self, value):",
+      "        self._count = value",
+      "    def write(self):",
+      "        self.count = 3",
+      "    def read(self):",
+      "        return self.count",
+      "",
+      "class AssignedProperty:",
+      "    def get_count(self):",
+      "        return self._count",
+      "    def set_count(self, value):",
+      "        self._count = value",
+      "    count = property(get_count, set_count)",
+      "    def write(self):",
+      "        self.count = 3",
+      "    def read(self):",
+      "        return self.count",
     ].join("\n");
     await fsp.writeFile(file, source, "utf8");
     try {
@@ -1396,6 +1421,39 @@ describe("Python receiver member navigation", () => {
       const laterWriteReferences = await findReferences(index, { file, line: 22, column: columnOf(22, "count") });
       expect(laterWriteReferences).toEqual(firstWriteReferences);
 
+      const laterWriteDefinition = index.byFile
+        .get(fileIdentityKey(file))
+        ?.locals.find((local) => local.range.start.line === 22);
+      expect(laterWriteDefinition).toBeDefined();
+      if (!laterWriteDefinition) throw new Error("Expected an indexed later instance write");
+      const definitionReferences = await findReferences(index, { def: laterWriteDefinition });
+      const handleReferences = await findReferencesById(index, symbolId(laterWriteDefinition));
+      expect.soft(definitionReferences).toEqual(firstWriteReferences);
+      expect.soft(handleReferences).toEqual(firstWriteReferences);
+
+      const mappedRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-shadowed-attribute-mapped-"));
+      try {
+        const mappedFile = path.join(mappedRoot, "models.pyt").replace(/\\/g, "/");
+        await fsp.writeFile(mappedFile, source, "utf8");
+        const mappedIndex = await buildProjectIndex(mappedRoot, {
+          cache: "off",
+          languageExtensions: { ".pyt": "python" },
+        });
+        const mappedReferences = await findReferences(mappedIndex, {
+          file: mappedFile,
+          line: 22,
+          column: columnOf(22, "count"),
+        });
+        expect(mappedReferences.status).toBe("ok");
+        if (mappedReferences.status === "ok") {
+          const hits = mappedReferences.references.map((reference) => reference.range.start.line);
+          expect(hits).toEqual(expect.arrayContaining([20, 22, 24]));
+          expect(hits).not.toContain(18);
+        }
+      } finally {
+        await fsp.rm(mappedRoot, { recursive: true, force: true });
+      }
+
       const annotatedOnly = await goToDefinition(index, { file, line: 31, column: columnOf(31, "count") });
       expect(annotatedOnly.status).toBe("ok");
       if (annotatedOnly.status === "ok") expect(annotatedOnly.definition.range.start.line).toBe(27);
@@ -1405,6 +1463,90 @@ describe("Python receiver member navigation", () => {
       if (annotatedReferences.status === "ok") {
         const hits = annotatedReferences.references.map((reference) => reference.range.start.line);
         expect(hits).toEqual(expect.arrayContaining([27, 29, 31]));
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it.each([
+    {
+      name: "a @property setter",
+      source: [
+        "class Counter:",
+        "    @property",
+        "    def count(self):",
+        "        return self._count",
+        "    @count.setter",
+        "    def count(self, value):",
+        "        self._count = value",
+        "    def write(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ].join("\n"),
+      propertyLine: 3,
+      writeLine: 9,
+      readLine: 11,
+    },
+    {
+      name: "a property() assignment",
+      source: [
+        "class Counter:",
+        "    def get_count(self):",
+        "        return self._count",
+        "    def set_count(self, value):",
+        "        self._count = value",
+        "    count = property(get_count, set_count)",
+        "    def write(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ].join("\n"),
+      propertyLine: 6,
+      writeLine: 8,
+      readLine: 10,
+    },
+  ])("keeps instance writes behind $name descriptors", async ({ source, propertyLine, writeLine, readLine }) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-property-descriptor-"));
+    try {
+      const file = path.join(root, "models.py").replace(/\\/g, "/");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const lines = source.split("\n");
+      const columnOf = (line: number, token: string): number => {
+        const indexOf = lines[line - 1]!.indexOf(token);
+        if (indexOf < 0) throw new Error(`Expected token ${token} on fixture line ${line}`);
+        return indexOf + 1;
+      };
+      const navigation = await goToDefinition(index, {
+        file,
+        line: readLine,
+        column: columnOf(readLine, "count"),
+      });
+      const writeNavigation = await goToDefinition(index, {
+        file,
+        line: writeLine,
+        column: columnOf(writeLine, "count"),
+      });
+      const propertyDefinition = index.byFile
+        .get(fileIdentityKey(file))
+        ?.locals.find((local) => local.localName === "count" && local.range.start.line === propertyLine);
+      expect(propertyDefinition).toBeDefined();
+      if (!propertyDefinition) throw new Error("Expected the class property definition");
+      const writeReferences = await findReferences(index, {
+        file,
+        line: writeLine,
+        column: columnOf(writeLine, "count"),
+      });
+      const propertyReferences = await findReferences(index, { def: propertyDefinition });
+      expect(navigation.status).toBe("ok");
+      if (navigation.status === "ok") expect(navigation.definition.range.start.line).toBe(propertyLine);
+      expect(writeNavigation.status).toBe("ok");
+      if (writeNavigation.status === "ok") expect(writeNavigation.definition.range.start.line).toBe(propertyLine);
+      expect(writeReferences.status).toBe("ok");
+      expect(propertyReferences.status).toBe("ok");
+      if (writeReferences.status === "ok" && propertyReferences.status === "ok") {
+        expect(writeReferences.references).toEqual(propertyReferences.references);
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

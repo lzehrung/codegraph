@@ -637,6 +637,28 @@ async function findReferencesInternal(
   if ("def" in req) {
     def = req.def;
     provenance = createNavigationProvenance("exact", "high");
+    if (supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.id === "python") {
+      const context = await ensureParsedContext(
+        def.file,
+        index.parsed?.get(fileIdentityKey(def.file)),
+        index.languageExtensions,
+      );
+      if (context.sup.id === "python") {
+        const position = { row: def.range.start.line - 1, column: def.range.start.column - 1 };
+        const node = context.tree.rootNode.descendantForPosition(position, position);
+        if (isPythonReceiverAttributeAssignmentName(node)) {
+          const canonical = await goToDefinition(
+            index,
+            { file: def.file, line: def.range.start.line, column: def.range.start.column },
+            context,
+          );
+          if (canonical.status === "ok") {
+            def = canonical.definition;
+            provenance = canonical.provenance;
+          }
+        }
+      }
+    }
   } else {
     const module = index.byFile.get(fileIdentityKey(req.file));
     // A SQL definition spans its whole statement, so a position inside it can name another object: the
@@ -662,7 +684,7 @@ async function findReferencesInternal(
     } else if (localAtPosition) {
       def = localAtPosition;
       provenance = createNavigationProvenance("exact", "high");
-      if (module && supportForFileWithoutHeaderSample(req.file)?.id === "python") {
+      if (module && supportForFileWithoutHeaderSample(req.file, index.languageExtensions)?.id === "python") {
         const context = await ensureParsedContext(
           req.file,
           index.parsed?.get(fileIdentityKey(req.file)),

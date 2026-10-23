@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { buildSymbolGraphDetailed, type DetailedSymbolGraph } from "../src/graphs/symbol-graph-detailed.js";
 import {
   emitReceiverCallEdges,
@@ -14,7 +14,7 @@ import { buildProjectIndex } from "../src/indexer/build-index.js";
 import { findReferences, goToDefinition } from "../src/index.js";
 import { SymbolKind } from "../src/indexer/types.js";
 import { extractCallableSignature } from "../src/impact/call-compatibility.js";
-import { prepareSourceInput } from "../src/languages/file-prep.js";
+import * as filePrep from "../src/languages/file-prep.js";
 import { ProjectedSyntaxTree } from "../src/native/projected-tree.js";
 import { getNativeSyntaxTreeExecution, isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -543,6 +543,34 @@ nativeDescribe("receiver method call edge language parity", () => {
     const helper = nodeIn(graph, "pyexample.py", "py_helper");
     const run = nodeIn(graph, "pyexample.py", "py_run");
     expect(callsiteTexts(graph, helper, run, files)).toEqual(["py_helper"]);
+  });
+  it("reuses one parsed Python owner for repeated self calls", async () => {
+    const root = await mkTmpDir("cg-receiver-py-repeated-calls-");
+    roots.push(root);
+    const file = path.join(root, "many.py").replace(/\\/g, "/");
+    const source = [
+      "class Repeated:",
+      "    def m(self):",
+      "        return 1",
+      "    def run(self):",
+      ...Array.from({ length: 200 }, () => "        self.m()"),
+    ].join("\n");
+    await fs.writeFile(file, source, "utf8");
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const prepareSpy = vi.spyOn(filePrep, "prepareSourceInput");
+    try {
+      const graph = await buildSymbolGraphDetailed(index);
+      const normalizedFile = path.resolve(file).replace(/\\/g, "/");
+      const ownerExtractions = prepareSpy.mock.calls.filter(
+        ([filePath]) => path.resolve(String(filePath)).replace(/\\/g, "/") === normalizedFile,
+      ).length;
+      expect(ownerExtractions).toBeLessThanOrEqual(1);
+      const target = nodeIn(graph, "many.py", "m");
+      const caller = nodeIn(graph, "many.py", "run");
+      expect(callsiteTexts(graph, target, caller, { "many.py": source })).toContain("m");
+    } finally {
+      prepareSpy.mockRestore();
+    }
   });
   it("does not attribute Python instance-shadowed calls to class methods", async () => {
     const files: Record<string, string> = {
@@ -2620,7 +2648,7 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     ].join("\n");
     await fs.writeFile(path.join(root, "Local.cs"), source);
     const index = await buildProjectIndex(root, { cache: "off" });
-    const prep = await prepareSourceInput(path.join(root, "Local.cs"), {});
+    const prep = await filePrep.prepareSourceInput(path.join(root, "Local.cs"), {});
     const nativeExecution = getNativeSyntaxTreeExecution(prep.source, prep.sup);
     expect(nativeExecution.tree).toBeDefined();
     const tree = new ProjectedSyntaxTree(prep.source, nativeExecution.tree!);

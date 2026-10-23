@@ -32,11 +32,11 @@ import { inheritsMemberOverloads } from "../indexer/member-selection.js";
 import { getPackageDeclarationName } from "../indexer/compilation-units.js";
 
 import {
+  createPythonReceiverResolutionCache,
   innermostNamespaceImport,
   resolveMemberAccessDefinition,
   sameParameterTypes,
 } from "../indexer/navigation-goto.js";
-
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
 import { getOrBuildScopeIndex } from "../indexer/navigation-local.js";
@@ -312,6 +312,7 @@ export async function buildSymbolGraphDetailed(
   const nodeAliases = new Map<string, string>();
   const pythonMemberAccessResolvers = new Map<string, (node: SyntaxNodeLike) => Promise<SymbolDef | null>>();
   const ownershipParsedContexts = new Map<string, Promise<ParsedFileContext | null>>();
+  let pythonReceiverResolutionCache: ReturnType<typeof createPythonReceiverResolutionCache> | undefined;
   const loadParsedFile = (file: string): Promise<ParsedFileContext | null> => {
     const fileKey = fileIdentityKey(file);
     const cached = ownershipParsedContexts.get(fileKey);
@@ -542,6 +543,9 @@ export async function buildSymbolGraphDetailed(
         },
         resolveMemberAccessTarget: async (node: SyntaxNodeLike): Promise<SymbolDef | null> => {
           const useNode = tree.rootNode.descendantForIndex(node.startIndex, node.endIndex);
+          if (sup.id === "python" && !pythonReceiverResolutionCache) {
+            pythonReceiverResolutionCache = createPythonReceiverResolutionCache();
+          }
           const resolved = await resolveMemberAccessDefinition({
             index,
             mod: moduleEntry,
@@ -555,6 +559,8 @@ export async function buildSymbolGraphDetailed(
               if (imported) return imported;
               return resolveIdentifier(name, expression);
             },
+            loadParsedFile,
+            ...(pythonReceiverResolutionCache ? { pythonReceiverResolutionCache } : {}),
           });
           return resolved?.status === "ok" ? resolved.definition : null;
         },

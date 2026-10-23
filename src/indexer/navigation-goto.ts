@@ -642,8 +642,11 @@ export async function resolveMemberAccessDefinition(params: {
   tree: SyntaxTreeLike;
   sup: LanguageSupport;
   resolveLexicalBinding?: (expression: SyntaxNodeLike) => SymbolDef | null;
+  loadParsedFile?: PythonParsedFileLoader;
+  pythonReceiverResolutionCache?: PythonReceiverResolutionCache;
 }): Promise<GoToResult | null> {
-  const { index, mod, node, source, tree, sup, resolveLexicalBinding } = params;
+  const { index, mod, node, source, tree, sup, resolveLexicalBinding, loadParsedFile, pythonReceiverResolutionCache } =
+    params;
   if (sup.id === "ruby") {
     const qualified = resolveRubyQualifiedConstantDefinition(index, mod, node, source);
     if (qualified) return qualified;
@@ -959,6 +962,8 @@ export async function resolveMemberAccessDefinition(params: {
         sup,
         resolveExpression,
         receiverProof,
+        loadParsedFile,
+        pythonReceiverResolutionCache,
       );
       if (!memberDef) return null;
       return okGoToResult(index, memberDef, {
@@ -3447,6 +3452,17 @@ function pythonClassKey(def: SymbolDef): string {
   return `${fileIdentityKey(def.file)}:${start.index ?? `${start.line}:${start.column}`}`;
 }
 
+type PythonParsedFileLoader = (file: string) => Promise<ParsedFileContext | null>;
+
+type PythonReceiverResolutionCache = {
+  classRefs: Map<string, Promise<PythonClassRef | null>>;
+  members: Map<string, Promise<SymbolDef | undefined>>;
+};
+
+export function createPythonReceiverResolutionCache(): PythonReceiverResolutionCache {
+  return { classRefs: new Map(), members: new Map() };
+}
+
 async function resolvePythonReceiverMember(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -3457,8 +3473,21 @@ async function resolvePythonReceiverMember(
   sup: LanguageSupport,
   resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
   proof: ReceiverBinding | null,
+  loadParsedFile: PythonParsedFileLoader | undefined,
+  cache: PythonReceiverResolutionCache | undefined,
 ): Promise<SymbolDef | undefined> {
-  const classRef = await pythonReceiverClassRef(index, mod, node, obj, source, sup, resolveExpression, proof);
+  const classRef = await pythonReceiverClassRef(
+    index,
+    mod,
+    node,
+    obj,
+    source,
+    sup,
+    resolveExpression,
+    proof,
+    loadParsedFile,
+    cache,
+  );
   if (!classRef) return undefined;
   return lookupPythonClassMember(
     index,
@@ -3466,6 +3495,8 @@ async function resolvePythonReceiverMember(
     member,
     classRef.startAtSupertype,
     classRef.preferInstanceAttributes,
+    loadParsedFile,
+    cache,
   );
 }
 
@@ -3480,6 +3511,8 @@ async function pythonReceiverClassRef(
   sup: LanguageSupport,
   resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
   proof: ReceiverBinding | null,
+  loadParsedFile: PythonParsedFileLoader | undefined,
+  cache: PythonReceiverResolutionCache | undefined,
 ): Promise<PythonReceiverClassRef | null> {
   const receiver = proof ?? classifyReceiver(sup, obj, source, null, 0, obj.parent ?? obj, noLexicalBinding);
   if (receiver.kind === "own-type" || receiver.kind === "supertype") {
@@ -3501,7 +3534,7 @@ async function pythonReceiverClassRef(
       );
     });
     if (!def) return null;
-    const ref = await pythonClassRefFromDef(index, def);
+    const ref = await pythonClassRefFromDef(index, def, loadParsedFile, cache);
     const preferInstanceAttributes = receiver.kind === "own-type" && sliceText(obj, source) === "self";
     return ref ? { ref, startAtSupertype: receiver.kind === "supertype", preferInstanceAttributes } : null;
   }
@@ -3522,30 +3555,55 @@ async function pythonReceiverClassRef(
     }
   }
   if (!classDef) return null;
-  const ref = await pythonClassRefFromDef(index, classDef);
+  const ref = await pythonClassRefFromDef(index, classDef, loadParsedFile, cache);
   return ref ? { ref, startAtSupertype: false, preferInstanceAttributes } : null;
 }
 
-async function pythonClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promise<PythonClassRef | null> {
-  const module = index.byFile.get(fileIdentityKey(def.file));
-  if (!module) return null;
-  const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
-  const start = def.range.start;
-  const position = {
-    row: start.line - 1,
-    column: start.column - 1,
-  };
-  let current: SyntaxNodeLike | null = context.tree.rootNode.descendantForPosition(position, position);
-  while (current && current.type !== "class_definition") {
-    current = current.parent;
-  }
-  if (!current) return null;
-  return { def, container: current, context, module };
+async function pythonClassRefFromDef(
+  index: ProjectIndex,
+  def: SymbolDef,
+  loadParsedFile?: PythonParsedFileLoader,
+  cache?: PythonReceiverResolutionCache,
+): Promise<PythonClassRef | null> {
+  const key = pythonClassKey(def);
+  const cached = cache?.classRefs.get(key);
+  if (cached) return cached;
+  const pending = (async (): Promise<PythonClassRef | null> => {
+    const module = index.byFile.get(fileIdentityKey(def.file));
+    if (!module) return null;
+    const context = loadParsedFile
+      ? await loadParsedFile(def.file)
+      : await ensureParsedContext(def.file, undefined, index.languageExtensions);
+    if (!context || context.sup.id !== "python") return null;
+    const start = def.range.start;
+    const position = {
+      row: start.line - 1,
+      column: start.column - 1,
+    };
+    let current: SyntaxNodeLike | null = context.tree.rootNode.descendantForPosition(position, position);
+    while (current && current.type !== "class_definition") {
+      current = current.parent;
+    }
+    if (!current) return null;
+    return { def, container: current, context, module };
+  })();
+  cache?.classRefs.set(key, pending);
+  return pending;
 }
 
 function pythonMembersOnClass(classRef: PythonClassRef, member: string, preferInstanceAttributes = false): SymbolDef[] {
   const normalizeIdentifier = classRef.context.sup.normalizeIdentifier;
+  let direct: SymbolDef[] | undefined;
   if (preferInstanceAttributes) {
+    direct = findDirectLocalsWithinNode(
+      classRef.module.locals,
+      member,
+      classRef.container,
+      classRef.context,
+      normalizeIdentifier,
+    );
+    const propertyMembers = pythonPropertyDescriptorMembers(classRef, member, direct);
+    if (propertyMembers) return propertyMembers;
     const instanceAttributes = findPythonInstanceAttributesWithinClass(
       classRef.module.locals,
       member,
@@ -3561,7 +3619,7 @@ function pythonMembersOnClass(classRef: PythonClassRef, member: string, preferIn
     );
     if (selectedInstanceAttribute) return [selectedInstanceAttribute];
   }
-  const direct = findDirectLocalsWithinNode(
+  direct ??= findDirectLocalsWithinNode(
     classRef.module.locals,
     member,
     classRef.container,
@@ -3576,6 +3634,49 @@ function pythonMembersOnClass(classRef: PythonClassRef, member: string, preferIn
     classRef.context,
     normalizeIdentifier,
   );
+}
+
+function pythonPropertyDescriptorMembers(
+  classRef: PythonClassRef,
+  member: string,
+  directMembers: readonly SymbolDef[],
+): SymbolDef[] | null {
+  let propertyAssignment: SymbolDef | undefined;
+  let propertyGetter: SymbolDef | undefined;
+  let propertySetter: SymbolDef | undefined;
+  for (const local of directMembers) {
+    const nameNode = nameNodeForDef(classRef.context, local);
+    if (!nameNode) continue;
+    const assignment = nameNode.parent;
+    if (
+      assignment?.type === "assignment" &&
+      assignment.childForFieldName("left")?.id === nameNode.id &&
+      assignment.childForFieldName("right")?.type === "call"
+    ) {
+      const value = assignment.childForFieldName("right");
+      const propertyName = value?.childForFieldName("function");
+      const argumentsNode = value?.childForFieldName("arguments");
+      if (propertyName?.text === "property" && (argumentsNode?.namedChildren.length ?? 0) >= 2) {
+        propertyAssignment = local;
+        continue;
+      }
+    }
+    let functionNode: SyntaxNodeLike | null = nameNode;
+    while (functionNode && functionNode.id !== classRef.container.id && functionNode.type !== "function_definition") {
+      functionNode = functionNode.parent;
+    }
+    if (functionNode?.type !== "function_definition") continue;
+    const decorated = functionNode.parent;
+    if (decorated?.type !== "decorated_definition") continue;
+    const decorators = decorated.namedChildren.filter((child) => child.type === "decorator");
+    if (decorators.some((decorator) => decorator.text.trim() === "@property")) {
+      propertyGetter = local;
+    } else if (decorators.some((decorator) => decorator.text.trim() === `@${member}.setter`)) {
+      propertySetter = local;
+    }
+  }
+  const descriptor = propertyAssignment ?? propertyGetter ?? propertySetter;
+  return descriptor ? [descriptor] : null;
 }
 
 function findPythonInstanceAttributesWithinClass(
@@ -3714,7 +3815,12 @@ function resolvePythonNamedClass(index: ProjectIndex, mod: ModuleIndex, name: st
   return undefined;
 }
 
-async function pythonBaseClassRefs(index: ProjectIndex, classRef: PythonClassRef): Promise<PythonClassRef[]> {
+async function pythonBaseClassRefs(
+  index: ProjectIndex,
+  classRef: PythonClassRef,
+  loadParsedFile: PythonParsedFileLoader | undefined,
+  cache: PythonReceiverResolutionCache | undefined,
+): Promise<PythonClassRef[]> {
   const names = pythonBaseIdentifierNodes(classRef.container);
   const refs: PythonClassRef[] = [];
   const seen = new Set<string>();
@@ -3724,7 +3830,7 @@ async function pythonBaseClassRefs(index: ProjectIndex, classRef: PythonClassRef
     const key = pythonClassKey(def);
     if (seen.has(key)) continue;
     seen.add(key);
-    const ref = await pythonClassRefFromDef(index, def);
+    const ref = await pythonClassRefFromDef(index, def, loadParsedFile, cache);
     if (ref) refs.push(ref);
   }
   return refs;
@@ -3736,6 +3842,33 @@ async function lookupPythonClassMember(
   member: string,
   startAtSupertype = false,
   preferInstanceAttributes = false,
+  loadParsedFile?: PythonParsedFileLoader,
+  cache?: PythonReceiverResolutionCache,
+): Promise<SymbolDef | undefined> {
+  const key = `${pythonClassKey(start.def)}:${member}:${startAtSupertype}:${preferInstanceAttributes}`;
+  const cached = cache?.members.get(key);
+  if (cached) return cached;
+  const pending = lookupPythonClassMemberUncached(
+    index,
+    start,
+    member,
+    startAtSupertype,
+    preferInstanceAttributes,
+    loadParsedFile,
+    cache,
+  );
+  cache?.members.set(key, pending);
+  return pending;
+}
+
+async function lookupPythonClassMemberUncached(
+  index: ProjectIndex,
+  start: PythonClassRef,
+  member: string,
+  startAtSupertype: boolean,
+  preferInstanceAttributes: boolean,
+  loadParsedFile: PythonParsedFileLoader | undefined,
+  cache: PythonReceiverResolutionCache | undefined,
 ): Promise<SymbolDef | undefined> {
   const membersByOwner = new Map<string, SymbolDef[]>();
   const parentsByOwner = new Map<string, PythonClassRef[]>();
@@ -3751,7 +3884,7 @@ async function lookupPythonClassMember(
     if (named) break;
     const next: PythonClassRef[] = [];
     for (const ref of level) {
-      const parents = await pythonBaseClassRefs(index, ref);
+      const parents = await pythonBaseClassRefs(index, ref, loadParsedFile, cache);
       parentsByOwner.set(pythonClassKey(ref.def), parents);
       for (const parent of parents) {
         const key = pythonClassKey(parent.def);
