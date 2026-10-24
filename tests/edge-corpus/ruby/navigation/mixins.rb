@@ -1,12 +1,12 @@
 module Atlas # @ref atlas
   module Engine # @ref engine
-    module Auditable # @def auditable @coverage auditable complete
+    module Auditable # @def auditable=Auditable @coverage auditable complete
       def audit # @def audit
         :ok
       end
     end
 
-    module FactoryMethods # @def factory_methods @coverage factory_methods complete
+    module FactoryMethods # @def factory_methods=FactoryMethods @coverage factory_methods complete
       def make # @def make
         Device.new("made")
       end

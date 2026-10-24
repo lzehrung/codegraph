@@ -19,9 +19,9 @@ Atlas::Engine::Registry.build(item) # @ref build @known-gap class_method_lookup 
 Atlas::Engine::Registry.find # @ref find @known-gap class_method_lookup observed=none
 Atlas::Engine::Registry.new.lookup # @ref lookup @known-gap instance_method_lookup observed=none
 
-values = [1, 2].map do |value; item_local| # @def value_param @def item_local
+values = [1, 2].map do |value; item_local| # @def value_param=value @def item_local
   item_local = value # @ref item_local @known-gap block_local_write observed=none
-  value # @ref value_param @known-gap block_parameter_reference observed=none
+  value # @ref value_param
 end
 
 text = <<~MESSAGE # @def text
