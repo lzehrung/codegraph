@@ -13,8 +13,8 @@ class Counter:
 
     def add(self, amount):
         Counter.count += amount  # @ref classCount @goto classCount
-        self.count += amount  # @ref instanceCount @known-gap same_named_instance_attribute_reference_missing observed=none
-        return self.count  # @goto instanceCount @known-gap same_named_instance_attribute_resolves_to_class_attribute observed=classCount
+        self.count += amount  # @ref instanceCount
+        return self.count  # @goto instanceCount
 
 # @def outer
 def outer(
