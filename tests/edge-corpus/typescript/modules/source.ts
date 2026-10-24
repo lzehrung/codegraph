@@ -1,4 +1,4 @@
-// @def original @coverage original complete @known-gap reexport_coverage observed=partial
+// @def original @coverage original partial
 export const original = 1;
 // @def Widget
 export default class Widget {

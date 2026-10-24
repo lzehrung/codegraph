@@ -1,4 +1,4 @@
-// @def Circle @coverage Circle complete @known-gap rust_type_coverage observed=partial
+// @def Circle @coverage Circle partial
 pub struct Circle {
     pub radius: f64, // @def circleRadius=radius
 }

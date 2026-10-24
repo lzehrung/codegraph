@@ -1,5 +1,5 @@
-$source: "module"; // @def useSource=$source @coverage useSource complete @known-gap sass_use_variable_coverage observed=partial
-$size: 1px; // @def moduleSize=$size @coverage moduleSize complete @known-gap sass_variable_coverage observed=partial
+$source: "module"; // @def useSource=$source @coverage useSource partial
+$size: 1px; // @def moduleSize=$size @coverage moduleSize partial
 
 @function pad($value) { @return $value; } // @def pad @coverage pad partial
 @function url($value) { @return $value; } // @def libUrl=url

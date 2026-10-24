@@ -11,7 +11,7 @@ $asset: "theme"; // @def asset=$asset
 $commentValue: 1; // @def commentValue=$commentValue
 /* #{$commentValue} */ $afterComment: 2; /* @def afterComment=$afterComment @ref commentValue */
 $foo-bar: 1; // @def outerFoo=$foo-bar
-$flow: 1; // @def moduleX=$flow @coverage moduleX complete @known-gap sass_variable_coverage observed=partial
+$flow: 1; // @def moduleX=$flow @coverage moduleX partial
 
 @function has($value) { @return $value; } // @def hasFunction=has
 @function box($values: [1, lib.$size]) { @return $values; } // @def boxFunction=box @ref moduleSize

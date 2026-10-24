@@ -6,9 +6,13 @@ import { fileURLToPath } from "node:url";
 import { parseFile } from "../dist/indexer.js";
 import { supportForFile } from "../dist/languages.js";
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const defaultRootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const args = process.argv.slice(2);
+const rootIndex = args.indexOf("--root");
+const requestedRoot = rootIndex < 0 ? undefined : args[rootIndex + 1];
+const rootDir = path.resolve(requestedRoot ?? defaultRootDir);
 const corpusDir = path.join(rootDir, "tests", "edge-corpus");
-const json = process.argv.slice(2).includes("--json");
+const json = args.includes("--json");
 
 async function supportedFiles(directory) {
   const files = [];
@@ -24,24 +28,29 @@ async function supportedFiles(directory) {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
-function parseFindings(root, file) {
+function parseFindings(parsed, file) {
   const findings = [];
-  function visit(node) {
-    if (node.type === "ERROR" || node.isMissing) {
+  const tree = parsed.tree;
+  const columns = tree.columns;
+  for (let nodeId = 0; nodeId < columns.nodeCount; nodeId += 1) {
+    const kind = columns.kinds[columns.kindIds[nodeId]];
+    const isMissing = columns.isMissing[nodeId] !== 0;
+    if (kind === "ERROR" || isMissing) {
+      const startIndex = tree.stringIndexForByte(columns.startIndex[nodeId]);
+      const endIndex = tree.stringIndexForByte(columns.endIndex[nodeId]);
       findings.push({
-        kind: node.isMissing ? "MISSING" : "ERROR",
+        kind: isMissing ? "MISSING" : "ERROR",
         file: path.relative(rootDir, file).replaceAll("\\", "/"),
-        line: node.startPosition.row + 1,
-        text: node.text.slice(0, 80),
+        line: columns.startRow[nodeId] + 1,
+        text: parsed.source.slice(startIndex, endIndex).slice(0, 80),
       });
     }
-    for (const child of node.namedChildren) visit(child);
   }
-  visit(root);
   return findings;
 }
 
 try {
+  if (rootIndex >= 0 && !requestedRoot) throw new Error("--root requires a directory");
   const languageEntries = (await fs.readdir(corpusDir, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
     .sort((left, right) => left.name.localeCompare(right.name));
@@ -52,7 +61,7 @@ try {
     const findings = [];
     for (const file of files) {
       const parsed = await parseFile(file);
-      findings.push(...parseFindings(parsed.tree.rootNode, file));
+      findings.push(...parseFindings(parsed, file));
     }
     const filesWithFindings = new Set(findings.map((finding) => finding.file)).size;
     report.push({
@@ -82,6 +91,7 @@ try {
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
+  process.exitCode = 1;
   if (json) console.log(JSON.stringify({ error: message }));
   else console.error(message);
 }

@@ -6,5 +6,6 @@ open class SpreadBase {
 
 class SpreadDerived : SpreadBase() {
     fun hit(value: String): String = value // @def spreadDerived=hit
-    fun use(values: IntArray): String = hit(*values) // @goto spreadBase=hit @known-gap spread_overload_goto observed=not_found @not-ref spreadDerived
+    fun hit(vararg values: Int): String = values.joinToString()
+    fun use(values: IntArray): String = hit(*values) // @not-ref spreadDerived @not-ref spreadBase
 }
