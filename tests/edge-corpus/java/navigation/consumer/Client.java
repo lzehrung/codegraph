@@ -15,7 +15,7 @@ class Client extends Service {
         var nested = new Service.Nested(); // @ref Nested @goto Nested
         var inner = service.new Inner(); // @ref Inner @known-gap inner-constructor-reference observed=none
         service.new Inner(); // @goto Inner @known-gap inner-constructor-goto observed=not_found
-        String innerOwner = inner.owner();
+        Service innerOwner = inner.owner();
         Mode mode = ACTIVE; // @ref ACTIVE @goto ACTIVE
         int codeValue = mode.code(); // @ref code @goto code
         String util = utility(); // @ref utility @goto utility

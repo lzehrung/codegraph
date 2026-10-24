@@ -15,7 +15,9 @@ public class Service extends Base implements Named { // @def Service
     }
 
     public class Inner { // @def Inner
-        public Service owner() { return this; } // @ref Service @known-gap inner-owner-return-type-reference observed=none
+        public Service owner() { // @ref Service @known-gap inner-owner-return-type-reference observed=none
+            return Service.this;
+        }
         public String ownerType() { return Service.class.getName(); } // @goto Service
     }
 }
