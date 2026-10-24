@@ -21,5 +21,5 @@ int consume(void) { // @def consume
     int macro_decoy = DECOY_MACRO(STATUS_DONE);
     // public_value STATUS_READY label are decoys in this comment.
     const char *text = "public_value STATUS_READY label"; // @not-ref public_value @not-ref STATUS_READY @not-ref label
-    return compare(from_header, local) + state + still + member_count + first_char + type_size + comparator_size + done_state + macro_decoy + text[0];
+    return compare(from_header) + local + state + still + member_count + first_char + type_size + comparator_size + done_state + macro_decoy + text[0];
 }

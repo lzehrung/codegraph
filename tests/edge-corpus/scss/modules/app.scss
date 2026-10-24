@@ -9,6 +9,7 @@
   width: t.scale(2); // @ref scale
   @extend %surface; // @ref surface
   color: kit.$accent; // @ref accent
+  width: kit.tool-scale(2); // @not-ref scale
   padding: kit.$spacing; // @ref spacing
   @include kit.tool-center; // @ref center @goto center=tool-center
   $again: palette.$accent; // @ref accent

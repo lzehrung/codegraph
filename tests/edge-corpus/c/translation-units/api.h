@@ -16,7 +16,7 @@ enum Status {
     STATUS_DONE // @def STATUS_DONE
 };
 
-typedef int (*Comparator)(int left, int right); // @def Comparator
+typedef int (*Comparator)(int input); // @def Comparator
 
 extern int public_value(int input); // @def public_value @coverage public_value complete
 int shared_name(int input); // @def shared_name
