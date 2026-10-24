@@ -1,6 +1,7 @@
 package sample.app
 
 import sample.model.Box
+import sample.other.Foo
 import sample.model.Formatter
 import sample.model.PairBox
 import sample.model.Record as Entry
@@ -34,6 +35,7 @@ fun use(): String {
     val objValue = objectRead() // @ref objectRead @goto objectRead
     val otherRecord = sample.decoy.Record("decoy") // @not-ref Record
     val otherRender = sample.decoy.render(otherRecord) // @not-ref render
+    val explicitFoo = Foo() // @goto importedFoo=Foo @not-ref samePackageFoo
     val decoy = "renderRecord summary compact overload"
     val rawDecoy = """build Formatter payload this@Box"""
     // decoy mention: overload summary this@Box

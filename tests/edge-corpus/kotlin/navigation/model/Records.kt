@@ -1,5 +1,6 @@
 package sample.model
-
+import sample.contracts.Renderable
+typealias RenderAlias = Renderable
 // @def Record
 data class Record(
     // @def name @coverage name partial
@@ -28,9 +29,11 @@ fun build(name: String): Record = Record(name)
 class Box(
     // @def payload
     val payload: String,
-) {
+) : RenderAlias {
     // @def read
     fun read(): String = this.payload
+
+    fun renderSelf(): String = this.renderTitle() // @goto renderTitle @known-gap inherited_interface_member_goto observed=not_found
 
     // @def Inner
     inner class Inner {
@@ -70,5 +73,14 @@ val Record.twin: String get() = name
 // @def objectValue
 val objectValue: String = "object"
 
-// @def objectRead @coverage objectRead complete
-fun objectRead(): String = objectValue
+fun objectRead(): String = objectValue // @def objectRead @coverage objectRead complete
+
+fun shadowHit(): String = "top" // @def topHit=shadowHit
+
+open class ShadowBase {
+    fun shadowHit(): String = "base" // @def baseHit=shadowHit
+}
+
+class ShadowChild : ShadowBase() {
+    fun use(): String = shadowHit() // @goto baseHit=shadowHit
+}

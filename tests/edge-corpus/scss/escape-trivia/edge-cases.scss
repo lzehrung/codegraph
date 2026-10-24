@@ -1,0 +1,7 @@
+$escapeTarget: 1; // @def escapeTarget=$escapeTarget
+.escaped {
+  --close: \};
+  content: \";
+  background: \//icon;
+  width: $escapeTarget; /* @ref escapeTarget */
+}

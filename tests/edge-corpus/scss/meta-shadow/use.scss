@@ -1,0 +1,2 @@
+@use "meta" as meta;
+.a { color: meta.$local; } /* @ref localMeta */

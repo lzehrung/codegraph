@@ -65,6 +65,7 @@
     "prepare": "node ./scripts/prepare-package.mjs",
     "security:production": "node ./scripts/check-production-audit.mjs",
     "fixtures:check-clean": "node ./scripts/check-fixture-cleanliness.mjs",
+    "census:edge-corpus": "node ./scripts/edge-corpus-census.mjs",
     "certify:packages": "node ./scripts/certification/run-package-smoke.mjs",
     "test": "npm run test:fast",
     "test:all": "npm run test:native && npm run test:ci",

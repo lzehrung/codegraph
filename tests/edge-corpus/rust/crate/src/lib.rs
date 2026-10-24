@@ -5,6 +5,7 @@ pub mod decoy;
 pub mod nested;
 pub mod shadow;
 pub mod shapes;
+pub mod field_error;
 
 // Macros are intentionally out of scope. `self::` is this crate root; raw strings and comments repeat real names as decoys.
 use self::calc::add; // @ref add

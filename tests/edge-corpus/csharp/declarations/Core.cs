@@ -1,8 +1,9 @@
 namespace Edge.Core;
 
-public static class Helpers // @def helpers=Helpers
+public static partial class Helpers // @def helpers=Helpers
 {
-    public static int Build(int seed) => seed; // @def build=Build
+    public static int Build(int seed) => seed; // @def build=Build @coverage build complete
+    public static int Two(int seed) => seed; // @def twoOne=Two
 }
 
 public partial class Box<T> // @def box=Box
@@ -24,3 +25,4 @@ public static class BoxExtensions
 }
 
 public class @class { public int Code => 9; } // @def escaped=@class
+public class Point {} // @def point=Point
