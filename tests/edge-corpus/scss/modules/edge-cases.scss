@@ -32,7 +32,7 @@ $flow: 1; // @def moduleX=$flow @coverage moduleX partial
   color: lib.$source; // @ref useSource @not-ref importSource
   width: late(2); // @not-ref lateFunction
   $foo_bar: 2; // @def innerFoo=$foo_bar
-  width: $foo-bar; /* token $foo_bar */ /* @not-ref innerFoo @not-ref outerFoo */
+  width: $foo-bar; // @ref innerFoo @known-gap sass_hyphen_underscore_reference observed=none @not-ref outerFoo
   width: theme.$surface; // @ref themeSurface
   @include showApi.show; /* @ref showMixin @goto showMixin=show */
   $dynamicMixins: meta.get-mixin("show", "lib"), meta.module-mixins("lib"); /* @coverage showMixin partial */

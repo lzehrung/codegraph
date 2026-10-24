@@ -52,4 +52,4 @@ class ShadowedSuperBase:
 
 class ShadowedSuperChild(ShadowedSuperBase):
     def call(self, super):  # @def shadowSuper=super
-        return super().helper()  # @goto shadowSuper=super
+        return super().helper()  # @goto shadowSuper=super @not-ref baseHelper
