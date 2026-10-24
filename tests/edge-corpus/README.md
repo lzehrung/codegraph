@@ -4,7 +4,7 @@ Edge fixtures live in `tests/edge-corpus/<language>/<scenario>/` as small multi-
 
 A marker goes in a line comment immediately above its code site or at the end of that site. IDs are unique within one scenario and are linked to a definition by `@def`.
 
-- `@def <id>` identifies the definition site: the one identifier on that line spelled `<id>`. Use `@def <id>=<identifier>` when the id differs from the identifier or to pick one of several identifiers. A line with zero or several matching identifiers fails.
+- `@def <id>` identifies the definition site: the one identifier on that line spelled `<id>`. Use `@def <id>=<identifier>` when the id differs from the identifier or to pick one of several identifiers. When the declaring token is not an identifier, such as Ruby `:serial` in `attr_accessor :serial`, `@def <id>=<token>` binds to the one named leaf node spelled `<token>`. A line with zero or several matching identifiers fails.
 - `@ref <id>` requires a reference to that definition on this line.
 - `@not-ref <id>` requires no reference to that definition on this line. The checked source text must contain the definition spelling outside the marker comment.
 - `@not-ref-block <id>` checks the full range of the outermost named syntax node (not the root) that starts on the site line. Put the marker in a comment above the opener of a multi-line string, heredoc, or nowdoc. The checked text must contain the definition spelling outside the marker comment.

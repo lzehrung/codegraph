@@ -8,8 +8,10 @@ class Atlas::Engine::Device # @ref atlas @goto atlas
 end
 
 item = Atlas::Engine::Device.new("sensor") # @ref atlas @goto atlas
-item.name = "probe" # @ref name_writer @known-gap attr_accessor_setter_reference observed=none
-item.name # @ref name_reader @known-gap attr_accessor_reader_reference observed=none
+item.name = "probe" # @ref name_writer @known-gap typed_local_setter_reference observed=none
+item.name # @ref name_reader @known-gap typed_local_reader_reference observed=none
+item.serial = 7 # @ref serial @known-gap generated_accessor_not_indexed observed=none
+item.serial # @goto serial=serial @known-gap generated_accessor_not_indexed observed=not_found
 item.ready? # @ref ready @known-gap predicate_method_reference observed=none
 item.reset! # @ref reset @known-gap bang_method_reference observed=none
 item.audit # @ref audit @known-gap included_mixin_method_reference observed=none

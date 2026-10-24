@@ -41,7 +41,7 @@ const commentPrefixes: Record<string, string> = {
 const MIN_ASSERTIONS_PER_LANGUAGE = 25;
 const MAX_ASSERTIONS_PER_LANGUAGE = 45;
 const assertionKinds = new Set<MarkerKind>(["ref", "not-ref", "not-ref-block", "goto", "coverage"]);
-const markerPattern = /@(def|ref|not-ref-block|not-ref|goto|coverage|known-gap)\s+([\w.-]+(?:=[\w$@?!=]+)?)/g;
+const markerPattern = /@(def|ref|not-ref-block|not-ref|goto|coverage|known-gap)\s+([\w.-]+(?:=[\w$@?!=:]+)?)/g;
 
 function walkNodes(root: SyntaxNodeLike, visit: (node: SyntaxNodeLike) => void): void {
   visit(root);
@@ -146,6 +146,14 @@ function identifierNodesOnLine(parsed: ParsedSource, line: number): SyntaxNodeLi
   return nodes;
 }
 
+function namedLeavesOnLine(parsed: ParsedSource, line: number): SyntaxNodeLike[] {
+  const nodes: SyntaxNodeLike[] = [];
+  walkNodes(parsed.tree.rootNode, (node) => {
+    if (!node.namedChildren.length && node.startPosition.row + 1 === line) nodes.push(node);
+  });
+  return nodes;
+}
+
 function outermostNodeStartingOnLine(parsed: ParsedSource, line: number): SyntaxNodeLike | undefined {
   let selected: SyntaxNodeLike | undefined;
   walkNodes(parsed.tree.rootNode, (node) => {
@@ -227,7 +235,12 @@ describe("Tree-sitter edge corpus", () => {
         const [defId, identifierName = defId] = marker.id.split("=", 2) as [string, string?];
         marker.id = defId;
         const nodes = identifierNodesOnLine(parsed, marker.line);
-        const matching = nodes.filter((node) => node.text === identifierName);
+        let matching = nodes.filter((node) => node.text === identifierName);
+        // A declaring token that is not an identifier, such as Ruby `:name` in `attr_accessor :name`,
+        // binds to the one named leaf spelled that way.
+        if (!matching.length) {
+          matching = namedLeavesOnLine(parsed, marker.line).filter((node) => node.text === identifierName);
+        }
         const selected = matching.length === 1 ? matching[0] : undefined;
         if (!selected) {
           failures.push(
