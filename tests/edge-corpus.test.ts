@@ -24,18 +24,29 @@ type ParsedSource = Awaited<ReturnType<typeof parseFile>>;
 type DefinitionSite = { file: string; line: number; column: number; name: string };
 type Scenario = { language: string; root: string };
 
-/** Line-comment prefix per corpus directory; the directory name is the language. */
-const commentPrefixes: Record<string, string> = {
-  typescript: "//",
-  python: "#",
-  csharp: "//",
-  java: "//",
-  kotlin: "//",
-  go: "//",
-  rust: "//",
-  php: "//",
-  ruby: "#",
-  cpp: "//",
+/** Comment prefixes per corpus directory; the directory name is the language. */
+const commentPrefixes: Record<string, readonly string[]> = {
+  typescript: ["//"],
+  python: ["#"],
+  csharp: ["//"],
+  java: ["//"],
+  kotlin: ["//"],
+  go: ["//"],
+  rust: ["//"],
+  php: ["//"],
+  ruby: ["#"],
+  cpp: ["//"],
+  c: ["//", "/*"],
+  swift: ["//", "/*"],
+  zig: ["//"],
+  vue: ["//", "/*", "<!--"],
+  svelte: ["//", "/*", "<!--"],
+  astro: ["//", "/*", "<!--"],
+  css: ["/*"],
+  scss: ["//", "/*"],
+  terraform: ["#", "//", "/*"],
+  html: ["<!--"],
+  markdown: ["<!--"],
 };
 /** Every language directory must carry 25-45 assertions. */
 const MIN_ASSERTIONS_PER_LANGUAGE = 25;
@@ -98,7 +109,7 @@ async function sourceFiles(root: string): Promise<string[]> {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
-function extractMarkers(parsed: ParsedSource, file: string, commentPrefix: string): Marker[] {
+function extractMarkers(parsed: ParsedSource, file: string, prefixes: readonly string[]): Marker[] {
   const language = getLanguageById(parsed.sup.id);
   if (!language) throw new Error(`Missing language definition for ${parsed.sup.id}`);
   const commentTypes = new Set(language.structure.comments);
@@ -106,7 +117,8 @@ function extractMarkers(parsed: ParsedSource, file: string, commentPrefix: strin
   walkNodes(parsed.tree.rootNode, (node) => {
     if (!commentTypes.has(node.type)) return;
     const comment = node.text.trimStart();
-    if (!comment.startsWith(commentPrefix)) return;
+    const commentPrefix = prefixes.find((prefix) => comment.startsWith(prefix));
+    if (!commentPrefix) return;
     const line = parsed.source.split(/\r?\n/)[node.startPosition.row] ?? "";
     const beforeComment = line.slice(0, node.startPosition.column);
     const siteRow = beforeComment.trim() ? node.startPosition.row : node.endPosition.row + 1;

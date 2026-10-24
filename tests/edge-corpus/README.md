@@ -1,6 +1,6 @@
 # Tree-sitter edge corpus
 
-Edge fixtures live in `tests/edge-corpus/<language>/<scenario>/` as small multi-file projects. The shared `tests/edge-corpus.test.ts` indexes each scenario separately and reads markers only from Tree-sitter comment nodes for that language. The only language-specific marker parsing is the line-comment prefix (`//` for TypeScript and `#` for Python and Ruby).
+Edge fixtures live in `tests/edge-corpus/<language>/<scenario>/` as small multi-file projects. The shared `tests/edge-corpus.test.ts` indexes each scenario separately and reads markers only from Tree-sitter comment nodes for that language. The only language-specific marker parsing is the comment prefix list in `commentPrefixes` (for example `//` for TypeScript, `#` for Python and Ruby, `/*` for CSS, and `<!--` for HTML). A block comment carries markers the same way as a line comment.
 
 A marker goes in a line comment immediately above its code site or at the end of that site. IDs are unique within one scenario and are linked to a definition by `@def`.
 
