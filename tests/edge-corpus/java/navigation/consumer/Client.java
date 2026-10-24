@@ -32,7 +32,8 @@ class Client extends Service {
 
     String decoys() {
         // Service send echo Nested Inner ACTIVE Marker utility are decoys here.
-        String text = "Service.send(echo) Nested Inner ACTIVE Marker utility";
+        String text = "Service.send(echo) Nested Inner ACTIVE Marker utility"; // @not-ref Service @not-ref echo
+        // @not-ref-block Service @not-ref-block echo
         String block = """
                 Service.send(echo) Nested Inner ACTIVE Marker utility
                 """;

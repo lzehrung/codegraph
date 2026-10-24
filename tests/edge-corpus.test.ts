@@ -176,9 +176,10 @@ function sourceWithoutMarkerComment(source: string, start: number, end: number, 
 
 function positionIsWithinNode(node: SyntaxNodeLike, line: number, column: number): boolean {
   const row = line - 1;
+  const zeroBasedColumn = column - 1; // Reference ranges are 1-based; syntax positions are 0-based.
   if (row < node.startPosition.row || row > node.endPosition.row) return false;
-  if (row === node.startPosition.row && column < node.startPosition.column) return false;
-  return row !== node.endPosition.row || column < node.endPosition.column;
+  if (row === node.startPosition.row && zeroBasedColumn < node.startPosition.column) return false;
+  return row !== node.endPosition.row || zeroBasedColumn < node.endPosition.column;
 }
 function relativeFile(file: string): string {
   return path.relative(process.cwd(), file).replaceAll("\\", "/");

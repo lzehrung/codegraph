@@ -20,7 +20,8 @@ int exercise() {
     int eighth = text::launch(worker); // @ref launch @goto launch
     int ninth = om::identity<int>(seventh); // @ref identity @goto identity
     int tenth = text::launch(worker); // @ref launch @goto launch
-    int decoy_call = unrelated::step(unrelated::run(1)); // @not-ref step @not-ref run
+    unrelated::Worker decoyWorker;
+    int decoy_call = unrelated::step(1) + decoyWorker.run(1); // @not-ref step @not-ref run
     return first + second + third + fourth + fourthGoto + fifth + sixth + seventh + eighth + ninth + tenth + decoy_call + EDGE_SCALE(1);
 }
 const char* decoy = R"raw(step Worker::run identity orbit::detail::Base)raw";
