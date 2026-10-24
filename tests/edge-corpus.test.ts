@@ -5,6 +5,7 @@ import { findReferences, goToDefinition } from "../src/index.js";
 import { buildProjectIndex, parseFile } from "../src/indexer.js";
 import type { SyntaxNodeLike } from "../src/languages/types.js";
 import { getLanguageById } from "../src/languages/registry.js";
+import { supportForFile } from "../src/languages.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
 type MarkerKind = "def" | "ref" | "not-ref" | "goto" | "coverage" | "known-gap";
@@ -37,7 +38,7 @@ const commentPrefixes: Record<string, string> = {
 /** Every language directory must carry at least this many assertions. */
 const MIN_ASSERTIONS_PER_LANGUAGE = 10;
 const assertionKinds = new Set<MarkerKind>(["ref", "not-ref", "goto", "coverage"]);
-const markerPattern = /@(def|ref|not-ref|goto|coverage|known-gap)\s+([\w.-]+)/g;
+const markerPattern = /@(def|ref|not-ref|goto|coverage|known-gap)\s+([\w.-]+(?:=[\w$@?!=]+)?)/g;
 
 function walkNodes(root: SyntaxNodeLike, visit: (node: SyntaxNodeLike) => void): void {
   visit(root);
@@ -80,7 +81,8 @@ async function sourceFiles(root: string): Promise<string[]> {
     for (const entry of entries) {
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) await visit(entryPath);
-      else if (entry.isFile()) files.push(entryPath);
+      // Manifests such as go.mod or Cargo.toml help resolution but carry no markers.
+      else if (entry.isFile() && supportForFile(entryPath)) files.push(entryPath);
     }
   }
   await visit(root);
@@ -174,14 +176,15 @@ describe("Tree-sitter edge corpus", () => {
           failures.push(`${relativeFile(marker.file)}:${marker.line} @def ${marker.id}: file was not parsed`);
           continue;
         }
+        // `@def id` names the identifier spelled `id`; `@def id=name` gives a different id to identifier `name`.
+        const [defId, identifierName = defId] = marker.id.split("=", 2) as [string, string?];
+        marker.id = defId;
         const nodes = identifierNodesOnLine(parsed, marker.line);
-        const matching = nodes.filter((node) => node.text === marker.id);
-        let selected: SyntaxNodeLike | undefined;
-        if (matching.length === 1) selected = matching[0];
-        else if (!matching.length && nodes.length) selected = nodes[nodes.length - 1];
+        const matching = nodes.filter((node) => node.text === identifierName);
+        const selected = matching.length === 1 ? matching[0] : undefined;
         if (!selected) {
           failures.push(
-            `${relativeFile(marker.file)}:${marker.line} @def ${marker.id}: expected one matching identifier, found ${nodes.map((node) => node.text).join(", ") || "none"}`,
+            `${relativeFile(marker.file)}:${marker.line} @def ${marker.id}: expected exactly one identifier spelled ${JSON.stringify(identifierName)}, found ${nodes.map((node) => node.text).join(", ") || "none"}`,
           );
           continue;
         }

@@ -4,7 +4,7 @@ Edge fixtures live in `tests/edge-corpus/<language>/<scenario>/` as small multi-
 
 A marker goes in a line comment immediately above its code site or at the end of that site. IDs are unique within one scenario and are linked to a definition by `@def`.
 
-- `@def <id>` identifies the definition site for later assertions.
+- `@def <id>` identifies the definition site: the one identifier on that line spelled `<id>`. Use `@def <id>=<identifier>` when the id differs from the identifier (for example `@def instanceCount=count`) or to pick one of several identifiers. A line with zero or several matching identifiers fails.
 - `@ref <id>` requires a reference to that definition on this line.
 - `@not-ref <id>` requires that this line is not a reference to that definition.
 - `@goto <id>` requires go-to-definition from this line to land on the marked definition.
