@@ -5,15 +5,18 @@ import { findReferences, goToDefinition } from "../src/index.js";
 import { buildProjectIndex, parseFile } from "../src/indexer.js";
 import type { SyntaxNodeLike } from "../src/languages/types.js";
 import { getLanguageById } from "../src/languages/registry.js";
+import { supportForFile } from "../src/languages.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
-type MarkerKind = "def" | "ref" | "not-ref" | "goto" | "coverage" | "known-gap";
+type MarkerKind = "def" | "ref" | "not-ref" | "not-ref-block" | "goto" | "coverage" | "known-gap";
 type CoverageState = "complete" | "partial";
 type Marker = {
   kind: MarkerKind;
   id: string;
   file: string;
   line: number;
+  commentStart: number;
+  commentEnd: number;
   state?: CoverageState;
   observed?: string;
 };
@@ -21,9 +24,24 @@ type ParsedSource = Awaited<ReturnType<typeof parseFile>>;
 type DefinitionSite = { file: string; line: number; column: number; name: string };
 type Scenario = { language: string; root: string };
 
-const commentPrefixes: Record<string, string> = { typescript: "//", python: "#" };
-const assertionKinds = new Set<MarkerKind>(["ref", "not-ref", "goto", "coverage"]);
-const markerPattern = /@(def|ref|not-ref|goto|coverage|known-gap)\s+([\w.-]+)/g;
+/** Line-comment prefix per corpus directory; the directory name is the language. */
+const commentPrefixes: Record<string, string> = {
+  typescript: "//",
+  python: "#",
+  csharp: "//",
+  java: "//",
+  kotlin: "//",
+  go: "//",
+  rust: "//",
+  php: "//",
+  ruby: "#",
+  cpp: "//",
+};
+/** Every language directory must carry 25-45 assertions. */
+const MIN_ASSERTIONS_PER_LANGUAGE = 25;
+const MAX_ASSERTIONS_PER_LANGUAGE = 45;
+const assertionKinds = new Set<MarkerKind>(["ref", "not-ref", "not-ref-block", "goto", "coverage"]);
+const markerPattern = /@(def|ref|not-ref-block|not-ref|goto|coverage|known-gap)\s+([\w.-]+(?:=[\w$@?!=:]+)?)/g;
 
 function walkNodes(root: SyntaxNodeLike, visit: (node: SyntaxNodeLike) => void): void {
   visit(root);
@@ -37,7 +55,17 @@ function isMissingPathError(error: unknown): boolean {
 async function discoverScenarios(samplesRoot: string): Promise<Scenario[]> {
   const languages = await fs.readdir(samplesRoot, { withFileTypes: true });
   const scenarios: Scenario[] = [];
-  for (const language of languages.filter((entry) => entry.isDirectory())) {
+  // EDGE_CORPUS_LANGS=csharp,go limits the run to those language directories while authoring scenarios.
+  const only = process.env.EDGE_CORPUS_LANGS?.split(",").filter(Boolean);
+  const languageDirectories = languages.filter((entry) => entry.isDirectory());
+  const validNames = languageDirectories.map((entry) => entry.name).sort();
+  const invalidNames = only?.filter((name) => !validNames.includes(name)) ?? [];
+  if (invalidNames.length) {
+    throw new Error(
+      `Unknown EDGE_CORPUS_LANGS name(s): ${invalidNames.join(", ")}. Valid names: ${validNames.join(", ")}`,
+    );
+  }
+  for (const language of languageDirectories.filter((entry) => !only?.length || only.includes(entry.name))) {
     const edgeRoot = path.join(samplesRoot, language.name);
     let entries;
     try {
@@ -62,7 +90,8 @@ async function sourceFiles(root: string): Promise<string[]> {
     for (const entry of entries) {
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) await visit(entryPath);
-      else if (entry.isFile()) files.push(entryPath);
+      // Manifests such as go.mod or Cargo.toml help resolution but carry no markers.
+      else if (entry.isFile() && supportForFile(entryPath)) files.push(entryPath);
     }
   }
   await visit(root);
@@ -93,6 +122,8 @@ function extractMarkers(parsed: ParsedSource, file: string, commentPrefix: strin
         id,
         file,
         line: siteRow + 1,
+        commentStart: node.startIndex,
+        commentEnd: node.endIndex,
         ...(stateMatch ? { state: stateMatch[1] as CoverageState } : {}),
         ...(observedMatch ? { observed: observedMatch[1] } : {}),
       });
@@ -106,6 +137,7 @@ function identifierNodesOnLine(parsed: ParsedSource, line: number): SyntaxNodeLi
     ...parsed.sup.nodeTypes.identifier,
     ...(parsed.sup.nodeTypes.propertyIdentifier ?? []),
     ...(parsed.sup.nodeTypes.shorthandPropertyIdentifier ?? []),
+    "field_identifier",
   ]);
   const nodes: SyntaxNodeLike[] = [];
   walkNodes(parsed.tree.rootNode, (node) => {
@@ -114,6 +146,49 @@ function identifierNodesOnLine(parsed: ParsedSource, line: number): SyntaxNodeLi
   return nodes;
 }
 
+function namedLeavesOnLine(parsed: ParsedSource, line: number): SyntaxNodeLike[] {
+  const nodes: SyntaxNodeLike[] = [];
+  walkNodes(parsed.tree.rootNode, (node) => {
+    if (!node.namedChildren.length && node.startPosition.row + 1 === line) nodes.push(node);
+  });
+  return nodes;
+}
+
+function outermostNodeStartingOnLine(parsed: ParsedSource, line: number): SyntaxNodeLike | undefined {
+  let selected: SyntaxNodeLike | undefined;
+  walkNodes(parsed.tree.rootNode, (node) => {
+    if (!selected && node !== parsed.tree.rootNode && node.startPosition.row + 1 === line) selected = node;
+  });
+  return selected;
+}
+
+function sourceLineRange(source: string, line: number): { start: number; end: number } | undefined {
+  let start = 0;
+  for (let currentLine = 1; currentLine < line; currentLine++) {
+    const newline = source.indexOf("\n", start);
+    if (newline < 0) return undefined;
+    start = newline + 1;
+  }
+  let end = source.indexOf("\n", start);
+  if (end < 0) end = source.length;
+  if (end > start && source[end - 1] === "\r") end--;
+  return { start, end };
+}
+
+function sourceWithoutMarkerComment(source: string, start: number, end: number, marker: Marker): string {
+  const commentStart = Math.max(start, marker.commentStart);
+  const commentEnd = Math.min(end, marker.commentEnd);
+  if (commentStart >= commentEnd) return source.slice(start, end);
+  return source.slice(start, commentStart) + source.slice(commentEnd, end);
+}
+
+function positionIsWithinNode(node: SyntaxNodeLike, line: number, column: number): boolean {
+  const row = line - 1;
+  const zeroBasedColumn = column - 1; // Reference ranges are 1-based; syntax positions are 0-based.
+  if (row < node.startPosition.row || row > node.endPosition.row) return false;
+  if (row === node.startPosition.row && zeroBasedColumn < node.startPosition.column) return false;
+  return row !== node.endPosition.row || zeroBasedColumn < node.endPosition.column;
+}
 function relativeFile(file: string): string {
   return path.relative(process.cwd(), file).replaceAll("\\", "/");
 }
@@ -156,14 +231,20 @@ describe("Tree-sitter edge corpus", () => {
           failures.push(`${relativeFile(marker.file)}:${marker.line} @def ${marker.id}: file was not parsed`);
           continue;
         }
+        // `@def id` names the identifier spelled `id`; `@def id=name` gives a different id to identifier `name`.
+        const [defId, identifierName = defId] = marker.id.split("=", 2) as [string, string?];
+        marker.id = defId;
         const nodes = identifierNodesOnLine(parsed, marker.line);
-        const matching = nodes.filter((node) => node.text === marker.id);
-        let selected: SyntaxNodeLike | undefined;
-        if (matching.length === 1) selected = matching[0];
-        else if (!matching.length && nodes.length) selected = nodes[nodes.length - 1];
+        let matching = nodes.filter((node) => node.text === identifierName);
+        // A declaring token that is not an identifier, such as Ruby `:name` in `attr_accessor :name`,
+        // binds to the one named leaf spelled that way.
+        if (!matching.length) {
+          matching = namedLeavesOnLine(parsed, marker.line).filter((node) => node.text === identifierName);
+        }
+        const selected = matching.length === 1 ? matching[0] : undefined;
         if (!selected) {
           failures.push(
-            `${relativeFile(marker.file)}:${marker.line} @def ${marker.id}: expected one matching identifier, found ${nodes.map((node) => node.text).join(", ") || "none"}`,
+            `${relativeFile(marker.file)}:${marker.line} @def ${marker.id}: expected exactly one identifier spelled ${JSON.stringify(identifierName)}, found ${nodes.map((node) => node.text).join(", ") || "none"}`,
           );
           continue;
         }
@@ -205,28 +286,28 @@ describe("Tree-sitter edge corpus", () => {
         const references = referencesById.get(marker.id);
 
         if (marker.kind === "goto") {
-          const target = definitions.get(marker.id);
+          const [definitionId, requestedIdentifier] = marker.id.split("=", 2);
+          const target = definitions.get(definitionId ?? "");
           if (!target) {
             failures.push(`${location} @goto ${marker.id}: definition marker was not found`);
             continue;
           }
-          const reference =
-            references?.status === "ok"
-              ? references.references.find(
-                  (entry) => sameFile(entry.file, marker.file) && entry.range.start.line === marker.line,
-                )
-              : undefined;
           const parsed = parsedByFile.get(marker.file);
-          const candidates = parsed ? identifierNodesOnLine(parsed, marker.line) : [];
-          const selected = candidates.find((node) => node.text === target.name) ?? candidates[candidates.length - 1];
-          const column = reference?.range.start.column ?? (selected ? selected.startPosition.column + 1 : undefined);
-          if (column === undefined) {
+          const identifierName = requestedIdentifier ?? target.name;
+          const identifiers = parsed ? identifierNodesOnLine(parsed, marker.line) : [];
+          const candidates = identifiers.filter((node) => node.text === identifierName);
+          const selected = candidates.length === 1 ? candidates[0] : undefined;
+          if (!selected) {
             failures.push(
-              `${location} @goto ${marker.id}: no identifier site to navigate from; input=${JSON.stringify(sourceLine)}`,
+              `${location} @goto ${marker.id}: expected exactly one identifier spelled ${JSON.stringify(identifierName)} on this line, found ${candidates.map((node) => node.text).join(", ") || "none"}; input=${JSON.stringify(sourceLine)}`,
             );
             continue;
           }
-          const result = await goToDefinition(index, { file: marker.file, line: marker.line, column });
+          const result = await goToDefinition(index, {
+            file: marker.file,
+            line: marker.line,
+            column: selected.startPosition.column + 1,
+          });
           if (gapReason) {
             let observed: string = result.status;
             if (result.status === "ok") {
@@ -273,6 +354,35 @@ describe("Tree-sitter edge corpus", () => {
           failures.push(`${location} @${marker.kind} ${marker.id}: missing @def marker`);
           continue;
         }
+        const parsed = parsedByFile.get(marker.file);
+        let exclusionBlock: SyntaxNodeLike | undefined;
+        if (marker.kind === "not-ref-block" && parsed) {
+          exclusionBlock = outermostNodeStartingOnLine(parsed, marker.line);
+        }
+        if (marker.kind === "not-ref-block" && !exclusionBlock) {
+          failures.push(`${location} @not-ref-block ${marker.id}: no named syntax node starts on this line`);
+          continue;
+        }
+        if (marker.kind === "not-ref" || marker.kind === "not-ref-block") {
+          const definition = definitions.get(marker.id);
+          let start = exclusionBlock?.startIndex;
+          let end = exclusionBlock?.endIndex;
+          if (marker.kind === "not-ref" && parsed) {
+            const lineRange = sourceLineRange(parsed.source, marker.line);
+            start = lineRange?.start;
+            end = lineRange?.end;
+          }
+          if (!parsed || !definition || start === undefined || end === undefined) {
+            failures.push(`${location} @${marker.kind} ${marker.id}: could not determine checked source text`);
+            continue;
+          }
+          const checkedSource = sourceWithoutMarkerComment(parsed.source, start, end, marker);
+          if (!checkedSource.includes(definition.name)) {
+            failures.push(
+              `${location} @${marker.kind} ${marker.id}: checked source text must contain decoy spelling ${JSON.stringify(definition.name)} outside the marker comment`,
+            );
+          }
+        }
         if (references.status !== "ok") {
           if (gapReason && marker.kind === "coverage" && knownGap?.observed !== references.status) {
             failures.push(
@@ -292,7 +402,11 @@ describe("Tree-sitter edge corpus", () => {
             knownGaps.push(
               `${scenario.language}: ${location} input=${JSON.stringify(sourceLine)}; expected reference to ${marker.id}; observed not_found; reason=${gapReason}`,
             );
-          } else if (gapReason && references.status === "not_found" && marker.kind === "not-ref") {
+          } else if (
+            gapReason &&
+            references.status === "not_found" &&
+            (marker.kind === "not-ref" || marker.kind === "not-ref-block")
+          ) {
             knownGaps.push(
               `${scenario.language}: ${location} input=${JSON.stringify(sourceLine)}; expected no reference to ${marker.id}; observed not_found; reason=${gapReason}`,
             );
@@ -303,9 +417,12 @@ describe("Tree-sitter edge corpus", () => {
           }
           continue;
         }
-        const matchingReferences = references.references.filter(
-          (reference) => sameFile(reference.file, marker.file) && reference.range.start.line === marker.line,
-        );
+        const matchingReferences = references.references.filter((reference) => {
+          if (!sameFile(reference.file, marker.file)) return false;
+          if (exclusionBlock)
+            return positionIsWithinNode(exclusionBlock, reference.range.start.line, reference.range.start.column);
+          return reference.range.start.line === marker.line;
+        });
 
         if (marker.kind === "coverage") {
           if (!marker.state) {
@@ -340,10 +457,10 @@ describe("Tree-sitter edge corpus", () => {
               `${location} @ref ${marker.id}: expected a reference, observed none; input=${JSON.stringify(sourceLine)}`,
             );
           }
-        } else if (marker.kind === "not-ref") {
+        } else if (marker.kind === "not-ref" || marker.kind === "not-ref-block") {
           if (matchingReferences.length) {
             failures.push(
-              `${location} @not-ref ${marker.id}: expected no reference, observed ${matchingReferences.length}; input=${JSON.stringify(sourceLine)}`,
+              `${location} @${marker.kind} ${marker.id}: expected no reference, observed ${matchingReferences.length}; input=${JSON.stringify(sourceLine)}`,
             );
           }
         }
@@ -360,9 +477,13 @@ describe("Tree-sitter edge corpus", () => {
       }
     }
 
-    for (const language of Object.keys(commentPrefixes)) {
+    for (const language of new Set(scenarios.map((scenario) => scenario.language))) {
       const count = assertionCounts.get(language) ?? 0;
-      if (count < 25 || count > 45) failures.push(`${language}: expected 25-45 edge assertions, observed ${count}`);
+      if (count < MIN_ASSERTIONS_PER_LANGUAGE || count > MAX_ASSERTIONS_PER_LANGUAGE) {
+        failures.push(
+          `${language}: expected ${MIN_ASSERTIONS_PER_LANGUAGE}-${MAX_ASSERTIONS_PER_LANGUAGE} edge assertions, observed ${count}`,
+        );
+      }
     }
     if (knownGaps.length) {
       process.stdout.write(`Known edge-corpus gaps:\n${knownGaps.join("\n")}\n`);
