@@ -1,0 +1,35 @@
+@use "tokens" as palette;
+@use "tools" as t;
+@use "barrel" as kit;
+
+.panel {
+  color: palette.$accent; // @ref accent
+  padding: palette.$spacing; // @ref spacing
+  @include t.center; // @ref center @goto center
+  width: t.scale(2); // @ref scale
+  @extend %surface; // @ref surface
+  color: kit.$accent; // @ref accent
+  padding: kit.$spacing; // @ref spacing
+  @include kit.tool-center; // @ref center @goto center
+  $again: palette.$accent; // @ref accent
+  content: "$accent"; // @not-ref accent
+  content: "$hidden"; // @not-ref hidden
+  content: "scale"; // @not-ref scale
+  .nested { width: t.scale(3); } // @ref scale
+  .inside { @include t.center; } // @ref center @goto center
+  $copy: palette.$accent; // @ref accent
+  $copy2: palette.$accent; // @ref accent
+  $space2: palette.$spacing; // @ref spacing
+  $space3: kit.$spacing; // @ref spacing
+  @include t.center; // @ref center
+  $width: t.scale(4); // @ref scale
+  .deep { $tone: kit.$accent; } // @ref accent
+  $again2: palette.$accent; // @ref accent
+  $space4: kit.$spacing; // @ref spacing
+  @include t.center; // @ref center
+  $wide: t.scale(5); // @ref scale
+  $more: palette.$accent; // @ref accent
+  @include t.center; // @ref center
+  $last: kit.$spacing; // @ref spacing
+  content: "literal #{'scale'}"; // @not-ref scale
+}

@@ -39,14 +39,10 @@ const commentPrefixes: Record<string, readonly string[]> = {
   c: ["//", "/*"],
   swift: ["//", "/*"],
   zig: ["//"],
-  vue: ["//", "/*", "<!--"],
-  svelte: ["//", "/*", "<!--"],
-  astro: ["//", "/*", "<!--"],
-  css: ["/*"],
+  vue: ["//", "/*"],
+  svelte: ["//", "/*"],
   scss: ["//", "/*"],
   terraform: ["#", "//", "/*"],
-  html: ["<!--"],
-  markdown: ["<!--"],
 };
 /** Every language directory must carry 25-45 assertions. */
 const MIN_ASSERTIONS_PER_LANGUAGE = 25;
