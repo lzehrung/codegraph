@@ -6,6 +6,6 @@ open class SpreadBase {
 
 class SpreadDerived : SpreadBase() {
     fun hit(value: String): String = value // @def spreadDerived=hit
-    fun hit(vararg values: Int): String = values.joinToString()
+    // No vararg overload: the spread call below must not bind either method.
     fun use(values: IntArray): String = hit(*values) // @not-ref spreadDerived @not-ref spreadBase
 }

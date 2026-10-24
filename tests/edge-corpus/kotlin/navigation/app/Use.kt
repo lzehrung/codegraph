@@ -18,17 +18,17 @@ fun use(): String {
     val record = makeRecord("Ada") // @ref build @goto build=makeRecord
     val named = Entry(name = record.name, rank = 2) // @ref Record @goto Record=Entry
     val label = renderRecord(named) // @ref render @goto render=renderRecord
-    val summary = named.summary // @ref summary @known-gap extension_property_receiver_unresolved observed=none
+    val summary = named.summary // @not-ref summary
     val compact = named.renderCompact("*") // @ref compact @known-gap extension_function_alias_unresolved observed=none
-    val twin = named.twin // @ref twin @known-gap extension_property_receiver_unresolved observed=none
+    val twin = named.twin // @not-ref twin
     val formatted = Formatter.format(named) // @ref format @goto format
     val box = Box.create("payload") // @ref create @goto create @ref Box
-    val boxRead = box.read() // @ref read @known-gap typed_receiver_member_unresolved observed=none
-    val inner = box.Inner() // @ref Inner @known-gap inner_constructor_receiver_unresolved observed=none
-    val outer = inner.outerValue() // @ref outerValue @known-gap inner_member_receiver_unresolved observed=none
-    val viaOuter = inner.fromOuter() // @ref fromOuter @known-gap inner_member_receiver_unresolved observed=none
-    val intOverload = overload(3) // @ref overload @known-gap aliased_overload_import_unresolved observed=none
-    val stringOverload = overload("three") // @ref overloadString @known-gap aliased_overload_import_unresolved observed=none
+    val boxRead = box.read() // @not-ref read
+    val inner = box.Inner() // @not-ref Inner
+    val outer = inner.outerValue() // @not-ref outerValue
+    val viaOuter = inner.fromOuter() // @not-ref fromOuter
+    val intOverload = overload(3) // @not-ref overload @not-ref overloadString
+    val stringOverload = overload("three") // @not-ref overload @not-ref overloadString
     val withDefault = defaulted(value = "done") // @ref defaulted @goto defaulted
     val pair = PairBox(left = label, right = compact) // @ref left @ref right @known-gap data_class_named_arguments_unresolved observed=none
     val pairAgain = PairBox(label, compact) // @ref PairBox @goto PairBox

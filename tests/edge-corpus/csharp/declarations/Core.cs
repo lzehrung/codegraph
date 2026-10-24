@@ -1,8 +1,12 @@
 namespace Edge.Core;
 
-public static partial class Helpers // @def helpers=Helpers
+public static class Helpers // @def helpers=Helpers
 {
     public static int Build(int seed) => seed; // @def build=Build @coverage build complete
+}
+
+public static partial class PartialHelpers // @def partialHelpers=PartialHelpers
+{
     public static int Two(int seed) => seed; // @def twoOne=Two
 }
 

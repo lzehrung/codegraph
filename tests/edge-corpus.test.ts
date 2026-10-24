@@ -15,6 +15,7 @@ type Marker = {
   id: string;
   file: string;
   line: number;
+  markerSourceOffset: number;
   commentStart: number;
   commentEnd: number;
   state?: CoverageState;
@@ -49,10 +50,20 @@ const MIN_ASSERTIONS_PER_LANGUAGE = 25;
 const MAX_ASSERTIONS_PER_LANGUAGE = 80;
 const assertionKinds = new Set<MarkerKind>(["ref", "not-ref", "not-ref-block", "goto", "coverage"]);
 const markerPattern = /@(def|ref|not-ref-block|not-ref|goto|coverage|known-gap)\s+([\w.-]+(?:=[\w$@?!=:-]+)?)/g;
+const markerTagPattern = /@(def|ref|not-ref-block|not-ref|goto|coverage|known-gap)\b/g;
 
 function walkNodes(root: SyntaxNodeLike, visit: (node: SyntaxNodeLike) => void): void {
   visit(root);
   for (const child of root.namedChildren) walkNodes(child, visit);
+}
+
+function walkAllNodes(root: SyntaxNodeLike, visit: (node: SyntaxNodeLike) => void): void {
+  visit(root);
+  for (let index = 0; ; index++) {
+    const child = root.child(index);
+    if (!child) break;
+    walkAllNodes(child, visit);
+  }
 }
 
 function isMissingPathError(error: unknown): boolean {
@@ -110,7 +121,7 @@ function extractMarkers(parsed: ParsedSource, file: string, prefixes: readonly s
   if (!language) throw new Error(`Missing language definition for ${parsed.sup.id}`);
   const commentTypes = new Set(language.structure.comments);
   const markers: Marker[] = [];
-  walkNodes(parsed.tree.rootNode, (node) => {
+  walkAllNodes(parsed.tree.rootNode, (node) => {
     if (!commentTypes.has(node.type)) return;
     const comment = node.text.trimStart();
     const commentPrefix = prefixes.find((prefix) => comment.startsWith(prefix));
@@ -125,11 +136,13 @@ function extractMarkers(parsed: ParsedSource, file: string, prefixes: readonly s
       const followingText = body.slice((match.index ?? 0) + match[0].length).trimStart();
       const stateMatch = kind === "coverage" ? /^(complete|partial)\b/.exec(followingText) : null;
       const observedMatch = kind === "known-gap" ? /(?:^|\s)observed=([\w.-]+)/.exec(followingText) : null;
+      const markerPrefixLength = node.text.length - comment.length + commentPrefix.length + (match.index ?? 0);
       markers.push({
         kind,
         id,
         file,
         line: siteRow + 1,
+        markerSourceOffset: node.startIndex + markerPrefixLength,
         commentStart: node.startIndex,
         commentEnd: node.endIndex,
         ...(stateMatch ? { state: stateMatch[1] as CoverageState } : {}),
@@ -139,7 +152,71 @@ function extractMarkers(parsed: ParsedSource, file: string, prefixes: readonly s
   });
   return markers;
 }
+function findUnextractedMarkerTags(
+  parsed: ParsedSource,
+  file: string,
+  extracted: Marker[],
+  prefixes: readonly string[],
+): string[] {
+  const language = getLanguageById(parsed.sup.id);
+  if (!language) throw new Error(`Missing language definition for ${parsed.sup.id}`);
+  const commentTypes = new Set(language.structure.comments);
+  const extractedOffsets = new Set(extracted.map((marker) => marker.markerSourceOffset));
+  const hasAncestor = (node: SyntaxNodeLike, predicate: (candidate: SyntaxNodeLike) => boolean): boolean => {
+    for (let current: SyntaxNodeLike | null = node; current; current = current.parent) {
+      if (predicate(current)) return true;
+    }
+    return false;
+  };
+  const isCommentNode = (node: SyntaxNodeLike): boolean =>
+    commentTypes.has(node.type) || node.type.toLowerCase().includes("comment");
+  const isLiteralNode = (node: SyntaxNodeLike): boolean =>
+    /string|character|regex|template/.test(node.type.toLowerCase());
+  const markerIsInComment = (offset: number, length: number): boolean => {
+    const markerNode = parsed.tree.rootNode.descendantForIndex(offset, offset + length);
+    if (hasAncestor(markerNode, isCommentNode)) return true;
+    if (hasAncestor(markerNode, isLiteralNode)) return false;
 
+    const lineStart = parsed.source.lastIndexOf("\n", offset - 1) + 1;
+    const linePrefix = parsed.source.slice(lineStart, offset);
+    for (const prefix of prefixes.filter((candidate) => candidate === "//" || candidate === "#")) {
+      const prefixIndex = linePrefix.lastIndexOf(prefix);
+      if (prefixIndex < 0) continue;
+      const prefixOffset = lineStart + prefixIndex;
+      const prefixNode = parsed.tree.rootNode.descendantForIndex(prefixOffset, prefixOffset + prefix.length);
+      if (!hasAncestor(prefixNode, isLiteralNode)) return true;
+    }
+
+    if (prefixes.includes("/*")) {
+      const commentStart = parsed.source.lastIndexOf("/*", offset);
+      const commentEnd = parsed.source.lastIndexOf("*/", offset);
+      if (commentStart > commentEnd) {
+        const opener = parsed.tree.rootNode.descendantForIndex(commentStart, commentStart + 2);
+        if (!hasAncestor(opener, isLiteralNode)) return true;
+      }
+    }
+    return false;
+  };
+
+  const parsedMarkersByOffset = new Map<number, { kind: MarkerKind; id: string }>();
+  for (const match of parsed.source.matchAll(markerPattern)) {
+    parsedMarkersByOffset.set(match.index ?? -1, { kind: match[1] as MarkerKind, id: match[2] ?? "" });
+  }
+
+  const failures: string[] = [];
+  for (const match of parsed.source.matchAll(markerTagPattern)) {
+    const markerOffset = match.index ?? -1;
+    if (!markerIsInComment(markerOffset, match[0].length) || extractedOffsets.has(markerOffset)) continue;
+    const kind = match[1] as MarkerKind;
+    const sourceLine = parsed.source.slice(0, markerOffset).split(/\r?\n/).length;
+    const parsedMarker = parsedMarkersByOffset.get(markerOffset);
+    const id = parsedMarker?.kind === kind ? parsedMarker.id : "";
+    failures.push(
+      `${relativeFile(file)}:${sourceLine} @${kind}${id ? ` ${id}` : ""}: marker-like text was not extracted from a comment`,
+    );
+  }
+  return failures;
+}
 function identifierNodesOnLine(parsed: ParsedSource, line: number): SyntaxNodeLike[] {
   const nodeTypes = new Set([
     ...parsed.sup.nodeTypes.identifier,
@@ -229,7 +306,9 @@ describe("Tree-sitter edge corpus", () => {
         const parsed = await parseFile(file);
         parsedByFile.set(file, parsed);
         sourceByFile.set(file, parsed.source);
-        markers.push(...extractMarkers(parsed, file, commentPrefix));
+        const extracted = extractMarkers(parsed, file, commentPrefix);
+        markers.push(...extracted);
+        failures.push(...findUnextractedMarkerTags(parsed, file, extracted, commentPrefix));
       }
 
       const definitions = new Map<string, DefinitionSite>();

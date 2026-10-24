@@ -1,7 +1,19 @@
 $source: "module"; // @def useSource=$source @coverage useSource partial
 $size: 1px; // @def moduleSize=$size @coverage moduleSize partial
 
-@function pad($value) { @return $value; } // @def pad @coverage pad partial
-@function url($value) { @return $value; } // @def libUrl=url
-@mixin show { color: red; } // @def showMixin=show
-@function dynamicProbe() { @return 1; } // @def dynamicProbe
+// @def pad @coverage pad partial
+@function pad($value) {
+  @return $value;
+}
+// @def libUrl=url
+@function url($value) {
+  @return $value;
+}
+// @def showMixin=show
+@mixin show {
+  color: red;
+}
+// @def dynamicProbe
+@function dynamicProbe() {
+  @return 1;
+}

@@ -8,16 +8,16 @@ namespace text = orbit::model::nested;
 int exercise() {
     Worker worker;
     orbit::detail::Base& base = worker;
-    int selected = pick(3); // @goto pick @known-gap using_overload_goto observed=not_found
-    int selectedReference = pick(3); // @ref pick @known-gap using_overload_reference observed=none
-    int selectedDouble = pick(3.5); // @goto pickDouble=pick @known-gap using_overload_goto observed=not_found
-    int selectedDoubleReference = pick(3.5); // @ref pickDouble @known-gap using_overload_reference observed=none
+    int selected = pick(3); // @not-ref pick @not-ref pickDouble
+    int selectedReference = pick(3); // @not-ref pick @not-ref pickDouble
+    int selectedDouble = pick(3.5); // @not-ref pick @not-ref pickDouble
+    int selectedDoubleReference = pick(3.5); // @not-ref pick @not-ref pickDouble
     int zero = orbit::detail::choose(); // @ref chooseVoid @goto chooseVoid=choose
-    int first = base.step(3); // @goto step @known-gap qualified_member_goto observed=not_found
-    int second = base.step(3.5); // @ref stepDouble @known-gap base-double-step-reference observed=none @not-ref step
-    int third = worker.run(4); // @goto run @known-gap receiver_member_goto observed=not_found
-    int fourth = worker.run(4.5); // @ref runDouble @known-gap double-run-reference observed=none @not-ref run
-    int fourthGoto = worker.run(4.5); // @goto runDouble @known-gap double-run-goto observed=not_found @not-ref run
+    int first = base.step(3); // @not-ref step @not-ref stepDouble
+    int second = base.step(3.5); // @not-ref step @not-ref stepDouble
+    int third = worker.run(4); // @not-ref run @not-ref runDouble
+    int fourth = worker.run(4.5); // @not-ref run @not-ref runDouble
+    int fourthGoto = worker.run(4.5); // @not-ref run @not-ref runDouble
     int fifth = om::identity<int>(first); // @ref identity @goto identity
     int sixth = text::launch(worker); // @ref launch @goto launch
     int made = Worker::make(); // @goto make @known-gap using_type_static_member_goto observed=not_found

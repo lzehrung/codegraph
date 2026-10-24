@@ -13,7 +13,7 @@ namespace Foreign.Client
 
     public class PrivateBuildDerived : PrivateBuildBase
     {
-        public int Run() => Build(4); // @ref build @known-gap private_base_static_using_reference observed=none
-        public int RunAgain() => Build(4); // @goto build=Build @known-gap private_base_static_using_goto observed=not_found
+        public int Run() => Build(4); // @ref build
+        public int RunAgain() => Build(4); // @goto build=Build
     }
 }

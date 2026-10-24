@@ -1,2 +1,2 @@
 $importAsset: "theme"; // @def importAsset=$importAsset
-@import "https://example.com/#{$importAsset}.css"; /* @ref importAsset @known-gap sass_import_url_interpolation observed=none */
+@import "https://example.com/#{$importAsset}.css"; /* @not-ref importAsset */

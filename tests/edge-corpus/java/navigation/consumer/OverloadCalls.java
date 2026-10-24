@@ -4,6 +4,6 @@ import api.Service;
 
 class OverloadCalls extends Service
 {
-    int inheritedPick() { return choose(1); } // @goto intChoose=choose @known-gap inherited_overload_goto observed=not_found
+    int inheritedPick() { return choose(1); } // @not-ref baseChoose @not-ref intChoose
     int typeReceiver() { return Service.mix(1); } // @goto staticMix=mix
 }

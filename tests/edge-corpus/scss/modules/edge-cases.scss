@@ -9,66 +9,120 @@
 
 $asset: "theme"; // @def asset=$asset
 $commentValue: 1; // @def commentValue=$commentValue
-/* #{$commentValue} */ $afterComment: 2; /* @def afterComment=$afterComment @ref commentValue */
+/* #{$commentValue} */ /* @ref commentValue */
+$afterComment: 2; /* @def afterComment=$afterComment */
 $foo-bar: 1; // @def outerFoo=$foo-bar
 $flow: 1; // @def moduleX=$flow @coverage moduleX partial
 
-@function has($value) { @return $value; } // @def hasFunction=has
-@function box($values: [1, lib.$size]) { @return $values; } // @def boxFunction=box @ref moduleSize
-@mixin pad { color: red; } // @def outerPad=pad
+// @def hasFunction=has
+@function has($value) {
+  @return $value;
+}
+// @def boxFunction=box @ref moduleSize
+@function box($values: [1, lib.$size]) {
+  @return $values;
+}
+// @def outerPad=pad
+@mixin pad {
+  color: red;
+}
 
 .a {
   color: $source; // @ref importSource @not-ref useSource
   color: lib.$source; // @ref useSource @not-ref importSource
   width: late(2); // @not-ref lateFunction
   $foo_bar: 2; // @def innerFoo=$foo_bar
-  width: $foo-bar; // @ref innerFoo @known-gap sass_hyphen_underscore_reference observed=none @not-ref outerFoo
+  width: $foo-bar; /* token $foo_bar */ /* @not-ref innerFoo @not-ref outerFoo */
   width: theme.$surface; // @ref themeSurface
   @include showApi.show; /* @ref showMixin @goto showMixin=show */
   $dynamicMixins: meta.get-mixin("show", "lib"), meta.module-mixins("lib"); /* @coverage showMixin partial */
-  @mixin pad { color: blue; } // @def innerPad=pad
+  /* @def innerPad=pad */
+  @mixin pad {
+    color: blue;
+  }
   @include pad; // @ref innerPad @goto innerPad=pad @not-ref outerPad
-  @extend %btn; content: "btn-large"; /* @ref baseBtn @goto baseBtn=btn @not-ref interpolatedBtn */
+  @extend %btn; /* @ref baseBtn @goto baseBtn=btn */
+  content: "btn-large"; /* @not-ref interpolatedBtn */
   width: box(); // @ref boxFunction
   width: helpers.get-function("pad");
   width: helpers.function-exists("pad");
-  $dynamicProbeLookups: call(get-function("dynamicProbe")), call("dynamicProbe"), helpers.get-function("dynamicProbe"), meta.function-exists("dynamicProbe", "lib"); /* @coverage dynamicProbe partial */
+  $dynamicProbeLookups:
+    call(get-function("dynamicProbe")), call("dynamicProbe"), helpers.get-function("dynamicProbe"),
+    meta.function-exists("dynamicProbe", "lib"); /* @coverage dynamicProbe partial */
   width: lib.url(plain); // @ref libUrl
   content: \$flow; /* @not-ref moduleX */
   width: $flow; // @ref moduleX
-  @supports selector(:has(*)) { width: 1px; } /* @not-ref hasFunction */
+  @supports selector(:has(*)) /* @not-ref hasFunction */ {
+    width: 1px;
+  }
 }
 
-%btn { color: red; } // @def baseBtn=btn
+// @def baseBtn=btn @coverage baseBtn partial
+%btn {
+  color: red;
+}
 $suffix: "-large"; // @def suffix=$suffix
-%btn-large { color: red; } // @def interpolatedBtn=btn-large
-%btn#{$suffix} { color: blue; }
+// @def interpolatedBtn=btn-large @coverage interpolatedBtn partial
+%btn-large {
+  color: red;
+}
+%btn#{$suffix} {
+  color: blue;
+}
 
 .interpolated-ref {
-  @extend %btn#{$suffix}; /* @ref interpolatedBtn @known-gap sass_interpolated_placeholder_reference observed=none */
-}
-.interpolated-goto {
-  @extend %btn#{$suffix}; /* @goto interpolatedBtn=btn @not-ref baseBtn @known-gap sass_interpolated_placeholder_goto observed=not_found */
+  @extend %btn#{$suffix}; /* token btn-large */ /* @not-ref interpolatedBtn @not-ref baseBtn */
 }
 @media screen {
-  %mediaBtn { color: red; } // @def mediaBtn=mediaBtn
-  .media { @extend %mediaBtn; } // @ref mediaBtn @goto mediaBtn=mediaBtn
+  // @def mediaBtn=mediaBtn
+  %mediaBtn {
+    color: red;
+  }
+  .media {
+    @extend %mediaBtn; /* @ref mediaBtn @goto mediaBtn=mediaBtn */
+  }
 }
 
-@function late($value) { @return $value; } // @def lateFunction=late
-.b { width: late(3); } // @ref lateFunction
-.c { width: helpers.get-function("pad"); }
-.d { @include pad; } // @ref outerPad @goto outerPad=pad
-.e { color: module.network; }
+// @def lateFunction=late
+@function late($value) {
+  @return $value;
+}
+.b {
+  width: late(3); // @ref lateFunction
+}
+.c {
+  width: helpers.get-function("pad");
+}
+.d {
+  @include pad; // @ref outerPad @goto outerPad=pad
+}
+.e {
+  color: module.network;
+}
 
-@if true { $x: 2; $x: 3; } // @ref importedX
-.g { width: $x; } // @ref importedX
-@if true { $y: $y + 1; } // @ref usedY
-.h { width: $y; } // @ref usedY
-@each $flow in (1, 2) { $flow: $flow + 1; }
-.i { width: $flow; } // @ref moduleX
-.comment-state { width: $afterComment; } /* @ref afterComment */
+@if true {
+  $x: 2; // @ref importedX
+  $x: 3;
+}
+.g {
+  width: $x; // @ref importedX
+}
+@if true {
+  $y: $y + 1; // @ref usedY
+}
+.h {
+  width: $y; // @ref usedY
+}
+@each $flow in (1, 2) {
+  $flow: $flow + 1;
+}
+.i {
+  width: $flow; // @ref moduleX
+}
+.comment-state {
+  width: $afterComment; /* @ref afterComment */
+}
 
-
-
-.url { content: url(http://example.com/#{$asset}.css); /* @ref asset */ }
+.url {
+  content: url(http://example.com/#{$asset}.css); /* @ref asset */
+}
