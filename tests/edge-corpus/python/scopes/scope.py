@@ -6,10 +6,10 @@ def track(function):
     return function
 
 class Counter:
-    count = 0  # @def classCount @coverage classCount complete
+    count = 0  # @def classCount=count @coverage classCount complete
 
     def __init__(self):
-        self.count = 0  # @def instanceCount
+        self.count = 0  # @def instanceCount=count
 
     def add(self, amount):
         Counter.count += amount  # @ref classCount @goto classCount
