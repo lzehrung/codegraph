@@ -412,9 +412,11 @@ export async function previewRenameInSnapshot(
     const loaded = await loadRenameFile(snapshot, realRoot, candidate.file, loadedFiles, unsafeSites, provenance);
     if (!loaded) continue;
     const oldText = textAtRange(loaded.source, candidate.range);
+    const reference = candidate.reference;
     if (
-      candidate.reference?.via?.import &&
-      isPreservedImportAlias(candidate.reference, oldText, resolved.def.localName)
+      reference?.via?.import &&
+      !reference.via.namespaceMember &&
+      isPreservedImportAlias(reference, oldText, resolved.def.localName)
     ) {
       continue;
     }
@@ -866,6 +868,7 @@ async function addScopeConflicts(
 
   const seenImportFiles = new Set<string>();
   for (const reference of references) {
+    if (reference.via?.namespaceMember) continue;
     const activeImport = reference.via?.import;
     const localImportWillChange = activeImport?.kind === "named" && activeImport.local === target.localName;
     if (!activeImport || !localImportWillChange || seenImportFiles.has(fileIdentityKey(reference.file))) continue;
@@ -1155,6 +1158,7 @@ async function collectImportDeclarationCandidates(
     }
   }
   for (const reference of references) {
+    if (reference.via?.namespaceMember) continue;
     const binding = reference.via?.import;
     if (!binding || binding.kind !== "named" || binding.imported !== oldName) continue;
     const key = namedImportBindingKey(reference.file, binding);

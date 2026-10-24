@@ -1,5 +1,6 @@
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -843,6 +844,65 @@ function referenceCandidateCacheKey(index: ProjectIndex, def: SymbolDef, exporte
   return `${fileIdentityKey(def.file)}::${def.range.start.index ?? 0}::canonical::${sortedNames.join("\0")}`;
 }
 
+/**
+ * True when `namespaceFile` is the definition's module, re-exports it, or reaches it through
+ * forwarded namespace exports. A named import of that namespace can spell the symbol as a member.
+ */
+function jsNamespaceFileExportsDefinition(
+  index: ProjectIndex,
+  namespaceFile: string,
+  def: SymbolDef,
+  exportedNames: readonly string[],
+  seen: Set<string>,
+): boolean {
+  const key = fileIdentityKey(namespaceFile);
+  if (seen.has(key)) return false;
+  seen.add(key);
+  if (!exportedNames.length) return false;
+  if (key === fileIdentityKey(def.file)) return true;
+  const moduleIndex = index.byFile.get(key);
+  if (!moduleIndex) return false;
+  for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
+    const visible = resolveExport(index, namespaceFile, exportedName, { allowLocalFallback: false });
+    if (visible?.kind === "resolved" && sameDef(visible.def, def, index.languageExtensions)) return true;
+    if (
+      visible?.kind === "namespace" &&
+      jsNamespaceFileExportsDefinition(index, visible.file, def, exportedNames, seen)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function jsNamespaceImportReachesDefinition(
+  index: ProjectIndex,
+  targetFile: string,
+  imp: ImportBinding,
+  def: SymbolDef,
+  exportedNames: readonly string[],
+  languageId: string,
+): boolean {
+  if (!isJsTsLanguage(languageId) || !exportedNames.length) return false;
+  if (imp.kind === "named") {
+    const namespaceHit = resolveExport(index, targetFile, imp.imported, { allowLocalFallback: false });
+    return (
+      namespaceHit?.kind === "namespace" &&
+      jsNamespaceFileExportsDefinition(index, namespaceHit.file, def, exportedNames, new Set())
+    );
+  }
+  if (imp.kind !== "namespace") return false;
+  const moduleIndex = index.byFile.get(fileIdentityKey(targetFile));
+  if (!moduleIndex) return false;
+  const seen = new Set<string>();
+  for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
+    const visible = resolveExport(index, targetFile, exportedName, { allowLocalFallback: false });
+    if (visible?.kind !== "namespace") continue;
+    if (jsNamespaceFileExportsDefinition(index, visible.file, def, exportedNames, seen)) return true;
+  }
+  return false;
+}
+
 function importCanReferenceDefinition(
   index: ProjectIndex,
   imp: ImportBinding,
@@ -872,6 +932,7 @@ function importCanReferenceDefinition(
   if (imp.kind === "named") {
     if (imp.jvmStaticWildcardName) return javaStaticNamedImportIncludes(index, imp, def);
     if (resolvesToDefinition(imp.imported)) return true;
+    if (jsNamespaceImportReachesDefinition(index, targetFile, imp, def, exportedNames, languageId)) return true;
     // A python `from pkg import name` binds `name` from the package's own namespace; when the
     // package has no such export, Python's own import system falls back to treating `name` as
     // an implicit submodule attribute instead (the same fallback `resolveImported` applies at
@@ -890,6 +951,7 @@ function importCanReferenceDefinition(
       return !!result && !("namespace" in result) && sameDef(result, def, index.languageExtensions);
     });
   }
+  if (jsNamespaceImportReachesDefinition(index, targetFile, imp, def, exportedNames, languageId)) return true;
   return exportedNames.some((exportedName) => resolvesToDefinition(exportedName));
 }
 
@@ -926,14 +988,16 @@ function filesExportingDefinition(
   const files = new Map<string, string>([[fileIdentityKey(def.file), def.file]]);
   const namespaceLinks: Array<{ sourceFile: string; exportedAs: string; targetFile: string }> = [];
   for (const moduleIndex of index.byFile.values()) {
+    if (!moduleIndex.exports.length) continue;
     const fileId = moduleIndex.file;
-    for (const entry of moduleIndex.exports) {
-      if (entry.type === "namespaceReexport") {
-        namespaceLinks.push({ sourceFile: fileId, exportedAs: entry.exportedAs, targetFile: entry.fromModule });
-      }
+    const visibleExportNames = moduleExportProbeNames(index, moduleIndex, exportedNames);
+    for (const exportedName of visibleExportNames) {
+      const visible = resolveExport(index, fileId, exportedName, { allowLocalFallback: false });
+      if (visible?.kind !== "namespace") continue;
+      namespaceLinks.push({ sourceFile: fileId, exportedAs: exportedName, targetFile: visible.file });
     }
-    if (fileIdentityKey(fileId) === fileIdentityKey(def.file) || !moduleIndex.exports.length) continue;
-    for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
+    if (fileIdentityKey(fileId) === fileIdentityKey(def.file)) continue;
+    for (const exportedName of visibleExportNames) {
       const resolved = resolveExport(index, fileId, exportedName);
       if (resolved?.kind === "resolved" && sameDef(resolved.def, def, index.languageExtensions)) {
         files.set(fileIdentityKey(fileId), fileId);
@@ -955,9 +1019,9 @@ function filesExportingDefinition(
       files.set(fileIdentityKey(fileId), fileId);
     }
   }
-  // A namespace re-export can expose an inner symbol through a member chain even
-  // though it does not export that symbol under its own name. Include consumers
-  // only when the visible namespace alias really targets the exporting module.
+  // Visible namespace exports can expose an inner symbol through a member chain even
+  // though they do not export that symbol under its own name. Include consumers
+  // only when the visible namespace export really targets the exporting module.
   let grew = true;
   while (grew) {
     grew = false;
@@ -994,7 +1058,9 @@ function getIndexedReferenceCandidateFiles(
     if (
       moduleIndex.imports.some(
         (imp) =>
-          (imp.kind === "star" || imp.kind === "namespace" || (imp.kind === "named" && imp.mechanism === "python")) &&
+          (imp.kind === "star" ||
+            imp.kind === "namespace" ||
+            (imp.kind === "named" && (imp.mechanism === "python" || isJsTsLanguage(languageId)))) &&
           importCanReferenceDefinition(index, imp, def, exportedNames, languageId),
       )
     ) {

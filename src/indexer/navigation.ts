@@ -1,4 +1,5 @@
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { pythonPropertyDecorator } from "./python-property-decorator.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
@@ -81,6 +82,7 @@ import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import {
+  collectMemberAccessChain,
   getMemberAccessParts,
   isMemberAccessNode,
   isMemberObjectIdentifier,
@@ -751,10 +753,15 @@ async function findReferencesInternal(
 
   const definitionFile = def.file;
   const definitionSiteKey = referenceSiteKey(definitionFile, def.range);
+  const explicitNamespaceMemberAliasFiles = new Set<string>();
   const includeReference = (ref: Reference): boolean => {
     if (collectionMode === "all") return true;
     if (ref.via?.reexport || referenceSiteKey(ref.file, ref.range) === definitionSiteKey) return false;
     if (collectionMode === "usages") return ref.via?.importBinding === undefined;
+    if (ref.via?.namespaceMember) {
+      const hasExplicitAlias = namespaceBindingHasExplicitAlias(ref.via.import);
+      return ref.via.namespaceMember === def.localName && !hasExplicitAlias;
+    }
     const binding = ref.via?.import;
     if (!binding || binding.kind === "star" || binding.kind === "namespace") return true;
     if (ref.via?.importBinding === "imported" && binding.kind === "named" && binding.imported === def.localName) {
@@ -826,6 +833,67 @@ async function findReferencesInternal(
   const matchesReferenceDefinition = (candidate: SymbolDef): boolean =>
     sameDef(candidate, definition, index.languageExtensions) ||
     equivalentDefinitions.some((equivalent) => sameDef(candidate, equivalent, index.languageExtensions));
+  const hasExplicitExportAliasForDefinition = async (candidateModule: ModuleIndex): Promise<boolean> => {
+    const definitionExportNames = new Set<string>();
+    for (const entry of candidateModule.exports) {
+      if (!("exportedAs" in entry)) continue;
+      const hit = resolveExport(index, candidateModule.file, entry.exportedAs, exportOptions);
+      if (hit?.kind === "resolved" && matchesReferenceDefinition(hit.def)) {
+        definitionExportNames.add(entry.exportedAs);
+      }
+    }
+    if (!definitionExportNames.size) return false;
+    const parsedModule = await ensureParsedContext(
+      candidateModule.file,
+      index.parsed?.get(fileIdentityKey(candidateModule.file)),
+      index.languageExtensions,
+    );
+    const pending: SyntaxNodeLike[] = [parsedModule.tree.rootNode];
+    while (pending.length) {
+      const node = pending.pop()!;
+      const alias = node.type === "export_specifier" ? node.childForFieldName("alias") : undefined;
+      if (alias && definitionExportNames.has(alias.text)) return true;
+      pending.push(...node.namedChildren);
+    }
+    return false;
+  };
+  // Alias uncertainty only affects rename safety; reference and usage queries skip the scan.
+  for (const candidateModule of collectionMode === "rename" ? index.byFile.values() : []) {
+    if (await hasExplicitExportAliasForDefinition(candidateModule)) {
+      explicitNamespaceMemberAliasFiles.add(fileIdentityKey(candidateModule.file));
+    }
+  }
+  let namespaceExportAliasUncertainty = false;
+  const namespaceBindingHasExplicitAlias = (binding: ImportBinding | undefined): boolean => {
+    if (!binding) return false;
+    const namespaceFiles: string[] = [];
+    if (binding.kind === "namespace" && typeof binding.resolved === "string") {
+      namespaceFiles.push(binding.resolved);
+    } else if (binding.kind === "named" && typeof binding.resolved === "string") {
+      const target = resolveExport(index, binding.resolved, binding.imported);
+      if (target?.kind === "namespace") namespaceFiles.push(target.file);
+    }
+    const visited = new Set<string>();
+    const modulePathHasAlias = (file: string): boolean => {
+      const fileKey = fileIdentityKey(file);
+      if (visited.has(fileKey)) return false;
+      visited.add(fileKey);
+      if (explicitNamespaceMemberAliasFiles.has(fileKey)) return true;
+      const targetModule = index.byFile.get(fileKey);
+      for (const entry of targetModule?.exports ?? []) {
+        if (entry.type === "namespaceReexport" && modulePathHasAlias(entry.fromModule)) return true;
+        if (entry.type !== "reexport") continue;
+        const hit = resolveExport(index, file, entry.exportedAs, exportOptions);
+        if (hit?.kind === "resolved" && matchesReferenceDefinition(hit.def) && modulePathHasAlias(entry.fromModule)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    const hasAlias = namespaceFiles.some(modulePathHasAlias);
+    if (hasAlias) namespaceExportAliasUncertainty = true;
+    return hasAlias;
+  };
 
   const exportedNames: string[] = [];
   for (const candidate of [definition, ...equivalentDefinitions]) {
@@ -1071,6 +1139,71 @@ async function findReferencesInternal(
       return scopeIndex;
     };
 
+    const scannedNamespaceMemberRoots = new Set<string>();
+    const scanNamespaceMemberPaths = async (
+      importBinding: ImportBinding,
+      namespacePaths: Array<{ file: FileId; name: string; depth: number }>,
+    ): Promise<void> => {
+      const rootPath = namespacePaths[0];
+      if (!rootPath) return;
+      const rootKey = fileIdentityKey(rootPath.file) + "::" + rootPath.name;
+      if (scannedNamespaceMemberRoots.has(rootKey)) return;
+      scannedNamespaceMemberRoots.add(rootKey);
+      for (let pathIndex = 0; pathIndex < namespacePaths.length; pathIndex++) {
+        if (hasReachedCollectionLimit()) return;
+        if (pathIndex >= MAX_REFERENCE_NAMESPACE_PATHS) {
+          receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
+          return;
+        }
+        const namespacePath = namespacePaths[pathIndex]!;
+        const namespaceExports = resolveModuleExports(index, namespacePath.file, { allowLocalFallback: false });
+        if (namespacePath.depth) {
+          for (const [visibleMemberName, nestedHit] of namespaceExports) {
+            if (nestedHit.kind !== "resolved" || !matchesReferenceDefinition(nestedHit.def)) continue;
+            const parsed = await ensureCandidateParsed();
+            const ranges = await collectNamespaceMemberRefs(
+              fileId,
+              namespacePath.name,
+              visibleMemberName,
+              parsed,
+              index.languageExtensions,
+              importBinding,
+              module.imports,
+              await ensureScope(),
+            );
+            for (const range of ranges) {
+              if (hasReachedCollectionLimit()) return;
+              const proof = await goToDefinition(
+                index,
+                { file: fileId, line: range.start.line, column: range.start.column },
+                parsed,
+              );
+              if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
+              pushRef({
+                file: fileId,
+                range,
+                via: { import: importBinding, namespaceMember: visibleMemberName },
+              });
+            }
+          }
+        }
+        if (namespacePath.depth >= MAX_REFERENCE_NAMESPACE_DEPTH) {
+          if ([...namespaceExports.values()].some((entry) => entry.kind === "namespace")) {
+            receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
+          }
+          continue;
+        }
+        for (const [alias, entry] of namespaceExports) {
+          if (entry.kind !== "namespace") continue;
+          namespacePaths.push({
+            file: entry.file,
+            name: `${namespacePath.name}.${alias}`,
+            depth: namespacePath.depth + 1,
+          });
+        }
+      }
+    };
+
     if (supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.supportsExportFromReferences) {
       for (const entry of module.exports) {
         if (hasReachedCollectionLimit()) break;
@@ -1195,72 +1328,18 @@ async function findReferencesInternal(
           // binds the whole module. Other namespaces use their local name directly.
           const namespaceSearchName =
             imp.mechanism === "python" && imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS;
-          if (!matchesDef) {
-            const targetModule = index.byFile.get(fileIdentityKey(targetFile));
-            if (
-              !targetModule?.exports.some((entry) => entry.type === "namespaceReexport" || entry.type === "exportStar")
-            ) {
-              continue;
-            }
-            // A namespace re-export exposes a member at paths such as W.helpers.helper,
+          const targetModule = index.byFile.get(fileIdentityKey(targetFile));
+          if (
+            targetModule?.exports.some(
+              (entry) => entry.type === "namespaceReexport" || entry.type === "exportStar" || entry.type === "reexport",
+            )
+          ) {
+            // A forwarded namespace can expose a member at paths such as W.helpers.helper,
             // not as a bare export of the intermediate module. Follow only export-proven
             // namespace edges, then verify each use through the same goto resolver.
-            const namespacePaths: Array<{ file: FileId; name: string; depth: number }> = [
-              { file: targetFile, name: namespaceSearchName, depth: 0 },
-            ];
-            for (let pathIndex = 0; pathIndex < namespacePaths.length; pathIndex++) {
-              if (pathIndex >= MAX_REFERENCE_NAMESPACE_PATHS) {
-                receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
-                break;
-              }
-              const namespacePath = namespacePaths[pathIndex]!;
-              if (namespacePath.depth) {
-                const nestedHit = resolveExport(index, namespacePath.file, exportedName, {
-                  allowLocalFallback: false,
-                  ...(exportOptions ?? {}),
-                });
-                if (nestedHit?.kind === "resolved" && matchesReferenceDefinition(nestedHit.def)) {
-                  const parsed = await ensureCandidateParsed();
-                  const ranges = await collectNamespaceMemberRefs(
-                    fileId,
-                    namespacePath.name,
-                    exportedName,
-                    parsed,
-                    index.languageExtensions,
-                    imp,
-                    module.imports,
-                    await ensureScope(),
-                  );
-                  for (const range of ranges) {
-                    if (hasReachedCollectionLimit()) break;
-                    const proof = await goToDefinition(
-                      index,
-                      { file: fileId, line: range.start.line, column: range.start.column },
-                      parsed,
-                    );
-                    if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
-                    pushRef({ file: fileId, range, via: { import: imp, namespaceMember: exportedName } });
-                  }
-                }
-              }
-              const exports = resolveModuleExports(index, namespacePath.file, { allowLocalFallback: false });
-              if (namespacePath.depth >= MAX_REFERENCE_NAMESPACE_DEPTH) {
-                if ([...exports.values()].some((entry) => entry.kind === "namespace")) {
-                  receiverProofUnavailableFiles.set(fileIdentityKey(fileId), fileId);
-                }
-                continue;
-              }
-              for (const [alias, entry] of exports) {
-                if (entry.kind !== "namespace") continue;
-                namespacePaths.push({
-                  file: entry.file,
-                  name: `${namespacePath.name}.${alias}`,
-                  depth: namespacePath.depth + 1,
-                });
-              }
-            }
-            continue;
+            await scanNamespaceMemberPaths(imp, [{ file: targetFile, name: namespaceSearchName, depth: 0 }]);
           }
+          if (!matchesDef) continue;
           const parsed = await ensureCandidateParsed();
           const ranges = await collectNamespaceMemberRefs(
             fileId,
@@ -1408,6 +1487,19 @@ async function findReferencesInternal(
               }
               continue;
             }
+          }
+          const candidateLanguage = supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.id;
+          if (
+            !matchesDef &&
+            imp.kind === "named" &&
+            hit?.kind === "namespace" &&
+            candidateLanguage &&
+            isJsTsLanguage(candidateLanguage)
+          ) {
+            // `import { nested }` binds the namespace object. Member lookup starts in that
+            // module; `import * as ns` still starts at the barrel and descends. Goto proves the site.
+            await scanNamespaceMemberPaths(imp, [{ file: hit.file, name: imp.local, depth: 1 }]);
+            continue;
           }
           if (!matchesDef) {
             // The requested export slot itself does not exist at all (as opposed to existing
@@ -1709,6 +1801,7 @@ async function findReferencesInternal(
   const strategyUnavailableFiles = [
     ...receiverProofUnavailableFiles.values(),
     ...(rubyReopen?.incomplete ? [definition.file] : []),
+    ...(namespaceExportAliasUncertainty ? [definition.file] : []),
   ];
   if (parsedContext.sup.id === "scss" && definition.localName.startsWith("$")) {
     const facts = await scssFactsForFile(index, definition.file);
@@ -2246,6 +2339,7 @@ export async function collectNamespaceMemberRefs(
   // Identifier equality follows the language rule, so C# `@X::@Target` matches alias `X` member `Target`.
   const normalize = sup.normalizeIdentifier;
   const normalizedNs = normalize(ns);
+  const namespaceSegments = normalizedNs.includes(".") ? normalizedNs.split(".") : undefined;
   const normalizedMember = normalize(member);
   let effectivePythonBinding: ImportBinding | undefined;
   if (sup.id === "python" && importBinding && imports) {
@@ -2268,13 +2362,24 @@ export async function collectNamespaceMemberRefs(
       if (obj && prop && isMemberReferencePropertyIdentifier(sup, prop.type)) {
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
-        // A python multi-segment dotted import (`import a.b`) binds only the first segment;
-        // the source only ever repeats the whole dotted phrase to reach the resolved leaf
-        // module again, so `ns` can be that literal phrase and `obj` a compound chain rather
-        // than the single bare identifier every other caller passes.
-        const objectMatches = normalizedNs.includes(".")
-          ? normalize(objectName) === normalizedNs
-          : isMemberObjectIdentifier(obj.type) && normalize(objectName) === normalizedNs;
+        let objectMatches = false;
+        if (namespaceSegments) {
+          const chain = collectMemberAccessChain({ sup, source, chainNode: obj });
+          if (
+            chain &&
+            isMemberObjectIdentifier(chain.base.type) &&
+            chain.names.length === namespaceSegments.length - 1
+          ) {
+            objectMatches = normalize(sliceText(chain.base, source)) === namespaceSegments[0];
+            for (let segmentIndex = 0; objectMatches && segmentIndex < chain.names.length; segmentIndex += 1) {
+              objectMatches =
+                normalize(chain.names[segmentIndex]!) ===
+                namespaceSegments[namespaceSegments.length - 1 - segmentIndex];
+            }
+          }
+        } else {
+          objectMatches = isMemberObjectIdentifier(obj.type) && normalize(objectName) === normalizedNs;
+        }
         if (objectMatches && normalize(propertyName) === normalizedMember) {
           let receiver = obj;
           while (!isMemberObjectIdentifier(receiver.type) && receiver.namedChildren.length) {
