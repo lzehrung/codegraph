@@ -1,5 +1,5 @@
 use crate::api::{renamed_add, Ring};
-use crate::calc::*; // @not-ref square
+use crate::calc::*; /* square */ // @not-ref square
 use crate::nested::child::{self, from_child};
 use crate::shapes::{Circle, Derived, Disk, Shape, Square};
 
@@ -7,7 +7,7 @@ pub fn reexported() -> i32 {
     let _ring = Ring::new(1.0);
     let _child = child::from_child();
     let _ = from_child();
-    let aliased = renamed_add(1, 2); // @goto add @known-gap reexport_alias_call_not_resolved observed=not_found
+    let aliased = renamed_add(1, 2); // @goto add=renamed_add @known-gap reexport_alias_call_not_resolved observed=not_found
     aliased + _child
 }
 

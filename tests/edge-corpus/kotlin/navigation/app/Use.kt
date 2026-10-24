@@ -14,9 +14,9 @@ import sample.model.summary
 import sample.model.twin
 
 fun use(): String {
-    val record = makeRecord("Ada") // @ref build @goto build
-    val named = Entry(name = record.name, rank = 2) // @ref Record @goto Record
-    val label = renderRecord(named) // @ref render @goto render
+    val record = makeRecord("Ada") // @ref build @goto build=makeRecord
+    val named = Entry(name = record.name, rank = 2) // @ref Record @goto Record=Entry
+    val label = renderRecord(named) // @ref render @goto render=renderRecord
     val summary = named.summary // @ref summary @known-gap extension_property_receiver_unresolved observed=none
     val compact = named.renderCompact("*") // @ref compact @known-gap extension_function_alias_unresolved observed=none
     val twin = named.twin // @ref twin @known-gap extension_property_receiver_unresolved observed=none

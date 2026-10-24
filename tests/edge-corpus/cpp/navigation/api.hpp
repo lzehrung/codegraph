@@ -5,7 +5,7 @@ namespace detail {
 class Base {
 public:
     int step(int amount); // @def step
-    int step(double amount);
+    int step(double amount); // @def stepDouble=step
 };
 }
 namespace model {
@@ -13,7 +13,7 @@ using detail::Base;
 class Worker : public detail::Base {
 public:
     int run(int amount); // @def run
-    int run(double amount);
+    int run(double amount); // @def runDouble=run
     static int instances; // @def instances
 };
 template <typename T>

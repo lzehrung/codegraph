@@ -12,18 +12,19 @@ class Client extends Service {
         service.send("text"); // @ref sendText @known-gap overload_call_reference_missing observed=none
         service.send(3); // @ref sendNumber @known-gap overload_call_reference_missing observed=none
         String echoed = service.echo("generic"); // @ref echo @goto echo
-        Service.Nested nested = new Service.Nested(); // @ref Nested @goto Nested
-        Service.Inner inner = service.new Inner(); // @ref Inner @goto Inner
+        var nested = new Service.Nested(); // @ref Nested @goto Nested
+        var inner = service.new Inner(); // @ref Inner @known-gap inner-constructor-reference observed=none
+        service.new Inner(); // @goto Inner @known-gap inner-constructor-goto observed=not_found
         String innerOwner = inner.owner();
         Mode mode = ACTIVE; // @ref ACTIVE @goto ACTIVE
-        int code = mode.code(); // @ref code @goto code
+        int codeValue = mode.code(); // @ref code @goto code
         String util = utility(); // @ref utility @goto utility
         String star = new Extra().toString(); // @ref Extra @goto Extra
         String samePackage = LocalPeer.pick(); // @ref LocalPeer @goto LocalPeer @ref pick @goto pick
         Named named = service; // @ref Named @goto Named
-        String label = named.label(); // @ref label @goto label
+        String labelText = named.label(); // @ref label @goto label
         String inherited = super.baseTag(); // @ref baseTag @goto baseTag
-        return echoed + nested.name() + innerOwner + code + util + star + samePackage + label + inherited;
+        return echoed + nested.name() + innerOwner + codeValue + util + star + samePackage + labelText + inherited;
     }
 
     @Override
