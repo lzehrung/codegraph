@@ -10,7 +10,7 @@
   @extend %surface; // @ref surface
   color: kit.$accent; // @ref accent
   padding: kit.$spacing; // @ref spacing
-  @include kit.tool-center; // @ref center @goto center
+  @include kit.tool-center; // @ref center @goto center=tool-center
   $again: palette.$accent; // @ref accent
   content: "$accent"; // @not-ref accent
   content: "$hidden"; // @not-ref hidden

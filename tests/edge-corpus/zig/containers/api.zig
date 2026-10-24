@@ -1,4 +1,4 @@
-// @def Box @coverage Box partial
+// @def Box @coverage Box complete
 pub const Box = struct {
     value: i32, // @def value
 
@@ -26,8 +26,8 @@ pub const Container = struct {
     };
 };
 
-pub fn exported() i32 { // @def exported @coverage exported complete @known-gap exported_reference_coverage observed=partial
-    return Box.Nested.answer(); // @ref answer @known-gap nested_method_reference observed=none
+pub fn exported() i32 { // @def exported @coverage exported complete
+    return Container.Nested.answer(); // @ref answer @known-gap nested_method_reference observed=none
 }
 
 fn internal() i32 { // @def internal

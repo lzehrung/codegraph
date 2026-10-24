@@ -48,7 +48,7 @@ const commentPrefixes: Record<string, readonly string[]> = {
 const MIN_ASSERTIONS_PER_LANGUAGE = 25;
 const MAX_ASSERTIONS_PER_LANGUAGE = 45;
 const assertionKinds = new Set<MarkerKind>(["ref", "not-ref", "not-ref-block", "goto", "coverage"]);
-const markerPattern = /@(def|ref|not-ref-block|not-ref|goto|coverage|known-gap)\s+([\w.-]+(?:=[\w$@?!=:]+)?)/g;
+const markerPattern = /@(def|ref|not-ref-block|not-ref|goto|coverage|known-gap)\s+([\w.-]+(?:=[\w$@?!=:-]+)?)/g;
 
 function walkNodes(root: SyntaxNodeLike, visit: (node: SyntaxNodeLike) => void): void {
   visit(root);

@@ -26,8 +26,8 @@ comptime {
 
 // @not-ref-block exported
 const poem =
-    \exported internalUser Box
-    \answer bump
+    \\exported internalUser Box
+    \\answer bump
 ;
 
 // exported internalUser answer bump are decoys in this comment.
