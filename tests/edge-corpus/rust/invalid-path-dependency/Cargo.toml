@@ -1,0 +1,7 @@
+[package]
+name = "invalid_path_consumer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crate_a = { path = "orphan" }

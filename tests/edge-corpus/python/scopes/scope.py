@@ -44,3 +44,12 @@ class Service:
 def via_annotated():
     svc: Service = Service()
     return svc.run()  # @ref run @goto run
+
+class ShadowedSuperBase:
+    # @def baseHelper=helper
+    def helper(self):
+        return 1
+
+class ShadowedSuperChild(ShadowedSuperBase):
+    def call(self, super):  # @def shadowSuper=super
+        return super().helper()  # @goto shadowSuper=super

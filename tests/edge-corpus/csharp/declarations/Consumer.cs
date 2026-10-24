@@ -14,7 +14,9 @@ namespace Edge.App
             var indexed = box[0]; // indexer access
             CoreBox.Node nested = new(); // @ref node @known-gap nested-type observed=none
             nested.Id = Build(4); // @ref id @known-gap nested-member observed=none
-            var built = Build(4); // @ref build
+            var built = Build(4); // @ref build @known-gap static_using_build_reference observed=none
+            var two = Two(1, 2); // @ref twoPair @known-gap partial_static_method_reference observed=none
+            var twoGoto = Two(1, 2); // @goto twoPair=Two @known-gap partial_static_method_goto observed=not_found
             var tag = box.Tag(); // @ref tag @known-gap extension-method observed=none
             var tagGoto = box.Tag(); // @goto tag @known-gap extension-goto observed=not_found
             var extra = box.Extra; // @ref extra @known-gap partial-member observed=none
@@ -27,7 +29,7 @@ namespace Edge.App
             var raw = """Value Box Build Tag Node Extra"""; // @not-ref value @not-ref build @not-ref node @not-ref extra
             var interpolated = $"Value {box.Value} Box Build Tag"; // @ref value @known-gap interpolated-receiver-property observed=none
             var decoyComment = 0; // Value Box Build Tag are comment-only decoys.
-            return Build(first.Length + nested.Id); // @ref build
+            return Build(first.Length + nested.Id); // @ref build @known-gap static_using_build_reference observed=none
         }
     }
 }

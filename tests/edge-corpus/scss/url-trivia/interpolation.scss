@@ -1,0 +1,2 @@
+$urlLater: 1; // @def urlLater=$urlLater
+.a { content: "#{url(http://example.com/x.png)}"; width: $urlLater; } /* @ref urlLater */

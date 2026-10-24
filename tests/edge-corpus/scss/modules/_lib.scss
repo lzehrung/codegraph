@@ -1,0 +1,7 @@
+$source: "module"; // @def useSource=$source @coverage useSource complete @known-gap sass_use_variable_coverage observed=partial
+$size: 1px; // @def moduleSize=$size @coverage moduleSize complete @known-gap sass_variable_coverage observed=partial
+
+@function pad($value) { @return $value; } // @def pad @coverage pad partial
+@function url($value) { @return $value; } // @def libUrl=url
+@mixin show { color: red; } // @def showMixin=show
+@function dynamicProbe() { @return 1; } // @def dynamicProbe

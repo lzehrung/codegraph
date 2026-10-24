@@ -1,11 +1,16 @@
 #include "api.h"
 
+int before_file_declaration(void) { return file_value; } // @not-ref fileValue
+int file_value; // @def fileValue=file_value @coverage fileValue complete
+
 static int local_tool(int input) { // @def local_consumer=local_tool
     return input - 10;
 }
 
 int consume(void) { // @def consume
     Record item = { .count = 2, .label = "ok" };
+    struct Token tagged; // @goto tokenTag=Token
+    Token alias = 0; // @goto tokenTypedef=Token
     Payload payload = { .number = item.count };
     Comparator compare = public_value; // @ref public_value @goto public_value
     int from_header = public_value(item.count); // @ref public_value @goto public_value

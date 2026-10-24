@@ -2,6 +2,7 @@ package api;
 
 public class Service extends Base implements Named { // @def Service
     public Service() {}
+    public static void mix(int value) {} // @def staticMix=mix
 
     public String baseValue() { return super.baseTag(); }
 
