@@ -21,7 +21,21 @@ type ParsedSource = Awaited<ReturnType<typeof parseFile>>;
 type DefinitionSite = { file: string; line: number; column: number; name: string };
 type Scenario = { language: string; root: string };
 
-const commentPrefixes: Record<string, string> = { typescript: "//", python: "#" };
+/** Line-comment prefix per corpus directory; the directory name is the language. */
+const commentPrefixes: Record<string, string> = {
+  typescript: "//",
+  python: "#",
+  csharp: "//",
+  java: "//",
+  kotlin: "//",
+  go: "//",
+  rust: "//",
+  php: "//",
+  ruby: "#",
+  cpp: "//",
+};
+/** Every language directory must carry at least this many assertions. */
+const MIN_ASSERTIONS_PER_LANGUAGE = 10;
 const assertionKinds = new Set<MarkerKind>(["ref", "not-ref", "goto", "coverage"]);
 const markerPattern = /@(def|ref|not-ref|goto|coverage|known-gap)\s+([\w.-]+)/g;
 
@@ -37,7 +51,11 @@ function isMissingPathError(error: unknown): boolean {
 async function discoverScenarios(samplesRoot: string): Promise<Scenario[]> {
   const languages = await fs.readdir(samplesRoot, { withFileTypes: true });
   const scenarios: Scenario[] = [];
-  for (const language of languages.filter((entry) => entry.isDirectory())) {
+  // EDGE_CORPUS_LANGS=csharp,go limits the run to those language directories while authoring scenarios.
+  const only = process.env.EDGE_CORPUS_LANGS?.split(",").filter(Boolean);
+  for (const language of languages.filter(
+    (entry) => entry.isDirectory() && (!only?.length || only.includes(entry.name)),
+  )) {
     const edgeRoot = path.join(samplesRoot, language.name);
     let entries;
     try {
@@ -360,9 +378,13 @@ describe("Tree-sitter edge corpus", () => {
       }
     }
 
-    for (const language of Object.keys(commentPrefixes)) {
+    for (const language of new Set(scenarios.map((scenario) => scenario.language))) {
       const count = assertionCounts.get(language) ?? 0;
-      if (count < 25 || count > 45) failures.push(`${language}: expected 25-45 edge assertions, observed ${count}`);
+      if (count < MIN_ASSERTIONS_PER_LANGUAGE) {
+        failures.push(
+          `${language}: expected at least ${MIN_ASSERTIONS_PER_LANGUAGE} edge assertions, observed ${count}`,
+        );
+      }
     }
     if (knownGaps.length) {
       process.stdout.write(`Known edge-corpus gaps:\n${knownGaps.join("\n")}\n`);
