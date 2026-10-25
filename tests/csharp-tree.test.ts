@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import { buildProjectIndexFromFiles } from "../src/index.js";
+import { collectImportsForFile } from "../src/indexer/imports.js";
+import { resolveCsharpNamespaceTypePath } from "../src/util/resolution/csharp.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs/specifiers.js";
 import { CSHARP_SUPPORT } from "../src/languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../src/languages/types.js";
@@ -43,6 +48,46 @@ function setNativeTreeParseFailure(message: string): void {
   });
 }
 
+function setNativeTreeParseFailureFor(marker: string, message: string): void {
+  const state = loadBinding();
+  if (!state.loaded) throw new Error("Native addon required for C# tree tests");
+  const parseSyntaxTree = state.binding.parseSyntaxTree;
+  if (!parseSyntaxTree) throw new Error("Native addon does not expose parseSyntaxTree");
+  __setNativeTreeSitterBindingForTests({
+    ...state,
+    binding: {
+      ...state.binding,
+      parseSyntaxTree: (source, languageId) => {
+        if (source.includes(marker)) throw new Error(message);
+        return parseSyntaxTree(source, languageId);
+      },
+    },
+  });
+}
+
+function countNativeTreeParses(): () => number {
+  const state = loadBinding();
+  if (!state.loaded) throw new Error("Native addon required for C# tree tests");
+  const parseSyntaxTree = state.binding.parseSyntaxTree;
+  if (!parseSyntaxTree) throw new Error("Native addon does not expose parseSyntaxTree");
+  const extractLanguage = state.binding.extractLanguage;
+  let count = 0;
+  __setNativeTreeSitterBindingForTests({
+    ...state,
+    binding: {
+      ...state.binding,
+      parseSyntaxTree: (source, languageId) => {
+        count += 1;
+        return parseSyntaxTree(source, languageId);
+      },
+      extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+        count += 1;
+        return extractLanguage(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+      },
+    },
+  });
+  return () => count;
+}
 function projectIndexWithSource(file: string, source: string): ProjectIndex {
   const key = fileIdentityKey(file);
   const module: ModuleIndex = { file, exports: [], imports: [], locals: [] };
@@ -123,6 +168,88 @@ describe("C# syntax-tree outcomes", () => {
   });
 });
 
+describe("C# namespace type-index completeness", () => {
+  it("returns partial when a project C# file cannot be parsed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-partial-"));
+    const typeFile = path.join(root, "Box.cs");
+    const unparsedFile = path.join(root, "Unparsed.cs");
+    try {
+      await writeFile(typeFile, "namespace N; public class Box {}\n", "utf8");
+      await writeFile(unparsedFile, "// CSHARP_PARSE_FAILURE\nnamespace Other; class Hidden {}\n", "utf8");
+      setNativeTreeParseFailureFor("CSHARP_PARSE_FAILURE", "forced C# namespace candidate parse failure");
+
+      const resolution = await resolveCsharpNamespaceTypePath(root, "N", "Box", typeFile);
+      expect(resolution).toEqual({ status: "partial" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# project-build import tree reuse", () => {
+  it("uses one native tree parse for a C# module", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-import-tree-build-"));
+    const file = path.join(root, "Main.cs");
+    try {
+      await writeFile(file, "class Main {}\n", "utf8");
+      const parseCount = countNativeTreeParses();
+      await buildProjectIndexFromFiles(root, [file], { useNativeWorkers: false });
+      expect(parseCount()).toBe(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("C# import tree reuse", () => {
+  it("does not reparse a caller-supplied tree", async () => {
+    const root = "E:/git repos/codegraph-wt-csharp-using";
+    const file = path.join(root, "src", "CsharpTreeReuse.cs");
+    const source = "class Main {}\n";
+    const tree = treeForSource(source);
+    const parseCount = countNativeTreeParses();
+    const optionsWithTree = { source, sup: CSHARP_SUPPORT, nativeQueries: null, tree };
+
+    await collectImportsForFile(file, root, optionsWithTree);
+    expect(parseCount()).toBe(0);
+
+    await collectImportsForFile(file, root, { source, sup: CSHARP_SUPPORT, nativeQueries: null });
+    expect(parseCount()).toBe(1);
+  });
+});
+
+describe("C# alias namespace parse reporting", () => {
+  it("reports failed namespace candidates while handling a namespace alias", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-parse-report-"));
+    const main = path.join(root, "Main.cs");
+    const namespaceFile = path.join(root, "Namespace.cs");
+    const unparsedFile = path.join(root, "Unparsed.cs");
+    const source = "using A = N;\nclass Main {}\n";
+    const report: BuildReport = { timings: {} };
+    try {
+      await writeFile(main, source, "utf8");
+      await writeFile(namespaceFile, "namespace N; public class Box {}\n", "utf8");
+      await writeFile(unparsedFile, "// CSHARP_PARSE_FAILURE\nnamespace Other; class Hidden {}\n", "utf8");
+      setNativeTreeParseFailureFor("CSHARP_PARSE_FAILURE", "forced C# alias namespace parse failure");
+
+      const bindings = await collectImportsForFile(main, root, { source, sup: CSHARP_SUPPORT, report });
+      expect(bindings).toContainEqual(expect.objectContaining({ kind: "namespace", localNS: "A", from: "N" }));
+      expect(report.backend?.parser).toMatchObject({
+        total: 1,
+        byLanguage: { csharp: 1 },
+        files: [
+          {
+            file: unparsedFile.replace(/\\/g, "/"),
+            languageId: "csharp",
+            nativeFallbackReason: "queryFailure",
+            nativeError: "forced C# alias namespace parse failure",
+          },
+        ],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 describe("C# using-directive syntax lookup", () => {
   it("selects the second of adjacent directives without reusing the first", () => {
     const source = "using A;using B;";

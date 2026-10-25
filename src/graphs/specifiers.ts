@@ -281,7 +281,7 @@ export function collectModuleSpecifiersFromSource(
     for (const directive of collectCsharpImportDirectives(tree)) {
       const parsed = csharpUsingDirective(directive);
       if (parsed) {
-        const preserveGenericTarget = parsed.hasGenericTarget && !parsed.alias && !parsed.isStatic && !parsed.isGlobal;
+        const preserveGenericTarget = parsed.hasGenericTarget;
         out.push({ spec: preserveGenericTarget ? parsed.rawValue : parsed.value, typeOnly: false });
       }
     }

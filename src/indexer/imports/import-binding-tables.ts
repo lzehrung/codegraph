@@ -227,6 +227,18 @@ async function applyCsharpStatementOverride(
   const localRange = parsed.alias && lineStarts ? csharpNodeRange(parsed.alias, context.source, lineStarts) : undefined;
   const importedRange =
     parsed.alias && lineStarts ? csharpNodeRange(parsed.leaf, context.source, lineStarts) : undefined;
+  if (parsed.alias && parsed.hasGenericTarget) {
+    const typeMatch = await resolveCsharpDottedTypeImportPath(
+      context.projectRoot,
+      parsed.rawValue,
+      context.file,
+      context.languageExtensions,
+    );
+    let resolved: ResolvedImportTarget = { external: parsed.value };
+    if (typeMatch.status === "found") resolved = typeMatch.file;
+    pushCsharpOverride(context, parsed, typeOnly, parsed.value, resolved, localRange, importedRange);
+    return true;
+  }
 
   // Static imports bind to a declaring type only when exactly one file owns that type. A global
   // static using applies to the whole project, which module-local bindings cannot express.

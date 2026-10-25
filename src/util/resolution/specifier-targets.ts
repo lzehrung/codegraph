@@ -180,14 +180,16 @@ async function resolveCsharpOrRubyTargets(
     return { files: [], externalName: specifier };
   }
   if (languageId === "csharp") {
-    const namespaceTargets = await resolveCsharpNamespaceImportPaths(
-      metadata.projectRoot,
-      specifier,
-      file,
-      metadata.languageExtensions,
-      metadata.report,
-    );
-    if (namespaceTargets.length) return { files: namespaceTargets, externalName: specifier };
+    if (!specifier.includes("<")) {
+      const namespaceTargets = await resolveCsharpNamespaceImportPaths(
+        metadata.projectRoot,
+        specifier,
+        file,
+        metadata.languageExtensions,
+        metadata.report,
+      );
+      if (namespaceTargets.length) return { files: namespaceTargets, externalName: specifier };
+    }
     const typeMatch = await resolveCsharpDottedTypeImportPath(
       metadata.projectRoot,
       specifier,

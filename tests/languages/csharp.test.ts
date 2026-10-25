@@ -514,6 +514,50 @@ describe("C# namespace aliases", () => {
     }
   });
 
+  it("keeps a generic type alias distinct from a same-named namespace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-type-alias-"));
+    const typeFile = path.join(root, "Box.cs");
+    const namespaceFile = path.join(root, "NamespaceBox.cs");
+    const main = path.join(root, "Main.cs");
+    const useLines = ["using B = N.Box<int>;", "class Use {", "  void M() { B.Nested.Run(); }", "}"];
+    try {
+      await writeFile(
+        typeFile,
+        "namespace N {\n  public class Box<T> {\n    public class Nested { public static void Run() {} }\n  }\n}\n",
+        "utf8",
+      );
+      await writeFile(
+        namespaceFile,
+        "namespace N.Box { public class Nested { public static void Run() {} } }\n",
+        "utf8",
+      );
+      await writeFile(main, useLines.join("\n") + "\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [typeFile, namespaceFile, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const alias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "B");
+      expect(alias).toMatchObject({ kind: "named", local: "B", imported: "Box", from: "N.Box" });
+      expect(typeof alias?.resolved).toBe("string");
+      if (typeof alias?.resolved !== "string") return;
+      expect(fileIdentityKey(alias.resolved)).toBe(fileIdentityKey(typeFile));
+
+      expect(edgesFrom(index, main).map((edge) => edge.to)).toEqual([
+        { type: "file", path: typeFile.replace(/\\/g, "/") },
+      ]);
+
+      const nested = await goToDefinition(index, {
+        file: main,
+        line: 3,
+        column: columnOf(useLines, 3, "Nested"),
+      });
+      expect(nested.status).toBe("ok");
+      if (nested.status !== "ok") throw new Error("Expected the nested generic type through alias B");
+      expect(fileIdentityKey(nested.definition.file)).toBe(fileIdentityKey(typeFile));
+      expect(nested.definition.localName).toBe("Nested");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   describe("C# type alias across a split namespace", () => {
     it("resolves PT when namespace N is in two files and Point is in one, ignoring M.Point", async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-split-"));

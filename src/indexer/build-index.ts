@@ -627,6 +627,7 @@ async function buildIndexedModuleForFile(args: {
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,
           sup,
+          ...(sup.id === "csharp" && tree ? { tree } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
           ...sharedImportOptions,
         });

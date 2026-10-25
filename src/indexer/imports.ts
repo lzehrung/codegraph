@@ -46,6 +46,7 @@ export async function collectImportsForFile(
     source?: string;
     sup?: LanguageSupport;
     nativeQueries?: NativeQueryResults | null;
+    tree?: SyntaxTreeLike | null;
     graphOptions?: GraphBuildOptions;
     logLevel?: LogLevel;
     languageExtensions?: LanguageExtensionMap;
@@ -86,21 +87,23 @@ export async function collectImportsForFile(
   assertNativeRequiredAvailable();
   let nativeExecution: NativeQueryExecution | null = null;
   let resolvedNativeQueries: NativeQueryResults | null = opts?.nativeQueries ?? null;
-  let csharpTree: SyntaxTreeLike | null | undefined;
+  let csharpTree: SyntaxTreeLike | null | undefined = resolvedSup.id === "csharp" ? opts?.tree : undefined;
   if (opts?.nativeQueries === undefined) {
     if (resolvedSup.id === "csharp") {
       const extraction = getNativeExtractionExecution(resolvedSource, resolvedSup);
       nativeExecution = extraction;
       resolvedNativeQueries = extraction.results;
-      const parsed = csharpSyntaxTreeFromNativeExecution(resolvedSource, extraction);
-      csharpTree = parsed.tree;
-      if (!parsed.tree) {
-        recordParserBackendDegradation(opts?.report, {
-          file: file.replace(/\\/g, "/"),
-          languageId: resolvedSup.id,
-          ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
-          ...(parsed.error ? { nativeError: parsed.error } : {}),
-        });
+      if (csharpTree === undefined) {
+        const parsed = csharpSyntaxTreeFromNativeExecution(resolvedSource, extraction);
+        csharpTree = parsed.tree;
+        if (!parsed.tree) {
+          recordParserBackendDegradation(opts?.report, {
+            file: file.replace(/\\/g, "/"),
+            languageId: resolvedSup.id,
+            ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
+            ...(parsed.error ? { nativeError: parsed.error } : {}),
+          });
+        }
       }
     } else {
       nativeExecution = getNativeQueryExecution(resolvedSource, resolvedSup);
@@ -211,6 +214,7 @@ export async function collectImportsForFile(
     languageId: resolvedSup.id,
     ...(resolvedSup.id === "csharp" && csharpTree !== undefined ? { csharpTree } : {}),
     ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+    ...(opts?.report ? { report: opts.report } : {}),
     resolveFrom: (from: string, phpImportType?: "class" | "function" | "const", resolverOpts?: ImportResolverOptions) =>
       resolveFrom(from, phpImportType, {
         ...(stylesheetLanguage ? { resolutionKind: "stylesheet" as const } : {}),
