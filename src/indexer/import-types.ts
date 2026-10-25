@@ -20,8 +20,6 @@ export type ImportBinding =
       kind: "named";
       local: string;
       imported: string;
-      /** Generic arity carried by a C# using alias. */
-      csharpGenericArity?: number;
       from: string;
       /** True when the source spells an alias even if the alias equals the imported name. */
       explicitAlias?: boolean;

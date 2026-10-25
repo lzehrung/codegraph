@@ -13,7 +13,6 @@ import type {
   ModuleSpecifierResolutionKind,
   RubyLoadForm,
 } from "../specifiers.js";
-import type { CsharpTypeNamePath } from "../csharp-tree.js";
 
 export type SpecifierTargetMetadata = {
   projectRoot: string;
@@ -21,8 +20,6 @@ export type SpecifierTargetMetadata = {
   workspaceConfig?: WorkspaceConfig;
   resolveNodeModules?: boolean;
   resolutionHints?: string[];
-  csharpTypePath?: CsharpTypeNamePath;
-  csharpEnclosingNamespaces?: readonly string[];
   phpImportType?: "class" | "function" | "const";
   resolutionKind?: ModuleSpecifierResolutionKind;
   exportCondition?: ModuleSpecifierExportCondition;
@@ -183,25 +180,6 @@ async function resolveCsharpOrRubyTargets(
     return { files: [], externalName: specifier };
   }
   if (languageId === "csharp") {
-    if (metadata.csharpTypePath) {
-      const typeMatch = await resolveCsharpDottedTypeImportPath(
-        metadata.projectRoot,
-        metadata.csharpTypePath,
-        file,
-        metadata.languageExtensions,
-        metadata.report,
-        metadata.csharpEnclosingNamespaces,
-      );
-      if (typeMatch.status === "found") return { files: [typeMatch.file], externalName: specifier };
-      if (typeMatch.status === "ambiguous" || typeMatch.status === "partial") {
-        return {
-          files: [],
-          externalName: metadata.rawSpecifier ?? specifier,
-          retainExternalEdge: true,
-        };
-      }
-      return { files: [], externalName: metadata.rawSpecifier ?? specifier };
-    }
     if (specifier.includes("<") || specifier.includes(">")) {
       return { files: [], externalName: metadata.rawSpecifier ?? specifier };
     }

@@ -10,7 +10,6 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "..
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import {
   csharpExternAlias,
-  csharpHasGenericTypeOwner,
   csharpImportDirectiveAt,
   csharpUsingDirective,
   parseCsharpSyntaxTree,
@@ -139,8 +138,6 @@ function pushCsharpOverride(
       localStart === undefined ? parsed.alias.text : context.source.slice(localStart, parsed.alias.endIndex);
     const imported =
       importedStart === undefined ? parsed.leaf.text : context.source.slice(importedStart, parsed.leaf.endIndex);
-    const typeSegments = parsed.csharpTypePath?.segments;
-    const csharpGenericArity = typeSegments?.[typeSegments.length - 1]?.typeArgumentCount;
     context.pushBinding({
       kind: "named",
       local,
@@ -149,7 +146,6 @@ function pushCsharpOverride(
       explicitAlias: true,
       ...(localRange ? { localRange } : {}),
       ...(importedRange ? { importedRange } : {}),
-      ...(csharpGenericArity !== undefined ? { csharpGenericArity } : {}),
       resolved,
       typeOnly,
     });
@@ -221,47 +217,26 @@ async function applyCsharpStatementOverride(
   }
 
   const parsed = csharpUsingDirective(directive);
-  if (!parsed) return false;
-  const csharpTypePath = parsed.csharpTypePath;
-  if (csharpTypePath && csharpHasGenericTypeOwner(csharpTypePath)) return true;
-  if (parsed.isStatic && csharpTypePath?.segments.some((segment) => segment.typeArgumentCount !== undefined)) {
-    return true;
-  }
-  if (!parsed.alias && !parsed.isStatic && !parsed.isGlobal && csharpTypePath) {
-    const target = parsed.rawValue;
-    context.pushBinding({ kind: "star", from: target, resolved: { external: target }, typeOnly });
-    return true;
+  if (!parsed) {
+    if (directive.childForFieldName("name")) return true;
+    for (let index = 0; ; index += 1) {
+      const child = directive.child(index);
+      if (!child) break;
+      if (child.type === "static") return true;
+    }
+    return false;
   }
   const lineStarts = parsed.alias ? collectLineStartOffsets(context.source) : undefined;
   const localRange = parsed.alias && lineStarts ? csharpNodeRange(parsed.alias, context.source, lineStarts) : undefined;
   const importedRange =
     parsed.alias && lineStarts ? csharpNodeRange(parsed.leaf, context.source, lineStarts) : undefined;
-  if (parsed.alias && csharpTypePath) {
-    const typeMatch = await resolveCsharpDottedTypeImportPath(
-      context.projectRoot,
-      csharpTypePath,
-      context.file,
-      context.languageExtensions,
-      context.report,
-      parsed.enclosingNamespaces,
-    );
-    let resolved: ResolvedImportTarget = { external: parsed.value };
-    let fromValue = parsed.value;
-    if (typeMatch.status === "found") {
-      resolved = typeMatch.file;
-      const typeName = csharpTypePath.segments[csharpTypePath.segments.length - 1]?.name;
-      if (typeMatch.namespaceName && typeName) fromValue = typeMatch.namespaceName + "." + typeName;
-    }
-    pushCsharpOverride(context, parsed, typeOnly, fromValue, resolved, localRange, importedRange);
-    return true;
-  }
 
   // Static imports bind to a declaring type only when exactly one file owns that type. A global
   // static using applies to the whole project, which module-local bindings cannot express.
   if (parsed.isStatic && !parsed.isGlobal) {
     const typeMatch = await resolveCsharpDottedTypeImportPath(
       context.projectRoot,
-      parsed.csharpTypePath ?? parsed.value,
+      parsed.value,
       context.file,
       context.languageExtensions,
       context.report,
@@ -277,15 +252,13 @@ async function applyCsharpStatementOverride(
       });
       return true;
     }
-    if (parsed.csharpTypePath) {
-      context.pushBinding({
-        kind: "star",
-        from: parsed.rawValue,
-        resolved: { external: parsed.rawValue },
-        typeOnly,
-      });
-      return true;
-    }
+    context.pushBinding({
+      kind: "star",
+      from: parsed.rawValue,
+      resolved: { external: parsed.rawValue },
+      typeOnly,
+    });
+    return true;
   }
 
   // A target declared as a namespace remains a namespace alias, even when written with alias

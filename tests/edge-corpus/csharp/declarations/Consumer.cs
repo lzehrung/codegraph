@@ -9,7 +9,7 @@ namespace Edge.App
     {
         public int Run()
         {
-            CoreBox box = new() { Value = "hello" }; // @goto boxPart=CoreBox
+            CoreBox box = new() { Value = "hello" }; // @goto boxPart=CoreBox @known-gap generic_alias_target_unresolved observed=not_found
             var first = box.Value; // @ref value @known-gap receiver-property observed=none
             var second = box.Value; // @goto value @known-gap receiver-property-goto observed=not_found
             var indexed = box[0]; // indexer access

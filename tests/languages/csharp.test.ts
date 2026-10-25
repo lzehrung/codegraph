@@ -514,123 +514,64 @@ describe("C# namespace aliases", () => {
     }
   });
 
-  it("keeps a generic type alias distinct from a same-named namespace", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-type-alias-"));
-    const typeFile = path.join(root, "Box.cs");
-    const namespaceFile = path.join(root, "NamespaceBox.cs");
+  it("leaves generic alias targets unresolved while resolving non-generic aliases", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-alias-boundary-"));
+    const genericTargets = path.join(root, "GenericTargets.cs");
+    const regularTarget = path.join(root, "Regular.cs");
     const main = path.join(root, "Main.cs");
-    const useLines = ["using B = N.Box<int>;", "class Use {", "  void M() { B.Nested.Run(); }", "}"];
+    const mainLines = [
+      "using BoxAlias = N.Box<int>;",
+      "using NestedAlias = N.Outer<int>.Inner;",
+      "using static N.Box<int>;",
+      "using RegularAlias = N.Regular;",
+      "class Use {",
+      "  BoxAlias box;",
+      "  NestedAlias nested;",
+      "  RegularAlias regular;",
+      "}",
+    ];
     try {
       await writeFile(
-        typeFile,
-        "namespace N {\n  public class Box<T> {\n    public class Nested { public static void Run() {} }\n  }\n}\n",
+        genericTargets,
+        "namespace N { public class Box<T> { public static void StaticOnly() {} } public class Outer<T> { public class Inner {} } }\n",
         "utf8",
       );
-      await writeFile(
-        namespaceFile,
-        "namespace N.Box { public class Nested { public static void Run() {} } }\n",
-        "utf8",
-      );
-      await writeFile(main, useLines.join("\n") + "\n", "utf8");
-
-      const index = await createTestIndexFromFiles(root, [typeFile, namespaceFile, main]);
+      await writeFile(regularTarget, "namespace N { public class Regular {} }\n", "utf8");
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [genericTargets, regularTarget, main]);
       const module = index.byFile.get(fileIdentityKey(main));
-      const alias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "B");
-      expect(alias).toMatchObject({ kind: "named", local: "B", imported: "Box", from: "N.Box" });
-      expect(typeof alias?.resolved).toBe("string");
-      if (typeof alias?.resolved !== "string") return;
-      expect(fileIdentityKey(alias.resolved)).toBe(fileIdentityKey(typeFile));
-
-      expect(edgesFrom(index, main).map((edge) => edge.to)).toEqual([
-        { type: "file", path: typeFile.replace(/\\/g, "/") },
-      ]);
-
-      const nested = await goToDefinition(index, {
-        file: main,
-        line: 3,
-        column: columnOf(useLines, 3, "Nested"),
-      });
-      expect(nested.status).toBe("ok");
-      if (nested.status !== "ok") throw new Error("Expected the nested generic type through alias B");
-      expect(fileIdentityKey(nested.definition.file)).toBe(fileIdentityKey(typeFile));
-      expect(nested.definition.localName).toBe("Nested");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-  it("resolves generic alias paths from syntax despite comments", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-alias-comments-"));
-    const nonGenericTypeFile = path.join(root, "Box.cs");
-    const typeFile = path.join(root, "GenericBox.cs");
-    const main = path.join(root, "Main.cs");
-    try {
-      await writeFile(nonGenericTypeFile, "namespace N;\npublic class Box {}\n", "utf8");
-      await writeFile(typeFile, "namespace N;\npublic class Box<T> {}\n", "utf8");
-      await writeFile(main, "using B = N /* c */ .Box</* < > */ int>;\nusing C = N.Box<int>;\nclass Use {}\n", "utf8");
-
-      const index = await buildProjectIndexFromFiles(root, [nonGenericTypeFile, typeFile, main]);
-      const module = index.byFile.get(fileIdentityKey(main));
-      const commentedAlias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "B");
-      const plainAlias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "C");
-
-      expect(commentedAlias).toMatchObject({ kind: "named", local: "B", imported: "Box", from: "N.Box" });
-      expect(plainAlias).toMatchObject({ kind: "named", local: "C", imported: "Box", from: "N.Box" });
       expect(
-        commentedAlias && typeof commentedAlias.resolved === "string" && fileIdentityKey(commentedAlias.resolved),
-      ).toBe(fileIdentityKey(typeFile));
-      expect(plainAlias && typeof plainAlias.resolved === "string" && fileIdentityKey(plainAlias.resolved)).toBe(
-        fileIdentityKey(typeFile),
-      );
+        module?.imports.some(
+          (binding) => binding.kind === "named" && (binding.local === "BoxAlias" || binding.local === "NestedAlias"),
+        ),
+      ).toBe(false);
+      expect(module?.imports.some((binding) => binding.from.includes("<"))).toBe(false);
+      expect(module?.imports.some((binding) => binding.kind === "star" && binding.from.includes("Box"))).toBe(false);
       expect(edgesFrom(index, main).map((edge) => edge.to)).toEqual([
-        { type: "file", path: typeFile.replace(/\\/g, "/") },
+        { type: "file", path: regularTarget.replace(/\\/g, "/") },
       ]);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects generic non-final owners and matches aliases by type arity", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-alias-arity-"));
-    const outerNamespaceFile = path.join(root, "Outer.cs");
-    const nonGenericBoxFile = path.join(root, "Box.cs");
-    const genericBoxFile = path.join(root, "GenericBox.cs");
-    const main = path.join(root, "Main.cs");
-    try {
-      await writeFile(outerNamespaceFile, "namespace N.Outer;\npublic class Inner {}\n", "utf8");
-      await writeFile(nonGenericBoxFile, "namespace N;\npublic class Box {}\n", "utf8");
-      await writeFile(genericBoxFile, "namespace N;\npublic class Box<T> {}\n", "utf8");
-      await writeFile(
-        main,
-        "using A = N.Outer<int>.Inner;\nusing X = N.Box<int>;\nusing Y = N.Box;\nclass Use {}\n",
-        "utf8",
+      const regularAlias = module?.imports.find(
+        (binding) => binding.kind === "named" && binding.local === "RegularAlias",
       );
-
-      const index = await buildProjectIndexFromFiles(root, [
-        outerNamespaceFile,
-        nonGenericBoxFile,
-        genericBoxFile,
-        main,
-      ]);
-      const module = index.byFile.get(fileIdentityKey(main));
-      const outerAlias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "A");
-      const genericAlias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "X");
-      const nonGenericAlias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "Y");
-
-      expect(outerAlias).toBeUndefined();
-      expect(genericAlias).toBeDefined();
-      expect(genericAlias && typeof genericAlias.resolved === "string" && fileIdentityKey(genericAlias.resolved)).toBe(
-        fileIdentityKey(genericBoxFile),
-      );
-      expect(nonGenericAlias).toBeDefined();
-      const nonGenericTarget =
-        typeof nonGenericAlias?.resolved === "string" ? fileIdentityKey(nonGenericAlias.resolved) : undefined;
-      expect(nonGenericTarget).not.toBe(fileIdentityKey(genericBoxFile));
-      if (nonGenericTarget) expect(nonGenericTarget).toBe(fileIdentityKey(nonGenericBoxFile));
-
-      const fileTargets = edgesFrom(index, main)
-        .filter((edge) => edge.to.type === "file")
-        .map((edge) => fileIdentityKey(edge.to.type === "file" ? edge.to.path : ""));
-      expect(fileTargets).not.toContain(fileIdentityKey(outerNamespaceFile));
+      expect(regularAlias).toMatchObject({ kind: "named", local: "RegularAlias", imported: "Regular" });
+      const regularAliasTarget =
+        typeof regularAlias?.resolved === "string" ? fileIdentityKey(regularAlias.resolved) : undefined;
+      expect(regularAliasTarget).toBe(fileIdentityKey(regularTarget));
+      const genericGoto = await goToDefinition(index, {
+        file: main,
+        line: 6,
+        column: columnOf(mainLines, 6, "BoxAlias"),
+      });
+      expect(["not_found", "partial"]).toContain(genericGoto.status);
+      const regularGoto = await goToDefinition(index, {
+        file: main,
+        line: 8,
+        column: columnOf(mainLines, 8, "RegularAlias"),
+      });
+      expect(regularGoto.status).toBe("ok");
+      if (regularGoto.status === "ok") {
+        expect(fileIdentityKey(regularGoto.definition.file)).toBe(fileIdentityKey(regularTarget));
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -3205,34 +3146,6 @@ describe("C# plain dotted using targets", () => {
       }
       expect(edgeBases).toEqual(["Foo.cs"]);
       expect(edgeBases).not.toContain("index.ts");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("does not bind an unparsed C# using capture to a non-C# file", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-unparsed-using-"));
-    try {
-      const script = path.join(root, "Something.ts");
-      const use = path.join(root, "Use.cs");
-      await writeFile(script, "export const x = 1;\n");
-      await writeFile(use, "using Something.Foo<int>;\n");
-      const index = await buildProjectIndex(root, { cache: "off" });
-      const binding = index.byFile
-        .get(fileIdentityKey(use))
-        ?.imports.find((entry) => entry.from === "Something.Foo<int>");
-      const fileEdges = index.graph.edges.filter(
-        (edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file",
-      );
-      const externalNames = index.graph.edges
-        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "external")
-        .map((edge) => (edge.to.type === "external" ? edge.to.name : ""));
-      const resolvedBase = typeof binding?.resolved === "string" ? path.basename(binding.resolved) : null;
-
-      expect(binding?.resolved).toEqual({ external: "Something.Foo<int>" });
-      expect(resolvedBase).not.toBe("Something.ts");
-      expect(fileEdges).toEqual([]);
-      expect(externalNames).toContain("Something.Foo<int>");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

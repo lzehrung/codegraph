@@ -6,7 +6,6 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText } from "../util/ast.js";
 import { normalizeCsharpQualifiedName } from "../util/identifiers.js";
-import { csharpGenericTypeArityForName } from "../util/csharp-tree.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "./types.js";
@@ -457,7 +456,6 @@ export function selectUniqueCsharpNamespaceTypeFile(
   files: readonly string[],
   namespaceName: string,
   typeName: string,
-  genericArity?: number,
 ): { status: "found"; file: string } | { status: "not_found" } | { status: "ambiguous" } | { status: "partial" } {
   const expectedPath = namespaceName + "." + typeName;
   const parsed = new Map<string, ParsedFileContext>();
@@ -477,7 +475,6 @@ export function selectUniqueCsharpNamespaceTypeFile(
       if (getCSharpFullPath(container, context.source) !== expectedPath) continue;
       const nameNode = container.childForFieldName("name");
       if (!nameNode) continue;
-      if (genericArity !== undefined && csharpGenericTypeArityForName(nameNode) !== genericArity) continue;
       matches.push({
         file,
         localName: typeName,

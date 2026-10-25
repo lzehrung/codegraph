@@ -44,8 +44,6 @@ export type ResolveExportOptions = {
    * exported under one name) are chosen by indexed `callable.arity`; other languages ignore it.
    */
   argumentCount?: number;
-  /** C# type arity required by a resolved using alias. */
-  csharpGenericArity?: number;
 };
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
@@ -365,7 +363,6 @@ export function resolveExport(
   const visited = new Set<string>();
   const matchesOptions = (def: SymbolDef, namespace: ResolveExportOptions["cNamespace"]): boolean =>
     (!opts?.preferredKind || def.kind === opts.preferredKind) &&
-    (opts?.csharpGenericArity === undefined || def.csharpGenericArity === opts.csharpGenericArity) &&
     (namespace === undefined || (def.cTag ? "tag" : "ordinary") === namespace);
   const allowLocalFallback = opts?.allowLocalFallback ?? true;
 
@@ -396,8 +393,7 @@ export function resolveExport(
     }
     const canonicalName = names.normalizeIdentifier(unqualifiedName);
     const argumentCountKey = opts?.argumentCount === undefined ? "" : String(opts.argumentCount);
-    const csharpGenericArityKey = opts?.csharpGenericArity === undefined ? "" : String(opts.csharpGenericArity);
-    const key = `${cacheKey(normalizedFile, names.normalizeIdentifier(name))}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}::${referenceIndex ?? ""}::${argumentCountKey}::${csharpGenericArityKey}`;
+    const key = `${cacheKey(normalizedFile, names.normalizeIdentifier(name))}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}::${referenceIndex ?? ""}::${argumentCountKey}`;
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
     const cycleKey = `${cacheKey(normalizedFile, canonicalName)}::${namespace ?? ""}`;
@@ -984,9 +980,6 @@ export function resolveImported(
     ? resolvePhpExportByImportType(index, targetFile, exportedName, phpRole)
     : resolveExport(index, targetFile, lookupName, {
         ...opts,
-        ...(support?.id === "csharp" && imp.kind === "named" && imp.csharpGenericArity !== undefined
-          ? { csharpGenericArity: imp.csharpGenericArity }
-          : {}),
         ...(namespace ? { cNamespace: namespace } : {}),
       });
   if (hit?.kind === "resolved") {

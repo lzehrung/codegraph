@@ -37,8 +37,6 @@ export type SymbolDef = {
   range: Range;
   /** Indexed callable facts; absent for symbols that are not callable. */
   callable?: CallableIdentity;
-  /** Generic arity declared by a C# type. */
-  csharpGenericArity?: number;
   isMember?: boolean;
   /** Direct JVM type owner for nested classifiers and Java members. */
   jvmTypeOwnerStartIndex?: number;

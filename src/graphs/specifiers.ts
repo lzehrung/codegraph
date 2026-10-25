@@ -6,12 +6,7 @@ import {
   parseRustImportStatements,
 } from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import {
-  collectCsharpImportDirectives,
-  csharpHasGenericTypeOwner,
-  csharpUsingDirective,
-  parseCsharpSyntaxTree,
-} from "../util/csharp-tree.js";
+import { collectCsharpImportDirectives, csharpUsingDirective, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
 import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import type { BuildReport } from "../indexer/types.js";
 import { errorMessage } from "../util/errors.js";
@@ -113,8 +108,6 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
       : {
           spec: entry.spec,
           ...(entry.raw !== undefined ? { raw: entry.raw } : {}),
-          ...(entry.csharpTypePath ? { csharpTypePath: entry.csharpTypePath } : {}),
-          ...(entry.csharpEnclosingNamespaces ? { csharpEnclosingNamespaces: entry.csharpEnclosingNamespaces } : {}),
           ...(entry.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
           ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
           ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
@@ -288,17 +281,7 @@ export function collectModuleSpecifiersFromSource(
     for (const directive of collectCsharpImportDirectives(tree)) {
       const parsed = csharpUsingDirective(directive);
       if (!parsed) continue;
-      const csharpTypePath = parsed.csharpTypePath;
-      if (csharpTypePath && csharpHasGenericTypeOwner(csharpTypePath)) continue;
-      if (parsed.isStatic && csharpTypePath?.segments.some((segment) => segment.typeArgumentCount !== undefined)) {
-        continue;
-      }
-      out.push({
-        spec: csharpTypePath ? parsed.rawValue : parsed.value,
-        ...(csharpTypePath ? { csharpTypePath } : {}),
-        ...(parsed.enclosingNamespaces.length ? { csharpEnclosingNamespaces: parsed.enclosingNamespaces } : {}),
-        typeOnly: false,
-      });
+      out.push({ spec: parsed.value, typeOnly: false });
     }
     return normalizeModuleSpecifiers(out);
   }

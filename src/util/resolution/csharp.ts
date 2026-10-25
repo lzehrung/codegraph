@@ -7,12 +7,11 @@ import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./fil
 import { buildDeclaredContainerIndex, type LanguageProjectSymbolIndex } from "./project-symbols.js";
 import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
 import type { BuildReport } from "../../indexer/types.js";
-import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree, type CsharpTypeNamePath } from "../csharp-tree.js";
+import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../csharp-tree.js";
 
 type CsharpNamespaceIndexEntry = {
   namespaces: string[];
   symbolsByNamespace: ReadonlyMap<string, ReadonlySet<string>>;
-  typeAritiesByNamespace: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<number>>>;
 };
 
 type CsharpProjectNamespaceIndexResult = {
@@ -28,7 +27,7 @@ type CsharpProjectNamespaceIndexResult = {
  * not proven. Callers must not fall through to the first path match.
  */
 export type CsharpNamespaceTypeResolution =
-  | { status: "found"; file: string; namespaceName?: string }
+  | { status: "found"; file: string }
   | { status: "not_found" }
   | { status: "ambiguous" }
   | { status: "partial" };
@@ -43,7 +42,7 @@ function collectCsharpNamespaceIndex(
 ): CsharpNamespaceIndexEntry | null {
   const support = supportForFileWithoutHeaderSample(filePath, languageExtensions);
   if (support?.id !== "csharp") {
-    return { namespaces: [], symbolsByNamespace: new Map(), typeAritiesByNamespace: new Map() };
+    return { namespaces: [], symbolsByNamespace: new Map() };
   }
   const parsed = parseCsharpSyntaxTree(source, support);
   if (!parsed.tree) {
@@ -59,7 +58,6 @@ function collectCsharpNamespaceIndex(
   return {
     namespaces: facts.namespaces,
     symbolsByNamespace: facts.symbolsByNamespace,
-    typeAritiesByNamespace: facts.typeAritiesByNamespace,
   };
 }
 
@@ -186,7 +184,6 @@ export async function resolveCsharpNamespaceTypePath(
   typeName: string,
   fromFile: string,
   languageExtensions?: LanguageExtensionMap,
-  genericArity?: number,
   report?: BuildReport,
 ): Promise<CsharpNamespaceTypeResolution> {
   const normalizedNamespace = normalizeCsharpQualifiedName(namespaceName);
@@ -199,91 +196,36 @@ export async function resolveCsharpNamespaceTypePath(
   const indexRoot = await resolveNearestManifestRoot(projectRoot, fromFile, CSHARP_PACKAGE_MANIFEST_NAMES);
   const projectIndexResult = await getCsharpProjectNamespaceIndex(indexRoot, languageExtensions, report);
   if (!projectIndexResult.complete) return { status: "partial" };
-  let files = projectIndexResult.index.filesByPackageSymbol.get(namespaceLookup)?.get(normalizedType) ?? [];
-  if (genericArity !== undefined) {
-    const arityMatches: string[] = [];
-    for (const candidate of files) {
-      const entry = csharpNamespaceFileCache.get(fileIdentityKey(candidate));
-      if (!entry) return { status: "partial" };
-      const arities = entry.typeAritiesByNamespace.get(namespaceLookup)?.get(normalizedType);
-      if (arities?.has(genericArity)) arityMatches.push(candidate);
-    }
-    files = arityMatches;
-  }
+  const files = projectIndexResult.index.filesByPackageSymbol.get(namespaceLookup)?.get(normalizedType) ?? [];
   const confined = await confineCsharpTypeFiles(projectRoot, files, languageExtensions);
   if (confined.length === 0) return { status: "not_found" };
   if (confined.length === 1) return { status: "found", file: confined[0]! };
-  return selectUniqueCsharpNamespaceTypeFile(confined, namespaceLookup, normalizedType, genericArity);
+  return selectUniqueCsharpNamespaceTypeFile(confined, namespaceLookup, normalizedType);
 }
 
-/**
- * Resolves a C# namespace-qualified type from syntax-derived path segments. Text callers may
- * provide non-generic dotted names, but generic paths must carry syntax metadata.
- */
+/** Resolves a C# namespace-qualified type from its source name. */
 export async function resolveCsharpDottedTypeImportPath(
   projectRoot: string,
-  spec: string | CsharpTypeNamePath,
+  spec: string,
   fromFile: string,
   languageExtensions?: LanguageExtensionMap,
   report?: BuildReport,
-  enclosingNamespaces: readonly string[] = [],
 ): Promise<CsharpNamespaceTypeResolution> {
-  if (typeof spec === "string") {
-    const normalized = normalizeCsharpQualifiedName(spec);
-    if (normalized.includes("<") || normalized.includes(">")) return { status: "not_found" };
-    const body = normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
-    const parts = body.split(".").filter(Boolean);
-    if (parts.length < 2) return { status: "not_found" };
-    const typeName = parts[parts.length - 1]!;
-    const namespaceName = parts.slice(0, -1).join(".");
-    return await resolveCsharpNamespaceTypePath(
-      projectRoot,
-      namespaceName,
-      typeName,
-      fromFile,
-      languageExtensions,
-      undefined,
-      report,
-    );
-  }
-
-  if (spec.aliasQualifier && normalizeCsharpIdentifier(spec.aliasQualifier) !== "global") {
-    return { status: "not_found" };
-  }
-  const segments = spec.segments;
-  if (segments.length < 2) return { status: "not_found" };
-  const typeSegment = segments[segments.length - 1];
-  if (!typeSegment) return { status: "not_found" };
-  const typeName = normalizeCsharpIdentifier(typeSegment.name);
-  if (!typeName) return { status: "not_found" };
-  let namespaceName = "";
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    const segment = segments[index];
-    if (!segment || segment.typeArgumentCount !== undefined) return { status: "not_found" };
-    const name = normalizeCsharpIdentifier(segment.name);
-    if (!name) return { status: "not_found" };
-    namespaceName = namespaceName ? namespaceName + "." + name : name;
-  }
-  const namespaceCandidates = [namespaceName];
-  if (!spec.aliasQualifier && enclosingNamespaces.length) {
-    namespaceCandidates.unshift(
-      ...enclosingNamespaces.map((enclosingNamespace) => enclosingNamespace + "." + namespaceName),
-    );
-  }
-  for (const candidateNamespace of namespaceCandidates) {
-    const typeMatch = await resolveCsharpNamespaceTypePath(
-      projectRoot,
-      candidateNamespace,
-      typeName,
-      fromFile,
-      languageExtensions,
-      typeSegment.typeArgumentCount,
-      report,
-    );
-    if (typeMatch.status === "found") return { ...typeMatch, namespaceName: candidateNamespace };
-    if (typeMatch.status !== "not_found") return typeMatch;
-  }
-  return { status: "not_found" };
+  const normalized = normalizeCsharpQualifiedName(spec);
+  if (normalized.includes("<") || normalized.includes(">")) return { status: "not_found" };
+  const body = normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
+  const parts = body.split(".").filter(Boolean);
+  if (parts.length < 2) return { status: "not_found" };
+  const typeName = parts[parts.length - 1]!;
+  const namespaceName = parts.slice(0, -1).join(".");
+  return await resolveCsharpNamespaceTypePath(
+    projectRoot,
+    namespaceName,
+    typeName,
+    fromFile,
+    languageExtensions,
+    report,
+  );
 }
 
 export function clearCsharpResolutionCaches(): void {
