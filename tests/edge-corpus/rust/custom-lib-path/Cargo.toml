@@ -1,0 +1,7 @@
+[package]
+name = "custom_lib_consumer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+path_dep = { path = "deps/path_dep" }

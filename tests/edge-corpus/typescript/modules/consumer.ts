@@ -1,10 +1,12 @@
 import { alias as localAlias } from "./barrel"; // @ref original
+import { visible as facadeVisible } from "./facade";
 import { starValue } from "./barrel";
 import { nested } from "./barrel";
 import Widget from "./source";
 import * as sourceNS from "./source";
 const direct = sourceNS.original; // @ref original @goto original
 const aliased = localAlias; // @ref original
+const forwarded = facadeVisible; // @ref original @goto original=facadeVisible
 const starred = starValue; // @ref starValue
 const namespaced = nested.namespaceValue; // @ref namespaceValue
 const namespaceGoto = nested.namespaceValue; // @goto namespaceValue

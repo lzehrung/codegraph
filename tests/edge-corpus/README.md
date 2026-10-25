@@ -1,6 +1,6 @@
 # Tree-sitter edge corpus
 
-Edge fixtures live in `tests/edge-corpus/<language>/<scenario>/` as small multi-file projects. The shared `tests/edge-corpus.test.ts` indexes each scenario separately and reads markers only from Tree-sitter comment nodes for that language. The only language-specific marker parsing is the comment prefix list in `commentPrefixes` (for example `//` for TypeScript, `#` for Python and Ruby, and `/*` for C and SCSS). A block comment carries markers the same way as a line comment.
+Edge fixtures live in `tests/edge-corpus/<language>/<scenario>/` as small multi-file projects. The shared `tests/edge-corpus.test.ts` indexes each scenario separately and reads markers only from Tree-sitter comment nodes for that language. The only language-specific marker parsing is the comment prefix list in `commentPrefixes` (for example `//` for TypeScript, `#` for Python and Ruby, and `/*` for C and SCSS). A block comment carries markers the same way as a line comment. The harness traverses the full syntax tree and fails when a parser comment contains marker-like text that was not extracted, so annotations cannot be silently skipped.
 
 A marker goes in a line comment immediately above its code site or at the end of that site. IDs are unique within one scenario and are linked to a definition by `@def`.
 
@@ -12,6 +12,6 @@ A marker goes in a line comment immediately above its code site or at the end of
 - `@coverage <id> complete|partial` checks `findReferences` coverage for the marked definition.
 - `@known-gap <reason> observed=<value>` pairs with an assertion whose expected result is currently missed. Pin `not_found` for a missing result, `none` for an `@ref` with no reference, or the off-target definition ID for a wrong goto. For `@coverage`, pin the observed coverage state or status. A fixed or changed result fails until the fixture is updated.
 
-The harness requires 25-45 assertions per selected language.
+The harness requires 25-80 assertions per selected language. The upper bound keeps each language small enough to review; past review findings take priority over new ordinary forms.
 
 Multiple markers may share a comment. Example: `// @def value @coverage value complete`.

@@ -1,0 +1,2 @@
+$escapedLater: 1; // @def escapedLater=$escapedLater
+.a { content: url(\68 ttp://example.com/x); width: $escapedLater; } /* @ref escapedLater */
