@@ -44,7 +44,6 @@ describe("trivia masking keeps following code visible per language", () => {
     { language: "swift", source: 'let s = #"Qx9body"#', opener: '#"', closer: '"#', body: "Qx9body" },
     { language: "swift", source: 'let s = """\nQx9body\n"""', opener: '"""', closer: '"""', body: "Qx9body" },
     { language: "kotlin", source: 'val s = """Qx9body"""', opener: '"""', closer: '"""', body: "Qx9body" },
-    { language: "zig", source: "const s =\n    \\\\Qx9body", opener: "\\\\", closer: "", body: "Qx9body" },
   ];
 
   it.each(DELIMITER_CASES)("keeps $language delimiters visible and blanks only the body", (testCase) => {
@@ -133,14 +132,6 @@ describe("trivia masking keeps following code visible per language", () => {
     expectOffsetsPreserved(source, masked);
     expect(masked).not.toContain("a \\");
     expect(masked).toContain("let t = 3");
-  });
-
-  it("masks Zig multiline string lines and keeps following declarations visible", () => {
-    const source = "const s =\n    \\\\line one\n    \\\\line two\n;\nconst t = 1;\n";
-    const masked = maskTrivia(source, "zig");
-    expectOffsetsPreserved(source, masked);
-    expect(masked).not.toContain("line one");
-    expect(masked).toContain("const t = 1;");
   });
 
   it("masks Rust raw strings and leaves lifetimes and chars alone", () => {

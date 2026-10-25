@@ -65,8 +65,6 @@ export type TriviaRow = {
   heredocs?: TriviaHeredocForm[];
   /** Ruby percent literals (`%q(...)`, `%w[...]`, ...). */
   percentLiterals?: boolean;
-  /** Zig multiline strings: backslash-prefixed continuation lines. */
-  zigMultiline?: boolean;
   /**
    * `url(` with unquoted content (Sass and CSS). The content is one opaque token, so a line
    * comment opener, a quote, or a block comment opener inside it starts no comment or string:
@@ -195,27 +193,6 @@ const KOTLIN_ROW: TriviaRow = {
   ],
 };
 
-const ZIG_ROW: TriviaRow = {
-  lineComments: ["//"],
-  blockComments: [],
-  strings: [
-    { open: '"', close: '"', escape: "\\" },
-    { open: "'", close: "'", escape: "\\" },
-  ],
-  zigMultiline: true,
-};
-
-// CSS and Less: block comments only. Less has `//` comments, but this row keeps `//` visible so
-// an unquoted `url(//...)` is not read as a comment, and Less has no unquoted-url rule here.
-const CSS_FAMILY_ROW: TriviaRow = {
-  lineComments: [],
-  blockComments: [SLASH_STAR_COMMENT],
-  strings: [
-    { open: "'", close: "'", escape: "\\" },
-    { open: '"', close: '"', escape: "\\" },
-  ],
-};
-
 // SCSS: `//` comments end at the line break and are read before any quote, so an apostrophe in
 // `// don't` cannot open a string. `#{...}` is code even inside a string. An unquoted `url(...)`
 // is one token, including inside that interpolation, so `url(http://x/y.png)` and `url(//cdn/y.png)`
@@ -251,24 +228,6 @@ const JAVA_ROW: TriviaRow = {
   ],
 };
 
-const SQL_ROW: TriviaRow = {
-  lineComments: ["--"],
-  blockComments: [SLASH_STAR_COMMENT],
-  strings: [
-    { open: "'", close: "'", doubled: true },
-    { open: '"', close: '"', doubled: true },
-  ],
-};
-
-// HCL: `#` and `//` line comments, `/* */` block comments, quoted strings with `${...}`
-// interpolation, and `<<EOT` / `<<-EOT` heredocs whose closing marker may be indented.
-const TERRAFORM_ROW: TriviaRow = {
-  lineComments: ["#", "//"],
-  blockComments: [SLASH_STAR_COMMENT],
-  strings: [{ open: '"', close: '"', escape: "\\", interpolation: { start: "${", end: "}" } }],
-  heredocs: [{ opener: "<<-?([A-Za-z_][A-Za-z0-9_-]*)", indentedTerminator: true }],
-};
-
 const TRIVIA_ROWS: Record<string, TriviaRow> = {
   js: JS_LIKE_ROW,
   ts: JS_LIKE_ROW,
@@ -284,15 +243,9 @@ const TRIVIA_ROWS: Record<string, TriviaRow> = {
   ruby: RUBY_ROW,
   swift: SWIFT_ROW,
   kotlin: KOTLIN_ROW,
-  zig: ZIG_ROW,
-  css: CSS_FAMILY_ROW,
-  less: CSS_FAMILY_ROW,
   scss: SCSS_ROW,
-  c: C_FAMILY_ROW,
   cpp: C_FAMILY_ROW,
   java: JAVA_ROW,
-  sql: SQL_ROW,
-  terraform: TERRAFORM_ROW,
 };
 
 /** The trivia row for `languageId`; unknown ids fall back to the JS-family row, which is what
