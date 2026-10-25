@@ -10,6 +10,7 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "..
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import {
   csharpExternAlias,
+  csharpHasGenericTypeOwner,
   csharpImportDirectiveAt,
   csharpUsingDirective,
   parseCsharpSyntaxTree,
@@ -218,7 +219,9 @@ async function applyCsharpStatementOverride(
 
   const parsed = csharpUsingDirective(directive);
   if (!parsed) return false;
-  if (!parsed.alias && !parsed.isStatic && !parsed.isGlobal && parsed.hasGenericTarget) {
+  const csharpTypePath = parsed.csharpTypePath;
+  if (csharpTypePath && csharpHasGenericTypeOwner(csharpTypePath)) return true;
+  if (!parsed.alias && !parsed.isStatic && !parsed.isGlobal && csharpTypePath) {
     const target = parsed.rawValue;
     context.pushBinding({ kind: "star", from: target, resolved: { external: target }, typeOnly });
     return true;
@@ -227,10 +230,10 @@ async function applyCsharpStatementOverride(
   const localRange = parsed.alias && lineStarts ? csharpNodeRange(parsed.alias, context.source, lineStarts) : undefined;
   const importedRange =
     parsed.alias && lineStarts ? csharpNodeRange(parsed.leaf, context.source, lineStarts) : undefined;
-  if (parsed.alias && parsed.hasGenericTarget) {
+  if (parsed.alias && csharpTypePath) {
     const typeMatch = await resolveCsharpDottedTypeImportPath(
       context.projectRoot,
-      parsed.rawValue,
+      csharpTypePath,
       context.file,
       context.languageExtensions,
     );
@@ -245,7 +248,7 @@ async function applyCsharpStatementOverride(
   if (parsed.isStatic && !parsed.isGlobal) {
     const typeMatch = await resolveCsharpDottedTypeImportPath(
       context.projectRoot,
-      parsed.value,
+      parsed.csharpTypePath ?? parsed.value,
       context.file,
       context.languageExtensions,
     );
@@ -257,6 +260,15 @@ async function applyCsharpStatementOverride(
         resolved: typeMatch.file.replace(/\\/g, "/"),
         typeOnly,
         staticMembersOf: qualifiedType,
+      });
+      return true;
+    }
+    if (parsed.csharpTypePath) {
+      context.pushBinding({
+        kind: "star",
+        from: parsed.rawValue,
+        resolved: { external: parsed.rawValue },
+        typeOnly,
       });
       return true;
     }
@@ -324,8 +336,19 @@ async function applyCsharpStatementOverride(
             resolved = { external: parsed.value };
           }
         } else if (typeof resolved !== "string" && fallbackNamespaceTargets.length === 1) {
-          fromValue = fallbackFrom;
-          resolved = fallbackNamespaceTargets[0]!.replace(/\\/g, "/");
+          const typeMatch = await resolveCsharpDottedTypeImportPath(
+            context.projectRoot,
+            parsed.value,
+            context.file,
+            context.languageExtensions,
+          );
+          if (typeMatch.status === "partial") {
+            fromValue = parsed.value;
+            resolved = { external: parsed.value };
+          } else {
+            fromValue = fallbackFrom;
+            resolved = fallbackNamespaceTargets[0]!.replace(/\\/g, "/");
+          }
         } else if (typeof resolved !== "string") {
           const fallbackResolved = await context.resolveFrom(fallbackFrom);
           if (typeof fallbackResolved === "string") {

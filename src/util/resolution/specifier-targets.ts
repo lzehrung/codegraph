@@ -13,6 +13,7 @@ import type {
   ModuleSpecifierResolutionKind,
   RubyLoadForm,
 } from "../specifiers.js";
+import type { CsharpTypeNamePath } from "../csharp-tree.js";
 
 export type SpecifierTargetMetadata = {
   projectRoot: string;
@@ -20,6 +21,7 @@ export type SpecifierTargetMetadata = {
   workspaceConfig?: WorkspaceConfig;
   resolveNodeModules?: boolean;
   resolutionHints?: string[];
+  csharpTypePath?: CsharpTypeNamePath;
   phpImportType?: "class" | "function" | "const";
   resolutionKind?: ModuleSpecifierResolutionKind;
   exportCondition?: ModuleSpecifierExportCondition;
@@ -180,16 +182,34 @@ async function resolveCsharpOrRubyTargets(
     return { files: [], externalName: specifier };
   }
   if (languageId === "csharp") {
-    if (!specifier.includes("<")) {
-      const namespaceTargets = await resolveCsharpNamespaceImportPaths(
+    if (metadata.csharpTypePath) {
+      const typeMatch = await resolveCsharpDottedTypeImportPath(
         metadata.projectRoot,
-        specifier,
+        metadata.csharpTypePath,
         file,
         metadata.languageExtensions,
-        metadata.report,
       );
-      if (namespaceTargets.length) return { files: namespaceTargets, externalName: specifier };
+      if (typeMatch.status === "found") return { files: [typeMatch.file], externalName: specifier };
+      if (typeMatch.status === "ambiguous" || typeMatch.status === "partial") {
+        return {
+          files: [],
+          externalName: metadata.rawSpecifier ?? specifier,
+          retainExternalEdge: true,
+        };
+      }
+      return { files: [], externalName: metadata.rawSpecifier ?? specifier };
     }
+    if (specifier.includes("<") || specifier.includes(">")) {
+      return { files: [], externalName: metadata.rawSpecifier ?? specifier };
+    }
+    const namespaceTargets = await resolveCsharpNamespaceImportPaths(
+      metadata.projectRoot,
+      specifier,
+      file,
+      metadata.languageExtensions,
+      metadata.report,
+    );
+    if (namespaceTargets.length) return { files: namespaceTargets, externalName: specifier };
     const typeMatch = await resolveCsharpDottedTypeImportPath(
       metadata.projectRoot,
       specifier,

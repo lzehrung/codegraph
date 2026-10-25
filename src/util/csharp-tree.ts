@@ -35,15 +35,26 @@ const CSHARP_TYPE_DECLARATION_TYPES: Record<string, true> = {
   delegate_declaration: true,
 };
 
+export type CsharpTypeNameSegment = {
+  name: string;
+  typeArgumentCount?: number;
+};
+
+export type CsharpTypeNamePath = {
+  value: string;
+  segments: readonly CsharpTypeNameSegment[];
+  aliasQualifier?: string;
+};
+
 export type CsharpNamePath = {
   value: string;
   leaf: SyntaxNodeLike;
+  csharpTypePath?: CsharpTypeNamePath;
 };
 
 export type CsharpUsingDirective = CsharpNamePath & {
   target: SyntaxNodeLike;
   rawValue: string;
-  hasGenericTarget: boolean;
   alias?: SyntaxNodeLike;
   isStatic: boolean;
   isGlobal: boolean;
@@ -59,9 +70,9 @@ export type CsharpNamespaceFacts = {
   regions: CsharpNamespaceSpan[];
   namespaces: string[];
   symbolsByNamespace: Map<string, Set<string>>;
+  typeAritiesByNamespace: Map<string, Map<string, Set<number>>>;
   hasGlobalType: boolean;
 };
-
 export type CsharpSyntaxTreeResult = {
   tree: SyntaxTreeLike | null;
   fallbackReason?: NativeFallbackReason;
@@ -95,7 +106,7 @@ export function parseCsharpSyntaxTree(source: string, support: LanguageSupport):
   return csharpSyntaxTreeFromNativeExecution(source, getNativeSyntaxTreeExecution(source, support));
 }
 
-/** Builds a C# name path from native syntax nodes, omitting generic arguments. */
+/** Builds a C# name path from native syntax nodes, preserving generic type identity. */
 export function csharpNamePath(node: SyntaxNodeLike | null): CsharpNamePath | null {
   if (!node) return null;
   if (node.type === "identifier" || node.type === "predefined_type") {
@@ -103,31 +114,64 @@ export function csharpNamePath(node: SyntaxNodeLike | null): CsharpNamePath | nu
   }
   if (node.type === "generic_name") {
     const identifier = node.namedChildren.find((child) => child.type === "identifier");
-    return csharpNamePath(identifier ?? null);
+    if (!identifier) return null;
+    const argumentList = node.namedChildren.find((child) => child.type === "type_argument_list");
+    return {
+      value: identifier.text,
+      leaf: identifier,
+      csharpTypePath: {
+        value: identifier.text,
+        segments: [
+          {
+            name: identifier.text,
+            typeArgumentCount: argumentList?.namedChildren.filter((child) => child.type !== "comment").length ?? 0,
+          },
+        ],
+      },
+    };
   }
   if (node.type === "qualified_name") {
     const qualifier = csharpNamePath(node.childForFieldName("qualifier"));
     const name = csharpNamePath(node.childForFieldName("name"));
     if (!name) return null;
-    return qualifier ? { value: `${qualifier.value}.${name.value}`, leaf: name.leaf } : name;
+    const value = qualifier ? qualifier.value + "." + name.value : name.value;
+    const csharpTypePath = mergeCsharpTypePaths(value, qualifier, name);
+    return { value, leaf: name.leaf, ...(csharpTypePath ? { csharpTypePath } : {}) };
   }
   if (node.type === "alias_qualified_name") {
     const alias = csharpNamePath(node.childForFieldName("alias"));
     const name = csharpNamePath(node.childForFieldName("name"));
     if (!alias || !name) return null;
-    return { value: `${alias.value}::${name.value}`, leaf: name.leaf };
+    const value = alias.value + "::" + name.value;
+    const csharpTypePath = name.csharpTypePath
+      ? { value, segments: name.csharpTypePath.segments, aliasQualifier: alias.value }
+      : undefined;
+    return { value, leaf: name.leaf, ...(csharpTypePath ? { csharpTypePath } : {}) };
   }
   const wrappedName = node.namedChildren.find((child) => CSHARP_NAME_NODE_TYPES[child.type]);
   return csharpNamePath(wrappedName ?? null);
 }
 
-function csharpContainsGenericName(node: SyntaxNodeLike): boolean {
-  const stack = [node];
-  while (stack.length) {
-    const current = stack.pop();
-    if (!current) continue;
-    if (current.type === "generic_name") return true;
-    stack.push(...current.namedChildren);
+function mergeCsharpTypePaths(
+  value: string,
+  qualifier: CsharpNamePath | null,
+  name: CsharpNamePath,
+): CsharpTypeNamePath | undefined {
+  if (!qualifier?.csharpTypePath && !name.csharpTypePath) return undefined;
+  const segments = qualifier
+    ? [...csharpPathSegments(qualifier), ...csharpPathSegments(name)]
+    : csharpPathSegments(name);
+  const aliasQualifier = qualifier?.csharpTypePath?.aliasQualifier ?? name.csharpTypePath?.aliasQualifier;
+  return { value, segments, ...(aliasQualifier ? { aliasQualifier } : {}) };
+}
+
+function csharpPathSegments(path: CsharpNamePath): readonly CsharpTypeNameSegment[] {
+  return path.csharpTypePath?.segments ?? [{ name: path.value }];
+}
+
+export function csharpHasGenericTypeOwner(path: CsharpTypeNamePath): boolean {
+  for (let index = 0; index < path.segments.length - 1; index += 1) {
+    if (path.segments[index]?.typeArgumentCount !== undefined) return true;
   }
   return false;
 }
@@ -183,7 +227,6 @@ export function csharpUsingDirective(node: SyntaxNodeLike): CsharpUsingDirective
     ...path,
     target,
     rawValue: target.text,
-    hasGenericTarget: csharpContainsGenericName(target),
     ...(alias ? { alias } : {}),
     isStatic,
     isGlobal,
@@ -198,6 +241,7 @@ export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike, sourceLength: 
   const regions: CsharpNamespaceSpan[] = [];
   const namespaces = new Set<string>();
   const symbolsByNamespace = new Map<string, Set<string>>();
+  const typeAritiesByNamespace = new Map<string, Map<string, Set<number>>>();
   let hasGlobalType = false;
 
   const qualifiedNamespace = (enclosing: string | null, node: SyntaxNodeLike): string | null => {
@@ -222,6 +266,28 @@ export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike, sourceLength: 
       symbolsByNamespace.set(namespaceName, symbols);
     }
     symbols.add(name);
+
+    let aritiesByType = typeAritiesByNamespace.get(namespaceName);
+    if (!aritiesByType) {
+      aritiesByType = new Map<string, Set<number>>();
+      typeAritiesByNamespace.set(namespaceName, aritiesByType);
+    }
+    let arities = aritiesByType.get(name);
+    if (!arities) {
+      arities = new Set<number>();
+      aritiesByType.set(name, arities);
+    }
+    const typeParameters =
+      node.childForFieldName("type_parameters") ??
+      node.namedChildren.find((child) => child.type === "type_parameter_list") ??
+      null;
+    let parameterCount = 0;
+    let identifierCount = 0;
+    for (const parameter of typeParameters?.namedChildren ?? []) {
+      if (parameter.type === "type_parameter") parameterCount += 1;
+      else if (parameter.type === "identifier") identifierCount += 1;
+    }
+    arities.add(parameterCount || identifierCount);
   };
 
   const visitNamespaceMembers = (members: readonly SyntaxNodeLike[], namespaceName: string): void => {
@@ -265,6 +331,7 @@ export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike, sourceLength: 
     regions,
     namespaces: Array.from(namespaces),
     symbolsByNamespace,
+    typeAritiesByNamespace,
     hasGlobalType,
   };
 }

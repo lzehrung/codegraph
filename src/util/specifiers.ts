@@ -14,6 +14,7 @@ import {
   type PathFoldProfile,
 } from "./dynamic-import-tables.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, PYTHON_IDENTIFIER_SOURCE } from "./identifiers.js";
+import type { CsharpTypeNamePath } from "./csharp-tree.js";
 import { normalizePath } from "./paths.js";
 import { pythonStatements } from "./python-type-checking.js";
 
@@ -68,6 +69,8 @@ export function cFamilyImportFormFromText(
 export type ModuleSpecifier = {
   spec: string;
   raw?: string;
+  /** Syntax-derived C# path metadata for generic using targets. */
+  csharpTypePath?: CsharpTypeNamePath;
   /** A Java/Kotlin package star import, distinct from a same-spelled class import. */
   jvmPackageWildcard?: true;
   typeOnly?: boolean;
