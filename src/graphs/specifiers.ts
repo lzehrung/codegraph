@@ -114,6 +114,7 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
           spec: entry.spec,
           ...(entry.raw !== undefined ? { raw: entry.raw } : {}),
           ...(entry.csharpTypePath ? { csharpTypePath: entry.csharpTypePath } : {}),
+          ...(entry.csharpEnclosingNamespaces ? { csharpEnclosingNamespaces: entry.csharpEnclosingNamespaces } : {}),
           ...(entry.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
           ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
           ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
@@ -295,6 +296,7 @@ export function collectModuleSpecifiersFromSource(
       out.push({
         spec: csharpTypePath ? parsed.rawValue : parsed.value,
         ...(csharpTypePath ? { csharpTypePath } : {}),
+        ...(parsed.enclosingNamespaces.length ? { csharpEnclosingNamespaces: parsed.enclosingNamespaces } : {}),
         typeOnly: false,
       });
     }

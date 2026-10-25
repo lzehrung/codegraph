@@ -6,6 +6,7 @@ import { type WorkspaceConfig } from "../util/workspace.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
 import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../util/resolution-candidates.js";
 import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
+import type { BuildReport } from "../indexer/types.js";
 
 type ResolvedSpecifierEdge = {
   to: EdgeTo;
@@ -27,6 +28,7 @@ export type ModuleSpecifierResolutionContext = {
   resolutionHints?: string[];
   /** Active extension-to-language mapping, so a file is classified as the language that parses it. */
   languageExtensions?: LanguageExtensionMap;
+  report?: BuildReport;
 };
 
 function edgeToResolvedFile(resolved: string): EdgeTo {
@@ -69,6 +71,7 @@ export async function resolveModuleSpecifierEdges(
     ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
     ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
     ...(entry.csharpTypePath ? { csharpTypePath: entry.csharpTypePath } : {}),
+    ...(entry.csharpEnclosingNamespaces ? { csharpEnclosingNamespaces: entry.csharpEnclosingNamespaces } : {}),
     ...(entry.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
     ...(entry.raw !== undefined ? { rawSpecifier: entry.raw } : {}),
     ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
@@ -79,6 +82,7 @@ export async function resolveModuleSpecifierEdges(
     ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
     ...(entry.rubyLoadForm ? { rubyLoadForm: entry.rubyLoadForm } : {}),
     ...(resolutionExtensions ? { resolutionExtensions } : {}),
+    ...(context.report ? { report: context.report } : {}),
   });
 
   if (targets.files.length) {

@@ -54,6 +54,8 @@ export type CsharpUsingDirective = CsharpNamePath & {
   alias?: SyntaxNodeLike;
   isStatic: boolean;
   isGlobal: boolean;
+  /** Enclosing namespace prefixes, innermost first, for qualified type lookup. */
+  enclosingNamespaces: readonly string[];
 };
 
 export type CsharpNamespaceSpan = {
@@ -173,6 +175,30 @@ function csharpPathSegments(path: CsharpNamePath): readonly CsharpTypeNameSegmen
   return path.csharpTypePath?.segments ?? [{ name: path.value }];
 }
 
+function csharpEnclosingNamespaceCandidates(node: SyntaxNodeLike): string[] {
+  const enclosingNamespaceNames: string[] = [];
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type !== "namespace_declaration" && current.type !== "file_scoped_namespace_declaration") continue;
+    const name = csharpNamePath(current.childForFieldName("name"));
+    if (name) enclosingNamespaceNames.push(normalizeCsharpQualifiedName(name.value));
+  }
+
+  let fullNamespace = "";
+  for (let index = enclosingNamespaceNames.length - 1; index >= 0; index -= 1) {
+    const name = enclosingNamespaceNames[index]!;
+    fullNamespace = fullNamespace ? fullNamespace + "." + name : name;
+  }
+  const candidates: string[] = [];
+  let candidate = fullNamespace;
+  while (candidate) {
+    candidates.push(candidate);
+    const separator = candidate.lastIndexOf(".");
+    if (separator < 0) break;
+    candidate = candidate.slice(0, separator);
+  }
+  return candidates;
+}
+
 export function csharpHasGenericTypeOwner(path: CsharpTypeNamePath): boolean {
   for (let index = 0; index < path.segments.length - 1; index += 1) {
     if (path.segments[index]?.typeArgumentCount !== undefined) return true;
@@ -256,6 +282,7 @@ export function csharpUsingDirective(node: SyntaxNodeLike): CsharpUsingDirective
     ...(alias ? { alias } : {}),
     isStatic,
     isGlobal,
+    enclosingNamespaces: csharpEnclosingNamespaceCandidates(node),
   };
 }
 export function csharpExternAlias(node: SyntaxNodeLike): string | null {

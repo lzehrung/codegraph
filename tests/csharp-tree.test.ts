@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
+import fsp from "node:fs/promises";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { buildProjectIndexFromFiles } from "../src/index.js";
+import { collectEdgesForFile } from "../src/graph-edge-collector.js";
 import { collectImportsForFile } from "../src/indexer/imports.js";
 import { resolveCsharpNamespaceTypePath } from "../src/util/resolution/csharp.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs/specifiers.js";
@@ -322,6 +324,99 @@ describe("C# generic alias parse reporting", () => {
           },
         ],
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("C# namespace resolution failures and parser reporting", () => {
+  it("returns partial when a C# namespace candidate file cannot be read", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-read-failure-"));
+    const typeFile = path.join(root, "Box.cs");
+    const unreadableFile = path.join(root, "Other.cs");
+    try {
+      await writeFile(typeFile, "namespace N; public class Box {}\n", "utf8");
+      await writeFile(unreadableFile, "namespace Other; public class Hidden {}\n", "utf8");
+      const originalReadFile = fsp.readFile.bind(fsp);
+      const readFileSpy = vi.spyOn(fsp, "readFile").mockImplementation((...args) => {
+        if (fileIdentityKey(String(args[0])) === fileIdentityKey(unreadableFile)) {
+          return Promise.reject(new Error("forced C# candidate read failure"));
+        }
+        return originalReadFile(...args);
+      });
+      try {
+        const resolution = await resolveCsharpNamespaceTypePath(root, "N", "Box", typeFile);
+        expect(resolution).toEqual({ status: "partial" });
+      } finally {
+        readFileSpy.mockRestore();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records C# candidate parse failures while collecting dependency edges", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-edge-parse-report-"));
+    const main = path.join(root, "Main.cs");
+    const typeFile = path.join(root, "Box.cs");
+    const failedCandidate = path.join(root, "Unparsed.cs");
+    const source = "using B = N.Box<int>;\nclass Main { B value; }\n";
+    const report: BuildReport = { timings: {} };
+    try {
+      await writeFile(main, source, "utf8");
+      await writeFile(typeFile, "namespace N; public class Box<T> {}\n", "utf8");
+      await writeFile(failedCandidate, "// CSHARP_EDGE_PARSE_FAILURE\nnamespace Other; class Hidden {}\n", "utf8");
+      setNativeTreeParseFailureFor("CSHARP_EDGE_PARSE_FAILURE", "forced C# edge candidate parse failure");
+
+      const edges = await collectEdgesForFile(main, root, undefined, {
+        parsed: { source, sup: CSHARP_SUPPORT },
+        report,
+      });
+
+      expect(edges).toEqual(
+        expect.arrayContaining([expect.objectContaining({ to: { type: "external", name: "N.Box<int>" } })]),
+      );
+      expect(report.backend?.parser).toMatchObject({
+        total: 1,
+        byLanguage: { csharp: 1 },
+        files: [
+          expect.objectContaining({
+            file: failedCandidate.replace(/\\/g, "/"),
+            languageId: "csharp",
+            nativeFallbackReason: "queryFailure",
+            nativeError: "forced C# edge candidate parse failure",
+          }),
+        ],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("counts repeated C# alias candidate failures once per file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-parse-report-dedup-"));
+    const main = path.join(root, "Main.cs");
+    const typeFile = path.join(root, "Box.cs");
+    const failedCandidate = path.join(root, "Unparsed.cs");
+    const source = "using A = N.Box<int>;\nusing B = N.Box<int>;\nclass Main {}\n";
+    const report: BuildReport = { timings: {} };
+    try {
+      await writeFile(main, source, "utf8");
+      await writeFile(typeFile, "namespace N; public class Box<T> {}\n", "utf8");
+      await writeFile(failedCandidate, "// CSHARP_ALIAS_DEDUP_FAILURE\nnamespace Other; class Hidden {}\n", "utf8");
+      setNativeTreeParseFailureFor("CSHARP_ALIAS_DEDUP_FAILURE", "forced C# alias dedup parse failure");
+
+      const bindings = await collectImportsForFile(main, root, { source, sup: CSHARP_SUPPORT, report });
+
+      expect(bindings.filter((binding) => binding.kind === "named" && ["A", "B"].includes(binding.local))).toHaveLength(
+        2,
+      );
+      expect(report.backend?.parser).toMatchObject({
+        total: 1,
+        byLanguage: { csharp: 1 },
+        files: [expect.objectContaining({ file: failedCandidate.replace(/\\/g, "/"), languageId: "csharp" })],
+      });
+      expect(report.backend?.parser?.files).toHaveLength(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

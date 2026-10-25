@@ -54,7 +54,7 @@ import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { expandStarImports } from "./expand-star-imports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
 import { BloomFilter, buildBloomFilterFromSource } from "../util/bloom-filter.js";
-import { initNativeBackendReport } from "../native/native-backend-report.js";
+import { initNativeBackendReport, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
 import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from "../native/tree-sitter-native.js";
 import { isNodeSqliteUnavailableError } from "../sqlite-driver.js";
@@ -113,8 +113,6 @@ import {
   type ImportBinding,
   type IncrementalBuildOptions,
   type ModuleIndex,
-  type NativeBackendFallbackReason,
-  type ParserBackendDegradationReport,
   type ProjectIndex,
   type ProjectIndexManifestEntry,
   type ParseErrorRange,
@@ -166,54 +164,6 @@ type IndexedFileModuleResult = {
   cacheWrite?: PendingModuleCacheWrite | undefined;
   graphContext: IndexedFileGraphContext;
 };
-
-function initParserBackendDegradationReport(
-  report: BuildReport | undefined,
-): ParserBackendDegradationReport | undefined {
-  if (!report) return undefined;
-  initNativeBackendReport(report);
-  report.backend ??= {
-    native: {
-      available: false,
-      enabled: false,
-      supportedLanguageIds: [],
-      filesUsed: 0,
-      filesFellBack: 0,
-      fallbackReasons: {
-        unavailable: 0,
-        unsupportedLanguage: 0,
-        queryFailure: 0,
-        sourceTooLarge: 0,
-      },
-      byLanguage: {},
-      errors: [],
-    },
-  };
-  report.backend.parser ??= {
-    total: 0,
-    byLanguage: {},
-    files: [],
-  };
-  return report.backend.parser;
-}
-
-function recordParserBackendDegradation(
-  report: BuildReport | undefined,
-  entry: {
-    file: string;
-    languageId: string;
-    nativeFallbackReason?: NativeBackendFallbackReason;
-    nativeError?: string;
-    jsError?: string;
-  },
-): void {
-  const parserReport = initParserBackendDegradationReport(report);
-  if (!parserReport) return;
-  parserReport.total += 1;
-  parserReport.byLanguage[entry.languageId] = (parserReport.byLanguage[entry.languageId] ?? 0) + 1;
-  if (parserReport.files.length >= 20) return;
-  parserReport.files.push(entry);
-}
 
 function isConfinedFileReadError(error: unknown): boolean {
   return (

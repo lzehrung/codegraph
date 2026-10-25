@@ -22,6 +22,7 @@ export type SpecifierTargetMetadata = {
   resolveNodeModules?: boolean;
   resolutionHints?: string[];
   csharpTypePath?: CsharpTypeNamePath;
+  csharpEnclosingNamespaces?: readonly string[];
   phpImportType?: "class" | "function" | "const";
   resolutionKind?: ModuleSpecifierResolutionKind;
   exportCondition?: ModuleSpecifierExportCondition;
@@ -189,6 +190,7 @@ async function resolveCsharpOrRubyTargets(
         file,
         metadata.languageExtensions,
         metadata.report,
+        metadata.csharpEnclosingNamespaces,
       );
       if (typeMatch.status === "found") return { files: [typeMatch.file], externalName: specifier };
       if (typeMatch.status === "ambiguous" || typeMatch.status === "partial") {

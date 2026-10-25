@@ -243,10 +243,16 @@ async function applyCsharpStatementOverride(
       context.file,
       context.languageExtensions,
       context.report,
+      parsed.enclosingNamespaces,
     );
     let resolved: ResolvedImportTarget = { external: parsed.value };
-    if (typeMatch.status === "found") resolved = typeMatch.file;
-    pushCsharpOverride(context, parsed, typeOnly, parsed.value, resolved, localRange, importedRange);
+    let fromValue = parsed.value;
+    if (typeMatch.status === "found") {
+      resolved = typeMatch.file;
+      const typeName = csharpTypePath.segments[csharpTypePath.segments.length - 1]?.name;
+      if (typeMatch.namespaceName && typeName) fromValue = typeMatch.namespaceName + "." + typeName;
+    }
+    pushCsharpOverride(context, parsed, typeOnly, fromValue, resolved, localRange, importedRange);
     return true;
   }
 

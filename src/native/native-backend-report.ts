@@ -13,6 +13,9 @@ import type {
   ParserBackendDegradationReport,
 } from "../indexer/types.js";
 import { stringifyUnknown } from "../util/ast.js";
+import { fileIdentityKey } from "../util/paths.js";
+
+const parserDegradedFilesByReport = new WeakMap<BuildReport, Set<string>>();
 
 export type NativeBackendOutcome = {
   usedNative: boolean;
@@ -140,7 +143,17 @@ export function recordParserBackendDegradation(
   entry: ParserBackendDegradationReport["files"][number],
 ): void {
   const backend = initNativeBackendReport(report);
-  if (!backend) return;
+  if (!backend || !report) return;
+
+  let degradedFiles = parserDegradedFilesByReport.get(report);
+  if (!degradedFiles) {
+    degradedFiles = new Set();
+    parserDegradedFilesByReport.set(report, degradedFiles);
+  }
+  const key = entry.languageId + "\0" + fileIdentityKey(entry.file);
+  if (degradedFiles.has(key)) return;
+  degradedFiles.add(key);
+
   backend.parser ??= { total: 0, byLanguage: {}, files: [] };
   const parserReport = backend.parser;
   parserReport.total += 1;

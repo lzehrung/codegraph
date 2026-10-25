@@ -234,6 +234,7 @@ export async function collectEdgesForFile(
       resolveNodeModules: !!opts.resolveNodeModules,
       ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
       ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+      ...(opts.report ? { report: opts.report } : {}),
     });
   });
 

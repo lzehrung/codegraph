@@ -71,6 +71,8 @@ export type ModuleSpecifier = {
   raw?: string;
   /** Syntax-derived C# path metadata for generic using targets. */
   csharpTypePath?: CsharpTypeNamePath;
+  /** Namespace prefixes enclosing the C# using directive, innermost first. */
+  csharpEnclosingNamespaces?: readonly string[];
   /** A Java/Kotlin package star import, distinct from a same-spelled class import. */
   jvmPackageWildcard?: true;
   typeOnly?: boolean;
