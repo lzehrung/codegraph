@@ -19,7 +19,9 @@ enum Status {
 typedef int (*Comparator)(int input); // @def Comparator
 
 extern int public_value(int input); // @def public_value @coverage public_value complete
-int shared_name(int input); // @def shared_name
+int shared_name(int input); // @def shared_name @coverage shared_name complete
+struct Token { int raw; }; // @def tokenTag=Token
+typedef int Token; // @def tokenTypedef=Token
 
 #define DECOY_MACRO(x) public_value(x) /* @not-ref public_value */
 #define STATUS_ALIAS STATUS_READY /* @not-ref STATUS_READY */

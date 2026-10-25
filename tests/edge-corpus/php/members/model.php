@@ -1,6 +1,7 @@
 <?php
 namespace App\Model;
 
+// @def hasLabel=HasLabel
 trait HasLabel
 {
     // @def label
@@ -18,7 +19,7 @@ class ParentRecord
 
 class Record extends ParentRecord
 {
-    use HasLabel;
+    use hASlABEL; // @ref hasLabel @goto hasLabel=hASlABEL
 
     public function __construct(public string $name, private int $count = 0) {} // @def name @def count
 

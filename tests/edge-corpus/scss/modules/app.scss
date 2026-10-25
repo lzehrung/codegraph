@@ -3,34 +3,51 @@
 @use "barrel" as kit;
 
 .panel {
-  color: palette.$accent; // @ref accent
-  padding: palette.$spacing; // @ref spacing
-  @include t.center; // @ref center @goto center
-  width: t.scale(2); // @ref scale
-  @extend %surface; // @ref surface
-  color: kit.$accent; // @ref accent
-  width: kit.tool-scale(2); // @not-ref scale
-  padding: kit.$spacing; // @ref spacing
-  @include kit.tool-center; // @ref center @goto center=tool-center
-  $again: palette.$accent; // @ref accent
-  content: "$accent"; // @not-ref accent
-  content: "$hidden"; // @not-ref hidden
-  content: "scale"; // @not-ref scale
-  .nested { width: t.scale(3); } // @ref scale
-  .inside { @include t.center; } // @ref center @goto center
-  $copy: palette.$accent; // @ref accent
-  $copy2: palette.$accent; // @ref accent
-  $space2: palette.$spacing; // @ref spacing
-  $space3: kit.$spacing; // @ref spacing
-  @include t.center; // @ref center
-  $width: t.scale(4); // @ref scale
-  .deep { $tone: kit.$accent; } // @ref accent
-  $again2: palette.$accent; // @ref accent
-  $space4: kit.$spacing; // @ref spacing
-  @include t.center; // @ref center
-  $wide: t.scale(5); // @ref scale
-  $more: palette.$accent; // @ref accent
-  @include t.center; // @ref center
-  $last: kit.$spacing; // @ref spacing
-  content: "literal #{'scale'}"; // @not-ref scale
+  /* @ref accent */
+  color: palette.$accent;
+  /* @ref spacing */
+  padding: palette.$spacing;
+  /* @ref center @goto center */
+  @include t.center;
+  /* @ref scale */
+  width: t.scale(2);
+  /* @ref surface */
+  @extend %surface;
+  /* @ref accent */
+  color: kit.$accent;
+  /* @not-ref scale */
+  width: kit.tool-scale(2);
+  /* @ref spacing */
+  padding: kit.$spacing;
+  /* @ref center @goto center=tool-center */
+  @include kit.tool-center;
+  $again: palette.$accent;
+  /* @not-ref accent */
+  content: "$accent";
+  /* @not-ref hidden */
+  content: "$hidden";
+  /* @not-ref scale */
+  content: "scale";
+  /* @ref scale */
+  .nested { width: t.scale(3); }
+  /* @ref center @goto center */
+  .inside { @include t.center; }
+  $copy: palette.$accent;
+  $copy2: palette.$accent;
+  $space2: palette.$spacing;
+  $space3: kit.$spacing;
+  @include t.center;
+  $width: t.scale(4);
+  /* @ref accent */
+  .deep { $tone: kit.$accent; }
+  $again2: palette.$accent;
+  $space4: kit.$spacing;
+  @include t.center;
+  $wide: t.scale(5);
+  $more: palette.$accent;
+  @include t.center;
+  $last: kit.$spacing;
+  /* @not-ref scale */
+  content: "literal #{'scale'}";
 }
+

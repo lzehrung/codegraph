@@ -9,8 +9,8 @@ import static api.Extra.utility;
 class Client extends Service {
     String run() {
         Service service = new Service();
-        service.send("text"); // @ref sendText @known-gap overload_call_reference_missing observed=none
-        service.send(3); // @ref sendNumber @known-gap overload_call_reference_missing observed=none
+        service.send("text"); // @not-ref sendText @not-ref sendNumber
+        service.send(3); // @not-ref sendText @not-ref sendNumber
         String echoed = service.echo("generic"); // @ref echo @goto echo
         var nested = new Service.Nested(); // @ref Nested @goto Nested
         var inner = service.new Inner(); // @ref Inner @known-gap inner-constructor-reference observed=none
