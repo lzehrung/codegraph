@@ -216,13 +216,17 @@ describe("C# namespace type-index completeness", () => {
 });
 
 describe("C# project-build import tree reuse", () => {
-  it("uses one native tree parse for a C# module", async () => {
+  it("reuses the C# tree for using directives and compilation-unit namespace lookup", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-import-tree-build-"));
     const file = path.join(root, "Main.cs");
     try {
-      await writeFile(file, "class Main {}\n", "utf8");
+      const usingDirectives = Array.from({ length: 12 }, (_, index) => `using Missing.Namespace${index};`);
+      await writeFile(file, ["namespace A;", ...usingDirectives, "class Main {}", ""].join("\n"), "utf8");
       const parseCount = countNativeTreeParses();
-      await buildProjectIndexFromFiles(root, [file], { useNativeWorkers: false });
+      const index = await buildProjectIndexFromFiles(root, [file], { useNativeWorkers: false, keepParsed: true });
+      expect(parseCount()).toBe(1);
+      const { getCompilationUnitPeers } = await import("../src/indexer/compilation-units.js");
+      expect(getCompilationUnitPeers(index, file).files).toContain(file);
       expect(parseCount()).toBe(1);
     } finally {
       await rm(root, { recursive: true, force: true });

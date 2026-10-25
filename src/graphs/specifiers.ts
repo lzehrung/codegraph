@@ -290,10 +290,8 @@ export function collectModuleSpecifiersFromSource(
       const parsed = csharpUsingDirective(directive);
       if (!parsed) continue;
       const specifier: ModuleSpecifier = { spec: parsed.value, typeOnly: false };
-      if (parsed.alias && !parsed.isStatic) {
-        const enclosingNamespace = csharpNamespaceAtOffset(namespaceFacts, directive.startIndex);
-        if (enclosingNamespace) specifier.csharpNamespace = enclosingNamespace;
-      }
+      const enclosingNamespace = csharpNamespaceAtOffset(namespaceFacts, directive.startIndex);
+      if (enclosingNamespace) specifier.csharpNamespace = enclosingNamespace;
       out.push(specifier);
     }
     return normalizeModuleSpecifiers(out);

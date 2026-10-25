@@ -2,14 +2,11 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "..
 import type { WorkspaceConfig } from "../workspace.js";
 import { resolveImportSpecifier, resolvePathLikeModule, resolvePythonModule, resolveSpecifier } from "../resolution.js";
 import { getImportableLanguageExtensions, STYLESHEET_RESOLUTION_EXTENSIONS } from "../resolution-candidates.js";
-import {
-  resolveCsharpDottedTypeImportPath,
-  resolveCsharpNamespaceImportPaths,
-  resolveCsharpScopedAliasTarget,
-} from "./csharp.js";
+import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "./csharp.js";
 import { resolveJvmPackageImportPaths } from "./jvm.js";
 import { resolveTerraformModuleSourcePaths } from "./terraform.js";
 import type { BuildReport } from "../../indexer/types.js";
+import type { ParsedFileContext } from "../../indexer/parse-context.js";
 import type { MatchPathFn } from "./tsconfig.js";
 import type {
   CFamilyIncludeForm,
@@ -28,11 +25,11 @@ export type SpecifierTargetMetadata = {
   resolutionKind?: ModuleSpecifierResolutionKind;
   exportCondition?: ModuleSpecifierExportCondition;
   pathAttribute?: string;
-  csharpNamespace?: string;
   statementStartIndex?: number;
   includeForm?: CFamilyIncludeForm;
   rubyLoadForm?: RubyLoadForm;
   languageExtensions?: LanguageExtensionMap;
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
   report?: BuildReport;
   /** Distinguishes `import p.C.*` from `import p.C` when both a package and a class exist. */
   jvmPackageWildcard?: true;
@@ -188,36 +185,13 @@ async function resolveCsharpOrRubyTargets(
     if (specifier.includes("<") || specifier.includes(">")) {
       return { files: [], externalName: metadata.rawSpecifier ?? specifier };
     }
-    if (metadata.csharpNamespace) {
-      const target = await resolveCsharpScopedAliasTarget(
-        metadata.projectRoot,
-        specifier,
-        file,
-        metadata.csharpNamespace,
-        metadata.languageExtensions,
-        metadata.report,
-      );
-      if (target) {
-        if (target.kind === "namespace") return { files: target.files, externalName: specifier };
-        if (target.resolution.status === "found") {
-          return { files: [target.resolution.file], externalName: specifier };
-        }
-        if (target.resolution.status === "ambiguous" || target.resolution.status === "partial") {
-          return {
-            files: [],
-            externalName: metadata.rawSpecifier ?? specifier,
-            retainExternalEdge: true,
-          };
-        }
-        return { files: [], externalName: metadata.rawSpecifier ?? specifier };
-      }
-    }
     const namespaceTargets = await resolveCsharpNamespaceImportPaths(
       metadata.projectRoot,
       specifier,
       file,
       metadata.languageExtensions,
       metadata.report,
+      metadata.parsedFiles,
     );
     if (namespaceTargets.length) return { files: namespaceTargets, externalName: specifier };
     const typeMatch = await resolveCsharpDottedTypeImportPath(
@@ -226,6 +200,7 @@ async function resolveCsharpOrRubyTargets(
       file,
       metadata.languageExtensions,
       metadata.report,
+      metadata.parsedFiles,
     );
     if (typeMatch.status === "found") return { files: [typeMatch.file], externalName: specifier };
     if (typeMatch.status === "ambiguous" || typeMatch.status === "partial") {

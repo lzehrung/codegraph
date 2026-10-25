@@ -20,6 +20,7 @@ import { collectModuleSpecifiersFromSource } from "./graphs/specifiers.js";
 import { resolveModuleSpecifierEdges } from "./graphs/edge-resolution.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
+import type { ParsedFileContext } from "./indexer/parse-context.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
 import { collectSqlEdgesForFile } from "./sql/source-graph.js";
 import type { SqlFactCache } from "./sql/source-graph.js";
@@ -103,6 +104,7 @@ export async function collectEdgesForFile(
     cachedFileEdgesProjectRoot?: string;
     languageExtensions?: LanguageExtensionMap;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
+    parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
     report?: BuildReport;
     logLevel?: LogLevel;
     allFiles?: readonly string[];
@@ -235,6 +237,7 @@ export async function collectEdgesForFile(
       ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
       ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
       ...(opts.report ? { report: opts.report } : {}),
+      ...(opts.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
     });
   });
 

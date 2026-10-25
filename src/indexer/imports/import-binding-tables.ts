@@ -24,7 +24,7 @@ import { recordParserBackendDegradation } from "../../native/native-backend-repo
 import {
   resolveCsharpDottedTypeImportPath,
   resolveCsharpNamespaceImportPaths,
-  resolveCsharpScopedAliasTarget,
+  hasCsharpEnclosingNamespaceFirstSegmentConflict,
 } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute } from "../../util/resolution/rust.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
@@ -33,6 +33,7 @@ import type { Range } from "../../types.js";
 import type { CFamilyIncludeForm, RubyLoadForm } from "../../util/specifiers.js";
 import type { BuildReport, ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
+import type { ParsedFileContext } from "../parse-context.js";
 
 /**
  * Per-language import-binding registry for statement overrides and implicit native-capture
@@ -60,6 +61,7 @@ export type LanguageSpecificImportContext = ImportBindingSink & {
   csharpTree?: SyntaxTreeLike | null;
   /** Namespace facts derived once from the reusable C# tree. */
   csharpNamespaceFacts?: CsharpNamespaceFacts;
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
   report?: BuildReport;
   getBindings: () => ImportBinding[];
   replaceBindings: (bindings: ImportBinding[]) => void;
@@ -198,7 +200,7 @@ function csharpNamespaceAt(
   return csharpNamespaceAtOffset(facts, offset);
 }
 
-async function applyCsharpScopedAliasOverride(
+async function applyCsharpEnclosingNamespaceConflictOverride(
   context: LanguageSpecificImportContext,
   tree: SyntaxTreeLike,
   directive: SyntaxNodeLike,
@@ -207,36 +209,26 @@ async function applyCsharpScopedAliasOverride(
   localRange: Range | undefined,
   importedRange: Range | undefined,
 ): Promise<boolean> {
-  if (!parsed.alias) return false;
+  if (parsed.isGlobal) return false;
   const enclosingNamespace = csharpNamespaceAt(context, tree, directive.startIndex);
   if (!enclosingNamespace) return false;
-
-  const target = await resolveCsharpScopedAliasTarget(
+  const conflict = await hasCsharpEnclosingNamespaceFirstSegmentConflict(
     context.projectRoot,
     parsed.value,
     context.file,
     enclosingNamespace,
     context.languageExtensions,
     context.report,
+    context.parsedFiles,
   );
-  if (!target) return false;
-  if (target.kind === "namespace") {
-    context.pushBinding({
-      kind: "namespace",
-      localNS: normalizeCsharpIdentifier(parsed.alias.text),
-      from: parsed.value,
-      ...(target.files.length === 1 ? { resolved: target.files[0]!.replace(/\\/g, "/") } : {}),
-      typeOnly,
-      ...(localRange ? { localRange } : {}),
-    });
-    return true;
-  }
+  if (!conflict) return false;
 
-  let resolved: ResolvedImportTarget = { external: target.name };
-  if (target.resolution.status === "found") {
-    resolved = target.resolution.file.replace(/\\/g, "/");
+  const unresolved: ResolvedImportTarget = { external: parsed.value };
+  if (parsed.alias) {
+    pushCsharpOverride(context, parsed, typeOnly, parsed.value, unresolved, localRange, importedRange);
+  } else {
+    context.pushBinding({ kind: "star", from: parsed.rawValue, resolved: unresolved, typeOnly });
   }
-  pushCsharpOverride(context, parsed, typeOnly, target.name, resolved, localRange, importedRange);
   return true;
 }
 function csharpImportNodeForStatement(
@@ -293,6 +285,20 @@ async function applyCsharpStatementOverride(
   const localRange = parsed.alias && lineStarts ? csharpNodeRange(parsed.alias, context.source, lineStarts) : undefined;
   const importedRange =
     parsed.alias && lineStarts ? csharpNodeRange(parsed.leaf, context.source, lineStarts) : undefined;
+  if (
+    tree &&
+    (await applyCsharpEnclosingNamespaceConflictOverride(
+      context,
+      tree,
+      directive,
+      parsed,
+      typeOnly,
+      localRange,
+      importedRange,
+    ))
+  ) {
+    return true;
+  }
 
   // Static imports bind to a declaring type only when exactly one file owns that type. A global
   // static using applies to the whole project, which module-local bindings cannot express.
@@ -303,6 +309,7 @@ async function applyCsharpStatementOverride(
       context.file,
       context.languageExtensions,
       context.report,
+      context.parsedFiles,
     );
     const qualifiedType = normalizeCsharpQualifiedName(parsed.value).replace(/^global::/u, "");
     if (typeMatch.status === "found" && qualifiedType.includes(".")) {
@@ -324,19 +331,6 @@ async function applyCsharpStatementOverride(
     return true;
   }
 
-  if (parsed.alias && tree) {
-    const scopedAliasHandled = await applyCsharpScopedAliasOverride(
-      context,
-      tree,
-      directive,
-      parsed,
-      typeOnly,
-      localRange,
-      importedRange,
-    );
-    if (scopedAliasHandled) return true;
-  }
-
   // A target declared as a namespace remains a namespace alias, even when written with alias
   // syntax. Ambiguous namespaces stay unresolved rather than claiming one declaring file.
   const namespaceTargets = await resolveCsharpNamespaceImportPaths(
@@ -345,6 +339,7 @@ async function applyCsharpStatementOverride(
     context.file,
     context.languageExtensions,
     context.report,
+    context.parsedFiles,
   );
   if (parsed.alias && namespaceTargets.length) {
     context.pushBinding({
@@ -383,6 +378,7 @@ async function applyCsharpStatementOverride(
           context.file,
           context.languageExtensions,
           context.report,
+          context.parsedFiles,
         );
         if (fallbackNamespaceTargets.length > 1) {
           const typeMatch = await resolveCsharpDottedTypeImportPath(
@@ -391,6 +387,7 @@ async function applyCsharpStatementOverride(
             context.file,
             context.languageExtensions,
             context.report,
+            context.parsedFiles,
           );
           if (typeMatch.status === "found") {
             fromValue = fallbackFrom;
@@ -406,6 +403,7 @@ async function applyCsharpStatementOverride(
             context.file,
             context.languageExtensions,
             context.report,
+            context.parsedFiles,
           );
           if (typeMatch.status === "partial") {
             fromValue = parsed.value;

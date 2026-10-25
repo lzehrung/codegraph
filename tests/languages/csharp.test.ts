@@ -371,7 +371,7 @@ describe("C# namespace aliases", () => {
     }
   });
 
-  it("resolves a type alias in a file-scoped namespace before the global namespace", async () => {
+  it("leaves a file-scoped namespace alias unresolved when its first segment can bind in the namespace", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-filescoped-type-alias-lookup-"));
     const scopedTarget = path.join(root, "Scoped.cs");
     const globalTarget = path.join(root, "Global.cs");
@@ -385,22 +385,214 @@ describe("C# namespace aliases", () => {
       const module = index.byFile.get(fileIdentityKey(main));
       const alias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "B");
 
-      expect(alias).toMatchObject({ kind: "named", local: "B", imported: "Thing" });
-      expect(typeof alias?.resolved).toBe("string");
-      if (typeof alias?.resolved !== "string") throw new Error("Expected the C# type alias to resolve");
-      expect(fileIdentityKey(alias.resolved)).toBe(fileIdentityKey(scopedTarget));
-      expect(edgesFrom(index, main).map((edge) => edge.to)).toEqual([
-        { type: "file", path: scopedTarget.replace(/\\/g, "/") },
-      ]);
+      expect(alias).toMatchObject({
+        kind: "named",
+        local: "B",
+        imported: "Thing",
+        from: "N.Thing",
+        resolved: { external: "N.Thing" },
+      });
+      expect(edgesFrom(index, main)).toEqual([]);
 
       const navigation = await goToDefinition(index, {
         file: main,
         line: 3,
         column: edgeColumns(mainSource, 3, "B value;"),
       });
+      expect(navigation.status).not.toBe("ok");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("leaves an alias unresolved when an enclosing type can bind its first segment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-type-first-segment-"));
+    const scopedTarget = path.join(root, "Scoped.cs");
+    const globalTarget = path.join(root, "Global.cs");
+    const main = path.join(root, "Main.cs");
+    const globalLines = ["namespace N;", "public class Thing {}", ""];
+    const mainLines = ["namespace A {", "  using T = N.Thing;", "  class Use { T value; }", "}", ""];
+    try {
+      await writeFile(scopedTarget, "namespace A; public class N { public class Thing {} }\n", "utf8");
+      await writeFile(globalTarget, globalLines.join("\n"), "utf8");
+      await writeFile(main, mainLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [scopedTarget, globalTarget, main]);
+      const alias = index.byFile
+        .get(fileIdentityKey(main))
+        ?.imports.find((binding) => binding.kind === "named" && binding.local === "T");
+
+      expect(alias).toMatchObject({
+        kind: "named",
+        local: "T",
+        imported: "Thing",
+        from: "N.Thing",
+        resolved: { external: "N.Thing" },
+      });
+      expect(edgesFrom(index, main)).toEqual([]);
+
+      const navigation = await goToDefinition(index, {
+        file: main,
+        line: 3,
+        column: columnOf(mainLines, 3, "T value;"),
+      });
+      expect(navigation.status).not.toBe("ok");
+      const references = await findReferences(index, {
+        file: globalTarget,
+        line: 2,
+        column: columnOf(globalLines, 2, "Thing"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected C# type references");
+      expect(references.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))).toBe(
+        false,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("leaves a block-scoped alias and using directive unresolved when an enclosing namespace can bind first", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-block-namespace-first-segment-"));
+    const nestedTarget = path.join(root, "Scoped", "Thing.cs");
+    const globalDecoy = path.join(root, "Global", "Thing.cs");
+    const main = path.join(root, "Consumer", "Main.cs");
+    const nestedLines = ["namespace A.N.Inner;", "public class Thing {}", ""];
+    const decoyLines = ["namespace N.Inner;", "public class Thing {}", ""];
+    const mainLines = [
+      "namespace A {",
+      "  using N;",
+      "  using S = N.Inner;",
+      "  class Use { S.Thing value; }",
+      "}",
+      "",
+    ];
+    try {
+      await mkdir(path.dirname(nestedTarget), { recursive: true });
+      await mkdir(path.dirname(globalDecoy), { recursive: true });
+      await mkdir(path.dirname(main), { recursive: true });
+      await writeFile(nestedTarget, nestedLines.join("\n"), "utf8");
+      await writeFile(globalDecoy, decoyLines.join("\n"), "utf8");
+      await writeFile(main, mainLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [nestedTarget, globalDecoy, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const alias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "S");
+      const namespaceUsing = module?.imports.find((binding) => binding.kind === "star" && binding.from === "N");
+
+      expect(namespaceUsing).toMatchObject({ kind: "star", from: "N", resolved: { external: "N" } });
+      expect(alias).toMatchObject({
+        kind: "named",
+        local: "S",
+        imported: "Inner",
+        from: "N.Inner",
+        resolved: { external: "N.Inner" },
+      });
+      expect(edgesFrom(index, main)).toEqual([]);
+
+      const navigation = await goToDefinition(index, {
+        file: main,
+        line: 4,
+        column: columnOf(mainLines, 4, "Thing"),
+      });
+      expect(navigation.status).not.toBe("ok");
+
+      for (const [file, lines] of [
+        [nestedTarget, nestedLines],
+        [globalDecoy, decoyLines],
+      ] as const) {
+        const references = await findReferences(index, {
+          file,
+          line: 2,
+          column: columnOf(lines, 2, "Thing"),
+        });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected C# type references");
+        expect(
+          references.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main)),
+        ).toBe(false);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a file-scoped alias unresolved when an indexed implicit ancestor can bind its first segment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-file-implicit-ancestor-"));
+    const nestedTarget = path.join(root, "Scoped", "Nested.cs");
+    const globalDecoy = path.join(root, "Global", "Thing.cs");
+    const main = path.join(root, "Consumer", "Main.cs");
+    const decoyLines = ["namespace N.Inner;", "public class Thing {}", ""];
+    const mainLines = ["namespace A;", "using T = N.Inner.Thing;", "class Use { T value; }", ""];
+    try {
+      await mkdir(path.dirname(nestedTarget), { recursive: true });
+      await mkdir(path.dirname(globalDecoy), { recursive: true });
+      await mkdir(path.dirname(main), { recursive: true });
+      await writeFile(nestedTarget, "namespace A.N.Inner; class Nested {}\n", "utf8");
+      await writeFile(globalDecoy, decoyLines.join("\n"), "utf8");
+      await writeFile(main, mainLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [nestedTarget, globalDecoy, main]);
+      const alias = index.byFile
+        .get(fileIdentityKey(main))
+        ?.imports.find((binding) => binding.kind === "named" && binding.local === "T");
+
+      expect(alias).toMatchObject({
+        kind: "named",
+        local: "T",
+        imported: "Thing",
+        from: "N.Inner.Thing",
+        resolved: { external: "N.Inner.Thing" },
+      });
+      expect(edgesFrom(index, main)).toEqual([]);
+
+      const navigation = await goToDefinition(index, {
+        file: main,
+        line: 3,
+        column: columnOf(mainLines, 3, "T value;"),
+      });
+      expect(navigation.status).not.toBe("ok");
+      const references = await findReferences(index, {
+        file: globalDecoy,
+        line: 2,
+        column: columnOf(decoyLines, 2, "Thing"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected C# type references");
+      expect(references.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))).toBe(
+        false,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a type alias globally when no enclosing namespace can bind its first segment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-first-segment-global-"));
+    const target = path.join(root, "Global", "Thing.cs");
+    const main = path.join(root, "Consumer", "Main.cs");
+    const mainLines = ["namespace A {", "  using T = N.Thing;", "  class Use { T value; }", "}", ""];
+    try {
+      await mkdir(path.dirname(target), { recursive: true });
+      await mkdir(path.dirname(main), { recursive: true });
+      await writeFile(target, "namespace N; public class Thing {}\n", "utf8");
+      await writeFile(main, mainLines.join("\n"), "utf8");
+      const index = await createTestIndexFromFiles(root, [target, main]);
+      const alias = index.byFile
+        .get(fileIdentityKey(main))
+        ?.imports.find((binding) => binding.kind === "named" && binding.local === "T");
+
+      expect(alias).toMatchObject({ kind: "named", local: "T", imported: "Thing" });
+      expect(typeof alias?.resolved).toBe("string");
+      if (typeof alias?.resolved !== "string") throw new Error("Expected the global C# alias to resolve");
+      expect(fileIdentityKey(alias.resolved)).toBe(fileIdentityKey(target));
+      expect(edgesFrom(index, main).map((edge) => edge.to)).toEqual([
+        { type: "file", path: target.replace(/\\/g, "/") },
+      ]);
+
+      const navigation = await goToDefinition(index, {
+        file: main,
+        line: 3,
+        column: columnOf(mainLines, 3, "T value;"),
+      });
       expect(navigation.status).toBe("ok");
-      if (navigation.status !== "ok") throw new Error("Expected file-scoped type-alias navigation");
-      expect(fileIdentityKey(navigation.definition.file)).toBe(fileIdentityKey(scopedTarget));
+      if (navigation.status !== "ok") throw new Error("Expected global type-alias navigation");
+      expect(fileIdentityKey(navigation.definition.file)).toBe(fileIdentityKey(target));
       expect(navigation.definition.localName).toBe("Thing");
     } finally {
       await rm(root, { recursive: true, force: true });

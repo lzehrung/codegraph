@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
+import type { SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
 import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -125,19 +126,24 @@ function collectCsharpNamespaceRegions(
   filePath: string,
   support: LanguageSupport | undefined,
   report: BuildReport | undefined,
+  retainedTree?: SyntaxTreeLike,
 ): CsharpNamespaceRegion[] | null {
   if (support?.id !== "csharp") return [];
-  const parsed = parseCsharpSyntaxTree(source, support);
-  if (!parsed.tree) {
-    recordParserBackendDegradation(report, {
-      file: filePath,
-      languageId: support.id,
-      ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
-      ...(parsed.error ? { nativeError: parsed.error } : {}),
-    });
-    return null;
+  let tree = retainedTree;
+  if (!tree) {
+    const parsed = parseCsharpSyntaxTree(source, support);
+    if (!parsed.tree) {
+      recordParserBackendDegradation(report, {
+        file: filePath,
+        languageId: support.id,
+        ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
+        ...(parsed.error ? { nativeError: parsed.error } : {}),
+      });
+      return null;
+    }
+    tree = parsed.tree;
   }
-  const facts = collectCsharpNamespaceFacts(parsed.tree, source.length);
+  const facts = collectCsharpNamespaceFacts(tree, source.length);
   if (facts.regions.length && facts.hasGlobalType) {
     facts.regions.unshift({ name: "", start: 0, end: source.length });
   }
@@ -227,9 +233,12 @@ export function getCsharpNamespaceRegions(
   }
   const cached = cache.get(fileKey);
   if (cached !== undefined) return cached;
-  const source = unitDeclarationSource(index, filePath, fileKey);
+  const retained = index.parsed?.get(fileKey);
+  const source = retained?.source ?? unitDeclarationSource(index, filePath, fileKey);
   const support = supportForFileWithoutHeaderSample(filePath, index.languageExtensions);
-  const regions = source === null ? null : collectCsharpNamespaceRegions(source, filePath, support, index.buildReport);
+  const tree = retained?.sup?.id === "csharp" ? retained.tree : undefined;
+  const regions =
+    source === null ? null : collectCsharpNamespaceRegions(source, filePath, support, index.buildReport, tree);
   cache.set(fileKey, regions);
   return regions;
 }

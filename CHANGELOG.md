@@ -18,6 +18,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - GitHub release descriptions now include the changelog section for the released version.
 - For non-SCSS definitions, any candidate or scanned file with an outermost Tree-sitter `ERROR` or `MISSING` range makes find-references coverage `partial` with `parse_error` and marks that file affected, regardless of the range contents. SCSS remains exempt because its grammar reports `ERROR` on supported module syntax. Files without a usable native syntax-tree projection are also marked `parser_degraded`, including on warm-cache rebuilds.
 
+- C#: A using directive inside a namespace stays unresolved when its first target segment could also bind in an enclosing namespace, including through an implicit namespace ancestor.
+
 ### Fixed
 
 - C#: plain, static, global, and alias `using` directives and block/file-scoped namespaces are now indexed from native Tree-sitter nodes. Commented namespace aliases and `X::Type<T>` references now resolve for navigation and references. Mapped extensions preserve C# namespace scope during compilation-unit lookup; native parse or projection failures retain their cause and report parser degradation instead of appearing as empty namespace facts. Adjacent directives and directives after leading comments are selected correctly. Split-namespace aliases are included in cross-directory reference candidates, so references agree with go-to-definition. Conditional namespace and type declarations under `#if`, `#elif`, and `#else` retain their enclosing namespace. Relative type aliases in file-scoped namespaces bind their first segment in the enclosing namespace before global lookup, and navigation and dependency edges use that bound target.

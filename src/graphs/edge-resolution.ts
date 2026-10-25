@@ -7,6 +7,8 @@ import { isGraphOnlyLanguage } from "../document-links.js";
 import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../util/resolution-candidates.js";
 import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
 import type { BuildReport } from "../indexer/types.js";
+import type { ParsedFileContext } from "../indexer/parse-context.js";
+import { hasCsharpEnclosingNamespaceFirstSegmentConflict } from "../util/resolution/csharp.js";
 
 type ResolvedSpecifierEdge = {
   to: EdgeTo;
@@ -29,6 +31,7 @@ export type ModuleSpecifierResolutionContext = {
   /** Active extension-to-language mapping, so a file is classified as the language that parses it. */
   languageExtensions?: LanguageExtensionMap;
   report?: BuildReport;
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
 };
 
 function edgeToResolvedFile(resolved: string): EdgeTo {
@@ -63,6 +66,22 @@ export async function resolveModuleSpecifierEdges(
     resolutionExtensions = getGraphOnlyResolutionExtensions(context.support.id, entry.resolutionKind ?? "document");
   }
 
+  if (
+    context.support.id === "csharp" &&
+    entry.csharpNamespace &&
+    (await hasCsharpEnclosingNamespaceFirstSegmentConflict(
+      context.projectRoot,
+      entry.spec,
+      context.file,
+      entry.csharpNamespace,
+      context.languageExtensions,
+      context.report,
+      context.parsedFiles,
+    ))
+  ) {
+    return null;
+  }
+
   const targets = await resolveSpecifierTargets(context.file, entry.spec, context.support.id, {
     projectRoot: context.projectRoot,
     ...(context.matchPath ? { matchPath: context.matchPath } : {}),
@@ -76,12 +95,12 @@ export async function resolveModuleSpecifierEdges(
     ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
     ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
     ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
-    ...(entry.csharpNamespace ? { csharpNamespace: entry.csharpNamespace } : {}),
     ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
     ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
     ...(entry.rubyLoadForm ? { rubyLoadForm: entry.rubyLoadForm } : {}),
     ...(resolutionExtensions ? { resolutionExtensions } : {}),
     ...(context.report ? { report: context.report } : {}),
+    ...(context.parsedFiles ? { parsedFiles: context.parsedFiles } : {}),
   });
 
   if (targets.files.length) {

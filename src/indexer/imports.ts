@@ -6,6 +6,7 @@ import type { LogLevel } from "../logging.js";
 import { errorMessage } from "../util/errors.js";
 import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import type { BuildReport } from "./types.js";
+import type { ParsedFileContext } from "./parse-context.js";
 import { collectModuleSpecifiersFromSource } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LanguageExtensionMap } from "../languages.js";
@@ -53,6 +54,7 @@ export async function collectImportsForFile(
     workspaceConfig?: WorkspaceConfig;
     report?: BuildReport;
     matchPath?: MatchPathFn;
+    parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
   },
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
@@ -176,6 +178,7 @@ export async function collectImportsForFile(
         resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
         ...(resolutionHints ? { resolutionHints } : {}),
         ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+        ...(opts?.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
         ...(opts?.report ? { report: opts.report } : {}),
         ...(resolverOpts?.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
         ...(phpImportType ? { phpImportType } : {}),
@@ -213,6 +216,7 @@ export async function collectImportsForFile(
     source: resolvedSource,
     languageId: resolvedSup.id,
     ...(resolvedSup.id === "csharp" && csharpTree !== undefined ? { csharpTree } : {}),
+    ...(opts?.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
     ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
     ...(opts?.report ? { report: opts.report } : {}),
     resolveFrom: (from: string, phpImportType?: "class" | "function" | "const", resolverOpts?: ImportResolverOptions) =>

@@ -79,7 +79,7 @@ export type ModuleSpecifier = {
   confidence?: number;
   pathAttribute?: string;
   statementStartIndex?: number;
-  /** Enclosing C# namespace for contextual type-alias lookup. */
+  /** Enclosing C# namespace for conservative using-directive first-segment checks. */
   csharpNamespace?: string;
   includeForm?: CFamilyIncludeForm;
   rubyLoadForm?: RubyLoadForm;

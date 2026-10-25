@@ -570,6 +570,7 @@ async function buildIndexedModuleForFile(args: {
     ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
     ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
     ...(args.report ? { report: args.report } : {}),
+    parsedFiles: args.parsedMap,
   };
   const imports =
     nativeSourceLimitSkip || sup.id === "sql"
@@ -1787,6 +1788,7 @@ async function buildIndexFromFileListShared(
             ...(manifest?.projectRoot ? { cachedFileEdgesProjectRoot: manifest.projectRoot } : {}),
             ...(onFileEdges ? { onFileEdges } : {}),
             allFiles: normalizedFiles,
+            parsedFiles: parsedMap,
             ...(sqlFactCache ? { sqlFactCache } : {}),
           });
           if (bloomFilterCache) {
@@ -1846,6 +1848,7 @@ async function buildIndexFromFileListShared(
           ...(manifest?.projectRoot ? { cachedFileEdgesProjectRoot: manifest.projectRoot } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
           allFiles: normalizedFiles,
+          parsedFiles: parsedMap,
           ...(sqlFactCache ? { sqlFactCache } : {}),
         });
         return [file, mod ?? createEmptyModuleIndex(file), edges, cacheWrite] as const;
