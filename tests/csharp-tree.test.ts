@@ -170,6 +170,33 @@ describe("C# syntax-tree outcomes", () => {
   });
 });
 
+describe("C# namespace declarations in conditional directives", () => {
+  it("keeps a conditional namespace in its enclosing scope only", () => {
+    const source = [
+      "namespace Outer {",
+      "#if FEATURE",
+      "namespace Nested { public class ConditionalType {} }",
+      "#elif OTHER",
+      "namespace Alternate { public class AlternateType {} }",
+      "#else",
+      "namespace Fallback { public class FallbackType {} }",
+      "#endif",
+      "}",
+      "namespace Unrelated { public class OtherType {} }",
+      "",
+    ].join("\n");
+    const tree = treeForSource(source);
+    const facts = collectCsharpNamespaceFacts(tree, source.length);
+
+    expect(facts.namespaces).toEqual(["Outer", "Outer.Nested", "Outer.Alternate", "Outer.Fallback", "Unrelated"]);
+    expect(facts.symbolsByNamespace.get("Outer.Nested")).toEqual(new Set(["ConditionalType"]));
+    expect(facts.symbolsByNamespace.get("Outer.Alternate")).toEqual(new Set(["AlternateType"]));
+    expect(facts.symbolsByNamespace.get("Outer.Fallback")).toEqual(new Set(["FallbackType"]));
+    expect(facts.symbolsByNamespace.get("Unrelated")).toEqual(new Set(["OtherType"]));
+    expect(facts.symbolsByNamespace.has("Unrelated.Nested")).toBe(false);
+    expect(facts.hasGlobalType).toBe(false);
+  });
+});
 describe("C# namespace type-index completeness", () => {
   it("returns partial when a project C# file cannot be parsed", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-partial-"));

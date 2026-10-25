@@ -6,7 +6,13 @@ import {
   parseRustImportStatements,
 } from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { collectCsharpImportDirectives, csharpUsingDirective, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
+import {
+  collectCsharpImportDirectives,
+  collectCsharpNamespaceFacts,
+  csharpNamespaceAtOffset,
+  csharpUsingDirective,
+  parseCsharpSyntaxTree,
+} from "../util/csharp-tree.js";
 import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import type { BuildReport } from "../indexer/types.js";
 import { errorMessage } from "../util/errors.js";
@@ -117,6 +123,7 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
           ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
           ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
           ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
+          ...(entry.csharpNamespace ? { csharpNamespace: entry.csharpNamespace } : {}),
           ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
           ...(entry.rubyLoadForm ? { rubyLoadForm: entry.rubyLoadForm } : {}),
         },
@@ -128,7 +135,7 @@ function moduleSpecifierKey(entry: ModuleSpecifier): string {
     entry.exportCondition ?? ""
   }::${entry.pathAttribute ?? ""}::${entry.includeForm ?? ""}::${entry.rubyLoadForm ?? ""}::${entry.jvmPackageWildcard ? 1 : 0}::${
     entry.resolutionKind ?? ""
-  }`;
+  }::${entry.csharpNamespace ?? ""}`;
 }
 
 function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpecifier[], seen: Set<string>): void {
@@ -278,10 +285,16 @@ export function collectModuleSpecifiersFromSource(
       }
       tree = parsed.tree;
     }
+    const namespaceFacts = collectCsharpNamespaceFacts(tree, source.length);
     for (const directive of collectCsharpImportDirectives(tree)) {
       const parsed = csharpUsingDirective(directive);
       if (!parsed) continue;
-      out.push({ spec: parsed.value, typeOnly: false });
+      const specifier: ModuleSpecifier = { spec: parsed.value, typeOnly: false };
+      if (parsed.alias && !parsed.isStatic) {
+        const enclosingNamespace = csharpNamespaceAtOffset(namespaceFacts, directive.startIndex);
+        if (enclosingNamespace) specifier.csharpNamespace = enclosingNamespace;
+      }
+      out.push(specifier);
     }
     return normalizeModuleSpecifiers(out);
   }

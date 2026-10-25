@@ -29,6 +29,11 @@ const CSHARP_TYPE_DECLARATION_TYPES: Record<string, true> = {
   record_declaration: true,
   delegate_declaration: true,
 };
+const CSHARP_PREPROCESSOR_WRAPPER_TYPES: Record<string, true> = {
+  preproc_if: true,
+  preproc_elif: true,
+  preproc_else: true,
+};
 
 export type CsharpNamePath = {
   value: string;
@@ -180,6 +185,15 @@ export function csharpExternAlias(node: SyntaxNodeLike): string | null {
   const alias = node.childForFieldName("name");
   return alias?.type === "identifier" ? alias.text : null;
 }
+export function csharpNamespaceAtOffset(facts: CsharpNamespaceFacts, position: number): string | null {
+  let closest: CsharpNamespaceSpan | undefined;
+  for (const region of facts.regions) {
+    if (!region.name || position < region.start || position >= region.end) continue;
+    if (!closest || region.end - region.start < closest.end - closest.start) closest = region;
+  }
+  return closest?.name ?? null;
+}
+
 export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike, sourceLength: number): CsharpNamespaceFacts {
   const regions: CsharpNamespaceSpan[] = [];
   const namespaces = new Set<string>();
@@ -212,6 +226,10 @@ export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike, sourceLength: 
 
   const visitNamespaceMembers = (members: readonly SyntaxNodeLike[], namespaceName: string): void => {
     for (const member of members) {
+      if (CSHARP_PREPROCESSOR_WRAPPER_TYPES[member.type]) {
+        visitNamespaceMembers(member.namedChildren, namespaceName);
+        continue;
+      }
       if (member.type === "namespace_declaration") {
         visitBlockNamespace(member, namespaceName);
       } else if (CSHARP_TYPE_DECLARATION_TYPES[member.type]) {
@@ -231,21 +249,28 @@ export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike, sourceLength: 
 
   let rootNamespace: string | null = null;
   let sawNamespaceDeclaration = false;
-  for (const member of tree.rootNode.namedChildren) {
-    if (member.type === "file_scoped_namespace_declaration") {
-      if (sawNamespaceDeclaration) continue;
-      rootNamespace = qualifiedNamespace(null, member);
-      if (!rootNamespace) continue;
-      regions.push({ name: rootNamespace, start: member.startIndex, end: sourceLength });
-      namespaces.add(rootNamespace);
-      sawNamespaceDeclaration = true;
-    } else if (member.type === "namespace_declaration") {
-      sawNamespaceDeclaration = true;
-      visitBlockNamespace(member, rootNamespace);
-    } else if (CSHARP_TYPE_DECLARATION_TYPES[member.type]) {
-      addType(member, rootNamespace);
+  const visitCompilationUnitMembers = (members: readonly SyntaxNodeLike[]): void => {
+    for (const member of members) {
+      if (CSHARP_PREPROCESSOR_WRAPPER_TYPES[member.type]) {
+        visitCompilationUnitMembers(member.namedChildren);
+        continue;
+      }
+      if (member.type === "file_scoped_namespace_declaration") {
+        if (sawNamespaceDeclaration) continue;
+        rootNamespace = qualifiedNamespace(null, member);
+        if (!rootNamespace) continue;
+        regions.push({ name: rootNamespace, start: member.startIndex, end: sourceLength });
+        namespaces.add(rootNamespace);
+        sawNamespaceDeclaration = true;
+      } else if (member.type === "namespace_declaration") {
+        sawNamespaceDeclaration = true;
+        visitBlockNamespace(member, rootNamespace);
+      } else if (CSHARP_TYPE_DECLARATION_TYPES[member.type]) {
+        addType(member, rootNamespace);
+      }
     }
-  }
+  };
+  visitCompilationUnitMembers(tree.rootNode.namedChildren);
 
   return {
     regions,

@@ -79,6 +79,8 @@ export type ModuleSpecifier = {
   confidence?: number;
   pathAttribute?: string;
   statementStartIndex?: number;
+  /** Enclosing C# namespace for contextual type-alias lookup. */
+  csharpNamespace?: string;
   includeForm?: CFamilyIncludeForm;
   rubyLoadForm?: RubyLoadForm;
 };

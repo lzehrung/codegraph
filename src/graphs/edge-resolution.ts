@@ -76,6 +76,7 @@ export async function resolveModuleSpecifierEdges(
     ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
     ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
     ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
+    ...(entry.csharpNamespace ? { csharpNamespace: entry.csharpNamespace } : {}),
     ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
     ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
     ...(entry.rubyLoadForm ? { rubyLoadForm: entry.rubyLoadForm } : {}),

@@ -265,6 +265,39 @@ function edgeColumns(source: string, line: number, needle: string): number {
   return (source.split("\n")[line - 1] ?? "").indexOf(needle) + 1;
 }
 
+describe("C# declarations in conditional directives", () => {
+  it("resolves a type under a conditional namespace through using", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-conditional-namespace-type-"));
+    const declaration = path.join(root, "Conditional.cs");
+    const main = path.join(root, "Main.cs");
+    const mainLines = ["using N;", "class Use {", "  ConditionalType value;", "}"];
+    try {
+      await writeFile(
+        declaration,
+        ["#if FEATURE", "namespace N {", "  public class ConditionalType {}", "}", "#endif", ""].join("\n"),
+        "utf8",
+      );
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const index = await createTestIndexFromFiles(root, [declaration, main]);
+      expect(edgesFrom(index, main).map((edge) => edge.to)).toEqual([
+        { type: "file", path: declaration.replace(/\\/g, "/") },
+      ]);
+      const navigation = await goToDefinition(index, {
+        file: main,
+        line: 3,
+        column: columnOf(mainLines, 3, "ConditionalType"),
+      });
+
+      expect(navigation.status).toBe("ok");
+      if (navigation.status !== "ok") throw new Error("Expected conditional namespace type navigation");
+      expect(fileIdentityKey(navigation.definition.file)).toBe(fileIdentityKey(declaration));
+      expect(navigation.definition.localName).toBe("ConditionalType");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("C# namespace aliases", () => {
   it("resolves a block-scoped namespace alias to its declaring file and navigates its members", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-alias-"));
@@ -333,6 +366,42 @@ describe("C# namespace aliases", () => {
 
       const edges = edgesFrom(index, main);
       expect(edges.map((edge) => edge.to)).toEqual([{ type: "file", path: declaration.replace(/\\/g, "/") }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a type alias in a file-scoped namespace before the global namespace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-filescoped-type-alias-lookup-"));
+    const scopedTarget = path.join(root, "Scoped.cs");
+    const globalTarget = path.join(root, "Global.cs");
+    const main = path.join(root, "Main.cs");
+    const mainSource = ["namespace A;", "using B = N.Thing;", "class Use { B value; }", ""].join("\n");
+    try {
+      await writeFile(scopedTarget, "namespace A.N;\npublic class Thing {}\n", "utf8");
+      await writeFile(globalTarget, "namespace N;\npublic class Thing {}\n", "utf8");
+      await writeFile(main, mainSource, "utf8");
+      const index = await createTestIndexFromFiles(root, [scopedTarget, globalTarget, main]);
+      const module = index.byFile.get(fileIdentityKey(main));
+      const alias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "B");
+
+      expect(alias).toMatchObject({ kind: "named", local: "B", imported: "Thing" });
+      expect(typeof alias?.resolved).toBe("string");
+      if (typeof alias?.resolved !== "string") throw new Error("Expected the C# type alias to resolve");
+      expect(fileIdentityKey(alias.resolved)).toBe(fileIdentityKey(scopedTarget));
+      expect(edgesFrom(index, main).map((edge) => edge.to)).toEqual([
+        { type: "file", path: scopedTarget.replace(/\\/g, "/") },
+      ]);
+
+      const navigation = await goToDefinition(index, {
+        file: main,
+        line: 3,
+        column: edgeColumns(mainSource, 3, "B value;"),
+      });
+      expect(navigation.status).toBe("ok");
+      if (navigation.status !== "ok") throw new Error("Expected file-scoped type-alias navigation");
+      expect(fileIdentityKey(navigation.definition.file)).toBe(fileIdentityKey(scopedTarget));
+      expect(navigation.definition.localName).toBe("Thing");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

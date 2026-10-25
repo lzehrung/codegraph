@@ -227,6 +227,85 @@ export async function resolveCsharpDottedTypeImportPath(
     report,
   );
 }
+export type CsharpScopedAliasTarget =
+  | { kind: "namespace"; name: string; files: string[] }
+  | { kind: "type"; name: string; resolution: CsharpNamespaceTypeResolution };
+
+/** Resolves a relative alias target after its first namespace segment binds in context. */
+export async function resolveCsharpScopedAliasTarget(
+  projectRoot: string,
+  spec: string,
+  fromFile: string,
+  enclosingNamespace: string,
+  languageExtensions?: LanguageExtensionMap,
+  report?: BuildReport,
+): Promise<CsharpScopedAliasTarget | null> {
+  const normalized = normalizeCsharpQualifiedName(spec);
+  if (
+    !normalized ||
+    normalized.startsWith("global::") ||
+    normalized.includes("::") ||
+    normalized.includes("<") ||
+    normalized.includes(">")
+  ) {
+    return null;
+  }
+  const parts = normalized.split(".").filter(Boolean);
+  if (parts.length < 2 || !enclosingNamespace) return null;
+  const firstSegment = parts[0];
+  if (!firstSegment) return null;
+
+  const enclosingParts = enclosingNamespace.split(".");
+  let boundNamespace: string | null = null;
+  for (let depth = enclosingParts.length; depth > 0; depth -= 1) {
+    const candidate = enclosingParts.slice(0, depth).join(".") + "." + firstSegment;
+    const targets = await resolveCsharpNamespaceImportPaths(
+      projectRoot,
+      candidate,
+      fromFile,
+      languageExtensions,
+      report,
+    );
+    if (targets.length) {
+      boundNamespace = candidate;
+      break;
+    }
+  }
+  if (!boundNamespace) {
+    const globalTargets = await resolveCsharpNamespaceImportPaths(
+      projectRoot,
+      firstSegment,
+      fromFile,
+      languageExtensions,
+      report,
+    );
+    if (globalTargets.length) boundNamespace = firstSegment;
+  }
+  if (!boundNamespace) return null;
+
+  let targetNamespace = boundNamespace;
+  for (let index = 1; index < parts.length - 1; index += 1) {
+    targetNamespace += "." + parts[index];
+  }
+  const targetName = targetNamespace + "." + parts[parts.length - 1];
+  const namespaceFiles = await resolveCsharpNamespaceImportPaths(
+    projectRoot,
+    targetName,
+    fromFile,
+    languageExtensions,
+    report,
+  );
+  if (namespaceFiles.length) return { kind: "namespace", name: targetName, files: namespaceFiles };
+
+  const resolution = await resolveCsharpDottedTypeImportPath(
+    projectRoot,
+    targetName,
+    fromFile,
+    languageExtensions,
+    report,
+  );
+  return { kind: "type", name: targetName, resolution };
+}
 
 export function clearCsharpResolutionCaches(): void {
   csharpNamespaceFileCache.clear();

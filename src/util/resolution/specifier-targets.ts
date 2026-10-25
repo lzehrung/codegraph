@@ -2,7 +2,11 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "..
 import type { WorkspaceConfig } from "../workspace.js";
 import { resolveImportSpecifier, resolvePathLikeModule, resolvePythonModule, resolveSpecifier } from "../resolution.js";
 import { getImportableLanguageExtensions, STYLESHEET_RESOLUTION_EXTENSIONS } from "../resolution-candidates.js";
-import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "./csharp.js";
+import {
+  resolveCsharpDottedTypeImportPath,
+  resolveCsharpNamespaceImportPaths,
+  resolveCsharpScopedAliasTarget,
+} from "./csharp.js";
 import { resolveJvmPackageImportPaths } from "./jvm.js";
 import { resolveTerraformModuleSourcePaths } from "./terraform.js";
 import type { BuildReport } from "../../indexer/types.js";
@@ -24,6 +28,7 @@ export type SpecifierTargetMetadata = {
   resolutionKind?: ModuleSpecifierResolutionKind;
   exportCondition?: ModuleSpecifierExportCondition;
   pathAttribute?: string;
+  csharpNamespace?: string;
   statementStartIndex?: number;
   includeForm?: CFamilyIncludeForm;
   rubyLoadForm?: RubyLoadForm;
@@ -182,6 +187,30 @@ async function resolveCsharpOrRubyTargets(
   if (languageId === "csharp") {
     if (specifier.includes("<") || specifier.includes(">")) {
       return { files: [], externalName: metadata.rawSpecifier ?? specifier };
+    }
+    if (metadata.csharpNamespace) {
+      const target = await resolveCsharpScopedAliasTarget(
+        metadata.projectRoot,
+        specifier,
+        file,
+        metadata.csharpNamespace,
+        metadata.languageExtensions,
+        metadata.report,
+      );
+      if (target) {
+        if (target.kind === "namespace") return { files: target.files, externalName: specifier };
+        if (target.resolution.status === "found") {
+          return { files: [target.resolution.file], externalName: specifier };
+        }
+        if (target.resolution.status === "ambiguous" || target.resolution.status === "partial") {
+          return {
+            files: [],
+            externalName: metadata.rawSpecifier ?? specifier,
+            retainExternalEdge: true,
+          };
+        }
+        return { files: [], externalName: metadata.rawSpecifier ?? specifier };
+      }
     }
     const namespaceTargets = await resolveCsharpNamespaceImportPaths(
       metadata.projectRoot,

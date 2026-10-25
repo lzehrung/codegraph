@@ -9,16 +9,23 @@ import {
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import {
+  collectCsharpNamespaceFacts,
   csharpExternAlias,
   csharpImportDirectiveAt,
+  csharpNamespaceAtOffset,
   csharpUsingDirective,
   parseCsharpSyntaxTree,
+  type CsharpNamespaceFacts,
   type CsharpUsingDirective,
 } from "../../util/csharp-tree.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
-import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
+import {
+  resolveCsharpDottedTypeImportPath,
+  resolveCsharpNamespaceImportPaths,
+  resolveCsharpScopedAliasTarget,
+} from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute } from "../../util/resolution/rust.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
@@ -51,6 +58,8 @@ export type LanguageSpecificImportContext = ImportBindingSink & {
   languageExtensions?: LanguageExtensionMap;
   /** Parsed native C# tree reused to resolve using-directive captures. */
   csharpTree?: SyntaxTreeLike | null;
+  /** Namespace facts derived once from the reusable C# tree. */
+  csharpNamespaceFacts?: CsharpNamespaceFacts;
   report?: BuildReport;
   getBindings: () => ImportBinding[];
   replaceBindings: (bindings: ImportBinding[]) => void;
@@ -176,6 +185,60 @@ function csharpTreeForContext(context: LanguageSpecificImportContext): SyntaxTre
   return parsed.tree;
 }
 
+function csharpNamespaceAt(
+  context: LanguageSpecificImportContext,
+  tree: SyntaxTreeLike,
+  offset: number,
+): string | null {
+  let facts = context.csharpNamespaceFacts;
+  if (!facts) {
+    facts = collectCsharpNamespaceFacts(tree, context.source.length);
+    context.csharpNamespaceFacts = facts;
+  }
+  return csharpNamespaceAtOffset(facts, offset);
+}
+
+async function applyCsharpScopedAliasOverride(
+  context: LanguageSpecificImportContext,
+  tree: SyntaxTreeLike,
+  directive: SyntaxNodeLike,
+  parsed: CsharpUsingDirective,
+  typeOnly: boolean,
+  localRange: Range | undefined,
+  importedRange: Range | undefined,
+): Promise<boolean> {
+  if (!parsed.alias) return false;
+  const enclosingNamespace = csharpNamespaceAt(context, tree, directive.startIndex);
+  if (!enclosingNamespace) return false;
+
+  const target = await resolveCsharpScopedAliasTarget(
+    context.projectRoot,
+    parsed.value,
+    context.file,
+    enclosingNamespace,
+    context.languageExtensions,
+    context.report,
+  );
+  if (!target) return false;
+  if (target.kind === "namespace") {
+    context.pushBinding({
+      kind: "namespace",
+      localNS: normalizeCsharpIdentifier(parsed.alias.text),
+      from: parsed.value,
+      ...(target.files.length === 1 ? { resolved: target.files[0]!.replace(/\\/g, "/") } : {}),
+      typeOnly,
+      ...(localRange ? { localRange } : {}),
+    });
+    return true;
+  }
+
+  let resolved: ResolvedImportTarget = { external: target.name };
+  if (target.resolution.status === "found") {
+    resolved = target.resolution.file.replace(/\\/g, "/");
+  }
+  pushCsharpOverride(context, parsed, typeOnly, target.name, resolved, localRange, importedRange);
+  return true;
+}
 function csharpImportNodeForStatement(
   tree: SyntaxTreeLike | null,
   statementStartIndex: number | undefined,
@@ -259,6 +322,19 @@ async function applyCsharpStatementOverride(
       typeOnly,
     });
     return true;
+  }
+
+  if (parsed.alias && tree) {
+    const scopedAliasHandled = await applyCsharpScopedAliasOverride(
+      context,
+      tree,
+      directive,
+      parsed,
+      typeOnly,
+      localRange,
+      importedRange,
+    );
+    if (scopedAliasHandled) return true;
   }
 
   // A target declared as a namespace remains a namespace alias, even when written with alias
