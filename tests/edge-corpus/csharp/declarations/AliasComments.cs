@@ -4,6 +4,6 @@ namespace Edge.Commented
 
     public class AliasComments
     {
-        public X.Point Use() => default; // @goto point=Point @known-gap commented_alias_goto observed=not_found
+        public X.Point Use() => default; // @goto point=Point
     }
 }

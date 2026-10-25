@@ -1,7 +1,7 @@
 namespace Edge.App
 {
     using Edge.Core;
-    using CoreBox = Edge.Core.Box<string>; // @def coreBox=CoreBox @ref box @known-gap alias-target observed=none
+    using CoreBox = Edge.Core.Box<string>; // @def coreBox=CoreBox @ref boxPart
     using static Edge.Core.Helpers; // @ref helpers
     using static Edge.Core.PartialHelpers; // @ref partialHelpers
 
@@ -9,7 +9,7 @@ namespace Edge.App
     {
         public int Run()
         {
-            CoreBox box = new() { Value = "hello" }; // @goto box=CoreBox @known-gap alias-goto observed=not_found
+            CoreBox box = new() { Value = "hello" }; // @goto boxPart=CoreBox
             var first = box.Value; // @ref value @known-gap receiver-property observed=none
             var second = box.Value; // @goto value @known-gap receiver-property-goto observed=not_found
             var indexed = box[0]; // indexer access

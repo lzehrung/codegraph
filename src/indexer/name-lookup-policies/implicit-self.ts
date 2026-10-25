@@ -92,8 +92,9 @@ export const swiftLookupPolicy: NameLookupPolicy = {
  * file's `using P;` across every directory that declares `P`.
  */
 function csharpQualifiedThroughUsing({ use, lookupName }: NameLookupState): GoToResult | null {
-  if (!lookupName.includes(".")) return null;
-  const hit = resolveCsharpQualifiedName(use.index, use.mod, lookupName, use.node.startIndex);
+  const qualifiedName = csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports);
+  if (!qualifiedName.includes(".")) return null;
+  const hit = resolveCsharpQualifiedName(use.index, use.mod, qualifiedName, use.node.startIndex);
   return hit?.kind === "resolved"
     ? okGoToResult(use.index, hit.def, { resolution: "import", confidence: "high" })
     : null;

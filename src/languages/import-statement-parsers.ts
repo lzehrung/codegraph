@@ -1,6 +1,5 @@
 import path from "node:path";
 import {
-  CSHARP_IDENTIFIER_SOURCE,
   JAVA_IDENTIFIER_SOURCE,
   KOTLIN_IDENTIFIER_SOURCE,
   PHP_IDENTIFIER_SOURCE,
@@ -513,12 +512,6 @@ function flattenRustUseTree(prefix: readonly string[], item: string): ParsedRust
   ];
 }
 
-export type ParsedCsharpUsingDirective = {
-  from: string;
-  alias?: string;
-  isStatic: boolean;
-};
-
 export type ParsedPhpImportStatement =
   | {
       kind: "include";
@@ -835,19 +828,6 @@ const JAVA_IMPORT_PATTERN = new RegExp(
   "u",
 );
 
-const CSHARP_DOTTED_NAME_SOURCE = String.raw`${CSHARP_IDENTIFIER_SOURCE}(?:\.${CSHARP_IDENTIFIER_SOURCE})*`;
-const CSHARP_USING_ALIAS_PATTERN = new RegExp(
-  String.raw`^(?:global\s+)?using\s+(${CSHARP_IDENTIFIER_SOURCE})\s*=\s*(${CSHARP_DOTTED_NAME_SOURCE})\s*;?$`,
-  "u",
-);
-const CSHARP_USING_STATIC_PATTERN = new RegExp(
-  String.raw`^(?:global\s+)?using\s+static\s+(${CSHARP_DOTTED_NAME_SOURCE})\s*;?$`,
-  "u",
-);
-const CSHARP_USING_PLAIN_PATTERN = new RegExp(
-  String.raw`^(?:global\s+)?using\s+(${CSHARP_DOTTED_NAME_SOURCE})\s*;?$`,
-  "u",
-);
 export type ParsedJavaImportStatement =
   | {
       kind: "named";
@@ -882,34 +862,6 @@ export function parseJavaImportStatement(stmtText: string): ParsedJavaImportStat
     from: isStatic ? parts.slice(0, -1).join(".") : rawSpec,
     imported,
     isStatic,
-  };
-}
-
-export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDirective | null {
-  const trimmed = stmtText.trim();
-
-  const aliasMatch = trimmed.match(CSHARP_USING_ALIAS_PATTERN);
-  if (aliasMatch?.[1] && aliasMatch[2]) {
-    return {
-      from: aliasMatch[2],
-      alias: aliasMatch[1],
-      isStatic: false,
-    };
-  }
-
-  const staticMatch = trimmed.match(CSHARP_USING_STATIC_PATTERN);
-  if (staticMatch?.[1]) {
-    return {
-      from: staticMatch[1],
-      isStatic: true,
-    };
-  }
-
-  const plainMatch = trimmed.match(CSHARP_USING_PLAIN_PATTERN);
-  if (!plainMatch?.[1]) return null;
-  return {
-    from: plainMatch[1],
-    isStatic: false,
   };
 }
 

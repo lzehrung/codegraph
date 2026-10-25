@@ -1,8 +1,7 @@
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
 import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../paths.js";
-import { CSHARP_IDENTIFIER_SOURCE, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../identifiers.js";
+import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../identifiers.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
-import { maskTrivia } from "../trivia.js";
 import { selectUniqueCsharpNamespaceTypeFile } from "../../indexer/shared-owner-identity.js";
 import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
 import {
@@ -10,22 +9,7 @@ import {
   getOrCreateProjectSymbolIndex,
   type LanguageProjectSymbolIndex,
 } from "./project-symbols.js";
-
-// A namespace name may be qualified (`namespace A.B { }`) and either block-scoped (closing
-// `{`) or file-scoped (closing `;`). Both forms declare the same namespace for a file, a file
-// may declare several namespaces, and a block-scoped namespace may nest inside another, so
-// every declaration is indexed under its composed name.
-const CSHARP_NAMESPACE_DECLARATION_PATTERN = new RegExp(
-  String.raw`(?<![\w@.])namespace\s+(${CSHARP_IDENTIFIER_SOURCE}(?:\s*\.\s*${CSHARP_IDENTIFIER_SOURCE})*)\s*[;{]`,
-  "gu",
-);
-// Namespace-direct types only. A nested `class Point` inside another type is not `N.Point`.
-// `delegate` is omitted: its return type sits where a type name would, so a naive match
-// would index `void` from `delegate void Point()`.
-const CSHARP_TYPE_DECLARATION_PATTERN = new RegExp(
-  String.raw`(?<![\w@.])(?:class|struct|interface|enum|record)\s+(?:(?:class|struct)\s+)?(${CSHARP_IDENTIFIER_SOURCE})`,
-  "gu",
-);
+import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../csharp-tree.js";
 
 type CsharpNamespaceIndexEntry = {
   namespaces: string[];
@@ -45,105 +29,18 @@ export type CsharpNamespaceTypeResolution =
   | { status: "ambiguous" }
   | { status: "partial" };
 
-type CsharpNamespaceScope = {
-  /** Brace depth when the namespace's own `{` was opened, used to close it on the matching `}`. */
-  openedDepth: number;
-  /** Fully qualified name contributed by this block. */
-  name: string;
-};
-
 const csharpNamespaceFileCache = new Map<string, CsharpNamespaceIndexEntry>();
 const csharpProjectNamespaceIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
 
-/**
- * Blanks C# comments and string literals in place, preserving offsets and line breaks, so a
- * namespace scan cannot read `namespace` out of trivia. Over-masking only risks missing a real
- * declaration, never inventing one. Routed through the shared trivia scanner's C# row, which
- * handles verbatim `@""` doubling, raw `"""` quote runs, and ordinary escaped literals.
- */
-function maskCsharpTrivia(source: string): string {
-  return maskTrivia(source, "csharp");
-}
-
-/**
- * Namespaces a file declares, plus the types declared directly in each one.
- * `@P` and `P` are one namespace, and `namespace Outer { namespace Inner {} }` is
- * `Outer.Inner`, matching compilation-unit identity. Brace depth is tracked on the
- * masked source, so braces inside comments and strings cannot compose a name, and a
- * type nested inside another type is not recorded under the enclosing namespace.
- */
-function collectCsharpNamespaceIndex(source: string): {
-  namespaces: string[];
-  symbolsByNamespace: Map<string, Set<string>>;
-} {
-  const masked = maskCsharpTrivia(source);
-  const namespaces = new Set<string>();
-  const symbolsByNamespace = new Map<string, Set<string>>();
-  const scopes: CsharpNamespaceScope[] = [];
-  let fileScoped: string | null = null;
-  let depth = 0;
-  let cursor = 0;
-
-  type ScanEvent = { index: number; kind: "namespace" | "type"; match: RegExpMatchArray };
-  const events: ScanEvent[] = [];
-  for (const match of masked.matchAll(CSHARP_NAMESPACE_DECLARATION_PATTERN)) {
-    events.push({ index: match.index ?? 0, kind: "namespace", match });
-  }
-  for (const match of masked.matchAll(CSHARP_TYPE_DECLARATION_PATTERN)) {
-    events.push({ index: match.index ?? 0, kind: "type", match });
-  }
-  events.sort((left, right) => left.index - right.index || (left.kind === "namespace" ? -1 : 1));
-
-  const advance = (to: number): void => {
-    for (; cursor < to; cursor += 1) {
-      const ch = masked[cursor];
-      if (ch === "{") {
-        depth += 1;
-      } else if (ch === "}") {
-        depth -= 1;
-        while (scopes.length && scopes[scopes.length - 1]!.openedDepth >= depth) scopes.pop();
-      }
-    }
-  };
-
-  for (const event of events) {
-    advance(event.index);
-    if (event.kind === "namespace") {
-      const namespaceName = event.match[1];
-      if (!namespaceName) continue;
-      const normalized = normalizeCsharpQualifiedName(namespaceName);
-      if (!normalized) continue;
-      const matchEnd = event.index + event.match[0].length;
-      const terminator = masked[matchEnd - 1];
-      cursor = matchEnd;
-      if (terminator !== "{") {
-        // A file-scoped namespace is always top level and does not open a scope.
-        fileScoped = normalized;
-        namespaces.add(normalized);
-        continue;
-      }
-      const enclosing = scopes.length ? scopes[scopes.length - 1]!.name : null;
-      const qualified = enclosing ? `${enclosing}.${normalized}` : normalized;
-      namespaces.add(qualified);
-      scopes.push({ openedDepth: depth, name: qualified });
-      depth += 1;
-      continue;
-    }
-
-    const rawName = event.match[1];
-    if (!rawName) continue;
-    const typeName = normalizeCsharpIdentifier(rawName);
-    if (!typeName) continue;
-    const currentNamespace = scopes.length ? scopes[scopes.length - 1]!.name : fileScoped;
-    if (!currentNamespace) continue;
-    const contentDepth = scopes.length ? scopes[scopes.length - 1]!.openedDepth + 1 : 0;
-    if (depth !== contentDepth) continue;
-    const symbols = symbolsByNamespace.get(currentNamespace) ?? new Set<string>();
-    symbols.add(typeName);
-    symbolsByNamespace.set(currentNamespace, symbols);
-  }
-
-  return { namespaces: Array.from(namespaces), symbolsByNamespace };
+function collectCsharpNamespaceIndex(
+  source: string,
+  filePath: string,
+): { namespaces: string[]; symbolsByNamespace: Map<string, Set<string>> } {
+  const support = supportForFileWithoutHeaderSample(filePath);
+  const tree = support?.id === "csharp" ? parseCsharpSyntaxTree(source, support) : null;
+  if (!tree) return { namespaces: [], symbolsByNamespace: new Map<string, Set<string>>() };
+  const facts = collectCsharpNamespaceFacts(tree, source.length);
+  return { namespaces: facts.namespaces, symbolsByNamespace: facts.symbolsByNamespace };
 }
 
 async function readCsharpNamespaceIndex(filePath: string): Promise<CsharpNamespaceIndexEntry> {
@@ -151,7 +48,7 @@ async function readCsharpNamespaceIndex(filePath: string): Promise<CsharpNamespa
   if (cached) return cached;
 
   const source = await readUtf8WithoutBom(filePath);
-  const collected = collectCsharpNamespaceIndex(source);
+  const collected = collectCsharpNamespaceIndex(source, filePath);
   const entry = { namespaces: collected.namespaces, symbolsByNamespace: collected.symbolsByNamespace };
   csharpNamespaceFileCache.set(filePath, entry);
   return entry;
@@ -199,8 +96,8 @@ function slashPath(filePath: string): string {
 }
 
 /**
- * The scanner finds candidates by C# filename globs; an active extension mapping can assign one of
- * those suffixes to another language, and such a file is never a C# namespace or type target.
+ * Candidate discovery uses C# filename globs. An active extension mapping can assign one of those
+ * suffixes to another language, and such a file is never a C# namespace or type target.
  */
 function isActiveCsharpFile(file: string, languageExtensions: LanguageExtensionMap | undefined): boolean {
   return !languageExtensions || supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "csharp";

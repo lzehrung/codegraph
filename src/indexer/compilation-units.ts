@@ -2,15 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Range } from "../types.js";
-import {
-  CSHARP_IDENTIFIER_SOURCE,
-  GO_IDENTIFIER_SOURCE,
-  JAVA_IDENTIFIER_SOURCE,
-  KOTLIN_IDENTIFIER_SOURCE,
-  normalizeCsharpQualifiedName,
-} from "../util/identifiers.js";
+import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
+import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
 import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
 import type { ProjectIndex } from "./types.js";
 
@@ -124,85 +119,16 @@ export type CsharpNamespaceRegion = {
   end: number;
 };
 
-// A namespace name may be qualified (`namespace A.B { }`) and either block-scoped (closing
-// `{`) or file-scoped (closing `;`). Mirrors the composition rule in
-// `util/resolution/csharp.ts`, extended with spans so per-declaration namespaces can be read.
-const CSHARP_NAMESPACE_DECLARATION_PATTERN = new RegExp(
-  String.raw`(?<![\w@.])namespace\s+(${CSHARP_IDENTIFIER_SOURCE}(?:\s*\.\s*${CSHARP_IDENTIFIER_SOURCE})*)\s*[;{]`,
-  "gu",
-);
-
-function collectCsharpNamespaceRegions(source: string): CsharpNamespaceRegion[] {
-  const masked = maskTrivia(source, "csharp");
-  const regions: CsharpNamespaceRegion[] = [];
-  const scopes: Array<{ openedDepth: number; name: string; region: CsharpNamespaceRegion }> = [];
-  let depth = 0;
-  let cursor = 0;
-  for (const match of masked.matchAll(CSHARP_NAMESPACE_DECLARATION_PATTERN)) {
-    const matchIndex = match.index ?? 0;
-    for (; cursor < matchIndex; cursor += 1) {
-      const ch = masked[cursor];
-      if (ch === "{") {
-        depth += 1;
-      } else if (ch === "}") {
-        depth -= 1;
-        while (scopes.length && scopes[scopes.length - 1]!.openedDepth >= depth) {
-          scopes.pop()!.region.end = cursor;
-        }
-      }
-    }
-    const namespaceName = match[1];
-    if (!namespaceName) continue;
-    // `namespace @P` and `namespace P` declare one namespace; compare normalized segments.
-    const normalized = normalizeCsharpQualifiedName(namespaceName);
-    const terminator = masked[matchIndex + match[0].length - 1];
-    cursor = matchIndex + match[0].length;
-    if (terminator !== "{") {
-      // A file-scoped namespace is always top level and does not open a scope.
-      regions.push({ name: normalized, start: matchIndex, end: masked.length });
-      continue;
-    }
-    const enclosing = scopes.length ? scopes[scopes.length - 1]!.name : null;
-    const qualified = enclosing ? `${enclosing}.${normalized}` : normalized;
-    const region: CsharpNamespaceRegion = { name: qualified, start: matchIndex, end: masked.length };
-    regions.push(region);
-    scopes.push({ openedDepth: depth, name: qualified, region });
-    depth += 1;
+function collectCsharpNamespaceRegions(source: string, filePath: string): CsharpNamespaceRegion[] {
+  const support = supportForFileWithoutHeaderSample(filePath);
+  if (support?.id !== "csharp") return [];
+  const tree = parseCsharpSyntaxTree(source, support);
+  if (!tree) return [];
+  const facts = collectCsharpNamespaceFacts(tree, source.length);
+  if (facts.regions.length && facts.hasGlobalType) {
+    facts.regions.unshift({ name: "", start: 0, end: source.length });
   }
-  for (; cursor < masked.length; cursor += 1) {
-    if (masked[cursor] === "{") {
-      depth += 1;
-    } else if (masked[cursor] === "}") {
-      depth -= 1;
-      while (scopes.length && scopes[scopes.length - 1]!.openedDepth >= depth) {
-        scopes.pop()!.region.end = cursor;
-      }
-    }
-  }
-  while (scopes.length) {
-    scopes.pop()!.region.end = masked.length;
-  }
-  // A block-scoped namespace does not cover the whole file, so a type declared outside every
-  // region (`class Global {}` beside `namespace P { }`) lives in the global namespace. A
-  // whole-file global region keeps that fact; nested named regions still win as innermost.
-  if (regions.length && csharpHasTopLevelTypeOutside(masked, regions)) {
-    regions.unshift({ name: "", start: 0, end: masked.length });
-  }
-  return regions;
-}
-
-const CSHARP_TYPE_KEYWORD_PATTERN = /(?<![\w@])(?:class|struct|interface|enum|record|delegate)(?!\w)/u;
-
-/** True when trivia-masked source outside every namespace region declares a type. */
-function csharpHasTopLevelTypeOutside(masked: string, regions: readonly CsharpNamespaceRegion[]): boolean {
-  let cursor = 0;
-  const outside: string[] = [];
-  for (const region of [...regions].sort((left, right) => left.start - right.start)) {
-    if (region.start > cursor) outside.push(masked.slice(cursor, region.start));
-    cursor = Math.max(cursor, region.end + 1);
-  }
-  if (cursor < masked.length) outside.push(masked.slice(cursor));
-  return outside.some((text) => CSHARP_TYPE_KEYWORD_PATTERN.test(text));
+  return facts.regions;
 }
 
 type PackageDeclaration = { name: string | null; readable: boolean };
@@ -289,7 +215,7 @@ export function getCsharpNamespaceRegions(
   const cached = cache.get(fileKey);
   if (cached !== undefined) return cached;
   const source = unitDeclarationSource(index, filePath, fileKey);
-  const regions = source === null ? null : collectCsharpNamespaceRegions(source);
+  const regions = source === null ? null : collectCsharpNamespaceRegions(source, filePath);
   cache.set(fileKey, regions);
   return regions;
 }

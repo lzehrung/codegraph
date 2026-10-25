@@ -414,9 +414,8 @@ function enclosingImportScope(declarationName: SyntaxNodeLike): SyntaxNodeLike |
 }
 
 /**
- * Rewrites a valid C# `using X = Namespace; X::Target` lookup into the dotted form
- * export resolution already understands. `global::` and ordinary dotted names keep
- * their source spelling; an unknown alias stays `X::Target` instead of a bare name.
+ * Rewrites a valid C# `using X = Namespace;` lookup (`X.Target` or `X::Target`) into the
+ * dotted form export resolution understands. `global::` and unknown aliases keep their source spelling.
  */
 export function csharpAliasQualifiedLookupName(
   node: SyntaxNodeLike,
@@ -427,7 +426,7 @@ export function csharpAliasQualifiedLookupName(
   const raw = csharpLookupName(node, source, fallback);
   if (raw.startsWith("global::")) return raw;
   const chainNode = csharpQualifiedNameNode(node);
-  if (!chainNode || !raw.includes("::")) return raw;
+  if (!chainNode) return raw;
   const names: string[] = [];
   let current: SyntaxNodeLike | null = chainNode;
   let base: SyntaxNodeLike | null = null;

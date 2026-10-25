@@ -1,12 +1,12 @@
 import { type LanguageSupport } from "../languages.js";
 import {
-  parseCsharpUsingDirective,
   parseJavaImportStatement,
   parseKotlinImportStatement,
   parsePhpImportStatement,
   parseRustImportStatements,
 } from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import { collectCsharpImportDirectives, csharpUsingDirective, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
 import { recordNativeExecutionOutcome } from "../native/native-backend-report.js";
 import type { BuildReport } from "../indexer/types.js";
 import { errorMessage } from "../util/errors.js";
@@ -261,6 +261,18 @@ export function collectModuleSpecifiersFromSource(
     return [];
   }
 
+  if (support.id === "csharp") {
+    const tree = opts?.tree ?? parseCsharpSyntaxTree(source, support);
+    if (!tree) return [];
+    for (const directive of collectCsharpImportDirectives(tree)) {
+      const parsed = csharpUsingDirective(directive);
+      if (parsed) {
+        const preserveGenericTarget = parsed.hasGenericTarget && !parsed.alias && !parsed.isStatic && !parsed.isGlobal;
+        out.push({ spec: preserveGenericTarget ? parsed.rawValue : parsed.value, typeOnly: false });
+      }
+    }
+    return normalizeModuleSpecifiers(out);
+  }
   const nativeImportsArray = resolveNativeImportMatches(support, source, opts).matches;
   if (!nativeImportsArray) return [];
   const nativeImportsToProcess = htmlLikeLanguage ? [] : nativeImportsArray;
@@ -322,13 +334,6 @@ export function collectModuleSpecifiersFromSource(
               parsedList.map((parsed) => rustSpecifierForParsedImport(parsed, source, statementStartIndex)),
               rustSeen,
             );
-            continue;
-          }
-        }
-        if (support.id === "csharp") {
-          const parsed = parseCsharpUsingDirective(stmtText);
-          if (parsed) {
-            out.push({ spec: parsed.from, typeOnly: false });
             continue;
           }
         }

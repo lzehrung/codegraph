@@ -3,7 +3,6 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  parseCsharpUsingDirective,
   parseJavaImportStatement,
   parseKotlinImportStatement,
   parsePhpImportStatement,
@@ -144,29 +143,28 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
     });
   });
 
-  it("C#: using alias to a Unicode-named alias", () => {
-    expect(parseCsharpUsingDirective("using créer = Some.Namespace;")).toEqual({
-      from: "Some.Namespace",
-      alias: "créer",
-      isStatic: false,
-    });
-    // A verbatim identifier (`@` prefix) escapes a reserved keyword; `@class` is a legal
-    // C# identifier distinct from the `class` keyword.
-    expect(parseCsharpUsingDirective("using @class = Some.@class;")).toEqual({
-      from: "Some.@class",
-      alias: "@class",
-      isStatic: false,
-    });
-    // ECMA-334 identifier-start-character accepts a letter-number (Nl, e.g. a Roman numeral)
-    // and identifier-part-character accepts a combining mark (Mn) in continuation.
-    expect(parseCsharpUsingDirective("using \u2160Alias = Some.cafe\u0301;")).toEqual({
-      from: "Some.cafe\u0301",
-      alias: "\u2160Alias",
-      isStatic: false,
-    });
-    // A connecting-punctuation character other than `_` (e.g. U+203F UNDERTIE) is a valid
-    // identifier-part-character but not a valid identifier-start-character.
-    expect(parseCsharpUsingDirective("using \u203fname = Some.Namespace;")).toBeNull();
+  it("C#: binds a Unicode namespace alias from its using directive", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-unicode-alias-"));
+    const namespaceFile = path.join(root, "namespace.cs");
+    const mainFile = path.join(root, "main.cs");
+    try {
+      await fsp.writeFile(namespaceFile, "namespace Some.Namespace;\npublic class Widget {}\n", "utf8");
+      await fsp.writeFile(
+        mainFile,
+        "using créer = Some.Namespace;\npublic class Main { public créer.Widget? Value { get; set; } }\n",
+        "utf8",
+      );
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const mainKey = [...index.byFile.keys()].find((file) => file.endsWith("/main.cs"));
+      expect(mainKey).toBeDefined();
+      const mainModule = mainKey ? index.byFile.get(mainKey) : undefined;
+      const alias = mainModule?.imports.find((binding) => binding.kind === "namespace" && binding.localNS === "créer");
+      expect(alias).toMatchObject({ kind: "namespace", localNS: "créer", from: "Some.Namespace" });
+      expect(alias?.resolved).toBe(namespaceFile.replace(/\\/g, "/"));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("JS CommonJS destructuring require(): Unicode property name binding", async () => {

@@ -759,14 +759,19 @@ function csharpNamespaceImportDirectories(index: ProjectIndex): Map<ImportBindin
   const result = new Map<ImportBinding, FileId[]>();
   for (const mod of index.byFile.values()) {
     for (const imp of mod.imports) {
-      if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
-      if (supportForFileWithoutHeaderSample(imp.resolved, index.languageExtensions)?.id !== "csharp") continue;
-      const files = new Map<string, FileId>([
-        [fileIdentityKey(path.posix.dirname(normalizePath(imp.resolved))), imp.resolved],
-      ]);
+      const isNamespaceAlias =
+        imp.kind === "namespace" &&
+        supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id === "csharp";
+      if (!isNamespaceAlias && (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string"))
+        continue;
+      const boundFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
+      if (boundFile && supportForFileWithoutHeaderSample(boundFile, index.languageExtensions)?.id !== "csharp")
+        continue;
+      const files = new Map<string, FileId>();
+      if (boundFile) files.set(fileIdentityKey(path.posix.dirname(normalizePath(boundFile))), boundFile);
       const targets = edgesByImporter.get(fileIdentityKey(mod.file))?.get(normalizeCsharpQualifiedName(imp.from));
       for (const [directoryKey, file] of targets ?? []) if (!files.has(directoryKey)) files.set(directoryKey, file);
-      result.set(imp, [...files.values()]);
+      if (files.size) result.set(imp, [...files.values()]);
     }
   }
   csharpNamespaceImportDirectoryFiles.set(index, result);
@@ -781,7 +786,7 @@ function csharpNamespaceImportDirectories(index: ProjectIndex): Map<ImportBindin
  */
 function resolveCsharpNamespaceImport(
   index: ProjectIndex,
-  imp: Extract<ImportBinding, { kind: "star" }>,
+  imp: ImportBinding,
   boundFile: string,
   lookupName: string,
   opts: ResolveExportOptions | undefined,
@@ -819,6 +824,15 @@ export function resolveCsharpQualifiedName(
   if (separator <= 0) return null;
   const namespaceName = normalizeCsharpQualifiedName(qualifiedName.slice(0, separator)).replace(/^global::/u, "");
   const typeName = qualifiedName.slice(separator + 1);
+  for (const imp of mod.imports) {
+    if (imp.kind !== "namespace") continue;
+    if (normalizeCsharpQualifiedName(imp.from).replace(/^global::/u, "") !== namespaceName) continue;
+    const files = csharpNamespaceImportDirectories(index).get(imp);
+    const boundFile = (typeof imp.resolved === "string" ? imp.resolved : undefined) ?? files?.[0];
+    if (!boundFile) continue;
+    const hit = resolveCsharpNamespaceImport(index, imp, boundFile, qualifiedName, { referenceIndex });
+    if (hit) return "namespace" in hit ? { kind: "namespace", file: hit.namespace } : { kind: "resolved", def: hit };
+  }
   for (const imp of mod.imports) {
     if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
     if (normalizeCsharpQualifiedName(imp.from).replace(/^global::/u, "") !== namespaceName) continue;
