@@ -139,6 +139,8 @@ function pushCsharpOverride(
       localStart === undefined ? parsed.alias.text : context.source.slice(localStart, parsed.alias.endIndex);
     const imported =
       importedStart === undefined ? parsed.leaf.text : context.source.slice(importedStart, parsed.leaf.endIndex);
+    const typeSegments = parsed.csharpTypePath?.segments;
+    const csharpGenericArity = typeSegments?.[typeSegments.length - 1]?.typeArgumentCount;
     context.pushBinding({
       kind: "named",
       local,
@@ -147,6 +149,7 @@ function pushCsharpOverride(
       explicitAlias: true,
       ...(localRange ? { localRange } : {}),
       ...(importedRange ? { importedRange } : {}),
+      ...(csharpGenericArity !== undefined ? { csharpGenericArity } : {}),
       resolved,
       typeOnly,
     });
@@ -221,6 +224,9 @@ async function applyCsharpStatementOverride(
   if (!parsed) return false;
   const csharpTypePath = parsed.csharpTypePath;
   if (csharpTypePath && csharpHasGenericTypeOwner(csharpTypePath)) return true;
+  if (parsed.isStatic && csharpTypePath?.segments.some((segment) => segment.typeArgumentCount !== undefined)) {
+    return true;
+  }
   if (!parsed.alias && !parsed.isStatic && !parsed.isGlobal && csharpTypePath) {
     const target = parsed.rawValue;
     context.pushBinding({ kind: "star", from: target, resolved: { external: target }, typeOnly });
@@ -236,6 +242,7 @@ async function applyCsharpStatementOverride(
       csharpTypePath,
       context.file,
       context.languageExtensions,
+      context.report,
     );
     let resolved: ResolvedImportTarget = { external: parsed.value };
     if (typeMatch.status === "found") resolved = typeMatch.file;
@@ -251,6 +258,7 @@ async function applyCsharpStatementOverride(
       parsed.csharpTypePath ?? parsed.value,
       context.file,
       context.languageExtensions,
+      context.report,
     );
     const qualifiedType = normalizeCsharpQualifiedName(parsed.value).replace(/^global::/u, "");
     if (typeMatch.status === "found" && qualifiedType.includes(".")) {
@@ -327,6 +335,7 @@ async function applyCsharpStatementOverride(
             parsed.value,
             context.file,
             context.languageExtensions,
+            context.report,
           );
           if (typeMatch.status === "found") {
             fromValue = fallbackFrom;
@@ -341,6 +350,7 @@ async function applyCsharpStatementOverride(
             parsed.value,
             context.file,
             context.languageExtensions,
+            context.report,
           );
           if (typeMatch.status === "partial") {
             fromValue = parsed.value;

@@ -14,6 +14,7 @@ import {
 } from "../native/tree-sitter-native.js";
 import { maskJsLikeCommentsAndStrings, maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
+import { csharpGenericTypeArityForName } from "../util/csharp-tree.js";
 import { callableIdentityForDeclaration, propagateCppInternalLinkage } from "./callable-identity.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
@@ -826,6 +827,10 @@ export function collectLocalsAndExportsFromSource(
           }
         : {}),
     };
+    if (support.id === "csharp" && node) {
+      const csharpGenericArity = csharpGenericTypeArityForName(node);
+      if (csharpGenericArity !== undefined) base.csharpGenericArity = csharpGenericArity;
+    }
     if (node && isTypeMemberDeclaration(node)) base.isMember = true;
     const jvmOwner =
       node &&

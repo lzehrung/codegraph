@@ -560,13 +560,15 @@ describe("C# namespace aliases", () => {
   });
   it("resolves generic alias paths from syntax despite comments", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-alias-comments-"));
-    const typeFile = path.join(root, "Box.cs");
+    const nonGenericTypeFile = path.join(root, "Box.cs");
+    const typeFile = path.join(root, "GenericBox.cs");
     const main = path.join(root, "Main.cs");
     try {
+      await writeFile(nonGenericTypeFile, "namespace N;\npublic class Box {}\n", "utf8");
       await writeFile(typeFile, "namespace N;\npublic class Box<T> {}\n", "utf8");
       await writeFile(main, "using B = N /* c */ .Box</* < > */ int>;\nusing C = N.Box<int>;\nclass Use {}\n", "utf8");
 
-      const index = await buildProjectIndexFromFiles(root, [typeFile, main]);
+      const index = await buildProjectIndexFromFiles(root, [nonGenericTypeFile, typeFile, main]);
       const module = index.byFile.get(fileIdentityKey(main));
       const commentedAlias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "B");
       const plainAlias = module?.imports.find((binding) => binding.kind === "named" && binding.local === "C");

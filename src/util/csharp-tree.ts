@@ -15,10 +15,6 @@ const CSHARP_NAME_NODE_TYPES: Record<string, true> = {
   alias_qualified_name: true,
   generic_name: true,
   predefined_type: true,
-  array_type: true,
-  nullable_type: true,
-  pointer_type: true,
-  ref_type: true,
 };
 
 const CSHARP_IMPORT_DIRECTIVE_TYPES: Record<string, true> = {
@@ -109,6 +105,14 @@ export function parseCsharpSyntaxTree(source: string, support: LanguageSupport):
 /** Builds a C# name path from native syntax nodes, preserving generic type identity. */
 export function csharpNamePath(node: SyntaxNodeLike | null): CsharpNamePath | null {
   if (!node) return null;
+  if (
+    node.type === "array_type" ||
+    node.type === "nullable_type" ||
+    node.type === "pointer_type" ||
+    node.type === "ref_type"
+  ) {
+    return null;
+  }
   if (node.type === "identifier" || node.type === "predefined_type") {
     return { value: node.text, leaf: node };
   }
@@ -176,6 +180,28 @@ export function csharpHasGenericTypeOwner(path: CsharpTypeNamePath): boolean {
   return false;
 }
 
+export function csharpGenericTypeArityForName(nameNode: SyntaxNodeLike | null | undefined): number | undefined {
+  if (!nameNode) return undefined;
+  let declaration = nameNode.parent;
+  while (declaration && !CSHARP_TYPE_DECLARATION_TYPES[declaration.type]) declaration = declaration.parent;
+  if (!declaration) return undefined;
+  const declaredName = declaration.childForFieldName("name");
+  if (!declaredName || declaredName.startIndex !== nameNode.startIndex || declaredName.endIndex !== nameNode.endIndex) {
+    return undefined;
+  }
+
+  const typeParameters =
+    declaration.childForFieldName("type_parameters") ??
+    declaration.namedChildren.find((child) => child.type === "type_parameter_list") ??
+    null;
+  let parameterCount = 0;
+  let identifierCount = 0;
+  for (const parameter of typeParameters?.namedChildren ?? []) {
+    if (parameter.type === "type_parameter") parameterCount += 1;
+    else if (parameter.type === "identifier") identifierCount += 1;
+  }
+  return parameterCount || identifierCount;
+}
 export function csharpImportDirectiveAt(
   tree: SyntaxTreeLike | null | undefined,
   startIndex: number,

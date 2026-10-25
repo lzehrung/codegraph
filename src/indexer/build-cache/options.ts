@@ -48,8 +48,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 92 records tree-sitter ERROR/MISSING ranges per file for `parse_error` reference coverage.
  * Epoch 93 stops indexing an annotation-only Python `self.x: T` as an instance attribute declaration.
  * Epoch 94 reads C# using directives and namespace declarations from native syntax nodes.
+ * Epoch 95 preserves generic C# alias arity and leaves unsupported wrapped/static targets unresolved.
  */
-export const CORE_ALGORITHM_EPOCH = 94;
+export const CORE_ALGORITHM_EPOCH = 95;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

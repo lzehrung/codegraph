@@ -288,6 +288,45 @@ describe("C# alias namespace parse reporting", () => {
     }
   });
 });
+describe("C# generic alias parse reporting", () => {
+  it("reports a failed candidate while resolving a generic alias", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-alias-parse-report-"));
+    const main = path.join(root, "Main.cs");
+    const typeFile = path.join(root, "Box.cs");
+    const failedCandidate = path.join(root, "Unparsed.cs");
+    const source = "using A = N.Box<int>;\nclass Main {}\n";
+    const report: BuildReport = { timings: {} };
+    try {
+      await writeFile(main, source, "utf8");
+      await writeFile(typeFile, "namespace N; public class Box<T> {}\n", "utf8");
+      await writeFile(failedCandidate, "// CSHARP_PARSE_FAILURE\nnamespace Other; class Hidden {}\n", "utf8");
+      setNativeTreeParseFailureFor("CSHARP_PARSE_FAILURE", "forced C# generic alias candidate parse failure");
+
+      const bindings = await collectImportsForFile(main, root, { source, sup: CSHARP_SUPPORT, report });
+      expect(bindings.find((binding) => binding.kind === "named" && binding.local === "A")).toMatchObject({
+        kind: "named",
+        local: "A",
+        imported: "Box",
+        from: "N.Box",
+        resolved: { external: "N.Box" },
+      });
+      expect(report.backend?.parser).toMatchObject({
+        total: 1,
+        byLanguage: { csharp: 1 },
+        files: [
+          {
+            file: failedCandidate.replace(/\\/g, "/"),
+            languageId: "csharp",
+            nativeFallbackReason: "queryFailure",
+            nativeError: "forced C# generic alias candidate parse failure",
+          },
+        ],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 describe("C# using-directive syntax lookup", () => {
   it("selects the second of adjacent directives without reusing the first", () => {
     const source = "using A;using B;";

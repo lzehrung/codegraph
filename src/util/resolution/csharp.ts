@@ -181,6 +181,7 @@ export async function resolveCsharpNamespaceTypePath(
   fromFile: string,
   languageExtensions?: LanguageExtensionMap,
   genericArity?: number,
+  report?: BuildReport,
 ): Promise<CsharpNamespaceTypeResolution> {
   const normalizedNamespace = normalizeCsharpQualifiedName(namespaceName);
   const namespaceLookup = normalizedNamespace.startsWith("global::")
@@ -190,7 +191,7 @@ export async function resolveCsharpNamespaceTypePath(
   if (!namespaceLookup || !normalizedType) return { status: "not_found" };
 
   const indexRoot = await resolveNearestManifestRoot(projectRoot, fromFile, CSHARP_PACKAGE_MANIFEST_NAMES);
-  const projectIndexResult = await getCsharpProjectNamespaceIndex(indexRoot);
+  const projectIndexResult = await getCsharpProjectNamespaceIndex(indexRoot, languageExtensions, report);
   if (!projectIndexResult.complete) return { status: "partial" };
   let files = projectIndexResult.index.filesByPackageSymbol.get(namespaceLookup)?.get(normalizedType) ?? [];
   if (genericArity !== undefined) {
@@ -218,6 +219,7 @@ export async function resolveCsharpDottedTypeImportPath(
   spec: string | CsharpTypeNamePath,
   fromFile: string,
   languageExtensions?: LanguageExtensionMap,
+  report?: BuildReport,
 ): Promise<CsharpNamespaceTypeResolution> {
   if (typeof spec === "string") {
     const normalized = normalizeCsharpQualifiedName(spec);
@@ -227,7 +229,15 @@ export async function resolveCsharpDottedTypeImportPath(
     if (parts.length < 2) return { status: "not_found" };
     const typeName = parts[parts.length - 1]!;
     const namespaceName = parts.slice(0, -1).join(".");
-    return await resolveCsharpNamespaceTypePath(projectRoot, namespaceName, typeName, fromFile, languageExtensions);
+    return await resolveCsharpNamespaceTypePath(
+      projectRoot,
+      namespaceName,
+      typeName,
+      fromFile,
+      languageExtensions,
+      undefined,
+      report,
+    );
   }
 
   if (spec.aliasQualifier && normalizeCsharpIdentifier(spec.aliasQualifier) !== "global") {
@@ -254,6 +264,7 @@ export async function resolveCsharpDottedTypeImportPath(
     fromFile,
     languageExtensions,
     typeSegment.typeArgumentCount,
+    report,
   );
 }
 

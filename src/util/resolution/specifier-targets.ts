@@ -188,6 +188,7 @@ async function resolveCsharpOrRubyTargets(
         metadata.csharpTypePath,
         file,
         metadata.languageExtensions,
+        metadata.report,
       );
       if (typeMatch.status === "found") return { files: [typeMatch.file], externalName: specifier };
       if (typeMatch.status === "ambiguous" || typeMatch.status === "partial") {
@@ -215,6 +216,7 @@ async function resolveCsharpOrRubyTargets(
       specifier,
       file,
       metadata.languageExtensions,
+      metadata.report,
     );
     if (typeMatch.status === "found") return { files: [typeMatch.file], externalName: specifier };
     if (typeMatch.status === "ambiguous" || typeMatch.status === "partial") {

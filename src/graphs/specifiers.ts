@@ -289,6 +289,9 @@ export function collectModuleSpecifiersFromSource(
       if (!parsed) continue;
       const csharpTypePath = parsed.csharpTypePath;
       if (csharpTypePath && csharpHasGenericTypeOwner(csharpTypePath)) continue;
+      if (parsed.isStatic && csharpTypePath?.segments.some((segment) => segment.typeArgumentCount !== undefined)) {
+        continue;
+      }
       out.push({
         spec: csharpTypePath ? parsed.rawValue : parsed.value,
         ...(csharpTypePath ? { csharpTypePath } : {}),
