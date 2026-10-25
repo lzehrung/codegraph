@@ -26,6 +26,7 @@ import {
   csharpImportDirectiveAt,
   parseCsharpSyntaxTree,
 } from "../src/util/csharp-tree.js";
+import * as csharpTree from "../src/util/csharp-tree.js";
 
 type CsharpTreeOutcome = { tree: SyntaxTreeLike | null; fallbackReason?: string; error?: string };
 
@@ -257,7 +258,7 @@ describe("C# project-build import tree reuse", () => {
 });
 describe("C# import tree reuse", () => {
   it("does not reparse a caller-supplied tree", async () => {
-    const root = "E:/git repos/codegraph-wt-csharp-using";
+    const root = process.cwd();
     const file = path.join(root, "src", "CsharpTreeReuse.cs");
     const source = "class Main {}\n";
     const tree = treeForSource(source);
@@ -533,5 +534,50 @@ describe("C# using-directive syntax lookup", () => {
 
     expect(collectCsharpImportDirectives(tree)).toHaveLength(children.length);
     expect(namedChildrenReads).toBe(1);
+  });
+});
+describe("C# alias shadowing facts", () => {
+  it("collects a tree's namespace facts once and still decides from the current index", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-facts-"));
+    const real = path.join(root, "Real.cs");
+    const main = path.join(root, "Main.cs");
+    const mainLines = [
+      "using X = Real;",
+      "namespace Local {",
+      "  class Use { X.Target a; X.Target b; X.Target c; }",
+      "}",
+    ];
+    const options = { useNativeWorkers: false, keepParsed: true };
+    const collectFacts = vi.spyOn(csharpTree, "collectCsharpNamespaceFacts");
+    const targets = async (index: ProjectIndex): Promise<string[]> => {
+      const found: string[] = [];
+      for (const match of mainLines[2]!.matchAll(/Target/gu)) {
+        const result = await goToDefinition(index, { file: main, line: 3, column: match.index + 1 });
+        found.push(result.status === "ok" ? path.basename(result.definition.file) : result.status);
+      }
+      return found;
+    };
+    try {
+      await writeFile(real, "namespace Real; public class Target {}\n", "utf8");
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [real, main], options);
+      expect(await targets(index)).toEqual(["Real.cs", "Real.cs", "Real.cs"]);
+
+      // The index's own caches are warm, so only the per-use shadowing check could collect facts again.
+      collectFacts.mockClear();
+      expect(await targets(index)).toEqual(["Real.cs", "Real.cs", "Real.cs"]);
+      expect(collectFacts.mock.calls.length).toBe(0);
+
+      // The facts depend on the tree alone: an index that declares `Local.X` shares the tree and still sees it.
+      const shadow = path.join(root, "Shadow.cs");
+      await writeFile(shadow, "namespace Local.X; public class Other {}\n", "utf8");
+      const shadowed = await buildProjectIndexFromFiles(root, [real, main, shadow], options);
+      shadowed.parsed = index.parsed;
+      expect(await targets(shadowed)).toEqual(["not_found", "not_found", "not_found"]);
+      expect(await targets(index)).toEqual(["Real.cs", "Real.cs", "Real.cs"]);
+    } finally {
+      collectFacts.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

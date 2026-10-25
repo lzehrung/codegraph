@@ -9,23 +9,16 @@ import {
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import {
-  collectCsharpNamespaceFacts,
   csharpExternAlias,
   csharpImportDirectiveAt,
-  csharpNamespaceAtOffset,
   csharpUsingDirective,
   parseCsharpSyntaxTree,
-  type CsharpNamespaceFacts,
   type CsharpUsingDirective,
 } from "../../util/csharp-tree.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
-import {
-  resolveCsharpDottedTypeImportPath,
-  resolveCsharpNamespaceImportPaths,
-  hasCsharpEnclosingNamespaceFirstSegmentConflict,
-} from "../../util/resolution/csharp.js";
+import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute } from "../../util/resolution/rust.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
@@ -59,8 +52,6 @@ export type LanguageSpecificImportContext = ImportBindingSink & {
   languageExtensions?: LanguageExtensionMap;
   /** Parsed native C# tree reused to resolve using-directive captures. */
   csharpTree?: SyntaxTreeLike | null;
-  /** Namespace facts derived once from the reusable C# tree. */
-  csharpNamespaceFacts?: CsharpNamespaceFacts;
   parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
   report?: BuildReport;
   getBindings: () => ImportBinding[];
@@ -201,42 +192,6 @@ function csharpTreeForContext(context: LanguageSpecificImportContext): SyntaxTre
   return parsed.tree;
 }
 
-function csharpNamespaceFactsFor(context: LanguageSpecificImportContext, tree: SyntaxTreeLike): CsharpNamespaceFacts {
-  context.csharpNamespaceFacts ??= collectCsharpNamespaceFacts(tree, context.source.length);
-  return context.csharpNamespaceFacts;
-}
-
-async function applyCsharpEnclosingNamespaceConflictOverride(
-  context: LanguageSpecificImportContext,
-  tree: SyntaxTreeLike,
-  directive: SyntaxNodeLike,
-  parsed: CsharpUsingDirective,
-  typeOnly: boolean,
-  localRange: Range | undefined,
-  importedRange: Range | undefined,
-): Promise<boolean> {
-  if (parsed.isGlobal) return false;
-  const enclosingNamespace = csharpNamespaceAtOffset(csharpNamespaceFactsFor(context, tree), directive.startIndex);
-  if (!enclosingNamespace) return false;
-  const conflict = await hasCsharpEnclosingNamespaceFirstSegmentConflict(
-    context.projectRoot,
-    parsed.value,
-    context.file,
-    enclosingNamespace,
-    context.languageExtensions,
-    context.report,
-    context.parsedFiles,
-  );
-  if (!conflict) return false;
-
-  const unresolved: ResolvedImportTarget = { external: parsed.value };
-  if (parsed.alias) {
-    pushCsharpOverride(context, parsed, typeOnly, parsed.value, unresolved, localRange, importedRange);
-  } else {
-    context.pushBinding({ kind: "star", from: parsed.rawValue, resolved: unresolved, typeOnly });
-  }
-  return true;
-}
 function csharpImportNodeForStatement(
   tree: SyntaxTreeLike | null,
   statementStartIndex: number | undefined,
@@ -318,20 +273,6 @@ async function applyCsharpStatementOverride(
   const localRange = parsed.alias && lineStarts ? csharpNodeRange(parsed.alias, context.source, lineStarts) : undefined;
   const importedRange =
     parsed.alias && lineStarts ? csharpNodeRange(parsed.leaf, context.source, lineStarts) : undefined;
-  if (
-    tree &&
-    (await applyCsharpEnclosingNamespaceConflictOverride(
-      context,
-      tree,
-      directive,
-      parsed,
-      typeOnly,
-      localRange,
-      importedRange,
-    ))
-  ) {
-    return true;
-  }
 
   // Static imports bind to a declaring type only when exactly one file owns that type. A global
   // static using applies to the whole project, which module-local bindings cannot express.

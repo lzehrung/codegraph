@@ -107,12 +107,6 @@ describe("import binding regressions", () => {
     const cases = [
       { name: "generic alias", target: "N.Box<int>", box: "namespace N; public class Box<T> {}\n" },
       { name: "array alias", target: "N.Box[]", box: "namespace N; public class Box {}\n" },
-      {
-        name: "conflict-unresolved alias",
-        target: "N.Box",
-        box: "namespace N; public class Box {}\n",
-        conflict: true,
-      },
     ];
     const outcomes: { name: string; hasUnresolvedAlias: boolean; useStatus: string }[] = [];
     for (const testCase of cases) {
@@ -120,21 +114,12 @@ describe("import binding regressions", () => {
       const main = path.join(root, "Main.cs");
       const box = path.join(root, "Box.cs");
       const decoy = path.join(root, "Other.cs");
-      const aliasLine = "using B = " + testCase.target + ";";
-      const mainLines = testCase.conflict
-        ? ["namespace Local {", "  " + aliasLine, "  using Other;", "  class Use { B value; }", "}"]
-        : [aliasLine, "using Other;", "class Use { B value; }"];
+      const mainLines = ["using B = " + testCase.target + ";", "using Other;", "class Use { B value; }"];
       try {
         await writeFile(main, mainLines.join("\n") + "\n", "utf8");
         await writeFile(box, testCase.box, "utf8");
         await writeFile(decoy, "namespace Other; public class B {}\n", "utf8");
-        const files = [main, box, decoy];
-        if (testCase.conflict) {
-          const localNamespace = path.join(root, "LocalNamespace.cs");
-          await writeFile(localNamespace, "namespace Local.N; public class Marker {}\n", "utf8");
-          files.push(localNamespace);
-        }
-        const index = await buildProjectIndexFromFiles(root, files);
+        const index = await buildProjectIndexFromFiles(root, [main, box, decoy]);
         const importer = index.byFile.get(fileIdentityKey(main));
         const hasUnresolvedAlias =
           importer?.imports.some(
@@ -146,11 +131,10 @@ describe("import binding regressions", () => {
               typeof entry.resolved !== "string",
           ) ?? false;
 
-        const useLine = mainLines.findIndex((line) => line.includes("B value")) + 1;
         const result = await goToDefinition(index, {
           file: main,
-          line: useLine,
-          column: mainLines[useLine - 1]!.indexOf("B value") + 1,
+          line: 3,
+          column: mainLines[2]!.indexOf("B value") + 1,
         });
         outcomes.push({ name: testCase.name, hasUnresolvedAlias, useStatus: result.status });
       } finally {

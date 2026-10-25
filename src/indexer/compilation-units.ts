@@ -7,9 +7,9 @@ import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE 
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
 import { recordParserBackendDegradation } from "../native/native-backend-report.js";
-import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
+import { CSHARP_FILE_LOCAL_PREFIX, collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
 import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
-import type { BuildReport, ProjectIndex } from "./types.js";
+import type { BuildReport, ModuleIndex, ProjectIndex } from "./types.js";
 
 /**
  * Proven same-compilation-unit peers for implicit bare-name visibility and shared-owner lookup
@@ -343,6 +343,7 @@ function aggregateCsharpDeclaredNames(index: ProjectIndex): ReadonlySet<string> 
     if (supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id !== "csharp") continue;
     if (!moduleEntry.csharpDeclaredNames) return null;
     for (const name of moduleEntry.csharpDeclaredNames) {
+      if (name.startsWith(CSHARP_FILE_LOCAL_PREFIX)) continue;
       // Declaring `A.B.T` also makes `A` and `A.B` exist, so each prefix is a declared name too.
       for (let dot = name.indexOf("."); dot >= 0; dot = name.indexOf(".", dot + 1)) names.add(name.slice(0, dot));
       names.add(name);
@@ -353,12 +354,18 @@ function aggregateCsharpDeclaredNames(index: ProjectIndex): ReadonlySet<string> 
 
 /**
  * Whether `namespaceName` or one of its enclosing namespaces (the global namespace excluded) has a
- * namespace or type member called `name` in any indexed C# file. Each module records only its own
- * declarations; they are combined here, once per index, so an added, changed, or deleted file
- * changes the answer without touching any other file's cached module. Unknown when an indexed C#
- * file has no recorded declarations, which answers `true` because that file could declare it.
+ * namespace or type member called `name` in any indexed C# file, or a `file` type of that name in
+ * `mod`'s own file, the only one that can see it. Each module records only its own declarations;
+ * they are combined here, once per index, so an added, changed, or deleted file changes the answer
+ * without touching any other file's cached module. Unknown when an indexed C# file has no recorded
+ * declarations, which answers `true` because that file could declare it.
  */
-export function csharpNamespaceChainDeclares(index: ProjectIndex, namespaceName: string, name: string): boolean {
+export function csharpNamespaceChainDeclares(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  namespaceName: string,
+  name: string,
+): boolean {
   let cached = csharpDeclaredNameCaches.get(index);
   if (!cached || cached.source !== index.byFile || cached.size !== index.byFile.size) {
     cached = { source: index.byFile, size: index.byFile.size, names: aggregateCsharpDeclaredNames(index) };
@@ -367,7 +374,8 @@ export function csharpNamespaceChainDeclares(index: ProjectIndex, namespaceName:
   const { names } = cached;
   if (!names) return true;
   for (let end = namespaceName.length; end > 0; end = namespaceName.lastIndexOf(".", end - 1)) {
-    if (names.has(`${namespaceName.slice(0, end)}.${name}`)) return true;
+    const declared = `${namespaceName.slice(0, end)}.${name}`;
+    if (names.has(declared) || mod.csharpDeclaredNames?.includes(CSHARP_FILE_LOCAL_PREFIX + declared)) return true;
   }
   return false;
 }

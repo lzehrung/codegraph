@@ -6,6 +6,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import {
+  type CsharpNamespaceFacts,
   collectCsharpNamespaceFacts,
   csharpNamespaceAtOffset,
   csharpSkipConditionalWrappers,
@@ -447,6 +448,9 @@ export function csharpChainQualifier(
   return { qualifier: chain.base, names: chain.names };
 }
 
+/** Namespace facts per C# tree, keyed by its root node: they come from syntax alone. The index is read per use. */
+const csharpNamespaceFactsByRoot = new WeakMap<SyntaxNodeLike, CsharpNamespaceFacts>();
+
 /**
  * Whether an enclosing namespace shadows the compilation-unit alias that `qualifier` (the `X` of
  * `X.Type`) names. C# finds a namespace or type `X` in an enclosing namespace before the alias, so
@@ -469,9 +473,13 @@ export function csharpAliasShadowedAt(
   let root = qualifier;
   while (root.parent) root = root.parent;
   if (csharpSkipConditionalWrappers(importScopeAt(root, aliasStart))?.type !== "compilation_unit") return false;
-  const facts = collectCsharpNamespaceFacts({ rootNode: root }, source.length);
+  let facts = csharpNamespaceFactsByRoot.get(root);
+  if (!facts) {
+    facts = collectCsharpNamespaceFacts({ rootNode: root }, source.length);
+    csharpNamespaceFactsByRoot.set(root, facts);
+  }
   const enclosing = csharpNamespaceAtOffset(facts, qualifier.startIndex);
-  return !!enclosing && csharpNamespaceChainDeclares(index, enclosing, CSHARP_SUPPORT.normalizeIdentifier(name));
+  return !!enclosing && csharpNamespaceChainDeclares(index, mod, enclosing, CSHARP_SUPPORT.normalizeIdentifier(name));
 }
 
 /**

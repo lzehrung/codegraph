@@ -8,7 +8,6 @@ import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../util/resolution-candidates.
 import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
 import type { BuildReport } from "../indexer/types.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
-import { hasCsharpEnclosingNamespaceFirstSegmentConflict } from "../util/resolution/csharp.js";
 
 type ResolvedSpecifierEdge = {
   to: EdgeTo;
@@ -64,22 +63,6 @@ export async function resolveModuleSpecifierEdges(
     resolutionExtensions = STYLESHEET_RESOLUTION_EXTENSIONS;
   } else if (graphOnlyLanguage) {
     resolutionExtensions = getGraphOnlyResolutionExtensions(context.support.id, entry.resolutionKind ?? "document");
-  }
-
-  if (
-    context.support.id === "csharp" &&
-    entry.csharpNamespace &&
-    (await hasCsharpEnclosingNamespaceFirstSegmentConflict(
-      context.projectRoot,
-      entry.spec,
-      context.file,
-      entry.csharpNamespace,
-      context.languageExtensions,
-      context.report,
-      context.parsedFiles,
-    ))
-  ) {
-    return null;
   }
 
   const targets = await resolveSpecifierTargets(context.file, entry.spec, context.support.id, {

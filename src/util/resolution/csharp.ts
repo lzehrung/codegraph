@@ -262,35 +262,6 @@ export async function resolveCsharpDottedTypeImportPath(
     parsedFiles,
   );
 }
-export async function hasCsharpEnclosingNamespaceFirstSegmentConflict(
-  projectRoot: string,
-  spec: string,
-  fromFile: string,
-  enclosingNamespace: string,
-  languageExtensions?: LanguageExtensionMap,
-  report?: BuildReport,
-  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
-): Promise<boolean> {
-  const normalized = normalizeCsharpQualifiedName(spec);
-  if (!normalized || !enclosingNamespace || normalized.startsWith("global::") || normalized.includes("::"))
-    return false;
-  const firstSegment = normalizeCsharpIdentifier((normalized.split(".")[0] ?? "").split("<")[0] ?? "");
-  const enclosingParts = normalizeCsharpQualifiedName(enclosingNamespace).split(".").filter(Boolean);
-  if (!firstSegment || !enclosingParts.length) return false;
-
-  const indexRoot = await resolveNearestManifestRoot(projectRoot, fromFile, CSHARP_PACKAGE_MANIFEST_NAMES);
-  const projectIndex = await getCsharpProjectNamespaceIndex(indexRoot, languageExtensions, report, parsedFiles);
-  if (!projectIndex.complete) return true;
-  for (let depth = enclosingParts.length; depth > 0; depth -= 1) {
-    const enclosing = enclosingParts.slice(0, depth).join(".");
-    const candidate = enclosing + "." + firstSegment;
-    if (projectIndex.index.filesByPackageSymbol.get(enclosing)?.has(firstSegment)) return true;
-    for (const namespaceName of projectIndex.index.filesByPackage.keys()) {
-      if (namespaceName === candidate || namespaceName.startsWith(candidate + ".")) return true;
-    }
-  }
-  return false;
-}
 
 export function clearCsharpResolutionCaches(): void {
   csharpNamespaceFileCache.clear();

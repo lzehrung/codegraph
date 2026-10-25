@@ -105,9 +105,10 @@ export type ModuleIndex = {
   declaredContainers?: string[];
   /**
    * C# only: the namespaces this file opens and the types it declares directly in one, as dotted
-   * names (`Outer.Inner`, `Outer.Inner.Type`), read from its own syntax tree. A lookup that depends
-   * on other files' declarations aggregates these over the index when it runs, so a cached module
-   * never holds another file's declarations. Absent when the file's tree was unavailable.
+   * names (`Outer.Inner`, `Outer.Inner.Type`), read from its own syntax tree. A C# 11 `file` type
+   * carries the prefix `file ` because only this file can see it. A lookup that depends on other
+   * files' declarations aggregates these over the index when it runs, so a cached module never
+   * holds another file's declarations. Absent when the file's tree was unavailable.
    */
   csharpDeclaredNames?: string[];
   /** Outermost Tree-sitter ERROR/MISSING ranges. */

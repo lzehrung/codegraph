@@ -35,6 +35,9 @@ const CSHARP_PREPROCESSOR_WRAPPER_TYPES: Record<string, true> = {
   preproc_else: true,
 };
 
+/** Marks a declared type name only its own file can see (a C# 11 `file` type); other files' lookups skip it. */
+export const CSHARP_FILE_LOCAL_PREFIX = "file ";
+
 export type CsharpNamePath = {
   value: string;
   leaf: SyntaxNodeLike;
@@ -57,6 +60,8 @@ export type CsharpNamespaceFacts = {
   regions: CsharpNamespaceSpan[];
   namespaces: string[];
   symbolsByNamespace: Map<string, Set<string>>;
+  /** Types declared with the C# 11 `file` modifier, as `Namespace.Type`. */
+  fileLocalTypes: Set<string>;
   hasGlobalType: boolean;
 };
 export type CsharpSyntaxTreeResult = {
@@ -201,6 +206,7 @@ export function collectCsharpNamespaceFacts(
   const regions: CsharpNamespaceSpan[] = [];
   const namespaces = new Set<string>();
   const symbolsByNamespace = new Map<string, Set<string>>();
+  const fileLocalTypes = new Set<string>();
   let hasGlobalType = false;
 
   const qualifiedNamespace = (enclosing: string | null, node: SyntaxNodeLike): string | null => {
@@ -225,6 +231,9 @@ export function collectCsharpNamespaceFacts(
       symbolsByNamespace.set(namespaceName, symbols);
     }
     symbols.add(name);
+    if (node.namedChildren.some((child) => child.type === "modifier" && child.text === "file")) {
+      fileLocalTypes.add(`${namespaceName}.${name}`);
+    }
   };
 
   const visitNamespaceMembers = (members: readonly SyntaxNodeLike[], namespaceName: string): void => {
@@ -279,20 +288,25 @@ export function collectCsharpNamespaceFacts(
     regions,
     namespaces: Array.from(namespaces),
     symbolsByNamespace,
+    fileLocalTypes,
     hasGlobalType,
   };
 }
 
 /**
  * The dotted names this file's own tree declares for other files' lookup: each namespace it opens
- * (`Outer.Inner`) and each type it declares directly in one (`Outer.Inner.Type`). A cached module
- * keeps them because they depend on this file alone.
+ * (`Outer.Inner`) and each type it declares directly in one (`Outer.Inner.Type`), a `file` type
+ * under {@link CSHARP_FILE_LOCAL_PREFIX}. A cached module keeps them because they depend on this
+ * file alone.
  */
 export function collectCsharpDeclaredNames(tree: SyntaxTreeLike): string[] {
   const facts = collectCsharpNamespaceFacts(tree, tree.rootNode.endIndex);
   const names = [...facts.namespaces];
   for (const [namespaceName, types] of facts.symbolsByNamespace) {
-    for (const type of types) names.push(`${namespaceName}.${type}`);
+    for (const type of types) {
+      const name = `${namespaceName}.${type}`;
+      names.push(facts.fileLocalTypes.has(name) ? CSHARP_FILE_LOCAL_PREFIX + name : name);
+    }
   }
   return names;
 }
