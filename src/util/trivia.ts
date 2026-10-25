@@ -59,9 +59,8 @@ export function buildTriviaMask(source: string, languageId: string, options?: Tr
 
 /** Blanks comments and string-literal bodies in place: every masked unit becomes a space, `\r`
  * and `\n` are preserved, and the output length always equals the input length. String
- * delimiters (quotes, prefixes, hash runs, heredoc introducers and terminators, Zig `\\`
- * line prefixes) stay visible so consumers can match `from "..."`-shaped regexes over the
- * masked text; only the literal body is blanked. */
+ * delimiters (quotes, prefixes, hash runs, heredoc introducers, and terminators) stay visible so consumers can match
+ * `from "..."`-shaped regexes over the masked text; only the literal body is blanked. */
 export function maskTrivia(source: string, languageId: string, options?: TriviaMaskOptions): string {
   const mask = buildMarkedMask(source, languageId, {
     maskStrings: options?.maskStrings ?? true,
@@ -307,7 +306,6 @@ function rowStarterCodes(row: TriviaRow): Uint8Array {
     add("u");
     add("U");
   }
-  if (row.zigMultiline) add("\\");
   starterCache.set(row, starters);
   return starters;
 }
@@ -369,9 +367,6 @@ function nextTriviaConstruct(source: string, row: TriviaRow, index: number): Tri
   if (row.percentLiterals) {
     const percentConstruct = percentLiteralConstructAt(source, index);
     if (percentConstruct !== null) return percentConstruct;
-  }
-  if (row.zigMultiline && source.startsWith("\\\\", index)) {
-    return zigMultilineConstruct(source, index);
   }
   return null;
 }
@@ -833,39 +828,6 @@ function percentLiteralConstructAt(source: string, index: number): TriviaConstru
     end: source.length,
     renderSpans: bodyStart < source.length ? [[bodyStart, source.length]] : [],
     maskSpans: [[index, source.length]],
-    delimitersAreTrivia: false,
-  };
-}
-
-function zigMultilineConstruct(source: string, start: number): TriviaConstruct {
-  const renderSpans: TriviaSpan[] = [];
-  let cursor = start;
-  let end = source.length;
-  while (cursor < source.length) {
-    let lineEnd = cursor;
-    while (lineEnd < source.length && source[lineEnd] !== "\n") lineEnd += 1;
-    // The `\\` line prefix is a delimiter and stays visible; the rest of the line is body.
-    if (cursor + 2 < lineEnd) renderSpans.push([cursor + 2, lineEnd]);
-    if (lineEnd >= source.length) {
-      end = source.length;
-      break;
-    }
-    let probe = lineEnd + 1;
-    while (probe < source.length && (source[probe] === " " || source[probe] === "\t" || source[probe] === "\r")) {
-      probe += 1;
-    }
-    if (source[probe] === "\\" && source[probe + 1] === "\\") {
-      cursor = probe;
-      continue;
-    }
-    end = lineEnd;
-    break;
-  }
-  return {
-    start,
-    end,
-    renderSpans,
-    maskSpans: [[start, end]],
     delimitersAreTrivia: false,
   };
 }
