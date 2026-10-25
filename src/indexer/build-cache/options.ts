@@ -49,8 +49,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 93 stops indexing an annotation-only Python `self.x: T` as an instance attribute declaration.
  * Epoch 94 reads C# using directives and namespace declarations from native syntax nodes.
  * Epoch 95 preserves generic C# alias arity and leaves unsupported wrapped/static targets unresolved.
+ * Epoch 96 records the namespaces where a C# compilation-unit alias is shadowed by an enclosing namespace member.
  */
-export const CORE_ALGORITHM_EPOCH = 95;
+export const CORE_ALGORITHM_EPOCH = 96;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

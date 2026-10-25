@@ -11,11 +11,14 @@ import {
 } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import { sliceText } from "../../util/ast.js";
 import {
+  CSHARP_SHADOWED_ALIAS_REASON,
   csharpAliasQualifiedLookupName,
+  csharpAliasShadowedAt,
+  csharpChainQualifier,
   implicitSelfCallee,
   isDirectKeywordMemberDeclaration,
 } from "../navigation-goto.js";
-import { csharpLookupName, definitionForBinding } from "../navigation-local.js";
+import { csharpLookupName, csharpQualifiedNameNode, definitionForBinding } from "../navigation-local.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName } from "../navigation-resolve.js";
@@ -105,6 +108,15 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   fromClosestBinding: ownOverloadDeclaration,
   crossModuleName: ({ use, lookupName }) =>
     csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports),
+  // A dotted name led by a compilation-unit alias that an enclosing namespace shadows is unproven.
+  beforeCrossModule({ use }) {
+    const chainNode = csharpQualifiedNameNode(use.node);
+    const lead = chainNode && csharpChainQualifier(chainNode, use.parsed.source);
+    return lead && csharpAliasShadowedAt(use.mod.imports, lead.qualifier, use.parsed.source)
+      ? { status: "not_found", reason: CSHARP_SHADOWED_ALIAS_REASON }
+      : undefined;
+  },
+  shadowsModuleAlias: (use) => csharpAliasShadowedAt(use.mod.imports, use.node, use.parsed.source),
   // A static member function reaches only static members of its type.
   onLocal(state, local) {
     if (!bindsTypeMethod(state) || !isImplicitSelfCall(state)) return undefined;

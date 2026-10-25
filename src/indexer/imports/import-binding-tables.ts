@@ -199,17 +199,37 @@ function csharpTreeForContext(context: LanguageSpecificImportContext): SyntaxTre
   return parsed.tree;
 }
 
-function csharpNamespaceAt(
+function csharpNamespaceFactsFor(context: LanguageSpecificImportContext, tree: SyntaxTreeLike): CsharpNamespaceFacts {
+  context.csharpNamespaceFacts ??= collectCsharpNamespaceFacts(tree, context.source.length);
+  return context.csharpNamespaceFacts;
+}
+
+/**
+ * Spans of this file's namespaces that hide a compilation-unit alias from dotted names. C# looks a
+ * name up in each enclosing namespace before the alias, so a namespace, implicit ancestor, or type
+ * `E.X` hides `X.Type` inside `E`. `X::Type` reaches only aliases and is never hidden.
+ */
+async function csharpAliasShadowedSpans(
   context: LanguageSpecificImportContext,
   tree: SyntaxTreeLike,
-  offset: number,
-): string | null {
-  let facts = context.csharpNamespaceFacts;
-  if (!facts) {
-    facts = collectCsharpNamespaceFacts(tree, context.source.length);
-    context.csharpNamespaceFacts = facts;
+  directive: SyntaxNodeLike,
+  alias: string,
+): Promise<{ start: number; end: number }[]> {
+  if (directive.parent?.type !== "compilation_unit") return [];
+  const spans: { start: number; end: number }[] = [];
+  for (const region of csharpNamespaceFactsFor(context, tree).regions) {
+    const shadowed = await hasCsharpEnclosingNamespaceFirstSegmentConflict(
+      context.projectRoot,
+      alias,
+      context.file,
+      region.name,
+      context.languageExtensions,
+      context.report,
+      context.parsedFiles,
+    );
+    if (shadowed) spans.push({ start: region.start, end: region.end });
   }
-  return csharpNamespaceAtOffset(facts, offset);
+  return spans;
 }
 
 async function applyCsharpEnclosingNamespaceConflictOverride(
@@ -222,7 +242,7 @@ async function applyCsharpEnclosingNamespaceConflictOverride(
   importedRange: Range | undefined,
 ): Promise<boolean> {
   if (parsed.isGlobal) return false;
-  const enclosingNamespace = csharpNamespaceAt(context, tree, directive.startIndex);
+  const enclosingNamespace = csharpNamespaceAtOffset(csharpNamespaceFactsFor(context, tree), directive.startIndex);
   if (!enclosingNamespace) return false;
   const conflict = await hasCsharpEnclosingNamespaceFirstSegmentConflict(
     context.projectRoot,
@@ -380,6 +400,7 @@ async function applyCsharpStatementOverride(
     context.parsedFiles,
   );
   if (parsed.alias && namespaceTargets.length) {
+    const shadowedSpans = tree ? await csharpAliasShadowedSpans(context, tree, directive, parsed.alias.text) : [];
     context.pushBinding({
       kind: "namespace",
       localNS: normalizeCsharpIdentifier(parsed.alias.text),
@@ -387,6 +408,7 @@ async function applyCsharpStatementOverride(
       ...(namespaceTargets.length === 1 ? { resolved: namespaceTargets[0]!.replace(/\\/g, "/") } : {}),
       typeOnly,
       ...(localRange ? { localRange } : {}),
+      ...(shadowedSpans.length ? { shadowedSpans } : {}),
     });
     return true;
   }

@@ -95,6 +95,8 @@ export type NameLookupPolicy = {
   afterCrossModule?(state: NameLookupState, resolved: GoToResult | null): NameResolution | null | undefined;
   /** Whether a file import alias remains visible at this use, after lexical shadowing. */
   moduleAliasIsUnshadowed?(state: NameLookupState): boolean;
+  /** Whether a language rule hides a file import alias at this use (C#: a member of an enclosing namespace). */
+  shadowsModuleAlias?(use: BareNameUse): boolean;
   /** Files a synchronous consumer loads before resolving names in a module of this language. */
   preloadFiles?(index: ProjectIndex, mod: ModuleIndex): Iterable<FileId>;
 };

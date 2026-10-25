@@ -61,6 +61,11 @@ export type ImportBinding =
       explicitAlias?: boolean;
       /** UTF-16 range of the namespace binding token. */
       localRange?: Range;
+      /**
+       * C# compilation-unit alias: UTF-16 spans of this file's namespaces whose enclosing chain
+       * declares a namespace or type named like the alias, which a dotted name (`X.Type`) finds first.
+       */
+      shadowedSpans?: { start: number; end: number }[];
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python" | "php";

@@ -2313,57 +2313,153 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  /**
+   * What each consumer reports for the `Target` and `Run` tokens on `probeLines` of Use.cs: goto
+   * results, the Use.cs lines that reference each declared `Target`, and the detailed-graph edges
+   * from Use.cs members (not the alias import node) into the fixture's other files.
+   */
+  async function aliasUseOutcome(
+    root: string,
+    files: Record<string, string>,
+    useLines: string[],
+    probeLines: number[],
+  ): Promise<{ goto: Record<number, string[]>; references: Record<string, number[]>; edges: string[] }> {
+    const paths = await writeFixtureFiles(root, { ...files, "Use.cs": useLines.join("\n") + "\n" });
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const useFile = paths["Use.cs"]!;
+    const goto: Record<number, string[]> = {};
+    for (const line of probeLines) {
+      goto[line] = [];
+      for (const match of useLines[line - 1]!.matchAll(/Target|Run/gu)) {
+        const result = await goToDefinition(index, { file: useFile, line, column: match.index + 1 });
+        goto[line].push(result.status === "ok" ? path.basename(result.definition.file) : result.status);
+      }
+    }
+    const references: Record<string, number[]> = {};
+    for (const [name, source] of Object.entries(files)) {
+      if (!source.includes("class Target")) continue;
+      const result = await findReferences(index, {
+        file: paths[name]!,
+        line: 1,
+        column: source.indexOf("Target") + 1,
+      });
+      if (result.status !== "ok") throw new Error(`Expected references for ${name}`);
+      references[name] = result.references
+        .filter((reference) => normalizePath(reference.file) === useFile)
+        .map((reference) => reference.range.start.line);
+    }
+    const graph = await buildSymbolGraphDetailed(index);
+    const edges = graph.edges
+      .flatMap((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        const leavesUse = from && to && normalizePath(from.file) === useFile && normalizePath(to.file) !== useFile;
+        return leavesUse && from.kind !== "namespaceImport"
+          ? [`${from.name} ${edge.label} ${path.basename(to.file)}`]
+          : [];
+      })
+      .sort();
+    return { goto, references, edges };
+  }
+
   it("does not expand a namespace alias when an enclosing namespace has the same first segment", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-enclosing-alias-conflict-"));
     try {
-      const useLines = ["using X = Real;", "namespace Local {", "  class Use { X.Target value; }", "}"];
-      const paths = await writeFixtureFiles(root, {
-        "Real.cs": "namespace Real; public class Target {}\n",
-        "LocalTarget.cs": "namespace Local.X; public class Target {}\n",
-        "Use.cs": useLines.join("\n") + "\n",
-      });
-      const index = await buildProjectIndex(root, { cache: "off" });
-      const useLine = useLines.findIndex((line) => line.includes("X.Target")) + 1;
-      const useColumn = useLines[useLine - 1]!.lastIndexOf("Target") + 1;
-      const goto = await goToDefinition(index, { file: paths["Use.cs"]!, line: useLine, column: useColumn });
-      const localReferences = await findReferences(index, {
-        file: paths["LocalTarget.cs"]!,
-        line: 1,
-        column: "namespace Local.X; public class Target {}".lastIndexOf("Target") + 1,
-      });
-      const realReferences = await findReferences(index, {
-        file: paths["Real.cs"]!,
-        line: 1,
-        column: "namespace Real; public class Target {}".lastIndexOf("Target") + 1,
-      });
-      const localUseFound =
-        localReferences.status === "ok" &&
-        localReferences.references.some(
-          (reference) => normalizePath(reference.file) === paths["Use.cs"] && reference.range.start.line === useLine,
-        );
-      const realUseFound =
-        realReferences.status === "ok" &&
-        realReferences.references.some(
-          (reference) => normalizePath(reference.file) === paths["Use.cs"] && reference.range.start.line === useLine,
-        );
+      const useLines = [
+        "using X = Real;",
+        "namespace Local {",
+        "  class Use { X.Target value; void Make() { var made = new X.Target(); } }",
+        "}",
+      ];
+      const outcome = await aliasUseOutcome(
+        root,
+        {
+          "Real.cs": "namespace Real; public class Target {}\n",
+          "LocalTarget.cs": "namespace Local.X; public class Target {}\n",
+        },
+        useLines,
+        [3],
+      );
 
-      expect({
-        gotoTarget: goto.status === "ok" ? normalizePath(goto.definition.file) : null,
-        localReferenceStatus: localReferences.status,
-        localUseFound,
-        realReferenceStatus: realReferences.status,
-        realUseFound,
-      }).toEqual({
-        gotoTarget: paths["LocalTarget.cs"],
-        localReferenceStatus: "ok",
-        localUseFound: true,
-        realReferenceStatus: "ok",
-        realUseFound: false,
+      // `Local.X` is found before the alias, but the name is not resolved there either.
+      expect(outcome).toEqual({
+        goto: { 3: ["not_found", "not_found"] },
+        references: { "Real.cs": [], "LocalTarget.cs": [] },
+        edges: [],
       });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("does not retry outer namespaces when an enclosing namespace shadows a dotted alias", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-outer-alias-decoy-"));
+    try {
+      const useLines = [
+        "using X = Real;",
+        "namespace A.B {",
+        "  class Use { X.Target value; void Make() { var made = new X.Target(); X.Target.Run(); } }",
+        "}",
+      ];
+      const target = (namespace: string): string =>
+        `namespace ${namespace}; public class Target { public static void Run() {} }\n`;
+      const outcome = await aliasUseOutcome(
+        root,
+        {
+          "Real.cs": target("Real"),
+          // `A.B.X` exists without a `Target`; the outer `A.X.Target` must not stand in for it.
+          "OuterTarget.cs": target("A.X"),
+          "InnerOther.cs": "namespace A.B.X; public class Other {}\n",
+        },
+        useLines,
+        [3],
+      );
+
+      expect(outcome).toEqual({
+        goto: { 3: ["not_found", "not_found", "not_found", "not_found"] },
+        references: { "Real.cs": [], "OuterTarget.cs": [] },
+        edges: [],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps resolving a namespace alias outside the namespaces that shadow its dotted form", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-unshadowed-region-"));
+    try {
+      const useLines = [
+        "using X = Real;",
+        "namespace Local {",
+        "  class Use { X.Target value; X::Target aliased; void MakeLocal() { var made = new X.Target(); } }",
+        "}",
+        "namespace Other {",
+        "  class Open { X.Target value; void MakeOther() { var made = new X.Target(); } }",
+        "}",
+      ];
+      const outcome = await aliasUseOutcome(
+        root,
+        {
+          "Real.cs": "namespace Real; public class Target {}\n",
+          // A second file declaring `Real` leaves the alias without one representative file.
+          "RealPeer.cs": "namespace Real; public class Peer {}\n",
+          "LocalTarget.cs": "namespace Local.X; public class Target {}\n",
+        },
+        useLines,
+        [3, 6],
+      );
+
+      expect(outcome).toEqual({
+        // `X::Target` reaches only aliases, so the shadowing `Local.X` does not affect it.
+        goto: { 3: ["not_found", "Real.cs", "not_found"], 6: ["Real.cs", "Real.cs"] },
+        references: { "Real.cs": [3, 6, 6], "LocalTarget.cs": [] },
+        edges: ["MakeOther instantiates Real.cs"],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a parameter or local named like a namespace alias ahead of an enclosing namespace of that name", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-lexical-receiver-"));
     try {

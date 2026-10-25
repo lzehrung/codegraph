@@ -131,6 +131,7 @@ export function fileBindingIsUnshadowed(scopeIndex: ScopeIndex, binding: Binding
 /** File import aliases yield to closer lexical bindings unless a language policy says otherwise. */
 export function moduleAliasIsUnshadowed(use: BareNameUse, aliasFrom?: string): boolean {
   const policy = nameLookupPolicyFor(use.parsed.sup.id);
+  if (policy.shadowsModuleAlias?.(use)) return false;
   const closestBinding = findClosestScopeBinding(use.scopeIndex, use.name, use.node, use.parsed.sup);
   if (policy.moduleAliasIsUnshadowed) {
     return policy.moduleAliasIsUnshadowed({ use, lookupName: use.name, closestBinding });
