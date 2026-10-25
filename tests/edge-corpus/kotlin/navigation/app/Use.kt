@@ -1,6 +1,7 @@
 package sample.app
 
 import sample.model.Box
+import sample.other.Foo
 import sample.model.Formatter
 import sample.model.PairBox
 import sample.model.Record as Entry
@@ -26,14 +27,15 @@ fun use(): String {
     val inner = box.Inner() // @ref Inner @known-gap inner_constructor_receiver_unresolved observed=none
     val outer = inner.outerValue() // @ref outerValue @known-gap inner_member_receiver_unresolved observed=none
     val viaOuter = inner.fromOuter() // @ref fromOuter @known-gap inner_member_receiver_unresolved observed=none
-    val intOverload = overload(3) // @ref overload @known-gap aliased_overload_import_unresolved observed=none
-    val stringOverload = overload("three") // @ref overloadString @known-gap aliased_overload_import_unresolved observed=none
+    val intOverload = overload(3) // @not-ref overload @not-ref overloadString
+    val stringOverload = overload("three") // @not-ref overload @not-ref overloadString
     val withDefault = defaulted(value = "done") // @ref defaulted @goto defaulted
     val pair = PairBox(left = label, right = compact) // @ref left @ref right @known-gap data_class_named_arguments_unresolved observed=none
     val pairAgain = PairBox(label, compact) // @ref PairBox @goto PairBox
     val objValue = objectRead() // @ref objectRead @goto objectRead
     val otherRecord = sample.decoy.Record("decoy") // @not-ref Record
     val otherRender = sample.decoy.render(otherRecord) // @not-ref render
+    val explicitFoo = Foo() // @goto importedFoo=Foo @not-ref samePackageFoo
     val decoy = "renderRecord summary compact overload"
     val rawDecoy = """build Formatter payload this@Box"""
     // decoy mention: overload summary this@Box

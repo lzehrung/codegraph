@@ -1,6 +1,6 @@
-// @def Circle @coverage Circle complete
+// @def Circle @coverage Circle partial
 pub struct Circle {
-    pub radius: f64,
+    pub radius: f64, // @def circleRadius=radius
 }
 
 // @def Square
