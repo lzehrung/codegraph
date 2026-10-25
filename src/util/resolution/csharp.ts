@@ -1,4 +1,5 @@
 import {
+  languageExtensionPatterns,
   normalizeLanguageExtensions,
   supportForFileWithoutHeaderSample,
   type LanguageExtensionMap,
@@ -43,6 +44,15 @@ const csharpProjectNamespaceIndexCache = new Map<string, Promise<CsharpProjectNa
 function csharpNamespaceCacheKey(anchor: string, languageExtensions?: LanguageExtensionMap): string {
   const mappings = Object.entries(normalizeLanguageExtensions(languageExtensions) ?? {});
   return anchor + "\0" + JSON.stringify(mappings);
+}
+/** The built-in C# suffixes plus every extension the active mapping assigns to C#. */
+function csharpCandidateGlobs(languageExtensions: LanguageExtensionMap | undefined): string[] {
+  const csharpMappings = Object.fromEntries(
+    Object.entries(normalizeLanguageExtensions(languageExtensions) ?? {}).filter(
+      ([, languageId]) => languageId === "csharp",
+    ),
+  );
+  return [...getImportableLanguageGlobs("csharp"), ...languageExtensionPatterns(csharpMappings)];
 }
 function collectCsharpNamespaceIndex(
   source: string,
@@ -105,7 +115,7 @@ async function getCsharpProjectNamespaceIndex(
   let pending = csharpProjectNamespaceIndexCache.get(cacheKey);
   if (!pending) {
     let complete = true;
-    pending = buildDeclaredContainerIndex(indexRoot, getImportableLanguageGlobs("csharp"), async (filePath) => {
+    pending = buildDeclaredContainerIndex(indexRoot, csharpCandidateGlobs(languageExtensions), async (filePath) => {
       let entry: CsharpNamespaceIndexEntry | null;
       try {
         entry = await readCsharpNamespaceIndex(filePath, languageExtensions, report, parsedFiles);

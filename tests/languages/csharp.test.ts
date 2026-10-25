@@ -404,6 +404,59 @@ describe("C# namespace aliases", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("reads files with a mapped C# extension when an enclosing namespace can bind a first segment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-mapped-first-segment-"));
+    const scopedTarget = path.join(root, "Scoped.csharpx");
+    const mappedTarget = path.join(root, "Mapped.csharpx");
+    const globalDecoy = path.join(root, "Global.cs");
+    const main = path.join(root, "Main.cs");
+    const mainLines = [
+      "namespace A;",
+      "using B = N.Thing;",
+      "using M = Mapped.Item;",
+      "class Use { B value; M item; }",
+      "",
+    ];
+    try {
+      await writeFile(scopedTarget, "namespace A.N;\npublic class Thing {}\n", "utf8");
+      await writeFile(mappedTarget, "namespace Mapped;\npublic class Item {}\n", "utf8");
+      await writeFile(globalDecoy, "namespace N;\npublic class Thing {}\n", "utf8");
+      await writeFile(main, mainLines.join("\n"), "utf8");
+      const index = await buildProjectIndexFromFiles(root, [scopedTarget, mappedTarget, globalDecoy, main], {
+        cache: "off",
+        languageExtensions: { ".csharpx": "csharp" },
+      });
+      const imports = index.byFile.get(fileIdentityKey(main))?.imports ?? [];
+      const shadowed = imports.find((binding) => binding.kind === "named" && binding.local === "B");
+      const mapped = imports.find((binding) => binding.kind === "named" && binding.local === "M");
+
+      // `A.N` is declared only in a mapped file, so `N` cannot bind the global namespace.
+      expect(shadowed).toMatchObject({ kind: "named", local: "B", from: "N.Thing", resolved: { external: "N.Thing" } });
+      expect(typeof mapped?.resolved).toBe("string");
+      if (typeof mapped?.resolved !== "string") throw new Error("Expected the mapped-file alias to resolve");
+      expect(fileIdentityKey(mapped.resolved)).toBe(fileIdentityKey(mappedTarget));
+      expect(
+        edgesFrom(index, main).map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : "")),
+      ).toEqual([fileIdentityKey(mappedTarget)]);
+
+      const shadowedUse = await goToDefinition(index, {
+        file: main,
+        line: 4,
+        column: edgeColumns(mainLines.join("\n"), 4, "B value;"),
+      });
+      expect(shadowedUse.status).not.toBe("ok");
+      const mappedUse = await goToDefinition(index, {
+        file: main,
+        line: 4,
+        column: edgeColumns(mainLines.join("\n"), 4, "M item;"),
+      });
+      expect(mappedUse.status === "ok" && fileIdentityKey(mappedUse.definition.file)).toBe(
+        fileIdentityKey(mappedTarget),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("leaves an alias unresolved when an enclosing type can bind its first segment", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-type-first-segment-"));
     const scopedTarget = path.join(root, "Scoped.cs");
@@ -2306,6 +2359,63 @@ describe("C# partial class members across files", () => {
         localUseFound: true,
         realReferenceStatus: "ok",
         realUseFound: false,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps a parameter or local named like a namespace alias ahead of an enclosing namespace of that name", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-lexical-receiver-"));
+    try {
+      const useLines = [
+        "using X = Real;",
+        "namespace Local {",
+        "  class Holder { public int Target; }",
+        "  class Use {",
+        "    int Param(Holder X) => X.Target;",
+        "    int Local() { Holder X = new Holder(); return X.Target; }",
+        "  }",
+        "}",
+      ];
+      const localLines = ["namespace Local.X; public class Target {}"];
+      const paths = await writeFixtureFiles(root, {
+        "Real.cs": "namespace Real; public class Target {}\n",
+        "LocalTarget.cs": localLines.join("\n") + "\n",
+        "Use.cs": useLines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const gotoMember = async (line: number): Promise<{ file: string; line: number } | null> => {
+        const result = await goToDefinition(index, {
+          file: paths["Use.cs"]!,
+          line,
+          column: useLines[line - 1]!.lastIndexOf("Target") + 1,
+        });
+        if (result.status !== "ok") return null;
+        return { file: normalizePath(result.definition.file), line: result.definition.range.start.line };
+      };
+      const useLinesReferencing = async (file: string, line: number, column: number): Promise<number[]> => {
+        const result = await findReferences(index, { file, line, column });
+        if (result.status !== "ok") throw new Error("Expected C# member references");
+        return result.references
+          .filter((reference) => normalizePath(reference.file) === paths["Use.cs"])
+          .map((reference) => reference.range.start.line)
+          .sort((left, right) => left - right);
+      };
+
+      expect({
+        parameterUse: await gotoMember(5),
+        localUse: await gotoMember(6),
+        fieldReferences: await useLinesReferencing(paths["Use.cs"]!, 3, useLines[2]!.indexOf("Target") + 1),
+        namespaceTypeReferences: await useLinesReferencing(
+          paths["LocalTarget.cs"]!,
+          1,
+          localLines[0]!.lastIndexOf("Target") + 1,
+        ),
+      }).toEqual({
+        parameterUse: { file: paths["Use.cs"], line: 3 },
+        localUse: { file: paths["Use.cs"], line: 3 },
+        fieldReferences: [3, 5, 6],
+        namespaceTypeReferences: [],
       });
     } finally {
       await rm(root, { recursive: true, force: true });

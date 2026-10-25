@@ -843,7 +843,7 @@ export async function resolveMemberAccessDefinition(params: {
             subObj,
             sup.normalizeIdentifier,
           );
-          if (alias && isCompilationUnitNamespaceAlias(alias, tree)) {
+          if (alias && isCompilationUnitNamespaceAlias(alias, tree) && !resolveLexicalBinding?.(subObj)) {
             const enclosingNamespace = csharpNamespaceAtOffset(
               collectCsharpNamespaceFacts(tree, source.length),
               expr.startIndex,
