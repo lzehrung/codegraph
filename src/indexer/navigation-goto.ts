@@ -1,11 +1,17 @@
 import { CSHARP_SUPPORT, supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
+import path from "node:path";
 import { pythonPropertyDecorator } from "./python-property-decorator.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
-import { foldPhpIdentifierCase } from "../util/identifiers.js";
+import { foldPhpIdentifierCase, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
+import {
+  hasCsharpEnclosingNamespaceFirstSegmentConflict,
+  resolveCsharpDottedTypeImportPath,
+} from "../util/resolution/csharp.js";
+import { csharpNamespaceAtOffset, collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
 import {
   collectMemberAccessChain,
   getMemberAccessParts,
@@ -412,6 +418,20 @@ function enclosingImportScope(declarationName: SyntaxNodeLike): SyntaxNodeLike |
   }
   return current?.parent ?? null;
 }
+function isCompilationUnitNamespaceAlias(binding: ImportBinding, tree: SyntaxTreeLike): boolean {
+  if (binding.kind !== "namespace") return false;
+  const start = binding.localRange?.start.index;
+  if (start === undefined) return false;
+  let nameNode: SyntaxNodeLike = tree.rootNode;
+  for (;;) {
+    const child = nameNode.namedChildren.find(
+      (candidate) => candidate.startIndex <= start && start < candidate.endIndex,
+    );
+    if (!child) break;
+    nameNode = child;
+  }
+  return enclosingImportScope(nameNode)?.type === "compilation_unit";
+}
 
 /**
  * Rewrites a valid C# `using X = Namespace;` lookup (`X.Target` or `X::Target`) into the
@@ -671,6 +691,7 @@ export async function resolveMemberAccessDefinition(params: {
       ? (getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined)
       : undefined;
 
+  let csharpNamespaceAliasConflict = false;
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
     const exprIsId = isReceiverNameNode(sup, expr.type) && !isMemberAccessNode(sup, expr);
     if (exprIsId) {
@@ -815,6 +836,54 @@ export async function resolveMemberAccessDefinition(params: {
         subProp = getNavigationExpressionProperty(sup, expr);
       }
       if (subObj && subProp) {
+        if (sup.id === "csharp" && isReceiverNameNode(sup, subObj.type)) {
+          const alias = innermostNamespaceImport(
+            mod.imports,
+            sliceText(subObj, source),
+            subObj,
+            sup.normalizeIdentifier,
+          );
+          if (alias && isCompilationUnitNamespaceAlias(alias, tree)) {
+            const enclosingNamespace = csharpNamespaceAtOffset(
+              collectCsharpNamespaceFacts(tree, source.length),
+              expr.startIndex,
+            );
+            if (enclosingNamespace) {
+              const projectRoot = index.projectRoot ?? path.dirname(mod.file);
+              const qualifiedName = sliceText(expr, source).replace(/\s+/gu, "");
+              const conflict = await hasCsharpEnclosingNamespaceFirstSegmentConflict(
+                projectRoot,
+                qualifiedName,
+                mod.file,
+                enclosingNamespace,
+                index.languageExtensions,
+              );
+              if (conflict) {
+                csharpNamespaceAliasConflict = true;
+                const namespaceParts = normalizeCsharpQualifiedName(enclosingNamespace).split(".").filter(Boolean);
+                for (let depth = namespaceParts.length; depth > 0; depth -= 1) {
+                  const localName = namespaceParts.slice(0, depth).join(".") + "." + qualifiedName;
+                  const hit = resolveCsharpQualifiedName(index, mod, localName, expr.startIndex);
+                  if (hit) return hit;
+                  const localType = await resolveCsharpDottedTypeImportPath(
+                    projectRoot,
+                    localName,
+                    mod.file,
+                    index.languageExtensions,
+                  );
+                  if (localType.status === "found") {
+                    const typeName = qualifiedName.split(".").at(-1) ?? "";
+                    const localHit = resolveExport(index, localType.file, typeName, {
+                      referenceIndex: expr.startIndex,
+                    });
+                    if (localHit) return localHit;
+                  }
+                }
+                return null;
+              }
+            }
+          }
+        }
         const base = await resolveExpression(subObj);
         if (!base) {
           const qualified = resolveJvmPackageExpression(index, sup, source, expr, resolveLexicalBinding, mod.file);
@@ -928,6 +997,9 @@ export async function resolveMemberAccessDefinition(params: {
     ((receiverProof?.kind === "own-type" && obj?.type === "identifier" && sliceText(obj, source) === "self") ||
       (receiverProof?.kind === "named-type" && receiverProof.proof !== "static-type"));
   const chain = await resolveExpression(memberNode);
+  if (csharpNamespaceAliasConflict && !chain) {
+    return { status: "not_found", reason: "C# name is shadowed in the enclosing namespace" };
+  }
   if (chain && prop && node.id === prop.id) {
     if (chain.kind === "resolved" && !pythonInstanceReceiver) {
       return okGoToResult(index, chain.def, {

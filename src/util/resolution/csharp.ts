@@ -1,4 +1,8 @@
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
+import {
+  normalizeLanguageExtensions,
+  supportForFileWithoutHeaderSample,
+  type LanguageExtensionMap,
+} from "../../languages.js";
 import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../paths.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../identifiers.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
@@ -36,6 +40,10 @@ export type CsharpNamespaceTypeResolution =
 
 const csharpNamespaceFileCache = new Map<string, CsharpNamespaceIndexEntry>();
 const csharpProjectNamespaceIndexCache = new Map<string, Promise<CsharpProjectNamespaceIndexResult>>();
+function csharpNamespaceCacheKey(anchor: string, languageExtensions?: LanguageExtensionMap): string {
+  const mappings = Object.entries(normalizeLanguageExtensions(languageExtensions) ?? {});
+  return anchor + "\0" + JSON.stringify(mappings);
+}
 function collectCsharpNamespaceIndex(
   source: string,
   filePath: string,
@@ -74,11 +82,12 @@ async function readCsharpNamespaceIndex(
   report: BuildReport | undefined,
   parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
 ): Promise<CsharpNamespaceIndexEntry | null> {
-  const cacheKey = fileIdentityKey(filePath);
+  const fileKey = fileIdentityKey(filePath);
+  const cacheKey = csharpNamespaceCacheKey(fileKey, languageExtensions);
   const cached = csharpNamespaceFileCache.get(cacheKey);
   if (cached) return cached;
 
-  const retained = parsedFiles?.get(cacheKey);
+  const retained = parsedFiles?.get(fileKey);
   const source = retained?.source ?? (await readUtf8WithoutBom(filePath));
   const tree = retained?.sup?.id === "csharp" ? retained.tree : undefined;
   const entry = collectCsharpNamespaceIndex(source, filePath, languageExtensions, report, tree);
@@ -92,7 +101,8 @@ async function getCsharpProjectNamespaceIndex(
   report: BuildReport | undefined = undefined,
   parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
 ): Promise<CsharpProjectNamespaceIndexResult> {
-  let pending = csharpProjectNamespaceIndexCache.get(indexRoot);
+  const cacheKey = csharpNamespaceCacheKey(indexRoot, languageExtensions);
+  let pending = csharpProjectNamespaceIndexCache.get(cacheKey);
   if (!pending) {
     let complete = true;
     pending = buildDeclaredContainerIndex(indexRoot, getImportableLanguageGlobs("csharp"), async (filePath) => {
@@ -114,14 +124,14 @@ async function getCsharpProjectNamespaceIndex(
     })
       .then((index) => ({ index, complete }))
       .catch((error: unknown) => {
-        csharpProjectNamespaceIndexCache.delete(indexRoot);
+        csharpProjectNamespaceIndexCache.delete(cacheKey);
         throw error;
       });
-    csharpProjectNamespaceIndexCache.set(indexRoot, pending);
+    csharpProjectNamespaceIndexCache.set(cacheKey, pending);
   }
   const result = await pending;
-  if (!result.complete && csharpProjectNamespaceIndexCache.get(indexRoot) === pending) {
-    csharpProjectNamespaceIndexCache.delete(indexRoot);
+  if (!result.complete && csharpProjectNamespaceIndexCache.get(cacheKey) === pending) {
+    csharpProjectNamespaceIndexCache.delete(cacheKey);
   }
   return result;
 }

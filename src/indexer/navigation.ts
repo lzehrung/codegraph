@@ -1390,6 +1390,14 @@ async function findReferencesInternal(
           );
           for (const range of ranges) {
             if (hasReachedCollectionLimit()) break;
+            if (parsed.sup.id === "csharp" && imp.localRange) {
+              const proof = await goToDefinition(
+                index,
+                { file: fileId, line: range.start.line, column: range.start.column },
+                parsed,
+              );
+              if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
+            }
             pushRef({
               file: fileId,
               range,

@@ -132,6 +132,18 @@ function csharpNodeRange(node: SyntaxNodeLike, source: string, lineStarts: numbe
   if (startIndex && source[startIndex - 1] === "@") startIndex -= 1;
   return sourceRangeFromOffsets(lineStarts, startIndex, node.endIndex);
 }
+function csharpAliasTargetLeaf(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (node.type === "identifier" || node.type === "predefined_type") return node;
+  if (node.type === "generic_name" || node.type === "qualified_name" || node.type === "alias_qualified_name") {
+    const name = node.childForFieldName("name");
+    if (name) return csharpAliasTargetLeaf(name);
+  }
+  for (let index = node.namedChildren.length - 1; index >= 0; index -= 1) {
+    const leaf = csharpAliasTargetLeaf(node.namedChildren[index]!);
+    if (leaf) return leaf;
+  }
+  return null;
+}
 
 function pushCsharpOverride(
   context: LanguageSpecificImportContext,
@@ -273,7 +285,33 @@ async function applyCsharpStatementOverride(
 
   const parsed = csharpUsingDirective(directive);
   if (!parsed) {
-    if (directive.childForFieldName("name")) return true;
+    const alias = directive.childForFieldName("name");
+    if (alias?.type === "identifier") {
+      const target = directive.namedChildren.find((child) => child !== alias && child.type !== "comment");
+      if (target) {
+        const leaf = csharpAliasTargetLeaf(target) ?? target;
+        const unresolved: CsharpUsingDirective = {
+          value: target.text,
+          leaf,
+          rawValue: target.text,
+          alias,
+          isStatic: false,
+          isGlobal: false,
+        };
+        const lineStarts = collectLineStartOffsets(context.source);
+        pushCsharpOverride(
+          context,
+          unresolved,
+          typeOnly,
+          unresolved.value,
+          { external: unresolved.value },
+          csharpNodeRange(alias, context.source, lineStarts),
+          csharpNodeRange(leaf, context.source, lineStarts),
+        );
+      }
+      return true;
+    }
+    if (alias) return true;
     for (let index = 0; ; index += 1) {
       const child = directive.child(index);
       if (!child) break;

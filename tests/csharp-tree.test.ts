@@ -250,6 +250,37 @@ describe("C# import tree reuse", () => {
   });
 });
 
+describe("C# namespace resolution cache mappings", () => {
+  it("recollects namespace facts when sequential import collection uses a different mapping", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-mapped-namespace-cache-"));
+    const main = path.join(root, "Main.csx");
+    const namespaceFile = path.join(root, "Namespace.cs");
+    const source = "using N;\nclass Main {}\n";
+    const { clearCsharpResolutionCaches } = await import("../src/util/resolution/csharp.js");
+    try {
+      await writeFile(main, source, "utf8");
+      await writeFile(namespaceFile, "namespace N; public class Target {}\n", "utf8");
+      clearCsharpResolutionCaches();
+
+      await collectImportsForFile(main, root, {
+        source,
+        sup: CSHARP_SUPPORT,
+        languageExtensions: { ".cs": "python" },
+      });
+      const imports = await collectImportsForFile(main, root, {
+        source,
+        sup: CSHARP_SUPPORT,
+        languageExtensions: { ".cs": "csharp" },
+      });
+      const namespaceImport = imports.find((binding) => binding.kind === "star" && binding.from === "N");
+
+      expect(namespaceImport?.resolved).toBe(namespaceFile.replace(/\\/g, "/"));
+    } finally {
+      clearCsharpResolutionCaches();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 describe("C# alias namespace parse reporting", () => {
   it("reports failed namespace candidates while handling a namespace alias", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-parse-report-"));

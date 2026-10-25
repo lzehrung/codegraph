@@ -801,12 +801,25 @@ describe("C# namespace aliases", () => {
       await writeFile(main, mainLines.join("\n") + "\n", "utf8");
       const index = await buildProjectIndexFromFiles(root, [genericTargets, regularTarget, main]);
       const module = index.byFile.get(fileIdentityKey(main));
-      expect(
-        module?.imports.some(
-          (binding) => binding.kind === "named" && (binding.local === "BoxAlias" || binding.local === "NestedAlias"),
-        ),
-      ).toBe(false);
-      expect(module?.imports.some((binding) => binding.from.includes("<"))).toBe(false);
+      const genericAliases =
+        module?.imports
+          .flatMap((binding) => {
+            if (binding.kind !== "named" || (binding.local !== "BoxAlias" && binding.local !== "NestedAlias"))
+              return [];
+            return [
+              {
+                local: binding.local,
+                from: binding.from,
+                explicitAlias: binding.explicitAlias,
+                unresolved: typeof binding.resolved !== "string",
+              },
+            ];
+          })
+          .sort((left, right) => left.local.localeCompare(right.local)) ?? [];
+      expect(genericAliases).toEqual([
+        { local: "BoxAlias", from: "N.Box<int>", explicitAlias: true, unresolved: true },
+        { local: "NestedAlias", from: "N.Outer<int>.Inner", explicitAlias: true, unresolved: true },
+      ]);
       expect(module?.imports.some((binding) => binding.kind === "star" && binding.from.includes("Box"))).toBe(false);
       expect(edgesFrom(index, main).map((edge) => edge.to)).toEqual([
         { type: "file", path: regularTarget.replace(/\\/g, "/") },
@@ -2247,6 +2260,57 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  it("does not expand a namespace alias when an enclosing namespace has the same first segment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-enclosing-alias-conflict-"));
+    try {
+      const useLines = ["using X = Real;", "namespace Local {", "  class Use { X.Target value; }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "Real.cs": "namespace Real; public class Target {}\n",
+        "LocalTarget.cs": "namespace Local.X; public class Target {}\n",
+        "Use.cs": useLines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const useLine = useLines.findIndex((line) => line.includes("X.Target")) + 1;
+      const useColumn = useLines[useLine - 1]!.lastIndexOf("Target") + 1;
+      const goto = await goToDefinition(index, { file: paths["Use.cs"]!, line: useLine, column: useColumn });
+      const localReferences = await findReferences(index, {
+        file: paths["LocalTarget.cs"]!,
+        line: 1,
+        column: "namespace Local.X; public class Target {}".lastIndexOf("Target") + 1,
+      });
+      const realReferences = await findReferences(index, {
+        file: paths["Real.cs"]!,
+        line: 1,
+        column: "namespace Real; public class Target {}".lastIndexOf("Target") + 1,
+      });
+      const localUseFound =
+        localReferences.status === "ok" &&
+        localReferences.references.some(
+          (reference) => normalizePath(reference.file) === paths["Use.cs"] && reference.range.start.line === useLine,
+        );
+      const realUseFound =
+        realReferences.status === "ok" &&
+        realReferences.references.some(
+          (reference) => normalizePath(reference.file) === paths["Use.cs"] && reference.range.start.line === useLine,
+        );
+
+      expect({
+        gotoTarget: goto.status === "ok" ? normalizePath(goto.definition.file) : null,
+        localReferenceStatus: localReferences.status,
+        localUseFound,
+        realReferenceStatus: realReferences.status,
+        realUseFound,
+      }).toEqual({
+        gotoTarget: paths["LocalTarget.cs"],
+        localReferenceStatus: "ok",
+        localUseFound: true,
+        realReferenceStatus: "ok",
+        realUseFound: false,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("matches verbatim namespace-alias spellings in navigation, references, and graph edges", async () => {
     const cases = [
       { name: "verbatim declaration", declaration: "using @X = P;", use: "X" },

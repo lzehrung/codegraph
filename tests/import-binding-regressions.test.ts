@@ -103,6 +103,64 @@ describe("import binding regressions", () => {
       resolved: constantTarget,
     });
   });
+  it("keeps unresolved C# aliases as bindings that shadow imported decoys", async () => {
+    const cases = [
+      { name: "generic alias", target: "N.Box<int>", box: "namespace N; public class Box<T> {}\n" },
+      { name: "array alias", target: "N.Box[]", box: "namespace N; public class Box {}\n" },
+      {
+        name: "conflict-unresolved alias",
+        target: "N.Box",
+        box: "namespace N; public class Box {}\n",
+        conflict: true,
+      },
+    ];
+    const outcomes: { name: string; hasUnresolvedAlias: boolean; useStatus: string }[] = [];
+    for (const testCase of cases) {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-shadow-"));
+      const main = path.join(root, "Main.cs");
+      const box = path.join(root, "Box.cs");
+      const decoy = path.join(root, "Other.cs");
+      const aliasLine = "using B = " + testCase.target + ";";
+      const mainLines = testCase.conflict
+        ? ["namespace Local {", "  " + aliasLine, "  using Other;", "  class Use { B value; }", "}"]
+        : [aliasLine, "using Other;", "class Use { B value; }"];
+      try {
+        await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+        await writeFile(box, testCase.box, "utf8");
+        await writeFile(decoy, "namespace Other; public class B {}\n", "utf8");
+        const files = [main, box, decoy];
+        if (testCase.conflict) {
+          const localNamespace = path.join(root, "LocalNamespace.cs");
+          await writeFile(localNamespace, "namespace Local.N; public class Marker {}\n", "utf8");
+          files.push(localNamespace);
+        }
+        const index = await buildProjectIndexFromFiles(root, files);
+        const importer = index.byFile.get(fileIdentityKey(main));
+        const hasUnresolvedAlias =
+          importer?.imports.some(
+            (entry) =>
+              entry.kind === "named" &&
+              entry.local === "B" &&
+              entry.from === testCase.target &&
+              entry.explicitAlias &&
+              typeof entry.resolved !== "string",
+          ) ?? false;
+
+        const useLine = mainLines.findIndex((line) => line.includes("B value")) + 1;
+        const result = await goToDefinition(index, {
+          file: main,
+          line: useLine,
+          column: mainLines[useLine - 1]!.indexOf("B value") + 1,
+        });
+        outcomes.push({ name: testCase.name, hasUnresolvedAlias, useStatus: result.status });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+    expect(outcomes).toEqual(
+      cases.map((testCase) => ({ name: testCase.name, hasUnresolvedAlias: true, useStatus: "not_found" })),
+    );
+  });
   it("keeps array, nullable, pointer, and ref C# alias targets unresolved", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-wrapped-alias-targets-"));
     const typeFile = path.join(root, "Box.cs");
@@ -129,6 +187,9 @@ describe("import binding regressions", () => {
       const bindings =
         importer?.imports.filter((binding) => binding.kind === "named" && wrappedAliases.has(binding.local)) ?? [];
 
+      expect(bindings.map((binding) => (binding.kind === "named" ? binding.local : "")).sort()).toEqual(
+        [...wrappedAliases].sort(),
+      );
       expect(bindings.every((binding) => typeof binding.resolved !== "string")).toBe(true);
       const fileTargets = index.graph.edges
         .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main) && edge.to.type === "file")
