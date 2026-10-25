@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
 import { CSHARP_SUPPORT } from "../../src/languages.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
+import { clearMemoryCache } from "../../src/indexer/build-cache.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import {
@@ -2313,19 +2314,21 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  type AliasOutcome = { goto: Record<number, string[]>; references: Record<string, number[]>; edges: string[] };
+
   /**
-   * What each consumer reports for the `Target` and `Run` tokens on `probeLines` of Use.cs: goto
-   * results, the Use.cs lines that reference each declared `Target`, and the detailed-graph edges
-   * from Use.cs members (not the alias import node) into the fixture's other files.
+   * What each consumer of `index` reports for the `Target` and `Run` tokens on `probeLines` of
+   * Use.cs: goto results, the Use.cs lines that reference each declared `Target`, and the
+   * detailed-graph edges from Use.cs members (not the alias import node) into the fixture's
+   * other files.
    */
-  async function aliasUseOutcome(
-    root: string,
+  async function aliasOutcomeFor(
+    index: ProjectIndex,
+    paths: Record<string, string>,
     files: Record<string, string>,
     useLines: string[],
     probeLines: number[],
-  ): Promise<{ goto: Record<number, string[]>; references: Record<string, number[]>; edges: string[] }> {
-    const paths = await writeFixtureFiles(root, { ...files, "Use.cs": useLines.join("\n") + "\n" });
-    const index = await buildProjectIndex(root, { cache: "off" });
+  ): Promise<AliasOutcome> {
     const useFile = paths["Use.cs"]!;
     const goto: Record<number, string[]> = {};
     for (const line of probeLines) {
@@ -2360,6 +2363,17 @@ describe("C# partial class members across files", () => {
       })
       .sort();
     return { goto, references, edges };
+  }
+
+  async function aliasUseOutcome(
+    root: string,
+    files: Record<string, string>,
+    useLines: string[],
+    probeLines: number[],
+  ): Promise<AliasOutcome> {
+    const paths = await writeFixtureFiles(root, { ...files, "Use.cs": useLines.join("\n") + "\n" });
+    const index = await buildProjectIndex(root, { cache: "off" });
+    return await aliasOutcomeFor(index, paths, files, useLines, probeLines);
   }
 
   it("does not expand a namespace alias when an enclosing namespace has the same first segment", async () => {
@@ -2516,6 +2530,185 @@ describe("C# partial class members across files", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    { name: "a namespace", source: "namespace Local.X; public class Target {}\n", declaresTarget: true },
+    { name: "an implicit namespace ancestor", source: "namespace Local.X.Deep; public class Marker {}\n" },
+    { name: "a type", source: "namespace Local; public class X {}\n" },
+  ])("treats $name named like the alias in an enclosing namespace as shadowing it", async (shadow) => {
+    const { source } = shadow;
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-shadow-kinds-"));
+    try {
+      const useLines = [
+        "using X = Real;",
+        "namespace Local {",
+        "  class Use { X.Target value; void Make() { var made = new X.Target(); } }",
+        "}",
+      ];
+      const outcome = await aliasUseOutcome(
+        root,
+        { "Real.cs": "namespace Real; public class Target {}\n", "LocalShadow.cs": source },
+        useLines,
+        [3],
+      );
+
+      expect(outcome).toEqual({
+        goto: { 3: ["not_found", "not_found"] },
+        references: { "Real.cs": [], ...(shadow.declaresTarget ? { "LocalShadow.cs": [] } : {}) },
+        edges: [],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["#if", "#elif", "#else"] as const)(
+    "treats a compilation-unit alias under %s like an unconditional one when an enclosing namespace shadows it",
+    async (directive) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-conditional-"));
+      try {
+        const body = [
+          "using X = Real;",
+          "namespace Local {",
+          "  class Use { X.Target value; void Make() { var made = new X.Target(); } }",
+          "}",
+        ];
+        const wrapped = {
+          "#if": ["#if FEATURE", ...body, "#endif"],
+          "#elif": ["#if OTHER", "class Unrelated {}", "#elif FEATURE", ...body, "#endif"],
+          "#else": ["#if OTHER", "class Unrelated {}", "#else", ...body, "#endif"],
+        }[directive];
+        const probe = wrapped.findIndex((line) => line.includes("class Use")) + 1;
+        const real = "namespace Real; public class Target {}\n";
+
+        // A namespace outside `Local` leaves the alias in force, which proves the wrapped alias is visible.
+        const unshadowed = await aliasUseOutcome(
+          root,
+          { "Real.cs": real, "ElsewhereTarget.cs": "namespace Elsewhere.X; public class Target {}\n" },
+          wrapped,
+          [probe],
+        );
+        expect(unshadowed).toEqual({
+          goto: { [probe]: ["Real.cs", "Real.cs"] },
+          references: { "Real.cs": [probe, probe], "ElsewhereTarget.cs": [] },
+          edges: ["Make instantiates Real.cs", "Make uses Real.cs"],
+        });
+
+        await rm(path.join(root, "ElsewhereTarget.cs"));
+        const shadowed = await aliasUseOutcome(
+          root,
+          { "Real.cs": real, "LocalTarget.cs": "namespace Local.X; public class Target {}\n" },
+          wrapped,
+          [probe],
+        );
+        expect(shadowed).toEqual({
+          goto: { [probe]: ["not_found", "not_found"] },
+          references: { "Real.cs": [], "LocalTarget.cs": [] },
+          edges: [],
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  const cacheModes = ["memory", "disk", "incremental"] as const;
+
+  /**
+   * Builds `root` with a `mode` cache that earlier builds of `root` warmed, and with the cache off,
+   * and returns what each build's consumers report for `files` and Use.cs. A warm build must agree
+   * with the cold one. The caller writes only the files that changed, so every other file keeps the
+   * signature its cached module was built from.
+   */
+  async function warmAndColdAliasOutcomes(
+    mode: (typeof cacheModes)[number],
+    root: string,
+    cacheDir: string,
+    files: Record<string, string>,
+    useLines: string[],
+    probeLines: number[],
+  ): Promise<{ warm: AliasOutcome; cold: AliasOutcome }> {
+    const paths = Object.fromEntries(
+      [...Object.keys(files), "Use.cs"].map((name) => [name, normalizePath(path.join(root, name))]),
+    );
+    const options = { cache: mode === "memory" ? ("memory" as const) : ("disk" as const), cacheDir, threads: 1 };
+    const warmIndex = await (mode === "incremental" ? buildProjectIndexIncremental : buildProjectIndex)(root, options);
+    const coldIndex = await buildProjectIndex(root, { cache: "off" });
+    return {
+      warm: await aliasOutcomeFor(warmIndex, paths, files, useLines, probeLines),
+      cold: await aliasOutcomeFor(coldIndex, paths, files, useLines, probeLines),
+    };
+  }
+
+  describe("a compilation-unit namespace alias across cached builds", () => {
+    const useLines = [
+      "using X = Real;",
+      "namespace Local {",
+      "  class Use { X.Target value; void Make() { var made = new X.Target(); } }",
+      "}",
+    ];
+    const target = (namespace: string): string => `namespace ${namespace}; public class Target {}\n`;
+    /** The outcome when the alias expands to Real.cs, or when a shadowing declaration leaves it unresolved. */
+    const outcome = (expands: boolean, decoy?: string): AliasOutcome => ({
+      goto: { 3: expands ? ["Real.cs", "Real.cs"] : ["not_found", "not_found"] },
+      references: { "Real.cs": expands ? [3, 3] : [], ...(decoy ? { [decoy]: [] } : {}) },
+      edges: expands ? ["Make instantiates Real.cs", "Make uses Real.cs"] : [],
+    });
+
+    /** Runs `scenario` once per cache mode, each in a fresh project root and cache directory. */
+    async function acrossCacheModes(
+      scenario: (mode: (typeof cacheModes)[number], root: string, cacheDir: string) => Promise<void>,
+    ): Promise<void> {
+      for (const mode of cacheModes) {
+        const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-cache-"));
+        const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-cache-dir-"));
+        try {
+          await scenario(mode, root, cacheDir);
+        } finally {
+          clearMemoryCache();
+          await rm(root, { recursive: true, force: true });
+          await rm(cacheDir, { recursive: true, force: true });
+        }
+      }
+    }
+
+    it("stops expanding the alias when another file changes to declare the shadowing namespace", async () => {
+      await acrossCacheModes(async (mode, root, cacheDir) => {
+        const before = { "Real.cs": target("Real"), "LocalOther.cs": target("Local.Other") };
+        await writeFixtureFiles(root, { ...before, "Use.cs": useLines.join("\n") + "\n" });
+        const first = await warmAndColdAliasOutcomes(mode, root, cacheDir, before, useLines, [3]);
+        expect(first.cold, `${mode} before the change`).toEqual(outcome(true, "LocalOther.cs"));
+        expect(first.warm, `${mode} before the change`).toEqual(first.cold);
+
+        const after = { ...before, "LocalOther.cs": target("Local.X") };
+        await writeFixtureFiles(root, { "LocalOther.cs": after["LocalOther.cs"] });
+        const second = await warmAndColdAliasOutcomes(mode, root, cacheDir, after, useLines, [3]);
+        expect(second.cold, `${mode} after the change`).toEqual(outcome(false, "LocalOther.cs"));
+        expect(second.warm, `${mode} after the change`).toEqual(second.cold);
+      });
+    });
+
+    it("expands the alias again when the shadowing declaration is deleted, and stops when it returns", async () => {
+      await acrossCacheModes(async (mode, root, cacheDir) => {
+        const withShadow = { "Real.cs": target("Real"), "LocalX.cs": target("Local.X") };
+        await writeFixtureFiles(root, { ...withShadow, "Use.cs": useLines.join("\n") + "\n" });
+        const first = await warmAndColdAliasOutcomes(mode, root, cacheDir, withShadow, useLines, [3]);
+        expect(first.cold, `${mode} with the declaration`).toEqual(outcome(false, "LocalX.cs"));
+        expect(first.warm, `${mode} with the declaration`).toEqual(first.cold);
+
+        await rm(path.join(root, "LocalX.cs"));
+        const withoutShadow = { "Real.cs": target("Real") };
+        const second = await warmAndColdAliasOutcomes(mode, root, cacheDir, withoutShadow, useLines, [3]);
+        expect(second.cold, `${mode} after the deletion`).toEqual(outcome(true));
+        expect(second.warm, `${mode} after the deletion`).toEqual(second.cold);
+
+        await writeFixtureFiles(root, { "LocalX.cs": withShadow["LocalX.cs"] });
+        const third = await warmAndColdAliasOutcomes(mode, root, cacheDir, withShadow, useLines, [3]);
+        expect(third.cold, `${mode} after the declaration returns`).toEqual(outcome(false, "LocalX.cs"));
+        expect(third.warm, `${mode} after the declaration returns`).toEqual(third.cold);
+      });
+    });
   });
   it("matches verbatim namespace-alias spellings in navigation, references, and graph edges", async () => {
     const cases = [

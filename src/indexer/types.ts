@@ -103,6 +103,13 @@ export type ModuleIndex = {
    * consumers whose imports name a container this build changed.
    */
   declaredContainers?: string[];
+  /**
+   * C# only: the namespaces this file opens and the types it declares directly in one, as dotted
+   * names (`Outer.Inner`, `Outer.Inner.Type`), read from its own syntax tree. A lookup that depends
+   * on other files' declarations aggregates these over the index when it runs, so a cached module
+   * never holds another file's declarations. Absent when the file's tree was unavailable.
+   */
+  csharpDeclaredNames?: string[];
   /** Outermost Tree-sitter ERROR/MISSING ranges. */
   parseErrorRanges?: ParseErrorRange[];
 };

@@ -328,6 +328,50 @@ export function csharpNamespaceAt(index: ProjectIndex, filePath: string, positio
   return regions ? csharpNamespaceAtIndex(regions, position) : null;
 }
 
+type CsharpDeclaredNames = {
+  source: ProjectIndex["byFile"];
+  size: number;
+  /** `null` when an indexed C# file's declarations are unknown. */
+  names: ReadonlySet<string> | null;
+};
+
+const csharpDeclaredNameCaches = new WeakMap<ProjectIndex, CsharpDeclaredNames>();
+
+function aggregateCsharpDeclaredNames(index: ProjectIndex): ReadonlySet<string> | null {
+  const names = new Set<string>();
+  for (const moduleEntry of index.byFile.values()) {
+    if (supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id !== "csharp") continue;
+    if (!moduleEntry.csharpDeclaredNames) return null;
+    for (const name of moduleEntry.csharpDeclaredNames) {
+      // Declaring `A.B.T` also makes `A` and `A.B` exist, so each prefix is a declared name too.
+      for (let dot = name.indexOf("."); dot >= 0; dot = name.indexOf(".", dot + 1)) names.add(name.slice(0, dot));
+      names.add(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Whether `namespaceName` or one of its enclosing namespaces (the global namespace excluded) has a
+ * namespace or type member called `name` in any indexed C# file. Each module records only its own
+ * declarations; they are combined here, once per index, so an added, changed, or deleted file
+ * changes the answer without touching any other file's cached module. Unknown when an indexed C#
+ * file has no recorded declarations, which answers `true` because that file could declare it.
+ */
+export function csharpNamespaceChainDeclares(index: ProjectIndex, namespaceName: string, name: string): boolean {
+  let cached = csharpDeclaredNameCaches.get(index);
+  if (!cached || cached.source !== index.byFile || cached.size !== index.byFile.size) {
+    cached = { source: index.byFile, size: index.byFile.size, names: aggregateCsharpDeclaredNames(index) };
+    csharpDeclaredNameCaches.set(index, cached);
+  }
+  const { names } = cached;
+  if (!names) return true;
+  for (let end = namespaceName.length; end > 0; end = namespaceName.lastIndexOf(".", end - 1)) {
+    if (names.has(`${namespaceName.slice(0, end)}.${name}`)) return true;
+  }
+  return false;
+}
+
 function csharpNamespaceAtIndex(regions: readonly CsharpNamespaceRegion[], position: number | undefined): string {
   if (position === undefined) return "";
   let innermost: CsharpNamespaceRegion | undefined;

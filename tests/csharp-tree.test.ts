@@ -3,7 +3,7 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { buildProjectIndexFromFiles } from "../src/index.js";
+import { buildProjectIndexFromFiles, goToDefinition } from "../src/index.js";
 import { collectEdgesForFile } from "../src/graph-edge-collector.js";
 import { collectImportsForFile } from "../src/indexer/imports.js";
 import { resolveCsharpNamespaceTypePath } from "../src/util/resolution/csharp.js";
@@ -62,6 +62,28 @@ function setNativeTreeParseFailureFor(marker: string, message: string): void {
       parseSyntaxTree: (source, languageId) => {
         if (source.includes(marker)) throw new Error(message);
         return parseSyntaxTree(source, languageId);
+      },
+    },
+  });
+}
+
+/** Fails parsing and extraction for sources containing `marker`, so that file indexes without a tree. */
+function setNativeIndexingFailureFor(marker: string, message: string): void {
+  const state = loadBinding();
+  if (!state.loaded) throw new Error("Native addon required for C# tree tests");
+  const { parseSyntaxTree, extractLanguage } = state.binding;
+  if (!parseSyntaxTree) throw new Error("Native addon does not expose parseSyntaxTree");
+  __setNativeTreeSitterBindingForTests({
+    ...state,
+    binding: {
+      ...state.binding,
+      parseSyntaxTree: (source, languageId) => {
+        if (source.includes(marker)) throw new Error(message);
+        return parseSyntaxTree(source, languageId);
+      },
+      extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+        if (source.includes(marker)) throw new Error(message);
+        return extractLanguage(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
       },
     },
   });
@@ -440,6 +462,41 @@ describe("C# namespace resolution failures and parser reporting", () => {
         files: [expect.objectContaining({ file: failedCandidate.replace(/\\/g, "/"), languageId: "csharp" })],
       });
       expect(report.backend?.parser?.files).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a dotted alias use unresolved while an indexed C# file's declarations are unknown", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-unknown-declarations-"));
+    const real = path.join(root, "Real.cs");
+    const unparsed = path.join(root, "Unparsed.cs");
+    const main = path.join(root, "Main.cs");
+    const mainLines = ["using X = Real;", "namespace Local {", "  class Use { X.Target value; }", "}"];
+    try {
+      await writeFile(real, "namespace Real; public class Target {}\n", "utf8");
+      await writeFile(unparsed, "// CSHARP_UNKNOWN_DECLARATIONS\nnamespace Elsewhere; class Hidden {}\n", "utf8");
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const gotoTarget = async (index: ProjectIndex): Promise<string> => {
+        const result = await goToDefinition(index, {
+          file: main,
+          line: 3,
+          column: mainLines[2]!.indexOf("Target") + 1,
+        });
+        return result.status === "ok" ? path.basename(result.definition.file) : result.status;
+      };
+      const files = [real, unparsed, main];
+
+      // Without a tree, Unparsed.cs could declare `Local.X`; an unreadable file is not an empty one.
+      setNativeIndexingFailureFor("CSHARP_UNKNOWN_DECLARATIONS", "forced C# declarations indexing failure");
+      expect(await gotoTarget(await buildProjectIndexFromFiles(root, files, { useNativeWorkers: false }))).toBe(
+        "not_found",
+      );
+
+      __resetNativeTreeSitterBindingForTests();
+      expect(await gotoTarget(await buildProjectIndexFromFiles(root, files, { useNativeWorkers: false }))).toBe(
+        "Real.cs",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

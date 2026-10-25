@@ -194,7 +194,10 @@ export function csharpNamespaceAtOffset(facts: CsharpNamespaceFacts, position: n
   return closest?.name ?? null;
 }
 
-export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike, sourceLength: number): CsharpNamespaceFacts {
+export function collectCsharpNamespaceFacts(
+  tree: { rootNode: SyntaxNodeLike },
+  sourceLength: number,
+): CsharpNamespaceFacts {
   const regions: CsharpNamespaceSpan[] = [];
   const namespaces = new Set<string>();
   const symbolsByNamespace = new Map<string, Set<string>>();
@@ -278,4 +281,28 @@ export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike, sourceLength: 
     symbolsByNamespace,
     hasGlobalType,
   };
+}
+
+/**
+ * The dotted names this file's own tree declares for other files' lookup: each namespace it opens
+ * (`Outer.Inner`) and each type it declares directly in one (`Outer.Inner.Type`). A cached module
+ * keeps them because they depend on this file alone.
+ */
+export function collectCsharpDeclaredNames(tree: SyntaxTreeLike): string[] {
+  const facts = collectCsharpNamespaceFacts(tree, tree.rootNode.endIndex);
+  const names = [...facts.namespaces];
+  for (const [namespaceName, types] of facts.symbolsByNamespace) {
+    for (const type of types) names.push(`${namespaceName}.${type}`);
+  }
+  return names;
+}
+
+/**
+ * `node` itself, or its nearest ancestor that is not a `#if`, `#elif`, or `#else` wrapper: the
+ * scope a conditionally compiled declaration belongs to.
+ */
+export function csharpSkipConditionalWrappers(node: SyntaxNodeLike | null): SyntaxNodeLike | null {
+  let scope = node;
+  while (scope && CSHARP_PREPROCESSOR_WRAPPER_TYPES[scope.type]) scope = scope.parent;
+  return scope;
 }

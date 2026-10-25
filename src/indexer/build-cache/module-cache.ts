@@ -438,6 +438,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   if (!value || typeof value !== "object") return false;
   const mod = value as {
     file?: unknown;
+    csharpDeclaredNames?: unknown;
     docstringsChecked?: unknown;
     exports?: unknown;
     imports?: unknown;
@@ -452,6 +453,8 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     mod.imports.every(hasValidImportBindingRanges) &&
     Array.isArray(mod.locals) &&
     mod.locals.every(hasValidCallableSymbol) &&
+    (mod.csharpDeclaredNames === undefined ||
+      (Array.isArray(mod.csharpDeclaredNames) && mod.csharpDeclaredNames.every((name) => typeof name === "string"))) &&
     (mod.parseErrorRanges === undefined ||
       (Array.isArray(mod.parseErrorRanges) && mod.parseErrorRanges.every(hasValidParseErrorRange))) &&
     mod.exports.every((entry: unknown) => {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { collectImportsForFile, parseFile } from "../src/indexer.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { buildProjectIndexFromFiles, goToDefinition } from "../src/index.js";
+import { buildProjectIndexFromFiles, findReferences, goToDefinition } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
 function simplifyImports(imports: Awaited<ReturnType<typeof collectImportsForFile>>): unknown[] {
@@ -202,6 +202,48 @@ describe("import binding regressions", () => {
         column: mainLines[5]!.indexOf("Nested") + 1,
       });
       expect(nested.status).not.toBe("ok");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps every name in an unresolved generic C# alias target an ordinary reference", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-alias-argument-"));
+    const model = path.join(root, "Model.cs");
+    const box = path.join(root, "Box.cs");
+    const main = path.join(root, "Main.cs");
+    const mainLines = ["using B = N.Box<Model>;", "using C = N.Box<Model>.Inner;", "class Use { B value; }"];
+    try {
+      await writeFile(model, "public class Model {}\n", "utf8");
+      const boxSource = "namespace N; public class Box<T> { public class Inner {} }\n";
+      await writeFile(box, boxSource, "utf8");
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [model, box, main]);
+      const aliases = index.byFile
+        .get(fileIdentityKey(main))
+        ?.imports.filter((binding) => binding.kind === "named" && (binding.local === "B" || binding.local === "C"));
+
+      // `imported` names the target type, not a type argument, and neither alias resolves.
+      expect(aliases).toMatchObject([
+        { local: "B", imported: "Box", from: "N.Box<Model>", explicitAlias: true },
+        { local: "C", imported: "Inner", from: "N.Box<Model>.Inner", explicitAlias: true },
+      ]);
+      expect(aliases?.map((binding) => typeof binding.resolved !== "string")).toEqual([true, true]);
+      const alias = await goToDefinition(index, { file: main, line: 3, column: mainLines[2]!.indexOf("B value") + 1 });
+      expect(alias.status).not.toBe("ok");
+
+      const mainSites = async (file: string, column: number): Promise<string[]> => {
+        const references = await findReferences(index, { file, line: 1, column });
+        if (references.status !== "ok") throw new Error(`Expected references for ${path.basename(file)}`);
+        return references.references
+          .filter((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))
+          .map((reference) => `${reference.range.start.line}:${reference.range.start.column}`);
+      };
+      const column = (line: number, name: string): number => mainLines[line - 1]!.indexOf(name) + 1;
+      expect(await mainSites(model, 14)).toEqual([`1:${column(1, "Model")}`, `2:${column(2, "Model")}`]);
+      expect(await mainSites(box, boxSource.indexOf("Box") + 1)).toEqual([
+        `1:${column(1, "Box")}`,
+        `2:${column(2, "Box")}`,
+      ]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

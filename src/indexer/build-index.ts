@@ -29,6 +29,7 @@ import {
   type MatchPathFn,
 } from "../util/resolution.js";
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
+import { collectCsharpDeclaredNames } from "../util/csharp-tree.js";
 import { resolveJvmPackageImportPaths } from "../util/resolution/jvm.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
@@ -614,6 +615,7 @@ async function buildIndexedModuleForFile(args: {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
   }
+  if (sup.id === "csharp" && tree) mod.csharpDeclaredNames = collectCsharpDeclaredNames(tree);
   await resolveCrossModuleSymbolExports(
     args.file,
     mod,

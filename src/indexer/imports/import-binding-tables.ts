@@ -134,7 +134,9 @@ function csharpNodeRange(node: SyntaxNodeLike, source: string, lineStarts: numbe
 }
 function csharpAliasTargetLeaf(node: SyntaxNodeLike): SyntaxNodeLike | null {
   if (node.type === "identifier" || node.type === "predefined_type") return node;
-  if (node.type === "generic_name" || node.type === "qualified_name" || node.type === "alias_qualified_name") {
+  // A generic name is its identifier followed by type arguments; only the identifier names the target.
+  if (node.type === "generic_name") return node.namedChildren.find((child) => child.type === "identifier") ?? null;
+  if (node.type === "qualified_name" || node.type === "alias_qualified_name") {
     const name = node.childForFieldName("name");
     if (name) return csharpAliasTargetLeaf(name);
   }
@@ -202,34 +204,6 @@ function csharpTreeForContext(context: LanguageSpecificImportContext): SyntaxTre
 function csharpNamespaceFactsFor(context: LanguageSpecificImportContext, tree: SyntaxTreeLike): CsharpNamespaceFacts {
   context.csharpNamespaceFacts ??= collectCsharpNamespaceFacts(tree, context.source.length);
   return context.csharpNamespaceFacts;
-}
-
-/**
- * Spans of this file's namespaces that hide a compilation-unit alias from dotted names. C# looks a
- * name up in each enclosing namespace before the alias, so a namespace, implicit ancestor, or type
- * `E.X` hides `X.Type` inside `E`. `X::Type` reaches only aliases and is never hidden.
- */
-async function csharpAliasShadowedSpans(
-  context: LanguageSpecificImportContext,
-  tree: SyntaxTreeLike,
-  directive: SyntaxNodeLike,
-  alias: string,
-): Promise<{ start: number; end: number }[]> {
-  if (directive.parent?.type !== "compilation_unit") return [];
-  const spans: { start: number; end: number }[] = [];
-  for (const region of csharpNamespaceFactsFor(context, tree).regions) {
-    const shadowed = await hasCsharpEnclosingNamespaceFirstSegmentConflict(
-      context.projectRoot,
-      alias,
-      context.file,
-      region.name,
-      context.languageExtensions,
-      context.report,
-      context.parsedFiles,
-    );
-    if (shadowed) spans.push({ start: region.start, end: region.end });
-  }
-  return spans;
 }
 
 async function applyCsharpEnclosingNamespaceConflictOverride(
@@ -319,6 +293,8 @@ async function applyCsharpStatementOverride(
           isGlobal: false,
         };
         const lineStarts = collectLineStartOffsets(context.source);
+        // The binding stays unresolved, so it cannot restore a target token it claims: only the alias
+        // name is a binding token, and every name in the target remains an ordinary reference.
         pushCsharpOverride(
           context,
           unresolved,
@@ -326,7 +302,6 @@ async function applyCsharpStatementOverride(
           unresolved.value,
           { external: unresolved.value },
           csharpNodeRange(alias, context.source, lineStarts),
-          csharpNodeRange(leaf, context.source, lineStarts),
         );
       }
       return true;
@@ -400,7 +375,6 @@ async function applyCsharpStatementOverride(
     context.parsedFiles,
   );
   if (parsed.alias && namespaceTargets.length) {
-    const shadowedSpans = tree ? await csharpAliasShadowedSpans(context, tree, directive, parsed.alias.text) : [];
     context.pushBinding({
       kind: "namespace",
       localNS: normalizeCsharpIdentifier(parsed.alias.text),
@@ -408,7 +382,6 @@ async function applyCsharpStatementOverride(
       ...(namespaceTargets.length === 1 ? { resolved: namespaceTargets[0]!.replace(/\\/g, "/") } : {}),
       typeOnly,
       ...(localRange ? { localRange } : {}),
-      ...(shadowedSpans.length ? { shadowedSpans } : {}),
     });
     return true;
   }

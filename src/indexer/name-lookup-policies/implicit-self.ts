@@ -112,11 +112,11 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   beforeCrossModule({ use }) {
     const chainNode = csharpQualifiedNameNode(use.node);
     const lead = chainNode && csharpChainQualifier(chainNode, use.parsed.source);
-    return lead && csharpAliasShadowedAt(use.mod.imports, lead.qualifier, use.parsed.source)
+    return lead && csharpAliasShadowedAt(use.index, use.mod, lead.qualifier, use.parsed.source)
       ? { status: "not_found", reason: CSHARP_SHADOWED_ALIAS_REASON }
       : undefined;
   },
-  shadowsModuleAlias: (use) => csharpAliasShadowedAt(use.mod.imports, use.node, use.parsed.source),
+  shadowsModuleAlias: (use) => csharpAliasShadowedAt(use.index, use.mod, use.node, use.parsed.source),
   // A static member function reaches only static members of its type.
   onLocal(state, local) {
     if (!bindsTypeMethod(state) || !isImplicitSelfCall(state)) return undefined;
