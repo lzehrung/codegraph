@@ -5,6 +5,7 @@ import { getImportableLanguageExtensions, STYLESHEET_RESOLUTION_EXTENSIONS } fro
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "./csharp.js";
 import { resolveJvmPackageImportPaths } from "./jvm.js";
 import { resolveTerraformModuleSourcePaths } from "./terraform.js";
+import type { BuildReport } from "../../indexer/types.js";
 import type { MatchPathFn } from "./tsconfig.js";
 import type {
   CFamilyIncludeForm,
@@ -27,6 +28,7 @@ export type SpecifierTargetMetadata = {
   includeForm?: CFamilyIncludeForm;
   rubyLoadForm?: RubyLoadForm;
   languageExtensions?: LanguageExtensionMap;
+  report?: BuildReport;
   /** Distinguishes `import p.C.*` from `import p.C` when both a package and a class exist. */
   jvmPackageWildcard?: true;
   /** Rust tries this spelling before `specifier` when it differs, without `pathAttribute`. */
@@ -183,6 +185,7 @@ async function resolveCsharpOrRubyTargets(
       specifier,
       file,
       metadata.languageExtensions,
+      metadata.report,
     );
     if (namespaceTargets.length) return { files: namespaceTargets, externalName: specifier };
     const typeMatch = await resolveCsharpDottedTypeImportPath(

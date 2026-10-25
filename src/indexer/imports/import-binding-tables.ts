@@ -17,13 +17,14 @@ import {
 } from "../../util/csharp-tree.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
+import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute } from "../../util/resolution/rust.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
 import type { Range } from "../../types.js";
 import type { CFamilyIncludeForm, RubyLoadForm } from "../../util/specifiers.js";
-import type { ImportBinding } from "../types.js";
+import type { BuildReport, ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
 
 /**
@@ -50,6 +51,7 @@ export type LanguageSpecificImportContext = ImportBindingSink & {
   languageExtensions?: LanguageExtensionMap;
   /** Parsed native C# tree reused to resolve using-directive captures. */
   csharpTree?: SyntaxTreeLike | null;
+  report?: BuildReport;
   getBindings: () => ImportBinding[];
   replaceBindings: (bindings: ImportBinding[]) => void;
 };
@@ -161,7 +163,17 @@ function pushCsharpOverride(
 function csharpTreeForContext(context: LanguageSpecificImportContext): SyntaxTreeLike | null {
   if (context.csharpTree !== undefined) return context.csharpTree;
   const support = supportForFileWithoutHeaderSample(context.file, context.languageExtensions);
-  return support?.id === "csharp" ? parseCsharpSyntaxTree(context.source, support) : null;
+  if (support?.id !== "csharp") return null;
+  const parsed = parseCsharpSyntaxTree(context.source, support);
+  if (!parsed.tree) {
+    recordParserBackendDegradation(context.report, {
+      file: context.file.replace(/\\/g, "/"),
+      languageId: support.id,
+      ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
+      ...(parsed.error ? { nativeError: parsed.error } : {}),
+    });
+  }
+  return parsed.tree;
 }
 
 function csharpImportNodeForStatement(
@@ -245,6 +257,7 @@ async function applyCsharpStatementOverride(
     parsed.value,
     context.file,
     context.languageExtensions,
+    context.report,
   );
   if (parsed.alias && namespaceTargets.length) {
     context.pushBinding({
@@ -282,6 +295,7 @@ async function applyCsharpStatementOverride(
           fallbackFrom,
           context.file,
           context.languageExtensions,
+          context.report,
         );
         if (fallbackNamespaceTargets.length > 1) {
           const typeMatch = await resolveCsharpDottedTypeImportPath(

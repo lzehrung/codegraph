@@ -377,6 +377,54 @@ describe("C# namespace aliases", () => {
     }
   });
 
+  it("finds member references through a split namespace alias across directories", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-split-alias-refs-"));
+    const widgetFile = path.join(root, "Types", "Widget.cs");
+    const helperFile = path.join(root, "Helpers", "Helper.cs");
+    const useFile = path.join(root, "Consumer", "Use.cs");
+    const targetLines = ["namespace Shared;", "public class Widget {", "  public static void Build() {}", "}"];
+    const useLines = ["using S = Shared;", "class Use {", "  void M() { S::Widget.Build(); }", "}"];
+    try {
+      await mkdir(path.dirname(widgetFile), { recursive: true });
+      await mkdir(path.dirname(helperFile), { recursive: true });
+      await mkdir(path.dirname(useFile), { recursive: true });
+      await writeFile(widgetFile, targetLines.join("\n") + "\n", "utf8");
+      await writeFile(helperFile, "namespace Shared; public class Helper {}\n", "utf8");
+      await writeFile(useFile, useLines.join("\n") + "\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [widgetFile, helperFile, useFile]);
+      const alias = index.byFile
+        .get(fileIdentityKey(useFile))
+        ?.imports.find((binding) => binding.kind === "namespace" && binding.localNS === "S");
+      expect(alias?.resolved).toBeUndefined();
+
+      const goto = await goToDefinition(index, {
+        file: useFile,
+        line: 3,
+        column: columnOf(useLines, 3, "Widget"),
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected namespace-alias member navigation");
+      expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(widgetFile));
+      expect(goto.definition.localName).toBe("Widget");
+      const { getCachedReferenceCandidateFiles } = await import("../../src/indexer/navigation-references.js");
+      const candidates = getCachedReferenceCandidateFiles(index, goto.definition, ["Widget"], false, "csharp");
+      expect(candidates.map(fileIdentityKey)).toContain(fileIdentityKey(useFile));
+
+      const references = await findReferences(index, {
+        file: widgetFile,
+        line: 2,
+        column: columnOf(targetLines, 2, "Widget"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected namespace-alias references");
+      expect(
+        references.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(useFile)),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("keeps an external namespace alias external", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-external-"));
     const main = path.join(root, "NamespaceAlias.cs");

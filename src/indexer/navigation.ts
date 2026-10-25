@@ -1,3 +1,4 @@
+import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { pythonPropertyDecorator } from "./python-property-decorator.js";
@@ -67,6 +68,7 @@ import {
 } from "./navigation-references.js";
 import {
   directModuleValueEntry,
+  csharpNamespaceImportDirectories,
   javaStaticNamedImportIncludes,
   resolveExport,
   resolveImported,
@@ -78,7 +80,7 @@ import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import type { ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
-import { fileIdentityKey } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import {
@@ -1234,6 +1236,41 @@ async function findReferencesInternal(
       if (hasReachedCollectionLimit()) break;
       if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) continue;
       const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
+      if (!targetFile && parsedContext.sup.id === "csharp" && imp.kind === "namespace") {
+        const namespaceTargets = csharpNamespaceImportDirectories(index).get(imp) ?? [];
+        const targetDirectories = new Set(
+          namespaceTargets.map((target) => fileIdentityKey(path.posix.dirname(normalizePath(target)))),
+        );
+        const definitionIsTargeted = [definition, ...equivalentDefinitions].some((candidate) =>
+          targetDirectories.has(fileIdentityKey(path.posix.dirname(normalizePath(candidate.file)))),
+        );
+        if (definitionIsTargeted) {
+          for (const exportedName of exportedNames) {
+            if (hasReachedCollectionLimit()) break;
+            const ranges = await collectVerifiedNamedNodeReferences(
+              index,
+              fileId,
+              exportedName,
+              definition,
+              (params, parsed) => goToDefinition(index, params, parsed),
+              remainingCollectionSlots(),
+              verifiedReferenceFilter(fileId),
+              (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
+              equivalentDefinitions,
+            );
+            for (const { range, provenance, via } of ranges) {
+              if (hasReachedCollectionLimit()) break;
+              pushRef({
+                file: fileId,
+                range,
+                via: { import: imp, ...(via ?? {}) },
+                ...(provenance ? { provenance } : {}),
+              });
+            }
+          }
+        }
+        continue;
+      }
       const bindingSites = importBindingReferenceSites(imp);
       let verifiedBindingMatches: boolean | undefined;
       const bindingMatchesDefinition = async (): Promise<boolean> => {

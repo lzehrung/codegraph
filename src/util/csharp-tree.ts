@@ -1,7 +1,12 @@
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
-import { getNativeSyntaxTreeExecution } from "../native/tree-sitter-native.js";
+import {
+  getNativeSyntaxTreeExecution,
+  type NativeFallbackReason,
+  type NativeSyntaxTreeExecution,
+} from "../native/tree-sitter-native.js";
+import { errorMessage } from "./errors.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "./identifiers.js";
 
 const CSHARP_NAME_NODE_TYPES: Record<string, true> = {
@@ -57,10 +62,37 @@ export type CsharpNamespaceFacts = {
   hasGlobalType: boolean;
 };
 
-export function parseCsharpSyntaxTree(source: string, support: LanguageSupport): SyntaxTreeLike | null {
-  if (support.id !== "csharp") return null;
-  const execution = getNativeSyntaxTreeExecution(source, support);
-  return execution.tree ? new ProjectedSyntaxTree(source, execution.tree) : null;
+export type CsharpSyntaxTreeResult = {
+  tree: SyntaxTreeLike | null;
+  fallbackReason?: NativeFallbackReason;
+  error?: string;
+};
+
+export function csharpSyntaxTreeFromNativeExecution(
+  source: string,
+  execution: Pick<NativeSyntaxTreeExecution, "tree" | "fallbackReason" | "error">,
+): CsharpSyntaxTreeResult {
+  if (!execution.tree) {
+    return {
+      tree: null,
+      ...(execution.fallbackReason ? { fallbackReason: execution.fallbackReason } : {}),
+      ...(execution.error ? { error: execution.error } : {}),
+    };
+  }
+  try {
+    return { tree: new ProjectedSyntaxTree(source, execution.tree) };
+  } catch (error) {
+    return {
+      tree: null,
+      fallbackReason: execution.fallbackReason ?? "queryFailure",
+      error: errorMessage(error),
+    };
+  }
+}
+
+export function parseCsharpSyntaxTree(source: string, support: LanguageSupport): CsharpSyntaxTreeResult {
+  if (support.id !== "csharp") return { tree: null };
+  return csharpSyntaxTreeFromNativeExecution(source, getNativeSyntaxTreeExecution(source, support));
 }
 
 /** Builds a C# name path from native syntax nodes, omitting generic arguments. */
@@ -105,7 +137,9 @@ export function csharpImportDirectiveAt(
   startIndex: number,
 ): SyntaxNodeLike | null {
   if (!tree) return null;
-  let node: SyntaxNodeLike | null = tree.rootNode.descendantForIndex(startIndex, startIndex);
+  const root = tree.rootNode;
+  if (startIndex < root.startIndex || startIndex >= root.endIndex) return null;
+  let node: SyntaxNodeLike | null = root.descendantForIndex(startIndex, startIndex + 1);
   while (node && !CSHARP_IMPORT_DIRECTIVE_TYPES[node.type]) node = node.parent;
   return node;
 }
@@ -121,8 +155,9 @@ export function collectCsharpImportDirectives(tree: SyntaxTreeLike): SyntaxNodeL
       directives.push(node);
       continue;
     }
-    for (let index = node.namedChildren.length - 1; index >= 0; index -= 1) {
-      const child = node.namedChildren[index];
+    const children = node.namedChildren;
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      const child = children[index];
       if (child) stack.push(child);
     }
   }

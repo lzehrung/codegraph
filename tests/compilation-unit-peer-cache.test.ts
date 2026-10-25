@@ -284,4 +284,25 @@ describe("compilation-unit peer cache", () => {
     expect(peerKeys(after)).toEqual(new Set([fileIdentityKey(first.file), fileIdentityKey(sibling.file)]));
     expect(after.complete).toBe(true);
   });
+  it("uses the selected language mapping when extracting C# namespace peers", () => {
+    const root = path.resolve("cg-unit-peer-cache-csharp-extension").replace(/\\/g, "/");
+    const mapped: IndexedFile = {
+      file: path.join(root, "Use.csharpx").replace(/\\/g, "/"),
+      source: "namespace Q; class Use {}\n",
+    };
+    const related: IndexedFile = {
+      file: path.join(root, "Sibling.cs").replace(/\\/g, "/"),
+      source: "namespace Q; class Sibling {}\n",
+    };
+    const decoy: IndexedFile = {
+      file: path.join(root, "Decoy.cs").replace(/\\/g, "/"),
+      source: "namespace P; class Decoy {}\n",
+    };
+    const { index } = stubIndex([mapped, related, decoy]);
+    index.languageExtensions = { ".csharpx": "csharp" };
+
+    expect(peerKeys(getCompilationUnitPeers(index, mapped.file))).toEqual(
+      new Set([mapped, related].map((entry) => fileIdentityKey(entry.file))),
+    );
+  });
 });

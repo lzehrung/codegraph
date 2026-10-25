@@ -740,7 +740,7 @@ const csharpNamespaceImportDirectoryFiles = new WeakMap<ProjectIndex, Map<Import
  * one file reaches the rest of its directory, so one file per directory covers every declaration
  * of `N`. Built once per index.
  */
-function csharpNamespaceImportDirectories(index: ProjectIndex): Map<ImportBinding, FileId[]> {
+export function csharpNamespaceImportDirectories(index: ProjectIndex): Map<ImportBinding, FileId[]> {
   const cached = csharpNamespaceImportDirectoryFiles.get(index);
   if (cached) return cached;
   const edgesByImporter = new Map<string, Map<string, Map<string, FileId>>>();

@@ -4,16 +4,19 @@ import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../iden
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
 import { selectUniqueCsharpNamespaceTypeFile } from "../../indexer/shared-owner-identity.js";
 import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
-import {
-  buildDeclaredContainerIndex,
-  getOrCreateProjectSymbolIndex,
-  type LanguageProjectSymbolIndex,
-} from "./project-symbols.js";
+import { buildDeclaredContainerIndex, type LanguageProjectSymbolIndex } from "./project-symbols.js";
+import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
+import type { BuildReport } from "../../indexer/types.js";
 import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../csharp-tree.js";
 
 type CsharpNamespaceIndexEntry = {
   namespaces: string[];
   symbolsByNamespace: ReadonlyMap<string, ReadonlySet<string>>;
+};
+
+type CsharpProjectNamespaceIndexResult = {
+  index: LanguageProjectSymbolIndex;
+  complete: boolean;
 };
 
 /**
@@ -30,40 +33,74 @@ export type CsharpNamespaceTypeResolution =
   | { status: "partial" };
 
 const csharpNamespaceFileCache = new Map<string, CsharpNamespaceIndexEntry>();
-const csharpProjectNamespaceIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
-
+const csharpProjectNamespaceIndexCache = new Map<string, Promise<CsharpProjectNamespaceIndexResult>>();
 function collectCsharpNamespaceIndex(
   source: string,
   filePath: string,
-): { namespaces: string[]; symbolsByNamespace: Map<string, Set<string>> } {
-  const support = supportForFileWithoutHeaderSample(filePath);
-  const tree = support?.id === "csharp" ? parseCsharpSyntaxTree(source, support) : null;
-  if (!tree) return { namespaces: [], symbolsByNamespace: new Map<string, Set<string>>() };
-  const facts = collectCsharpNamespaceFacts(tree, source.length);
+  languageExtensions: LanguageExtensionMap | undefined,
+  report: BuildReport | undefined,
+): CsharpNamespaceIndexEntry | null {
+  const support = supportForFileWithoutHeaderSample(filePath, languageExtensions);
+  if (support?.id !== "csharp") return { namespaces: [], symbolsByNamespace: new Map() };
+  const parsed = parseCsharpSyntaxTree(source, support);
+  if (!parsed.tree) {
+    recordParserBackendDegradation(report, {
+      file: filePath.replace(/\\/g, "/"),
+      languageId: support.id,
+      ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
+      ...(parsed.error ? { nativeError: parsed.error } : {}),
+    });
+    return null;
+  }
+  const facts = collectCsharpNamespaceFacts(parsed.tree, source.length);
   return { namespaces: facts.namespaces, symbolsByNamespace: facts.symbolsByNamespace };
 }
 
-async function readCsharpNamespaceIndex(filePath: string): Promise<CsharpNamespaceIndexEntry> {
+async function readCsharpNamespaceIndex(
+  filePath: string,
+  languageExtensions: LanguageExtensionMap | undefined,
+  report: BuildReport | undefined,
+): Promise<CsharpNamespaceIndexEntry | null> {
   const cached = csharpNamespaceFileCache.get(filePath);
   if (cached) return cached;
 
   const source = await readUtf8WithoutBom(filePath);
-  const collected = collectCsharpNamespaceIndex(source, filePath);
-  const entry = { namespaces: collected.namespaces, symbolsByNamespace: collected.symbolsByNamespace };
-  csharpNamespaceFileCache.set(filePath, entry);
+  const entry = collectCsharpNamespaceIndex(source, filePath, languageExtensions, report);
+  if (entry) csharpNamespaceFileCache.set(filePath, entry);
   return entry;
 }
 
-async function getCsharpProjectNamespaceIndex(indexRoot: string): Promise<LanguageProjectSymbolIndex> {
-  return await getOrCreateProjectSymbolIndex(csharpProjectNamespaceIndexCache, indexRoot, async () =>
-    buildDeclaredContainerIndex(indexRoot, getImportableLanguageGlobs("csharp"), async (filePath) => {
-      const entry = await readCsharpNamespaceIndex(filePath);
+async function getCsharpProjectNamespaceIndex(
+  indexRoot: string,
+  languageExtensions: LanguageExtensionMap | undefined = undefined,
+  report: BuildReport | undefined = undefined,
+): Promise<LanguageProjectSymbolIndex> {
+  let pending = csharpProjectNamespaceIndexCache.get(indexRoot);
+  if (!pending) {
+    let complete = true;
+    pending = buildDeclaredContainerIndex(indexRoot, getImportableLanguageGlobs("csharp"), async (filePath) => {
+      const entry = await readCsharpNamespaceIndex(filePath, languageExtensions, report);
+      if (!entry) {
+        complete = false;
+        return [];
+      }
       return entry.namespaces.map((name) => {
         const symbols = entry.symbolsByNamespace.get(name);
         return symbols ? { name, symbols } : { name };
       });
-    }),
-  );
+    })
+      .then((index) => ({ index, complete }))
+      .catch((error: unknown) => {
+        csharpProjectNamespaceIndexCache.delete(indexRoot);
+        throw error;
+      });
+    csharpProjectNamespaceIndexCache.set(indexRoot, pending);
+  }
+  const result = await pending;
+  if (!result.complete && csharpProjectNamespaceIndexCache.get(indexRoot) === pending) {
+    csharpProjectNamespaceIndexCache.delete(indexRoot);
+  }
+  return result.index;
 }
 
 /**
@@ -76,9 +113,10 @@ export async function resolveCsharpNamespaceImportPaths(
   spec: string,
   fromFile: string,
   languageExtensions?: LanguageExtensionMap,
+  report?: BuildReport,
 ): Promise<string[]> {
   const indexRoot = await resolveNearestManifestRoot(projectRoot, fromFile, CSHARP_PACKAGE_MANIFEST_NAMES);
-  const projectIndex = await getCsharpProjectNamespaceIndex(indexRoot);
+  const projectIndex = await getCsharpProjectNamespaceIndex(indexRoot, languageExtensions, report);
   const normalized = normalizeCsharpQualifiedName(spec);
   const lookup = normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
   if (!lookup) return [];

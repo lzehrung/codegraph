@@ -82,15 +82,6 @@ export function normalizeCsharpQualifiedName(text: string): string {
 export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]*`;
 
 /**
- * C# identifiers (ECMA-334 `identifier-start-character`/`identifier-part-character`) permit a
- * Unicode letter (Lu/Ll/Lt/Lm/Lo), a letter-number (Nl), or a literal underscore at the first
- * position, plus an optional leading `@` for a verbatim identifier (escaping a keyword, e.g.
- * `@class`); continuation additionally allows decimal digits (Nd), connecting-punctuation
- * (Pc), combining marks (Mn/Mc), and formatting characters.
- */
-export const CSHARP_IDENTIFIER_SOURCE = String.raw`@?[\p{L}\p{Nl}_][\p{L}\p{Nl}_\p{Nd}\p{Pc}\p{Mn}\p{Mc}${CSHARP_IDENTIFIER_FORMAT_SOURCE}]*`;
-
-/**
  * Go identifiers (`unicode_letter`/`unicode_digit` in the Go spec's `identifier` production)
  * permit a Unicode letter (Lu/Ll/Lt/Lm/Lo) or underscore at every position; continuation
  * additionally allows decimal digits (Nd). Letter-numbers (Nl), other number categories

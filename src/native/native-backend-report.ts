@@ -10,6 +10,7 @@ import type {
   BuildReport,
   NativeBackendFallbackReason,
   NativeBackendLanguageReport,
+  ParserBackendDegradationReport,
 } from "../indexer/types.js";
 import { stringifyUnknown } from "../util/ast.js";
 
@@ -132,4 +133,18 @@ export function recordNativeExecutionOutcome(report: BuildReport | undefined, ou
     ...(outcome.fallbackReason ? { fallbackReason: outcome.fallbackReason } : {}),
     ...(outcome.error ? { error: outcome.error } : {}),
   });
+}
+
+export function recordParserBackendDegradation(
+  report: BuildReport | undefined,
+  entry: ParserBackendDegradationReport["files"][number],
+): void {
+  const backend = initNativeBackendReport(report);
+  if (!backend) return;
+  backend.parser ??= { total: 0, byLanguage: {}, files: [] };
+  const parserReport = backend.parser;
+  parserReport.total += 1;
+  parserReport.byLanguage[entry.languageId] = (parserReport.byLanguage[entry.languageId] ?? 0) + 1;
+  if (parserReport.files.length >= 20) return;
+  parserReport.files.push(entry);
 }

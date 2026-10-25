@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { supportForFileWithoutHeaderSample } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { FileId, Range } from "../types.js";
 import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
+import { recordParserBackendDegradation } from "../native/native-backend-report.js";
 import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
 import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
-import type { ProjectIndex } from "./types.js";
+import type { BuildReport, ProjectIndex } from "./types.js";
 
 /**
  * Proven same-compilation-unit peers for implicit bare-name visibility and shared-owner lookup
@@ -119,12 +120,24 @@ export type CsharpNamespaceRegion = {
   end: number;
 };
 
-function collectCsharpNamespaceRegions(source: string, filePath: string): CsharpNamespaceRegion[] {
-  const support = supportForFileWithoutHeaderSample(filePath);
+function collectCsharpNamespaceRegions(
+  source: string,
+  filePath: string,
+  support: LanguageSupport | undefined,
+  report: BuildReport | undefined,
+): CsharpNamespaceRegion[] | null {
   if (support?.id !== "csharp") return [];
-  const tree = parseCsharpSyntaxTree(source, support);
-  if (!tree) return [];
-  const facts = collectCsharpNamespaceFacts(tree, source.length);
+  const parsed = parseCsharpSyntaxTree(source, support);
+  if (!parsed.tree) {
+    recordParserBackendDegradation(report, {
+      file: filePath,
+      languageId: support.id,
+      ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
+      ...(parsed.error ? { nativeError: parsed.error } : {}),
+    });
+    return null;
+  }
+  const facts = collectCsharpNamespaceFacts(parsed.tree, source.length);
   if (facts.regions.length && facts.hasGlobalType) {
     facts.regions.unshift({ name: "", start: 0, end: source.length });
   }
@@ -215,7 +228,8 @@ export function getCsharpNamespaceRegions(
   const cached = cache.get(fileKey);
   if (cached !== undefined) return cached;
   const source = unitDeclarationSource(index, filePath, fileKey);
-  const regions = source === null ? null : collectCsharpNamespaceRegions(source, filePath);
+  const support = supportForFileWithoutHeaderSample(filePath, index.languageExtensions);
+  const regions = source === null ? null : collectCsharpNamespaceRegions(source, filePath, support, index.buildReport);
   cache.set(fileKey, regions);
   return regions;
 }
