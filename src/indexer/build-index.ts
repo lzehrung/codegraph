@@ -1729,7 +1729,10 @@ async function buildIndexFromFileListShared(
     );
     for (const file of staleCachedModules) {
       const probe = cacheProbes.get(file);
-      if (probe && !("error" in probe)) cacheProbes.set(file, { ...probe, mod: null });
+      if (probe && !("error" in probe)) {
+        if (probe.mod) primeReusedCsharpNamespaceFacts(file, probe.mod, opts);
+        cacheProbes.set(file, { ...probe, mod: null });
+      }
       cachedGraphEntries?.delete(file);
     }
   }
@@ -2826,6 +2829,8 @@ export async function buildProjectIndexIncremental(
         }
       }
       const reverseDeps = buildTrackedFileReverseDependencies(trackedEntries);
+      // Dependents rebuilt only because a file they depend on changed: their own source may be unchanged.
+      const dependentsToPrime = new Set<string>();
       const invalidateCachedDependents = () => {
         const dependentFilesOfChanged = collectTrackedFileDependents(trackedEntries, changedFiles, reverseDeps);
         for (const file of dependentFilesOfChanged) {
@@ -2835,6 +2840,8 @@ export async function buildProjectIndexIncremental(
             if (fileReport) {
               fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
             }
+          } else if (!changedFiles.has(file)) {
+            dependentsToPrime.add(file);
           }
           markAsChanged(file);
         }
@@ -2858,7 +2865,27 @@ export async function buildProjectIndexIncremental(
         ? await tryLoadPersistedBloomFilters(projectRoot, opts, report)
         : null;
       for (const file of allFiles) {
-        if (changedFiles.has(file)) continue;
+        if (changedFiles.has(file)) {
+          if (
+            dependentsToPrime.has(file) &&
+            supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id === "csharp"
+          ) {
+            const key = fileIdentityKey(file);
+            const sigInfo = fileSignatures.get(file)!;
+            const reusable =
+              snapshotModules?.get(key) ??
+              (cacheEnabled
+                ? tryLoadFromCache(
+                    projectRoot,
+                    file,
+                    await moduleCacheSignatureForFile(file, sigInfo, opts, resolverEnvironmentFingerprint),
+                    opts,
+                  )
+                : null);
+            if (reusable) primeReusedCsharpNamespaceFacts(file, reusable, opts);
+          }
+          continue;
+        }
         const sigInfo = fileSignatures.get(file)!;
         let cached: ModuleIndex | null = null;
         const snapshotMod = snapshotModules?.get(fileIdentityKey(file));

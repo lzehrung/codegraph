@@ -16,7 +16,7 @@ namespace Edge.App
             CoreBox.Node nested = new(); // @ref node @known-gap nested-type observed=none
             nested.Id = Build(4); // @ref id @known-gap nested-member observed=none
             var built = Build(4); // @ref build
-            var two = Two(1, 2); // @ref twoPair @known-gap partial_static_method_reference observed=none
+            var two = Two(1, 2); // @ref twoPair @not-ref twoOne @known-gap partial_static_method_reference observed=none
             var tag = box.Tag(); // @ref tag @known-gap extension-method observed=none
             var tagGoto = box.Tag(); // @goto tag=Tag @known-gap extension-goto observed=not_found
             var extra = box.Extra; // @ref extra @known-gap partial-member observed=none

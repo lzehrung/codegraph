@@ -1197,3 +1197,54 @@ describe("C# partial type split across a file-scoped and a block namespace", () 
     }
   });
 });
+
+describe("C# namespace scan after a touched-file build", () => {
+  const builds = {
+    files: (root: string, files: string[], options: object) => buildProjectIndexFromFiles(root, files, options),
+    full: (root: string, _files: string[], options: object) => buildProjectIndex(root, options),
+    incremental: (root: string, _files: string[], options: object) => buildProjectIndexIncremental(root, options),
+  };
+  for (const [mode, build] of Object.entries(builds)) {
+    it(`parses no unchanged importer on the main thread (${mode} build)`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-touched-scan-"));
+      const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-touched-scan-cache-"));
+      try {
+        const sources: Record<string, string> = { "Types.cs": "namespace N; public class T {}\n" };
+        for (let importer = 0; importer < 6; importer += 1) {
+          sources[`Use${importer}.cs`] = `using N;\nclass Use${importer} { T value; }\n`;
+        }
+        await writeFixtureFiles(root, sources);
+        const files = Object.keys(sources).map((name) => path.join(root, name));
+        const options = { cache: "disk" as const, cacheDir, threads: 1, useNativeWorkers: false };
+        await build(root, files, options);
+        clearMemoryCache();
+
+        // Every importer is rebuilt because Types.cs changed, yet none of their own sources did.
+        await writeFile(path.join(root, "Types.cs"), "namespace N; public class T { int x; }\n", "utf8");
+        const state = loadBinding();
+        if (!state.loaded || !state.binding.parseSyntaxTree) throw new Error("Native addon required for C# tree tests");
+        const parseSyntaxTree = state.binding.parseSyntaxTree;
+        let treeParses = 0;
+        __setNativeTreeSitterBindingForTests({
+          ...state,
+          binding: {
+            ...state.binding,
+            parseSyntaxTree: (source, languageId) => {
+              treeParses += 1;
+              return parseSyntaxTree(source, languageId);
+            },
+          },
+        });
+        const report: BuildReport = { timings: {} };
+        await build(root, files, { ...options, report });
+
+        expect(report.files?.parsed).toBe(files.length);
+        expect(treeParses).toBe(0);
+      } finally {
+        clearMemoryCache();
+        await rm(root, { recursive: true, force: true });
+        await rm(cacheDir, { recursive: true, force: true });
+      }
+    });
+  }
+});

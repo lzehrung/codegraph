@@ -234,7 +234,7 @@ export async function applyCsharpImportDirective(
       context.parsedFiles,
     );
     const qualifiedType = normalizeCsharpQualifiedName(parsed.value).replace(/^global::/u, "");
-    if (typeMatch.status === "found" && qualifiedType.includes(".")) {
+    if (typeMatch.status === "found" && !typeMatch.parts && qualifiedType.includes(".")) {
       context.pushBinding({
         kind: "star",
         from: parsed.value,

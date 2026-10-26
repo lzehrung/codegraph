@@ -32,12 +32,13 @@ type CsharpProjectNamespaceIndexResult = {
 /**
  * A namespace-qualified type name found in more than one declaring file.
  * `found` is the one declaration, or the partial-type representative when every
- * part shares one owner. `ambiguous` and `partial` never name a file: ambiguity
+ * part shares one owner; `parts` is then the number of declaring files, so a caller that needs every
+ * part can tell it holds only one. `ambiguous` and `partial` never name a file: ambiguity
  * is proven, and `partial` means a candidate could not be read so uniqueness is
  * not proven. Callers must not fall through to the first path match.
  */
 export type CsharpNamespaceTypeResolution =
-  | { status: "found"; file: string }
+  | { status: "found"; file: string; parts?: number }
   | { status: "not_found" }
   | { status: "ambiguous" }
   | { status: "partial" };
@@ -246,13 +247,14 @@ export async function resolveCsharpNamespaceTypePath(
   const confined = await confineCsharpTypeFiles(projectRoot, files, languageExtensions);
   if (confined.length === 0) return { status: "not_found" };
   if (confined.length === 1) return { status: "found", file: confined[0]! };
-  return selectUniqueCsharpNamespaceTypeFile(
+  const selected = selectUniqueCsharpNamespaceTypeFile(
     confined,
     namespaceLookup,
     normalizedType,
     languageExtensions,
     parsedFiles,
   );
+  return selected.status === "found" ? { ...selected, parts: confined.length } : selected;
 }
 
 /** Resolves a C# namespace-qualified type from its source name. */
