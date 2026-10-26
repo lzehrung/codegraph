@@ -436,7 +436,8 @@ function importScopeAt(root: SyntaxNodeLike, start: number): SyntaxNodeLike | nu
   return enclosingImportScope(nameNode);
 }
 
-export const CSHARP_SHADOWED_ALIAS_REASON = "C# alias is shadowed by an enclosing namespace member";
+const CSHARP_SHADOWED_ALIAS_REASON = "C# alias is shadowed by an enclosing namespace member";
+const CSHARP_INCOMPLETE_ALIAS_REASON = "C# namespace alias was bound while a project file could not be read";
 
 /** The leading name `X` of a C# dotted or alias-qualified name (`X.Y.Z`, `X::Y`) and the names it qualifies. */
 export function csharpChainQualifier(
@@ -458,7 +459,7 @@ const csharpNamespaceFactsByRoot = new WeakMap<SyntaxNodeLike, CsharpNamespaceFa
  * binding a cached module holds. An alias under `#if`, `#elif`, or `#else` belongs to the
  * compilation unit; a namespace-scoped alias is not checked. `X::Type` binds only aliases.
  */
-export function csharpAliasShadowedAt(
+function csharpAliasShadowedAt(
   index: ProjectIndex,
   mod: ModuleIndex,
   qualifier: SyntaxNodeLike,
@@ -480,6 +481,28 @@ export function csharpAliasShadowedAt(
   }
   const enclosing = csharpNamespaceAtOffset(facts, qualifier.startIndex);
   return !!enclosing && csharpNamespaceChainDeclares(index, mod, enclosing, CSHARP_SUPPORT.normalizeIdentifier(name));
+}
+
+/**
+ * Why a use led by the compilation-unit alias `qualifier` names (`X.Type`, `X::Type`) is unproven, or `null`
+ * when the alias stands. An enclosing namespace can shadow the alias. A namespace alias bound while a project
+ * file that could declare its namespace was unreadable keeps its targets, but that file may declare the same
+ * type name, so no type found through the alias is proven to be the only one.
+ */
+export function csharpAliasUnprovenReason(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  qualifier: SyntaxNodeLike,
+  source: string,
+): string | null {
+  if (csharpAliasShadowedAt(index, mod, qualifier, source)) return CSHARP_SHADOWED_ALIAS_REASON;
+  const alias = innermostNamespaceImport(
+    mod.imports,
+    sliceText(qualifier, source),
+    qualifier,
+    CSHARP_SUPPORT.normalizeIdentifier,
+  );
+  return alias?.kind === "namespace" && alias.incompleteScan ? CSHARP_INCOMPLETE_ALIAS_REASON : null;
 }
 
 /**
@@ -711,11 +734,14 @@ export async function resolveMemberAccessDefinition(params: {
   if (!memberNode) return null;
   if (sup.id === "csharp") {
     const lead = csharpChainQualifier(memberNode, source);
-    if (lead && csharpAliasShadowedAt(index, mod, lead.qualifier, source)) {
-      // A parameter, local, or member named like the alias is a value that C# binds before any alias.
+    const reason = lead ? csharpAliasUnprovenReason(index, mod, lead.qualifier, source) : null;
+    if (lead && reason) {
+      // A parameter, local, or member named like the alias is a value that C# binds before any alias,
+      // except after `::`, which reaches aliases only.
       const scopeIndex = getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree);
       const closest = findClosestScopeBinding(scopeIndex, sliceText(lead.qualifier, source), lead.qualifier, sup);
-      if (!closest || closest.import) return { status: "not_found", reason: CSHARP_SHADOWED_ALIAS_REASON };
+      const aliasQualified = lead.qualifier.parent?.type === "alias_qualified_name";
+      if (aliasQualified || !closest || closest.import) return { status: "not_found", reason };
     }
   }
   const { object: obj, property: prop } = getMemberAccessParts(sup, memberNode);

@@ -94,11 +94,11 @@ describe("monorepo resolution boundaries", () => {
     await writeFile(libB, "namespace Shared;\npublic class Lib {}\n");
     await writeFile(appA, "using Shared;\npublic class App { Shared.Lib lib; }\n");
 
-    const local = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
+    const { files: local } = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
     expect(local.map(posix)).toEqual([posix(libA)]);
     expect(local.map(posix)).not.toContain(posix(libB));
 
-    const fromB = await resolveCsharpNamespaceImportPaths(root, "Shared", libB);
+    const { files: fromB } = await resolveCsharpNamespaceImportPaths(root, "Shared", libB);
     expect(fromB.map(posix)).toEqual([posix(libB)]);
   });
 
@@ -162,7 +162,7 @@ describe("monorepo resolution boundaries", () => {
     expect(posix(beside ?? "")).toBe(posix(realProj));
     expect(posix(await resolveNearestManifestRoot(root, appA, CSHARP_PACKAGE_MANIFEST_NAMES))).toBe(posix(pkgA));
 
-    const local = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
+    const { files: local } = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
     expect(local.map(posix)).toEqual([posix(libA)]);
     expect(local.map(posix)).not.toContain(posix(libB));
   });
@@ -183,7 +183,7 @@ describe("monorepo resolution boundaries", () => {
     await expect(findNearestManifest(pkgA, root, CSHARP_PACKAGE_MANIFEST_NAMES)).resolves.toBeNull();
     expect(posix(await resolveNearestManifestRoot(root, appA, CSHARP_PACKAGE_MANIFEST_NAMES))).toBe(posix(root));
 
-    const local = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
+    const { files: local } = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
     expect(local.map(posix).sort()).toEqual([posix(libA), posix(libB)].sort());
   });
 

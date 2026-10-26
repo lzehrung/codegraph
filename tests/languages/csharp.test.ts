@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
-import { CSHARP_SUPPORT } from "../../src/languages.js";
+import { CSHARP_SUPPORT, type LanguageExtensionMap } from "../../src/languages.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { clearMemoryCache } from "../../src/indexer/build-cache.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
@@ -836,50 +836,63 @@ describe("C# namespace aliases", () => {
       }
     });
 
-    it("follows partial-type ownership when several files declare partial N.Point", async () => {
-      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-partial-"));
-      try {
-        const useLines = [
-          "using PT = N.Point;",
-          "class Use {",
-          "  int M() {",
-          "    PT p = new PT();",
-          "    return p.Sum() + p.Extra();",
-          "  }",
-          "}",
-        ];
-        const paths = await writeFixtureFiles(root, {
-          "PartA.cs": "namespace N {\n  public partial class Point {\n    public int Sum() => 1;\n  }\n}\n",
-          "PartB.cs": "namespace N {\n  public partial class Point {\n    public int Extra() => 2;\n  }\n}\n",
-          "Use.cs": `${useLines.join("\n")}\n`,
-        });
-        const index = await buildProjectIndex(root, { cache: "off" });
-        const representative = [paths["PartA.cs"]!, paths["PartB.cs"]!].sort((left, right) =>
-          fileIdentityKey(left) < fileIdentityKey(right) ? -1 : 1,
-        )[0]!;
-        const useFile = paths["Use.cs"]!;
-        const alias = index.byFile
-          .get(fileIdentityKey(useFile))
-          ?.imports.find((binding) => binding.kind === "named" && binding.local === "PT");
-        expect(alias && typeof alias.resolved === "string" && fileIdentityKey(alias.resolved)).toBe(
-          fileIdentityKey(representative),
-        );
+    it.each<[string, LanguageExtensionMap | undefined]>([
+      [".cs", undefined],
+      [".csharpx", { ".csharpx": "csharp" }],
+    ])(
+      "follows partial-type ownership when several %s files declare partial N.Point",
+      async (extension, languageExtensions) => {
+        const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-partial-"));
+        try {
+          const useLines = [
+            "using PT = N.Point;",
+            "class Use {",
+            "  int M() {",
+            "    PT p = new PT();",
+            "    return p.Sum() + p.Extra();",
+            "  }",
+            "}",
+          ];
+          const partA = `PartA${extension}`;
+          const partB = `PartB${extension}`;
+          const paths = await writeFixtureFiles(root, {
+            [partA]: "namespace N {\n  public partial class Point {\n    public int Sum() => 1;\n  }\n}\n",
+            [partB]: "namespace N {\n  public partial class Point {\n    public int Extra() => 2;\n  }\n}\n",
+            "Use.cs": `${useLines.join("\n")}\n`,
+          });
+          const index = await buildProjectIndex(root, {
+            cache: "off",
+            ...(languageExtensions ? { languageExtensions } : {}),
+          });
+          const representative = [paths[partA]!, paths[partB]!].sort((left, right) =>
+            fileIdentityKey(left) < fileIdentityKey(right) ? -1 : 1,
+          )[0]!;
+          const useFile = paths["Use.cs"]!;
+          const alias = index.byFile
+            .get(fileIdentityKey(useFile))
+            ?.imports.find((binding) => binding.kind === "named" && binding.local === "PT");
+          expect(alias && typeof alias.resolved === "string" && fileIdentityKey(alias.resolved)).toBe(
+            fileIdentityKey(representative),
+          );
 
-        const sum = await goToDefinition(index, { file: useFile, line: 5, column: columnOf(useLines, 5, "Sum") });
-        expect(sum.status === "ok" && fileIdentityKey(sum.definition.file)).toBe(fileIdentityKey(paths["PartA.cs"]!));
-        const extra = await goToDefinition(index, { file: useFile, line: 5, column: columnOf(useLines, 5, "Extra") });
-        expect(extra.status === "ok" && fileIdentityKey(extra.definition.file)).toBe(
-          fileIdentityKey(paths["PartB.cs"]!),
-        );
+          const sum = await goToDefinition(index, { file: useFile, line: 5, column: columnOf(useLines, 5, "Sum") });
+          expect(sum.status === "ok" && fileIdentityKey(sum.definition.file)).toBe(fileIdentityKey(paths[partA]!));
+          const extra = await goToDefinition(index, {
+            file: useFile,
+            line: 5,
+            column: columnOf(useLines, 5, "Extra"),
+          });
+          expect(extra.status === "ok" && fileIdentityKey(extra.definition.file)).toBe(fileIdentityKey(paths[partB]!));
 
-        const fileTargets = edgesFrom(index, useFile)
-          .filter((edge) => edge.to.type === "file")
-          .map((edge) => fileIdentityKey(edge.to.type === "file" ? edge.to.path : ""));
-        expect(fileTargets).toEqual([fileIdentityKey(representative)]);
-      } finally {
-        await rm(root, { recursive: true, force: true });
-      }
-    });
+          const fileTargets = edgesFrom(index, useFile)
+            .filter((edge) => edge.to.type === "file")
+            .map((edge) => fileIdentityKey(edge.to.type === "file" ? edge.to.path : ""));
+          expect(fileTargets).toEqual([fileIdentityKey(representative)]);
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
 
     it("equates @-escaped namespace segments when the alias names the type", async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-verbatim-ns-"));

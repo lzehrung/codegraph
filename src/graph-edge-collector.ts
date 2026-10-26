@@ -15,7 +15,7 @@ import {
 } from "./document-links.js";
 import { getCompactImportsExecution } from "./native/tree-sitter-native.js";
 import type { CompactQueryResults, NativeQueryResults } from "./native/tree-sitter-native.js";
-import { recordNativeExecutionOutcome } from "./native/native-backend-report.js";
+import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "./native/native-backend-report.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "./worker/native-extract-worker.js";
 import { collectModuleSpecifiersFromSource } from "./graphs/specifiers.js";
 import { resolveModuleSpecifierEdges } from "./graphs/edge-resolution.js";
@@ -184,7 +184,6 @@ export async function collectEdgesForFile(
   // A C# file collected without a parsed context has not been accounted for, so its one tree parse is recorded here.
   if (!parsed && sup.id === "csharp") {
     const outcome = parseCsharpSyntaxTree(src, sup);
-    tree = outcome.tree ?? undefined;
     recordNativeExecutionOutcome(opts.report, {
       file: normalizedFile,
       support: sup,
@@ -192,6 +191,18 @@ export async function collectEdgesForFile(
       ...(outcome.fallbackReason ? { fallbackReason: outcome.fallbackReason } : {}),
       ...(outcome.error ? { error: outcome.error } : {}),
     });
+    if (!outcome.tree) {
+      // Reading the directives would parse the file again, so the failed parse is recorded once and ends collection.
+      recordParserBackendDegradation(opts.report, {
+        file: normalizedFile,
+        languageId: sup.id,
+        ...(outcome.fallbackReason ? { nativeFallbackReason: outcome.fallbackReason } : {}),
+        ...(outcome.error ? { nativeError: outcome.error } : {}),
+      });
+      emitCacheEntry([]);
+      return [];
+    }
+    tree = outcome.tree;
   }
   if (sup.id === "sql") {
     const allFiles = opts.allFiles ?? [normalizedFile];

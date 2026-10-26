@@ -3,10 +3,10 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { buildProjectIndexFromFiles, goToDefinition } from "../src/index.js";
+import { buildProjectIndexFromFiles, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../src/index.js";
 import { collectEdgesForFile } from "../src/graph-edge-collector.js";
 import { collectImportsForFile } from "../src/indexer/imports.js";
-import { resolveCsharpNamespaceTypePath } from "../src/util/resolution/csharp.js";
+import { clearCsharpResolutionCaches, resolveCsharpNamespaceTypePath } from "../src/util/resolution/csharp.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs/specifiers.js";
 import { CSHARP_SUPPORT } from "../src/languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../src/languages/types.js";
@@ -20,6 +20,7 @@ import type { BuildReport, ModuleIndex, ProjectIndex } from "../src/indexer/type
 import type { ParsedFileContext } from "../src/indexer/parse-context.js";
 import { makeTestProjectIndex } from "./helpers/narrow.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { columnOf } from "./languages/callable-consumer-fixtures.js";
 import {
   collectCsharpDeclaredNames,
   collectCsharpImportDirectives,
@@ -38,18 +39,21 @@ function parseCsharpOutcome(source: string): CsharpTreeOutcome {
   return parsed;
 }
 
-function setNativeTreeParseFailure(message: string): void {
+function setNativeTreeParseFailure(message: string): () => number {
   const state = loadBinding();
   if (!state.loaded) throw new Error("Native addon required for C# tree tests");
+  let attempts = 0;
   __setNativeTreeSitterBindingForTests({
     ...state,
     binding: {
       ...state.binding,
       parseSyntaxTree: () => {
+        attempts += 1;
         throw new Error(message);
       },
     },
   });
+  return () => attempts;
 }
 
 function setNativeTreeParseFailureFor(marker: string, message: string): void {
@@ -250,6 +254,48 @@ describe("C# namespace type-index completeness", () => {
     }
   });
 });
+describe("C# partial type selection", () => {
+  it("selects among partial parts from retained trees without parsing them again", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-retained-"));
+    const partA = path.join(root, "PartA.cs");
+    const partB = path.join(root, "PartB.cs");
+    const sources = new Map([
+      [partA, "namespace N { public partial class Point { public int Sum() => 1; } }\n"],
+      [partB, "namespace N { public partial class Point { public int Extra() => 2; } }\n"],
+    ]);
+    try {
+      const parsedFiles = new Map<string, ParsedFileContext>();
+      for (const [file, source] of sources) {
+        await writeFile(file, source, "utf8");
+        parsedFiles.set(fileIdentityKey(file), {
+          source,
+          tree: treeForSource(source),
+          sup: CSHARP_SUPPORT,
+          nativeQueries: null,
+        });
+      }
+      clearCsharpResolutionCaches();
+      const parseCount = countNativeTreeParses();
+
+      const resolution = await resolveCsharpNamespaceTypePath(
+        root,
+        "N",
+        "Point",
+        partA,
+        undefined,
+        undefined,
+        parsedFiles,
+      );
+
+      // Both parts are one partial type, so the first file stands for it; nothing is read from disk again.
+      expect(resolution.status === "found" && fileIdentityKey(resolution.file)).toBe(fileIdentityKey(partA));
+      expect(parseCount()).toBe(0);
+    } finally {
+      clearCsharpResolutionCaches();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("C# project-build import tree reuse", () => {
   it("reuses the C# tree for using directives and compilation-unit namespace lookup", async () => {
@@ -344,7 +390,7 @@ describe("C# import tree reuse", () => {
     const importer = path.join(root, "Importer.cs");
     try {
       await writeFile(importer, "using System.Text;\nclass Importer {}\n", "utf8");
-      setNativeTreeParseFailure("forced C# edge tree failure");
+      const parseAttempts = setNativeTreeParseFailure("forced C# edge tree failure");
 
       const report: BuildReport = { timings: {} };
       expect(await collectEdgesForFile(importer, root, undefined, { report })).toEqual([]);
@@ -363,7 +409,20 @@ describe("C# import tree reuse", () => {
           },
         ],
       });
-      expect(report.backend?.parser).toMatchObject({ total: 1, byLanguage: { csharp: 1 } });
+      expect(report.backend?.parser).toMatchObject({
+        total: 1,
+        byLanguage: { csharp: 1 },
+        files: [
+          {
+            file: importer.replace(/\\/g, "/"),
+            languageId: "csharp",
+            nativeFallbackReason: "queryFailure",
+            nativeError: "forced C# edge tree failure",
+          },
+        ],
+      });
+      // The failed tree is the file's one parse attempt: reading its directives must not parse it again.
+      expect(parseAttempts()).toBe(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -376,7 +435,6 @@ describe("C# namespace resolution cache mappings", () => {
     const main = path.join(root, "Main.csx");
     const namespaceFile = path.join(root, "Namespace.cs");
     const source = "using N;\nclass Main {}\n";
-    const { clearCsharpResolutionCaches } = await import("../src/util/resolution/csharp.js");
     try {
       await writeFile(main, source, "utf8");
       await writeFile(namespaceFile, "namespace N; public class Target {}\n", "utf8");
@@ -595,6 +653,105 @@ describe("C# namespace resolution failures and parser reporting", () => {
       expect(await gotoTarget(await buildProjectIndexFromFiles(root, files, { useNativeWorkers: false }))).toBe(
         "Real.cs",
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a namespace alias's dependency edge but names no type through it after an incomplete scan", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-incomplete-scan-"));
+    const declaration = path.join(root, "Box.cs");
+    const unparsed = path.join(root, "Unparsed.cs");
+    const main = path.join(root, "Main.cs");
+    const mainLines = [
+      "using A = N;",
+      "class Holder { public int Count; }",
+      "class Use {",
+      "  A::Box aliased;",
+      "  A.Box dotted;",
+      "  object Make() { return new A::Box(); }",
+      "  void Run() { A::Box.Go(); }",
+      "  void Dotted() { A.Box.Go(); }",
+      "  int Value(Holder A) => A.Count;",
+      "  void Qualified(Holder A) { A::Box.Go(); }",
+      "}",
+    ];
+    const consumers = async (index: ProjectIndex) => {
+      const goto: string[] = [];
+      for (const [line, token] of [
+        [4, "Box"],
+        [5, "Box"],
+        [6, "Box"],
+        [7, "Box"],
+        [7, "Go"],
+        [8, "Box"],
+        [8, "Go"],
+        [9, "Count"],
+        [10, "Go"],
+      ] as const) {
+        const result = await goToDefinition(index, { file: main, line, column: columnOf(mainLines, line, token) });
+        goto.push(result.status === "ok" ? path.basename(result.definition.file) : result.status);
+      }
+      const references = await findReferences(index, { file: declaration, line: 1, column: 27 });
+      const graph = await buildSymbolGraphDetailed(index);
+      return {
+        goto,
+        references:
+          references.status === "ok"
+            ? references.references
+                .filter((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))
+                .map((reference) => reference.range.start.line)
+            : references.status,
+        graphEdges: graph.edges
+          .flatMap((edge) => {
+            const from = graph.nodes.get(edge.from);
+            const to = graph.nodes.get(edge.to);
+            const leavesMain = from && to && fileIdentityKey(from.file) === fileIdentityKey(main);
+            return leavesMain && fileIdentityKey(to.file) !== fileIdentityKey(main) && from.kind !== "namespaceImport"
+              ? [`${from.name} ${edge.label} ${path.basename(to.file)}`]
+              : [];
+          })
+          .sort(),
+        dependencies: index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : ""))
+          .sort(),
+      };
+    };
+    try {
+      await writeFile(declaration, "namespace N; public class Box { public static void Go() {} }\n", "utf8");
+      // Without a tree, Unparsed.cs could declare another `N.Box`: the one readable `N.Box` is not proven the only one.
+      await writeFile(unparsed, "// CSHARP_ALIAS_SCAN_FAILURE\nnamespace Elsewhere; public class Hidden {}\n", "utf8");
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const files = [declaration, unparsed, main];
+
+      setNativeIndexingFailureFor("CSHARP_ALIAS_SCAN_FAILURE", "forced C# alias scan indexing failure");
+      expect(await consumers(await buildProjectIndexFromFiles(root, files, { useNativeWorkers: false }))).toEqual({
+        // A parameter named `A` still makes `A.Count` a member of that value; `A::` reaches aliases only.
+        goto: [...Array.from({ length: 7 }, () => "not_found"), "Main.cs", "not_found"],
+        references: [],
+        graphEdges: [],
+        dependencies: ["Box.cs"],
+      });
+
+      // Once every candidate parses, the one declaring file is proven and every consumer follows the alias.
+      __resetNativeTreeSitterBindingForTests();
+      expect(await consumers(await buildProjectIndexFromFiles(root, files, { useNativeWorkers: false }))).toEqual({
+        goto: [...Array.from({ length: 7 }, () => "Box.cs"), "Main.cs", "Box.cs"],
+        references: [4, 5, 6, 7, 8, 10],
+        graphEdges: [
+          "Dotted calls Box.cs",
+          "Dotted uses Box.cs",
+          "Dotted uses Box.cs",
+          "Make instantiates Box.cs",
+          "Make uses Box.cs",
+          "Qualified calls Box.cs",
+          "Run calls Box.cs",
+          "Run uses Box.cs",
+          "Run uses Box.cs",
+        ],
+        dependencies: ["Box.cs"],
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

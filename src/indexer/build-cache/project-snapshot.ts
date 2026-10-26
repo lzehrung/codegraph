@@ -1916,7 +1916,11 @@ function isImportBinding(value: unknown): value is ImportBinding {
     );
   }
   if (binding.kind === "namespace") {
-    return typeof binding.localNS === "string" && isOptionalRange(binding.localRange);
+    return (
+      typeof binding.localNS === "string" &&
+      isOptionalRange(binding.localRange) &&
+      isOptionalBoolean(binding.incompleteScan)
+    );
   }
   return (
     binding.kind === "star" &&

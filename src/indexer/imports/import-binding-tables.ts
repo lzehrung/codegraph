@@ -306,8 +306,9 @@ async function applyCsharpStatementOverride(
   }
 
   // A target declared as a namespace remains a namespace alias, even when written with alias
-  // syntax. Ambiguous namespaces stay unresolved rather than claiming one declaring file.
-  const namespaceTargets = await resolveCsharpNamespaceImportPaths(
+  // syntax. Ambiguous namespaces stay unresolved rather than claiming one declaring file, and an
+  // alias bound while a candidate file was unreadable keeps its targets but proves no type through it.
+  const { files: namespaceTargets, complete: namespaceScanComplete } = await resolveCsharpNamespaceImportPaths(
     context.projectRoot,
     parsed.value,
     context.file,
@@ -321,6 +322,7 @@ async function applyCsharpStatementOverride(
       localNS: normalizeCsharpIdentifier(parsed.alias.text),
       from: parsed.value,
       ...(namespaceTargets.length === 1 ? { resolved: namespaceTargets[0]!.replace(/\\/g, "/") } : {}),
+      ...(namespaceScanComplete ? {} : { incompleteScan: true }),
       typeOnly,
       ...(localRange ? { localRange } : {}),
     });
@@ -346,7 +348,7 @@ async function applyCsharpStatementOverride(
       if (fallbackFrom) {
         // A type alias names a type in a namespace. Resolve the type across every namespace file;
         // an ambiguous result stays external instead of selecting a path-like first match.
-        const fallbackNamespaceTargets = await resolveCsharpNamespaceImportPaths(
+        const { files: fallbackNamespaceTargets } = await resolveCsharpNamespaceImportPaths(
           context.projectRoot,
           fallbackFrom,
           context.file,

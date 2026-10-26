@@ -185,7 +185,7 @@ async function resolveCsharpOrRubyTargets(
     if (specifier.includes("<") || specifier.includes(">")) {
       return { files: [], externalName: metadata.rawSpecifier ?? specifier };
     }
-    const namespaceTargets = await resolveCsharpNamespaceImportPaths(
+    const { files: namespaceTargets } = await resolveCsharpNamespaceImportPaths(
       metadata.projectRoot,
       specifier,
       file,

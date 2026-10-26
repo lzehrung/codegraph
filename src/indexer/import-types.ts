@@ -62,6 +62,11 @@ export type ImportBinding =
       /** UTF-16 range of the namespace binding token. */
       localRange?: Range;
       resolved?: FileId | { external: string };
+      /**
+       * C# namespace alias bound while a project file that could declare the namespace was unreadable.
+       * The alias keeps its targets, but no type found through it is proven to be the only declaration.
+       */
+      incompleteScan?: boolean;
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python" | "php";
       /** Whether this Python import is declared at the module's top level. */

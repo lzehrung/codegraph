@@ -150,6 +150,7 @@ async function getCsharpProjectNamespaceIndex(
  * Every file under the nearest C# project manifest (or `projectRoot` when none
  * exists) that declares `spec` as a namespace, via either a block-scoped or a
  * file-scoped namespace declaration. Sorted by the shared project symbol index.
+ * `complete` is false when a candidate file could not be read: it may declare `spec` too.
  */
 export async function resolveCsharpNamespaceImportPaths(
   projectRoot: string,
@@ -158,19 +159,20 @@ export async function resolveCsharpNamespaceImportPaths(
   languageExtensions?: LanguageExtensionMap,
   report?: BuildReport,
   parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
-): Promise<string[]> {
+): Promise<{ files: string[]; complete: boolean }> {
   const indexRoot = await resolveNearestManifestRoot(projectRoot, fromFile, CSHARP_PACKAGE_MANIFEST_NAMES);
   const projectIndex = await getCsharpProjectNamespaceIndex(indexRoot, languageExtensions, report, parsedFiles);
+  const { complete } = projectIndex;
   const normalized = normalizeCsharpQualifiedName(spec);
   const lookup = normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
-  if (!lookup) return [];
+  if (!lookup) return { files: [], complete };
   const packageCandidates = projectIndex.index.filesByPackage.get(lookup) ?? [];
   const confined: string[] = [];
   for (const candidate of packageCandidates) {
     const hit = await confineResolvedPath(projectRoot, candidate);
     if (hit && isActiveCsharpFile(hit, languageExtensions)) confined.push(hit);
   }
-  return confined;
+  return { files: confined, complete };
 }
 
 function slashPath(filePath: string): string {
@@ -233,7 +235,13 @@ export async function resolveCsharpNamespaceTypePath(
   const confined = await confineCsharpTypeFiles(projectRoot, files, languageExtensions);
   if (confined.length === 0) return { status: "not_found" };
   if (confined.length === 1) return { status: "found", file: confined[0]! };
-  return selectUniqueCsharpNamespaceTypeFile(confined, namespaceLookup, normalizedType);
+  return selectUniqueCsharpNamespaceTypeFile(
+    confined,
+    namespaceLookup,
+    normalizedType,
+    languageExtensions,
+    parsedFiles,
+  );
 }
 
 /** Resolves a C# namespace-qualified type from its source name. */

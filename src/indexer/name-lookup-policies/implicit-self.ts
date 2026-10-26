@@ -11,9 +11,8 @@ import {
 } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import { sliceText } from "../../util/ast.js";
 import {
-  CSHARP_SHADOWED_ALIAS_REASON,
   csharpAliasQualifiedLookupName,
-  csharpAliasShadowedAt,
+  csharpAliasUnprovenReason,
   csharpChainQualifier,
   implicitSelfCallee,
   isDirectKeywordMemberDeclaration,
@@ -114,8 +113,9 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   fromClosestBinding: ownOverloadDeclaration,
   crossModuleName: ({ use, lookupName }) =>
     csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports),
-  // A dotted name led by a compilation-unit alias that an enclosing namespace shadows is unproven, and so
-  // is one qualified through a generic type, whose namespace-qualified spelling drops its type arguments.
+  // A dotted name led by a compilation-unit alias that an enclosing namespace shadows, or that was bound while a
+  // project file was unreadable, is unproven, and so is one qualified through a generic type, whose
+  // namespace-qualified spelling drops its type arguments.
   beforeCrossModule({ use }) {
     const chainNode = csharpQualifiedNameNode(use.node);
     if (!chainNode) return undefined;
@@ -123,11 +123,10 @@ export const csharpLookupPolicy: NameLookupPolicy = {
       return { status: "not_found", reason: CSHARP_GENERIC_OWNER_REASON };
     }
     const lead = csharpChainQualifier(chainNode, use.parsed.source);
-    return lead && csharpAliasShadowedAt(use.index, use.mod, lead.qualifier, use.parsed.source)
-      ? { status: "not_found", reason: CSHARP_SHADOWED_ALIAS_REASON }
-      : undefined;
+    const reason = lead ? csharpAliasUnprovenReason(use.index, use.mod, lead.qualifier, use.parsed.source) : null;
+    return reason ? { status: "not_found", reason } : undefined;
   },
-  shadowsModuleAlias: (use) => csharpAliasShadowedAt(use.index, use.mod, use.node, use.parsed.source),
+  shadowsModuleAlias: (use) => !!csharpAliasUnprovenReason(use.index, use.mod, use.node, use.parsed.source),
   // A static member function reaches only static members of its type.
   onLocal(state, local) {
     if (!bindsTypeMethod(state) || !isImplicitSelfCall(state)) return undefined;
