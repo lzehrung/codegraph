@@ -21,6 +21,7 @@ import type { ParsedFileContext } from "../src/indexer/parse-context.js";
 import { makeTestProjectIndex } from "./helpers/narrow.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
+  collectCsharpDeclaredNames,
   collectCsharpImportDirectives,
   collectCsharpNamespaceFacts,
   csharpImportDirectiveAt,
@@ -304,6 +305,65 @@ describe("C# import tree reuse", () => {
       // The single tree still yields the file's directives.
       const edges = await collectEdgesForFile(importer, root, undefined, {});
       expect(edges.map((edge) => edge.raw)).toEqual(["System.Text"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accounts a C# file's native parse when edges are collected without a parsed context", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-edge-native-report-"));
+    const importer = path.join(root, "Importer.cs");
+    const source = "using System.Text;\nclass Importer {}\n";
+    try {
+      await writeFile(importer, source, "utf8");
+
+      const report: BuildReport = { timings: {} };
+      await collectEdgesForFile(importer, root, undefined, { report });
+      expect(report.backend?.native).toMatchObject({
+        enabled: true,
+        filesUsed: 1,
+        filesFellBack: 0,
+        byLanguage: { csharp: { filesSeen: 1, filesUsed: 1, filesFellBack: 0 } },
+      });
+
+      // A supplied context was accounted when it was built, so collecting its edges counts nothing more.
+      const supplied: BuildReport = { timings: {} };
+      await collectEdgesForFile(importer, root, undefined, {
+        parsed: { source, sup: CSHARP_SUPPORT },
+        report: supplied,
+      });
+      expect(supplied.backend?.native.filesUsed ?? 0).toBe(0);
+      expect(supplied.backend?.native.byLanguage.csharp?.filesSeen ?? 0).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("counts a C# file whose tree is unavailable as one native fallback and one parser degradation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-edge-native-fallback-"));
+    const importer = path.join(root, "Importer.cs");
+    try {
+      await writeFile(importer, "using System.Text;\nclass Importer {}\n", "utf8");
+      setNativeTreeParseFailure("forced C# edge tree failure");
+
+      const report: BuildReport = { timings: {} };
+      expect(await collectEdgesForFile(importer, root, undefined, { report })).toEqual([]);
+      expect(report.backend?.native).toMatchObject({
+        enabled: false,
+        filesUsed: 0,
+        filesFellBack: 1,
+        fallbackReasons: { queryFailure: 1 },
+        byLanguage: { csharp: { filesSeen: 1, filesUsed: 0, filesFellBack: 1 } },
+        errors: [
+          {
+            file: importer.replace(/\\/g, "/"),
+            languageId: "csharp",
+            reason: "queryFailure",
+            message: "forced C# edge tree failure",
+          },
+        ],
+      });
+      expect(report.backend?.parser).toMatchObject({ total: 1, byLanguage: { csharp: 1 } });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -616,5 +676,33 @@ describe("C# alias shadowing facts", () => {
       collectFacts.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("declares a type for other files' lookups only when a bare name can bind it", () => {
+    const source = [
+      "namespace Local {",
+      "  class Plain {}",
+      "  class Both {}",
+      "  class Both<T> {}",
+      "  class OnlyGeneric<T> {}",
+      "  struct Pair<A, B> {}",
+      "  interface IBox<out T> {}",
+      "  record Wrapper<T>(T Value);",
+      "  delegate void Handler<T>(T value);",
+      "  file class Hidden<T> {}",
+      "  enum Mode { A }",
+      "}",
+      "class GlobalGeneric<T> {}",
+      "",
+    ].join("\n");
+    const tree = treeForSource(source);
+    const facts = collectCsharpNamespaceFacts(tree, source.length);
+
+    // `X` never binds `X<T>`, so only a namespace or a type without type parameters can shadow a bare name.
+    expect([...collectCsharpDeclaredNames(tree)].sort()).toEqual(["Local", "Local.Both", "Local.Mode", "Local.Plain"]);
+    expect(facts.symbolsByNamespace.get("Local")).toEqual(new Set(["Plain", "Both", "Mode"]));
+    expect(facts.fileLocalTypes.size).toBe(0);
+    // A generic type outside every namespace still makes its file a global-namespace peer.
+    expect(facts.hasGlobalType).toBe(true);
   });
 });

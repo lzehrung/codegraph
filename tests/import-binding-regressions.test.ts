@@ -232,4 +232,30 @@ describe("import binding regressions", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("binds a C# alias target to the declaration without type parameters", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-arity-"));
+    const main = path.join(root, "Main.cs");
+    const plain = path.join(root, "Box.cs");
+    const generic = path.join(root, "BoxOfT.cs");
+    const genericOnly = path.join(root, "Only.cs");
+    try {
+      await writeFile(plain, "namespace N; public class Box {}\n", "utf8");
+      await writeFile(generic, "namespace N; public class Box<T> {}\n", "utf8");
+      await writeFile(genericOnly, "namespace N; public class Only<T> {}\n", "utf8");
+      await writeFile(main, "using B = N.Box;\nusing O = N.Only;\nclass Use { B value; }\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [main, plain, generic, genericOnly]);
+      const target = (local: string): string | undefined => {
+        const alias = index.byFile
+          .get(fileIdentityKey(main))
+          ?.imports.find((binding) => binding.kind === "named" && binding.local === local);
+        return typeof alias?.resolved === "string" ? fileIdentityKey(alias.resolved) : undefined;
+      };
+
+      // `N.Box` names `Box`, never `Box<T>`, so a generic sibling does not make it ambiguous; `N.Only` names no type.
+      expect(target("B")).toBe(fileIdentityKey(plain));
+      expect(target("O")).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

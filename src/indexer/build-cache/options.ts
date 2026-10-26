@@ -53,8 +53,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * unresolved C# alias out of its binding tokens.
  * Epoch 97 marks C# `file` types in each file's declared names, and resolves a using directive
  * inside a namespace by global lookup alone.
+ * Epoch 98 leaves generic types out of each C# file's declared names, so `class X<T>` no longer
+ * shadows a compilation-unit alias named `X`.
  */
-export const CORE_ALGORITHM_EPOCH = 97;
+export const CORE_ALGORITHM_EPOCH = 98;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

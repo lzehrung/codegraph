@@ -2364,6 +2364,10 @@ describe("C# partial class members across files", () => {
     { name: "a namespace", source: "namespace Local.X; public class Target {}\n", declaresTarget: true },
     { name: "an implicit namespace ancestor", source: "namespace Local.X.Deep; public class Marker {}\n" },
     { name: "a type", source: "namespace Local; public class X {}\n" },
+    {
+      name: "a type beside a generic type of its name",
+      source: "namespace Local; public class X<T> {} public class X {}\n",
+    },
   ])("treats $name named like the alias in an enclosing namespace as shadowing it", async (shadow) => {
     const { source } = shadow;
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-shadow-kinds-"));
@@ -2385,6 +2389,41 @@ describe("C# partial class members across files", () => {
         goto: { 3: ["not_found", "not_found"] },
         references: { "Real.cs": [], ...(shadow.declaresTarget ? { "LocalShadow.cs": [] } : {}) },
         edges: [],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a compilation-unit alias in force when an enclosing namespace declares only generic types of its name", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-generic-name-"));
+    try {
+      const useLines = [
+        "using X = Real;",
+        "namespace Local {",
+        "  class Use { X.Target value; void Make() { var made = new X.Target(); } }",
+        "}",
+      ];
+      // `X` has no type arguments, so it never binds `X<T>`; one declaration kind per arity.
+      const generics = [
+        "namespace Local;",
+        "public class X<T> {}",
+        "public struct X<A, B> {}",
+        "public interface X<A, B, C> {}",
+        "public record X<A, B, C, D>(A Value);",
+        "public delegate void X<A, B, C, D, E>();",
+      ];
+      const outcome = await aliasUseOutcome(
+        root,
+        { "Real.cs": "namespace Real; public class Target {}\n", "LocalGeneric.cs": generics.join("\n") + "\n" },
+        useLines,
+        [3],
+      );
+
+      expect(outcome).toEqual({
+        goto: { 3: ["Real.cs", "Real.cs"] },
+        references: { "Real.cs": [3, 3] },
+        edges: ["Make instantiates Real.cs", "Make uses Real.cs"],
       });
     } finally {
       await rm(root, { recursive: true, force: true });

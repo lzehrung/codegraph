@@ -59,6 +59,7 @@ export type CsharpNamespaceSpan = {
 export type CsharpNamespaceFacts = {
   regions: CsharpNamespaceSpan[];
   namespaces: string[];
+  /** Types without type parameters declared directly in each namespace: a bare name `X` never binds `X<T>`. */
   symbolsByNamespace: Map<string, Set<string>>;
   /** Types declared with the C# 11 `file` modifier, as `Namespace.Type`. */
   fileLocalTypes: Set<string>;
@@ -222,6 +223,9 @@ export function collectCsharpNamespaceFacts(
       hasGlobalType = true;
       return;
     }
+    const children = node.namedChildren;
+    // A bare name `X` binds a type with no type parameters, never `X<T>`.
+    if (children.some((child) => child.type === "type_parameter_list")) return;
     const nameNode = node.childForFieldName("name");
     const name = nameNode ? normalizeCsharpIdentifier(nameNode.text) : "";
     if (!name) return;
@@ -231,7 +235,7 @@ export function collectCsharpNamespaceFacts(
       symbolsByNamespace.set(namespaceName, symbols);
     }
     symbols.add(name);
-    if (node.namedChildren.some((child) => child.type === "modifier" && child.text === "file")) {
+    if (children.some((child) => child.type === "modifier" && child.text === "file")) {
       fileLocalTypes.add(`${namespaceName}.${name}`);
     }
   };
@@ -295,9 +299,9 @@ export function collectCsharpNamespaceFacts(
 
 /**
  * The dotted names this file's own tree declares for other files' lookup: each namespace it opens
- * (`Outer.Inner`) and each type it declares directly in one (`Outer.Inner.Type`), a `file` type
- * under {@link CSHARP_FILE_LOCAL_PREFIX}. A cached module keeps them because they depend on this
- * file alone.
+ * (`Outer.Inner`) and each type without type parameters it declares directly in one
+ * (`Outer.Inner.Type`), a `file` type under {@link CSHARP_FILE_LOCAL_PREFIX}. A cached module keeps
+ * them because they depend on this file alone.
  */
 export function collectCsharpDeclaredNames(tree: SyntaxTreeLike): string[] {
   const facts = collectCsharpNamespaceFacts(tree, tree.rootNode.endIndex);

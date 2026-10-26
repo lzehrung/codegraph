@@ -6,6 +6,7 @@ import type { WorkspaceConfig } from "./util/workspace.js";
 import { extractDynamicImportSpecifiers, type ModuleSpecifier } from "./util/specifiers.js";
 import { fileIdentityKey } from "./util/paths.js";
 import { edgeKey } from "./util/graph-edges.js";
+import { parseCsharpSyntaxTree } from "./util/csharp-tree.js";
 import type { LogLevel } from "./logging.js";
 import {
   graphOnlyLanguageSupportsImportAliases,
@@ -146,6 +147,7 @@ export async function collectEdgesForFile(
   let src = parsed?.source;
   let embeddedBlocks = parsed?.embeddedBlocks ?? [];
   let compactNativeImports: CompactQueryResults | null = null;
+  let tree = parsed?.tree;
   let graphOnlyLanguage = sup ? isGraphOnlyLanguage(sup.id) : false;
   if (!sup || src === undefined) {
     const prep = await prepareSourceInput(file, { languageExtensions: opts.languageExtensions });
@@ -179,6 +181,18 @@ export async function collectEdgesForFile(
       ...(compactExecution.error ? { error: compactExecution.error } : {}),
     });
   }
+  // A C# file collected without a parsed context has not been accounted for, so its one tree parse is recorded here.
+  if (!parsed && sup.id === "csharp") {
+    const outcome = parseCsharpSyntaxTree(src, sup);
+    tree = outcome.tree ?? undefined;
+    recordNativeExecutionOutcome(opts.report, {
+      file: normalizedFile,
+      support: sup,
+      results: outcome.tree,
+      ...(outcome.fallbackReason ? { fallbackReason: outcome.fallbackReason } : {}),
+      ...(outcome.error ? { error: outcome.error } : {}),
+    });
+  }
   if (sup.id === "sql") {
     const allFiles = opts.allFiles ?? [normalizedFile];
     const sqlEdges = deduplicateEdges(
@@ -190,7 +204,7 @@ export async function collectEdgesForFile(
   }
 
   const specs = collectModuleSpecifiersFromSource(sup, src, {
-    ...(parsed?.tree ? { tree: parsed.tree } : {}),
+    ...(tree ? { tree } : {}),
     ...(parsed && parsed.nativeQueries !== undefined ? { nativeQueries: parsed.nativeQueries } : {}),
     ...(queriesImports ? { compactNativeImports } : {}),
     file: normalizedFile,
