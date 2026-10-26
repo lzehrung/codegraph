@@ -56,6 +56,7 @@ import {
 import { getCallArgumentCount, memberLookupBinding } from "../languages/callable-arity.js";
 import {
   csharpNamespaceChainDeclares,
+  csharpProjectDeclarationsUnknown,
   getCompilationUnitPeers,
   getPackageDeclarationName,
 } from "./compilation-units.js";
@@ -437,7 +438,7 @@ function importScopeAt(root: SyntaxNodeLike, start: number): SyntaxNodeLike | nu
 }
 
 const CSHARP_SHADOWED_ALIAS_REASON = "C# alias is shadowed by an enclosing namespace member";
-const CSHARP_INCOMPLETE_ALIAS_REASON = "C# namespace alias was bound while a project file could not be read";
+const CSHARP_INCOMPLETE_ALIAS_REASON = "C# namespace alias may name a type in a project file that could not be read";
 
 /** The leading name `X` of a C# dotted or alias-qualified name (`X.Y.Z`, `X::Y`) and the names it qualifies. */
 export function csharpChainQualifier(
@@ -485,9 +486,10 @@ function csharpAliasShadowedAt(
 
 /**
  * Why a use led by the compilation-unit alias `qualifier` names (`X.Type`, `X::Type`) is unproven, or `null`
- * when the alias stands. An enclosing namespace can shadow the alias. A namespace alias bound while a project
- * file that could declare its namespace was unreadable keeps its targets, but that file may declare the same
- * type name, so no type found through the alias is proven to be the only one.
+ * when the alias stands. An enclosing namespace can shadow the alias. A project file whose declarations are
+ * unknown (no syntax tree) may declare the same type name as one the alias reaches, so no type found through a
+ * namespace alias is proven to be the only one. Both answers come from the index's own C# declarations when the
+ * lookup runs, never from a flag a cached module holds.
  */
 export function csharpAliasUnprovenReason(
   index: ProjectIndex,
@@ -502,7 +504,9 @@ export function csharpAliasUnprovenReason(
     qualifier,
     CSHARP_SUPPORT.normalizeIdentifier,
   );
-  return alias?.kind === "namespace" && alias.incompleteScan ? CSHARP_INCOMPLETE_ALIAS_REASON : null;
+  return alias?.kind === "namespace" && csharpProjectDeclarationsUnknown(index, mod)
+    ? CSHARP_INCOMPLETE_ALIAS_REASON
+    : null;
 }
 
 /**

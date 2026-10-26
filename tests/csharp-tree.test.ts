@@ -3,7 +3,14 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { buildProjectIndexFromFiles, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+} from "../src/index.js";
 import { collectEdgesForFile } from "../src/graph-edge-collector.js";
 import { collectImportsForFile } from "../src/indexer/imports.js";
 import { clearCsharpResolutionCaches, resolveCsharpNamespaceTypePath } from "../src/util/resolution/csharp.js";
@@ -18,9 +25,10 @@ import { loadBinding } from "../src/native/runtime.js";
 import { getCsharpNamespaceRegions } from "../src/indexer/compilation-units.js";
 import type { BuildReport, ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
 import type { ParsedFileContext } from "../src/indexer/parse-context.js";
+import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import { makeTestProjectIndex } from "./helpers/narrow.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-import { columnOf } from "./languages/callable-consumer-fixtures.js";
+import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import {
   collectCsharpDeclaredNames,
   collectCsharpImportDirectives,
@@ -530,6 +538,105 @@ describe("C# alias namespace parse reporting", () => {
     }
   });
 });
+/** Main.cs for the alias-scan projects: `A` aliases namespace `N`, and each use names `N.Box` through it. */
+const aliasScanMainLines = [
+  "using A = N;",
+  "class Holder { public int Count; }",
+  "class Use {",
+  "  A::Box aliased;",
+  "  A.Box dotted;",
+  "  object Make() { return new A::Box(); }",
+  "  void Run() { A::Box.Go(); }",
+  "  void Dotted() { A.Box.Go(); }",
+  "  int Value(Holder A) => A.Count;",
+  "  void Qualified(Holder A) { A::Box.Go(); }",
+  "}",
+];
+
+/**
+ * Writes the alias-scan project. `N.Box` is declared once, and Unparsed.cs, whose declarations are unknown while
+ * native indexing fails for its marker, could declare another one.
+ */
+async function writeAliasScanProject(root: string): Promise<void> {
+  await writeFixtureFiles(root, {
+    "Box.cs": "namespace N; public class Box { public static void Go() {} }\n",
+    "Unparsed.cs": "// CSHARP_ALIAS_SCAN_FAILURE\nnamespace Elsewhere; public class Hidden {}\n",
+    "Main.cs": aliasScanMainLines.join("\n") + "\n",
+  });
+}
+
+/** What each consumer reports for the alias uses in the alias-scan project's Main.cs. */
+async function aliasScanConsumers(index: ProjectIndex, root: string) {
+  const main = path.join(root, "Main.cs");
+  const goto: string[] = [];
+  for (const [line, token] of [
+    [4, "Box"],
+    [5, "Box"],
+    [6, "Box"],
+    [7, "Box"],
+    [7, "Go"],
+    [8, "Box"],
+    [8, "Go"],
+    [9, "Count"],
+    [10, "Go"],
+  ] as const) {
+    const result = await goToDefinition(index, { file: main, line, column: columnOf(aliasScanMainLines, line, token) });
+    goto.push(result.status === "ok" ? path.basename(result.definition.file) : result.status);
+  }
+  const references = await findReferences(index, { file: path.join(root, "Box.cs"), line: 1, column: 27 });
+  const graph = await buildSymbolGraphDetailed(index);
+  return {
+    goto,
+    references:
+      references.status === "ok"
+        ? references.references
+            .filter((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))
+            .map((reference) => reference.range.start.line)
+        : references.status,
+    graphEdges: graph.edges
+      .flatMap((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        const leavesMain = from && to && fileIdentityKey(from.file) === fileIdentityKey(main);
+        return leavesMain && fileIdentityKey(to.file) !== fileIdentityKey(main) && from.kind !== "namespaceImport"
+          ? [`${from.name} ${edge.label} ${path.basename(to.file)}`]
+          : [];
+      })
+      .sort(),
+    dependencies: index.graph.edges
+      .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main) && edge.to.type === "file")
+      .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : ""))
+      .sort(),
+  };
+}
+
+/** While Unparsed.cs's declarations are unknown, the dependency edge stays and no consumer names a type through `A`. */
+const aliasScanUnproven = {
+  // A parameter named `A` still makes `A.Count` a member of that value; `A::` reaches aliases only.
+  goto: [...Array.from({ length: 7 }, () => "not_found"), "Main.cs", "not_found"],
+  references: [],
+  graphEdges: [],
+  dependencies: ["Box.cs"],
+};
+
+/** Once every file's declarations are known, the one declaring file is proven and every consumer follows the alias. */
+const aliasScanProven = {
+  goto: [...Array.from({ length: 7 }, () => "Box.cs"), "Main.cs", "Box.cs"],
+  references: [4, 5, 6, 7, 8, 10],
+  graphEdges: [
+    "Dotted calls Box.cs",
+    "Dotted uses Box.cs",
+    "Dotted uses Box.cs",
+    "Make instantiates Box.cs",
+    "Make uses Box.cs",
+    "Qualified calls Box.cs",
+    "Run calls Box.cs",
+    "Run uses Box.cs",
+    "Run uses Box.cs",
+  ],
+  dependencies: ["Box.cs"],
+};
+
 describe("C# namespace resolution failures and parser reporting", () => {
   it("returns partial when a C# namespace candidate file cannot be read", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-read-failure-"));
@@ -660,97 +767,173 @@ describe("C# namespace resolution failures and parser reporting", () => {
 
   it("keeps a namespace alias's dependency edge but names no type through it after an incomplete scan", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-incomplete-scan-"));
-    const declaration = path.join(root, "Box.cs");
-    const unparsed = path.join(root, "Unparsed.cs");
-    const main = path.join(root, "Main.cs");
-    const mainLines = [
-      "using A = N;",
-      "class Holder { public int Count; }",
-      "class Use {",
-      "  A::Box aliased;",
-      "  A.Box dotted;",
-      "  object Make() { return new A::Box(); }",
-      "  void Run() { A::Box.Go(); }",
-      "  void Dotted() { A.Box.Go(); }",
-      "  int Value(Holder A) => A.Count;",
-      "  void Qualified(Holder A) { A::Box.Go(); }",
-      "}",
-    ];
-    const consumers = async (index: ProjectIndex) => {
-      const goto: string[] = [];
-      for (const [line, token] of [
-        [4, "Box"],
-        [5, "Box"],
-        [6, "Box"],
-        [7, "Box"],
-        [7, "Go"],
-        [8, "Box"],
-        [8, "Go"],
-        [9, "Count"],
-        [10, "Go"],
-      ] as const) {
-        const result = await goToDefinition(index, { file: main, line, column: columnOf(mainLines, line, token) });
-        goto.push(result.status === "ok" ? path.basename(result.definition.file) : result.status);
-      }
-      const references = await findReferences(index, { file: declaration, line: 1, column: 27 });
-      const graph = await buildSymbolGraphDetailed(index);
-      return {
-        goto,
-        references:
-          references.status === "ok"
-            ? references.references
-                .filter((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))
-                .map((reference) => reference.range.start.line)
-            : references.status,
-        graphEdges: graph.edges
-          .flatMap((edge) => {
-            const from = graph.nodes.get(edge.from);
-            const to = graph.nodes.get(edge.to);
-            const leavesMain = from && to && fileIdentityKey(from.file) === fileIdentityKey(main);
-            return leavesMain && fileIdentityKey(to.file) !== fileIdentityKey(main) && from.kind !== "namespaceImport"
-              ? [`${from.name} ${edge.label} ${path.basename(to.file)}`]
-              : [];
-          })
-          .sort(),
-        dependencies: index.graph.edges
-          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main) && edge.to.type === "file")
-          .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : ""))
-          .sort(),
-      };
-    };
     try {
-      await writeFile(declaration, "namespace N; public class Box { public static void Go() {} }\n", "utf8");
-      // Without a tree, Unparsed.cs could declare another `N.Box`: the one readable `N.Box` is not proven the only one.
-      await writeFile(unparsed, "// CSHARP_ALIAS_SCAN_FAILURE\nnamespace Elsewhere; public class Hidden {}\n", "utf8");
-      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
-      const files = [declaration, unparsed, main];
+      await writeAliasScanProject(root);
+      const files = ["Box.cs", "Unparsed.cs", "Main.cs"].map((name) => path.join(root, name));
 
       setNativeIndexingFailureFor("CSHARP_ALIAS_SCAN_FAILURE", "forced C# alias scan indexing failure");
-      expect(await consumers(await buildProjectIndexFromFiles(root, files, { useNativeWorkers: false }))).toEqual({
-        // A parameter named `A` still makes `A.Count` a member of that value; `A::` reaches aliases only.
-        goto: [...Array.from({ length: 7 }, () => "not_found"), "Main.cs", "not_found"],
-        references: [],
-        graphEdges: [],
-        dependencies: ["Box.cs"],
+      const failed = await buildProjectIndexFromFiles(root, files, { useNativeWorkers: false });
+      expect(await aliasScanConsumers(failed, root)).toEqual(aliasScanUnproven);
+
+      __resetNativeTreeSitterBindingForTests();
+      const recovered = await buildProjectIndexFromFiles(root, files, { useNativeWorkers: false });
+      expect(await aliasScanConsumers(recovered, root)).toEqual(aliasScanProven);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A failed file recovers when the failure clears or when it is edited. An incremental build keeps an unchanged
+  // file's module from its snapshot, so there only an edit recovers it.
+  it.each([
+    ["clears", "memory"],
+    ["clears", "disk"],
+    ["is fixed", "memory"],
+    ["is fixed", "disk"],
+    ["is fixed", "incremental"],
+  ] as const)("answers the same warm and cold after a failed candidate file %s (%s cache)", async (recovery, mode) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-recovery-"));
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-recovery-cache-"));
+    try {
+      await writeAliasScanProject(root);
+      const warmBuild = mode === "incremental" ? buildProjectIndexIncremental : buildProjectIndex;
+      const options = {
+        cache: mode === "memory" ? ("memory" as const) : ("disk" as const),
+        cacheDir,
+        threads: 1,
+        useNativeWorkers: false,
+      };
+      const outcomes = async () => ({
+        warm: await aliasScanConsumers(await warmBuild(root, options), root),
+        cold: await aliasScanConsumers(await buildProjectIndex(root, { cache: "off", useNativeWorkers: false }), root),
       });
 
-      // Once every candidate parses, the one declaring file is proven and every consumer follows the alias.
-      __resetNativeTreeSitterBindingForTests();
-      expect(await consumers(await buildProjectIndexFromFiles(root, files, { useNativeWorkers: false }))).toEqual({
-        goto: [...Array.from({ length: 7 }, () => "Box.cs"), "Main.cs", "Box.cs"],
-        references: [4, 5, 6, 7, 8, 10],
-        graphEdges: [
-          "Dotted calls Box.cs",
-          "Dotted uses Box.cs",
-          "Dotted uses Box.cs",
-          "Make instantiates Box.cs",
-          "Make uses Box.cs",
-          "Qualified calls Box.cs",
-          "Run calls Box.cs",
-          "Run uses Box.cs",
-          "Run uses Box.cs",
-        ],
-        dependencies: ["Box.cs"],
+      setNativeIndexingFailureFor("CSHARP_ALIAS_SCAN_FAILURE", "forced C# alias scan indexing failure");
+      const failed = await outcomes();
+      expect(failed.cold, "while Unparsed.cs fails").toEqual(aliasScanUnproven);
+      expect(failed.warm, "while Unparsed.cs fails").toEqual(failed.cold);
+
+      // Main.cs is unchanged, so it keeps the module it cached while Unparsed.cs failed.
+      if (recovery === "clears") {
+        __resetNativeTreeSitterBindingForTests();
+      } else {
+        await writeFile(path.join(root, "Unparsed.cs"), "namespace Elsewhere; public class Hidden {}\n", "utf8");
+      }
+      const recovered = await outcomes();
+      expect(recovered.cold, "after Unparsed.cs recovers").toEqual(aliasScanProven);
+      expect(recovered.warm, "after Unparsed.cs recovers").toEqual(recovered.cold);
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# alias project boundary", () => {
+  const manifest = '<Project Sdk="Microsoft.NET.Sdk"></Project>\n';
+  const real = "namespace Real; public class Target {}\n";
+  const localX = "namespace Local.X; public class Target {}\n";
+  const useLines = [
+    "using X = Real;",
+    "class Top { X::Target aliased; }",
+    "namespace Local {",
+    "  class Use { X.Target dotted; void Make() { var made = new X.Target(); } }",
+    "}",
+  ];
+  const unparsed = "// CSHARP_PROJECT_BOUNDARY_FAILURE\nnamespace Elsewhere; public class Hidden {}\n";
+
+  /** One project: its manifest, a `Real` namespace, and a Use.cs that reaches `Real.Target` through the alias `X`. */
+  const project = (name: string, extra: Record<string, string> = {}): Record<string, string> => ({
+    [`${name}/${name.toUpperCase()}.csproj`]: manifest,
+    [`${name}/Real.cs`]: real,
+    [`${name}/Use.cs`]: useLines.join("\n") + "\n",
+    ...extra,
+  });
+
+  /** What each consumer reports for the `Target` uses in `<name>/Use.cs`, with files named relative to `root`. */
+  async function useOutcome(index: ProjectIndex, root: string, name: string) {
+    const relative = (file: string): string => path.relative(root, file).replace(/\\/g, "/");
+    const useFile = path.join(root, name, "Use.cs");
+    const goto: string[] = [];
+    for (const line of [2, 4]) {
+      for (const match of useLines[line - 1]!.matchAll(/Target/gu)) {
+        const result = await goToDefinition(index, { file: useFile, line, column: match.index + 1 });
+        goto.push(result.status === "ok" ? relative(result.definition.file) : result.status);
+      }
+    }
+    const references = await findReferences(index, {
+      file: path.join(root, name, "Real.cs"),
+      line: 1,
+      column: real.indexOf("Target") + 1,
+    });
+    const graph = await buildSymbolGraphDetailed(index);
+    return {
+      goto,
+      references:
+        references.status === "ok"
+          ? references.references
+              .filter((reference) => fileIdentityKey(reference.file) === fileIdentityKey(useFile))
+              .map((reference) => reference.range.start.line)
+          : references.status,
+      edges: graph.edges
+        .flatMap((edge) => {
+          const from = graph.nodes.get(edge.from);
+          const to = graph.nodes.get(edge.to);
+          const leavesUse = from && to && fileIdentityKey(from.file) === fileIdentityKey(useFile);
+          return leavesUse && fileIdentityKey(to.file) !== fileIdentityKey(useFile) && from.kind !== "namespaceImport"
+            ? [`${from.name} ${edge.label} ${relative(to.file)}`]
+            : [];
+        })
+        .sort(),
+    };
+  }
+
+  /** Project a has no declaration or unknown file of its own that could stand between its alias and `Real`. */
+  const provenInA = {
+    goto: ["a/Real.cs", "a/Real.cs", "a/Real.cs"],
+    references: [2, 4, 4],
+    edges: ["Make instantiates a/Real.cs", "Make uses a/Real.cs"],
+  };
+
+  it("lets only a namespace in the importer's own project shadow its alias", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-project-shadow-"));
+    try {
+      await writeFixtureFiles(root, {
+        ...project("a"),
+        // Project b declares `Local.X` but is not project a.
+        "b/B.csproj": manifest,
+        "b/LocalX.cs": localX,
+        ...project("c", { "c/LocalX.cs": localX }),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+
+      expect(await useOutcome(index, root, "a")).toEqual(provenInA);
+      // Project c declares `Local.X` itself: the dotted uses inside `Local` are shadowed, while `X::Target` is not.
+      expect(await useOutcome(index, root, "c")).toEqual({
+        goto: ["c/Real.cs", "not_found", "not_found"],
+        references: [2],
+        edges: [],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats an unreadable file's declarations as unknown only within its own project", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-project-unknown-"));
+    try {
+      setNativeIndexingFailureFor("CSHARP_PROJECT_BOUNDARY_FAILURE", "forced C# project boundary indexing failure");
+      await writeFixtureFiles(root, { ...project("a"), "b/B.csproj": manifest, "b/Unparsed.cs": unparsed });
+      const beside = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+      expect(await useOutcome(beside, root, "a")).toEqual(provenInA);
+
+      await writeFixtureFiles(root, { "a/Unparsed.cs": unparsed });
+      const within = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+      expect(await useOutcome(within, root, "a")).toEqual({
+        goto: ["not_found", "not_found", "not_found"],
+        references: [],
+        edges: [],
       });
     } finally {
       await rm(root, { recursive: true, force: true });

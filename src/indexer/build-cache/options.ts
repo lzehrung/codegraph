@@ -55,10 +55,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * inside a namespace by global lookup alone.
  * Epoch 98 leaves generic types out of each C# file's declared names, so `class X<T>` no longer
  * shadows a compilation-unit alias named `X`.
- * Epoch 99 marks a C# namespace alias bound while a candidate file was unreadable, and selects a
- * partial type among files with a mapped C# extension.
+ * Epoch 99 selects a partial type among files with a mapped C# extension.
+ * Epoch 100 binds a C# type alias to a namespace file only when it declares the type without type
+ * parameters, and no longer stores whether a namespace scan was complete in an alias binding.
  */
-export const CORE_ALGORITHM_EPOCH = 99;
+export const CORE_ALGORITHM_EPOCH = 100;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

@@ -516,7 +516,6 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     jvmPackageLanguageId?: unknown;
     jvmSamePackage?: unknown;
     rubyLoadForm?: unknown;
-    incompleteScan?: unknown;
   };
   return (
     (binding.explicitAlias === undefined || typeof binding.explicitAlias === "boolean") &&
@@ -531,8 +530,7 @@ function hasValidImportBindingRanges(value: unknown): boolean {
       binding.jvmPackageLanguageId === "java" ||
       binding.jvmPackageLanguageId === "kotlin") &&
     (binding.jvmSamePackage === undefined || typeof binding.jvmSamePackage === "boolean") &&
-    (binding.rubyLoadForm === undefined || isRubyLoadForm(binding.rubyLoadForm)) &&
-    (binding.incompleteScan === undefined || typeof binding.incompleteScan === "boolean")
+    (binding.rubyLoadForm === undefined || isRubyLoadForm(binding.rubyLoadForm))
   );
 }
 

@@ -306,9 +306,8 @@ async function applyCsharpStatementOverride(
   }
 
   // A target declared as a namespace remains a namespace alias, even when written with alias
-  // syntax. Ambiguous namespaces stay unresolved rather than claiming one declaring file, and an
-  // alias bound while a candidate file was unreadable keeps its targets but proves no type through it.
-  const { files: namespaceTargets, complete: namespaceScanComplete } = await resolveCsharpNamespaceImportPaths(
+  // syntax. Ambiguous namespaces stay unresolved rather than claiming one declaring file.
+  const namespaceTargets = await resolveCsharpNamespaceImportPaths(
     context.projectRoot,
     parsed.value,
     context.file,
@@ -322,7 +321,6 @@ async function applyCsharpStatementOverride(
       localNS: normalizeCsharpIdentifier(parsed.alias.text),
       from: parsed.value,
       ...(namespaceTargets.length === 1 ? { resolved: namespaceTargets[0]!.replace(/\\/g, "/") } : {}),
-      ...(namespaceScanComplete ? {} : { incompleteScan: true }),
       typeOnly,
       ...(localRange ? { localRange } : {}),
     });
@@ -346,9 +344,10 @@ async function applyCsharpStatementOverride(
     if (fromParts.length > 1) {
       const fallbackFrom = fromParts.slice(0, -1).join(".");
       if (fallbackFrom) {
-        // A type alias names a type in a namespace. Resolve the type across every namespace file;
-        // an ambiguous result stays external instead of selecting a path-like first match.
-        const { files: fallbackNamespaceTargets } = await resolveCsharpNamespaceImportPaths(
+        // A type alias names a type in a namespace. Resolve the type across every namespace file; any
+        // result but one proven declaration stays external instead of selecting a path-like first match
+        // or the namespace's file.
+        const fallbackNamespaceTargets = await resolveCsharpNamespaceImportPaths(
           context.projectRoot,
           fallbackFrom,
           context.file,
@@ -356,7 +355,10 @@ async function applyCsharpStatementOverride(
           context.report,
           context.parsedFiles,
         );
-        if (fallbackNamespaceTargets.length > 1) {
+        const namespaceDeclared =
+          fallbackNamespaceTargets.length > 1 ||
+          (fallbackNamespaceTargets.length === 1 && typeof resolved !== "string");
+        if (namespaceDeclared) {
           const typeMatch = await resolveCsharpDottedTypeImportPath(
             context.projectRoot,
             parsed.value,
@@ -371,22 +373,6 @@ async function applyCsharpStatementOverride(
           } else {
             fromValue = parsed.value;
             resolved = { external: parsed.value };
-          }
-        } else if (typeof resolved !== "string" && fallbackNamespaceTargets.length === 1) {
-          const typeMatch = await resolveCsharpDottedTypeImportPath(
-            context.projectRoot,
-            parsed.value,
-            context.file,
-            context.languageExtensions,
-            context.report,
-            context.parsedFiles,
-          );
-          if (typeMatch.status === "partial") {
-            fromValue = parsed.value;
-            resolved = { external: parsed.value };
-          } else {
-            fromValue = fallbackFrom;
-            resolved = fallbackNamespaceTargets[0]!.replace(/\\/g, "/");
           }
         } else if (typeof resolved !== "string") {
           const fallbackResolved = await context.resolveFrom(fallbackFrom);

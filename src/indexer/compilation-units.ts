@@ -8,6 +8,7 @@ import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
 import { recordParserBackendDegradation } from "../native/native-backend-report.js";
 import { CSHARP_FILE_LOCAL_PREFIX, collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
+import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRootSync } from "../util/resolution/files.js";
 import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
 import type { BuildReport, ModuleIndex, ProjectIndex } from "./types.js";
 
@@ -331,16 +332,21 @@ export function csharpNamespaceAt(index: ProjectIndex, filePath: string, positio
 type CsharpDeclaredNames = {
   source: ProjectIndex["byFile"];
   size: number;
-  /** `null` when an indexed C# file's declarations are unknown. */
-  names: ReadonlySet<string> | null;
+  /** Importer directory to its project boundary key: the directory its namespace imports scan, `""` for the root. */
+  boundaries: Map<string, string>;
+  /** Project boundary to the names its C# files declare; `null` when one of those files' declarations is unknown. */
+  names: Map<string, ReadonlySet<string> | null>;
 };
 
 const csharpDeclaredNameCaches = new WeakMap<ProjectIndex, CsharpDeclaredNames>();
 
-function aggregateCsharpDeclaredNames(index: ProjectIndex): ReadonlySet<string> | null {
+/** The names the indexed C# files under `boundaryKey` declare (every indexed C# file when it is empty). */
+function aggregateCsharpDeclaredNames(index: ProjectIndex, boundaryKey: string): ReadonlySet<string> | null {
+  const boundaryPrefix = boundaryKey.endsWith("/") ? boundaryKey : `${boundaryKey}/`;
   const names = new Set<string>();
   for (const moduleEntry of index.byFile.values()) {
     if (supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id !== "csharp") continue;
+    if (boundaryKey && !fileIdentityKey(moduleEntry.file).startsWith(boundaryPrefix)) continue;
     if (!moduleEntry.csharpDeclaredNames) return null;
     for (const name of moduleEntry.csharpDeclaredNames) {
       if (name.startsWith(CSHARP_FILE_LOCAL_PREFIX)) continue;
@@ -353,12 +359,42 @@ function aggregateCsharpDeclaredNames(index: ProjectIndex): ReadonlySet<string> 
 }
 
 /**
+ * The names the indexed C# files of `file`'s project declare, or `null` when one of them has no recorded
+ * declarations. The project is the directory that `resolveCsharpNamespaceImportPaths` scans for `file`: its
+ * nearest `*.csproj` directory, else the project root. Each module records only its own declarations; they are
+ * combined here, once per index and project, so an added, changed, or deleted file changes the answer without
+ * touching any other file's cached module.
+ */
+function csharpProjectDeclaredNames(index: ProjectIndex, file: FileId): ReadonlySet<string> | null {
+  let cached = csharpDeclaredNameCaches.get(index);
+  if (!cached || cached.source !== index.byFile || cached.size !== index.byFile.size) {
+    cached = { source: index.byFile, size: index.byFile.size, boundaries: new Map(), names: new Map() };
+    csharpDeclaredNameCaches.set(index, cached);
+  }
+  const directoryKey = fileIdentityKey(path.dirname(file));
+  let boundaryKey = cached.boundaries.get(directoryKey);
+  if (boundaryKey === undefined) {
+    const projectRoot = index.projectRoot;
+    const projectKey = projectRoot
+      ? fileIdentityKey(resolveNearestManifestRootSync(projectRoot, file, CSHARP_PACKAGE_MANIFEST_NAMES))
+      : "";
+    // The project root bounds every indexed file, so only a project below it restricts which files count.
+    boundaryKey = projectRoot && projectKey === fileIdentityKey(projectRoot) ? "" : projectKey;
+    cached.boundaries.set(directoryKey, boundaryKey);
+  }
+  let names = cached.names.get(boundaryKey);
+  if (names === undefined) {
+    names = aggregateCsharpDeclaredNames(index, boundaryKey);
+    cached.names.set(boundaryKey, names);
+  }
+  return names;
+}
+
+/**
  * Whether `namespaceName` or one of its enclosing namespaces (the global namespace excluded) has a
- * namespace or type member called `name` in any indexed C# file, or a `file` type of that name in
- * `mod`'s own file, the only one that can see it. Each module records only its own declarations;
- * they are combined here, once per index, so an added, changed, or deleted file changes the answer
- * without touching any other file's cached module. Unknown when an indexed C# file has no recorded
- * declarations, which answers `true` because that file could declare it.
+ * namespace or type member called `name` in any indexed C# file of `mod`'s project, or a `file` type of
+ * that name in `mod`'s own file, the only one that can see it. Unknown when an indexed C# file of the project
+ * has no recorded declarations, which answers `true` because that file could declare it.
  */
 export function csharpNamespaceChainDeclares(
   index: ProjectIndex,
@@ -366,18 +402,21 @@ export function csharpNamespaceChainDeclares(
   namespaceName: string,
   name: string,
 ): boolean {
-  let cached = csharpDeclaredNameCaches.get(index);
-  if (!cached || cached.source !== index.byFile || cached.size !== index.byFile.size) {
-    cached = { source: index.byFile, size: index.byFile.size, names: aggregateCsharpDeclaredNames(index) };
-    csharpDeclaredNameCaches.set(index, cached);
-  }
-  const { names } = cached;
+  const names = csharpProjectDeclaredNames(index, mod.file);
   if (!names) return true;
   for (let end = namespaceName.length; end > 0; end = namespaceName.lastIndexOf(".", end - 1)) {
     const declared = `${namespaceName.slice(0, end)}.${name}`;
     if (names.has(declared) || mod.csharpDeclaredNames?.includes(CSHARP_FILE_LOCAL_PREFIX + declared)) return true;
   }
   return false;
+}
+
+/**
+ * Whether an indexed C# file of `mod`'s project has no recorded declarations because its syntax tree was
+ * unavailable. That file could declare any type, so a type found once in the project is not proven the only one.
+ */
+export function csharpProjectDeclarationsUnknown(index: ProjectIndex, mod: ModuleIndex): boolean {
+  return !csharpProjectDeclaredNames(index, mod.file);
 }
 
 function csharpNamespaceAtIndex(regions: readonly CsharpNamespaceRegion[], position: number | undefined): string {

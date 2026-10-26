@@ -1,4 +1,4 @@
-import type { Dirent } from "node:fs";
+import fs, { type Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
@@ -123,6 +123,54 @@ export async function resolveNearestManifestRoot(
   const manifest = await findNearestManifest(startDir, resolvedRoot, names);
   if (!manifest) return resolvedRoot;
   return path.dirname(path.resolve(manifest));
+}
+
+function statIsFileSync(target: string): boolean {
+  try {
+    return fs.statSync(target).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function directoryHasManifestSync(dir: string, name: string): boolean {
+  if (!isExtensionManifestPattern(name)) return statIsFileSync(path.join(dir, name));
+  const suffix = name.slice(1).toLowerCase();
+  let entries: Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  return entries.some((entry) => {
+    if (!entry.name.toLowerCase().endsWith(suffix) || entry.isDirectory()) return false;
+    return entry.isFile() || statIsFileSync(path.join(dir, entry.name));
+  });
+}
+
+/**
+ * {@link resolveNearestManifestRoot} for lookups that cannot await, such as name resolution. It applies
+ * the same nearest-manifest rule, so both name the same project root.
+ */
+export function resolveNearestManifestRootSync(
+  projectRoot: string,
+  fromFile: string,
+  names: readonly string[],
+): string {
+  const resolvedRoot = path.resolve(projectRoot);
+  if (!fromFile) return resolvedRoot;
+  let dir = path.dirname(path.resolve(fromFile));
+  const rootKey = fileIdentityKey(resolvedRoot);
+  if (fileIdentityKey(dir) !== rootKey && !isFilePathWithinRoot(resolvedRoot, dir)) return resolvedRoot;
+  for (;;) {
+    for (const name of names) {
+      if (directoryHasManifestSync(dir, name)) return dir;
+    }
+    const parent = path.dirname(dir);
+    if (fileIdentityKey(dir) === rootKey || parent === dir) return resolvedRoot;
+    if (!isFilePathWithinRoot(resolvedRoot, parent) && fileIdentityKey(parent) !== rootKey) return resolvedRoot;
+    dir = parent;
+  }
 }
 
 export async function isDirectory(p: string): Promise<boolean> {

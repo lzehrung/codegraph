@@ -238,12 +238,16 @@ describe("import binding regressions", () => {
     const plain = path.join(root, "Box.cs");
     const generic = path.join(root, "BoxOfT.cs");
     const genericOnly = path.join(root, "Only.cs");
+    const soloGeneric = path.join(root, "Solo.cs");
+    const mainLines = ["using B = N.Box;", "using O = N.Only;", "using S = M.Solo;", "class Use { B value; S solo; }"];
     try {
       await writeFile(plain, "namespace N; public class Box {}\n", "utf8");
       await writeFile(generic, "namespace N; public class Box<T> {}\n", "utf8");
       await writeFile(genericOnly, "namespace N; public class Only<T> {}\n", "utf8");
-      await writeFile(main, "using B = N.Box;\nusing O = N.Only;\nclass Use { B value; }\n", "utf8");
-      const index = await buildProjectIndexFromFiles(root, [main, plain, generic, genericOnly]);
+      // The only file that declares namespace `M` declares just the generic type.
+      await writeFile(soloGeneric, "namespace M; public class Solo<T> {}\n", "utf8");
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [main, plain, generic, genericOnly, soloGeneric]);
       const target = (local: string): string | undefined => {
         const alias = index.byFile
           .get(fileIdentityKey(main))
@@ -251,9 +255,21 @@ describe("import binding regressions", () => {
         return typeof alias?.resolved === "string" ? fileIdentityKey(alias.resolved) : undefined;
       };
 
-      // `N.Box` names `Box`, never `Box<T>`, so a generic sibling does not make it ambiguous; `N.Only` names no type.
+      // `N.Box` names `Box`, never `Box<T>`, so a generic sibling does not make it ambiguous; `N.Only` and `M.Solo`
+      // name no type, whether their namespace is declared in several files or in one.
       expect(target("B")).toBe(fileIdentityKey(plain));
       expect(target("O")).toBeUndefined();
+      expect(target("S")).toBeUndefined();
+      const solo = await goToDefinition(index, {
+        file: main,
+        line: 4,
+        column: mainLines[3]!.indexOf("S solo") + 1,
+      });
+      expect(solo.status).not.toBe("ok");
+      const fileTargets = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : ""));
+      expect(fileTargets).not.toContain(fileIdentityKey(soloGeneric));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

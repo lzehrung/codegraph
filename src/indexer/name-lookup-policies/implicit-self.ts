@@ -113,8 +113,8 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   fromClosestBinding: ownOverloadDeclaration,
   crossModuleName: ({ use, lookupName }) =>
     csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports),
-  // A dotted name led by a compilation-unit alias that an enclosing namespace shadows, or that was bound while a
-  // project file was unreadable, is unproven, and so is one qualified through a generic type, whose
+  // A dotted name led by a compilation-unit alias that an enclosing namespace shadows, or that reaches a project
+  // with a file of unknown declarations, is unproven, and so is one qualified through a generic type, whose
   // namespace-qualified spelling drops its type arguments.
   beforeCrossModule({ use }) {
     const chainNode = csharpQualifiedNameNode(use.node);

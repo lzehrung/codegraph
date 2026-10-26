@@ -7,8 +7,10 @@ import { fileIdentityKey } from "../src/util/paths.js";
 import { resolveCsharpNamespaceImportPaths } from "../src/util/resolution/csharp.js";
 import {
   CSHARP_PACKAGE_MANIFEST_NAMES,
+  JVM_PACKAGE_MANIFEST_NAMES,
   findNearestManifest,
   resolveNearestManifestRoot,
+  resolveNearestManifestRootSync,
 } from "../src/util/resolution/files.js";
 import { resolveJvmImportPath } from "../src/util/resolution/jvm.js";
 import { resolvePhpImportPath } from "../src/util/resolution/php.js";
@@ -94,11 +96,11 @@ describe("monorepo resolution boundaries", () => {
     await writeFile(libB, "namespace Shared;\npublic class Lib {}\n");
     await writeFile(appA, "using Shared;\npublic class App { Shared.Lib lib; }\n");
 
-    const { files: local } = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
+    const local = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
     expect(local.map(posix)).toEqual([posix(libA)]);
     expect(local.map(posix)).not.toContain(posix(libB));
 
-    const { files: fromB } = await resolveCsharpNamespaceImportPaths(root, "Shared", libB);
+    const fromB = await resolveCsharpNamespaceImportPaths(root, "Shared", libB);
     expect(fromB.map(posix)).toEqual([posix(libB)]);
   });
 
@@ -162,7 +164,7 @@ describe("monorepo resolution boundaries", () => {
     expect(posix(beside ?? "")).toBe(posix(realProj));
     expect(posix(await resolveNearestManifestRoot(root, appA, CSHARP_PACKAGE_MANIFEST_NAMES))).toBe(posix(pkgA));
 
-    const { files: local } = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
+    const local = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
     expect(local.map(posix)).toEqual([posix(libA)]);
     expect(local.map(posix)).not.toContain(posix(libB));
   });
@@ -183,7 +185,7 @@ describe("monorepo resolution boundaries", () => {
     await expect(findNearestManifest(pkgA, root, CSHARP_PACKAGE_MANIFEST_NAMES)).resolves.toBeNull();
     expect(posix(await resolveNearestManifestRoot(root, appA, CSHARP_PACKAGE_MANIFEST_NAMES))).toBe(posix(root));
 
-    const { files: local } = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
+    const local = await resolveCsharpNamespaceImportPaths(root, "Shared", appA);
     expect(local.map(posix).sort()).toEqual([posix(libA), posix(libB)].sort());
   });
 
@@ -206,6 +208,43 @@ describe("monorepo resolution boundaries", () => {
     // on `readdir` order or on which file happened to be written first.
     expect(posix(firstChoice ?? "")).toBe(posix(path.join(firstProject, "App.csproj")));
     expect(posix(secondChoice ?? "")).toBe(posix(path.join(secondProject, "App.csproj")));
+  });
+
+  it("finds the same nearest manifest root synchronously and asynchronously", async () => {
+    const root = await mkTmpDir("dg-mono-sync-root-");
+    const outside = await mkTmpDir("dg-mono-sync-outside-");
+    const manifest = '<Project Sdk="Microsoft.NET.Sdk"></Project>\n';
+    try {
+      await writeFile(path.join(root, "Outer.csproj"), manifest);
+      await writeFile(path.join(root, "inner", "Inner.csproj"), manifest);
+      await writeFile(path.join(root, "inner", "x", "B.cs"), "class B {}\n");
+      await writeFile(path.join(root, "plain", "C.cs"), "class C {}\n");
+      await fsp.mkdir(path.join(root, "fake", "Fake.csproj"), { recursive: true });
+      await writeFile(path.join(root, "fake", "deep", "D.cs"), "class D {}\n");
+      await writeFile(path.join(root, "mvn", "pom.xml"), "<project></project>\n");
+      await writeFile(path.join(root, "mvn", "src", "E.java"), "class E {}\n");
+
+      const cases: Array<[file: string, names: readonly string[], expected: string]> = [
+        // A nested project owns its files, and the outer one owns the rest.
+        [path.join(root, "inner", "x", "B.cs"), CSHARP_PACKAGE_MANIFEST_NAMES, path.join(root, "inner")],
+        [path.join(root, "plain", "C.cs"), CSHARP_PACKAGE_MANIFEST_NAMES, root],
+        // A directory named like a manifest is not one.
+        [path.join(root, "fake", "deep", "D.cs"), CSHARP_PACKAGE_MANIFEST_NAMES, root],
+        // An exact manifest file name, and no manifest of the kind at all.
+        [path.join(root, "mvn", "src", "E.java"), JVM_PACKAGE_MANIFEST_NAMES, path.join(root, "mvn")],
+        [path.join(root, "inner", "x", "B.cs"), JVM_PACKAGE_MANIFEST_NAMES, root],
+        // An importer outside the root, or none, falls back to the root.
+        [path.join(outside, "F.cs"), CSHARP_PACKAGE_MANIFEST_NAMES, root],
+        ["", CSHARP_PACKAGE_MANIFEST_NAMES, root],
+      ];
+      for (const [file, names, expected] of cases) {
+        expect(posix(resolveNearestManifestRootSync(root, file, names)), `sync ${file}`).toBe(posix(expected));
+        expect(posix(await resolveNearestManifestRoot(root, file, names)), `async ${file}`).toBe(posix(expected));
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(outside, { recursive: true, force: true });
+    }
   });
 
   it("binds a PHP namespace to the nearest composer.json, not a sibling", async () => {
