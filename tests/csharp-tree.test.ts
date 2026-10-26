@@ -16,36 +16,24 @@ import { collectImportsForFile } from "../src/indexer/imports.js";
 import { clearCsharpResolutionCaches, resolveCsharpNamespaceTypePath } from "../src/util/resolution/csharp.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs/specifiers.js";
 import { CSHARP_SUPPORT } from "../src/languages.js";
-import type { SyntaxNodeLike, SyntaxTreeLike } from "../src/languages/types.js";
+import type { SyntaxTreeLike } from "../src/languages/types.js";
 import {
   __resetNativeTreeSitterBindingForTests,
   __setNativeTreeSitterBindingForTests,
 } from "../src/native/tree-sitter-native.js";
 import { loadBinding } from "../src/native/runtime.js";
 import { getCsharpNamespaceRegions } from "../src/indexer/compilation-units.js";
-import type { BuildReport, ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
+import type { BuildReport, ProjectIndex } from "../src/indexer/types.js";
 import type { ParsedFileContext } from "../src/indexer/parse-context.js";
 import { clearMemoryCache } from "../src/indexer/build-cache.js";
-import { makeTestProjectIndex } from "./helpers/narrow.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { captureCli } from "./helpers/cli.js";
 import {
-  collectCsharpDeclaredNames,
   collectCsharpImportDirectives,
   collectCsharpNamespaceFacts,
-  csharpImportDirectiveAt,
   parseCsharpSyntaxTree,
 } from "../src/util/csharp-tree.js";
-import * as csharpTree from "../src/util/csharp-tree.js";
-
-type CsharpTreeOutcome = { tree: SyntaxTreeLike | null; fallbackReason?: string; error?: string };
-
-function parseCsharpOutcome(source: string): CsharpTreeOutcome {
-  const parsed = parseCsharpSyntaxTree(source, CSHARP_SUPPORT) as unknown as CsharpTreeOutcome | SyntaxTreeLike | null;
-  if (!parsed) return { tree: null };
-  if ("rootNode" in parsed) return { tree: parsed };
-  return parsed;
-}
 
 function setNativeTreeParseFailure(message: string): () => number {
   const state = loadBinding();
@@ -81,26 +69,37 @@ function setNativeTreeParseFailureFor(marker: string, message: string): void {
   });
 }
 
-/** Fails parsing and extraction for sources containing `marker`, so that file indexes without a tree. */
-function setNativeIndexingFailureFor(marker: string, message: string): void {
+/**
+ * Fails parsing and extraction for sources containing `marker`, so that file indexes without a tree.
+ * Returns how many native reads of such a source have failed so far.
+ */
+function setNativeIndexingFailureFor(marker: string, message: string): () => number {
   const state = loadBinding();
   if (!state.loaded) throw new Error("Native addon required for C# tree tests");
   const { parseSyntaxTree, extractLanguage } = state.binding;
   if (!parseSyntaxTree) throw new Error("Native addon does not expose parseSyntaxTree");
+  let failures = 0;
   __setNativeTreeSitterBindingForTests({
     ...state,
     binding: {
       ...state.binding,
       parseSyntaxTree: (source, languageId) => {
-        if (source.includes(marker)) throw new Error(message);
+        if (source.includes(marker)) {
+          failures += 1;
+          throw new Error(message);
+        }
         return parseSyntaxTree(source, languageId);
       },
       extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
-        if (source.includes(marker)) throw new Error(message);
+        if (source.includes(marker)) {
+          failures += 1;
+          throw new Error(message);
+        }
         return extractLanguage(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
       },
     },
   });
+  return () => failures;
 }
 
 function countNativeTreeParses(): () => number {
@@ -138,18 +137,9 @@ function countNativeTreeParses(): () => number {
   });
   return () => count;
 }
-function projectIndexWithSource(file: string, source: string): ProjectIndex {
-  const key = fileIdentityKey(file);
-  const module: ModuleIndex = { file, exports: [], imports: [], locals: [] };
-  return makeTestProjectIndex({
-    byFile: new Map([[key, module]]),
-    parsed: new Map([[key, { source } as ParsedFileContext]]),
-    buildReport: { timings: {} } as BuildReport,
-  });
-}
 
 function treeForSource(source: string): SyntaxTreeLike {
-  const tree = parseCsharpOutcome(source).tree;
+  const tree = parseCsharpSyntaxTree(source, CSHARP_SUPPORT).tree;
   if (!tree) throw new Error("Expected a C# syntax tree");
   return tree;
 }
@@ -160,13 +150,13 @@ afterEach(() => {
 
 describe("C# syntax-tree outcomes", () => {
   it("distinguishes parsed-empty syntax from an unavailable native tree", () => {
-    const empty = parseCsharpOutcome("");
+    const empty = parseCsharpSyntaxTree("", CSHARP_SUPPORT);
     expect(empty.tree).not.toBeNull();
     expect(empty.fallbackReason).toBeUndefined();
-    expect(collectCsharpNamespaceFacts(empty.tree!, 0).regions).toEqual([]);
+    expect(collectCsharpNamespaceFacts(empty.tree!).regions).toEqual([]);
 
     setNativeTreeParseFailure("forced C# tree parse failure");
-    expect(parseCsharpOutcome("namespace N; class T {}\n")).toEqual({
+    expect(parseCsharpSyntaxTree("namespace N; class T {}\n", CSHARP_SUPPORT)).toEqual({
       tree: null,
       fallbackReason: "queryFailure",
       error: "forced C# tree parse failure",
@@ -197,24 +187,26 @@ describe("C# syntax-tree outcomes", () => {
     });
   });
 
-  it("does not cache unavailable namespace facts as an empty namespace", () => {
-    const file = path.resolve("CsharpTreeUnavailable.cs").replace(/\\/g, "/");
-    const index = projectIndexWithSource(file, "namespace N; class T {}\n");
-    setNativeTreeParseFailure("forced C# namespace parse failure");
+  it("reports a file indexed without a tree as unavailable, not as an empty namespace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-namespace-unavailable-"));
+    try {
+      const readable = path.join(root, "Readable.cs");
+      const unreadable = path.join(root, "Unreadable.cs");
+      await writeFixtureFiles(root, {
+        "Readable.cs": "namespace N; class T {}\n",
+        "Unreadable.cs": "// CSHARP_FACTS_UNAVAILABLE\nnamespace M; class U {}\n",
+      });
+      setNativeIndexingFailureFor("CSHARP_FACTS_UNAVAILABLE", "forced C# namespace indexing failure");
+      const index = await buildProjectIndexFromFiles(root, [readable, unreadable], { useNativeWorkers: false });
+      const reportBefore = JSON.stringify(index.buildReport?.backend);
 
-    expect(getCsharpNamespaceRegions(index, file)).toBeNull();
-    expect(index.buildReport?.backend?.parser).toMatchObject({
-      total: 1,
-      byLanguage: { csharp: 1 },
-      files: [
-        {
-          file,
-          languageId: "csharp",
-          nativeFallbackReason: "queryFailure",
-          nativeError: "forced C# namespace parse failure",
-        },
-      ],
-    });
+      expect(getCsharpNamespaceRegions(index, readable)?.map((region) => region.name)).toEqual(["N"]);
+      expect(getCsharpNamespaceRegions(index, unreadable)).toBeNull();
+      // A query never writes the build report: the build that indexed the file already recorded its failure.
+      expect(JSON.stringify(index.buildReport?.backend)).toBe(reportBefore);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -233,16 +225,22 @@ describe("C# namespace declarations in conditional directives", () => {
       "namespace Unrelated { public class OtherType {} }",
       "",
     ].join("\n");
-    const tree = treeForSource(source);
-    const facts = collectCsharpNamespaceFacts(tree, source.length);
+    const facts = collectCsharpNamespaceFacts(treeForSource(source));
 
-    expect(facts.namespaces).toEqual(["Outer", "Outer.Nested", "Outer.Alternate", "Outer.Fallback", "Unrelated"]);
-    expect(facts.symbolsByNamespace.get("Outer.Nested")).toEqual(new Set(["ConditionalType"]));
-    expect(facts.symbolsByNamespace.get("Outer.Alternate")).toEqual(new Set(["AlternateType"]));
-    expect(facts.symbolsByNamespace.get("Outer.Fallback")).toEqual(new Set(["FallbackType"]));
-    expect(facts.symbolsByNamespace.get("Unrelated")).toEqual(new Set(["OtherType"]));
-    expect(facts.symbolsByNamespace.has("Unrelated.Nested")).toBe(false);
-    expect(facts.hasGlobalType).toBe(false);
+    expect(facts.regions.map((region) => region.name)).toEqual([
+      "Outer",
+      "Outer.Nested",
+      "Outer.Alternate",
+      "Outer.Fallback",
+      "Unrelated",
+    ]);
+    // Each type belongs to its own namespace only; `Unrelated` does not inherit the conditional `Nested`.
+    expect(facts.types).toEqual([
+      "Outer.Nested.ConditionalType",
+      "Outer.Alternate.AlternateType",
+      "Outer.Fallback.FallbackType",
+      "Unrelated.OtherType",
+    ]);
   });
 });
 describe("C# namespace type-index completeness", () => {
@@ -940,41 +938,41 @@ describe("C# alias project boundary", () => {
     }
   });
 });
-describe("C# using-directive syntax lookup", () => {
-  it("selects the second of adjacent directives without reusing the first", () => {
-    const source = "using A;using B;";
-    const tree = treeForSource(source);
-    const secondStart = source.indexOf("using", 1);
+describe("C# using-directive discovery", () => {
+  const directiveTexts = (source: string): string[] =>
+    collectCsharpImportDirectives(treeForSource(source)).map((directive) => directive.text);
 
-    expect(csharpImportDirectiveAt(tree, source.indexOf("using"))?.text).toBe("using A;");
-    expect(csharpImportDirectiveAt(tree, secondStart)?.text).toBe("using B;");
+  it("returns adjacent directives and a directive after a leading comment in source order", () => {
+    expect(directiveTexts("using A;using B;")).toEqual(["using A;", "using B;"]);
+    expect(directiveTexts("/*x*/using A;")).toEqual(["using A;"]);
   });
 
-  it("finds a directive after a leading comment", () => {
-    const source = "/*x*/using A;";
-    const tree = treeForSource(source);
-
-    expect(csharpImportDirectiveAt(tree, source.indexOf("using"))?.text).toBe("using A;");
+  it("finds directives only where C# allows them", () => {
+    const source = [
+      "using A;",
+      "#if FEATURE",
+      "using B;",
+      "#else",
+      "using C;",
+      "#endif",
+      "namespace N {",
+      "  using D;",
+      "  namespace M { using E; }",
+      "  class K { using Hidden; }",
+      "}",
+      "class T { void F() { using (var x = Make()) { } } using AlsoHidden; }",
+      "",
+    ].join("\n");
+    expect(directiveTexts(source)).toEqual(["using A;", "using B;", "using C;", "using D;", "using E;"]);
+    expect(directiveTexts("namespace N;\nusing F;\nclass C {}\n")).toEqual(["using F;"]);
   });
 
-  it("reads each visited node's named-child list once", () => {
-    const children = Array.from({ length: 64 }, () => ({ type: "using_directive" }) as unknown as SyntaxNodeLike);
-    let namedChildrenReads = 0;
-    const rootNode = {
-      type: "compilation_unit",
-      get namedChildren() {
-        namedChildrenReads += 1;
-        return children;
-      },
-    } as unknown as SyntaxNodeLike;
-    const tree = { rootNode } as unknown as SyntaxTreeLike;
-
-    expect(collectCsharpImportDirectives(tree)).toHaveLength(children.length);
-    expect(namedChildrenReads).toBe(1);
+  it("keeps a directive the grammar leaves inside a recovery node", () => {
+    expect(directiveTexts("namespace N {\n using B;\n class C {\n")).toEqual(["using B;"]);
   });
 });
 describe("C# alias shadowing facts", () => {
-  it("collects a tree's namespace facts once and still decides from the current index", async () => {
+  it("decides alias shadowing from the current index's declarations", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-facts-"));
     const real = path.join(root, "Real.cs");
     const main = path.join(root, "Main.cs");
@@ -985,7 +983,6 @@ describe("C# alias shadowing facts", () => {
       "}",
     ];
     const options = { useNativeWorkers: false, keepParsed: true };
-    const collectFacts = vi.spyOn(csharpTree, "collectCsharpNamespaceFacts");
     const targets = async (index: ProjectIndex): Promise<string[]> => {
       const found: string[] = [];
       for (const match of mainLines[2]!.matchAll(/Target/gu)) {
@@ -1000,20 +997,13 @@ describe("C# alias shadowing facts", () => {
       const index = await buildProjectIndexFromFiles(root, [real, main], options);
       expect(await targets(index)).toEqual(["Real.cs", "Real.cs", "Real.cs"]);
 
-      // The index's own caches are warm, so only the per-use shadowing check could collect facts again.
-      collectFacts.mockClear();
-      expect(await targets(index)).toEqual(["Real.cs", "Real.cs", "Real.cs"]);
-      expect(collectFacts.mock.calls.length).toBe(0);
-
-      // The facts depend on the tree alone: an index that declares `Local.X` shares the tree and still sees it.
+      // An index that also declares `Local.X` shadows the alias; the first index still binds it.
       const shadow = path.join(root, "Shadow.cs");
       await writeFile(shadow, "namespace Local.X; public class Other {}\n", "utf8");
       const shadowed = await buildProjectIndexFromFiles(root, [real, main, shadow], options);
-      shadowed.parsed = index.parsed;
       expect(await targets(shadowed)).toEqual(["not_found", "not_found", "not_found"]);
       expect(await targets(index)).toEqual(["Real.cs", "Real.cs", "Real.cs"]);
     } finally {
-      collectFacts.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -1035,14 +1025,175 @@ describe("C# alias shadowing facts", () => {
       "class GlobalGeneric<T> {}",
       "",
     ].join("\n");
-    const tree = treeForSource(source);
-    const facts = collectCsharpNamespaceFacts(tree, source.length);
+    const facts = collectCsharpNamespaceFacts(treeForSource(source));
 
     // `X` never binds `X<T>`, so only a namespace or a type without type parameters can shadow a bare name.
-    expect([...collectCsharpDeclaredNames(tree)].sort()).toEqual(["Local", "Local.Both", "Local.Mode", "Local.Plain"]);
-    expect(facts.symbolsByNamespace.get("Local")).toEqual(new Set(["Plain", "Both", "Mode"]));
-    expect(facts.fileLocalTypes.size).toBe(0);
+    expect([...facts.types].sort()).toEqual(["Local.Both", "Local.Mode", "Local.Plain"]);
     // A generic type outside every namespace still makes its file a global-namespace peer.
-    expect(facts.hasGlobalType).toBe(true);
+    expect(facts.regions.map((region) => region.name)).toEqual(["", "Local"]);
+  });
+});
+
+describe("C# project with a file whose syntax tree is unavailable", () => {
+  const callerLines = ["public class B { public int Run() { return A.M(); } }"];
+  const targetLines = ["public class A { public static int M() { return 1; } }"];
+  /** Over the native node cap, so Big.cs indexes without a tree. */
+  const unprojectable = [
+    "namespace Gen {",
+    "  public class Big {",
+    ...Array.from({ length: 70000 }, (_, field) => `    public int F${field};`),
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+
+  async function writeProject(root: string): Promise<void> {
+    await writeFixtureFiles(root, {
+      "A.cs": targetLines.join("\n") + "\n",
+      "B.cs": callerLines.join("\n") + "\n",
+      "Big.cs": unprojectable,
+    });
+  }
+
+  it("answers every disk-cached CLI goto the same", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-unprojectable-cli-"));
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-unprojectable-cli-cache-"));
+    try {
+      await writeProject(root);
+      const position = `${path.join(root, "B.cs")}:1:${columnOf(callerLines, 1, "M()")}`;
+      const runs: string[] = [];
+      // The first run builds and persists the index; the next two load it from disk.
+      for (let run = 0; run < 3; run += 1) {
+        const result = await captureCli(["goto", position, "--root", root, "--cache-dir", cacheDir, "--json"]);
+        const outcome = result.stdout
+          ? (JSON.parse(result.stdout) as { status: string; definition?: { file: string } })
+          : null;
+        runs.push(outcome?.definition ? path.basename(outcome.definition.file) : (outcome?.status ?? result.stderr));
+      }
+      expect(runs).toEqual(["A.cs", "A.cs", "A.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports the same references and partial coverage from a loaded snapshot as from a fresh build", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-unprojectable-warm-"));
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-unprojectable-warm-cache-"));
+    try {
+      await writeProject(root);
+      const answers = async (index: ProjectIndex) => {
+        const target = await goToDefinition(index, {
+          file: path.join(root, "B.cs"),
+          line: 1,
+          column: columnOf(callerLines, 1, "M()"),
+        });
+        const references = await findReferences(index, {
+          file: path.join(root, "A.cs"),
+          line: 1,
+          column: columnOf(targetLines, 1, "A "),
+        });
+        return {
+          goto: target.status === "ok" ? path.basename(target.definition.file) : target.status,
+          references:
+            references.status === "ok"
+              ? references.references.map(
+                  (reference) => `${path.basename(reference.file)}:${reference.range.start.line}`,
+                )
+              : references.status,
+          coverage: references.status === "ok" ? references.referenceCoverage?.state : undefined,
+        };
+      };
+      const cold = await answers(await buildProjectIndex(root, { cache: "off", useNativeWorkers: false }));
+      expect(cold).toEqual({ goto: "A.cs", references: ["A.cs:1", "B.cs:1"], coverage: "partial" });
+
+      const options = { cache: "disk" as const, cacheDir, useNativeWorkers: false };
+      await buildProjectIndexIncremental(root, { ...options, report: { timings: {} } });
+      const report: BuildReport = { timings: {} };
+      const warm = await buildProjectIndexIncremental(root, { ...options, report });
+      // Nothing was rebuilt: this index came from the persisted snapshot.
+      expect(report.files?.cached).toBe(3);
+      expect(report.files?.parsed ?? 0).toBe(0);
+
+      expect(await answers(warm)).toEqual(cold);
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# namespace scan with a file that cannot be parsed", () => {
+  it("reads the failing file as often however many using directives resolve", async () => {
+    const failuresFor = async (importers: number): Promise<number> => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-scan-once-"));
+      try {
+        const files: Record<string, string> = {
+          "Target.cs": "namespace N; public class T {}\n",
+          "Unparsed.cs": "// CSHARP_SCAN_ONCE_FAILURE\nnamespace Elsewhere; public class Hidden {}\n",
+        };
+        for (let importer = 0; importer < importers; importer += 1) {
+          files[`Use${importer}.cs`] = `using N;\nusing Alias = N.T;\nclass Use${importer} {}\n`;
+        }
+        await writeFixtureFiles(root, files);
+        const failures = setNativeIndexingFailureFor("CSHARP_SCAN_ONCE_FAILURE", "forced C# scan failure");
+        await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+        return failures();
+      } finally {
+        __resetNativeTreeSitterBindingForTests();
+        await rm(root, { recursive: true, force: true });
+      }
+    };
+
+    // Unparsed.cs fails each time it is read, and the project scan that reads it is shared by the whole build.
+    expect(await failuresFor(10)).toBe(await failuresFor(2));
+  });
+});
+
+describe("C# partial type split across a file-scoped and a block namespace", () => {
+  it("lists the same references, alias uses included, from either part", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-scopes-"));
+    const useLines = [
+      "namespace Edge.App",
+      "{",
+      "    using CoreBox = Edge.Core.Box<string>;",
+      "    using X = Edge.Core;",
+      "",
+      "    public class Use",
+      "    {",
+      "        public X::Box<int> AliasQualified() => default!;",
+      "        public CoreBox Aliased() => default!;",
+      "    }",
+      "}",
+    ];
+    try {
+      await writeFixtureFiles(root, {
+        "Core.cs":
+          "namespace Edge.Core;\n\npublic partial class Box<T>\n{\n    public T Value { get; set; } = default!;\n}\n",
+        "Part.cs":
+          "namespace Edge.Core\n{\n    public partial class Box<T>\n    {\n        public int Extra => 7;\n    }\n}\n",
+        "Use.cs": useLines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+      const fromPart = async (file: string, column: number) => {
+        const result = await findReferences(index, { file: path.join(root, file), line: 3, column });
+        if (result.status !== "ok") return result.status;
+        const sites = result.references.map(
+          (reference) => `${path.basename(reference.file)}:${reference.range.start.line}`,
+        );
+        return { sites: sites.sort(), coverage: result.referenceCoverage?.state };
+      };
+
+      const fromCore = await fromPart("Core.cs", 22);
+      const fromBlock = await fromPart("Part.cs", 26);
+      expect(fromCore).toEqual(fromBlock);
+      expect(fromCore).toEqual({
+        sites: ["Core.cs:3", "Part.cs:3", "Use.cs:3", "Use.cs:8"],
+        coverage: "complete",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

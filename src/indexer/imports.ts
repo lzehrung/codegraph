@@ -25,6 +25,7 @@ import {
   csharpSyntaxTreeFromNativeExecution,
   parseCsharpSyntaxTree,
 } from "../util/csharp-tree.js";
+import { applyCsharpImportDirective } from "./imports/import-binding-tables.js";
 import type { ImportResolverOptions, ResolvedImportTarget } from "./imports/context.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./imports/binding-ranges.js";
 import { collectGraphOnlyImports } from "./imports/graph-only.js";
@@ -215,7 +216,6 @@ export async function collectImportsForFile(
     projectRoot,
     source: resolvedSource,
     languageId: resolvedSup.id,
-    ...(resolvedSup.id === "csharp" && csharpTree !== undefined ? { csharpTree } : {}),
     ...(opts?.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
     ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
     ...(opts?.report ? { report: opts.report } : {}),
@@ -294,7 +294,7 @@ export async function collectImportsForFile(
       typeOnly,
       statementStartIndex,
     );
-    if (handled && statementStartIndex !== undefined && resolvedSup.id !== "csharp") {
+    if (handled && statementStartIndex !== undefined) {
       attributeNamedBindingRanges({
         bindings: imports,
         fromIndex: bindingCountBefore,
@@ -319,7 +319,7 @@ export async function collectImportsForFile(
     try {
       if (resolvedSup.id === "csharp" && csharpTree) {
         for (const directive of collectCsharpImportDirectives(csharpTree)) {
-          await applyStatementOverride(directive.text, false, directive.startIndex);
+          await applyCsharpImportDirective(languageContext, directive);
         }
       } else if (resolvedNativeQueries) {
         await collectNativeCaptureImportBindings(

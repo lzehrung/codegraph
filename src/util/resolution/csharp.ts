@@ -9,17 +9,20 @@ import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../iden
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
 import { selectUniqueCsharpNamespaceTypeFile } from "../../indexer/shared-owner-identity.js";
 import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
-import { buildDeclaredContainerIndex, type LanguageProjectSymbolIndex } from "./project-symbols.js";
+import {
+  buildDeclaredContainerIndex,
+  type DeclaredContainer,
+  type LanguageProjectSymbolIndex,
+} from "./project-symbols.js";
 import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
 import type { BuildReport } from "../../indexer/types.js";
 import type { ParsedFileContext } from "../../indexer/parse-context.js";
-import type { SyntaxTreeLike } from "../../languages/types.js";
-import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../csharp-tree.js";
-
-type CsharpNamespaceIndexEntry = {
-  namespaces: string[];
-  symbolsByNamespace: ReadonlyMap<string, ReadonlySet<string>>;
-};
+import {
+  CSHARP_FILE_LOCAL_PREFIX,
+  collectCsharpNamespaceFacts,
+  parseCsharpSyntaxTree,
+  type CsharpNamespaceFacts,
+} from "../csharp-tree.js";
 
 type CsharpProjectNamespaceIndexResult = {
   index: LanguageProjectSymbolIndex;
@@ -39,8 +42,10 @@ export type CsharpNamespaceTypeResolution =
   | { status: "ambiguous" }
   | { status: "partial" };
 
-const csharpNamespaceFileCache = new Map<string, CsharpNamespaceIndexEntry>();
+/** The namespace facts known per file during one build, from a reused module or from the file's own tree. */
+const csharpNamespaceFileCache = new Map<string, CsharpNamespaceFacts>();
 const csharpProjectNamespaceIndexCache = new Map<string, Promise<CsharpProjectNamespaceIndexResult>>();
+const NO_CSHARP_NAMESPACE_FACTS: CsharpNamespaceFacts = { regions: [], types: [] };
 function csharpNamespaceCacheKey(anchor: string, languageExtensions?: LanguageExtensionMap): string {
   const mappings = Object.entries(normalizeLanguageExtensions(languageExtensions) ?? {});
   return anchor + "\0" + JSON.stringify(mappings);
@@ -54,20 +59,56 @@ function csharpCandidateGlobs(languageExtensions: LanguageExtensionMap | undefin
   );
   return [...getImportableLanguageGlobs("csharp"), ...languageExtensionPatterns(csharpMappings)];
 }
-function collectCsharpNamespaceIndex(
-  source: string,
+
+/**
+ * Gives the project scan the namespace facts a build already holds for `file`, so the scan parses nothing for
+ * it. A module's facts come from its own syntax tree and depend on no other file, so they stay valid while the
+ * file's content does. Call this after the build's caches are cleared and before its first resolution.
+ */
+export function primeCsharpNamespaceFacts(
+  file: string,
+  facts: CsharpNamespaceFacts,
+  languageExtensions?: LanguageExtensionMap,
+): void {
+  csharpNamespaceFileCache.set(csharpNamespaceCacheKey(fileIdentityKey(file), languageExtensions), facts);
+}
+
+/** The namespaces `facts` declare, each with the types declared directly in it. */
+function declaredContainersOf(facts: CsharpNamespaceFacts): DeclaredContainer[] {
+  const symbolsByNamespace = new Map<string, Set<string>>();
+  for (const region of facts.regions) {
+    if (region.name && !symbolsByNamespace.has(region.name)) symbolsByNamespace.set(region.name, new Set<string>());
+  }
+  for (const type of facts.types) {
+    const declared = type.startsWith(CSHARP_FILE_LOCAL_PREFIX) ? type.slice(CSHARP_FILE_LOCAL_PREFIX.length) : type;
+    const separator = declared.lastIndexOf(".");
+    if (separator > 0) symbolsByNamespace.get(declared.slice(0, separator))?.add(declared.slice(separator + 1));
+  }
+  return Array.from(symbolsByNamespace, ([name, symbols]) => ({ name, symbols }));
+}
+
+/**
+ * The namespace facts of one file: the facts a build primed, else those of its retained tree, else those of a
+ * fresh parse. `null` when its tree is unavailable, which leaves the file's declarations unknown.
+ */
+async function readCsharpNamespaceFacts(
   filePath: string,
   languageExtensions: LanguageExtensionMap | undefined,
   report: BuildReport | undefined,
-  retainedTree?: SyntaxTreeLike,
-): CsharpNamespaceIndexEntry | null {
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
+): Promise<CsharpNamespaceFacts | null> {
+  const fileKey = fileIdentityKey(filePath);
+  const cacheKey = csharpNamespaceCacheKey(fileKey, languageExtensions);
+  const cached = csharpNamespaceFileCache.get(cacheKey);
+  if (cached) return cached;
+
   const support = supportForFileWithoutHeaderSample(filePath, languageExtensions);
-  if (support?.id !== "csharp") {
-    return { namespaces: [], symbolsByNamespace: new Map() };
-  }
-  let tree = retainedTree;
+  // An active mapping can give a C# suffix to another language; such a file declares no namespace.
+  if (support?.id !== "csharp") return NO_CSHARP_NAMESPACE_FACTS;
+  const retained = parsedFiles?.get(fileKey);
+  let tree = retained?.sup?.id === "csharp" ? retained.tree : undefined;
   if (!tree) {
-    const parsed = parseCsharpSyntaxTree(source, support);
+    const parsed = parseCsharpSyntaxTree(await readUtf8WithoutBom(filePath), support);
     if (!parsed.tree) {
       recordParserBackendDegradation(report, {
         file: slashPath(filePath),
@@ -79,30 +120,9 @@ function collectCsharpNamespaceIndex(
     }
     tree = parsed.tree;
   }
-  const facts = collectCsharpNamespaceFacts(tree, source.length);
-  return {
-    namespaces: facts.namespaces,
-    symbolsByNamespace: facts.symbolsByNamespace,
-  };
-}
-
-async function readCsharpNamespaceIndex(
-  filePath: string,
-  languageExtensions: LanguageExtensionMap | undefined,
-  report: BuildReport | undefined,
-  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
-): Promise<CsharpNamespaceIndexEntry | null> {
-  const fileKey = fileIdentityKey(filePath);
-  const cacheKey = csharpNamespaceCacheKey(fileKey, languageExtensions);
-  const cached = csharpNamespaceFileCache.get(cacheKey);
-  if (cached) return cached;
-
-  const retained = parsedFiles?.get(fileKey);
-  const source = retained?.source ?? (await readUtf8WithoutBom(filePath));
-  const tree = retained?.sup?.id === "csharp" ? retained.tree : undefined;
-  const entry = collectCsharpNamespaceIndex(source, filePath, languageExtensions, report, tree);
-  if (entry) csharpNamespaceFileCache.set(cacheKey, entry);
-  return entry;
+  const facts = collectCsharpNamespaceFacts(tree);
+  csharpNamespaceFileCache.set(cacheKey, facts);
+  return facts;
 }
 
 async function getCsharpProjectNamespaceIndex(
@@ -116,21 +136,18 @@ async function getCsharpProjectNamespaceIndex(
   if (!pending) {
     let complete = true;
     pending = buildDeclaredContainerIndex(indexRoot, csharpCandidateGlobs(languageExtensions), async (filePath) => {
-      let entry: CsharpNamespaceIndexEntry | null;
+      let facts: CsharpNamespaceFacts | null;
       try {
-        entry = await readCsharpNamespaceIndex(filePath, languageExtensions, report, parsedFiles);
+        facts = await readCsharpNamespaceFacts(filePath, languageExtensions, report, parsedFiles);
       } catch {
         complete = false;
         return [];
       }
-      if (!entry) {
+      if (!facts) {
         complete = false;
         return [];
       }
-      return entry.namespaces.map((name) => {
-        const symbols = entry.symbolsByNamespace.get(name);
-        return symbols ? { name, symbols } : { name };
-      });
+      return declaredContainersOf(facts);
     })
       .then((index) => ({ index, complete }))
       .catch((error: unknown) => {
@@ -139,11 +156,7 @@ async function getCsharpProjectNamespaceIndex(
       });
     csharpProjectNamespaceIndexCache.set(cacheKey, pending);
   }
-  const result = await pending;
-  if (!result.complete && csharpProjectNamespaceIndexCache.get(cacheKey) === pending) {
-    csharpProjectNamespaceIndexCache.delete(cacheKey);
-  }
-  return result;
+  return await pending;
 }
 
 /**

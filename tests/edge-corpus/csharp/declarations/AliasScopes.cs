@@ -8,7 +8,7 @@ namespace Edge.First
         public PT Direct() => default; // @ref point @goto point=PT
         public X.Point Qualified() => default; // @ref point
         public X::Point AliasQualified() => default; // @goto point=Point
-        public X::Box<int> GenericAlias() => default; // @goto boxPart=Box
+        public X::Box<int> GenericAlias() => default; // @goto boxPart=Box @ref box
     }
 }
 

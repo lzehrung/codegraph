@@ -34,6 +34,18 @@ const CSHARP_PREPROCESSOR_WRAPPER_TYPES: Record<string, true> = {
   preproc_elif: true,
   preproc_else: true,
 };
+/**
+ * Nodes a using directive can sit under: the compilation unit, namespace bodies, and conditional-compilation
+ * wrappers. `ERROR` is a recovery node that keeps the directives the grammar could not place in a namespace.
+ * Type declarations are absent, so a walk never enters a type body.
+ */
+const CSHARP_DIRECTIVE_CONTAINER_TYPES: Record<string, true> = {
+  compilation_unit: true,
+  namespace_declaration: true,
+  declaration_list: true,
+  ERROR: true,
+  ...CSHARP_PREPROCESSOR_WRAPPER_TYPES,
+};
 
 /** Marks a declared type name only its own file can see (a C# 11 `file` type); other files' lookups skip it. */
 export const CSHARP_FILE_LOCAL_PREFIX = "file ";
@@ -50,20 +62,33 @@ export type CsharpUsingDirective = CsharpNamePath & {
   isGlobal: boolean;
 };
 
-export type CsharpNamespaceSpan = {
+/**
+ * A C# namespace declaration and the source span it governs. A block-scoped namespace spans from its
+ * `namespace` keyword to its closing `}`; a file-scoped one spans to the end of the file. Nested block
+ * scopes compose their names (`Outer` and `Outer.Inner`), so the innermost region containing a declaration
+ * is its namespace. The global namespace (`""`) spans the whole file when the file declares a type outside
+ * every namespace and also opens a namespace.
+ */
+export type CsharpNamespaceRegion = {
   name: string;
   start: number;
   end: number;
 };
 
+/**
+ * What one C# file declares, read from its own syntax tree and stored with its module. Nothing here depends
+ * on another file, so a cached module stays valid while its source does; lookups that need other files'
+ * declarations combine these facts across the index when they run.
+ */
 export type CsharpNamespaceFacts = {
-  regions: CsharpNamespaceSpan[];
-  namespaces: string[];
-  /** Types without type parameters declared directly in each namespace: a bare name `X` never binds `X<T>`. */
-  symbolsByNamespace: Map<string, Set<string>>;
-  /** Types declared with the C# 11 `file` modifier, as `Namespace.Type`. */
-  fileLocalTypes: Set<string>;
-  hasGlobalType: boolean;
+  /** Namespace regions in source order, each opened by this file. */
+  regions: CsharpNamespaceRegion[];
+  /**
+   * Types without type parameters declared directly in a namespace, as dotted names (`Outer.Inner.Type`):
+   * a bare name `X` never binds `X<T>`. A C# 11 `file` type carries {@link CSHARP_FILE_LOCAL_PREFIX},
+   * because only this file can see it.
+   */
+  types: string[];
 };
 export type CsharpSyntaxTreeResult = {
   tree: SyntaxTreeLike | null;
@@ -131,19 +156,11 @@ export function csharpNamePath(node: SyntaxNodeLike | null): CsharpNamePath | nu
   return csharpNamePath(wrappedName ?? null);
 }
 
-export function csharpImportDirectiveAt(
-  tree: SyntaxTreeLike | null | undefined,
-  startIndex: number,
-): SyntaxNodeLike | null {
-  if (!tree) return null;
-  const root = tree.rootNode;
-  if (startIndex < root.startIndex || startIndex >= root.endIndex) return null;
-  let node: SyntaxNodeLike | null = root.descendantForIndex(startIndex, startIndex + 1);
-  while (node && !CSHARP_IMPORT_DIRECTIVE_TYPES[node.type]) node = node.parent;
-  return node;
-}
-
-/** Returns C# using/extern-alias directives in source order from the projected native tree. */
+/**
+ * Returns C# using/extern-alias directives in source order from the projected native tree. Only the
+ * compilation unit, namespace bodies, and conditional-compilation wrappers can hold one, so the walk never
+ * enters a type.
+ */
 export function collectCsharpImportDirectives(tree: SyntaxTreeLike): SyntaxNodeLike[] {
   const directives: SyntaxNodeLike[] = [];
   const stack: SyntaxNodeLike[] = [tree.rootNode];
@@ -154,6 +171,7 @@ export function collectCsharpImportDirectives(tree: SyntaxTreeLike): SyntaxNodeL
       directives.push(node);
       continue;
     }
+    if (!CSHARP_DIRECTIVE_CONTAINER_TYPES[node.type]) continue;
     const children = node.namedChildren;
     for (let index = children.length - 1; index >= 0; index -= 1) {
       const child = children[index];
@@ -191,23 +209,32 @@ export function csharpExternAlias(node: SyntaxNodeLike): string | null {
   const alias = node.childForFieldName("name");
   return alias?.type === "identifier" ? alias.text : null;
 }
-export function csharpNamespaceAtOffset(facts: CsharpNamespaceFacts, position: number): string | null {
-  let closest: CsharpNamespaceSpan | undefined;
-  for (const region of facts.regions) {
-    if (!region.name || position < region.start || position >= region.end) continue;
-    if (!closest || region.end - region.start < closest.end - closest.start) closest = region;
+
+/**
+ * The namespace enclosing `position` in a file's regions (`""` for the global namespace): the containing
+ * region that starts last, which is the innermost of properly nested regions. Without a position, `""`.
+ */
+export function csharpNamespaceAtIndex(
+  regions: readonly CsharpNamespaceRegion[],
+  position: number | undefined,
+): string {
+  if (position === undefined) return "";
+  let innermost: CsharpNamespaceRegion | undefined;
+  for (const region of regions) {
+    if (position < region.start || position >= region.end) continue;
+    if (!innermost || region.start >= innermost.start) innermost = region;
   }
-  return closest?.name ?? null;
+  return innermost?.name ?? "";
 }
 
-export function collectCsharpNamespaceFacts(
-  tree: { rootNode: SyntaxNodeLike },
-  sourceLength: number,
-): CsharpNamespaceFacts {
-  const regions: CsharpNamespaceSpan[] = [];
-  const namespaces = new Set<string>();
-  const symbolsByNamespace = new Map<string, Set<string>>();
-  const fileLocalTypes = new Set<string>();
+/**
+ * The namespace facts of one file, read from its own syntax tree. This is the single collector: the index
+ * stores the result with the file's module, and every later lookup reads it from there.
+ */
+export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike): CsharpNamespaceFacts {
+  const regions: CsharpNamespaceRegion[] = [];
+  const types = new Set<string>();
+  const sourceEnd = tree.rootNode.endIndex;
   let hasGlobalType = false;
 
   const qualifiedNamespace = (enclosing: string | null, node: SyntaxNodeLike): string | null => {
@@ -229,15 +256,9 @@ export function collectCsharpNamespaceFacts(
     const nameNode = node.childForFieldName("name");
     const name = nameNode ? normalizeCsharpIdentifier(nameNode.text) : "";
     if (!name) return;
-    let symbols = symbolsByNamespace.get(namespaceName);
-    if (!symbols) {
-      symbols = new Set<string>();
-      symbolsByNamespace.set(namespaceName, symbols);
-    }
-    symbols.add(name);
-    if (children.some((child) => child.type === "modifier" && child.text === "file")) {
-      fileLocalTypes.add(`${namespaceName}.${name}`);
-    }
+    const declared = `${namespaceName}.${name}`;
+    const isFileLocal = children.some((child) => child.type === "modifier" && child.text === "file");
+    types.add(isFileLocal ? CSHARP_FILE_LOCAL_PREFIX + declared : declared);
   };
 
   const visitNamespaceMembers = (members: readonly SyntaxNodeLike[], namespaceName: string): void => {
@@ -259,7 +280,6 @@ export function collectCsharpNamespaceFacts(
     const body = node.childForFieldName("body");
     if (!name || !body) return;
     regions.push({ name, start: node.startIndex, end: Math.max(node.startIndex, body.endIndex - 1) });
-    namespaces.add(name);
     visitNamespaceMembers(body.namedChildren, name);
   };
 
@@ -275,8 +295,7 @@ export function collectCsharpNamespaceFacts(
         if (sawNamespaceDeclaration) continue;
         rootNamespace = qualifiedNamespace(null, member);
         if (!rootNamespace) continue;
-        regions.push({ name: rootNamespace, start: member.startIndex, end: sourceLength });
-        namespaces.add(rootNamespace);
+        regions.push({ name: rootNamespace, start: member.startIndex, end: sourceEnd });
         sawNamespaceDeclaration = true;
       } else if (member.type === "namespace_declaration") {
         sawNamespaceDeclaration = true;
@@ -288,31 +307,36 @@ export function collectCsharpNamespaceFacts(
   };
   visitCompilationUnitMembers(tree.rootNode.namedChildren);
 
-  return {
-    regions,
-    namespaces: Array.from(namespaces),
-    symbolsByNamespace,
-    fileLocalTypes,
-    hasGlobalType,
-  };
+  // A type outside every namespace makes the whole file a global-namespace peer of the namespaces it also opens.
+  if (regions.length && hasGlobalType) regions.unshift({ name: "", start: 0, end: sourceEnd });
+  return { regions, types: [...types] };
 }
 
-/**
- * The dotted names this file's own tree declares for other files' lookup: each namespace it opens
- * (`Outer.Inner`) and each type without type parameters it declares directly in one
- * (`Outer.Inner.Type`), a `file` type under {@link CSHARP_FILE_LOCAL_PREFIX}. A cached module keeps
- * them because they depend on this file alone.
- */
-export function collectCsharpDeclaredNames(tree: SyntaxTreeLike): string[] {
-  const facts = collectCsharpNamespaceFacts(tree, tree.rootNode.endIndex);
-  const names = [...facts.namespaces];
-  for (const [namespaceName, types] of facts.symbolsByNamespace) {
-    for (const type of types) {
-      const name = `${namespaceName}.${type}`;
-      names.push(facts.fileLocalTypes.has(name) ? CSHARP_FILE_LOCAL_PREFIX + name : name);
-    }
-  }
-  return names;
+function isCsharpNamespaceRegion(value: unknown): value is CsharpNamespaceRegion {
+  if (!value || typeof value !== "object") return false;
+  const region = value as { name?: unknown; start?: unknown; end?: unknown };
+  const { name, start, end } = region;
+  return (
+    typeof name === "string" &&
+    typeof start === "number" &&
+    typeof end === "number" &&
+    Number.isSafeInteger(start) &&
+    Number.isSafeInteger(end) &&
+    start >= 0 &&
+    end >= start
+  );
+}
+
+/** Whether a persisted value has the shape of {@link CsharpNamespaceFacts}. Both cache layers validate rows with it. */
+export function isCsharpNamespaceFacts(value: unknown): value is CsharpNamespaceFacts {
+  if (!value || typeof value !== "object") return false;
+  const facts = value as { regions?: unknown; types?: unknown };
+  return (
+    Array.isArray(facts.regions) &&
+    facts.regions.every(isCsharpNamespaceRegion) &&
+    Array.isArray(facts.types) &&
+    facts.types.every((type) => typeof type === "string")
+  );
 }
 
 /**

@@ -97,6 +97,31 @@ function csharpEnclosingSegment(name: string, arity: number): string {
   return arity > 0 ? `${name}\`${arity}` : name;
 }
 
+const CSHARP_CONDITIONAL_WRAPPERS: Record<string, true> = { preproc_if: true, preproc_elif: true, preproc_else: true };
+
+/**
+ * The file-scoped `namespace N;` that governs `container`, or `""`. It is a sibling that precedes the
+ * declarations it governs, not their ancestor, so a walk up the tree never meets it.
+ */
+function csharpFileScopedNamespace(container: SyntaxNodeLike, source: string): string {
+  let root: SyntaxNodeLike = container;
+  while (root.parent) root = root.parent;
+  const find = (nodes: readonly SyntaxNodeLike[]): string => {
+    for (const node of nodes) {
+      if (node.startIndex >= container.startIndex) break;
+      if (node.type === "file_scoped_namespace_declaration") {
+        const nsNode =
+          node.childForFieldName("name") ??
+          node.namedChildren.find((child) => child.type === "identifier" || child.type === "qualified_name");
+        return csharpNameText(nsNode ?? null, source);
+      }
+      const wrapped = CSHARP_CONDITIONAL_WRAPPERS[node.type] ? find(node.namedChildren) : "";
+      if (wrapped) return wrapped;
+    }
+    return "";
+  };
+  return find(root.namedChildren);
+}
 /**
  * Namespace + enclosing type names (each carrying its generic arity) + the
  * type name. The container's own arity is stored on
@@ -125,7 +150,8 @@ function getCSharpFullPath(container: SyntaxNodeLike, source: string): string | 
   }
   outer.reverse();
   namespaces.reverse();
-  const parts = [...namespaces, ...outer, typeName];
+  const fileScoped = csharpFileScopedNamespace(container, source);
+  const parts = [...(fileScoped ? [fileScoped] : []), ...namespaces, ...outer, typeName];
   return parts.join(".");
 }
 

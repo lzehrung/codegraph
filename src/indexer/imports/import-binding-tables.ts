@@ -6,18 +6,11 @@ import {
   rustImportKeywordOffset,
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
-import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
-import {
-  csharpExternAlias,
-  csharpImportDirectiveAt,
-  csharpUsingDirective,
-  parseCsharpSyntaxTree,
-  type CsharpUsingDirective,
-} from "../../util/csharp-tree.js";
+import type { LanguageExtensionMap } from "../../languages.js";
+import type { SyntaxNodeLike } from "../../languages/types.js";
+import { csharpExternAlias, csharpUsingDirective, type CsharpUsingDirective } from "../../util/csharp-tree.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
-import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute } from "../../util/resolution/rust.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
@@ -34,8 +27,9 @@ import type { ParsedFileContext } from "../parse-context.js";
  * file is the only dispatch consumer this wave.
  *
  * One row owns the statement handler, the implicit mapper, and the flags those paths used to
- * spell as `languageId === "..."` chains: trivia masking, JVM dot normalization, C# syntax-tree
- * directive/range lookup, Rust statement-key offsets, and Rust's reduced-mode rescan.
+ * spell as `languageId === "..."` chains: trivia masking, JVM dot normalization, Rust statement-key
+ * offsets, and Rust's reduced-mode rescan. C# binds its directives from syntax-tree nodes
+ * (`applyCsharpImportDirective`), so its row names no statement handler.
  * `text-import-extractors.ts` stays the shared discovery source; this table does not re-scan.
  *
  * `tests/import-binding-tables.test.ts` asserts every registered language has a row, that an
@@ -50,8 +44,6 @@ export type LanguageSpecificImportContext = ImportBindingSink & {
   resolveFrom: ImportResolver;
   /** Active extension-to-language mapping, so a resolved file is classified as the language that parses it. */
   languageExtensions?: LanguageExtensionMap;
-  /** Parsed native C# tree reused to resolve using-directive captures. */
-  csharpTree?: SyntaxTreeLike | null;
   parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
   report?: BuildReport;
   getBindings: () => ImportBinding[];
@@ -99,10 +91,10 @@ export type ImportBindingRow = {
   appendImplicit?: AppendImplicitImportBinding;
   /** Present only with `applyStatement`. */
   maskTrivia?: StatementTriviaMask;
-  /** Collapse whitespace around `.` after masking (C#, Java, Kotlin). */
+  /** Collapse whitespace around `.` after masking (Java, Kotlin). */
   normalizeDots?: true;
   /**
-   * Include the statement start offset in the override de-dupe key (C#, Rust). Required when the
+   * Include the statement start offset in the override de-dupe key (Rust). Required when the
    * same statement text can appear in several scopes and each must keep its own range.
    */
   statementKeyUsesOffset?: true;
@@ -176,60 +168,22 @@ function pushCsharpOverride(
   });
 }
 
-function csharpTreeForContext(context: LanguageSpecificImportContext): SyntaxTreeLike | null {
-  if (context.csharpTree !== undefined) return context.csharpTree;
-  const support = supportForFileWithoutHeaderSample(context.file, context.languageExtensions);
-  if (support?.id !== "csharp") return null;
-  const parsed = parseCsharpSyntaxTree(context.source, support);
-  if (!parsed.tree) {
-    recordParserBackendDegradation(context.report, {
-      file: context.file.replace(/\\/g, "/"),
-      languageId: support.id,
-      ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
-      ...(parsed.error ? { nativeError: parsed.error } : {}),
-    });
-  }
-  return parsed.tree;
-}
-
-function csharpImportNodeForStatement(
-  tree: SyntaxTreeLike | null,
-  statementStartIndex: number | undefined,
-  statementText: string,
-): SyntaxNodeLike | null {
-  if (statementStartIndex !== undefined) return csharpImportDirectiveAt(tree, statementStartIndex);
-  if (!tree) return null;
-  const stack: SyntaxNodeLike[] = [tree.rootNode];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) continue;
-    if (
-      (node.type === "using_directive" || node.type === "extern_alias_directive") &&
-      node.text.trim() === statementText.trim()
-    ) {
-      return node;
-    }
-    stack.push(...node.namedChildren);
-  }
-  return null;
-}
-
-async function applyCsharpStatementOverride(
+/**
+ * Binds one C# `using` or `extern alias` directive. The node comes from `collectCsharpImportDirectives`, so the
+ * directive is never found again by its text or offset. C# has no type-only imports.
+ */
+export async function applyCsharpImportDirective(
   context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-  statementStartIndex?: number,
-): Promise<boolean> {
-  const tree = csharpTreeForContext(context);
-  const directive = csharpImportNodeForStatement(tree, statementStartIndex, normalizedStmt);
-  if (!directive) return false;
+  directive: SyntaxNodeLike,
+): Promise<void> {
+  const typeOnly = false;
 
   const externAlias = csharpExternAlias(directive);
   if (externAlias) {
     // An extern alias names a compiler-provided assembly alias, so it remains unresolved and
     // does not produce a dependency edge: the graph query does not treat it as an import.
     context.pushBinding({ kind: "namespace", localNS: externAlias, from: externAlias });
-    return true;
+    return;
   }
 
   const parsed = csharpUsingDirective(directive);
@@ -259,15 +213,9 @@ async function applyCsharpStatementOverride(
           csharpNodeRange(alias, context.source, lineStarts),
         );
       }
-      return true;
+      return;
     }
-    if (alias) return true;
-    for (let index = 0; ; index += 1) {
-      const child = directive.child(index);
-      if (!child) break;
-      if (child.type === "static") return true;
-    }
-    return false;
+    return;
   }
   const lineStarts = parsed.alias ? collectLineStartOffsets(context.source) : undefined;
   const localRange = parsed.alias && lineStarts ? csharpNodeRange(parsed.alias, context.source, lineStarts) : undefined;
@@ -294,7 +242,7 @@ async function applyCsharpStatementOverride(
         typeOnly,
         staticMembersOf: qualifiedType,
       });
-      return true;
+      return;
     }
     context.pushBinding({
       kind: "star",
@@ -302,7 +250,7 @@ async function applyCsharpStatementOverride(
       resolved: { external: parsed.rawValue },
       typeOnly,
     });
-    return true;
+    return;
   }
 
   // A target declared as a namespace remains a namespace alias, even when written with alias
@@ -324,7 +272,7 @@ async function applyCsharpStatementOverride(
       typeOnly,
       ...(localRange ? { localRange } : {}),
     });
-    return true;
+    return;
   }
 
   let fromValue = parsed.value;
@@ -385,7 +333,6 @@ async function applyCsharpStatementOverride(
     }
   }
   pushCsharpOverride(context, parsed, typeOnly, fromValue, resolved, localRange, importedRange);
-  return true;
 }
 
 async function applyJavaStatementOverride(
@@ -808,10 +755,9 @@ export const IMPORT_BINDING_ROWS: Record<string, ImportBindingRow> = {
   },
   css: { omittedReason: STYLESHEET_OMITTED },
   csharp: {
-    applyStatement: applyCsharpStatementOverride,
-    statementKeyUsesOffset: true,
-    maskTrivia: false,
-    implicitOmittedReason: "C# using-directive captures are handled by the native syntax-tree statement override.",
+    statementOmittedReason:
+      "C# using directives are bound from syntax-tree nodes by applyCsharpImportDirective, not from statement text.",
+    implicitOmittedReason: "C# using directives are bound from syntax-tree nodes; no native capture is mapped.",
   },
   go: {
     appendImplicit: appendGoImplicitBinding,

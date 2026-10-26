@@ -1,16 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
-import type { SyntaxTreeLike } from "../languages/types.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Range } from "../types.js";
 import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
-import { recordParserBackendDegradation } from "../native/native-backend-report.js";
-import { CSHARP_FILE_LOCAL_PREFIX, collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
+import { CSHARP_FILE_LOCAL_PREFIX, csharpNamespaceAtIndex, type CsharpNamespaceRegion } from "../util/csharp-tree.js";
 import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRootSync } from "../util/resolution/files.js";
 import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
-import type { BuildReport, ModuleIndex, ProjectIndex } from "./types.js";
+import type { ModuleIndex, ProjectIndex } from "./types.js";
 
 /**
  * Proven same-compilation-unit peers for implicit bare-name visibility and shared-owner lookup
@@ -48,10 +46,11 @@ import type { BuildReport, ModuleIndex, ProjectIndex } from "./types.js";
  *   without a use position accepts a namespaced declaration only when every declared namespace
  *   can see it; it must not select a declaration visible in just one region.
  *
- * All facts are cached per `ProjectIndex` in memory only (like the existing package-directory
- * lookups) and are never persisted: they derive from indexed file paths and indexed file
- * sources, which the index already fingerprints per file. No build manifests or other
- * untracked inputs are read.
+ * The aggregated facts are cached per `ProjectIndex` in memory only (like the existing package-directory
+ * lookups). Go and JVM package clauses derive from indexed file sources, which the index already
+ * fingerprints per file. A C# file's namespace regions are the one fact stored with its module: they come
+ * from that file's own syntax tree and depend on no other file, so no lookup parses a C# file. The only
+ * untracked input is the nearest `*.csproj` directory that bounds a C# alias lookup's project.
  */
 export type CompilationUnitPeers = {
   files: ReadonlySet<FileId>;
@@ -110,47 +109,6 @@ export function jvmPackageNameFromSource(source: string, languageId: "java" | "k
   return pattern.exec(maskTrivia(source, languageId))?.[1] ?? null;
 }
 
-/**
- * A C# namespace declaration and the source span it governs. A block-scoped namespace spans
- * from its `namespace` keyword to the matching `}`; a file-scoped one spans to end of file.
- * Nested block scopes compose their names (`Outer` and `Outer.Inner`), so the innermost region
- * containing a declaration is its namespace.
- */
-export type CsharpNamespaceRegion = {
-  name: string;
-  start: number;
-  end: number;
-};
-
-function collectCsharpNamespaceRegions(
-  source: string,
-  filePath: string,
-  support: LanguageSupport | undefined,
-  report: BuildReport | undefined,
-  retainedTree?: SyntaxTreeLike,
-): CsharpNamespaceRegion[] | null {
-  if (support?.id !== "csharp") return [];
-  let tree = retainedTree;
-  if (!tree) {
-    const parsed = parseCsharpSyntaxTree(source, support);
-    if (!parsed.tree) {
-      recordParserBackendDegradation(report, {
-        file: filePath,
-        languageId: support.id,
-        ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
-        ...(parsed.error ? { nativeError: parsed.error } : {}),
-      });
-      return null;
-    }
-    tree = parsed.tree;
-  }
-  const facts = collectCsharpNamespaceFacts(tree, source.length);
-  if (facts.regions.length && facts.hasGlobalType) {
-    facts.regions.unshift({ name: "", start: 0, end: source.length });
-  }
-  return facts.regions;
-}
-
 type PackageDeclaration = { name: string | null; readable: boolean };
 type PackageNameCaches = Record<"go" | "jvm", Map<string, PackageDeclaration>>;
 const packageNameCaches = new WeakMap<ProjectIndex, PackageNameCaches>();
@@ -164,12 +122,10 @@ function packageNameCacheFor(index: ProjectIndex): PackageNameCaches {
   return caches;
 }
 
-const csharpRegionCaches = new WeakMap<ProjectIndex, Map<string, readonly CsharpNamespaceRegion[] | null>>();
-
 /**
  * Source to read a unit declaration from: the text the index already parsed when it retained
- * one, and otherwise the file itself. Reusing the retained text keeps the package or namespace
- * consistent with the symbols resolved from that same snapshot.
+ * one, and otherwise the file itself. Reusing the retained text keeps the package consistent
+ * with the symbols resolved from that same snapshot.
  */
 function unitDeclarationSource(index: ProjectIndex, filePath: string, fileKey: string): string | null {
   const retained = index.parsed?.get(fileKey)?.source;
@@ -219,29 +175,14 @@ export function getPackageDeclarationName(
 }
 
 /**
- * The C# namespace regions of a file, or `null` when its source cannot be read. Cached per
- * index alongside the package-clause facts.
+ * The C# namespace regions of a file, read from its module's own facts, or `null` when its tree was
+ * unavailable when it was indexed. Nothing is parsed here: the facts were stored with the module.
  */
 export function getCsharpNamespaceRegions(
   index: ProjectIndex,
   filePath: string,
 ): readonly CsharpNamespaceRegion[] | null {
-  const fileKey = fileIdentityKey(filePath);
-  let cache = csharpRegionCaches.get(index);
-  if (!cache) {
-    cache = new Map<string, readonly CsharpNamespaceRegion[] | null>();
-    csharpRegionCaches.set(index, cache);
-  }
-  const cached = cache.get(fileKey);
-  if (cached !== undefined) return cached;
-  const retained = index.parsed?.get(fileKey);
-  const source = retained?.source ?? unitDeclarationSource(index, filePath, fileKey);
-  const support = supportForFileWithoutHeaderSample(filePath, index.languageExtensions);
-  const tree = retained?.sup?.id === "csharp" ? retained.tree : undefined;
-  const regions =
-    source === null ? null : collectCsharpNamespaceRegions(source, filePath, support, index.buildReport, tree);
-  cache.set(fileKey, regions);
-  return regions;
+  return index.byFile.get(fileIdentityKey(filePath))?.csharpNamespaceFacts?.regions ?? null;
 }
 
 type UnitIdentity =
@@ -340,19 +281,28 @@ type CsharpDeclaredNames = {
 
 const csharpDeclaredNameCaches = new WeakMap<ProjectIndex, CsharpDeclaredNames>();
 
-/** The names the indexed C# files under `boundaryKey` declare (every indexed C# file when it is empty). */
+/**
+ * The names the indexed C# files under `boundaryKey` declare (every indexed C# file when it is empty), from the
+ * namespace regions and types each module records. `null` when one of those files has no recorded facts.
+ */
 function aggregateCsharpDeclaredNames(index: ProjectIndex, boundaryKey: string): ReadonlySet<string> | null {
   const boundaryPrefix = boundaryKey.endsWith("/") ? boundaryKey : `${boundaryKey}/`;
   const names = new Set<string>();
+  // Declaring `A.B.T` also makes `A` and `A.B` exist, so each prefix is a declared name too.
+  const addDeclaredName = (name: string): void => {
+    for (let dot = name.indexOf("."); dot >= 0; dot = name.indexOf(".", dot + 1)) names.add(name.slice(0, dot));
+    names.add(name);
+  };
   for (const moduleEntry of index.byFile.values()) {
     if (supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id !== "csharp") continue;
     if (boundaryKey && !fileIdentityKey(moduleEntry.file).startsWith(boundaryPrefix)) continue;
-    if (!moduleEntry.csharpDeclaredNames) return null;
-    for (const name of moduleEntry.csharpDeclaredNames) {
-      if (name.startsWith(CSHARP_FILE_LOCAL_PREFIX)) continue;
-      // Declaring `A.B.T` also makes `A` and `A.B` exist, so each prefix is a declared name too.
-      for (let dot = name.indexOf("."); dot >= 0; dot = name.indexOf(".", dot + 1)) names.add(name.slice(0, dot));
-      names.add(name);
+    const facts = moduleEntry.csharpNamespaceFacts;
+    if (!facts) return null;
+    for (const region of facts.regions) {
+      if (region.name) addDeclaredName(region.name);
+    }
+    for (const type of facts.types) {
+      if (!type.startsWith(CSHARP_FILE_LOCAL_PREFIX)) addDeclaredName(type);
     }
   }
   return names;
@@ -406,7 +356,8 @@ export function csharpNamespaceChainDeclares(
   if (!names) return true;
   for (let end = namespaceName.length; end > 0; end = namespaceName.lastIndexOf(".", end - 1)) {
     const declared = `${namespaceName.slice(0, end)}.${name}`;
-    if (names.has(declared) || mod.csharpDeclaredNames?.includes(CSHARP_FILE_LOCAL_PREFIX + declared)) return true;
+    if (names.has(declared) || mod.csharpNamespaceFacts?.types.includes(CSHARP_FILE_LOCAL_PREFIX + declared))
+      return true;
   }
   return false;
 }
@@ -417,16 +368,6 @@ export function csharpNamespaceChainDeclares(
  */
 export function csharpProjectDeclarationsUnknown(index: ProjectIndex, mod: ModuleIndex): boolean {
   return !csharpProjectDeclaredNames(index, mod.file);
-}
-
-function csharpNamespaceAtIndex(regions: readonly CsharpNamespaceRegion[], position: number | undefined): string {
-  if (position === undefined) return "";
-  let innermost: CsharpNamespaceRegion | undefined;
-  for (const region of regions) {
-    if (position < region.start || position >= region.end) continue;
-    if (!innermost || region.start >= innermost.start) innermost = region;
-  }
-  return innermost?.name ?? "";
 }
 
 function csharpNamespaceVisibleFromUseFile(
@@ -635,20 +576,19 @@ function extractedDirKey(group: string, dirKey: string): string {
 function extractDirFacts(index: ProjectIndex, grouped: UnitFactIndex, group: string, dirKey: string): void {
   const key = extractedDirKey(group, dirKey);
   if (grouped.extractedDirs.has(key)) return;
-  grouped.extractedDirs.add(key);
   for (const file of grouped.filesByGroupDir.get(group)?.get(dirKey) ?? []) {
     recordUnitFact(grouped, unitFactFor(index, file));
   }
+  // Registered once every file is recorded: a directory that failed midway is read again, not trusted half-filled.
+  grouped.extractedDirs.add(key);
 }
 
 function extractGroupFacts(index: ProjectIndex, grouped: UnitFactIndex, group: string): void {
   if (grouped.extractedGroups.has(group)) return;
-  grouped.extractedGroups.add(group);
-  const dirs = grouped.filesByGroupDir.get(group);
-  if (!dirs) return;
-  for (const dirKey of dirs.keys()) {
+  for (const dirKey of grouped.filesByGroupDir.get(group)?.keys() ?? []) {
     extractDirFacts(index, grouped, group, dirKey);
   }
+  grouped.extractedGroups.add(group);
 }
 
 function ensureFactsFor(index: ProjectIndex, grouped: UnitFactIndex, own: UnitFact): void {
@@ -688,7 +628,6 @@ function cachedUnitFactIndexFor(index: ProjectIndex): CachedUnitFactIndex {
   if (cached && (cached.source !== index.byFile || cached.languageExtensions !== index.languageExtensions)) {
     unitFactCaches.delete(index);
     packageNameCaches.delete(index);
-    csharpRegionCaches.delete(index);
   }
 
   const facts = createUnitFactIndex();

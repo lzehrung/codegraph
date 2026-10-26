@@ -1,7 +1,7 @@
 namespace Edge.App
 {
     using Edge.Core;
-    using CoreBox = Edge.Core.Box<string>; // @def coreBox=CoreBox @ref boxPart
+    using CoreBox = Edge.Core.Box<string>; // @def coreBox=CoreBox @ref boxPart @ref box
     using static Edge.Core.Helpers; // @ref helpers
     using static Edge.Core.PartialHelpers; // @ref partialHelpers
 

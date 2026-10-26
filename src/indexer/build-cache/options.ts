@@ -47,19 +47,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 91 keeps qualified `case` names and `loop`/`repeat` identifiers out of SQL block tracking.
  * Epoch 92 records tree-sitter ERROR/MISSING ranges per file for `parse_error` reference coverage.
  * Epoch 93 stops indexing an annotation-only Python `self.x: T` as an instance attribute declaration.
- * Epoch 94 reads C# using directives and namespace declarations from native syntax nodes.
- * Epoch 95 preserves generic C# alias arity and leaves unsupported wrapped/static targets unresolved.
- * Epoch 96 records the namespace and type names each C# file declares, and leaves the target of an
- * unresolved C# alias out of its binding tokens.
- * Epoch 97 marks C# `file` types in each file's declared names, and resolves a using directive
- * inside a namespace by global lookup alone.
- * Epoch 98 leaves generic types out of each C# file's declared names, so `class X<T>` no longer
- * shadows a compilation-unit alias named `X`.
- * Epoch 99 selects a partial type among files with a mapped C# extension.
- * Epoch 100 binds a C# type alias to a namespace file only when it declares the type without type
- * parameters, and no longer stores whether a namespace scan was complete in an alias binding.
+ * Epoch 94 reads C# using directives and namespace declarations from native syntax nodes, and stores each C#
+ * file's own namespace regions and declared types with its module (`csharpNamespaceFacts`) instead of
+ * scanning source text for them.
  */
-export const CORE_ALGORITHM_EPOCH = 100;
+export const CORE_ALGORITHM_EPOCH = 94;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

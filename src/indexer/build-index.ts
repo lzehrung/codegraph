@@ -29,7 +29,8 @@ import {
   type MatchPathFn,
 } from "../util/resolution.js";
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
-import { collectCsharpDeclaredNames } from "../util/csharp-tree.js";
+import { collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
+import { primeCsharpNamespaceFacts } from "../util/resolution/csharp.js";
 import { resolveJvmPackageImportPaths } from "../util/resolution/jvm.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
@@ -380,6 +381,14 @@ function cachedModuleHasExternalImport(mod: ModuleIndex): boolean {
 }
 
 /**
+ * Gives the C# namespace scan the facts a reused module holds, so it parses nothing for that file. They come
+ * from the file's own tree and depend on no other file, so the module's matching signature keeps them valid.
+ */
+function primeReusedCsharpNamespaceFacts(file: string, mod: ModuleIndex, opts: BuildOptions | undefined): void {
+  if (mod.csharpNamespaceFacts) primeCsharpNamespaceFacts(file, mod.csharpNamespaceFacts, opts?.languageExtensions);
+}
+
+/**
  * Declaration-language files that have a cached row, are not in the build, and no longer exist.
  * A deleted file leaves no cache miss, so importers that it satisfied would stay stale.
  * The existence probe separates deleted files from files outside the build scope.
@@ -615,7 +624,7 @@ async function buildIndexedModuleForFile(args: {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
   }
-  if (sup.id === "csharp" && tree) mod.csharpDeclaredNames = collectCsharpDeclaredNames(tree);
+  if (sup.id === "csharp" && tree) mod.csharpNamespaceFacts = collectCsharpNamespaceFacts(tree);
   await resolveCrossModuleSymbolExports(
     args.file,
     mod,
@@ -1723,6 +1732,9 @@ async function buildIndexFromFileListShared(
       if (probe && !("error" in probe)) cacheProbes.set(file, { ...probe, mod: null });
       cachedGraphEntries?.delete(file);
     }
+  }
+  for (const [file, probe] of cacheProbes) {
+    if (!("error" in probe) && probe.mod) primeReusedCsharpNamespaceFacts(file, probe.mod, opts);
   }
   const cacheMisses = Array.from(cacheProbes, ([file, probe]) =>
     !("error" in probe) && !probe.mod ? file : null,
@@ -2859,6 +2871,7 @@ export async function buildProjectIndexIncremental(
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
           modules.set(fileIdentityKey(file), cached);
+          primeReusedCsharpNamespaceFacts(file, cached, opts);
           collectJsonDependencies(cached.imports, jsonDependencies);
           if (bloomFilterCache) {
             const persistedFilter = persistedBloomFilters?.get(file, sigInfo);
