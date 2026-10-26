@@ -450,7 +450,8 @@ export function csharpChainQualifier(
  * `X.Type`) names. C# finds a namespace or type `X` in an enclosing namespace before the alias, so
  * the answer comes from the index's own C# declarations when the lookup runs, never from the alias
  * binding a cached module holds. An alias under `#if`, `#elif`, or `#else` belongs to the
- * compilation unit; a namespace-scoped alias is not checked. `X::Type` binds only aliases.
+ * compilation unit; an alias inside a block namespace or after a file-scoped namespace header is
+ * namespace-scoped and is not checked. `X::Type` binds only aliases.
  */
 function csharpAliasShadowedAt(
   index: ProjectIndex,
@@ -468,7 +469,9 @@ function csharpAliasShadowedAt(
   while (root.parent) root = root.parent;
   if (csharpSkipConditionalWrappers(importScopeAt(root, aliasStart))?.type !== "compilation_unit") return false;
   const regions = mod.csharpNamespaceFacts?.regions;
-  const enclosing = regions ? csharpNamespaceAtIndex(regions, qualifier.startIndex) : "";
+  // The tree keeps a file-scoped header's directives at the root, but the header's region covers the rest of the file.
+  if (!regions || csharpNamespaceAtIndex(regions, aliasStart)) return false;
+  const enclosing = csharpNamespaceAtIndex(regions, qualifier.startIndex);
   return !!enclosing && csharpNamespaceChainDeclares(index, mod, enclosing, CSHARP_SUPPORT.normalizeIdentifier(name));
 }
 

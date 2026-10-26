@@ -849,13 +849,16 @@ describe("C# alias project boundary", () => {
     ...extra,
   });
 
-  /** What each consumer reports for the `Target` uses in `<name>/Use.cs`, with files named relative to `root`. */
-  async function useOutcome(index: ProjectIndex, root: string, name: string) {
+  /**
+   * What each consumer reports for the `Target` uses on `targetLines` of `lines`, the text of `<name>/Use.cs`, with
+   * files named relative to `root`.
+   */
+  async function useOutcome(index: ProjectIndex, root: string, name: string, lines = useLines, targetLines = [2, 4]) {
     const relative = (file: string): string => path.relative(root, file).replace(/\\/g, "/");
     const useFile = path.join(root, name, "Use.cs");
     const goto: string[] = [];
-    for (const line of [2, 4]) {
-      for (const match of useLines[line - 1]!.matchAll(/Target/gu)) {
+    for (const line of targetLines) {
+      for (const match of lines[line - 1]!.matchAll(/Target/gu)) {
         const result = await goToDefinition(index, { file: useFile, line, column: match.index + 1 });
         goto.push(result.status === "ok" ? relative(result.definition.file) : result.status);
       }
@@ -913,6 +916,41 @@ describe("C# alias project boundary", () => {
         references: [2],
         edges: [],
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("scopes an alias after a file-scoped header or inside a block to its namespace, not the compilation unit", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-namespace-scope-"));
+    const outerX = "namespace Outer.X; public class Target {}\n";
+    const use = "class Use { X.Target dotted; void Make() { var made = new X.Target(); } }";
+    // Every `Use` sits in `Outer.Inner` and another file declares `Outer.X`. C# searches `Outer.Inner` together with
+    // its own aliases before `Outer`, and the compilation unit's aliases only after every enclosing namespace.
+    const variants = {
+      fileScoped: { shadowed: false, lines: ["namespace Outer.Inner;", "using X = Real;", use] },
+      block: { shadowed: false, lines: ["namespace Outer.Inner {", "  using X = Real;", `  ${use}`, "}"] },
+      fileScopedAfterAlias: { shadowed: true, lines: ["using X = Real;", "namespace Outer.Inner;", use] },
+      blockAfterAlias: { shadowed: true, lines: ["using X = Real;", "namespace Outer.Inner {", `  ${use}`, "}"] },
+    };
+    try {
+      const files: Record<string, string> = {};
+      for (const [name, { lines }] of Object.entries(variants)) {
+        const extra = { [`${name}/Use.cs`]: lines.join("\n") + "\n", [`${name}/OuterX.cs`]: outerX };
+        Object.assign(files, project(name, extra));
+      }
+      await writeFixtureFiles(root, files);
+      const index = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+
+      for (const [name, { lines, shadowed }] of Object.entries(variants)) {
+        const resolved = {
+          goto: [`${name}/Real.cs`, `${name}/Real.cs`],
+          references: [3, 3],
+          edges: [`Make instantiates ${name}/Real.cs`, `Make uses ${name}/Real.cs`],
+        };
+        const unresolved = { goto: ["not_found", "not_found"], references: [], edges: [] };
+        expect(await useOutcome(index, root, name, lines, [3]), name).toEqual(shadowed ? unresolved : resolved);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
