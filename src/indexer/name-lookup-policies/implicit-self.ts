@@ -18,7 +18,13 @@ import {
   implicitSelfCallee,
   isDirectKeywordMemberDeclaration,
 } from "../navigation-goto.js";
-import { csharpLookupName, csharpQualifiedNameNode, definitionForBinding } from "../navigation-local.js";
+import {
+  CSHARP_GENERIC_OWNER_REASON,
+  csharpLookupName,
+  csharpQualifiedNameNode,
+  csharpQualifiedThroughGenericOwner,
+  definitionForBinding,
+} from "../navigation-local.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName } from "../navigation-resolve.js";
@@ -108,10 +114,15 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   fromClosestBinding: ownOverloadDeclaration,
   crossModuleName: ({ use, lookupName }) =>
     csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports),
-  // A dotted name led by a compilation-unit alias that an enclosing namespace shadows is unproven.
+  // A dotted name led by a compilation-unit alias that an enclosing namespace shadows is unproven, and so
+  // is one qualified through a generic type, whose namespace-qualified spelling drops its type arguments.
   beforeCrossModule({ use }) {
     const chainNode = csharpQualifiedNameNode(use.node);
-    const lead = chainNode && csharpChainQualifier(chainNode, use.parsed.source);
+    if (!chainNode) return undefined;
+    if (csharpQualifiedThroughGenericOwner(chainNode)) {
+      return { status: "not_found", reason: CSHARP_GENERIC_OWNER_REASON };
+    }
+    const lead = csharpChainQualifier(chainNode, use.parsed.source);
     return lead && csharpAliasShadowedAt(use.index, use.mod, lead.qualifier, use.parsed.source)
       ? { status: "not_found", reason: CSHARP_SHADOWED_ALIAS_REASON }
       : undefined;

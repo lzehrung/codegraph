@@ -166,7 +166,9 @@ export async function collectEdgesForFile(
     emitCacheEntry([]);
     return [];
   }
-  if (!parsed && !graphOnlyLanguage) {
+  // C# reads its directives from one syntax tree, so the imports query would parse the file a second time.
+  const queriesImports = !parsed && !graphOnlyLanguage && sup.id !== "csharp";
+  if (queriesImports) {
     const compactExecution = getCompactImportsExecution(src, sup);
     compactNativeImports = compactExecution.results;
     recordNativeExecutionOutcome(opts.report, {
@@ -190,7 +192,7 @@ export async function collectEdgesForFile(
   const specs = collectModuleSpecifiersFromSource(sup, src, {
     ...(parsed?.tree ? { tree: parsed.tree } : {}),
     ...(parsed && parsed.nativeQueries !== undefined ? { nativeQueries: parsed.nativeQueries } : {}),
-    ...(!parsed && !graphOnlyLanguage ? { compactNativeImports } : {}),
+    ...(queriesImports ? { compactNativeImports } : {}),
     file: normalizedFile,
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
     ...(opts.report ? { report: opts.report } : {}),

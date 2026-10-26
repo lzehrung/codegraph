@@ -658,6 +658,80 @@ describe("C# namespace aliases", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("never reads a name qualified through a generic owner as a member of the same-named namespace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-owner-decoy-"));
+    const owners = path.join(root, "Owners.cs");
+    const decoy = path.join(root, "Decoy.cs");
+    const main = path.join(root, "Main.cs");
+    const decoyLines = ["namespace N.Outer { public class Inner {} }"];
+    const ownerLines = ["namespace N { public class Outer<T> { public class Inner {} } public class Model {} }"];
+    const mainLines = [
+      "using NestedAlias = N.Outer<int>.Inner;",
+      "using ModelAlias = N.Outer<N.Model>.Inner;",
+      "class Use {",
+      "  N.Outer<int>.Inner field;",
+      "  object Make() { return new N.Outer<int>.Inner(); }",
+      "  N.Outer.Inner plain;",
+      "  object MakePlain() { return new N.Outer.Inner(); }",
+      "}",
+    ];
+    try {
+      await writeFile(owners, ownerLines.join("\n") + "\n", "utf8");
+      await writeFile(decoy, decoyLines.join("\n") + "\n", "utf8");
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [owners, decoy, main]);
+      const gotoAt = async (line: number, token: string) => {
+        const result = await goToDefinition(index, { file: main, line, column: columnOf(mainLines, line, token) });
+        return result.status === "ok" ? path.basename(result.definition.file) : result.status;
+      };
+
+      // `Outer<int>.Inner` names a member of the constructed type, never the type in namespace `N.Outer`.
+      expect(await gotoAt(1, "Inner")).toBe("not_found");
+      expect(await gotoAt(2, "Inner")).toBe("not_found");
+      expect(await gotoAt(4, "Inner")).toBe("not_found");
+      expect(await gotoAt(5, "Inner")).toBe("not_found");
+      // The namespace-qualified spelling of the same decoy still resolves.
+      expect(await gotoAt(6, "Inner")).toBe("Decoy.cs");
+      expect(await gotoAt(7, "Inner")).toBe("Decoy.cs");
+
+      const decoyReferences = await findReferences(index, {
+        file: decoy,
+        line: 1,
+        column: columnOf(decoyLines, 1, "Inner"),
+      });
+      expect(decoyReferences.status).toBe("ok");
+      if (decoyReferences.status !== "ok") return;
+      expect(
+        decoyReferences.references
+          .map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+          .sort(),
+      ).toEqual(["Decoy.cs:1", "Main.cs:6", "Main.cs:7"]);
+      expect(decoyReferences.referenceCoverage.state).toBe("partial");
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const decoyInstantiations = graph.edges
+        .filter((edge) => edge.label === "instantiates" && graph.nodes.get(edge.to)?.name === "Inner")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`);
+      expect(decoyInstantiations).toEqual(["MakePlain->Decoy.cs"]);
+
+      // Type arguments are names of their own: they stay references through an unresolved alias target.
+      const model = await findReferences(index, {
+        file: owners,
+        line: 1,
+        column: columnOf(ownerLines, 1, "Model"),
+      });
+      expect(model.status).toBe("ok");
+      if (model.status !== "ok") return;
+      expect(
+        model.references
+          .filter((reference) => path.basename(reference.file) === "Main.cs")
+          .map((reference) => reference.range.start.line),
+      ).toEqual([2]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   describe("C# type alias across a split namespace", () => {
     it("resolves PT when namespace N is in two files and Point is in one, ignoring M.Point", async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-split-"));

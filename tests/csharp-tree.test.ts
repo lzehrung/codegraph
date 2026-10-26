@@ -93,10 +93,10 @@ function setNativeIndexingFailureFor(marker: string, message: string): void {
 function countNativeTreeParses(): () => number {
   const state = loadBinding();
   if (!state.loaded) throw new Error("Native addon required for C# tree tests");
-  const parseSyntaxTree = state.binding.parseSyntaxTree;
+  const { parseSyntaxTree, extractLanguage, runLanguageQueries, runImportsQueryCompact } = state.binding;
   if (!parseSyntaxTree) throw new Error("Native addon does not expose parseSyntaxTree");
-  const extractLanguage = state.binding.extractLanguage;
   let count = 0;
+  // Every native entry point that reads source parses it, including the query-only passes.
   __setNativeTreeSitterBindingForTests({
     ...state,
     binding: {
@@ -109,6 +109,18 @@ function countNativeTreeParses(): () => number {
         count += 1;
         return extractLanguage(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
       },
+      runLanguageQueries: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+        count += 1;
+        return runLanguageQueries(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+      },
+      ...(runImportsQueryCompact
+        ? {
+            runImportsQueryCompact: (source: string, languageId: string, importsQuery: string) => {
+              count += 1;
+              return runImportsQueryCompact(source, languageId, importsQuery);
+            },
+          }
+        : {}),
     },
   });
   return () => count;
@@ -270,6 +282,31 @@ describe("C# import tree reuse", () => {
 
     await collectImportsForFile(file, root, { source, sup: CSHARP_SUPPORT, nativeQueries: null });
     expect(parseCount()).toBe(1);
+  });
+
+  it("parses a C# file once when edges are collected without a parsed context", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-edge-tree-once-"));
+    const plain = path.join(root, "Plain.cs");
+    const second = path.join(root, "Second.cs");
+    const importer = path.join(root, "Importer.cs");
+    try {
+      await writeFile(plain, "class Plain {}\n", "utf8");
+      await writeFile(second, "class Second {}\n", "utf8");
+      await writeFile(importer, "using System.Text;\nclass Importer {}\n", "utf8");
+      const parseCount = countNativeTreeParses();
+
+      // Neither file has a directive to resolve, so the only native read is the one that finds none.
+      expect(await collectEdgesForFile(plain, root, undefined, {})).toEqual([]);
+      expect(parseCount()).toBe(1);
+      expect(await collectEdgesForFile(second, root, undefined, {})).toEqual([]);
+      expect(parseCount()).toBe(2);
+
+      // The single tree still yields the file's directives.
+      const edges = await collectEdgesForFile(importer, root, undefined, {});
+      expect(edges.map((edge) => edge.raw)).toEqual(["System.Text"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
