@@ -1,6 +1,6 @@
 import { registerSessionInvalidationHook } from "../src/agent/session-lifecycle.js";
 import { ensureSessionQueryIndex } from "../src/agent/query-index/session-store.js";
-import fsSync, { type FSWatcher } from "node:fs";
+import fsSync, { type FSWatcher, type WatchListener } from "node:fs";
 import fs from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
@@ -4246,6 +4246,7 @@ describe("MCP file watcher", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await tempRoots.cleanup();
   });
 
@@ -4277,6 +4278,22 @@ describe("MCP file watcher", () => {
       return watcher;
     });
     return { watchSpy, openHandles: (): number => opened.filter((watcher) => !closed.has(watcher)).length };
+  }
+
+  // Wraps the real `fs.watch` and keeps the listener that the server registers for `directory`, so that a test can
+  // deliver an event itself.
+  function captureWatchListener(directory: string) {
+    const realWatch = fsSync.watch;
+    let listener: WatchListener<string> | undefined;
+    vi.spyOn(fsSync, "watch").mockImplementation((...args) => {
+      const registered = args.find((arg) => typeof arg === "function");
+      if (registered && path.resolve(String(args[0])) === path.resolve(directory)) listener = registered;
+      return realWatch(...args);
+    });
+    return (filename: string): void => {
+      if (!listener) throw new Error(`The server opened no watch for ${directory}.`);
+      listener("change", filename);
+    };
   }
 
   async function findSymbol(handlers: CodegraphMcpHandlers, query: string) {
@@ -4435,6 +4452,41 @@ describe("MCP file watcher", () => {
       resources.session.invalidate();
     }
   });
+
+  it.each([
+    ["buildOptions.cacheDir", "option"],
+    ["CODEGRAPH_CACHE_DIR", "environment"],
+  ] as const)(
+    "does not wake the session for writes into a cache directory that %s moved into the project",
+    async (_label, source) => {
+      const root = await createProject("cg-mcp-watch-cache-dir-");
+      const anchor = path.join(root, ".moved-cache");
+      const deliver = captureWatchListener(root);
+      if (source === "environment") vi.stubEnv("CODEGRAPH_CACHE_DIR", anchor);
+      const resources = await createWarmedCodegraphMcpResources({
+        root,
+        ...(source === "option" ? { buildOptions: { cacheDir: anchor } } : {}),
+      });
+      try {
+        // Where the session really writes its cache, so that the test does not rely on what the server resolved.
+        const { index } = await resources.session.loadProject({ symbolGraph: "skip" });
+        const cacheDirectory = index.cacheRootDir ?? "";
+        expect(path.dirname(cacheDirectory)).toBe(anchor);
+        const markChanged = vi.spyOn(resources.session, "markChanged");
+
+        deliver(path.relative(root, path.join(cacheDirectory, "manifest.json")));
+        deliver(path.relative(root, path.join(cacheDirectory, "cache", "index-v1", "search-v1.sqlite")));
+        expect(markChanged).not.toHaveBeenCalled();
+
+        // The control: an edit to a project file reaches the session through the same watch.
+        deliver("f0.ts");
+        expect(markChanged).toHaveBeenCalledTimes(1);
+      } finally {
+        resources.closeWatcher();
+        resources.session.invalidate();
+      }
+    },
+  );
 
   it("pauses after the idle time and resumes on the next tool call, whichever tool it is", async () => {
     const root = await createProject("cg-mcp-watch-idle-");

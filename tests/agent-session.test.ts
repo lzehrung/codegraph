@@ -1630,6 +1630,28 @@ describe("agent session", () => {
       return { statSpy, scanStatted: scanStatted.promise, releaseScan: releaseScan.resolve };
     }
 
+    // Holds the first `holds` stats of main.ts after the real stat returned, one scan each, so that scans can be
+    // caught mid-flight. A scan after those is not held. Counts every stat of main.ts, which is one per scan.
+    function holdStatsOfMain(holds: number) {
+      const originalStat = fs.stat.bind(fs);
+      const scans = Array.from({ length: holds }, () => ({
+        statted: Promise.withResolvers<void>(),
+        released: Promise.withResolvers<void>(),
+      }));
+      let stats = 0;
+      const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const stat = await originalStat(...args);
+        if (String(args[0]).endsWith("main.ts")) {
+          const scan = scans[stats];
+          stats += 1;
+          scan?.statted.resolve();
+          await scan?.released.promise;
+        }
+        return stat;
+      });
+      return { statSpy, scans, stats: () => stats };
+    }
+
     it("makes the next freshness check rescan inside the cached window", async () => {
       const { session, filePath } = await createLoadedSession("cg-agent-session-mark-changed-");
       const dateSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now());
@@ -1705,6 +1727,33 @@ describe("agent session", () => {
         expect(await racing).toEqual({ state: "fresh" });
       } finally {
         hold.releaseScan();
+        hold.statSpy.mockRestore();
+        session.invalidate();
+      }
+    });
+
+    it("lets a caller join the scan that replaced a detached one after the detached one has finished", async () => {
+      const { session } = await createLoadedSession("cg-agent-session-mark-changed-replacement-");
+      const hold = holdStatsOfMain(2);
+      const [detachedScan, replacementScan] = hold.scans;
+      try {
+        const detached = session.checkFreshness!();
+        await detachedScan?.statted.promise;
+        session.markChanged!();
+        const replacement = session.checkFreshness!();
+        await replacementScan?.statted.promise;
+
+        // The detached scan ends while the replacement is still pending. Its cleanup must leave the replacement alone.
+        detachedScan?.released.resolve();
+        expect(await detached).toEqual({ state: "fresh" });
+        const joined = session.checkFreshness!();
+        replacementScan?.released.resolve();
+
+        expect(await Promise.all([replacement, joined])).toEqual([{ state: "fresh" }, { state: "fresh" }]);
+        // One scan answered both callers; a third scan would have statted main.ts again.
+        expect(hold.stats()).toBe(2);
+      } finally {
+        for (const scan of hold.scans) scan.released.resolve();
         hold.statSpy.mockRestore();
         session.invalidate();
       }

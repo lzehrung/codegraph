@@ -624,7 +624,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     if (freshnessInFlight) return freshnessInFlight;
 
     const generation = changeGeneration;
-    freshnessInFlight = (async (): Promise<AgentFreshnessResult> => {
+    const scan: Promise<AgentFreshnessResult> = (async (): Promise<AgentFreshnessResult> => {
       if (cachedBase) await cachedBase;
       else if (cachedFilePlan) await cachedFilePlan;
       if (!cachedFileSignatures) return { state: "fresh" };
@@ -699,10 +699,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       }
       return result;
     })().finally(() => {
-      freshnessInFlight = undefined;
+      // `markChanged` and `invalidate` detach a running scan, and a newer one may hold the slot by the time this one
+      // ends. That scan is not this one's to clear.
+      if (freshnessInFlight === scan) freshnessInFlight = undefined;
     });
+    freshnessInFlight = scan;
 
-    return freshnessInFlight;
+    return scan;
   };
 
   const session: AgentSession = {

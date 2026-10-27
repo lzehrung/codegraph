@@ -6,7 +6,7 @@ import { AGENT_FRESHNESS_CHECK_INTERVAL_MS, type AgentFreshnessResult, type Agen
 import { PROJECT_CACHE_DIRECTORY } from "../indexer/build-cache/location.js";
 import { isRelativePathInside } from "../util/discovery-path.js";
 import { errorMessage, isFileSystemErrorCode } from "../util/errors.js";
-import { normalizePath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { DEFAULT_PROJECT_FILE_IGNORES } from "../util/project-files.js";
 import { DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS } from "./stdio-lifecycle.js";
 
@@ -74,6 +74,11 @@ export type ProjectWatcherOptions = {
   onSettled: () => void;
   /** Discovered project files. Read only in per-directory mode. */
   listFiles: () => Promise<readonly string[]>;
+  /**
+   * The directory that the session writes its disk cache to (`resolveCacheLocation`). One inside the project is ignored
+   * as `.codegraph` is, so that the server's own cache writes wake nothing.
+   */
+  cacheDirectory?: string | undefined;
   /** Defaults to {@link DEFAULT_MCP_WATCH_DEBOUNCE_MS}. */
   debounceMs?: number | undefined;
   /** Defaults to `process.platform`. */
@@ -93,6 +98,26 @@ function startTimer(callback: () => void, ms: number): NodeJS.Timeout {
 /** True when a path relative to the project root is, or lies in, a directory that discovery ignores. */
 function isIgnoredPath(relativePath: string): boolean {
   return isDiscoveryIgnored(normalizePath(relativePath));
+}
+
+type PathMatcher = (relativePath: string) => boolean;
+
+/**
+ * Matches the paths relative to `root` that never reach the index: what discovery ignores, and the subtree of a cache
+ * directory that was moved into the project (`--cache-dir`, `CODEGRAPH_CACHE_DIR`), which the server writes to itself.
+ * A cache directory outside the project, or inside a directory that discovery ignores anyway, adds nothing.
+ */
+function createIgnoredPathMatcher(root: string, cacheDirectory: string | undefined): PathMatcher {
+  if (!cacheDirectory) return isIgnoredPath;
+  const cacheRelative = path.relative(root, path.resolve(root, cacheDirectory));
+  if (!isRelativePathInside(cacheRelative) || isIgnoredPath(cacheRelative)) return isIgnoredPath;
+  // The identity key has the file system's case rules and `/` separators, as the events name paths in either form.
+  const cacheKey = fileIdentityKey(cacheRelative);
+  return (relativePath) => {
+    if (isIgnoredPath(relativePath)) return true;
+    const key = fileIdentityKey(relativePath);
+    return key === cacheKey || key.startsWith(`${cacheKey}/`);
+  };
 }
 
 function capacityErrorCode(error: unknown): "ENOSPC" | "EMFILE" | undefined {
@@ -140,14 +165,14 @@ async function isEmptyDirectory(directory: string): Promise<boolean> {
 }
 
 /** The root, every directory that holds a listed file, and their ancestors up to the root. */
-function collectWatchDirectories(root: string, files: readonly string[]): Set<string> {
+function collectWatchDirectories(root: string, files: readonly string[], isIgnored: PathMatcher): Set<string> {
   const directories = new Set<string>([root]);
   for (const file of files) {
     let directory = path.dirname(path.resolve(root, file));
     // A directory already in the set brought all its ancestors with it.
     while (!directories.has(directory)) {
       const relative = path.relative(root, directory);
-      if (!isRelativePathInside(relative) || isIgnoredPath(relative)) break;
+      if (!isRelativePathInside(relative) || isIgnored(relative)) break;
       directories.add(directory);
       directory = path.dirname(directory);
     }
@@ -167,6 +192,7 @@ function collectWatchDirectories(root: string, files: readonly string[]): Set<st
  */
 export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatcher {
   const root = path.resolve(options.root);
+  const isIgnored = createIgnoredPathMatcher(root, options.cacheDirectory);
   const debounceMs = options.debounceMs ?? DEFAULT_MCP_WATCH_DEBOUNCE_MS;
   const platform = options.platform ?? process.platform;
   const recursive = platform === "win32" || platform === "darwin";
@@ -238,7 +264,7 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
           noteChange();
           return;
         }
-        if (filename && isIgnoredPath(prefix + filename)) return;
+        if (filename && isIgnored(prefix + filename)) return;
         noteChange();
         if (!recursive && eventType === "rename" && filename) queueDirectory(path.join(directory, filename));
       });
@@ -269,7 +295,7 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
   // this watch opened, which raised no event, so the directories inside it are queued too.
   const watchReportedDirectory = async (directory: string): Promise<void> => {
     const relative = path.relative(root, directory);
-    if (!isRelativePathInside(relative) || isIgnoredPath(relative) || handles.has(directory)) return;
+    if (!isRelativePathInside(relative) || isIgnored(relative) || handles.has(directory)) return;
     if (reportedDirectories.size >= MAX_REPORTED_DIRECTORIES) return;
     let stats: fs.Stats;
     try {
@@ -318,7 +344,7 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
   };
 
   const applyDirectories = async (files: readonly string[]): Promise<void> => {
-    const wanted = collectWatchDirectories(root, files);
+    const wanted = collectWatchDirectories(root, files, isIgnored);
     for (const [directory, handle] of [...handles]) {
       if (wanted.has(directory)) {
         reportedDirectories.delete(directory);
@@ -390,6 +416,8 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
 
 export type WatchControllerOptions = {
   root: string;
+  /** The directory that the session writes its disk cache to; see {@link ProjectWatcherOptions.cacheDirectory}. */
+  cacheDirectory?: string | undefined;
   /** Defaults to {@link DEFAULT_MCP_WATCH_DEBOUNCE_MS}. */
   debounceMs?: number | undefined;
   /** Defaults to {@link DEFAULT_MCP_WATCH_MIN_REFRESH_INTERVAL_MS}. */
@@ -420,7 +448,8 @@ export function assertMcpWatchMs(name: string, value: number | undefined): void 
 
 /**
  * Turns file events into background refreshes of an MCP-owned session.
- * - Every event clears the session's cached freshness result at once (`markChanged`).
+ * - Every event clears the session's cached freshness result at once (`markChanged`). It also cancels the refresh
+ *   and the rerun that an earlier burst scheduled, so that none starts while events still arrive.
  * - A settled burst starts a refresh, no sooner than `minRefreshIntervalMs` after the previous one ended.
  * - One refresh runs at a time. A settled burst during it sets one rerun flag.
  * - After `idleMs` without `noteActivity` the watches close. The next `noteActivity` reopens them and calls
@@ -490,6 +519,15 @@ export function createWatchController(session: AgentSession, options: WatchContr
     scheduleRefresh();
   };
 
+  // The burst that this event belongs to schedules its own refresh when it settles. One that an earlier burst armed
+  // would start in the middle of this one, so it goes now.
+  const onChange = (): void => {
+    clearTimeout(refreshTimer);
+    refreshTimer = undefined;
+    rerun = false;
+    session.markChanged?.();
+  };
+
   const pause = (): void => {
     clearTimeout(idleTimer);
     clearTimeout(refreshTimer);
@@ -509,7 +547,8 @@ export function createWatchController(session: AgentSession, options: WatchContr
   const open = (): void => {
     watcher = startProjectWatcher({
       root: options.root,
-      onChange: () => session.markChanged?.(),
+      cacheDirectory: options.cacheDirectory,
+      onChange,
       onSettled,
       listFiles: async () => (await session.listFiles?.()) ?? [],
       debounceMs: options.debounceMs,

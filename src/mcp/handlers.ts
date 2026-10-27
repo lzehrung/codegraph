@@ -30,6 +30,7 @@ import { requireSemanticSymbol, resolveSemanticSymbol } from "../agent/semantic-
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { parseQualifiedSymbolPath } from "../indexer/symbols.js";
+import { resolveCacheLocation } from "../indexer/build-cache/location.js";
 import { analyzeImpactFromDiff, type CompactImpactReport } from "../impact/index.js";
 import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 import { buildReviewReport, type ReviewDepth } from "../review.js";
@@ -362,6 +363,18 @@ function createCodegraphMcpSession(options: CodegraphMcpHandlerOptions, root: st
   );
 }
 
+/**
+ * Where the session writes its disk cache, for the watcher to ignore. A setting that cannot be resolved fails the
+ * session's own first use of the cache with the same error, so the watcher has nothing to ignore until then.
+ */
+function resolveWatchedCacheDirectory(root: string, buildOptions: BuildOptions | undefined): string | undefined {
+  try {
+    return resolveCacheLocation(root, buildOptions).path;
+  } catch {
+    return undefined;
+  }
+}
+
 function startCodegraphMcpWarmup(
   session: AgentSession,
   warmup: CodegraphMcpWarmupMode | undefined,
@@ -434,6 +447,7 @@ export async function createWarmedCodegraphMcpResources(
       ? undefined
       : createWatchController(session, {
           root,
+          cacheDirectory: resolveWatchedCacheDirectory(root, options.buildOptions),
           debounceMs: watchDebounceMs,
           minRefreshIntervalMs: watchMinRefreshIntervalMs,
           idleMs: watchIdleMs,

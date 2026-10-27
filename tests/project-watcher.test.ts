@@ -16,6 +16,7 @@ import {
   type ProjectWatcherOptions,
   type WatchControllerOptions,
 } from "../src/mcp/project-watcher.js";
+import { isFileIdentityCaseInsensitive, resetFileIdentityCaseSensitivityForTests } from "../src/util/paths.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 
 // Nothing below touches this directory: the fake watch factory never reaches the file system.
@@ -286,6 +287,64 @@ describe("startProjectWatcher", () => {
     ];
     for (const filename of reported) handle.emit(filename);
     expect(onChange).toHaveBeenCalledTimes(reported.length);
+  });
+
+  it("ignores the subtree of a cache directory that was moved into the project, and nothing next to it", async () => {
+    const { fake, onChange, onSettled } = startWatcher({ cacheDirectory: at(".moved-cache", "project-abc") });
+    const [handle] = fake.openHandles();
+
+    const ignored = [
+      ".moved-cache/project-abc",
+      ".moved-cache/project-abc/manifest.json",
+      ".moved-cache\\project-abc\\cache\\index-v1\\search-v1.sqlite",
+    ];
+    for (const filename of ignored) handle.emit(filename);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onSettled).not.toHaveBeenCalled();
+
+    // Paths that only start like the cache directory's are project files.
+    const reported = [
+      ".moved-cache/notes.md",
+      ".moved-cache/project-abcd/a.ts",
+      ".moved-cache/other/project-abc/a.ts",
+      ".moved-cache2/project-abc/a.ts",
+      "src/.moved-cache/project-abc/a.ts",
+      "project-abc/a.ts",
+    ];
+    for (const filename of reported) handle.emit(filename);
+    expect(onChange).toHaveBeenCalledTimes(reported.length);
+  });
+
+  it.each([
+    ["outside the project", path.join(os.tmpdir(), "cg-project-watcher-elsewhere", "project-abc")],
+    ["at the project root", root],
+  ] as const)("ignores nothing extra for a cache directory %s", (_label, cacheDirectory) => {
+    const { fake, onChange } = startWatcher({ cacheDirectory });
+    const [handle] = fake.openHandles();
+    const reported = ["src/a.ts", "project-abc/a.ts", "elsewhere/project-abc/a.ts", "a.ts"];
+
+    for (const filename of reported) handle.emit(filename);
+
+    expect(onChange).toHaveBeenCalledTimes(reported.length);
+  });
+
+  it.each([
+    ["a case-insensitive file system", true, 0],
+    ["a case-sensitive file system", false, 1],
+  ] as const)("compares the cache directory's path as %s does", (_label, caseInsensitive, expectedReports) => {
+    const originalCaseInsensitive = isFileIdentityCaseInsensitive();
+    resetFileIdentityCaseSensitivityForTests(caseInsensitive);
+    try {
+      const { fake, onChange } = startWatcher({ cacheDirectory: at(".moved-cache", "project-abc") });
+
+      // The system names the directory as it is on disk, which can differ in case from the configured path.
+      fake.openHandles()[0]?.emit(".Moved-Cache\\Project-ABC\\manifest.json");
+
+      expect(onChange).toHaveBeenCalledTimes(expectedReports);
+    } finally {
+      resetFileIdentityCaseSensitivityForTests(originalCaseInsensitive);
+    }
   });
 
   it("settles once, debounceMs after the last of several events", async () => {
@@ -713,8 +772,10 @@ describe("createWatchController", () => {
       await vi.advanceTimersByTimeAsync(1_000);
     }
 
-    // The 5 s interval runs from the end of a refresh: 500 + 700 + 5_000, and then 700 + 5_000 more each time.
-    expect(checkStarts).toEqual([500, 6_200, 11_900, 17_600]);
+    // The interval counts from the end of a refresh (1_200, 7_200, 13_200), so refreshes are due at 6_200, 12_200, and
+    // 18_200. An event at 6_000, 12_000, and 18_000 keeps its burst open for 500 ms more, and a refresh starts only once
+    // a burst has settled.
+    expect(checkStarts).toEqual([500, 6_500, 12_500, 18_500]);
     controller.close();
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -751,6 +812,79 @@ describe("createWatchController", () => {
 
     await vi.advanceTimersByTimeAsync(500);
     expect(checkStarts).toEqual([20_400]);
+  });
+
+  it("starts no refresh within the debounce time of an event, even when one is waiting out the minimum interval", async () => {
+    const { fake, checkStarts } = startController();
+    const [handle] = fake.openHandles();
+
+    handle.emit("src/a.ts");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(checkStarts).toEqual([500]);
+    // This burst settles at 1_500, and its refresh waits for the 5 s floor, until 5_500.
+    await vi.advanceTimersByTimeAsync(500);
+    handle.emit("src/b.ts");
+    await vi.advanceTimersByTimeAsync(4_200);
+
+    // A new burst starts just before that refresh is due, and goes on past it.
+    handle.emit("src/c.ts");
+    await vi.advanceTimersByTimeAsync(100);
+    handle.emit("src/d.ts");
+    await vi.advanceTimersByTimeAsync(100);
+    handle.emit("src/e.ts");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(checkStarts).toEqual([500]);
+
+    // The burst settles at 5_900, 500 ms after its last event, and the refresh starts then.
+    await vi.advanceTimersByTimeAsync(399);
+    expect(checkStarts).toEqual([500]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(checkStarts).toEqual([500, 5_900]);
+  });
+
+  it("keeps the minimum interval after the previous refresh when an event restarts the wait", async () => {
+    const { fake, checkStarts } = startController();
+    const [handle] = fake.openHandles();
+
+    handle.emit("src/a.ts");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(checkStarts).toEqual([500]);
+    // Settles at 1_000; the first refresh ended at 500, so this one is due at 5_500.
+    handle.emit("src/b.ts");
+    await vi.advanceTimersByTimeAsync(1_500);
+    // Settles at 2_500, long before the floor.
+    handle.emit("src/c.ts");
+    await vi.advanceTimersByTimeAsync(3_499);
+    expect(checkStarts).toEqual([500]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(checkStarts).toEqual([500, 5_500]);
+  });
+
+  it("does not rerun in the middle of a burst that began while the refresh was running", async () => {
+    const { fake, checkStarts, state } = startController({ minRefreshIntervalMs: 0 });
+    const [handle] = fake.openHandles();
+    const release = Promise.withResolvers<void>();
+    state.hold = release.promise;
+
+    handle.emit("src/a.ts");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(checkStarts).toEqual([500]);
+    // This burst settles at 1_000, while the refresh still runs, and sets the rerun flag.
+    handle.emit("src/b.ts");
+    await vi.advanceTimersByTimeAsync(500);
+
+    // A new burst starts, and the refresh ends 100 ms into it. With no minimum interval, the old flag would start the
+    // rerun at once.
+    handle.emit("src/c.ts");
+    await vi.advanceTimersByTimeAsync(100);
+    release.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(checkStarts).toEqual([500]);
+
+    await vi.advanceTimersByTimeAsync(399);
+    expect(checkStarts).toEqual([500]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(checkStarts).toEqual([500, 1_500]);
   });
 
   it("runs one more refresh, an interval after the current one ended, when bursts settle during it", async () => {
@@ -869,25 +1003,39 @@ describe("createWatchController", () => {
     expect(fake.openHandles()).toHaveLength(0);
   });
 
-  it("cancels a pending debounce and a rate-limited refresh when it pauses", async () => {
+  it("cancels a refresh that waits for the minimum interval when it pauses", async () => {
     const { fake, checkStarts } = startController({ idleMs: 3_000 });
     const [handle] = fake.openHandles();
 
     handle.emit("src/a.ts");
     await vi.advanceTimersByTimeAsync(1_000);
     expect(checkStarts).toEqual([500]);
-    // This burst settles at 1_500 and then waits for the 5 s floor, until 5_500.
+    // This burst settles at 1_500 and then waits for the 5 s floor, until 5_500. The idle time runs out at 3_000.
     handle.emit("src/b.ts");
     await vi.advanceTimersByTimeAsync(1_800);
-    // This one is still debouncing at 2_800, when the idle time is about to run out at 3_000.
-    handle.emit("src/c.ts");
-    expect(vi.getTimerCount()).toBe(3);
+    expect(vi.getTimerCount()).toBe(2);
     await vi.advanceTimersByTimeAsync(200);
 
     expect(fake.openHandles()).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(checkStarts).toEqual([500]);
+  });
+
+  it("cancels a pending debounce when it pauses", async () => {
+    const { fake, checkStarts } = startController({ idleMs: 3_000 });
+    const [handle] = fake.openHandles();
+
+    // This burst is still debouncing at 2_800, when the idle time is about to run out at 3_000.
+    await vi.advanceTimersByTimeAsync(2_800);
+    handle.emit("src/a.ts");
+    expect(vi.getTimerCount()).toBe(2);
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(fake.openHandles()).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(checkStarts).toEqual([]);
   });
 
   it("lets a refresh that is running at the pause finish without another one", async () => {
@@ -1300,6 +1448,31 @@ describe("startProjectWatcher with directories that appear", () => {
 
     // The root, `src`, and the 128 directories that the limit let through.
     expect(fake.openHandles()).toHaveLength(2 + 128);
+    watcher.close();
+  });
+
+  it("opens no watch inside a cache directory that was moved into the project, however the events name it", async () => {
+    const projectRoot = await tempRoots.create("cg-project-watcher-cache-");
+    const src = path.join(projectRoot, "src");
+    const moved = path.join(projectRoot, ".moved-cache");
+    const cache = path.join(moved, "project-abc");
+    await fs.mkdir(src);
+    const { fake, watcher } = startWatcher({
+      root: projectRoot,
+      platform: "linux",
+      listFiles: async () => [path.join(src, "a.ts")],
+      cacheDirectory: cache,
+    });
+    await watcher.refreshDirectories();
+
+    // The first cache write creates the whole tree under the watch that is open, and the `mkdir -p` raises one event.
+    await fs.mkdir(path.join(cache, "index-v1", "deeper"), { recursive: true });
+    fake.deliver(projectRoot, ".moved-cache", "rename");
+    await watcher.refreshDirectories();
+
+    // The directory around the cache is an ordinary one that the event reported. Nothing inside the cache gets a watch.
+    expect(fake.handles.map((handle) => handle.directory)).toContain(moved);
+    expect(fake.handles.filter((handle) => handle.directory.startsWith(cache))).toEqual([]);
     watcher.close();
   });
 

@@ -561,7 +561,7 @@ Handler sets created without `session` own their session; call `handlers.dispose
 
 `CodegraphMcpServerOptions.mcpToolConcurrency` caps concurrent calls per protocol session (default `4`); saturation returns a retryable busy error. `httpBodyTimeoutMs` bounds HTTP request-body receipt (default `30_000` ms), returning HTTP 408 on expiry; `mcpToolTimeoutMs` bounds each tool execution on stdio and HTTP (default `1_800_000` ms, `0` disables), aborting the handler with a deadline error that names the tool and limit. Supplied values must be whole milliseconds from `0` through `2_147_483_647` for `mcpToolTimeoutMs`, or `1` through `2_147_483_647` for `httpBodyTimeoutMs`; startup throws for other values.
 
-`serveCodegraphMcp()` watches the project root and refreshes the index in the background when Codegraph creates the session, on stdio and on HTTP alike; see [File watcher](./mcp.md#file-watcher). The CLI exposes only `--no-watch`; the other options are library-only:
+`serveCodegraphMcp()` watches the project root and refreshes the index in the background when Codegraph creates the session, on stdio and on HTTP alike; see [File watcher](./mcp.md#file-watcher). It ignores the cache directory that `buildOptions.cacheDir`, `buildOptions.cacheLocation`, or `CODEGRAPH_CACHE_DIR` selects when that directory lies inside the project. The CLI exposes only `--no-watch`; the other options are library-only:
 
 - `watch: false` turns the watcher off. A supplied `session` is never watched.
 - `watchDebounceMs` (default `500`): quiet time after the last file event before a background refresh starts.
