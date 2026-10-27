@@ -54,7 +54,7 @@ import {
   normalizeAgentFilePath,
   resolveAgentSnapshotFile,
 } from "./normalize.js";
-import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
+import { createRequestSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 import { buildSymbolLookup, type SymbolLookup } from "./symbol-lookup.js";
 import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 
@@ -211,10 +211,7 @@ const AGENT_DUPLICATE_MAX_PAIRS = 20_000;
 const AGENT_EXPLAIN_REFERENCE_COLLECTION_MULTIPLIER = 10;
 
 export async function explainCodegraphTarget(request: AgentExplainTarget): Promise<AgentExplanation> {
-  const session = createAgentSession({
-    root: request.root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-  });
+  const session = createRequestSession(request);
   return await explainCodegraphTargetWithSession(session, request);
 }
 

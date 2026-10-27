@@ -15,6 +15,7 @@ import {
   isReceiverNameNode,
   memberAccessTraversalTypes,
 } from "../util/member-access.js";
+import { toTreeSitterPosition } from "./shared.js";
 import { MEMBER_ACCESS_ROWS, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
 import { typescriptCallableContainerKey, typescriptMergedNamespaceContainers } from "./ts-callables.js";
 import {
@@ -1752,7 +1753,7 @@ function crossFilePeerMemberHidden(useFile: string, memberDef: SymbolDef, target
   const languageId = targetContext.sup.id;
   if (languageId !== "java" && languageId !== "kotlin" && languageId !== "swift") return false;
   const start = memberDef.range.start;
-  const position = { row: Math.max(0, start.line - 1), column: Math.max(0, start.column - 1) };
+  const position = toTreeSitterPosition(start);
   const nameNode = targetContext.tree.rootNode.descendantForPosition(position, position);
   if (!nameNode) return false;
   if (languageId === "swift") {

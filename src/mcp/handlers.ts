@@ -38,6 +38,7 @@ import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type
 import { boundList, countOmitted } from "../presentation/bounds.js";
 import { isPlainRecord } from "../util/guards.js";
 import { toProjectDisplayPath } from "../util/paths.js";
+import { isMissingPathError } from "../util/errors.js";
 import {
   assertNoPrebuiltSessionWithBuildOptions,
   createAgentSession,
@@ -570,7 +571,7 @@ function createCodegraphMcpHandlersForSession(
         if (!stat.isFile()) return;
         signatures.set(relative(file), { path: file, size: stat.size, mtimeMs: stat.mtimeMs });
       } catch (error) {
-        if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+        if (isMissingPathError(error)) {
           return;
         }
         throw error;

@@ -23,6 +23,7 @@ import { createAgentFileLookup } from "./normalize.js";
 import { summarizeAnalysis, type AnalysisSummary } from "../analysis-summary.js";
 import { runSessionInvalidationHooks } from "./session-lifecycle.js";
 import { prepareDuplicateAnalysis, type DuplicatePreparedAnalysis } from "../duplicates.js";
+import { isMissingPathError } from "../util/errors.js";
 
 export type AgentProjectSnapshot = {
   root: string;
@@ -249,12 +250,6 @@ export async function listAgentSessionFiles(
   return (await resolveAgentSessionFilePlan(options, discoveryContext)).files;
 }
 
-function isMissingStatRace(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  if (!("code" in error)) return false;
-  return error.code === "ENOENT" || error.code === "ENOTDIR";
-}
-
 function summarizeChangedFiles(files: readonly string[]): {
   changedFiles: string[];
   changedFileCount: number;
@@ -283,7 +278,7 @@ async function collectAgentFileSignatures(files: readonly string[]): Promise<Map
         mtimeMs: stat.mtimeMs,
       });
     } catch (error) {
-      if (isMissingStatRace(error)) return;
+      if (isMissingPathError(error)) return;
       throw new Error(`Unable to verify freshness for ${resolvedFile}`, { cause: error });
     }
   });
@@ -350,6 +345,29 @@ function diffAgentFileSignatures(
   return { changedFiles, changedBytes };
 }
 
+export function createRequestSession(
+  request: Pick<AgentSessionOptions, "root" | "buildOptions">,
+  extra: Omit<AgentSessionOptions, "root" | "buildOptions"> = {},
+): AgentSession {
+  return createAgentSession({
+    root: request.root,
+    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
+    ...extra,
+  });
+}
+
+export async function withRequestSession<T>(
+  request: Pick<AgentSessionOptions, "root" | "buildOptions">,
+  run: (session: AgentSession) => Promise<T>,
+  extra: Omit<AgentSessionOptions, "root" | "buildOptions"> = {},
+): Promise<T> {
+  const session = createRequestSession(request, extra);
+  try {
+    return await run(session);
+  } finally {
+    session.invalidate();
+  }
+}
 export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let cachedFilePlan: Promise<AgentSessionFilePlan> | undefined;
   let cachedFiles: Promise<string[]> | undefined;

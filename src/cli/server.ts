@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { delay } from "../util/concurrency.js";
 
 import { withInstallerLeaseLock } from "../installer/locks.js";
 import { isPlainRecord } from "../util/guards.js";
@@ -677,7 +678,7 @@ async function waitForLiveServer(
       ) {
         return result.health;
       }
-      await wait(SERVER_RETRY_DELAY_MS);
+      await delay(SERVER_RETRY_DELAY_MS);
     }
   } finally {
     child.removeListener("close", onChildClose);
@@ -715,7 +716,7 @@ async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise
   const onClose = () => resolve();
   child.once("close", onClose);
   try {
-    await Promise.race([promise, wait(timeoutMs)]);
+    await Promise.race([promise, delay(timeoutMs)]);
     return child.exitCode !== null || child.signalCode !== null;
   } finally {
     child.removeListener("close", onClose);
@@ -727,7 +728,7 @@ async function waitForServerStop(url: string, pid: number, timeoutMs: number): P
   while (Date.now() < deadline) {
     const health = await requestServerHealth(url);
     if (!health && getServerProcessState(pid) === "missing") return;
-    await wait(SERVER_RETRY_DELAY_MS);
+    await delay(SERVER_RETRY_DELAY_MS);
   }
   throw new Error(`Codegraph server at ${url} did not stop within ${timeoutMs}ms.`);
 }
@@ -749,14 +750,8 @@ async function waitForServerHealth(
     if (health) return health;
     const retryDelayMs = Math.min(SERVER_HEALTH_RETRY_DELAY_MS, deadline - Date.now());
     if (retryDelayMs <= 0) return undefined;
-    await wait(retryDelayMs);
+    await delay(retryDelayMs);
   }
-}
-
-function wait(delayMs: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, delayMs);
-  return promise;
 }
 
 async function requestServerHealth(

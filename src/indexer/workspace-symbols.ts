@@ -8,6 +8,7 @@ import { defNodeId } from "../graphs/symbol-graph.js";
 import { boundList } from "../presentation/bounds.js";
 import type { ImportBinding, ProjectIndex, SymbolDef, SymbolKind } from "./types.js";
 import { importNodeId } from "./import-types.js";
+import { compareCodeUnits } from "../util/collections.js";
 
 export const DEFAULT_WORKSPACE_SYMBOL_LIMIT = 50;
 export const MAX_WORKSPACE_SYMBOL_LIMIT = 500;
@@ -262,12 +263,6 @@ function compareRankedCandidates(left: RankedCandidate, right: RankedCandidate):
   const columnOrder = left.candidate.range.start.column - right.candidate.range.start.column;
   if (columnOrder) return columnOrder;
   return compareCodeUnits(left.candidate.id, right.candidate.id);
-}
-
-function compareCodeUnits(left: string, right: string): number {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
 }
 
 function fileSurfaceRank(file: string): number {

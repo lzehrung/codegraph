@@ -5,6 +5,7 @@ import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { computeConfigHash, loadManifest } from "../indexer/build-cache/manifest.js";
 import { logWithLevel } from "../logging.js";
 import { mapLimit } from "../util/concurrency.js";
+import { isMissingPathError } from "../util/errors.js";
 import { createProjectDiscoveryContext, type ProjectDiscoveryContext } from "../util/project-files.js";
 import { normalizeGraphOptions, summarizeBuildOptions } from "../indexer/build-cache/options.js";
 import type { BuildOptions } from "../indexer/types.js";
@@ -435,12 +436,6 @@ function diffLifecycleFileCounts(
 
 const FILE_SIGNATURE_STAT_CONCURRENCY = 64;
 
-function isMissingStatRace(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  if (!("code" in error)) return false;
-  return error.code === "ENOENT" || error.code === "ENOTDIR";
-}
-
 function hashManifestEntries(
   files: readonly string[],
   root: string,
@@ -495,7 +490,7 @@ async function hashDiscoveredFiles(files: readonly string[], root: string): Prom
       const stat = await fsp.stat(file);
       signatures.set(file, { size: stat.size, mtimeMs: stat.mtimeMs });
     } catch (error) {
-      if (isMissingStatRace(error)) return;
+      if (isMissingPathError(error)) return;
       throw new CodegraphLifecycleUserError(`Unable to verify file signature for ${file}: ${stringifyError(error)}`);
     }
   });

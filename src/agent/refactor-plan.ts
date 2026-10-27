@@ -16,9 +16,10 @@ import { previewRenameInSnapshot, type RenameCandidateTest, type RenamePreviewRe
 import type { CallHierarchyEntry } from "./call-hierarchy.js";
 import type { ImplementationEntry, TypeHierarchyRelation } from "./type-hierarchy.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
+import { semanticProvenance } from "./semantic.js";
 import { requireSemanticSymbol, semanticSymbolFromDef } from "./semantic-symbols.js";
 import {
-  createAgentSession,
+  createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
@@ -64,10 +65,7 @@ const DEFAULT_REFACTOR_RELATION_LIMIT = 100;
 const MAX_REFACTOR_SECTION_LIMIT = 500;
 
 export async function buildRefactorPlan(request: RefactorPlanRequest): Promise<RefactorPlanResponse> {
-  const session = createAgentSession({
-    root: request.root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-  });
+  const session = createRequestSession(request);
   return await buildRefactorPlanWithSession(session, request);
 }
 
@@ -89,7 +87,7 @@ export async function buildRefactorPlanInSnapshot(
   const referenceLimit = boundedSectionLimit(request.maxReferences, DEFAULT_REFACTOR_REFERENCE_LIMIT, "maxReferences");
   const callerLimit = boundedSectionLimit(request.maxCallers, DEFAULT_REFACTOR_RELATION_LIMIT, "maxCallers");
   const hierarchyLimit = boundedSectionLimit(request.maxHierarchy, DEFAULT_REFACTOR_RELATION_LIMIT, "maxHierarchy");
-  const provenance = relationshipProvenance(snapshot);
+  const provenance = semanticProvenance(snapshot);
   const lookup = buildSymbolLookup(snapshot);
 
   const referenceResult = await findReferences(
@@ -306,14 +304,6 @@ function callOmitted(result: CallHierarchyResult): number {
 
 function hierarchyOmitted(result: TypeHierarchyResult): number {
   return result.status === "ok" ? result.omitted : 0;
-}
-
-function relationshipProvenance(snapshot: AgentProjectSnapshot): SemanticProvenance {
-  return {
-    capability: "semantic",
-    backend: snapshot.analysis.backend,
-    confidence: "high",
-  };
 }
 
 function boundedSectionLimit(value: number | undefined, defaultValue: number, name: string): number {

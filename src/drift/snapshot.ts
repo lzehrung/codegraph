@@ -5,7 +5,6 @@ import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "..
 import { buildProjectIndex, buildProjectIndexFromFiles } from "../indexer/build-index.js";
 import { getApiSurface } from "../indexer/symbols.js";
 import type { Edge } from "../types.js";
-import { edgeKey } from "../util/graph-edges.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles } from "../util/project-files.js";
 import { isPathUnderIncludeRoots, normalizeIncludeRootsAbsolute } from "../util/include-roots.js";
 import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
@@ -21,6 +20,7 @@ import {
   type ArchitectureSnapshotOptions,
   type ArchitectureUnresolvedImport,
 } from "./types.js";
+import { toArchitectureGraphEdges } from "./graph-edges.js";
 
 const DEFAULT_DUPLICATE_LIMIT = 50;
 
@@ -141,23 +141,8 @@ async function duplicateSummary(
   };
 }
 
-function edgeTarget(edge: Edge, root: string): string {
-  if (edge.to.type === "file") return toProjectDisplayPath(root, edge.to.path);
-  return `external:${edge.to.name}`;
-}
-
 function toSnapshotEdges(root: string, edges: readonly Edge[]): ArchitectureGraphEdge[] {
-  const displayPath = (file: string): string => toProjectDisplayPath(root, file);
-  return edges
-    .map((edge) => ({
-      key: edgeKey(edge, true, displayPath),
-      from: displayPath(edge.from),
-      to: edgeTarget(edge, root),
-      raw: edge.raw,
-      ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
-      ...(edge.includeForm ? { includeForm: edge.includeForm } : {}),
-    }))
-    .sort((left, right) => left.key.localeCompare(right.key));
+  return toArchitectureGraphEdges(edges, (file) => toProjectDisplayPath(root, file));
 }
 
 export async function buildArchitectureSnapshot(

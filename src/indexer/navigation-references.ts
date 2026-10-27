@@ -14,6 +14,7 @@ import {
 import { provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { definitionIdentityKey, sameDef } from "./reference-context.js";
+import { toTreeSitterPosition } from "./shared.js";
 import {
   canonicalPhpReferenceNames,
   comparePhpReferenceNames,
@@ -286,7 +287,7 @@ async function phpOwnerInfo(
     index.languageExtensions,
   );
   const start = def.range.start;
-  const position = { row: Math.max(0, start.line - 1), column: Math.max(0, start.column - 1) };
+  const position = toTreeSitterPosition(start);
   let current: SyntaxNodeLike | null = parsed.tree.rootNode.descendantForPosition(position, position);
   while (current) {
     if (PHP_TYPE_CONTAINER_TYPES.has(current.type)) {

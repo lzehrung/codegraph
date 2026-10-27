@@ -9,7 +9,7 @@ import type { Graph } from "../types.js";
 import { isGitRepo } from "../util/git.js";
 import { isPathUnderIncludeRoots, normalizeIncludeRootsRelative } from "../util/include-roots.js";
 import { normalizePath } from "../util/paths.js";
-import { createAgentSession, type AgentSession } from "./session.js";
+import { createRequestSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
 import { dedupeAgentFollowUps, formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 
@@ -98,11 +98,7 @@ const ORIENT_BUDGETS: Record<
 
 export async function orientCodegraph(request: AgentOrientRequest): Promise<AgentOrientResponse> {
   const root = path.resolve(request.root);
-  const session = createAgentSession({
-    root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-    freshness: { policy: "manual" },
-  });
+  const session = createRequestSession(request, { freshness: { policy: "manual" } });
   return await orientCodegraphWithSession(session, { ...request, root });
 }
 

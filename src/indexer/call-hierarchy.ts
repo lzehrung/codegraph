@@ -1,5 +1,6 @@
 import type { SymbolGraph, SymbolNode } from "../graphs/symbol-graph.js";
 import type { FileId, Range } from "../types.js";
+import { compareCodeUnits } from "../util/collections.js";
 
 export type CallHierarchyDirection = "incoming" | "outgoing";
 
@@ -223,12 +224,6 @@ function compareCallsites(left: CallHierarchySite, right: CallHierarchySite): nu
     left.range.start.column - right.range.start.column ||
     (left.range.start.index ?? 0) - (right.range.start.index ?? 0)
   );
-}
-
-function compareCodeUnits(left: string, right: string): number {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
 }
 
 function callsiteKey(site: CallHierarchySite): string {

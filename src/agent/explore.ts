@@ -15,7 +15,7 @@ import {
 import { getCodegraphPacketWithSession, type AgentPacketResponse } from "./packet.js";
 import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 import { searchCodegraphWithSession, type AgentSearchResponse, type AgentSearchResult } from "./search.js";
-import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
+import { withRequestSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 
 export type AgentExploreRequest = {
   root: string;
@@ -98,15 +98,7 @@ const MAX_PACKET_LIMIT = 10;
 const MAX_PATH_LIMIT = 10;
 
 export async function exploreCodegraph(request: AgentExploreRequest): Promise<AgentExploreResponse> {
-  const session = createAgentSession({
-    root: request.root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-  });
-  try {
-    return await exploreCodegraphWithSession(session, request);
-  } finally {
-    session.invalidate();
-  }
+  return await withRequestSession(request, (session) => exploreCodegraphWithSession(session, request));
 }
 
 export async function exploreCodegraphWithSession(

@@ -268,7 +268,5 @@ async function releaseInstallerLeaseLock(lock: InstallerLeaseLock): Promise<void
 }
 
 export function waitForInstallerLockRetry(): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, INSTALLER_LOCK_RETRY_MS);
-  return promise;
+  return import("../util/concurrency.js").then(({ delay }) => delay(INSTALLER_LOCK_RETRY_MS));
 }

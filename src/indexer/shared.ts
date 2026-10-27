@@ -9,6 +9,9 @@ export {
 } from "../util/graph-edges.js";
 
 export const DEFAULT_REF_CONTEXT_LINES = 5;
+export function toTreeSitterPosition(position: { line: number; column: number }): { row: number; column: number } {
+  return { row: Math.max(0, position.line - 1), column: Math.max(0, position.column - 1) };
+}
 
 const GO_IMPORT_ALIAS_PATTERN = new RegExp(String.raw`^(\.|${GO_IDENTIFIER_SOURCE})\s+["'\u0060]`, "u");
 

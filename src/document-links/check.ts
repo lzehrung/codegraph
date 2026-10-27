@@ -4,6 +4,7 @@ import { extractMarkdownLinkOccurrences, type MarkdownLinkOccurrence } from "./m
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isFilePathWithinRoot, normalizePath, toProjectDisplayPath, toProjectRelativePath } from "../util/paths.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/project-files.js";
+import { isMissingPathError } from "../util/errors.js";
 
 type MarkdownLinkCheckPosition = {
   line: number;
@@ -247,10 +248,6 @@ async function readTargetStatus(target: string): Promise<TargetStatus> {
       `Failed to inspect Markdown link target ${normalizePath(target)}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-}
-
-function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
 }
 
 async function cachedMarkdownAnchors(

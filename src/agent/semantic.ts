@@ -37,3 +37,10 @@ export type SemanticSymbol = {
   exported: boolean;
   provenance: SemanticProvenance;
 };
+export function semanticProvenance(snapshot: { analysis: AnalysisSummary }): SemanticProvenance {
+  return {
+    capability: "semantic",
+    backend: snapshot.analysis.backend,
+    confidence: "high",
+  };
+}
