@@ -5,6 +5,8 @@ import { searchCodegraphWithSession } from "../src/agent/search.js";
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { isAnalysisComplete, summarizeAnalysis, type AnalysisSummary } from "../src/analysis-summary.js";
 import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
+import type { ProjectIndex } from "../src/indexer.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 
 const roots = createTempRootRegistry();
@@ -37,10 +39,15 @@ function projectFiles(): Record<string, string> {
   };
 }
 
-async function build(root: string): Promise<{ analysis: AnalysisSummary; report: BuildReport }> {
+/** A TypeScript file past the native source limit, so native skips it with `sourceTooLarge`. */
+function oversizedSource(): string {
+  return `export const big = 1;\n// ${"x".repeat(9 * 1024 * 1024)}\n`;
+}
+
+async function build(root: string): Promise<{ analysis: AnalysisSummary; report: BuildReport; index: ProjectIndex }> {
   const report: BuildReport = { timings: {} };
   const index = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report });
-  return { analysis: summarizeAnalysis({ index, report }), report };
+  return { analysis: summarizeAnalysis({ index, report }), report, index };
 }
 
 /** Searches in a fresh session, as a new agent process would, and reports the backend each layer names. */
@@ -108,9 +115,8 @@ describe("analysis summary", () => {
   });
 
   it("keeps a skipped oversized file counted when a rebuild reuses its module", async () => {
-    const oversized = `export const big = 1;\n// ${"x".repeat(9 * 1024 * 1024)}\n`;
     const root = await createProject("cg-analysis-skipped-", {
-      "src/big.ts": oversized,
+      "src/big.ts": oversizedSource(),
       "src/small.ts": "export const small = 1;\n",
       "docs/guide.md": "# Guide\n",
     });
@@ -130,6 +136,45 @@ describe("analysis summary", () => {
       });
       expect(isAnalysisComplete(stage.analysis)).toBe(false);
     }
+  });
+
+  it("keeps a file counted as skipped when it passed the native limit after the cache held its parsed module", async () => {
+    const root = await createProject("cg-analysis-skipped-after-parse-", {
+      "src/big.ts": "export const big = 1;\n",
+      "src/small.ts": "export const small = 1;\n",
+      "docs/guide.md": "# Guide\n",
+    });
+    const bigKey = fileIdentityKey(normalizePath(path.join(root, "src", "big.ts")));
+
+    const parsed = await build(root);
+    expect(parsed.index.byFile.get(bigKey)?.locals.map((local) => local.localName)).toEqual(["big"]);
+
+    // The module cache keeps the row from big.ts's last parse, and native now skips the file. Only the project
+    // snapshot can record the skip, so a rebuild that reuses the snapshot must still find it there.
+    await fsp.writeFile(path.join(root, "src", "big.ts"), oversizedSource(), "utf8");
+    const afterGrowth = await build(root);
+    const afterNoChange = await build(root);
+    await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+    const afterDocsEdit = await build(root);
+
+    for (const stage of [afterGrowth, afterNoChange, afterDocsEdit]) {
+      expect(stage.analysis).toMatchObject({
+        backend: "native",
+        nativeFilesUsed: 1,
+        nativeFilesFellBack: 1,
+        label: "native semantic (1 file(s) skipped)",
+      });
+      expect(isAnalysisComplete(stage.analysis)).toBe(false);
+      // The skipped file keeps none of the symbols from before it grew.
+      expect(stage.index.byFile.get(bigKey)).toMatchObject({ nativeOutcome: "skipped", locals: [] });
+    }
+
+    // A session that loads the project next reads the same summary.
+    const session = createAgentSession({ root, buildOptions: { cache: "disk" } });
+    sessions.push(session);
+    const snapshot = await session.loadProject({ symbolGraph: "skip" });
+    expect(snapshot.analysis).toMatchObject({ nativeFilesFellBack: 1 });
+    expect(isAnalysisComplete(snapshot.analysis)).toBe(false);
   });
 
   it("reports an unknown backend when no native-supported file is indexed", async () => {

@@ -908,6 +908,12 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
   };
 }
 
+/**
+ * The modules the snapshot embeds. A module with a disk-cache row is left out, and a load restores it from that row.
+ * A module native skipped is never written to the cache, so the row for its file is the stale one from before the
+ * file changed, such as before it grew past the native size limit. Embed it: at load the snapshot's copy wins over
+ * the row.
+ */
 function modulesForThinSnapshot(
   index: ProjectIndex,
   projectRoot: string,
@@ -916,7 +922,9 @@ function modulesForThinSnapshot(
   const modules = [...index.byFile.values()];
   const cachedFiles = listDiskCachedModuleFiles(projectRoot, opts);
   if (!cachedFiles) return modules;
-  return modules.filter((module) => !cachedFiles.has(cacheRelativePath(projectRoot, module.file)));
+  return modules.filter(
+    (module) => module.nativeOutcome === "skipped" || !cachedFiles.has(cacheRelativePath(projectRoot, module.file)),
+  );
 }
 
 function collectSnapshotModules(
