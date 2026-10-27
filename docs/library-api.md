@@ -565,7 +565,7 @@ Handler sets created without `session` own their session; call `handlers.dispose
 
 - `watch: false` turns the watcher off. A supplied `session` is never watched.
 - `watchDebounceMs` (default `500`): quiet time after the last file event before a background refresh starts.
-- `watchMinRefreshIntervalMs` (default `5_000`): minimum time between background refresh starts.
+- `watchMinRefreshIntervalMs` (default `5_000`): minimum time from the end of one background refresh to the start of the next.
 - `watchIdleMs` (default `1_800_000`; `0` never pauses): pauses the watcher after this long without a tool call. The next tool call resumes it.
 
 The three millisecond options must be whole numbers from `0` through `2_147_483_647`; startup throws for other values.

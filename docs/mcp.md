@@ -133,12 +133,13 @@ Tool schemas are flat JSON objects for broad client compatibility; argument comb
 
 `mcp serve` and `server start` watch the project root while the server runs, unless you pass `--no-watch`. The watcher is a hint: the freshness check that every index-backed tool call runs stays the authority, so a missed event costs speed, never correctness.
 
-- A file event outside `.git`, `node_modules`, `.codegraph`, and `.codegraph-cache` clears the cached freshness result at once. The next query then runs the full check instead of reusing a result that can be up to 5 seconds old.
-- 500 ms after the last event, and at least 5 seconds after the previous background refresh started, the server runs the freshness check and rebuilds the index in the background. A query that arrives during the rebuild waits for it, as on a cold start.
+- A file event outside the directories that default discovery ignores (`node_modules`, `.git`, `.codegraph`, `dist`, `build`, `target`, Python virtual environments, and the others listed under [Project config](./cli.md#project-config)) clears the cached freshness result at once. The next query then runs the full check instead of reusing a result that can be up to 5 seconds old. A tree that `discovery.includeGlobs` re-includes stays ignored here, so its edits wait for the freshness check.
+- 500 ms after the last event, and at least 5 seconds after the previous background refresh ended, the server runs the freshness check and rebuilds the index in the background. A query that arrives during the rebuild waits for it, as on a cold start.
 - The background rebuild also covers a change burst above the automatic refresh limits (50 files or 2 MB, for example a branch switch), which a query alone reports as `stale` until `refresh_index`. A session that cannot read its configuration keeps its snapshot, as it does without the watcher.
 - One refresh runs at a time, and events during it schedule exactly one more. A failed refresh writes `[codegraph] watch refresh failed: <message>` to stderr and leaves the freshness check as it was.
 - After 30 minutes without a tool call, the server closes every watch and cancels pending refreshes. The next tool call reopens the watches and clears the cached freshness result first, so the check sees every edit made during the pause. This matters most for `codegraph server start`, whose process lives until `server stop`.
 - Windows and macOS use one recursive watch on the root. Other platforms use one watch per directory that holds a discovered file, because Node's recursive watching on Linux walks the whole tree, `node_modules` included, and can exhaust inotify watches.
+- A watch that is lost with its directory (a deleted project root on Windows, a removed and recreated directory on Linux) closes at the first event that names the directory and counts as a change; the next refresh opens it again once the directory exists. On Linux, a directory that appears later gets its watch from the event that reports it and keeps it while it is empty, so that its first file is seen. At most 128 directories hold such a watch at once.
 - If the system runs out of watches or file descriptors, the server logs `file watching disabled: <code>` and relies on the freshness check alone. Network drives and some container mounts may not deliver events; the freshness check still applies.
 - With `--no-warmup`, the watches open on the first tool call. Handlers from `createCodegraphMcpHandlers` and servers started with a caller-supplied `session` are not watched.
 
@@ -146,7 +147,7 @@ The CLI exposes only `--no-watch`. Library callers of `serveCodegraphMcp` can tu
 
 - `watch`: `false` turns the watcher off. Defaults to on.
 - `watchDebounceMs`: quiet time after the last event. Defaults to `500`.
-- `watchMinRefreshIntervalMs`: minimum time between background refresh starts. Defaults to `5000`.
+- `watchMinRefreshIntervalMs`: minimum time from the end of one background refresh to the start of the next. Defaults to `5000`.
 - `watchIdleMs`: time without a tool call before the watcher pauses; `0` never pauses. Defaults to `1800000` (30 minutes).
 
 ### `workspace_symbols`

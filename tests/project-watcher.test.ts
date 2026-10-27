@@ -31,10 +31,18 @@ type FakeHandle = {
   directory: string;
   recursive: boolean;
   open: boolean;
+  /** The system stopped reporting this handle's directory without telling the process. */
+  silent: boolean;
   unrefCalls: number;
-  emit(filename: string | null): void;
+  emit(filename: string | null, eventType?: string): void;
   fail(error: Error): void;
 };
+
+/** How a system loses the watch of a removed directory. Neither reports an `error` or a `close`. */
+type DirectoryRemoval = "windows" | "inotify";
+
+/** Most events that a removal sends to a handle that nobody closes, so that a watcher that never closes it ends the loop. */
+const REMOVAL_EVENT_CAP = 5_000;
 
 type FakeWatch = {
   watch: ProjectWatchFactory;
@@ -46,6 +54,15 @@ type FakeWatch = {
   openDirectories(): string[];
   /** The most handles that were ever open at once. */
   maxOpen(): number;
+  /** Delivers an event through every open handle of `directory` that still receives events; returns how many did. */
+  deliver(directory: string, filename: string | null, eventType?: string): number;
+  /**
+   * Removes `directory` as the system does to its watch, and returns how many events the process received.
+   * - `windows`: `rename` events that name the directory by its absolute path (`\\?\C:\...`), again and again for as
+   *   long as the handle stays open.
+   * - `inotify`: two `rename` events with the directory's own name, then nothing more from a handle that is still open.
+   */
+  removeDirectory(directory: string, removal: DirectoryRemoval): number;
   /** Makes `watch` throw for the directories that `failure` returns an error for. */
   failOpens(failure: ((directory: string) => Error | undefined) | undefined): void;
 };
@@ -57,6 +74,8 @@ function createFakeWatch(): FakeWatch {
   let openFailure: ((directory: string) => Error | undefined) | undefined;
   let maxOpen = 0;
   const openHandles = (): FakeHandle[] => handles.filter((handle) => handle.open);
+  const receiving = (directory: string): FakeHandle[] =>
+    openHandles().filter((handle) => handle.directory === directory && !handle.silent);
   const watch: ProjectWatchFactory = (directory, watchOptions, listener) => {
     const failure = openFailure?.(directory);
     if (failure) throw failure;
@@ -66,8 +85,11 @@ function createFakeWatch(): FakeWatch {
       directory,
       recursive: watchOptions.recursive,
       open: true,
+      silent: false,
       unrefCalls: 0,
-      emit: (filename) => listener("change", filename),
+      emit: (filename, eventType = "change") => {
+        if (!handle.silent) listener(eventType, filename);
+      },
       fail: (error) => {
         for (const errorListener of errorListeners) errorListener(error);
       },
@@ -93,6 +115,30 @@ function createFakeWatch(): FakeWatch {
     openHandles,
     openDirectories: () => sorted(openHandles().map((handle) => handle.directory)),
     maxOpen: () => maxOpen,
+    deliver: (directory, filename, eventType) => {
+      const receivers = receiving(directory);
+      for (const handle of receivers) handle.emit(filename, eventType);
+      return receivers.length;
+    },
+    removeDirectory: (directory, removal) => {
+      let received = 0;
+      for (const handle of receiving(directory)) {
+        if (removal === "windows") {
+          while (handle.open && received < REMOVAL_EVENT_CAP) {
+            handle.emit(`\\\\?\\${directory}`, "rename");
+            received += 1;
+          }
+        } else {
+          // IN_DELETE_SELF, then IN_IGNORED. A process that closed the handle at the first one never sees the second.
+          for (let event = 0; event < 2 && handle.open; event += 1) {
+            handle.emit(path.basename(directory), "rename");
+            received += 1;
+          }
+          handle.silent = true;
+        }
+      }
+      return received;
+    },
     failOpens: (failure) => {
       openFailure = failure;
     },
@@ -123,10 +169,18 @@ const snapshot = {} as AgentProjectSnapshot;
 function createFakeSession(files: string[]) {
   const calls: string[] = [];
   const checkStarts: number[] = [];
-  const state: { freshness: AgentFreshnessResult | Error; files: string[]; hold: Promise<void> | undefined } = {
+  const checkEnds: number[] = [];
+  const state: {
+    freshness: AgentFreshnessResult | Error;
+    files: string[];
+    hold: Promise<void> | undefined;
+    /** How long a freshness check takes once `hold` is released. */
+    checkMs: number;
+  } = {
     freshness: { state: "fresh" },
     files,
     hold: undefined,
+    checkMs: 0,
   };
   const session: AgentSession = {
     root,
@@ -135,6 +189,8 @@ function createFakeSession(files: string[]) {
       calls.push("checkFreshness");
       checkStarts.push(Date.now());
       await state.hold;
+      if (state.checkMs) await new Promise<void>((resolve) => setTimeout(resolve, state.checkMs));
+      checkEnds.push(Date.now());
       if (state.freshness instanceof Error) throw state.freshness;
       return state.freshness;
     },
@@ -150,7 +206,7 @@ function createFakeSession(files: string[]) {
     },
   };
   const count = (call: string): number => calls.filter((entry) => entry === call).length;
-  return { session, calls, checkStarts, state, count };
+  return { session, calls, checkStarts, checkEnds, state, count };
 }
 
 function startController(overrides: Partial<WatchControllerOptions> & { fake?: FakeWatch; files?: string[] } = {}) {
@@ -188,6 +244,20 @@ describe("startProjectWatcher", () => {
       ".codegraph/cache/index-v1/search-v1.sqlite",
       ".codegraph/server.json",
       ".codegraph-cache/index-v1/manifest.json",
+      // The other directories that default discovery ignores, so that a build writing into them wakes nothing.
+      "dist",
+      "dist/bundle.js",
+      "dist\\chunks\\a.js",
+      "packages/app/build/out.js",
+      "target/debug/app",
+      ".venv/lib/x.py",
+      "venv/bin/python",
+      "lib/python3/site-packages/y.py",
+      "src/__pycache__/m.pyc",
+      "vendor/bundle/ruby/gem.rb",
+      ".build/debug/x",
+      "Pods/Alamofire/a.swift",
+      "infra/.terraform/providers/x",
     ];
     for (const filename of ignored) handle.emit(filename);
     await vi.advanceTimersByTimeAsync(10_000);
@@ -204,6 +274,14 @@ describe("startProjectWatcher", () => {
       "my.git/config",
       "codegraph/notes.md",
       "constructor/index.ts",
+      "distro/a.ts",
+      "src/build.ts",
+      "build.gradle",
+      "targets/a.ts",
+      ".venv2/x.py",
+      "vendor/lib/x.go",
+      "vendor/bundle.rb",
+      "Podfile",
       null,
     ];
     for (const filename of reported) handle.emit(filename);
@@ -262,14 +340,20 @@ describe("startProjectWatcher", () => {
       at(".git", "hooks", "pre-commit"),
       at(".codegraph", "cache", "state.json"),
       at("docs", "node_modules", "y.md"),
+      at("dist", "out.js"),
+      at("src", "build", "gen.ts"),
+      at("vendor", "bundle", "gems", "g.rb"),
+      at("vendor", "lib", "v.go"),
       at("..hidden", "z.ts"),
       path.join(os.tmpdir(), "cg-project-watcher-elsewhere", "outside.ts"),
     ];
     const { fake, watcher } = startWatcher({ platform: "linux", listFiles: async () => files });
     await watcher.refreshDirectories();
 
-    // `..hidden` is an ordinary directory name, not a way out of the root.
-    expect(fake.openDirectories()).toEqual(sorted([root, at("src"), at("src", "a"), at("..hidden")]));
+    // `..hidden` is an ordinary directory name, not a way out of the root. Bare `vendor` is not ignored, only `vendor/bundle`.
+    expect(fake.openDirectories()).toEqual(
+      sorted([root, at("src"), at("src", "a"), at("vendor"), at("vendor", "lib"), at("..hidden")]),
+    );
     expect(fake.handles.every((handle) => !handle.recursive)).toBe(true);
     expect(fake.handles.every((handle) => handle.unrefCalls === 1)).toBe(true);
     expect(fake.duplicateOpens).toEqual([]);
@@ -472,6 +556,56 @@ describe("startProjectWatcher", () => {
     expect(fake.openHandles()).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each([
+    ["Windows, recursive root", "windows", "win32", root],
+    ["Windows, a root under an ignored directory name", "windows", "win32", path.join(os.tmpdir(), "build", "cg-app")],
+    ["Windows, per-directory watches", "windows", "linux", root],
+    ["Linux", "inotify", "linux", root],
+  ] as const)(
+    "closes a handle at the first event that names its removed directory, as %s sends it",
+    async (_label, removal, platform, watchedRoot) => {
+      const { fake, watcher, onChange, onSettled, log } = startWatcher({ root: watchedRoot, platform });
+
+      // Windows repeats the event for as long as the handle stays open, and sends no error.
+      expect(fake.removeDirectory(watchedRoot, removal)).toBe(1);
+
+      expect(fake.openHandles()).toHaveLength(0);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(log).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(onSettled).toHaveBeenCalledTimes(1);
+      watcher.close();
+    },
+  );
+
+  it("keeps a recursive handle when an entry is named like the root", () => {
+    const { fake, watcher, onChange } = startWatcher({ platform: "win32" });
+
+    // `proj/proj` was created: a recursive handle reports it as a relative name, never as its own path.
+    expect(fake.deliver(root, path.basename(root), "rename")).toBe(1);
+
+    expect(fake.openHandles()).toHaveLength(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    watcher.close();
+  });
+
+  it("watches a directory again at the next refresh after the system dropped its watch without a word", async () => {
+    const files = [at("src", "a.ts")];
+    const { fake, watcher, onChange } = startWatcher({ platform: "linux", listFiles: async () => files });
+    await watcher.refreshDirectories();
+    expect(fake.deliver(at("src"), "a.ts")).toBe(1);
+
+    // `rm -rf src && mkdir src`: the old watch is gone, and all the process hears is a rename of the directory's name.
+    fake.removeDirectory(at("src"), "inotify");
+    expect(fake.deliver(at("src"), "a.ts")).toBe(0);
+    await watcher.refreshDirectories();
+
+    expect(fake.deliver(at("src"), "a.ts")).toBe(1);
+    expect(onChange).toHaveBeenCalledTimes(3);
+    expect(fake.duplicateOpens).toEqual([]);
+    watcher.close();
+  });
 });
 
 describe("createWatchController", () => {
@@ -569,18 +703,40 @@ describe("createWatchController", () => {
     expect(calls).toEqual(["markChanged", "checkFreshness"]);
   });
 
-  it("starts at most one refresh per interval while events keep coming for 20 seconds", async () => {
-    const { fake, checkStarts, controller } = startController();
+  it("starts a refresh at most once per interval after the previous one ended while events keep coming for 20 seconds", async () => {
+    const { fake, checkStarts, controller, state } = startController();
     const [handle] = fake.openHandles();
+    state.checkMs = 700;
 
     for (let second = 0; second < 20; second += 1) {
       handle.emit("src/a.ts");
       await vi.advanceTimersByTimeAsync(1_000);
     }
 
-    expect(checkStarts).toEqual([500, 5_500, 10_500, 15_500]);
+    // The 5 s interval runs from the end of a refresh: 500 + 700 + 5_000, and then 700 + 5_000 more each time.
+    expect(checkStarts).toEqual([500, 6_200, 11_900, 17_600]);
     controller.close();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("never starts a refresh within the interval after the previous one ended, even when a refresh outlasts the interval", async () => {
+    const { fake, checkStarts, checkEnds, controller, state } = startController({
+      debounceMs: 50,
+      minRefreshIntervalMs: 500,
+    });
+    state.checkMs = 800;
+    const [handle] = fake.openHandles();
+
+    // An event every 200 ms, so that a burst settles during every refresh.
+    for (let tick = 0; tick < 30; tick += 1) {
+      handle.emit("src/a.ts");
+      await vi.advanceTimersByTimeAsync(200);
+    }
+
+    expect(checkStarts.length).toBeGreaterThanOrEqual(4);
+    const gaps = checkStarts.slice(1).map((start, index) => start - (checkEnds[index] ?? Number.NaN));
+    expect(gaps.every((gap) => gap >= 500)).toBe(true);
+    controller.close();
   });
 
   it("waits for a burst to end before refreshing, however long it lasts", async () => {
@@ -588,7 +744,7 @@ describe("createWatchController", () => {
     const [handle] = fake.openHandles();
 
     for (let tick = 0; tick < 200; tick += 1) {
-      handle.emit("build/out.js");
+      handle.emit("src/out.js");
       await vi.advanceTimersByTimeAsync(100);
     }
     expect(checkStarts).toEqual([]);
@@ -597,7 +753,7 @@ describe("createWatchController", () => {
     expect(checkStarts).toEqual([20_400]);
   });
 
-  it("runs one more refresh after the current one when bursts settle during it", async () => {
+  it("runs one more refresh, an interval after the current one ended, when bursts settle during it", async () => {
     const { fake, checkStarts, state } = startController();
     const [handle] = fake.openHandles();
     const release = Promise.withResolvers<void>();
@@ -614,14 +770,15 @@ describe("createWatchController", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(checkStarts).toEqual([500]);
 
+    // The first refresh ends at 1_500, when it is released.
     release.resolve();
-    await vi.advanceTimersByTimeAsync(3_999);
+    await vi.advanceTimersByTimeAsync(4_999);
     expect(checkStarts).toEqual([500]);
     await vi.advanceTimersByTimeAsync(1);
-    expect(checkStarts).toEqual([500, 5_500]);
+    expect(checkStarts).toEqual([500, 6_500]);
 
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(checkStarts).toEqual([500, 5_500]);
+    expect(checkStarts).toEqual([500, 6_500]);
   });
 
   it("does not rerun when nothing changed while the refresh ran", async () => {
@@ -818,6 +975,28 @@ describe("createWatchController", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each(["refreshed", "stale"] as const)(
+    "does not rebuild when the server closed while the freshness check ran and found the index %s",
+    async (outcome) => {
+      const { fake, controller, calls, state } = startController();
+      const release = Promise.withResolvers<void>();
+      state.hold = release.promise;
+      state.freshness = freshnessByState[outcome];
+
+      fake.openHandles()[0]?.emit("src/a.ts");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(calls).toEqual(["markChanged", "checkFreshness"]);
+
+      controller.close();
+      release.resolve();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // A rebuild now would keep the project and its cache busy after the client has left.
+      expect(calls).toEqual(["markChanged", "checkFreshness"]);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 });
 
 describe("startProjectWatcher with the real file system", () => {
@@ -879,4 +1058,266 @@ describe("startProjectWatcher with the real file system", () => {
       }
     },
   );
+
+  // The self-removal events of macOS (FSEvents) are not characterized, so these two run where they were observed.
+  it.runIf(process.platform === "win32" || process.platform === "linux")(
+    "closes the handle of a removed root instead of spinning on its events",
+    async () => {
+      const projectRoot = await tempRoots.create("cg-project-watcher-removed-");
+      const listed = path.join(projectRoot, "src", "a.ts");
+      await fs.mkdir(path.dirname(listed), { recursive: true });
+      await fs.writeFile(listed, "export const a = 1;\n");
+      let delivered = 0;
+      const closed = new Set<string>();
+      const watcher = startProjectWatcher({
+        root: projectRoot,
+        onChange: vi.fn(),
+        onSettled: vi.fn(),
+        listFiles: async () => [listed],
+        watch: (directory, watchOptions, listener) => {
+          const handle = fsWatch(directory, watchOptions, (eventType, filename) => {
+            delivered += 1;
+            listener(eventType, filename);
+          });
+          const close = handle.close.bind(handle);
+          handle.close = () => {
+            closed.add(directory);
+            close();
+          };
+          return handle;
+        },
+      });
+
+      try {
+        await watcher.refreshDirectories();
+        await fs.rm(projectRoot, { recursive: true });
+
+        await vi.waitFor(() => expect(closed.has(projectRoot)).toBe(true), { timeout: 10_000, interval: 25 });
+        // Windows sends hundreds of thousands of events per second for a removed directory until its handle closes.
+        expect(delivered).toBeLessThan(100);
+      } finally {
+        watcher.close();
+      }
+    },
+  );
+
+  it.runIf(process.platform === "win32" || process.platform === "linux")(
+    "watches a directory that was removed and created again, with per-directory watches",
+    async () => {
+      const projectRoot = await tempRoots.create("cg-project-watcher-recreated-");
+      const feature = path.join(projectRoot, "src", "feature");
+      const listed = path.join(feature, "a.ts");
+      await fs.mkdir(feature, { recursive: true });
+      await fs.writeFile(listed, "export const a = 1;\n");
+      const opened: Array<{ directory: string; closed: boolean }> = [];
+      const reported: Array<{ directory: string; filename: string | null }> = [];
+      const watcher = startProjectWatcher({
+        root: projectRoot,
+        onChange: vi.fn(),
+        onSettled: vi.fn(),
+        listFiles: async () => [listed],
+        platform: "linux",
+        watch: (directory, watchOptions, listener) => {
+          const handle = fsWatch(directory, watchOptions, (eventType, filename) => {
+            reported.push({ directory, filename });
+            listener(eventType, filename);
+          });
+          const record = { directory, closed: false };
+          opened.push(record);
+          const close = handle.close.bind(handle);
+          handle.close = () => {
+            record.closed = true;
+            close();
+          };
+          return handle;
+        },
+      });
+      const featureWatches = (): Array<{ directory: string; closed: boolean }> =>
+        opened.filter((record) => record.directory === feature);
+      const timing = { timeout: 10_000, interval: 25 };
+
+      try {
+        await watcher.refreshDirectories();
+        expect(featureWatches()).toHaveLength(1);
+
+        await fs.rm(feature, { recursive: true });
+        // The system sends no error for the lost watch, so the watcher has to close it from the events.
+        await vi.waitFor(() => expect(featureWatches()[0]?.closed).toBe(true), timing);
+
+        await fs.mkdir(feature);
+        await vi.waitFor(() => expect(featureWatches()).toHaveLength(2), timing);
+        await fs.writeFile(listed, "export const a = 2;\n");
+        await vi.waitFor(
+          () => expect(reported.some((event) => event.directory === feature && event.filename === "a.ts")).toBe(true),
+          timing,
+        );
+      } finally {
+        watcher.close();
+      }
+    },
+  );
+
+  it("keeps the session's cached freshness result across writes to the output directories that discovery ignores", async () => {
+    const projectRoot = await tempRoots.create("cg-project-watcher-ignored-");
+    await fs.mkdir(path.join(projectRoot, "src"));
+    await fs.writeFile(path.join(projectRoot, "src", "main.ts"), "export const value = 1;\n");
+    const session = createAgentSession({
+      root: projectRoot,
+      buildOptions: { cache: "off" },
+      freshness: { policy: "auto" },
+    });
+    // A recursive handle, as on Windows and macOS, reports every write under the root.
+    const fake = createFakeWatch();
+    const controller = createWatchController(session, {
+      root: projectRoot,
+      platform: "win32",
+      watch: fake.watch,
+      debounceMs: 60_000,
+      log: vi.fn(),
+    });
+
+    try {
+      await session.loadProject({ symbolGraph: "skip" });
+      const [handle] = fake.openHandles();
+      // A scan builds a new result object; a cached answer returns the same one.
+      const answers = new Set<AgentFreshnessResult>();
+
+      for (const output of [
+        "dist/bundle.js",
+        "build\\out.js",
+        "vendor/bundle/gem.rb",
+        ".venv/lib/x.py",
+        ".codegraph/cache/state.json",
+      ]) {
+        handle.emit(output);
+        answers.add(await session.checkFreshness!());
+      }
+      expect(answers.size).toBe(1);
+
+      handle.emit("distro/a.ts");
+      answers.add(await session.checkFreshness!());
+      expect(answers.size).toBe(2);
+    } finally {
+      controller.close();
+      session.invalidate();
+    }
+  });
+});
+
+describe("startProjectWatcher with directories that appear", () => {
+  const tempRoots = createTempRootRegistry();
+  afterEach(async () => {
+    await tempRoots.cleanup();
+  });
+
+  const timing = { timeout: 10_000, interval: 25 };
+
+  // Per-directory watches over a real directory tree, with a fake `watch`, so that the test decides which events arrive.
+  async function startInProject() {
+    const projectRoot = await tempRoots.create("cg-project-watcher-appear-");
+    const src = path.join(projectRoot, "src");
+    await fs.mkdir(src);
+    const listFiles = vi.fn(async () => [path.join(src, "a.ts")]);
+    const started = startWatcher({ root: projectRoot, platform: "linux", listFiles });
+    await started.watcher.refreshDirectories();
+    return { projectRoot, src, listFiles, ...started };
+  }
+
+  it("watches a directory that a rename event reports and the directories inside it, and keeps the watch of an empty one", async () => {
+    const { projectRoot, src, fake, watcher, onChange } = await startInProject();
+    const feature = path.join(src, "feature");
+    const inner = path.join(feature, "inner");
+    const empty = path.join(inner, "empty");
+    // A `mkdir -p` that finished before the watch on `feature` opened raised no event for `inner` or `empty`.
+    await fs.mkdir(empty, { recursive: true });
+
+    fake.deliver(src, "feature", "rename");
+
+    await vi.waitFor(
+      () => expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, feature, inner, empty])),
+      timing,
+    );
+    // No file list names them. `feature` and `inner` hold only a directory, `empty` holds nothing: its first file must raise an event.
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, empty]));
+    expect(fake.deliver(empty, "first.ts")).toBe(1);
+    expect(onChange).toHaveBeenCalledTimes(2);
+
+    // A file that no list names ends it: discovery ignores such a directory, and so does the watcher.
+    await fs.writeFile(path.join(empty, "build.log"), "x\n");
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src]));
+    expect(fake.duplicateOpens).toEqual([]);
+    watcher.close();
+  });
+
+  it("opens no watch for a file, an ignored directory, or an entry that is gone, however the events name them", async () => {
+    const { projectRoot, src, fake, watcher } = await startInProject();
+    const vendor = path.join(src, "vendor");
+    const real = path.join(src, "real");
+    await fs.writeFile(path.join(src, "file.ts"), "x\n");
+    await fs.mkdir(path.join(src, "dist"));
+    await fs.mkdir(path.join(vendor, "bundle"), { recursive: true });
+    await fs.mkdir(real);
+
+    for (const name of ["file.ts", "gone", "dist", "vendor"]) fake.deliver(src, name, "rename");
+    await vi.waitFor(() => expect(fake.openDirectories()).toContain(vendor), timing);
+    // The events are handled in order, so by the time `real` is open the ones before it were handled too.
+    fake.deliver(src, "real", "rename");
+    await vi.waitFor(() => expect(fake.openDirectories()).toContain(real), timing);
+
+    // `vendor` is an ordinary directory, the `vendor/bundle` inside it is not.
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, vendor, real]));
+    watcher.close();
+  });
+
+  it("opens a recreated directory from the event that reports it, without waiting for a refresh", async () => {
+    const { projectRoot, src, listFiles, fake } = await startInProject();
+    const listed = listFiles.mock.calls.length;
+    expect(fake.deliver(src, "a.ts")).toBe(1);
+
+    // `rm -rf src && mkdir src`: the old watch is dropped without an error, and the process hears the rename.
+    await fs.rm(src, { recursive: true });
+    fake.removeDirectory(src, "inotify");
+    expect(fake.openDirectories()).toEqual([projectRoot]);
+    await fs.mkdir(src);
+    fake.deliver(projectRoot, "src", "rename");
+
+    await vi.waitFor(() => expect(fake.openDirectories()).toEqual(sorted([projectRoot, src])), timing);
+    expect(fake.deliver(src, "a.ts")).toBe(1);
+    expect(listFiles).toHaveBeenCalledTimes(listed);
+    expect(fake.duplicateOpens).toEqual([]);
+  });
+
+  it("opens at most 128 watches from events, so that a build that creates thousands of directories cannot use up the inotify watches", async () => {
+    const { src, fake, watcher } = await startInProject();
+    const names = Array.from({ length: 140 }, (_, index) => `generated${index}`);
+    await Promise.all(names.map((name) => fs.mkdir(path.join(src, name))));
+
+    for (const name of names) fake.deliver(src, name, "rename");
+    // A refresh waits for the events that are still being opened, and keeps the empty directories.
+    await watcher.refreshDirectories();
+
+    // The root, `src`, and the 128 directories that the limit let through.
+    expect(fake.openHandles()).toHaveLength(2 + 128);
+    watcher.close();
+  });
+
+  it("opens the recursive root handle again at the next refresh once the root exists, and stays quiet while it is gone", async () => {
+    const projectRoot = await tempRoots.create("cg-project-watcher-root-");
+    const { fake, watcher, log } = startWatcher({ root: projectRoot, platform: "win32" });
+
+    expect(fake.removeDirectory(projectRoot, "windows")).toBe(1);
+    expect(fake.openHandles()).toHaveLength(0);
+    await fs.rm(projectRoot, { recursive: true });
+    await watcher.refreshDirectories();
+    expect(fake.handles).toHaveLength(1);
+
+    await fs.mkdir(projectRoot);
+    await watcher.refreshDirectories();
+
+    expect(fake.openHandles().map((handle) => [handle.directory, handle.recursive])).toEqual([[projectRoot, true]]);
+    expect(log).not.toHaveBeenCalled();
+    watcher.close();
+  });
 });
