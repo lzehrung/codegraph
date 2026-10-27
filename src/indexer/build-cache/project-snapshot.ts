@@ -1,5 +1,5 @@
 import fsp from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { isRubyLoadForm } from "../../util/specifiers.js";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import path from "node:path";
@@ -11,6 +11,7 @@ import { BloomFilter, BloomFilterCache } from "../../util/bloom-filter.js";
 import { summarizeAnalysis } from "../../analysis-summary.js";
 import type { AnalysisSummary } from "../../analysis-summary.js";
 import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
+import { removeStaleTempFiles, writeFileAtomically } from "../../util/atomic-file.js";
 import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import { logWithLevel } from "../../logging.js";
 import { SymbolKind } from "../types.js";
@@ -48,6 +49,7 @@ import {
   isRange,
 } from "./module-cache.js";
 import { cacheRoot } from "./location.js";
+import { recordCacheCorruption } from "./reports.js";
 import type { ManifestFileEntry } from "./manifest.js";
 import { expandStarImports } from "../expand-star-imports.js";
 
@@ -97,7 +99,6 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v28: JVM type-on-demand imports only bind direct nested classifiers.
 export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 28;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
-const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
 const MAX_SNAPSHOT_CACHE_ENTRIES = 32;
 
@@ -442,14 +443,7 @@ async function snapshotFileIdentity(snapshotPath: string): Promise<SnapshotFileI
     ctimeMs: stat.ctimeMs,
   };
 }
-async function fsyncSnapshotFile(snapshotPath: string): Promise<void> {
-  const handle = await fsp.open(snapshotPath, "r+");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
+
 function isSnapshotTempName(name: string, snapshotName: string): boolean {
   const prefix = `.${snapshotName}.`;
   if (!name.startsWith(prefix) || !name.endsWith(SNAPSHOT_TEMP_SUFFIX)) return false;
@@ -457,45 +451,15 @@ function isSnapshotTempName(name: string, snapshotName: string): boolean {
   return /^\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(marker);
 }
 
-async function cleanupStaleSnapshotTemps(snapshotPath: string): Promise<void> {
-  let entries: Array<{ name: string; isFile(): boolean }>;
-  try {
-    entries = await fsp.readdir(path.dirname(snapshotPath), { withFileTypes: true });
-  } catch {
-    return;
-  }
-  const cutoff = Date.now() - SNAPSHOT_TEMP_RETENTION_MS;
-  const snapshotName = path.basename(snapshotPath);
-  for (const entry of entries) {
-    if (!entry.isFile() || !isSnapshotTempName(entry.name, snapshotName)) continue;
-    const candidate = path.join(path.dirname(snapshotPath), entry.name);
-    try {
-      const stat = await fsp.lstat(candidate);
-      if (stat.mtimeMs > cutoff) continue;
-      await fsp.rm(candidate, { force: true });
-    } catch {
-      // Abandoned snapshot cleanup must not block a cache write.
-    }
-  }
-}
-
 async function writeSnapshotAtomically(snapshotPath: string, data: Buffer): Promise<void> {
-  await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
-  await cleanupStaleSnapshotTemps(snapshotPath);
-  let tempPath: string | undefined = path.join(
-    path.dirname(snapshotPath),
-    `.${path.basename(snapshotPath)}.${process.pid}.${randomUUID()}${SNAPSHOT_TEMP_SUFFIX}`,
+  const snapshotDirectory = path.dirname(snapshotPath);
+  await fsp.mkdir(snapshotDirectory, { recursive: true });
+  const snapshotName = path.basename(snapshotPath);
+  await removeStaleTempFiles(
+    snapshotDirectory,
+    (entry) => entry.isFile() && isSnapshotTempName(entry.name, snapshotName),
   );
-  try {
-    await fsp.writeFile(tempPath, data, { flag: "wx" });
-    await fsyncSnapshotFile(tempPath);
-    await fsp.rename(tempPath, snapshotPath);
-    tempPath = undefined;
-  } finally {
-    if (tempPath) {
-      await fsp.rm(tempPath, { force: true }).catch(() => undefined);
-    }
-  }
+  await writeFileAtomically(snapshotPath, data);
 }
 
 function setBoundedSnapshotCache<K, V>(cache: Map<K, V>, key: K, value: V): void {
@@ -539,22 +503,6 @@ function materializeDetailedSymbolGraph(
 
 function decodeSnapshotPayload(compressed: Buffer): unknown {
   return JSON.parse(brotliDecompressSync(compressed).toString("utf8")) as unknown;
-}
-
-function recordSnapshotCorruption(
-  report: BuildReport | undefined,
-  artifact: string,
-  reason: string,
-  logLevel: BuildOptions["logLevel"],
-): void {
-  if (report) {
-    report.manifest ??= { used: true, reused: false };
-    report.manifest.corruptions ??= [];
-    if (!report.manifest.corruptions.some((entry) => entry.artifact === artifact)) {
-      report.manifest.corruptions.push({ artifact, reason });
-    }
-  }
-  logWithLevel(logLevel, "warn", `Warning: Corrupt cache artifact ${artifact}: ${reason}`);
 }
 
 function recordSnapshotInvalidation(artifact: string, reason: string, logLevel: BuildOptions["logLevel"]): void {
@@ -684,7 +632,7 @@ export async function tryLoadProjectIndexSnapshot(
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint();
     const implementationFingerprint = getImplementationFingerprint();
     if (!isProjectIndexSnapshotPayload(payload)) {
-      recordSnapshotCorruption(
+      recordCacheCorruption(
         report,
         projectSnapshotPath(projectRoot, opts),
         "invalid project snapshot payload",
@@ -741,7 +689,7 @@ export async function tryLoadProjectIndexSnapshot(
     };
   } catch (error) {
     if (!isMissingArtifactError(error)) {
-      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+      recordCacheCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     }
     return null;
   }
@@ -775,7 +723,7 @@ export async function tryLoadProjectSnapshotModules(
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint();
     const implementationFingerprint = getImplementationFingerprint();
     if (!isProjectSnapshotModulesPayload(payload)) {
-      recordSnapshotCorruption(
+      recordCacheCorruption(
         report,
         projectSnapshotPath(projectRoot, opts),
         "invalid project snapshot payload",
@@ -813,7 +761,7 @@ export async function tryLoadProjectSnapshotModules(
     return modules;
   } catch (error) {
     if (!isMissingArtifactError(error)) {
-      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+      recordCacheCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     }
     return null;
   }
@@ -841,12 +789,12 @@ export async function tryLoadPersistedBloomFilters(
     if (identityMismatch) {
       recordSnapshotInvalidation(sidecarPath, "bloom filter identity mismatch", opts?.logLevel);
     } else {
-      recordSnapshotCorruption(report, sidecarPath, "invalid bloom filter payload", opts?.logLevel);
+      recordCacheCorruption(report, sidecarPath, "invalid bloom filter payload", opts?.logLevel);
     }
   } catch (error) {
     const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
     if (!isMissing) {
-      recordSnapshotCorruption(report, bloomFilterSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+      recordCacheCorruption(report, bloomFilterSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     }
   }
   try {
@@ -857,7 +805,7 @@ export async function tryLoadPersistedBloomFilters(
   } catch (error) {
     const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
     if (!isMissing) {
-      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+      recordCacheCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     }
     return null;
   }
@@ -1242,7 +1190,7 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
           }
         : migratedPayload;
     if (!isDetailedSymbolGraphSnapshotPayload(payload)) {
-      recordSnapshotCorruption(report, snapshotPath, "invalid detailed symbol graph payload", opts?.logLevel);
+      recordCacheCorruption(report, snapshotPath, "invalid detailed symbol graph payload", opts?.logLevel);
       return null;
     }
     if (payload.implementationFingerprint !== getImplementationFingerprint()) {
@@ -1255,12 +1203,12 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
     }
     const graph = materializeDetailedSymbolGraph(payload.graph);
     if (!(await isDetailedSymbolGraphCompatibleWithProject(projectRoot, index, graph))) {
-      recordSnapshotCorruption(report, snapshotPath, "detailed symbol graph does not match project", opts?.logLevel);
+      recordCacheCorruption(report, snapshotPath, "detailed symbol graph does not match project", opts?.logLevel);
       return null;
     }
     const identity = await snapshotFileIdentity(snapshotPath);
     if (!sameSnapshotFileIdentity(parsed.identity, identity)) {
-      recordSnapshotCorruption(report, snapshotPath, "detailed symbol graph changed while reading", opts?.logLevel);
+      recordCacheCorruption(report, snapshotPath, "detailed symbol graph changed while reading", opts?.logLevel);
       return null;
     }
     setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
@@ -1271,7 +1219,7 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
     return graph;
   } catch (error) {
     if (!isMissingArtifactError(error)) {
-      recordSnapshotCorruption(report, snapshotPath, String(error), opts?.logLevel);
+      recordCacheCorruption(report, snapshotPath, String(error), opts?.logLevel);
     }
     return null;
   }

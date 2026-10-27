@@ -62,3 +62,19 @@ export function recordConfigHashResult(
   logWithLevel(logLevel, "warn", `Warning: ${configHashResult.error}`);
   return configHashResult.hash;
 }
+
+export function recordCacheCorruption(
+  report: BuildReport | undefined,
+  artifact: string,
+  reason: string,
+  logLevel: LogLevel | undefined,
+): void {
+  if (report) {
+    report.manifest ??= { used: true, reused: false };
+    report.manifest.corruptions ??= [];
+    if (!report.manifest.corruptions.some((entry) => entry.artifact === artifact)) {
+      report.manifest.corruptions.push({ artifact, reason });
+    }
+  }
+  logWithLevel(logLevel, "warn", `Warning: Corrupt cache artifact ${artifact}: ${reason}`);
+}
