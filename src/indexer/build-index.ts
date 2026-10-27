@@ -950,7 +950,7 @@ function emitIndexLifecycleProgress(
   });
 }
 
-function emitIndexCheckStart(opts: BuildOptions | undefined, activity: string = "Checking project index"): void {
+export function emitIndexCheckStart(opts: BuildOptions | undefined, activity: string = "Checking project index"): void {
   opts?.onProgress?.({
     type: "progress",
     phase: "start",
@@ -962,7 +962,7 @@ function emitIndexCheckStart(opts: BuildOptions | undefined, activity: string = 
   });
 }
 
-function emitIndexCheckActivity(
+export function emitIndexCheckActivity(
   opts: BuildOptions | undefined,
   activity: string,
   current: number = 0,

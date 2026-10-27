@@ -45,12 +45,14 @@ import {
   loadAllCachedModules,
   transformPersistedExportFromModule,
   type FileSignature,
+  isOptionalRange,
   isParseErrorRange,
   isRange,
 } from "./module-cache.js";
 import { cacheRoot } from "./location.js";
 import { recordCacheCorruption } from "./reports.js";
 import type { ManifestFileEntry } from "./manifest.js";
+import { compareCodeUnits } from "../../util/collections.js";
 import { expandStarImports } from "../expand-star-imports.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
@@ -216,7 +218,7 @@ export function projectSnapshotFilesSignature(
   projectRoot?: string,
 ): string {
   const hash = createHash("sha256");
-  for (const [file, entry] of [...entries.entries()].sort(([left], [right]) => compareSnapshotPath(left, right))) {
+  for (const [file, entry] of [...entries.entries()].sort(([left], [right]) => compareCodeUnits(left, right))) {
     hash.update(projectRoot ? cacheRelativePath(projectRoot, file) : file);
     hash.update("\0");
     hash.update(entry.sig);
@@ -423,12 +425,6 @@ function transformDetailedGraph(
       transformHandle(root, canonicalId, toRelative),
     ]),
   };
-}
-
-function compareSnapshotPath(left: string, right: string): number {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
 }
 
 function sameSnapshotFileIdentity(left: SnapshotFileIdentity, right: SnapshotFileIdentity): boolean {
@@ -1921,10 +1917,6 @@ function isOptionalBoolean(value: unknown): boolean {
 
 function isOptionalNumber(value: unknown): boolean {
   return value === undefined || typeof value === "number";
-}
-
-function isOptionalRange(value: unknown): boolean {
-  return value === undefined || isRange(value);
 }
 
 function isSymbolKind(value: unknown): value is SymbolKind {

@@ -1,5 +1,6 @@
 import path from "node:path";
-import { matchesCaseInsensitive, skipQuotedString } from "../util/text-scanning.js";
+import { matchesCaseInsensitive, skipDelimited, skipQuotedString } from "../util/text-scanning.js";
+import { positionAtOffset } from "../util/lines.js";
 
 export type SFCFramework = "vue" | "svelte";
 
@@ -58,9 +59,11 @@ export function parseSFC(source: string): SFCBlock[] {
     const contentStart = openTag.end;
     const contentEnd = closeTag.start;
     const content = source.slice(contentStart, contentEnd);
-    const startLine = lineForOffset(lineIndex, contentStart);
+    const startLine = positionAtOffset(lineIndex, contentStart).line;
     const endLine =
-      contentStart === contentEnd ? startLine : lineForOffset(lineIndex, Math.max(contentStart, contentEnd - 1));
+      contentStart === contentEnd
+        ? startLine
+        : positionAtOffset(lineIndex, Math.max(contentStart, contentEnd - 1)).line;
 
     blocks.push({
       type: openTag.name,
@@ -95,8 +98,8 @@ export function buildSvelteTemplateBlocks(source: string, blocks: SFCBlock[]): S
   for (const gap of gaps) {
     const slice = source.slice(gap.start, gap.end);
     if (!slice.trim()) continue;
-    const startLine = lineForOffset(lineIndex, gap.start);
-    const endLine = lineForOffset(lineIndex, Math.max(gap.start, gap.end - 1));
+    const startLine = positionAtOffset(lineIndex, gap.start).line;
+    const endLine = positionAtOffset(lineIndex, Math.max(gap.start, gap.end - 1)).line;
     templateBlocks.push({
       type: "template",
       attrs: {},
@@ -357,11 +360,6 @@ function findTagEnd(source: string, fromIndex: number): number {
   return -1;
 }
 
-function skipDelimited(source: string, contentStart: number, closing: string): number {
-  const closingIndex = source.indexOf(closing, contentStart);
-  return closingIndex === -1 ? source.length : closingIndex + closing.length;
-}
-
 function skipLineComment(source: string, contentStart: number): number {
   const newline = source.indexOf("\n", contentStart);
   return newline === -1 ? source.length : newline + 1;
@@ -399,17 +397,6 @@ function buildLineIndex(text: string): number[] {
     }
   }
   return index;
-}
-
-function lineForOffset(index: number[], offset: number): number {
-  let lo = 0;
-  let hi = index.length - 1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (index[mid]! <= offset) lo = mid + 1;
-    else hi = mid - 1;
-  }
-  return hi + 1;
 }
 
 function maskOutsideRanges(source: string, ranges: Range[]): string {

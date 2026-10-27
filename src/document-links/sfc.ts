@@ -1,7 +1,7 @@
 import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 import { DOCUMENT_HTML_FORMS } from "./html-forms.js";
 import { extractDocumentHtmlSpecifiers } from "./html.js";
-import { dedupeModuleSpecifiers, markResolutionKind, normalizeLinkSpecifier } from "./shared.js";
+import { dedupeModuleSpecifiers, markResolutionKind, normalizeDocumentSpecifier } from "./shared.js";
 
 export function extractAstroModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
@@ -22,10 +22,7 @@ export function extractHandlebarsModuleSpecifiers(source: string): ModuleSpecifi
   for (const match of source.matchAll(/\{\{\s*(?:#\s*)?>\s*(?:"([^"]+)"|'([^']+)'|([^\s}]+))/g)) {
     const rawSpecifier = match[1] ?? match[2] ?? match[3];
     if (!rawSpecifier) continue;
-    const normalized = normalizeLinkSpecifier(rawSpecifier, {
-      preferRelative: true,
-      resolutionKind: "document",
-    });
+    const normalized = normalizeDocumentSpecifier(rawSpecifier);
     if (normalized) out.push(normalized);
   }
 

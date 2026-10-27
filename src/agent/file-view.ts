@@ -5,6 +5,7 @@ import type { BuildOptions } from "../indexer/types.js";
 import { openConfinedReadableFile, resolveProjectFile, type ConfinedReadableFile } from "../util/confined-file.js";
 import { fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import {
+  checkSessionFreshness,
   createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
@@ -165,9 +166,7 @@ export async function getCodegraphFileViewWithSession(
       const activeSession =
         session ??
         createRequestSession({ root, ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}) });
-      if (activeSession.checkFreshness) {
-        freshness = await activeSession.checkFreshness();
-      }
+      freshness = await checkSessionFreshness(activeSession);
       // Path-only index lookup; byte reads already use the confined descriptor above.
       const projectFile = await resolveProjectFile(realRoot, root, request.file);
       const snapshot = await activeSession.loadProject({ symbolGraph: "skip" });

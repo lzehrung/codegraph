@@ -1920,10 +1920,7 @@ function pythonPropertyAccessorNeedsPartialCoverage(parsedContext: ParsedFileCon
 }
 
 function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDef): SyntaxNodeLike {
-  const position = {
-    row: def.range.start.line - 1,
-    column: def.range.start.column - 1,
-  };
+  const position = toTreeSitterPosition(def.range.start);
   return parsedContext.tree.rootNode.descendantForPosition(position, position);
 }
 

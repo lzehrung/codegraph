@@ -12,6 +12,10 @@ function countMatches(source: string, pattern: RegExp): number {
   return Array.from(source.matchAll(pattern)).length;
 }
 
+export function isSqlFilePath(filePath: string): boolean {
+  return path.extname(filePath).toLowerCase() === ".sql";
+}
+
 export function classifySqlFile(filePath: string, source: string): SqlFileRole {
   const normalized = filePath.replace(/\\/g, "/").toLowerCase();
   const basename = path.basename(normalized);

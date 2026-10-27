@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizePathForDisplay } from "../util/package-info.js";
 import { isFileSystemErrorCode } from "../util/errors.js";
+import { isPlainRecord } from "../util/guards.js";
 
 type InstallerLockSettings = {
   homeDir: string;
@@ -36,13 +37,9 @@ const INSTALLER_LOCK_RETRY_MS = 20;
 const INSTALLER_LOCK_LEASE_MS = 30_000;
 const INSTALLER_LOCK_ABANDONED_MS = INSTALLER_LOCK_LEASE_MS * 2;
 
-function opencodeConfigHome(settings: InstallerLockSettings): string {
+export function opencodeConfigHome(settings: InstallerLockSettings): string {
   const configHome = settings.env.XDG_CONFIG_HOME?.trim();
   return configHome || path.join(settings.homeDir, ".config");
-}
-
-function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function withInstallerTransactionLocks<T>(
@@ -238,7 +235,7 @@ function parseInstallerLeaseMetadata(content: string): InstallerLeaseMetadata | 
   try {
     const parsed: unknown = JSON.parse(content);
     if (
-      isJsonRecord(parsed) &&
+      isPlainRecord(parsed) &&
       typeof parsed.owner === "string" &&
       typeof parsed.pid === "number" &&
       Number.isInteger(parsed.pid) &&

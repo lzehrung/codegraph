@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { boundList } from "../presentation/bounds.js";
-import { buildProjectIndexIncremental } from "../indexer/build-index.js";
+import { buildProjectIndexIncremental, emitIndexCheckActivity, emitIndexCheckStart } from "../indexer/build-index.js";
 import { resolveIncrementalFilePlan, type IncrementalFilePlan } from "../indexer/incremental-plan.js";
 import { computeConfigHash } from "../indexer/build-cache/manifest.js";
 import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
@@ -85,6 +85,11 @@ export type AgentSession = {
   invalidate: () => void;
 };
 
+/** A session without a freshness check reports itself fresh. */
+export async function checkSessionFreshness(session: AgentSession): Promise<AgentFreshnessResult> {
+  return session.checkFreshness ? await session.checkFreshness() : { state: "fresh" };
+}
+
 export function assertNoPrebuiltSessionWithBuildOptions(
   options: { session?: AgentSession; buildOptions?: BuildOptions },
   consumer: string,
@@ -158,18 +163,6 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
   };
 }
 
-function emitAgentFilePlanProgress(options: AgentSessionOptions): void {
-  options.buildOptions?.onProgress?.({
-    type: "progress",
-    phase: "start",
-    mode: "check",
-    message: "Discovering source files",
-    activity: "Discovering source files",
-    current: 0,
-    total: 0,
-  });
-}
-
 /**
  * Report discovery work while it runs. Discovery walks or Git-lists the whole project
  * before any file is parsed, and on a project holding a large ignored tree that phase can
@@ -179,18 +172,10 @@ function emitAgentFilePlanProgress(options: AgentSessionOptions): void {
 function agentDiscoveryProgressReporter(
   options: AgentSessionOptions,
 ): ((progress: { activity: string; current: number; total: number }) => void) | undefined {
-  const onProgress = options.buildOptions?.onProgress;
-  if (!onProgress) return undefined;
+  const buildOptions = options.buildOptions;
+  if (!buildOptions?.onProgress) return undefined;
   return ({ activity, current, total }) => {
-    onProgress({
-      type: "progress",
-      phase: "update",
-      mode: "check",
-      message: activity,
-      activity,
-      current,
-      total,
-    });
+    emitIndexCheckActivity(buildOptions, activity, current, total);
   };
 }
 
@@ -226,7 +211,7 @@ async function resolveAgentSessionFilePlan(
   const { DEFAULT_PROJECT_PATTERNS } = await import("../util/project-files.js");
   const customPatterns = languageExtensionPatterns(languageExtensions);
   const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
-  emitAgentFilePlanProgress(options);
+  emitIndexCheckStart(options.buildOptions, "Discovering source files");
   const onDiscoveryProgress = agentDiscoveryProgressReporter(options);
   const files = await listProjectFilesWithGitCandidates(options.root, patterns, {
     ...discoveryOptions,

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readStringRecord } from "../../util/guards.js";
 
 export type DependencyManifest = {
   declaredPackages: Set<string>;
@@ -38,12 +39,6 @@ function readJsonObject(filePath: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-function readStringRecord(value: unknown): Record<string, string> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const entries = Object.entries(value).filter(([, entry]) => typeof entry === "string");
-  return Object.fromEntries(entries) as Record<string, string>;
 }
 
 function addPackageWithSeparators(packageName: string, declaredPackages: Set<string>): void {

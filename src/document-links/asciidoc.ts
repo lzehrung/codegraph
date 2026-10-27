@@ -2,7 +2,7 @@ import path from "node:path";
 import { type ModuleSpecifier } from "../util/specifiers.js";
 import { DOCUMENT_HTML_FORMS } from "./html-forms.js";
 import { extractDocumentHtmlSpecifiers } from "./html.js";
-import { dedupeModuleSpecifiers, normalizeLinkSpecifier } from "./shared.js";
+import { dedupeModuleSpecifiers, normalizeDocumentFileSpecifier } from "./shared.js";
 
 function blankAsciidocLine(line: string): string {
   return line.replace(/[^\r\n]/g, " ");
@@ -84,11 +84,7 @@ export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier
       directive === "xref" ? isLikelyAsciidocXrefTarget(rawSpecifier) : isLikelyAsciidocFileTarget(rawSpecifier);
     if (!fileLikeTarget) continue;
     const ambiguousXrefTarget = directive === "xref" && isAmbiguousAsciidocXrefTarget(rawSpecifier);
-    const normalized = normalizeLinkSpecifier(rawSpecifier, {
-      preferRelative: true,
-      resolutionKind: "document",
-      forceRelative: true,
-    });
+    const normalized = normalizeDocumentFileSpecifier(rawSpecifier);
     if (normalized) {
       out.push(ambiguousXrefTarget ? { ...normalized, dropIfUnresolved: true } : normalized);
     }
@@ -97,11 +93,7 @@ export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier
   for (const match of cleaned.matchAll(/^\s*include::([^\[\n]+)\[[^\]]*]/gm)) {
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
-    const normalized = normalizeLinkSpecifier(rawSpecifier, {
-      preferRelative: true,
-      resolutionKind: "document",
-      forceRelative: true,
-    });
+    const normalized = normalizeDocumentFileSpecifier(rawSpecifier);
     if (normalized) out.push(normalized);
   }
 
@@ -109,11 +101,7 @@ export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
     if (!isLikelyAsciidocFileTarget(rawSpecifier)) continue;
-    const normalized = normalizeLinkSpecifier(rawSpecifier, {
-      preferRelative: true,
-      resolutionKind: "document",
-      forceRelative: true,
-    });
+    const normalized = normalizeDocumentFileSpecifier(rawSpecifier);
     if (normalized) out.push(normalized);
   }
 

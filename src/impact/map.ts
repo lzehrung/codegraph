@@ -25,6 +25,16 @@ import {
 
 export { collectChangedLines } from "./hunks.js";
 
+/** The `SymbolDef` that stands for a changed symbol in reference and call lookups. */
+export function changedSymbolToDef(symbol: ChangedSymbol): SymbolDef {
+  return {
+    file: symbol.file,
+    localName: symbol.name,
+    kind: symbol.kind,
+    range: symbol.range,
+  };
+}
+
 export async function locateChangedSymbols(
   index: ProjectIndex,
   file: FileId,

@@ -237,4 +237,28 @@ describe("call hierarchy", () => {
     expect(result.entries.map((entry) => entry.symbolId)).toEqual(["upper", "lower"]);
     expect(result.entries[0]?.callsites.map((callsite) => callsite.file)).toEqual(["Z.ts", "a.ts"]);
   });
+
+  it("rejects invalid depth, limit, and callsite limit options by name", () => {
+    const graph = {
+      nodes: new Map([["a", { id: "a", file: "a.ts", name: "a", kind: "function" as const }]]),
+      edges: [],
+    };
+    expect(() => findCallHierarchy(graph, "a", "outgoing", { depth: -1 })).toThrow(
+      "Call hierarchy depth must be a non-negative integer.",
+    );
+    expect(() => findCallHierarchy(graph, "a", "outgoing", { depth: 0 })).toThrow(
+      "Call hierarchy depth must be a positive integer.",
+    );
+    expect(() => findCallHierarchy(graph, "a", "outgoing", { limit: 1.5 })).toThrow(
+      "Call hierarchy limit must be a non-negative integer.",
+    );
+    expect(() => findCallHierarchy(graph, "a", "outgoing", { callsiteLimit: -1 })).toThrow(
+      "Callsite limit must be a non-negative integer.",
+    );
+    expect(findCallHierarchy(graph, "a", "outgoing", { depth: 99, limit: 0, callsiteLimit: 0 })).toMatchObject({
+      status: "ok",
+      limit: 0,
+      callsiteLimit: 0,
+    });
+  });
 });

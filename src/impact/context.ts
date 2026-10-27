@@ -241,7 +241,7 @@ async function collectSymbolNeighbors(
  * Find test files that might be affected by changes.
  * Uses reverse dependencies and optional pattern matching.
  */
-function candidateConfidenceRank(confidence: CandidateTestFile["confidence"]): number {
+export function candidateConfidenceRank(confidence: CandidateTestFile["confidence"]): number {
   if (confidence === "high") return 3;
   if (confidence === "medium") return 2;
   return 1;

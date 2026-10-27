@@ -534,7 +534,7 @@ function hasValidImportBindingRanges(value: unknown): boolean {
   );
 }
 
-function isOptionalRange(value: unknown): boolean {
+export function isOptionalRange(value: unknown): boolean {
   return value === undefined || isRange(value);
 }
 

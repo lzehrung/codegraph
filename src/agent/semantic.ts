@@ -37,6 +37,13 @@ export type SemanticSymbol = {
   exported: boolean;
   provenance: SemanticProvenance;
 };
+
+/** One-line label for a symbol in CLI text output: `name [kind] file:line:column`. */
+export function formatSemanticSymbol(symbol: SemanticSymbol): string {
+  const { file, range } = symbol.location;
+  return `${symbol.name} [${symbol.kind}] ${file}:${range.start.line}:${range.start.column}`;
+}
+
 export function semanticProvenance(snapshot: { analysis: AnalysisSummary }): SemanticProvenance {
   return {
     capability: "semantic",

@@ -14,7 +14,7 @@ import {
   type CliProgressPolicy,
 } from "./progress.js";
 
-function toJSON(obj: unknown): string {
+export function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
 }
 

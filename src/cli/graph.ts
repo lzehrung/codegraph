@@ -20,6 +20,7 @@ import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
 import type { Edge, Graph } from "../types.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
+import { toJSON, type CommandReport } from "./context.js";
 import {
   parseCacheModeOption,
   parseNonNegativeIntegerOption,
@@ -43,18 +44,6 @@ export type CompactSymbolProjection = {
   symbols: CompactSymbolNode[];
   symbolEdges: CompactSymbolEdge[];
   symbolIdIndex: string[];
-};
-
-type CommandTimingReport = {
-  totalMs?: number;
-  resolveFilesMs?: number;
-  commandMs?: number;
-};
-
-type GraphCommandReport = {
-  command: string;
-  timings: CommandTimingReport;
-  index?: BuildReport;
 };
 
 function resolveGraphCacheMode(cache: BuildOptions["cache"]): Exclude<BuildOptions["cache"], undefined> {
@@ -88,13 +77,9 @@ export type GraphCommandContext = {
   } | null>;
   writeStdoutLine: (message: string) => void;
   setStderrFilePath: (filePath: string | undefined) => void;
-  writeCommandReport: (report: GraphCommandReport, reportFile: string | undefined) => Promise<void>;
+  writeCommandReport: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
   maybeWriteNativeBackendStatus: (report: BuildReport | undefined, showProgress: boolean) => void;
 };
-
-function toJSON(obj: unknown): string {
-  return JSON.stringify(obj, null, 2);
-}
 
 export function compactFileGraph(fgraph: Graph, stable = false): CompactFileProjection {
   const files = [...fgraph.nodes].sort();
@@ -229,7 +214,7 @@ function stabilizeSymbolGraph(graph: SymbolGraph): SymbolGraph {
 }
 
 export async function handleGraphCommand(context: GraphCommandContext): Promise<void> {
-  const commandReport: GraphCommandReport | undefined = context.reportEnabled
+  const commandReport: CommandReport | undefined = context.reportEnabled
     ? { command: "graph", timings: {} }
     : undefined;
   const commandStart = performance.now();

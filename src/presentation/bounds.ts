@@ -50,3 +50,15 @@ export function emptyBoundedList<T>(): BoundedList<T> {
 export function countOmitted(total: number, visible: number): number {
   return Math.max(0, total - visible);
 }
+
+/** `undefined` selects `defaultValue`; a non-integer or negative value throws; a larger value clamps to `max`. */
+export function boundedNonNegativeIntegerOption(
+  value: number | undefined,
+  defaultValue: number,
+  max: number,
+  name: string,
+): number {
+  if (value === undefined) return defaultValue;
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer.`);
+  return Math.min(value, max);
+}

@@ -7,7 +7,13 @@ import { parse as parseToml } from "smol-toml";
 import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../cli/skill.js";
 import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "../util/package-info.js";
 import { isFileSystemErrorCode } from "../util/errors.js";
-import { waitForInstallerLockRetry, withInstallerLeaseLock, withInstallerTransactionLocks } from "./locks.js";
+import { isPlainRecord } from "../util/guards.js";
+import {
+  opencodeConfigHome,
+  waitForInstallerLockRetry,
+  withInstallerLeaseLock,
+  withInstallerTransactionLocks,
+} from "./locks.js";
 
 export type InstallTargetId = SkillInstallAgent;
 
@@ -899,7 +905,7 @@ function isInstallCompatibleCodexTomlTable(config: string): boolean {
   if (findCodegraphTomlTableIndexes(config).length !== 1) return false;
   try {
     const parsed = parseToml(config);
-    if (!isJsonRecord(parsed)) return false;
+    if (!isPlainRecord(parsed)) return false;
     const mcpServers = readRecordProperty(parsed, "mcp_servers");
     if (mcpServers === undefined) return false;
     const codegraph = readRecordProperty(mcpServers, "codegraph");
@@ -928,7 +934,7 @@ function parseConfigJsonc(existing: string | null, configPath: string): JsonReco
       `Unable to parse ${normalizePathForDisplay(configPath)} as JSONC. Fix the file before running the installer.`,
     );
   }
-  if (isJsonRecord(parsed)) return parsed;
+  if (isPlainRecord(parsed)) return parsed;
   throw new Error(`${normalizePathForDisplay(configPath)} must contain a JSON object.`);
 }
 
@@ -958,7 +964,7 @@ function parseConfigJson(existing: string | null, configPath: string): JsonRecor
   if (existing === null || !existing.trim()) return {};
   try {
     const parsed: unknown = JSON.parse(existing);
-    if (isJsonRecord(parsed)) return parsed;
+    if (isPlainRecord(parsed)) return parsed;
   } catch (error) {
     throw new Error(
       `Unable to parse ${normalizePathForDisplay(configPath)} as JSON. Fix the file before running the installer.`,
@@ -973,18 +979,13 @@ function parseConfigJson(existing: string | null, configPath: string): JsonRecor
 function readRecordProperty(record: JsonRecord, property: string): JsonRecord {
   const value = record[property];
   if (value === undefined) return {};
-  if (isJsonRecord(value)) return value;
+  if (isPlainRecord(value)) return value;
   throw new Error(`Existing ${property} config must be a JSON object before codegraph can update it.`);
 }
 
 function renderJsonConfig(record: JsonRecord): string {
   if (!Object.keys(record).length) return "";
   return `${JSON.stringify(record, null, 2)}\n`;
-}
-
-function opencodeConfigHome(settings: InstallerSettings): string {
-  const configHome = settings.env.XDG_CONFIG_HOME?.trim();
-  return configHome || path.join(settings.homeDir, ".config");
 }
 
 function codegraphJsonServer(definition: TargetDefinition): JsonRecord {
@@ -1017,7 +1018,7 @@ function codegraphJsonServer(definition: TargetDefinition): JsonRecord {
 function isInstallCompatibleJsonServer(definition: TargetDefinition, value: unknown): boolean {
   if (isInstallerOwnedJsonServer(definition, value)) return true;
   const usesMcpServers = definition.kind === "json-mcp-servers" || definition.kind === "json-mcp-servers-no-type";
-  if (!usesMcpServers || !isJsonRecord(value)) return false;
+  if (!usesMcpServers || !isPlainRecord(value)) return false;
   const withoutType = {
     command: "codegraph",
     args: ["mcp", "serve", "--root", ".", "--stdio"],
@@ -1036,8 +1037,8 @@ function jsonValueEquals(left: unknown, right: unknown): boolean {
     if (left.length !== right.length) return false;
     return left.every((value, index) => jsonValueEquals(value, right[index]));
   }
-  if (isJsonRecord(left) || isJsonRecord(right)) {
-    if (!isJsonRecord(left) || !isJsonRecord(right)) return false;
+  if (isPlainRecord(left) || isPlainRecord(right)) {
+    if (!isPlainRecord(left) || !isPlainRecord(right)) return false;
     const leftKeys = Object.keys(left);
     const rightKeys = Object.keys(right);
     if (leftKeys.length !== rightKeys.length) return false;
@@ -1048,10 +1049,6 @@ function jsonValueEquals(left: unknown, right: unknown): boolean {
     return true;
   }
   return left === right;
-}
-
-function isJsonRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function installerSettings(options: { homeDir?: string; env?: Record<string, string | undefined> }): InstallerSettings {

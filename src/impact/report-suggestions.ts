@@ -13,6 +13,7 @@ import {
 import type { Range } from "../types.js";
 import { listCandidateTestFiles } from "./context.js";
 import { collectHunkLineText, collectRemovedLines } from "./hunks.js";
+import { changedSymbolToDef } from "./map.js";
 import { normalizeImpactFilePath } from "./path.js";
 import { collectImpactSuggestions } from "./suggestions.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./test-patterns.js";
@@ -425,14 +426,7 @@ async function collectUntestedChangeSuggestions(
   const suggestionEntries = await mapLimit(changedSymbols, 8, async (symbol) => {
     const refs = await findReferences(
       index,
-      {
-        def: {
-          file: symbol.file,
-          localName: symbol.name,
-          kind: symbol.kind,
-          range: symbol.range,
-        },
-      },
+      { def: changedSymbolToDef(symbol) },
       {
         maxReferences: UNTESTED_CHANGE_REFERENCE_SCAN_LIMIT,
       },

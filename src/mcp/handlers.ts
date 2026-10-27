@@ -35,12 +35,14 @@ import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 import { buildReviewReport, type ReviewDepth } from "../review.js";
 import { boundReviewReportForTransport, type ReviewReportForTransport } from "../review/types.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
+import type { SqliteArtifactFileSignature } from "../sqlite/types.js";
 import { boundList, countOmitted } from "../presentation/bounds.js";
 import { isPlainRecord } from "../util/guards.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { isMissingPathError } from "../util/errors.js";
 import {
   assertNoPrebuiltSessionWithBuildOptions,
+  checkSessionFreshness,
   createAgentSession,
   listAgentSessionFiles,
 } from "../agent/session.js";
@@ -320,12 +322,6 @@ type McpDependencyCollection = McpTruncationMeta & {
   entries: McpDependencyEntry[];
 };
 
-type SqliteArtifactFileSignature = {
-  path: string;
-  size: number;
-  mtimeMs: number;
-};
-
 const MAX_MCP_FRESHNESS_CHANGED_FILES = 25;
 const MAX_MCP_FRESHNESS_RETRIES = 3;
 const SQLITE_ARTIFACT_STAT_CONCURRENCY = 64;
@@ -436,17 +432,13 @@ function createCodegraphMcpHandlersForSession(
       reason,
     };
   };
-  const checkMcpFreshness = async (): Promise<AgentFreshnessResult> => {
-    if (session.checkFreshness) return await session.checkFreshness();
-    return { state: "fresh" };
-  };
   const withFreshness = async <T extends object>(
     run: () => Promise<T>,
   ): Promise<T & { freshness: AgentFreshnessResult }> => {
     for (let attempt = 0; attempt < MAX_MCP_FRESHNESS_RETRIES; attempt += 1) {
       if (refreshPromise) await refreshPromise;
       const epoch = refreshEpoch;
-      const freshness = await checkMcpFreshness();
+      const freshness = await checkSessionFreshness(session);
       const result = await run();
       if (epoch === refreshEpoch && !refreshPromise) return { ...result, freshness };
     }
@@ -1014,7 +1006,7 @@ function createCodegraphMcpHandlersForSession(
       let realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       let artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
       if (artifactFreshness.state !== "fresh") {
-        const sessionFreshness = await checkMcpFreshness();
+        const sessionFreshness = await checkSessionFreshness(session);
         // An unchecked (manual) session cannot prove its snapshot matches disk, so rebuilding
         // the artifact from it is as unsafe as rebuilding from a known-stale one.
         if (sessionFreshness.state === "stale" || sessionFreshness.state === "unchecked") {
@@ -1058,7 +1050,7 @@ function createCodegraphMcpHandlersForSession(
         if (readOnly) {
           throw new Error("artifact_build is disabled in read-only MCP mode.");
         }
-        const freshness = await checkMcpFreshness();
+        const freshness = await checkSessionFreshness(session);
         if (freshness.state === "stale") {
           const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
           const omitted = freshness.omittedChangedFileCount

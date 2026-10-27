@@ -1,8 +1,9 @@
 import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 import { SHARED_HTML_TAG_ATTRS, type DocumentHtmlForm } from "./html-forms.js";
-import { dedupeModuleSpecifiers, markResolutionKind, normalizeLinkSpecifier } from "./shared.js";
+import { dedupeModuleSpecifiers, markResolutionKind, normalizeDocumentSpecifier } from "./shared.js";
 import {
   matchesCaseInsensitive as matchesHtmlTagName,
+  skipDelimited as skipHtmlDelimited,
   skipQuotedString as skipHtmlBodyString,
 } from "../util/text-scanning.js";
 
@@ -158,11 +159,6 @@ function skipHtmlAttributeValue(source: string, quoteStart: number): number {
   return source.length;
 }
 
-function skipHtmlDelimited(source: string, contentStart: number, closing: string): number {
-  const closingIndex = source.indexOf(closing, contentStart);
-  return closingIndex === -1 ? source.length : closingIndex + closing.length;
-}
-
 function findHtmlCloseTag(
   source: string,
   tag: string,
@@ -224,13 +220,6 @@ function stripHtmlCommentsAndLiteralBlocks(source: string): string {
   return chars ? chars.join("") : source;
 }
 
-function extractNormalizedStyleSpecifier(rawSpecifier: string): ModuleSpecifier | null {
-  return normalizeLinkSpecifier(rawSpecifier, {
-    preferRelative: true,
-    resolutionKind: "document",
-  });
-}
-
 export function extractHtmlStyleSpecifiers(source: string): ModuleSpecifier[] {
   return styleSpecifiersFromCleaned(stripHtmlCommentsAndLiteralBlocks(source));
 }
@@ -244,7 +233,7 @@ function styleSpecifiersFromCleaned(cleaned: string): ModuleSpecifier[] {
     for (const importMatch of body.matchAll(importRe)) {
       const rawSpecifier = importMatch[1] ?? importMatch[2] ?? importMatch[3];
       if (!rawSpecifier) continue;
-      const normalized = extractNormalizedStyleSpecifier(rawSpecifier);
+      const normalized = normalizeDocumentSpecifier(rawSpecifier);
       if (normalized) out.push(normalized);
     }
 
@@ -252,7 +241,7 @@ function styleSpecifiersFromCleaned(cleaned: string): ModuleSpecifier[] {
     for (const urlMatch of body.matchAll(urlRe)) {
       const rawSpecifier = urlMatch[1] ?? urlMatch[2] ?? urlMatch[3];
       if (!rawSpecifier) continue;
-      const normalized = extractNormalizedStyleSpecifier(rawSpecifier);
+      const normalized = normalizeDocumentSpecifier(rawSpecifier);
       if (normalized) out.push(normalized);
     }
   }
@@ -304,18 +293,12 @@ function attributeSpecifiersFromCleaned(cleaned: string, tagAttrNames: Record<st
           .map((entry) => entry.trim().split(/\s+/)[0]?.trim())
           .filter((entry): entry is string => !!entry);
         for (const spec of candidates) {
-          const normalized = normalizeLinkSpecifier(spec, {
-            preferRelative: true,
-            resolutionKind: "document",
-          });
+          const normalized = normalizeDocumentSpecifier(spec);
           if (normalized) out.push(normalized);
         }
         continue;
       }
-      const normalized = normalizeLinkSpecifier(raw, {
-        preferRelative: true,
-        resolutionKind: "document",
-      });
+      const normalized = normalizeDocumentSpecifier(raw);
       if (normalized) out.push(normalized);
     }
   }

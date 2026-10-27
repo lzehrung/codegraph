@@ -1,5 +1,5 @@
 import { findCallHierarchy, type CallHierarchyDirection, type CallHierarchyResult } from "../indexer/call-hierarchy.js";
-import { boundList } from "../presentation/bounds.js";
+import { boundedNonNegativeIntegerOption, boundList } from "../presentation/bounds.js";
 import { findReferences } from "../indexer/navigation.js";
 import {
   findImplementations as queryImplementations,
@@ -13,12 +13,13 @@ import { shapeCandidateTests } from "./candidate-tests.js";
 import { classifySensitiveFile } from "./file-view.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import { previewRenameInSnapshot, type RenameCandidateTest, type RenamePreviewResponse } from "./rename-preview.js";
-import type { CallHierarchyEntry } from "./call-hierarchy.js";
-import type { ImplementationEntry, TypeHierarchyRelation } from "./type-hierarchy.js";
+import { callHierarchyEntries, type CallHierarchyEntry } from "./call-hierarchy.js";
+import { typeHierarchyRelations, type ImplementationEntry, type TypeHierarchyRelation } from "./type-hierarchy.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
 import { semanticProvenance } from "./semantic.js";
 import { requireSemanticSymbol, semanticSymbolFromDef } from "./semantic-symbols.js";
 import {
+  checkSessionFreshness,
   createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
@@ -73,7 +74,7 @@ export async function buildRefactorPlanWithSession(
   session: AgentSession,
   request: RefactorPlanRequest,
 ): Promise<RefactorPlanResponse> {
-  const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
+  const freshness = await checkSessionFreshness(session);
   const snapshot = await session.loadProject();
   return await buildRefactorPlanInSnapshot(snapshot, request, freshness);
 }
@@ -251,21 +252,7 @@ function normalizeCallSection(
   provenance: SemanticProvenance,
 ): CallHierarchyEntry[] {
   if (result.status !== "ok" || result.direction !== direction) return [];
-  return result.entries.flatMap((entry): CallHierarchyEntry[] => {
-    const def = lookup.defById.get(entry.symbolId);
-    if (!def) return [];
-    return [
-      {
-        symbol: semanticSymbolFromDef(snapshot, def),
-        callsites: entry.callsites.map((site) => ({
-          file: normalizeAgentFilePath(snapshot.root, site.file),
-          range: site.range,
-        })),
-        depth: entry.depth,
-        provenance,
-      },
-    ];
-  });
+  return callHierarchyEntries(snapshot, lookup, result.entries, provenance);
 }
 
 function normalizeHierarchySection(
@@ -276,26 +263,7 @@ function normalizeHierarchySection(
   provenance: SemanticProvenance,
 ): TypeHierarchyRelation[] {
   if (result.status !== "ok" || result.direction !== direction) return [];
-  return result.relations.flatMap((relation): TypeHierarchyRelation[] => {
-    const def = lookup.defById.get(relation.targetId);
-    if (!def) return [];
-    return [
-      {
-        type: semanticSymbolFromDef(snapshot, def),
-        relation: relation.relation,
-        ...(relation.site
-          ? {
-              declarationSite: {
-                file: normalizeAgentFilePath(snapshot.root, relation.site.file),
-                range: relation.site.range,
-              },
-            }
-          : {}),
-        depth: relation.depth,
-        provenance,
-      },
-    ];
-  });
+  return typeHierarchyRelations(snapshot, lookup, result.relations, provenance);
 }
 
 function callOmitted(result: CallHierarchyResult): number {
@@ -307,7 +275,5 @@ function hierarchyOmitted(result: TypeHierarchyResult): number {
 }
 
 function boundedSectionLimit(value: number | undefined, defaultValue: number, name: string): number {
-  if (value === undefined) return defaultValue;
-  if (!Number.isInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer.`);
-  return Math.min(value, MAX_REFACTOR_SECTION_LIMIT);
+  return boundedNonNegativeIntegerOption(value, defaultValue, MAX_REFACTOR_SECTION_LIMIT, name);
 }

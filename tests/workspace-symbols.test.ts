@@ -6,7 +6,7 @@ import { workspaceSymbolsInSnapshot } from "../src/agent/workspace-symbols.js";
 import { resolveSemanticSymbol } from "../src/agent/semantic-symbols.js";
 import { tool_workspaceSymbols } from "../src/agent-tools.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
-import { workspaceSymbols } from "../src/indexer/workspace-symbols.js";
+import { MAX_WORKSPACE_SYMBOL_LIMIT, workspaceSymbols } from "../src/indexer/workspace-symbols.js";
 import { SymbolKind, type ProjectIndex } from "../src/indexer/types.js";
 import type { AgentProjectSnapshot, AgentSession } from "../src/agent/session.js";
 import {
@@ -355,6 +355,17 @@ describe("workspace symbol lookup", () => {
     expect(result.symbols[0]?.name).toBe("Service");
     expect(result.totalCandidates).toBeGreaterThan(1);
     expect(result.omitted).toBe(result.totalCandidates - 1);
+  });
+
+  it("rejects a negative or fractional limit by name and clamps a limit above the maximum", async () => {
+    await expect(workspaceSymbols(index, { query: "Service", limit: -1 })).rejects.toThrow(
+      "Workspace symbol limit must be a non-negative integer.",
+    );
+    await expect(workspaceSymbols(index, { query: "Service", limit: 1.5 })).rejects.toThrow(
+      "Workspace symbol limit must be a non-negative integer.",
+    );
+    const clamped = await workspaceSymbols(index, { query: "Service", limit: Number.MAX_SAFE_INTEGER });
+    expect(clamped.limit).toBe(MAX_WORKSPACE_SYMBOL_LIMIT);
   });
 
   it("returns deterministic project-relative public symbols with portable handles", async () => {

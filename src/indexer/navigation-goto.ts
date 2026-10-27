@@ -15,6 +15,7 @@ import {
   isReceiverNameNode,
   memberAccessTraversalTypes,
 } from "../util/member-access.js";
+import { definitionIdentityKey } from "./reference-context.js";
 import { toTreeSitterPosition } from "./shared.js";
 import { MEMBER_ACCESS_ROWS, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
 import { typescriptCallableContainerKey, typescriptMergedNamespaceContainers } from "./ts-callables.js";
@@ -343,8 +344,8 @@ export async function findCsharpPartialTypeEquivalents(index: ProjectIndex, def:
   if (context.sup.id !== "csharp") return [];
   const start = def.range.start;
   const nameNode = context.tree.rootNode.descendantForPosition(
-    { row: start.line - 1, column: start.column - 1 },
-    { row: start.line - 1, column: start.column - 1 },
+    toTreeSitterPosition(start),
+    toTreeSitterPosition(start),
   );
   const container = nearestMemberContainer(nameNode);
   if (!container) return [];
@@ -408,7 +409,7 @@ function nameNodeForDef(context: ParsedFileContext, def: SymbolDef): SyntaxNodeL
   const start = def.range.start;
   const index = start.index;
   if (index !== undefined) return context.tree.rootNode.descendantForIndex(index, index);
-  const position = { row: start.line - 1, column: start.column - 1 };
+  const position = toTreeSitterPosition(start);
   return context.tree.rootNode.descendantForPosition(position, position);
 }
 
@@ -1308,11 +1309,6 @@ type KeywordClassRef = {
   module: ModuleIndex;
 };
 
-function keywordClassKey(def: SymbolDef): string {
-  const start = def.range.start;
-  return `${fileIdentityKey(def.file)}:${start.index ?? `${start.line}:${start.column}`}`;
-}
-
 function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
   return `${fileIdentityKey(file)}:${container.startIndex}:${container.endIndex}`;
 }
@@ -1807,7 +1803,7 @@ async function baseRefsFromContainer(
     // entries (`Face`, `by` delegations) are interfaces. Interface-only super lookup stays
     // unresolved, while an own receiver can inherit their default members.
     if (superclassOnly && sup.id === "kotlin" && !base.invoked) continue;
-    const key = keywordClassKey(def);
+    const key = definitionIdentityKey(def);
     if (seen.has(key)) continue;
     seen.add(key);
     refs.push(ref);
@@ -2984,11 +2980,11 @@ function indexedMemberModel(
   languageId: string,
 ): MemberModel<SymbolDef, SymbolDef> {
   return {
-    ownerKey: keywordClassKey,
+    ownerKey: definitionIdentityKey,
     members: () => members,
     supertypes: () => [],
     name: (def) => def.localName,
-    key: (def) => def.callable?.key ?? keywordClassKey(def),
+    key: (def) => def.callable?.key ?? definitionIdentityKey(def),
     callable: (def) => {
       const facts =
         def.callable ??
@@ -3290,7 +3286,7 @@ async function selectRustReceiverMember(
     if (!traitDef) continue;
     const ref = await keywordClassRefFromDef(index, traitDef);
     if (!ref || ref.container.type !== "trait_item") continue;
-    const key = keywordClassKey(traitDef);
+    const key = definitionIdentityKey(traitDef);
     if (traitMembers.has(key)) continue;
     const matches: SymbolDef[] = [];
     appendDirectKeywordMembers(
@@ -3318,7 +3314,7 @@ async function selectRustReceiverMember(
       return owner === "implemented" ? traitOwners : [];
     },
     name: (def) => context.sup.normalizeIdentifier(def.localName),
-    key: (def) => def.callable?.key ?? keywordClassKey(def),
+    key: (def) => def.callable?.key ?? definitionIdentityKey(def),
     callable: (def) => def.callable,
     scope: () => "any",
     visible: () => true,
@@ -3503,7 +3499,7 @@ async function selectGoReceiverMember(
     members: (owner) => members.get(owner) ?? [],
     supertypes: (owner) => embedded.get(owner) ?? [],
     name: (def) => normalizeIdentifier(def.localName),
-    key: (def) => def.callable?.key ?? keywordClassKey(def),
+    key: (def) => def.callable?.key ?? definitionIdentityKey(def),
     callable: (def) => def.callable,
     scope: () => "any",
     visible: () => true,
@@ -3524,11 +3520,6 @@ type PythonClassRef = {
   context: ParsedFileContext;
   module: ModuleIndex;
 };
-
-function pythonClassKey(def: SymbolDef): string {
-  const start = def.range.start;
-  return `${fileIdentityKey(def.file)}:${start.index ?? `${start.line}:${start.column}`}`;
-}
 
 type PythonParsedFileLoader = (file: string) => Promise<ParsedFileContext | null>;
 
@@ -3643,7 +3634,7 @@ async function pythonClassRefFromDef(
   loadParsedFile?: PythonParsedFileLoader,
   cache?: PythonReceiverResolutionCache,
 ): Promise<PythonClassRef | null> {
-  const key = pythonClassKey(def);
+  const key = definitionIdentityKey(def);
   const cached = cache?.classRefs.get(key);
   if (cached) return cached;
   const pending = (async (): Promise<PythonClassRef | null> => {
@@ -3908,7 +3899,7 @@ async function pythonBaseClassRefs(
   for (const nameNode of names) {
     const def = resolvePythonNamedClass(index, classRef.module, sliceText(nameNode, classRef.context.source));
     if (!def) continue;
-    const key = pythonClassKey(def);
+    const key = definitionIdentityKey(def);
     if (seen.has(key)) continue;
     seen.add(key);
     const ref = await pythonClassRefFromDef(index, def, loadParsedFile, cache);
@@ -3926,7 +3917,7 @@ async function lookupPythonClassMember(
   loadParsedFile?: PythonParsedFileLoader,
   cache?: PythonReceiverResolutionCache,
 ): Promise<SymbolDef | undefined> {
-  const key = `${pythonClassKey(start.def)}:${member}:${startAtSupertype}:${preferInstanceAttributes}`;
+  const key = `${definitionIdentityKey(start.def)}:${member}:${startAtSupertype}:${preferInstanceAttributes}`;
   const cached = cache?.members.get(key);
   if (cached) return cached;
   const pending = lookupPythonClassMemberUncached(
@@ -3953,22 +3944,22 @@ async function lookupPythonClassMemberUncached(
 ): Promise<SymbolDef | undefined> {
   const membersByOwner = new Map<string, SymbolDef[]>();
   const parentsByOwner = new Map<string, PythonClassRef[]>();
-  const visited = new Set<string>([pythonClassKey(start.def)]);
+  const visited = new Set<string>([definitionIdentityKey(start.def)]);
   let level = [start];
   for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
     let named = false;
     for (const ref of level) {
       const members = startAtSupertype && !depth ? [] : pythonMembersOnClass(ref, member, preferInstanceAttributes);
-      membersByOwner.set(pythonClassKey(ref.def), members);
+      membersByOwner.set(definitionIdentityKey(ref.def), members);
       if (members.length) named = true;
     }
     if (named) break;
     const next: PythonClassRef[] = [];
     for (const ref of level) {
       const parents = await pythonBaseClassRefs(index, ref, loadParsedFile, cache);
-      parentsByOwner.set(pythonClassKey(ref.def), parents);
+      parentsByOwner.set(definitionIdentityKey(ref.def), parents);
       for (const parent of parents) {
-        const key = pythonClassKey(parent.def);
+        const key = definitionIdentityKey(parent.def);
         if (visited.has(key)) continue;
         visited.add(key);
         next.push(parent);
@@ -3977,11 +3968,11 @@ async function lookupPythonClassMemberUncached(
     level = next;
   }
   const model: MemberModel<PythonClassRef, SymbolDef> = {
-    ownerKey: (ref) => pythonClassKey(ref.def),
-    members: (ref) => membersByOwner.get(pythonClassKey(ref.def)) ?? [],
-    supertypes: (ref) => parentsByOwner.get(pythonClassKey(ref.def)) ?? [],
+    ownerKey: (ref) => definitionIdentityKey(ref.def),
+    members: (ref) => membersByOwner.get(definitionIdentityKey(ref.def)) ?? [],
+    supertypes: (ref) => parentsByOwner.get(definitionIdentityKey(ref.def)) ?? [],
     name: (def) => def.localName,
-    key: (def) => def.callable?.key ?? pythonClassKey(def),
+    key: (def) => def.callable?.key ?? definitionIdentityKey(def),
     callable: (def) => def.callable,
     scope: () => "any",
     visible: () => true,
