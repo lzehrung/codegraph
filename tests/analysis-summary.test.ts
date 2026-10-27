@@ -9,10 +9,15 @@ import { isAnalysisComplete, summarizeAnalysis, type AnalysisSummary } from "../
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildOptions, type BuildReport } from "../src/index.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import * as filePrep from "../src/languages/file-prep.js";
+import * as nativeCaptures from "../src/indexer/imports/native-captures.js";
 import { __resetNativeTreeSitterBindingForTests } from "../src/native/tree-sitter-native.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
-import { failNativeExtractionFor, failNativeTreeReconstructionFor } from "./helpers/native-tree.js";
+import {
+  failNativeBlockQueriesFor,
+  failNativeExtractionFor,
+  failNativeTreeReconstructionFor,
+} from "./helpers/native-tree.js";
 
 const roots = createTempRootRegistry();
 const sessions: AgentSession[] = [];
@@ -59,6 +64,26 @@ type TreeFailureScenario = {
   fail: (marker: string) => void;
   counts: Pick<AnalysisSummary, "nativeFilesUsed" | "nativeFilesFellBack">;
 };
+
+/** A file that extracts, while a later extraction pass over part of it fails and leaves its imports incomplete. */
+type PartialExtractionScenario = {
+  degradedFile: string;
+  /** Every file the scenario indexes, including the degraded one. */
+  files: Record<string, string>;
+  /** Breaks the one extraction pass, and leaves the rest of the file's extraction working. */
+  fail: () => void;
+  /** The file once it no longer triggers the failure. */
+  repairedSource: string;
+  /** The specifiers the repaired file imports. */
+  repairedImports: string[];
+};
+
+/** A single-file component whose script extracts and whose style block imports `./colors`. */
+function componentSource(framework: "vue" | "svelte", styleComment: string): string {
+  const script = '<script lang="ts">\nexport const compValue = 1;\n</script>\n';
+  const markup = framework === "vue" ? "<template><div /></template>\n" : "<div />\n";
+  return `${script}${markup}<style lang="scss">\n/* ${styleComment} */\n@use "./colors";\n</style>\n`;
+}
 
 async function build(
   root: string,
@@ -329,6 +354,114 @@ describe("analysis summary", () => {
     expect(afterDocsEdit.analysis).toMatchObject(degraded);
     expect(afterDocsEdit.index.byFile.get(degradedKey)).toMatchObject({ parserDegraded: true });
     expect(await analysisInFreshSession(root)).toMatchObject(degraded);
+  });
+
+  it.each<[string, PartialExtractionScenario]>([
+    [
+      "a Vue style block's query fails after its script extracted",
+      {
+        degradedFile: "src/Comp.vue",
+        files: {
+          "src/Comp.vue": componentSource("vue", "styleQueryMarker"),
+          "src/_colors.scss": "$primary: red;\n",
+        },
+        fail: () => failNativeBlockQueriesFor("styleQueryMarker"),
+        repairedSource: componentSource("vue", "styleRepaired"),
+        repairedImports: ["./colors"],
+      },
+    ],
+    [
+      "a Svelte style block's query fails after its script extracted",
+      {
+        degradedFile: "src/Comp.svelte",
+        files: {
+          "src/Comp.svelte": componentSource("svelte", "styleQueryMarker"),
+          "src/_colors.scss": "$primary: red;\n",
+        },
+        fail: () => failNativeBlockQueriesFor("styleQueryMarker"),
+        repairedSource: componentSource("svelte", "styleRepaired"),
+        repairedImports: ["./colors"],
+      },
+    ],
+    [
+      "reading a source's import captures throws after its native queries succeeded",
+      {
+        degradedFile: "src/broken.ts",
+        files: { "src/broken.ts": 'import { small } from "./small";\nexport const brokenMarker = small;\n' },
+        fail: () => {
+          const collect = nativeCaptures.collectNativeCaptureImportBindings;
+          vi.spyOn(nativeCaptures, "collectNativeCaptureImportBindings").mockImplementation(
+            async (context, matches) => {
+              if (context.source.includes("brokenMarker")) throw new Error("forced import capture failure");
+              await collect(context, matches);
+            },
+          );
+        },
+        repairedSource: 'import { small } from "./small";\nexport const repaired = small;\n',
+        repairedImports: ["./small"],
+      },
+    ],
+  ])("keeps a file counted as parser-degraded when %s and a rebuild reuses its module", async (_title, scenario) => {
+    const root = await createProject("cg-analysis-partial-extraction-", {
+      ...scenario.files,
+      "src/small.ts": "export const small = 1;\n",
+      "docs/guide.md": "# Guide\n",
+    });
+    const degradedKey = fileIdentityKey(normalizePath(path.join(root, scenario.degradedFile)));
+    const importedSpecifiers = (stage: { index: ProjectIndex }): string[] | undefined =>
+      stage.index.byFile.get(degradedKey)?.imports.map((binding) => binding.from);
+    const quiet = { logLevel: "silent" } as const;
+    const degraded = { backend: "native", parserDegradedFiles: 1, label: "native semantic (1 file(s) skipped)" };
+
+    scenario.fail();
+    const cold = await build(root, quiet);
+    // Native extracted the file's script or source, so the file counts as used, and one part of it fell back.
+    expect(cold.report.backend?.native).toMatchObject({ filesFellBack: 1, fallbackReasons: { queryFailure: 1 } });
+    expect(cold.report.backend?.parser).toBeUndefined();
+    expect(cold.index.byFile.get(degradedKey)).toMatchObject({ nativeOutcome: "used", parserDegraded: true });
+    expect(importedSpecifiers(cold)).toEqual([]);
+    expect(cold.analysis).toMatchObject(degraded);
+    expect(isAnalysisComplete(cold.analysis)).toBe(false);
+
+    // From here nothing fails, so only the stored module can say that part of the file was not extracted.
+    __resetNativeTreeSitterBindingForTests();
+    vi.restoreAllMocks();
+    await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+    const afterDocsEdit = await build(root, quiet);
+    expect(afterDocsEdit.report.backend?.native.filesFellBack).toBe(0);
+    expect(afterDocsEdit.analysis).toMatchObject(degraded);
+    expect(afterDocsEdit.analysis.nativeFilesUsed).toBe(cold.analysis.nativeFilesUsed);
+    expect(afterDocsEdit.index.byFile.get(degradedKey)).toMatchObject({ nativeOutcome: "used", parserDegraded: true });
+    expect(importedSpecifiers(afterDocsEdit)).toEqual([]);
+    expect(isAnalysisComplete(afterDocsEdit.analysis)).toBe(false);
+
+    // A session that loads the project next reads the same summary, and does not call a rename safe.
+    const freshSession = await analysisInFreshSession(root);
+    expect(freshSession).toMatchObject(degraded);
+    expect(isAnalysisComplete(freshSession)).toBe(false);
+    const degradedRename = await renamePreviewInFreshSession(root);
+    expect(degradedRename.safe).toBe(false);
+    expect(degradedRename.unsafeSites.map((site) => site.reason)).toContain("parse_degraded");
+
+    // With neither the manifest nor the project snapshot, the module cache alone serves the build.
+    await fsp.rm(path.join(cacheDir(root), "manifest.json"));
+    await fsp.rm(path.join(cacheDir(root), "project-index-snapshot.json"));
+    const moduleCacheOnly = await build(root, quiet);
+    expect(moduleCacheOnly.report.cache?.hits).toBeGreaterThan(0);
+    expect(moduleCacheOnly.report.backend?.native.filesFellBack).toBe(0);
+    expect(moduleCacheOnly.analysis).toMatchObject(degraded);
+    expect(moduleCacheOnly.index.byFile.get(degradedKey)).toMatchObject({ parserDegraded: true });
+    expect(isAnalysisComplete(moduleCacheOnly.analysis)).toBe(false);
+
+    // Once the file is edited and extracts cleanly, it is indexed with its imports and no longer counted.
+    await fsp.writeFile(path.join(root, scenario.degradedFile), scenario.repairedSource, "utf8");
+    const afterRepair = await build(root, quiet);
+    expect(afterRepair.analysis).toMatchObject({ parserDegradedFiles: 0, label: "native semantic" });
+    expect(afterRepair.index.byFile.get(degradedKey)?.parserDegraded).toBeUndefined();
+    expect(importedSpecifiers(afterRepair)).toEqual(scenario.repairedImports);
+    expect(isAnalysisComplete(afterRepair.analysis)).toBe(true);
+    expect(isAnalysisComplete(await analysisInFreshSession(root))).toBe(true);
+    expect((await renamePreviewInFreshSession(root)).safe).toBe(true);
   });
 
   it.each(["incremental", "full"] as const)(

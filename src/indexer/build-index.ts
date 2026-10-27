@@ -509,8 +509,9 @@ async function buildIndexedModuleForFile(args: {
   );
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let tree: SyntaxTreeLike | undefined;
-  // Every degradation recorded below also marks the module. A later build that reuses the module from a cache has no
-  // report of this one, and still counts the file.
+  // Every degradation recorded below also marks the module, including a failed import extraction of the file's source
+  // or of one of its embedded blocks. A later build that reuses the module from a cache has no report of this one, and
+  // still counts the file.
   let parserDegraded = false;
   const recordTreeUnavailable = (entry: Parameters<typeof recordParserBackendDegradation>[1]): void => {
     parserDegraded = true;
@@ -598,6 +599,10 @@ async function buildIndexedModuleForFile(args: {
     ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
     ...(args.report ? { report: args.report } : {}),
     parsedFiles: args.parsedMap,
+    // A failed extraction leaves this file's imports incomplete, so it marks the module like a missing syntax tree.
+    onDegraded: () => {
+      parserDegraded = true;
+    },
   };
   const imports =
     nativeSourceLimitSkip || sup.id === "sql"

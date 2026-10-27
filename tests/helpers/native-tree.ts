@@ -54,3 +54,25 @@ export function failNativeExtractionFor(marker: string): void {
     },
   });
 }
+
+/**
+ * Native queries fail for sources containing `marker`, while the whole-file extraction a file's script goes through
+ * (`extractLanguage`) and the syntax tree it carries keep working. A single-file component's style or template block is
+ * read by a separate query over a source masked down to that block, so a marker inside one block fails that block's
+ * imports and leaves the script extracted. Pair it with `__resetNativeTreeSitterBindingForTests()` in `afterEach`.
+ */
+export function failNativeBlockQueriesFor(marker: string): void {
+  const state = loadBinding();
+  if (!state.loaded) throw new Error("Native addon required for the block query failure");
+  const { runLanguageQueries } = state.binding;
+  __setNativeTreeSitterBindingForTests({
+    ...state,
+    binding: {
+      ...state.binding,
+      runLanguageQueries: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+        if (source.includes(marker)) throw new Error("forced block query failure");
+        return runLanguageQueries(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+      },
+    },
+  });
+}

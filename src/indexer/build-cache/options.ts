@@ -50,9 +50,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 94 reads C# using directives and namespace declarations from native syntax nodes, and stores each C#
  * file's own namespace regions and declared types with its module (`csharpNamespaceFacts`) instead of
  * scanning source text for them.
- * Epoch 95 stores each module's native outcome (`nativeOutcome`) and whether its parser degraded (`parserDegraded`) so
- * the analysis summary counts files reused from the module cache or the project snapshot, not only the files a build
- * parsed.
+ * Epoch 95 stores each module's native outcome (`nativeOutcome`) and whether part of it could not be indexed
+ * (`parserDegraded`: no syntax tree, a failed import extraction of its source or of an embedded block, or a processing
+ * failure) so the analysis summary counts files reused from the module cache or the project snapshot, not only the
+ * files a build parsed.
  */
 export const CORE_ALGORITHM_EPOCH = 95;
 /**

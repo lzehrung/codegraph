@@ -121,8 +121,9 @@ export type ModuleIndex = {
    */
   nativeOutcome?: "used" | "skipped";
   /**
-   * Set only when this file's syntax tree could not be built when it was indexed, or processing the file failed. The
-   * module then came from native query results alone, or is empty. Cached with the module, like `nativeOutcome`, so
+   * Set only when part of this file was not indexed: its syntax tree could not be built, the imports of its source or of
+   * an embedded block (a Vue or Svelte style or template block) could not be extracted, or processing the file failed.
+   * The module then came from the extractions that worked, or is empty. Cached with the module, like `nativeOutcome`, so
    * the analysis summary keeps counting the file as parser-degraded after a build reuses it from the module cache or
    * the project snapshot, when that build's report no longer records the degradation.
    */
