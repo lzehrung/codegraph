@@ -657,6 +657,7 @@ The integration examples demonstrate semantic chunking with type-based filtering
 
 - It uses indexed symbols, semantic chunks, and text chunks.
 - It uses AST shape hashes when parser context is available, while keeping normal token and hash fallback behavior.
+- It classifies each file with the index's `languageExtensions`, so a suffix that `languages.extensions` maps to a language is compared as that language.
 - Grouped duplicate output uses `schemaVersion: 3`.
 - Results include grouped findings, confidence, score, clone type, metrics, omission counts, and pair stats.
 - Group `variants` are bounded by default and expose hidden evidence through `rawPairCount` and `omittedVariantCount`.
