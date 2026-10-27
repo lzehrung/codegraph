@@ -456,6 +456,13 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
 
 export type WatchControllerOptions = {
   root: string;
+  /**
+   * Runs `operation` once every operation that rebuilds the session's index or writes its artifacts has ended, and
+   * keeps the next one waiting until it ends. The MCP handlers pass the lock that `refresh_index`, `artifact_build`,
+   * and the SQLite rebuild take. A background refresh that overlapped one of them would leave the file signatures of
+   * whichever build ended last, whatever snapshot the session serves.
+   */
+  runExclusive: (operation: () => Promise<void>) => Promise<void>;
   /** The directory that the session writes its disk cache to; see {@link ProjectWatcherOptions.cacheDirectory}. */
   cacheDirectory?: string | undefined;
   /** Defaults to {@link DEFAULT_MCP_WATCH_DEBOUNCE_MS}. */
@@ -476,9 +483,9 @@ export type WatchController = {
   noteActivity: () => void;
   /**
    * Closes every handle and cancels every timer. Safe to call twice. The promise settles once the background refresh
-   * that was running has ended, and never rejects. A rebuild cannot be cancelled, so a caller that releases the session
-   * waits for it first: one that outlives the release keeps writing the cache and restores the file signatures that
-   * the release dropped.
+   * that was running has ended, and never rejects. A refresh that still waits for its turn then checks and rebuilds
+   * nothing. A rebuild cannot be cancelled, so a caller that releases the session waits for it first: one that
+   * outlives the release keeps writing the cache and restores the file signatures that the release dropped.
    */
   close: () => Promise<void>;
 };
@@ -496,7 +503,8 @@ export function assertMcpWatchMs(name: string, value: number | undefined): void 
  * - Every event clears the session's cached freshness result at once (`markChanged`). It also cancels the refresh
  *   and the rerun that an earlier burst scheduled, so that none starts while events still arrive.
  * - A settled burst starts a refresh, no sooner than `minRefreshIntervalMs` after the previous one ended.
- * - One refresh runs at a time. A settled burst during it sets one rerun flag.
+ * - One refresh runs at a time. A settled burst during it sets one rerun flag. Its freshness check, invalidation, and
+ *   rebuild run in one turn of `runExclusive`, so they never overlap an explicit refresh or an artifact build.
  * - After `idleMs` without `noteActivity` the watches close. The next `noteActivity` reopens them and calls
  *   `markChanged`, so the pull check sees every edit made during the pause.
  * - `close` ends the watching for good. The refresh that is running finishes, and `close` returns a promise for it, so
@@ -530,21 +538,29 @@ export function createWatchController(session: AgentSession, options: WatchContr
     }, waitMs);
   };
 
+  // Runs in one turn of `runExclusive`, so that no other refresh replaces the session between the check and the rebuild.
+  const checkAndRebuild = async (): Promise<void> => {
+    // The server closed while this refresh waited for its turn: even the check would keep the project busy after its
+    // client left.
+    if (closed) return;
+    const freshness: AgentFreshnessResult = session.checkFreshness
+      ? await session.checkFreshness()
+      : { state: "fresh" };
+    // The server closed while the check ran: a rebuild now would keep the project busy after its client left.
+    if (closed) return;
+    // Nobody waits in the background, so the auto-refresh limits do not apply to a stale result. A session that
+    // cannot verify its configuration keeps its snapshot instead, as it does without a watcher.
+    const rebuildStale = freshness.state === "stale" && freshness.reason !== CONFIGURATION_UNCHECKED_REASON;
+    if (rebuildStale) session.invalidate();
+    if (rebuildStale || freshness.state === "refreshed") {
+      await session.loadProject({ symbolGraph: "skip" });
+    }
+  };
+
   // Never rejects: a failure is logged.
   const refreshSession = async (current: ProjectWatcher | undefined): Promise<void> => {
     try {
-      const freshness: AgentFreshnessResult = session.checkFreshness
-        ? await session.checkFreshness()
-        : { state: "fresh" };
-      // The server closed while the check ran: a rebuild now would keep the project busy after its client left.
-      if (closed) return;
-      // Nobody waits in the background, so the auto-refresh limits do not apply to a stale result. A session that
-      // cannot verify its configuration keeps its snapshot instead, as it does without a watcher.
-      const rebuildStale = freshness.state === "stale" && freshness.reason !== CONFIGURATION_UNCHECKED_REASON;
-      if (rebuildStale) session.invalidate();
-      if (rebuildStale || freshness.state === "refreshed") {
-        await session.loadProject({ symbolGraph: "skip" });
-      }
+      await options.runExclusive(checkAndRebuild);
       // After every refresh, so a directory that a query already rebuilt around still gets its watch.
       await current?.refreshDirectories();
     } catch (error) {

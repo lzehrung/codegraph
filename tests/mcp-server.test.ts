@@ -4629,6 +4629,52 @@ describe("MCP file watcher", () => {
     });
   });
 
+  it("runs refresh_index after a background rebuild that is running, so that the later build's file signatures stay", async () => {
+    const root = await createProject("cg-mcp-watch-refresh-index-");
+    const held = holdBackgroundRebuild();
+    const resources = await createWarmedCodegraphMcpResources({
+      root,
+      watchDebounceMs: 25,
+      watchMinRefreshIntervalMs: 0,
+    });
+    try {
+      held.armed = true;
+      await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
+      await held.started;
+      // The background build listed the project before it was held, so only a build that starts later knows this file.
+      await fs.writeFile(path.join(root, "late.ts"), "export function lateSymbol() { return 3; }\n", "utf8");
+
+      const refreshed = resources.handlers.refresh_index({ warmup: "base" });
+
+      // Run at once, the refresh would drop the session state under the background build and start a second build
+      // beside it. Whichever build ended last would then replace the file signatures of the snapshot that is served.
+      expect(held.events).toEqual(["loadProject:start"]);
+
+      held.release();
+      await refreshed;
+
+      expect(held.events).toEqual([
+        "loadProject:start",
+        "loadProject:end",
+        "invalidate",
+        "loadProject:start",
+        "loadProject:end",
+      ]);
+      held.armed = false;
+      // Ends the 5 s window as an event would, so that the query checks the project against the session's baseline.
+      resources.session.markChanged?.();
+      // The baseline is the second build's, so it knows `late.ts` as the snapshot that is served does.
+      expect(await findSymbol(resources.handlers, "lateSymbol")).toEqual({
+        found: true,
+        freshness: { state: "fresh" },
+      });
+    } finally {
+      held.release();
+      await resources.closeWatcher();
+      resources.session.invalidate();
+    }
+  });
+
   it("waits for a background rebuild that is running when the HTTP server closes, and releases the session after it", async () => {
     const root = await createProject("cg-mcp-watch-http-rebuild-");
     const held = holdBackgroundRebuild();

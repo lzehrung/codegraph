@@ -419,6 +419,12 @@ type WarmedCodegraphMcpResources = {
   closeWatcher: () => Promise<void>;
 };
 
+type CodegraphMcpHandlerSet = {
+  handlers: CodegraphMcpHandlers;
+  /** Runs `operation` in its turn of the lock that `refresh_index`, `artifact_build`, and the SQLite rebuild take. */
+  runExclusive: <T>(operation: () => Promise<T>) => Promise<T>;
+};
+
 export async function createWarmedCodegraphMcpResources(
   options: CodegraphMcpServerOptions,
 ): Promise<WarmedCodegraphMcpResources> {
@@ -443,7 +449,7 @@ export async function createWarmedCodegraphMcpResources(
   assertMcpWatchMs("watchIdleMs", watchIdleMs);
   const session = createCodegraphMcpSession(options, root);
   await startCodegraphMcpWarmup(session, warmup, sessionProvidedExplicitly);
-  const handlers = createCodegraphMcpHandlersForSession({ ...handlerOptions, root }, session);
+  const { handlers, runExclusive } = createCodegraphMcpHandlersForSession({ ...handlerOptions, root }, session);
   // Only a session that Codegraph created is watched; a caller that passes its own session manages freshness.
   // Lazy startup (`warmup: "off"`) stays lazy: the watches open on the first tool call.
   const watcher =
@@ -451,6 +457,7 @@ export async function createWarmedCodegraphMcpResources(
       ? undefined
       : createWatchController(session, {
           root,
+          runExclusive,
           cacheDirectory: resolveWatchedCacheDirectory(root, options.buildOptions),
           debounceMs: watchDebounceMs,
           minRefreshIntervalMs: watchMinRefreshIntervalMs,
@@ -466,13 +473,13 @@ export async function createWarmedCodegraphMcpResources(
 export function createCodegraphMcpHandlers(options: CodegraphMcpHandlerOptions): CodegraphMcpHandlers {
   const root = path.resolve(options.root);
   const session = createCodegraphMcpSession(options, root);
-  return createCodegraphMcpHandlersForSession(options, session);
+  return createCodegraphMcpHandlersForSession(options, session).handlers;
 }
 
 function createCodegraphMcpHandlersForSession(
   options: CodegraphMcpHandlerOptions,
   session: AgentSession,
-): CodegraphMcpHandlers {
+): CodegraphMcpHandlerSet {
   const root = path.resolve(options.root);
   const readOnly = options.readOnly ?? true;
   const realRoot = fs.realpath(root);
@@ -487,6 +494,9 @@ function createCodegraphMcpHandlersForSession(
   let refreshPromise: Promise<void> | undefined;
   let refreshEpoch = 0;
 
+  // One turn at a time for everything that rebuilds the session's index or writes artifacts: `refresh_index`,
+  // `artifact_build`, the SQLite rebuild for `query_sqlite`, and the watcher's background refresh. Two of them in
+  // flight would leave the file signatures of whichever build ended last, whatever snapshot the session serves.
   let artifactWritePromise: Promise<void> | undefined;
   const withArtifactWriteLock = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = artifactWritePromise;
@@ -1182,9 +1192,7 @@ function createCodegraphMcpHandlersForSession(
   };
 
   return {
-    ...searchHandlers,
-    ...navigationHandlers,
-    ...reviewHandlers,
-    ...artifactHandlers,
+    handlers: { ...searchHandlers, ...navigationHandlers, ...reviewHandlers, ...artifactHandlers },
+    runExclusive: withArtifactWriteLock,
   };
 }

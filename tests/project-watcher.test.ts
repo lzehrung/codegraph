@@ -225,6 +225,8 @@ function startController(overrides: Partial<WatchControllerOptions> & { fake?: F
     platform: "win32",
     watch: fake.watch,
     log,
+    // Nothing else refreshes the session in these tests, so a turn comes at once.
+    runExclusive: (operation) => operation(),
     ...controllerOverrides,
   });
   return { fake, controller, log, ...fakeSession };
@@ -1198,6 +1200,63 @@ describe("createWatchController", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("takes its turn from the exclusive runner before it checks the session, and keeps the turn until the rebuild ended", async () => {
+    const turn = Promise.withResolvers<void>();
+    const releaseRebuild = Promise.withResolvers<void>();
+    let turnEnded = false;
+    const { fake, calls, state } = startController({
+      runExclusive: async (operation) => {
+        await turn.promise;
+        await operation();
+        turnEnded = true;
+      },
+    });
+    state.freshness = freshnessByState.stale;
+    state.loadHold = releaseRebuild.promise;
+
+    fake.openHandles()[0]?.emit("src/a.ts");
+    await vi.advanceTimersByTimeAsync(500);
+    // Another refresh or an artifact build holds the session: not even the check runs beside it.
+    expect(calls).toEqual(["markChanged"]);
+
+    turn.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["markChanged", "checkFreshness", "invalidate", "loadProject:skip"]);
+    expect(turnEnded).toBe(false);
+
+    releaseRebuild.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(turnEnded).toBe(true);
+  });
+
+  it("checks and rebuilds nothing when the server closed while the refresh waited for its turn", async () => {
+    const turn = Promise.withResolvers<void>();
+    const { fake, controller, calls, state } = startController({
+      runExclusive: async (operation) => {
+        await turn.promise;
+        await operation();
+      },
+    });
+    state.freshness = freshnessByState.stale;
+
+    fake.openHandles()[0]?.emit("src/a.ts");
+    await vi.advanceTimersByTimeAsync(500);
+    let closed = false;
+    const closing = controller.close().then(() => {
+      closed = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    // The refresh still waits, so a caller that releases the session now would do it under a check that is yet to run.
+    expect(closed).toBe(false);
+
+    turn.resolve();
+    await closing;
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(calls).toEqual(["markChanged"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("closes at once, and never starts the refresh, when one only waits for its minimum interval", async () => {
     const { fake, controller, checkStarts } = startController();
     const [handle] = fake.openHandles();
@@ -1448,6 +1507,7 @@ describe("startProjectWatcher with the real file system", () => {
       watch: fake.watch,
       debounceMs: 60_000,
       log: vi.fn(),
+      runExclusive: (operation) => operation(),
     });
 
     try {
