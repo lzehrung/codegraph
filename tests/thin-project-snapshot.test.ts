@@ -14,12 +14,15 @@ import { closeDiskCacheDatabase } from "../src/indexer/build-cache/module-cache.
 import { loadManifest } from "../src/indexer/build-cache/manifest.js";
 import { expandStarImports } from "../src/indexer/expand-star-imports.js";
 import { SymbolKind, type ModuleIndex } from "../src/indexer/types.js";
+import { __resetNativeTreeSitterBindingForTests } from "../src/native/tree-sitter-native.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
+import { failNativeTreeReconstructionFor } from "./helpers/native-tree.js";
 
 const roots = createTempRootRegistry();
 
 afterEach(async () => {
+  __resetNativeTreeSitterBindingForTests();
   await roots.cleanup();
 });
 
@@ -58,13 +61,17 @@ function sqliteModuleFiles(root: string): Set<string> {
   }
 }
 
-function sqliteModulePayloads(root: string): Array<{ file: string; nativeOutcome?: string }> {
+function sqliteModulePayloads(root: string): Array<{ file: string; nativeOutcome?: string; parserDegraded?: boolean }> {
   const db = new DatabaseSync(sqlitePath(root));
   try {
     const rows = db.prepare("SELECT payload FROM module_cache").all() as Array<{ payload: Uint8Array }>;
     return rows.map(
       (row) =>
-        JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as { file: string; nativeOutcome?: string },
+        JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as {
+          file: string;
+          nativeOutcome?: string;
+          parserDegraded?: boolean;
+        },
     );
   } finally {
     db.close();
@@ -280,6 +287,78 @@ describe("thin project snapshot", () => {
     }
     const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
     expect(rebuilt.byFile.get(fileIdentityKey(normalizePath(path.join(root, "api.ts"))))?.nativeOutcome).toBe("used");
+  });
+
+  it("keeps a parser-degraded star importer's markers in the module cache and when the snapshot loads", async () => {
+    const root = await roots.create("cg-snapshot-parser-degraded-");
+    await fsp.writeFile(path.join(root, "lib.py"), "def helper():\n    return 1\n", "utf8");
+    await fsp.writeFile(path.join(root, "consumer.py"), "# treeless\nfrom lib import *\n", "utf8");
+    failNativeTreeReconstructionFor("treeless");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    __resetNativeTreeSitterBindingForTests();
+
+    const rows = new Map(sqliteModulePayloads(root).map((module) => [module.file, module]));
+    expect(rows.get("consumer.py")).toMatchObject({ nativeOutcome: "used", parserDegraded: true });
+    expect(rows.get("lib.py")).toMatchObject({ nativeOutcome: "used" });
+    expect(rows.get("lib.py")?.parserDegraded).toBeUndefined();
+
+    // The snapshot load expands the star import into a copy of the importer, which must keep both markers.
+    const manifest = await loadManifest(root, { cache: "disk" });
+    if (!manifest) throw new Error("Expected manifest after the disk build.");
+    const loaded = await tryLoadProjectIndexSnapshot(root, { cache: "disk" }, new Map(Object.entries(manifest.files)));
+    closeDiskCacheDatabase(root, { cache: "disk" });
+    if (!loaded) throw new Error("Expected the snapshot to load.");
+    const consumer = loaded.index.byFile.get(fileIdentityKey(normalizePath(path.join(root, "consumer.py"))));
+    const lib = loaded.index.byFile.get(fileIdentityKey(normalizePath(path.join(root, "lib.py"))));
+    expect(consumer).toMatchObject({ nativeOutcome: "used", parserDegraded: true });
+    expect(consumer?.imports.some((binding) => binding.kind === "named" && binding.local === "helper")).toBe(true);
+    expect(lib?.parserDegraded).toBeUndefined();
+  });
+
+  it("rejects a legacy snapshot with a malformed parser-degraded marker", async () => {
+    const root = await roots.create("cg-snapshot-parser-degraded-malformed-");
+    await fsp.writeFile(path.join(root, "api.ts"), "export function api() {}\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const snapshot = await readSnapshot(root);
+    const modules = new Map<string, { file: string; parserDegraded?: unknown }>();
+    for (const module of sqliteModulePayloads(root)) modules.set(module.file, module);
+    for (const module of snapshot.modules) modules.set(module.file, module);
+    const api = modules.get("api.ts");
+    if (!api) throw new Error("Expected api.ts in the module cache.");
+    modules.set("api.ts", { ...api, parserDegraded: "yes" });
+    const malformed = { ...snapshot, version: 10, modules: [...modules.values()] };
+    await fsp.writeFile(
+      snapshotPath(root),
+      brotliCompressSync(JSON.stringify(malformed), { params: { [constants.BROTLI_PARAM_QUALITY]: 4 } }),
+    );
+    const manifest = await loadManifest(root, { cache: "disk" });
+    if (!manifest) throw new Error("Expected manifest after the disk build.");
+    const loaded = await tryLoadProjectIndexSnapshot(root, { cache: "disk" }, new Map(Object.entries(manifest.files)));
+    expect(loaded).toBeNull();
+  });
+
+  it("rebuilds a SQLite module with a malformed parser-degraded marker instead of reusing it", async () => {
+    const root = await roots.create("cg-module-parser-degraded-");
+    await fsp.writeFile(path.join(root, "api.ts"), "export function api() {}\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const db = new DatabaseSync(sqlitePath(root));
+    try {
+      const row = db.prepare("SELECT payload FROM module_cache WHERE file = ?").get("api.ts") as
+        | { payload: Uint8Array }
+        | undefined;
+      if (!row) throw new Error("Expected cached api.ts module.");
+      const module = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as { parserDegraded?: unknown };
+      module.parserDegraded = "yes";
+      db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+        brotliCompressSync(JSON.stringify(module)),
+        "api.ts",
+      );
+    } finally {
+      db.close();
+    }
+    const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+    const api = rebuilt.byFile.get(fileIdentityKey(normalizePath(path.join(root, "api.ts"))));
+    expect(api?.parserDegraded).toBeUndefined();
   });
 
   it("rebuilds quietly when SQLite module payloads are unreadable", async () => {

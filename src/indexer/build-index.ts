@@ -186,6 +186,15 @@ function unparsedModuleIndex(file: string): ModuleIndex {
   return { ...createEmptyModuleIndex(file), parseErrorRanges: [] };
 }
 
+/**
+ * A file whose processing failed. Its symbols are missing from the index, so it is flagged as parser-degraded: the flag
+ * keeps the analysis summary incomplete, and marks a module that is never written to the module cache, so the project
+ * snapshot embeds it instead of leaving its stale disk row to be restored.
+ */
+function failedModuleIndex(file: string): ModuleIndex {
+  return { ...createEmptyModuleIndex(file), parserDegraded: true };
+}
+
 function collectParseErrorRanges(tree: ProjectedSyntaxTree): ParseErrorRange[] {
   const columns = tree.columns;
   const isParseErrorNode = (nodeId: number): boolean => {
@@ -500,6 +509,13 @@ async function buildIndexedModuleForFile(args: {
   );
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let tree: SyntaxTreeLike | undefined;
+  // Every degradation recorded below also marks the module. A later build that reuses the module from a cache has no
+  // report of this one, and still counts the file.
+  let parserDegraded = false;
+  const recordTreeUnavailable = (entry: Parameters<typeof recordParserBackendDegradation>[1]): void => {
+    parserDegraded = true;
+    recordParserBackendDegradation(args.report, entry);
+  };
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id),
     nativeSourceLimitSkip = prepared.nativeFallbackReason === "sourceTooLarge";
 
@@ -525,7 +541,7 @@ async function buildIndexedModuleForFile(args: {
       tree = parsed.tree;
       setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     } else {
-      recordParserBackendDegradation(args.report, {
+      recordTreeUnavailable({
         file: args.file,
         languageId: prepared.sup.id,
         ...(parseAttempt.nativeFallbackReason ? { nativeFallbackReason: parseAttempt.nativeFallbackReason } : {}),
@@ -541,7 +557,7 @@ async function buildIndexedModuleForFile(args: {
       tree = parsed.tree;
       setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     } else {
-      recordParserBackendDegradation(args.report, {
+      recordTreeUnavailable({
         file: args.file,
         languageId: sup.id,
         ...(parseAttempt.nativeFallbackReason ? { nativeFallbackReason: parseAttempt.nativeFallbackReason } : {}),
@@ -550,7 +566,7 @@ async function buildIndexedModuleForFile(args: {
     }
   }
   if (sup.id === "sql" && !tree) {
-    recordParserBackendDegradation(args.report, {
+    recordTreeUnavailable({
       file: args.file,
       languageId: sup.id,
       ...(prepared.nativeFallbackReason ? { nativeFallbackReason: prepared.nativeFallbackReason } : {}),
@@ -623,6 +639,7 @@ async function buildIndexedModuleForFile(args: {
   else delete mod.parseErrorRanges;
   const nativeOutcome = preparedNativeOutcome(prepared);
   if (nativeOutcome) mod.nativeOutcome = nativeOutcome;
+  if (parserDegraded) mod.parserDegraded = true;
   if (sup.id === "cpp") {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
@@ -1880,7 +1897,7 @@ async function buildIndexFromFileListShared(
         }
         recordFileFailure(report, file, error);
         logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file}:`, error);
-        return [file, createEmptyModuleIndex(file), []] as const;
+        return [file, failedModuleIndex(file), []] as const;
       } finally {
         processedFiles += 1;
         if (opts?.onProgress && buildStartedAt !== undefined) {
@@ -3017,7 +3034,7 @@ export async function buildProjectIndexIncremental(
             }
             recordFileFailure(report, file, error);
             logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file}:`, error);
-            return [file, createEmptyModuleIndex(file), undefined] as const;
+            return [file, failedModuleIndex(file), undefined] as const;
           } finally {
             if (opts?.onProgress) {
               opts.onProgress({

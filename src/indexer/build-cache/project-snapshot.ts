@@ -904,15 +904,16 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
     ...(mod.csharpNamespaceFacts ? { csharpNamespaceFacts: mod.csharpNamespaceFacts } : {}),
     ...(mod.nativeOutcome ? { nativeOutcome: mod.nativeOutcome } : {}),
+    ...(mod.parserDegraded ? { parserDegraded: true } : {}),
     ...(mod.parseErrorRanges ? { parseErrorRanges: mod.parseErrorRanges } : {}),
   };
 }
 
 /**
  * The modules the snapshot embeds. A module with a disk-cache row is left out, and a load restores it from that row.
- * A module native skipped is never written to the cache, so the row for its file is the stale one from before the
- * file changed, such as before it grew past the native size limit. Embed it: at load the snapshot's copy wins over
- * the row.
+ * A module native skipped, or whose parser degraded, may not be written to the cache: its row is then the stale one
+ * from before the file changed, such as before it grew past the native size limit or began to fail processing. Embed
+ * it: at load the snapshot's copy wins over the row.
  */
 function modulesForThinSnapshot(
   index: ProjectIndex,
@@ -923,7 +924,10 @@ function modulesForThinSnapshot(
   const cachedFiles = listDiskCachedModuleFiles(projectRoot, opts);
   if (!cachedFiles) return modules;
   return modules.filter(
-    (module) => module.nativeOutcome === "skipped" || !cachedFiles.has(cacheRelativePath(projectRoot, module.file)),
+    (module) =>
+      module.nativeOutcome === "skipped" ||
+      module.parserDegraded ||
+      !cachedFiles.has(cacheRelativePath(projectRoot, module.file)),
   );
 }
 
@@ -1789,6 +1793,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     typeof moduleIndex.file === "string" &&
     isOptionalBoolean(moduleIndex.docstringsChecked) &&
     isOptionalNativeOutcome(moduleIndex.nativeOutcome) &&
+    isOptionalBoolean(moduleIndex.parserDegraded) &&
     Array.isArray(moduleIndex.locals) &&
     moduleIndex.locals.every(isSymbolDef) &&
     Array.isArray(moduleIndex.imports) &&

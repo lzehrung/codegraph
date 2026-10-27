@@ -446,11 +446,13 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     locals?: unknown;
     nativeOutcome?: unknown;
     parseErrorRanges?: unknown;
+    parserDegraded?: unknown;
   };
   return (
     typeof mod.file === "string" &&
     (mod.docstringsChecked === undefined || typeof mod.docstringsChecked === "boolean") &&
     isOptionalNativeOutcome(mod.nativeOutcome) &&
+    (mod.parserDegraded === undefined || typeof mod.parserDegraded === "boolean") &&
     Array.isArray(mod.exports) &&
     Array.isArray(mod.imports) &&
     mod.imports.every(hasValidImportBindingRanges) &&

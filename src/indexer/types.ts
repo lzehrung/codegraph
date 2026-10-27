@@ -120,6 +120,13 @@ export type ModuleIndex = {
    * not only the files the current build parsed.
    */
   nativeOutcome?: "used" | "skipped";
+  /**
+   * Set only when this file's syntax tree could not be built when it was indexed, or processing the file failed. The
+   * module then came from native query results alone, or is empty. Cached with the module, like `nativeOutcome`, so
+   * the analysis summary keeps counting the file as parser-degraded after a build reuses it from the module cache or
+   * the project snapshot, when that build's report no longer records the degradation.
+   */
+  parserDegraded?: boolean;
 };
 
 export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "namespace"; file: FileId };

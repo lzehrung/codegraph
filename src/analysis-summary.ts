@@ -32,18 +32,20 @@ export function formatAnalysisSummaryLabel(summary: AnalysisSummary): string {
 }
 
 /**
- * Counts indexed files by the native outcome their module was indexed with. A build parses only the files it cannot
- * reuse, so its report counts those alone; the modules also cover files served from the module cache or the
+ * Counts indexed files by how native handled them when their module was indexed. A build parses only the files it
+ * cannot reuse, so its report counts those alone; the modules also cover files served from the module cache or the
  * project snapshot.
  */
-function countModuleNativeOutcomes(index: ProjectIndex | undefined): { used: number; skipped: number } {
+function countModuleAnalysis(index: ProjectIndex | undefined): { used: number; skipped: number; degraded: number } {
   let used = 0;
   let skipped = 0;
+  let degraded = 0;
   for (const mod of index?.byFile.values() ?? []) {
     if (mod.nativeOutcome === "used") used += 1;
     else if (mod.nativeOutcome === "skipped") skipped += 1;
+    if (mod.parserDegraded) degraded += 1;
   }
-  return { used, skipped };
+  return { used, skipped, degraded };
 }
 
 export function summarizeAnalysis(input: {
@@ -52,14 +54,14 @@ export function summarizeAnalysis(input: {
 }): AnalysisSummary {
   if (input.index?.analysis) return input.index.analysis;
   const native = input.report?.backend?.native;
-  const indexed = countModuleNativeOutcomes(input.index);
+  const indexed = countModuleAnalysis(input.index);
   // Take the larger count: the report covers the files this build parsed, the modules cover every indexed file, and
   // an index whose modules carry no outcome keeps the report's counts.
   const nativeFilesUsed = Math.max(native?.filesUsed ?? 0, indexed.used);
   const summary: AnalysisSummary = {
     mode: "semantic",
     backend: nativeFilesUsed ? "native" : "unknown",
-    parserDegradedFiles: input.report?.backend?.parser?.total ?? 0,
+    parserDegradedFiles: Math.max(input.report?.backend?.parser?.total ?? 0, indexed.degraded),
     nativeFilesUsed,
     nativeFilesFellBack: Math.max(native?.filesFellBack ?? 0, indexed.skipped),
     label: "",
