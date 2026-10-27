@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { formatScalar } from "./pretty.js";
 import { resolveCacheLocation } from "../indexer/build-cache/location.js";
 import {
   isNativeTreeSitterAvailable,
@@ -158,14 +159,6 @@ function artifactPresent(dirPath: string, fileName: string | undefined): boolean
   const relativePath = path.relative(bundleRoot, artifactPath);
   if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) return false;
   return pathExists(artifactPath);
-}
-
-function formatScalar(value: unknown): string {
-  if (value === null || value === undefined) return "none";
-  if (typeof value === "boolean") return value ? "yes" : "no";
-  if (typeof value === "string") return value || "(empty)";
-  if (typeof value === "number" || typeof value === "bigint") return String(value);
-  return String(value);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

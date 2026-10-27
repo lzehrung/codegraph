@@ -7,6 +7,7 @@ import {
   SQL_OBJECT_NAME_PATTERN,
   splitTopLevelCommaSeparated,
   sqlParenDepthAt,
+  sqlMatchingParen as matchingParen,
   sqlSourceClauses,
   type SqlMaskOptions,
 } from "./lex.js";
@@ -426,19 +427,6 @@ function callKeywordMatchAllowsComments(statement: string, maskedMatch: string, 
     index += 1;
   }
   return true;
-}
-
-function matchingParen(text: string, openIndex: number): number {
-  let depth = 0;
-  for (let index = openIndex; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "(") depth += 1;
-    if (char === ")") {
-      depth -= 1;
-      if (depth === 0) return index;
-    }
-  }
-  return -1;
 }
 
 function wordAt(text: string, index: number): string {

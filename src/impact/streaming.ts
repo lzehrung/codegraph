@@ -17,7 +17,8 @@ import { getDiff } from "./providers/base.js";
 import { analyzeImpact } from "./analyzer.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util/project-files.js";
 import { errorMessage } from "../util/errors.js";
-import { buildImpactReport, newFileRangeForHunk } from "./report.js";
+import { buildImpactReport } from "./report.js";
+import { mapChangedFiles } from "./report-shared.js";
 import {
   applyChangedFileSymbolMapping,
   createImpactDiagnostics,
@@ -172,13 +173,7 @@ function buildLightStreamSummaryReport(
     schemaVersion: IMPACT_SCHEMA_VERSION,
     format: "stream-summary",
     ...(analysis ? { analysis } : {}),
-    changedFiles: normalizedChanges.map((change) => ({
-      file: displayFile(change.path),
-      kind: change.kind,
-      ...(change.oldPath ? { oldFile: displayFile(change.oldPath) } : {}),
-      ...(change.similarityIndex !== undefined ? { similarityIndex: change.similarityIndex } : {}),
-      hunks: change.hunks.map((hunk) => newFileRangeForHunk(hunk)),
-    })),
+    changedFiles: mapChangedFiles(normalizedChanges, displayFile),
     changedSymbols: changedSymbols.map((symbol) => ({
       ...symbol,
       file: displayFile(symbol.file),

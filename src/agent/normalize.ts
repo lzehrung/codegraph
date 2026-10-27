@@ -15,8 +15,6 @@ export type AgentFileSnapshot = {
   fileLookup?: ReadonlyMap<string, string>;
 };
 
-export type AgentSqlObjectKind = "table" | "view" | "index" | "routine";
-
 export function normalizeAgentFilePath(root: string, file: string): string {
   return toProjectRelativePath(root, file) ?? normalizePath(path.resolve(file));
 }
@@ -45,12 +43,8 @@ export function isAgentSqlFile(file: string): boolean {
   return file.toLowerCase().endsWith(".sql");
 }
 
-export function isAgentSqlObjectKind(kind: string): kind is AgentSqlObjectKind {
-  return kind === "table" || kind === "view" || kind === "index" || kind === "routine";
-}
-
 export function isAgentSqlObjectNode(node: { kind: string }): boolean {
-  return isAgentSqlObjectKind(node.kind);
+  return node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine";
 }
 
 export function collectFileFollowUps(file: string): AgentFollowUp[] {

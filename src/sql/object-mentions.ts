@@ -6,6 +6,7 @@ import {
   SQL_OBJECT_NAME_PATTERN,
   sqlObjectLookupKey,
   sqlParenDepthAt,
+  sqlMatchingParen as matchingParen,
   sqlSourceClauses,
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
@@ -112,19 +113,6 @@ function readName(text: string, index: number): SqlNameSpan | null {
     cursor = skipWhitespace(text, end);
   }
   return null;
-}
-
-function matchingParen(text: string, openIndex: number): number {
-  let depth = 0;
-  for (let index = openIndex; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "(") depth += 1;
-    if (char === ")") {
-      depth -= 1;
-      if (depth === 0) return index;
-    }
-  }
-  return -1;
 }
 
 function addName(spans: SqlNameSpan[], named: SqlNameSpan | null): void {

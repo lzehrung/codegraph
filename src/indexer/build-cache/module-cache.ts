@@ -456,7 +456,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     mod.locals.every(hasValidCallableSymbol) &&
     (mod.csharpNamespaceFacts === undefined || isCsharpNamespaceFacts(mod.csharpNamespaceFacts)) &&
     (mod.parseErrorRanges === undefined ||
-      (Array.isArray(mod.parseErrorRanges) && mod.parseErrorRanges.every(hasValidParseErrorRange))) &&
+      (Array.isArray(mod.parseErrorRanges) && mod.parseErrorRanges.every(isParseErrorRange))) &&
     mod.exports.every((entry: unknown) => {
       if (!entry || typeof entry !== "object") return false;
       const local = entry as { type?: unknown; target?: unknown };
@@ -465,7 +465,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   );
 }
 
-function hasValidParseErrorRange(value: unknown): value is ParseErrorRange {
+export function isParseErrorRange(value: unknown): value is ParseErrorRange {
   if (!value || typeof value !== "object") return false;
   const range = value as { startIndex?: unknown; endIndex?: unknown };
   const startIndex = range.startIndex;
@@ -538,7 +538,7 @@ function isOptionalRange(value: unknown): boolean {
   return value === undefined || isRange(value);
 }
 
-function isRange(value: unknown): value is Range {
+export function isRange(value: unknown): value is Range {
   if (!value || typeof value !== "object") return false;
   const range = value as Partial<Range>;
   return isPos(range.start) && isPos(range.end);

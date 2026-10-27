@@ -11,6 +11,7 @@ import {
   SQL_OBJECT_NAME_PATTERN,
   splitTopLevelCommaSeparated,
   sqlParenDepthAt,
+  sqlMatchingParen as findMatchingParen,
   sqlQueryScopes,
   sqlSourceClauses,
   sqlTriviaBoundaries,
@@ -729,19 +730,6 @@ function collectReadSources(text: string): {
     names: Array.from(new Set(names)),
     joins: joins.map((join) => ({ name: join.name, scopeFromNames: fromNamesByScope.get(join.scope) ?? [] })),
   };
-}
-
-function findMatchingParen(text: string, openIndex: number): number {
-  let depth = 0;
-  for (let index = openIndex; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "(") depth += 1;
-    if (char === ")") {
-      depth -= 1;
-      if (depth === 0) return index;
-    }
-  }
-  return -1;
 }
 
 function collectCteReads(text: string): { names: Set<string>; facts: SqlFactDraft[] } {
