@@ -8,7 +8,8 @@ import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
+import type { LanguageExtensionMap } from "../languages.js";
+import { isSqlFilePath } from "./classify-sql-file.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extract-facts.js";
 import {
   addSqlDefinition,
@@ -70,10 +71,6 @@ type SqlDefinitionCandidateMatch = {
   resolved: "heuristic" | "precise";
   confidence: number;
 };
-
-export function isSqlFile(filePath: string, languageExtensions?: LanguageExtensionMap): boolean {
-  return supportForFileWithoutHeaderSample(filePath, languageExtensions)?.id === "sql";
-}
 
 export function sqlCorpusSignature(
   sqlFiles: readonly string[],
@@ -316,7 +313,7 @@ export async function buildSqlFactCache(
   languageExtensions?: LanguageExtensionMap,
 ): Promise<SqlFactCache> {
   const sqlFiles = Array.from(
-    new Set(allFiles.map(normalizePath).filter((file) => isSqlFile(file, languageExtensions))),
+    new Set(allFiles.map(normalizePath).filter((file) => isSqlFilePath(file, languageExtensions))),
   ).sort((left, right) => left.localeCompare(right));
   const factGroups = await mapLimit(
     sqlFiles,
@@ -351,7 +348,7 @@ export async function collectSqlEdgesForFile(
   languageExtensions?: LanguageExtensionMap,
 ): Promise<Edge[]> {
   const normalizedFile = normalizePath(filePath);
-  if (!isSqlFile(normalizedFile, languageExtensions)) return [];
+  if (!isSqlFilePath(normalizedFile, languageExtensions)) return [];
   const cache = factCache ?? (await buildSqlFactCache(allFiles, languageExtensions));
   const currentFacts = cache.factsByFile.get(normalizedFile) ?? [];
   const edges: Edge[] = [];

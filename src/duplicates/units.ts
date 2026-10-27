@@ -9,7 +9,12 @@ import {
   hasUnterminatedQuotedLiteral,
   normalizeDuplicateSourceTokens,
 } from "../duplicate-token-normalization.js";
-import { supportById, supportForFileWithSource, supportForFileWithoutHeaderSample } from "../languages.js";
+import {
+  supportById,
+  supportForFileWithSource,
+  supportForFileWithoutHeaderSample,
+  type LanguageExtensionMap,
+} from "../languages.js";
 import {
   detectSFCFramework,
   parseSFC,
@@ -20,6 +25,7 @@ import {
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { attemptParsePreparedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
+import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { prepareSourceInput } from "../languages/file-prep.js";
 import { buildByteToStringIndexMap, stringIndexForByte } from "../native/byte-index.js";
 import { getNativeDuplicateTokens, getNativeSingleQueryExecution } from "../native/tree-sitter-native.js";
@@ -286,11 +292,15 @@ export function formatDuplicateSqlHandle(file: string, name: string, line: numbe
   return ["sql", encodeURIComponent(name), encodeURIComponent(file), String(line)].join(":");
 }
 
-function sqlHandleForDuplicateSymbol(symbol: SymbolDef, file: string): string | undefined {
+function sqlHandleForDuplicateSymbol(
+  symbol: SymbolDef,
+  file: string,
+  languageExtensions: LanguageExtensionMap | undefined,
+): string | undefined {
   if (symbol.kind !== SymbolKind.Routine && symbol.kind !== SymbolKind.Table && symbol.kind !== SymbolKind.View) {
     return undefined;
   }
-  if (!file.toLowerCase().endsWith(".sql")) return undefined;
+  if (!isSqlFilePath(file, languageExtensions)) return undefined;
   return formatDuplicateSqlHandle(file, symbol.localName, symbol.range.start.line);
 }
 
@@ -403,10 +413,11 @@ export function makeSymbolUnit(
   shingleSize: number,
   windowSize: number,
   astContext: DuplicateAstContext | undefined,
+  languageExtensions?: LanguageExtensionMap,
 ): DuplicateInternalUnit | undefined {
   if (!symbolUnitKinds.has(symbol.kind)) return undefined;
   const file = toProjectDisplayPath(projectRoot, symbol.file);
-  const sqlHandle = sqlHandleForDuplicateSymbol(symbol, file);
+  const sqlHandle = sqlHandleForDuplicateSymbol(symbol, file, languageExtensions);
   const symbolHandle =
     sqlHandle === undefined
       ? formatDuplicateSymbolHandle(file, symbol.localName, symbol.range.start.line, symbol.range.start.column)
@@ -788,7 +799,7 @@ export async function buildDuplicateUnitsForFile(
     .map((symbol) => {
       const chunk = findChunkForSymbol(symbol, symbolChunks);
       if (!chunk) return undefined;
-      return makeSymbolUnit(symbol, chunk, projectRoot, shingleSize, windowSize, astContext);
+      return makeSymbolUnit(symbol, chunk, projectRoot, shingleSize, windowSize, astContext, index.languageExtensions);
     })
     .filter((unit): unit is DuplicateInternalUnit => unit !== undefined);
   const chunkUnits = makeChunkUnits(file, chunks, projectRoot, shingleSize, windowSize, astContext);

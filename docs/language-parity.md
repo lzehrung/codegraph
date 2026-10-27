@@ -313,6 +313,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 ### Navigation
 
 - Not a full database analyzer: statement chunks and table, view, index, and routine symbols.
+- A file is SQL when the language registry says so: `.sql`, `.ddl`, `.pgsql`, `.mysql`, or a suffix that `languages.extensions` maps to `sql`. Navigation, rename, review context, `explain`, artifacts, and `graph` treat all of them alike.
 - An exact object name wins; an unqualified basename resolves only when exactly one definition carries it; no schema is inferred.
 - Schema-qualified names and `alias.column`/`table.column` resolve to table and view definitions; column definitions are `not_found`.
 - A qualifier naming a routine in `FROM` belongs to that routine, never a same-named table.

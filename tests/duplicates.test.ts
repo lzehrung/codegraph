@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, test } from "vitest";
 import { captureCli, runCliOrThrow, stripCliProgressLines } from "./helpers/cli.js";
+import type { Chunk } from "../src/chunking/types.js";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary, collectDuplicateLeadSummary } from "../src/duplicates-leads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
@@ -18,6 +19,7 @@ import {
 import {
   collectDuplicateUnits,
   getDuplicateAstContext,
+  makeSymbolUnit,
   maskDuplicateImportStatements,
 } from "../src/duplicates/units.js";
 import {
@@ -29,6 +31,7 @@ import {
   duplicateUnitDiskCache,
   tryLoadDuplicateUnitsFromCache,
 } from "../src/duplicates/unit-cache.js";
+import { SymbolKind, type SymbolDef } from "../src/indexer/types.js";
 import { cacheRelativePath } from "../src/indexer/build-cache/module-cache.js";
 import { brotliCompressSync } from "node:zlib";
 import {
@@ -3159,4 +3162,51 @@ test("C5: caches duplicate-only files by content signature", async () => {
   } finally {
     if (index) closeDuplicateUnitCacheForIndex(index);
   }
+});
+
+describe("duplicate unit SQL handles", () => {
+  const usersChunk: Chunk = {
+    id: "chunk-users",
+    languageId: "sql",
+    type: "create",
+    name: "users",
+    startLine: 1,
+    endLine: 3,
+    text: "CREATE TABLE users (\n  id integer,\n  email text\n);",
+    tokenCount: 12,
+  };
+
+  async function symbolIn(root: string, relativeFile: string, kind: SymbolKind, name: string): Promise<SymbolDef> {
+    const file = await writeProjectFile(root, relativeFile, "");
+    return { file, localName: name, kind, range: { start: { line: 1, column: 14 }, end: { line: 3, column: 2 } } };
+  }
+
+  // `.ddl`, `.pgsql`, and `.mysql` are built-in SQL extensions. `.sql` is the control.
+  test.each([".sql", ".ddl", ".pgsql", ".mysql"])(
+    "gives a table in a %s file the portable sql: handle",
+    async (ext) => {
+      const root = await makeTempProject();
+      const table = await symbolIn(root, `db/users${ext}`, SymbolKind.Table, "users");
+
+      const unit = makeSymbolUnit(table, usersChunk, root, 3, 4, undefined);
+
+      expect(unit?.sqlHandle).toBe(`sql:users:db%2Fusers${ext}:1`);
+      expect(unit?.symbolHandle).toBeUndefined();
+      expect(unit?.handle).toBe(unit?.sqlHandle);
+    },
+  );
+
+  test("follows languages.extensions and keeps code symbols on symbol: handles", async () => {
+    const root = await makeTempProject();
+    const mapped = await symbolIn(root, "db/users.psql", SymbolKind.Table, "users");
+    const code = await symbolIn(root, "src/users.ts", SymbolKind.Function, "users");
+
+    expect(makeSymbolUnit(mapped, usersChunk, root, 3, 4, undefined, { ".psql": "sql" })?.sqlHandle).toBe(
+      "sql:users:db%2Fusers.psql:1",
+    );
+    expect(makeSymbolUnit(mapped, usersChunk, root, 3, 4, undefined)?.sqlHandle).toBeUndefined();
+    const codeUnit = makeSymbolUnit(code, usersChunk, root, 3, 4, undefined, { ".psql": "sql" });
+    expect(codeUnit?.sqlHandle).toBeUndefined();
+    expect(codeUnit?.symbolHandle).toBe("symbol:src%2Fusers.ts:users:1:14");
+  });
 });
