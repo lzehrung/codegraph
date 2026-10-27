@@ -45,6 +45,7 @@ import {
   loadAllCachedModules,
   transformPersistedExportFromModule,
   type FileSignature,
+  isOptionalNativeOutcome,
   isOptionalRange,
   isParseErrorRange,
   isRange,
@@ -902,6 +903,7 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     ...(mod.docstringsChecked ? { docstringsChecked: true } : {}),
     ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
     ...(mod.csharpNamespaceFacts ? { csharpNamespaceFacts: mod.csharpNamespaceFacts } : {}),
+    ...(mod.nativeOutcome ? { nativeOutcome: mod.nativeOutcome } : {}),
     ...(mod.parseErrorRanges ? { parseErrorRanges: mod.parseErrorRanges } : {}),
   };
 }
@@ -1778,6 +1780,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   return (
     typeof moduleIndex.file === "string" &&
     isOptionalBoolean(moduleIndex.docstringsChecked) &&
+    isOptionalNativeOutcome(moduleIndex.nativeOutcome) &&
     Array.isArray(moduleIndex.locals) &&
     moduleIndex.locals.every(isSymbolDef) &&
     Array.isArray(moduleIndex.imports) &&

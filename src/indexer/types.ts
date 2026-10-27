@@ -113,6 +113,13 @@ export type ModuleIndex = {
   csharpNamespaceFacts?: CsharpNamespaceFacts;
   /** Outermost Tree-sitter ERROR/MISSING ranges. */
   parseErrorRanges?: ParseErrorRange[];
+  /**
+   * How native tree-sitter handled this file when it was indexed: `used` when native query results produced the
+   * module, `skipped` when native fell back (for example `sourceTooLarge`). Absent for files native does not parse,
+   * such as graph-only languages. Cached with the module so the analysis summary describes every indexed file,
+   * not only the files the current build parsed.
+   */
+  nativeOutcome?: "used" | "skipped";
 };
 
 export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "namespace"; file: FileId };

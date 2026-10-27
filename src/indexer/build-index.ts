@@ -130,6 +130,7 @@ import {
   prepareFileContextForBuild,
   countNativeWorkerEligibleFiles,
   emptyWorkerPoolSetup,
+  preparedNativeOutcome,
   setupWorkerPool,
   teardownWorkerPool,
   type WorkerPoolSetupResult,
@@ -620,6 +621,8 @@ async function buildIndexedModuleForFile(args: {
   if (tree instanceof ProjectedSyntaxTree) mod.parseErrorRanges = collectParseErrorRanges(tree);
   else if (graphOnlyLanguage) mod.parseErrorRanges = [];
   else delete mod.parseErrorRanges;
+  const nativeOutcome = preparedNativeOutcome(prepared);
+  if (nativeOutcome) mod.nativeOutcome = nativeOutcome;
   if (sup.id === "cpp") {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;

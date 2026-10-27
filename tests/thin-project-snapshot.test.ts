@@ -58,11 +58,14 @@ function sqliteModuleFiles(root: string): Set<string> {
   }
 }
 
-function sqliteModulePayloads(root: string): Array<{ file: string }> {
+function sqliteModulePayloads(root: string): Array<{ file: string; nativeOutcome?: string }> {
   const db = new DatabaseSync(sqlitePath(root));
   try {
     const rows = db.prepare("SELECT payload FROM module_cache").all() as Array<{ payload: Uint8Array }>;
-    return rows.map((row) => JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as { file: string });
+    return rows.map(
+      (row) =>
+        JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as { file: string; nativeOutcome?: string },
+    );
   } finally {
     db.close();
   }
@@ -231,6 +234,52 @@ describe("thin project snapshot", () => {
       symbols: [{ name: "undocumented" }],
       coverage: { state: "complete" },
     });
+  });
+
+  it("persists each module's native outcome and rejects a legacy snapshot with a malformed one", async () => {
+    const root = await roots.create("cg-snapshot-native-outcome-");
+    await fsp.writeFile(path.join(root, "api.ts"), "export function api() {}\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const snapshot = await readSnapshot(root);
+    const modules = new Map<string, { file: string; nativeOutcome?: string }>();
+    for (const module of sqliteModulePayloads(root)) modules.set(module.file, module);
+    for (const module of snapshot.modules) modules.set(module.file, module);
+    const api = modules.get("api.ts");
+    if (!api) throw new Error("Expected api.ts in the module cache.");
+    expect(api.nativeOutcome).toBe("used");
+    modules.set("api.ts", { ...api, nativeOutcome: "maybe" });
+    const malformed = { ...snapshot, version: 10, modules: [...modules.values()] };
+    await fsp.writeFile(
+      snapshotPath(root),
+      brotliCompressSync(JSON.stringify(malformed), { params: { [constants.BROTLI_PARAM_QUALITY]: 4 } }),
+    );
+    const manifest = await loadManifest(root, { cache: "disk" });
+    if (!manifest) throw new Error("Expected manifest after the disk build.");
+    const loaded = await tryLoadProjectIndexSnapshot(root, { cache: "disk" }, new Map(Object.entries(manifest.files)));
+    expect(loaded).toBeNull();
+  });
+
+  it("rebuilds a SQLite module with a malformed native outcome instead of reusing it", async () => {
+    const root = await roots.create("cg-module-native-outcome-");
+    await fsp.writeFile(path.join(root, "api.ts"), "export function api() {}\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const db = new DatabaseSync(sqlitePath(root));
+    try {
+      const row = db.prepare("SELECT payload FROM module_cache WHERE file = ?").get("api.ts") as
+        | { payload: Uint8Array }
+        | undefined;
+      if (!row) throw new Error("Expected cached api.ts module.");
+      const module = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as { nativeOutcome?: unknown };
+      module.nativeOutcome = "maybe";
+      db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+        brotliCompressSync(JSON.stringify(module)),
+        "api.ts",
+      );
+    } finally {
+      db.close();
+    }
+    const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+    expect(rebuilt.byFile.get(fileIdentityKey(normalizePath(path.join(root, "api.ts"))))?.nativeOutcome).toBe("used");
   });
 
   it("rebuilds quietly when SQLite module payloads are unreadable", async () => {
