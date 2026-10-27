@@ -22,6 +22,7 @@ import {
   toProjectRelativePath,
 } from "../../util/paths.js";
 import { assertRealPathCandidateWithinRoot } from "../../util/confined-file.js";
+import { isMissingPathError } from "../../util/errors.js";
 import { getGitBlobHashes } from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
 import { removeStaleTempFiles, writeFileAtomically } from "../../util/atomic-file.js";
@@ -215,7 +216,7 @@ export async function normalizeIndexedFileInputsWithinRoot(
       try {
         await assertRealPathCandidateWithinRoot(realRoot, file, label);
       } catch (error) {
-        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+        if (!isMissingPathError(error)) throw error;
       }
     }),
   );

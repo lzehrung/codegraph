@@ -235,7 +235,7 @@ codegraph index
 # Print full JSON index including locals, imports, and exports
 codegraph index --json
 
-# Force a full rebuild instead of incremental reuse
+# Print the same JSON as --json (module locals, imports, and exports); the cache is still reused
 codegraph index --full
 
 # Emit verbose index build diagnostics on stderr
