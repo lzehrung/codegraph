@@ -11,6 +11,7 @@ import {
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
 import { findSqlRoutineMentions, type SqlRoutineMention } from "./routine-mentions.js";
+import { skipWhitespace } from "../util/text-scanning.js";
 
 export type SqlNameSpan = { name: string; start: number; end: number };
 
@@ -90,12 +91,6 @@ function ctePattern(): RegExp {
   return new RegExp(CTE_SOURCE, "gi");
 }
 const ON_RE = /\bon\s+/gi;
-
-function skipWhitespace(text: string, index: number): number {
-  let cursor = index;
-  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) cursor += 1;
-  return cursor;
-}
 
 function readName(text: string, index: number): SqlNameSpan | null {
   let cursor = skipWhitespace(text, index);

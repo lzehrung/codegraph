@@ -16,6 +16,7 @@ import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { errorMessage } from "../util/errors.js";
 import { boundAgentList, defaultAgentLimit } from "./bounds.js";
+import { compareCodeUnits } from "../util/collections.js";
 import {
   formatAgentChunkHandle,
   formatAgentFileHandle,
@@ -37,7 +38,7 @@ import {
   resolveAgentSnapshotFile,
 } from "./normalize.js";
 import {
-  createAgentSession,
+  withRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
@@ -254,15 +255,7 @@ function hasSameFreshness(left: AgentFreshnessResult, right: AgentFreshnessResul
 }
 
 export async function searchCodegraph(request: AgentSearchRequest): Promise<AgentSearchResponse> {
-  const session = createAgentSession({
-    root: request.root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-  });
-  try {
-    return await searchCodegraphWithSession(session, request);
-  } finally {
-    session.invalidate();
-  }
+  return await withRequestSession(request, (session) => searchCodegraphWithSession(session, request));
 }
 
 export async function searchCodegraphWithSession(
@@ -1307,23 +1300,17 @@ function compareResults(left: MutableSearchResult, right: MutableSearchResult): 
   if (capabilityDelta !== 0) return capabilityDelta;
   const coverageDelta = right.matchedRankTerms.size - left.matchedRankTerms.size;
   if (coverageDelta !== 0) return coverageDelta;
-  const labelDelta = compareAscii(left.label, right.label);
+  const labelDelta = compareCodeUnits(left.label, right.label);
   if (labelDelta !== 0) return labelDelta;
-  const fileDelta = compareAscii(left.file, right.file);
+  const fileDelta = compareCodeUnits(left.file, right.file);
   if (fileDelta !== 0) return fileDelta;
-  return compareAscii(left.handle, right.handle);
+  return compareCodeUnits(left.handle, right.handle);
 }
 
 function capabilityRank(capability: AgentSearchResult["provenance"]["capability"]): number {
   if (capability === "semantic") return 0;
   if (capability === "graph") return 1;
   return 2;
-}
-
-function compareAscii(left: string, right: string): number {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
 }
 
 function selectTopResults(

@@ -10,7 +10,7 @@ import { isPlainRecord } from "../util/guards.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { createAgentFileLookup, normalizeAgentFilePath } from "./normalize.js";
-import { createAgentSession } from "./session.js";
+import { createRequestSession } from "./session.js";
 import type { AgentProjectSnapshot, AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
 
@@ -92,13 +92,10 @@ export async function buildCodegraphArtifact(
 ): Promise<CodegraphArtifactBuildResult> {
   const root = path.resolve(request.root);
   const outDir = path.resolve(root, request.outDir ?? DEFAULT_OUT_DIR);
-  const session = createAgentSession({
-    root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-    discovery: {
-      ignoreGlobs: outputIgnoreGlobs(root, outDir),
-    },
-  });
+  const session = createRequestSession(
+    { ...request, root },
+    { discovery: { ignoreGlobs: outputIgnoreGlobs(root, outDir) } },
+  );
   return await buildCodegraphArtifactWithSession(session, request);
 }
 

@@ -1,7 +1,7 @@
 import fs, { type BigIntStats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { errorMessage } from "./errors.js";
+import { errorMessage, isMissingPathError } from "./errors.js";
 
 export function normalizePath(p: string): string {
   return typeof p === "string" ? p.replace(/\\/g, "/") : "";
@@ -94,10 +94,6 @@ async function probeFileIdentityCaseSensitivity(resolvedRoot: string, generation
   caseInsensitiveFileIdentity = caseInsensitive;
   fileIdentityCaseSensitivityFrozen = true;
   fileIdentityCaseSensitivityRoot = resolvedRoot;
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
 }
 
 function flipPathCharacterCase(filePath: string): string | null {

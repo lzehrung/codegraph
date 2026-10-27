@@ -15,6 +15,7 @@ import { fileScopeDefinitionCoversUse } from "./scope-nodes.js";
 import type { Binding } from "./scope-types.js";
 import { definitionIdentityKey } from "./reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
+import { toTreeSitterPosition } from "./shared.js";
 
 const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
 export type CppParsedFile = { source: string; tree: SyntaxTreeLike; sup?: LanguageSupport };
@@ -823,10 +824,7 @@ export function resolveCppUsingDirectiveName(
 }
 
 function cppMemberContainerForDefinition(tree: SyntaxTreeLike, def: SymbolDef): SyntaxNodeLike | null {
-  const position = {
-    row: Math.max(0, def.range.start.line - 1),
-    column: Math.max(0, def.range.start.column - 1),
-  };
+  const position = toTreeSitterPosition(def.range.start);
   let current: SyntaxNodeLike | null = tree.rootNode.descendantForPosition(position, position);
   while (current) {
     if (CPP_MEMBER_CONTAINER_TYPES.has(current.type)) {

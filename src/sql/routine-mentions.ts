@@ -11,6 +11,7 @@ import {
   sqlSourceClauses,
   type SqlMaskOptions,
 } from "./lex.js";
+import { skipWhitespace } from "../util/text-scanning.js";
 
 /**
  * SQL keeps routines in name spaces of their own. A call names a function or a procedure
@@ -197,12 +198,6 @@ const SOURCE_MODIFIERS: WordTable = { lateral: true, only: true };
 
 function hasWord(table: WordTable, word: string): boolean {
   return Object.hasOwn(table, word);
-}
-
-function skipWhitespace(text: string, index: number): number {
-  let cursor = index;
-  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) cursor += 1;
-  return cursor;
 }
 
 function previousWord(text: string, index: number): string | undefined {

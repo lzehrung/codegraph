@@ -5,7 +5,7 @@ import type { BuildOptions } from "../indexer/types.js";
 import { openConfinedReadableFile, resolveProjectFile, type ConfinedReadableFile } from "../util/confined-file.js";
 import { fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import {
-  createAgentSession,
+  createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
@@ -121,10 +121,7 @@ const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 export async function getCodegraphFileView(request: AgentFileViewRequest): Promise<AgentFileViewResponse> {
   let session: AgentSession | undefined;
   if (request.includeGraphContext) {
-    session = createAgentSession({
-      root: request.root,
-      ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-    });
+    session = createRequestSession(request);
   }
   return await getCodegraphFileViewWithSession(session, request);
 }
@@ -167,10 +164,7 @@ export async function getCodegraphFileViewWithSession(
     if (request.includeGraphContext) {
       const activeSession =
         session ??
-        createAgentSession({
-          root,
-          ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-        });
+        createRequestSession({ root, ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}) });
       if (activeSession.checkFreshness) {
         freshness = await activeSession.checkFreshness();
       }

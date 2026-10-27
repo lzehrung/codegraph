@@ -19,3 +19,8 @@ export function matchesCaseInsensitive(source: string, start: number, value: str
   }
   return true;
 }
+export function skipWhitespace(text: string, index: number): number {
+  let cursor = index;
+  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) cursor += 1;
+  return cursor;
+}

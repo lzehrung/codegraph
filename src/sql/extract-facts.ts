@@ -20,6 +20,7 @@ import {
 import { sqlObjectLookupKeys } from "./lookup.js";
 import { SQL_ROUTINE_DEFINITION_RE } from "./routine-mentions.js";
 import type { SqlFactKind, SqlFileRole, SqlStatementFact } from "./types.js";
+import { skipWhitespace } from "../util/text-scanning.js";
 
 export { maskSqlStringsAndComments, normalizeSqlObjectName, sqlObjectBaseName } from "./lex.js";
 
@@ -655,14 +656,6 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
 }
 
 const SQL_OBJECT_MODIFIERS = new Set(["lateral", "only"]);
-
-function skipWhitespace(text: string, index: number): number {
-  let nextIndex = index;
-  while (nextIndex < text.length && /\s/.test(text[nextIndex] ?? "")) {
-    nextIndex += 1;
-  }
-  return nextIndex;
-}
 
 function objectAt(text: string, index: number, skipModifiers = SQL_OBJECT_MODIFIERS): string | null {
   let cursor = skipWhitespace(text, index);

@@ -7,12 +7,12 @@ import { defaultAgentLimit } from "./bounds.js";
 import { formatAgentSymbolHandle } from "./handles.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import {
-  createAgentSession,
+  createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
 } from "./session.js";
-import type { SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
+import { semanticProvenance, type SemanticResponseEnvelope, type SemanticSymbol } from "./semantic.js";
 
 export type AgentWorkspaceSymbolsRequest = WorkspaceSymbolsRequest & {
   root: string;
@@ -26,10 +26,7 @@ export type WorkspaceSymbolsResponse = SemanticResponseEnvelope & {
 };
 
 export async function workspaceSymbols(request: AgentWorkspaceSymbolsRequest): Promise<WorkspaceSymbolsResponse> {
-  const session = createAgentSession({
-    root: request.root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-  });
+  const session = createRequestSession(request);
   return await workspaceSymbolsWithSession(session, request);
 }
 
@@ -67,11 +64,7 @@ export async function workspaceSymbolsInSnapshot(
       kind: symbol.kind,
       location: { file, range },
       exported: symbol.exported,
-      provenance: {
-        capability: "semantic",
-        backend: snapshot.analysis.backend,
-        confidence: "high",
-      },
+      provenance: semanticProvenance(snapshot),
     };
   });
 

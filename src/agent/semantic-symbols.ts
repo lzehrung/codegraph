@@ -4,7 +4,7 @@ import type { SymbolDef } from "../indexer/types.js";
 import { formatAgentSymbolHandle, parseAgentSymbolHandle } from "./handles.js";
 import { normalizeAgentFilePath, resolveAgentSnapshotFile } from "./normalize.js";
 import type { AgentProjectSnapshot } from "./session.js";
-import type { SemanticSymbol } from "./semantic.js";
+import { semanticProvenance, type SemanticSymbol } from "./semantic.js";
 import { normalizePath } from "../util/paths.js";
 import { buildSymbolLookup } from "./symbol-lookup.js";
 
@@ -101,11 +101,7 @@ export function semanticSymbolFromDef(
     kind: def.kind,
     location: { file, range: def.range },
     exported,
-    provenance: {
-      capability: "semantic",
-      backend: snapshot.analysis.backend,
-      confidence: "high",
-    },
+    provenance: semanticProvenance(snapshot),
   };
 }
 

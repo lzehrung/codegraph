@@ -29,7 +29,7 @@ import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
 import { requireSemanticSymbol, semanticSymbolFromDef } from "./semantic-symbols.js";
 import {
-  createAgentSession,
+  createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
@@ -175,10 +175,7 @@ function incompleteReferenceCoverageReason(coverage: ReferenceCoverage): string 
 }
 
 export async function previewRename(request: RenamePreviewRequest): Promise<RenamePreviewResponse> {
-  const session = createAgentSession({
-    root: request.root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-  });
+  const session = createRequestSession(request);
   return await previewRenameWithSession(session, request);
 }
 

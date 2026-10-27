@@ -2,9 +2,10 @@ import { findCallHierarchy, type CallHierarchyDirection } from "../indexer/call-
 import type { BuildOptions } from "../indexer/types.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
+import { semanticProvenance } from "./semantic.js";
 import { requireSemanticSymbol, semanticSymbolFromDef } from "./semantic-symbols.js";
 import {
-  createAgentSession,
+  createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
@@ -34,11 +35,11 @@ export type CallHierarchyResponse = SemanticResponseEnvelope & {
 };
 
 export async function findCallers(request: CallHierarchyRequest): Promise<CallHierarchyResponse> {
-  return await runCallHierarchy(createSession(request), request, "incoming");
+  return await runCallHierarchy(createRequestSession(request), request, "incoming");
 }
 
 export async function findCallees(request: CallHierarchyRequest): Promise<CallHierarchyResponse> {
-  return await runCallHierarchy(createSession(request), request, "outgoing");
+  return await runCallHierarchy(createRequestSession(request), request, "outgoing");
 }
 
 export async function findCallersWithSession(
@@ -70,7 +71,7 @@ async function runCallHierarchy(
   if (result.status !== "ok") throw new Error(result.reason);
 
   const lookup = buildSymbolLookup(snapshot);
-  const provenance = callProvenance(snapshot);
+  const provenance = semanticProvenance(snapshot);
   const entries = result.entries.flatMap((match): CallHierarchyEntry[] => {
     const def = lookup.defById.get(match.symbolId);
     if (!def) return [];
@@ -96,21 +97,6 @@ async function runCallHierarchy(
     target: semanticSymbolFromDef(snapshot, resolved.def),
     direction,
     entries,
-  };
-}
-
-function createSession(request: CallHierarchyRequest): AgentSession {
-  return createAgentSession({
-    root: request.root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-  });
-}
-
-function callProvenance(snapshot: AgentProjectSnapshot): SemanticProvenance {
-  return {
-    capability: "semantic",
-    backend: snapshot.analysis.backend,
-    confidence: "high",
   };
 }
 

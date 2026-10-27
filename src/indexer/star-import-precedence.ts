@@ -4,6 +4,7 @@ import type { ImportBinding } from "./import-types.js";
 import { resolveImported } from "./navigation-resolve.js";
 import { sameDef } from "./reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
+import { createUnionFind } from "../util/collections.js";
 
 /**
  * What a language does when more than one star import can see the same simple name.
@@ -311,21 +312,7 @@ function compareSymbolDefs(left: SymbolDef, right: SymbolDef): number {
 }
 
 function groupStarDefinitions(index: ProjectIndex, languageId: string, defs: readonly SymbolDef[]): SymbolDef[][] {
-  const parent = defs.map((_, defIndex) => defIndex);
-  const find = (start: number): number => {
-    let current = start;
-    while (parent[current] !== current) {
-      const parentIndex = parent[current]!;
-      parent[current] = parent[parentIndex] ?? parentIndex;
-      current = parentIndex;
-    }
-    return current;
-  };
-  const unite = (left: number, right: number): void => {
-    const leftRoot = find(left);
-    const rightRoot = find(right);
-    if (leftRoot !== rightRoot) parent[rightRoot] = leftRoot;
-  };
+  const { find, unite } = createUnionFind(defs.length);
   for (let left = 0; left < defs.length; left += 1) {
     for (let right = left + 1; right < defs.length; right += 1) {
       if (sameStarIdentity(index, languageId, defs[left]!, defs[right]!)) unite(left, right);
