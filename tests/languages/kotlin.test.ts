@@ -442,6 +442,92 @@ describe("Kotlin imports with a same-named package", () => {
   });
 });
 
+describe("Kotlin declarations after a syntax error", () => {
+  // The pinned grammar cannot parse two one-line class bodies in a row: Handlers.kt's tree ends in an ERROR node after
+  // `Early`, and the declarations after it are read from the text the tree left out.
+  const handlers = [
+    "package com.acme.handlers",
+    "",
+    "class Early",
+    "",
+    "fun interface Handler { fun handle(x: Int): Int }",
+    "",
+    "class DefaultHandler : Handler { override fun handle(x: Int) = x }",
+    "object Registry { fun all(): List<Handler> = listOf() }",
+    "fun createHandler(): Handler = Handler { it }",
+    "typealias HandlerAlias = Handler",
+    "",
+  ].join("\n");
+  const importedNames = ["Early", "DefaultHandler", "Registry", "createHandler", "Handler", "HandlerAlias"];
+
+  it("resolves named imports of those declarations from Kotlin and Java, and leaves a member unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-error-declarations-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "handlers/Handlers.kt": handlers,
+        "handlers/Plain.kt": "package com.acme.handlers\n\nclass PlainHandler\nfun plainHandler() = PlainHandler()\n",
+        "app/Consumer.kt": [
+          "package com.acme.app",
+          "",
+          ...[...importedNames, "PlainHandler", "plainHandler", "handle", "all"].map(
+            (name) => `import com.acme.handlers.${name}`,
+          ),
+          "",
+        ].join("\n"),
+        "app/UseFromJava.java": [
+          "package com.acme.app;",
+          "",
+          "import com.acme.handlers.DefaultHandler;",
+          "import com.acme.handlers.Registry;",
+          "import com.acme.handlers.PlainHandler;",
+          "",
+          "class UseFromJava {",
+          "  DefaultHandler d;",
+          "  Registry r;",
+          "  PlainHandler p;",
+          "}",
+          "",
+        ].join("\n"),
+      });
+      const handlersFile = paths["handlers/Handlers.kt"]!;
+      const plainFile = paths["handlers/Plain.kt"]!;
+      const javaFile = paths["app/UseFromJava.java"]!;
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const resolvedImports = (file: string): Record<string, string> =>
+        Object.fromEntries(
+          (index.byFile.get(fileIdentityKey(file))?.imports ?? []).map((binding) => [
+            binding.from.split(".").pop()!,
+            typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+          ]),
+        );
+      expect(resolvedImports(paths["app/Consumer.kt"]!)).toEqual({
+        ...Object.fromEntries(importedNames.map((name) => [name, handlersFile])),
+        PlainHandler: plainFile,
+        plainHandler: plainFile,
+        // Members of the swallowed bodies are not top-level declarations.
+        handle: "external",
+        all: "external",
+      });
+      expect(resolvedImports(javaFile)).toEqual({
+        DefaultHandler: handlersFile,
+        Registry: handlersFile,
+        PlainHandler: plainFile,
+      });
+      const javaEdges = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(javaFile) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""))
+        .sort();
+      expect(javaEdges).toEqual([handlersFile, plainFile].sort());
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root }).map((entry) => entry.name);
+      expect(unresolved.sort()).toEqual(["com.acme.handlers.all", "com.acme.handlers.handle"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Kotlin receiver member navigation", () => {
   it("resolves property and method navigation to the proven receiver, not a local or decoy member", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-receiver-nav-"));

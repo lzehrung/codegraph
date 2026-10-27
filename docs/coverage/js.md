@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric    |   Hit | Found | Coverage |
 | --------- | ----: | ----: | -------: |
-| Lines     | 41999 | 46161 |   90.98% |
-| Functions |  6683 |  7128 |   93.76% |
-| Branches  | 34339 | 42775 |   80.28% |
+| Lines     | 45961 | 50009 |   91.91% |
+| Functions |  7161 |  7589 |   94.36% |
+| Branches  | 38204 | 47009 |   81.27% |
 
 ## Least-covered Files
 
@@ -17,8 +17,7 @@ Source: `coverage/js/lcov.info`
 | `src/cli/server.ts`                             |  0.00% |     0.00% |    0.00% |
 | `src/mcp/server.ts`                             |  0.00% |     0.00% |    0.00% |
 | `src/sqlite/raw-query-worker.ts`                |  0.00% |     0.00% |    0.00% |
-| `src/indexer/imports/js-text-imports.ts`        | 23.67% |    33.33% |   13.33% |
-| `src/indexer/imports/text-import-extractors.ts` | 35.00% |    40.00% |   28.33% |
+| `src/indexer/imports/js-text-imports.ts`        | 34.32% |    46.67% |   22.22% |
 | `src/mcp/lifecycle-health.ts`                   | 37.50% |    16.67% |   33.33% |
 | `src/languages/graph-captures.ts`               | 45.45% |    50.00% |    0.00% |
 | `src/native/backend-report-format.ts`           | 50.00% |    25.00% |   50.00% |
@@ -28,12 +27,13 @@ Source: `coverage/js/lcov.info`
 | `src/cli/artifact.ts`                           | 70.00% |   100.00% |   72.22% |
 | `src/cli/context.ts`                            | 71.78% |    62.75% |   74.77% |
 | `src/cli/rename-preview.ts`                     | 73.81% |   100.00% |   62.50% |
-| `src/native/execution.ts`                       | 74.29% |    81.82% |   59.57% |
 | `src/agent/follow-ups.ts`                       | 74.42% |    81.82% |   54.70% |
 | `src/cli/location.ts`                           | 75.00% |   100.00% |   50.00% |
 | `src/native/js-bridge.ts`                       | 75.00% |   100.00% |   16.67% |
 | `src/frameworks/angularjs.ts`                   | 75.64% |    88.46% |   57.27% |
 | `src/cli/install.ts`                            | 75.71% |    76.00% |   72.09% |
+| `src/cli/mcp.ts`                                | 75.86% |    66.67% |   78.13% |
+| `src/cli/packet.ts`                             | 76.47% |    50.00% |   62.96% |
 
 ## Type-Only Or Re-Export Files
 

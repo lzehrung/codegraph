@@ -14,12 +14,8 @@ import {
 } from "../src/indexer/types.js";
 import { supportById } from "../src/languages.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-import {
-  collectJvmFileFacts,
-  parseJvmSyntaxTree,
-  type JvmFileFacts,
-  type JvmLanguageId,
-} from "../src/util/jvm-tree.js";
+import { collectJvmFileFacts, type JvmFileFacts } from "../src/util/jvm-tree.js";
+import { parseSyntaxTree, type JvmLanguageId } from "../src/util/syntax-tree.js";
 import { createTempProjectRoot, type TempProjectFile } from "./helpers/filesystem.js";
 import { expectResolvedDef, makeTestProjectIndex } from "./helpers/narrow.js";
 
@@ -203,7 +199,7 @@ describe("sibling package export peers", () => {
   /** The facts the build stores with a Java or Kotlin module, read from the module's own source. */
   function jvmFactsOf(file: string, source: string): JvmFileFacts {
     const languageId: JvmLanguageId = file.endsWith(".kt") ? "kotlin" : "java";
-    const tree = parseJvmSyntaxTree(source, supportById(languageId)!).tree;
+    const tree = parseSyntaxTree(source, supportById(languageId)!).tree;
     if (!tree) throw new Error(`Expected a ${languageId} syntax tree for ${file}`);
     return collectJvmFileFacts(tree, languageId);
   }

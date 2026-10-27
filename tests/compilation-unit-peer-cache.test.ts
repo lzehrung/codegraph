@@ -6,8 +6,9 @@ import type { ParsedFileContext } from "../src/indexer/parse-context.js";
 import type { ModuleIndex } from "../src/indexer/types.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { CSHARP_SUPPORT, supportById } from "../src/languages.js";
-import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../src/util/csharp-tree.js";
-import { collectJvmFileFacts, parseJvmSyntaxTree, type JvmLanguageId } from "../src/util/jvm-tree.js";
+import { collectCsharpNamespaceFacts } from "../src/util/csharp-tree.js";
+import { collectJvmFileFacts } from "../src/util/jvm-tree.js";
+import { parseSyntaxTree, type JvmLanguageId } from "../src/util/syntax-tree.js";
 import { makeTestProjectIndex } from "./helpers/narrow.js";
 
 type ScanStats = { visits: number };
@@ -55,11 +56,9 @@ function jvmLanguageOf(file: string): JvmLanguageId | undefined {
 
 /** A stub module with the facts the build stores for a C#, Java, or Kotlin file; other languages carry none. */
 function moduleFor(entry: IndexedFile): ModuleIndex {
-  const csharpTree = /\.(cs|csharpx)$/.test(entry.file)
-    ? parseCsharpSyntaxTree(entry.source, CSHARP_SUPPORT).tree
-    : null;
+  const csharpTree = /\.(cs|csharpx)$/.test(entry.file) ? parseSyntaxTree(entry.source, CSHARP_SUPPORT).tree : null;
   const jvmLanguage = jvmLanguageOf(entry.file);
-  const jvmTree = jvmLanguage ? parseJvmSyntaxTree(entry.source, supportById(jvmLanguage)!).tree : null;
+  const jvmTree = jvmLanguage ? parseSyntaxTree(entry.source, supportById(jvmLanguage)!).tree : null;
   return {
     file: entry.file,
     exports: [],

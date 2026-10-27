@@ -6,6 +6,7 @@ import { buildProjectIndex, findReferences, goToDefinition } from "../../src/ind
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/worker/native-extract-worker.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
 
@@ -1057,6 +1058,46 @@ describe("Java lowercase class import bindings", () => {
         }),
         expect.objectContaining({ kind: "star", from: "com.example", jvmTypeWildcardName: "example", typeOnly: false }),
       ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Java package files without a usable syntax tree", () => {
+  // A file over the native source limit is never parsed whole, so its package comes from a bounded parse of its head. It
+  // stays in the package index and declares no names, as it did when packages were read from source text.
+  it("keeps a file over the native source limit in its package for wildcard and same-named imports", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-package-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        "p3/Big.java": `package com.acme.p3;\n\npublic class Big {}\n${padding}`,
+        "p3/Small.java": "package com.acme.p3;\n\npublic class Small {}\n",
+        "app/Use.java": [
+          "package com.acme.app;",
+          "import com.acme.p3.*;",
+          "import com.acme.p3.Big;",
+          "class Use {}",
+          "",
+        ].join("\n"),
+      });
+      const use = paths["app/Use.java"]!;
+      const big = paths["p3/Big.java"]!;
+      const small = paths["p3/Small.java"]!;
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      expect(index.byFile.get(fileIdentityKey(big))?.jvmFacts).toBeUndefined();
+      const importsFrom = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""))
+        .sort();
+      expect(importsFrom).toEqual([big, small].sort());
+      const named = index.byFile
+        .get(fileIdentityKey(use))
+        ?.imports.find((binding) => binding.from === "com.acme.p3.Big");
+      expect(named?.resolved).toBe(big);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

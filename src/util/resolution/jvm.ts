@@ -7,7 +7,8 @@ import {
   getOrCreateProjectSymbolIndex,
   type LanguageProjectSymbolIndex,
 } from "./project-symbols.js";
-import { collectJvmFileFacts, parseJvmSyntaxTree, type JvmFileFacts, type JvmLanguageId } from "../jvm-tree.js";
+import { collectJvmFileFacts, jvmPackageName, type JvmFileFacts } from "../jvm-tree.js";
+import { parseSyntaxTree, type JvmLanguageId } from "../syntax-tree.js";
 import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../paths.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
 import { JVM_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
@@ -29,7 +30,14 @@ export function primeJvmFileFacts(file: string, facts: JvmFileFacts): void {
   jvmFileFactsCache.set(fileIdentityKey(file), facts);
 }
 
-/** The facts of one file, or `null` when its tree is unavailable, which leaves its declarations unknown. */
+/** How much of a file's start is parsed for its package clause when the whole file has no usable tree. */
+const PACKAGE_HEAD_CHARS = 64 * 1024;
+
+/**
+ * The facts of one file. A file without a usable tree (too large, too many nodes, a parse failure) is known by its
+ * package clause alone, read from a bounded parse of its head: it stays in the package index and declares no names.
+ * `null` when even that parse fails.
+ */
 async function readJvmFileFacts(filePath: string, languageId: JvmLanguageId): Promise<JvmFileFacts | null> {
   const key = fileIdentityKey(filePath);
   const cached = jvmFileFactsCache.get(key);
@@ -38,8 +46,11 @@ async function readJvmFileFacts(filePath: string, languageId: JvmLanguageId): Pr
   const source = await readUtf8WithoutBom(filePath);
   const support = supportById(languageId);
   const tooLarge = Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES;
-  const tree = support && !tooLarge ? parseJvmSyntaxTree(source, support).tree : null;
-  const facts = tree ? collectJvmFileFacts(tree, languageId) : null;
+  const tree = support && !tooLarge ? parseSyntaxTree(source, support).tree : null;
+  const head = support && !tree ? parseSyntaxTree(source.slice(0, PACKAGE_HEAD_CHARS), support).tree : null;
+  let facts: JvmFileFacts | null = null;
+  if (tree) facts = collectJvmFileFacts(tree, languageId);
+  else if (head) facts = { packageName: jvmPackageName(head, languageId), symbols: [] };
   jvmFileFactsCache.set(key, facts);
   return facts;
 }

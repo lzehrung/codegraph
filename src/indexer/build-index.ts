@@ -30,7 +30,8 @@ import {
 } from "../util/resolution.js";
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
 import { collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
-import { collectJvmFileFacts, isJvmLanguage } from "../util/jvm-tree.js";
+import { collectJvmFileFacts } from "../util/jvm-tree.js";
+import { isJvmLanguage, readsSyntaxTree } from "../util/syntax-tree.js";
 import { primeCsharpNamespaceFacts } from "../util/resolution/csharp.js";
 import { primeJvmFileFacts, resolveJvmPackageImportPaths } from "../util/resolution/jvm.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
@@ -596,7 +597,7 @@ async function buildIndexedModuleForFile(args: {
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,
           sup,
-          ...((sup.id === "csharp" || jvmLanguageId) && tree ? { tree } : {}),
+          ...(readsSyntaxTree(sup.id) && tree ? { tree } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
           ...sharedImportOptions,
         });
@@ -2875,7 +2876,7 @@ export async function buildProjectIndexIncremental(
           const dependentLanguage = dependentsToPrime.has(file)
             ? supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id
             : undefined;
-          if (dependentLanguage === "csharp" || isJvmLanguage(dependentLanguage)) {
+          if (readsSyntaxTree(dependentLanguage)) {
             const key = fileIdentityKey(file);
             const sigInfo = fileSignatures.get(file)!;
             const reusable =

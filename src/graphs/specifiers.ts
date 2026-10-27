@@ -1,8 +1,9 @@
 import { type LanguageSupport } from "../languages.js";
 import { parsePhpImportStatement, parseRustImportStatements } from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { collectCsharpImportDirectives, csharpUsingDirective, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
-import { collectJvmImportDirectives, isJvmLanguage, parseJvmSyntaxTree } from "../util/jvm-tree.js";
+import { collectCsharpImportDirectives, csharpUsingDirective } from "../util/csharp-tree.js";
+import { collectJvmImportDirectives } from "../util/jvm-tree.js";
+import { isJvmLanguage, parseSyntaxTree, readsSyntaxTree } from "../util/syntax-tree.js";
 import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import type { BuildReport } from "../indexer/types.js";
 import { errorMessage } from "../util/errors.js";
@@ -257,10 +258,10 @@ export function collectModuleSpecifiersFromSource(
   }
 
   const jvmLanguageId = isJvmLanguage(support.id) ? support.id : undefined;
-  if (support.id === "csharp" || jvmLanguageId) {
+  if (readsSyntaxTree(support.id)) {
     let tree = opts?.tree;
     if (!tree) {
-      const parsed = jvmLanguageId ? parseJvmSyntaxTree(source, support) : parseCsharpSyntaxTree(source, support);
+      const parsed = parseSyntaxTree(source, support);
       if (!parsed.tree) {
         if (opts?.file) {
           recordParserBackendDegradation(opts.report, {

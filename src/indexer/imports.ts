@@ -20,12 +20,15 @@ import {
 } from "../native/tree-sitter-native.js";
 import type { NativeQueryExecution, NativeQueryResults } from "../native/tree-sitter-native.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
+import { collectCsharpImportDirectives } from "../util/csharp-tree.js";
+import { collectJvmImportDirectives, jvmPackageName } from "../util/jvm-tree.js";
 import {
-  collectCsharpImportDirectives,
-  csharpSyntaxTreeFromNativeExecution,
-  parseCsharpSyntaxTree,
-} from "../util/csharp-tree.js";
-import { collectJvmImportDirectives, isJvmLanguage, jvmPackageName, parseJvmSyntaxTree } from "../util/jvm-tree.js";
+  isJvmLanguage,
+  parseSyntaxTree,
+  readsSyntaxTree,
+  syntaxTreeFromNativeExecution,
+  type SyntaxTreeResult,
+} from "../util/syntax-tree.js";
 import { applyCsharpImportDirective, applyJvmImportDirective } from "./imports/import-binding-tables.js";
 import type { ImportResolverOptions, ResolvedImportTarget } from "./imports/context.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./imports/binding-ranges.js";
@@ -90,36 +93,25 @@ export async function collectImportsForFile(
   assertNativeRequiredAvailable();
   // C# and the JVM languages read their imports from one syntax tree, so none of them has an import query.
   const jvmLanguageId = isJvmLanguage(resolvedSup.id) ? resolvedSup.id : undefined;
-  const readsTree = resolvedSup.id === "csharp" || !!jvmLanguageId;
+  const readsTree = readsSyntaxTree(resolvedSup.id);
   let nativeExecution: NativeQueryExecution | null = null;
   let resolvedNativeQueries: NativeQueryResults | null = opts?.nativeQueries ?? null;
   let directiveTree: SyntaxTreeLike | null | undefined = readsTree ? opts?.tree : undefined;
+  let extractionTree: SyntaxTreeResult | undefined;
   if (opts?.nativeQueries === undefined && !jvmLanguageId) {
     if (resolvedSup.id === "csharp") {
       const extraction = getNativeExtractionExecution(resolvedSource, resolvedSup);
       nativeExecution = extraction;
       resolvedNativeQueries = extraction.results;
-      if (directiveTree === undefined) {
-        const parsed = csharpSyntaxTreeFromNativeExecution(resolvedSource, extraction);
-        directiveTree = parsed.tree;
-        if (!parsed.tree) {
-          recordParserBackendDegradation(opts?.report, {
-            file: file.replace(/\\/g, "/"),
-            languageId: resolvedSup.id,
-            ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
-            ...(parsed.error ? { nativeError: parsed.error } : {}),
-          });
-        }
-      }
+      // The extraction has parsed the file already, so a tree that is still needed comes from that parse.
+      if (directiveTree === undefined) extractionTree = syntaxTreeFromNativeExecution(resolvedSource, extraction);
     } else {
       nativeExecution = getNativeQueryExecution(resolvedSource, resolvedSup);
       resolvedNativeQueries = nativeExecution.results;
     }
   }
   if (readsTree && directiveTree === undefined) {
-    const parsed = jvmLanguageId
-      ? parseJvmSyntaxTree(resolvedSource, resolvedSup)
-      : parseCsharpSyntaxTree(resolvedSource, resolvedSup);
+    const parsed = extractionTree ?? parseSyntaxTree(resolvedSource, resolvedSup);
     directiveTree = parsed.tree;
     if (!parsed.tree) {
       recordParserBackendDegradation(opts?.report, {

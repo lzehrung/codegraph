@@ -13,16 +13,17 @@ import {
   __setNativeTreeSitterBindingForTests,
 } from "../src/native/tree-sitter-native.js";
 import {
+  MAX_UNREAD_CHARS,
+  MAX_UNREAD_PARSES,
   collectJvmFileFacts,
   collectJvmImportDirectives,
   isJvmFileFacts,
   jvmPackageName,
-  parseJvmSyntaxTree,
-  type JvmLanguageId,
 } from "../src/util/jvm-tree.js";
+import { parseSyntaxTree, type JvmLanguageId } from "../src/util/syntax-tree.js";
 
 function treeFor(languageId: JvmLanguageId, source: string): SyntaxTreeLike {
-  const tree = parseJvmSyntaxTree(source, supportById(languageId)!).tree;
+  const tree = parseSyntaxTree(source, supportById(languageId)!).tree;
   if (!tree) throw new Error(`Expected a ${languageId} syntax tree`);
   return tree;
 }
@@ -134,6 +135,25 @@ describe("JVM top-level declarations", () => {
     expect(facts.javaTypes).toEqual(["Top", "Obj", "Iface", "En"]);
   });
 
+  it("names a Kotlin extension function after its receiver type, but not a function type or type parameters", () => {
+    const source = [
+      "package p",
+      "fun String.shout() {}",
+      'fun String?.orEmpty2() = this ?: ""',
+      "fun List<String>.firstOrNone() = firstOrNull()",
+      "fun a.b.Qualified.bar() {}",
+      "fun (() -> Unit).runTwice() {}",
+      "fun ((Int) -> Int).twice(): Int = 0",
+      "fun <T> Set<T>.second(): T = first()",
+      "fun plain() {}",
+      "",
+    ].join("\n");
+
+    // The receiver type names the function, as it always has; a parenthesized receiver and a function with type
+    // parameters name nothing, so `Unit`, `Int`, `Set`, and `T` stay undeclared.
+    expect(collectJvmFileFacts(treeFor("kotlin", source), "kotlin").symbols).toEqual(["String", "List", "a", "plain"]);
+  });
+
   it("accepts the facts it produces and rejects a malformed persisted row", () => {
     expect(isJvmFileFacts(collectJvmFileFacts(treeFor("kotlin", "package p\nclass A\n"), "kotlin"))).toBe(true);
     expect(isJvmFileFacts({ packageName: null, symbols: [] })).toBe(true);
@@ -146,6 +166,133 @@ describe("JVM top-level declarations", () => {
       { packageName: null, symbols: [], javaTypes: "A" },
     ];
     for (const value of malformed) expect(isJvmFileFacts(value), JSON.stringify(value)).toBe(false);
+  });
+});
+
+describe("JVM facts after a syntax error", () => {
+  /** Whether the tree has an ERROR node at its top, as the pinned Kotlin grammar gives two one-line class bodies. */
+  function hasTopLevelError(tree: SyntaxTreeLike): boolean {
+    const root = tree.rootNode;
+    return root.type === "ERROR" || root.namedChildren.some((node) => node.type === "ERROR");
+  }
+
+  it("reads the declarations an ERROR left out of the tree, and none of the members of their bodies", () => {
+    const source = [
+      "package com.acme.handlers",
+      "",
+      "class Early",
+      "",
+      "fun interface Handler { fun handle(x: Int): Int }",
+      "",
+      "class DefaultHandler : Handler { override fun handle(x: Int) = x }",
+      "object Registry { fun all(): List<Handler> = listOf() }",
+      "fun createHandler(): Handler = Handler { it }",
+      "typealias HandlerAlias = Handler",
+      "",
+    ].join("\n");
+    const tree = treeFor("kotlin", source);
+    expect(hasTopLevelError(tree), "the pinned grammar no longer fails on this source").toBe(true);
+
+    const facts = collectJvmFileFacts(tree, "kotlin");
+
+    // `handle` and `all` are members of the swallowed bodies.
+    expect(facts.symbols).toEqual(["Early", "Handler", "DefaultHandler", "Registry", "createHandler", "HandlerAlias"]);
+    expect(facts.javaTypes).toEqual(["Early", "Handler", "DefaultHandler", "Registry"]);
+  });
+
+  it("counts a declaration an ERROR holds outside braces as top-level, and the text after it", () => {
+    const source = [
+      "package p",
+      "fun consume(): Int {",
+      "  return }x()",
+      "}",
+      "class After { fun member() {} }",
+      "object Obj",
+      "",
+    ].join("\n");
+    const tree = treeFor("kotlin", source);
+    expect(hasTopLevelError(tree), "the pinned grammar no longer fails on this source").toBe(true);
+
+    const facts = collectJvmFileFacts(tree, "kotlin");
+
+    expect(facts.symbols).toEqual(["consume", "After", "Obj"]);
+    expect(facts.javaTypes).toEqual(["After", "Obj"]);
+  });
+
+  it("reads the declarations after a stray token, without the members of their bodies", () => {
+    const source = ["package p", "class Before", ")", "class After { fun m() {} }", "fun later() {}", ""].join("\n");
+    const tree = treeFor("kotlin", source);
+    expect(hasTopLevelError(tree), "the pinned grammar no longer fails on this source").toBe(true);
+
+    const facts = collectJvmFileFacts(tree, "kotlin");
+
+    expect(facts.symbols).toEqual(["Before", "After", "later"]);
+    expect(facts.javaTypes).toEqual(["Before", "After"]);
+  });
+
+  it("never declares the members of one-line bodies, whichever follow the first one", () => {
+    const source = [
+      "package p",
+      "class Outer { fun member() {} }",
+      "class Second { fun other() {} }",
+      "class Third { val x = 1 }",
+      "val topLevelProperty = 1",
+      "fun top() {}",
+      "",
+    ].join("\n");
+    const tree = treeFor("kotlin", source);
+    expect(hasTopLevelError(tree), "the pinned grammar no longer fails on this source").toBe(true);
+
+    expect(collectJvmFileFacts(tree, "kotlin").symbols).toEqual(["Outer", "Second", "Third", "top"]);
+  });
+
+  it("reads nothing from text that begins inside a brace the ERROR leaves open", () => {
+    // The grammar fails at the second member of the first body, so the text after the ERROR is still inside that
+    // body. Its members stay undeclared, and so do the declarations after it: a miss, never a member as top-level.
+    const source = [
+      "package p",
+      "class Outer { fun member() {} val prop = 1 }",
+      "class Impl : Base { override fun member() {} fun created() {} }",
+      "typealias Alias = Outer",
+      "fun top() {}",
+      "",
+    ].join("\n");
+    const tree = treeFor("kotlin", source);
+    expect(hasTopLevelError(tree), "the pinned grammar no longer fails on this source").toBe(true);
+
+    expect(collectJvmFileFacts(tree, "kotlin").symbols).toEqual([]);
+  });
+
+  it("stops after the parse limit and keeps the names read so far, in source order", () => {
+    const names = Array.from({ length: MAX_UNREAD_PARSES }, (_, index) => `C${index}`);
+    // Each stray `)` ends the tree again, so every declaration costs two parses.
+    const source = ["package p", ...names.flatMap((name) => [`class ${name}`, ")"]), ""].join("\n");
+    const tree = treeFor("kotlin", source);
+    const parsed = recordStandaloneTreeParses();
+
+    const { symbols } = collectJvmFileFacts(tree, "kotlin");
+
+    expect(parsed).toHaveLength(MAX_UNREAD_PARSES);
+    expect(symbols.length).toBeGreaterThan(0);
+    expect(symbols.length).toBeLessThan(names.length);
+    expect(symbols).toEqual(names.slice(0, symbols.length));
+  });
+
+  it("does not read again a part longer than the character limit", () => {
+    const source = ["package p", "class Before", ")", "class After", "", "\n".repeat(MAX_UNREAD_CHARS)].join("\n");
+    const tree = treeFor("kotlin", source);
+    const parsed = recordStandaloneTreeParses();
+
+    expect(collectJvmFileFacts(tree, "kotlin").symbols).toEqual(["Before"]);
+    expect(parsed.every((text) => text.length <= MAX_UNREAD_CHARS)).toBe(true);
+  });
+
+  it("parses nothing again for a tree without an ERROR", () => {
+    const tree = treeFor("kotlin", "package p\nclass A { fun a() {} }\nfun b() {}\n");
+    const parsed = recordStandaloneTreeParses();
+
+    expect(collectJvmFileFacts(tree, "kotlin").symbols).toEqual(["A", "b"]);
+    expect(parsed).toEqual([]);
   });
 });
 

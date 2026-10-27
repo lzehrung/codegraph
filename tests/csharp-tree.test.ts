@@ -29,11 +29,8 @@ import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { captureCli } from "./helpers/cli.js";
-import {
-  collectCsharpImportDirectives,
-  collectCsharpNamespaceFacts,
-  parseCsharpSyntaxTree,
-} from "../src/util/csharp-tree.js";
+import { collectCsharpImportDirectives, collectCsharpNamespaceFacts } from "../src/util/csharp-tree.js";
+import { parseSyntaxTree } from "../src/util/syntax-tree.js";
 
 function setNativeTreeParseFailure(message: string): () => number {
   const state = loadBinding();
@@ -139,7 +136,7 @@ function countNativeTreeParses(): () => number {
 }
 
 function treeForSource(source: string): SyntaxTreeLike {
-  const tree = parseCsharpSyntaxTree(source, CSHARP_SUPPORT).tree;
+  const tree = parseSyntaxTree(source, CSHARP_SUPPORT).tree;
   if (!tree) throw new Error("Expected a C# syntax tree");
   return tree;
 }
@@ -150,13 +147,13 @@ afterEach(() => {
 
 describe("C# syntax-tree outcomes", () => {
   it("distinguishes parsed-empty syntax from an unavailable native tree", () => {
-    const empty = parseCsharpSyntaxTree("", CSHARP_SUPPORT);
+    const empty = parseSyntaxTree("", CSHARP_SUPPORT);
     expect(empty.tree).not.toBeNull();
     expect(empty.fallbackReason).toBeUndefined();
     expect(collectCsharpNamespaceFacts(empty.tree!).regions).toEqual([]);
 
     setNativeTreeParseFailure("forced C# tree parse failure");
-    expect(parseCsharpSyntaxTree("namespace N; class T {}\n", CSHARP_SUPPORT)).toEqual({
+    expect(parseSyntaxTree("namespace N; class T {}\n", CSHARP_SUPPORT)).toEqual({
       tree: null,
       fallbackReason: "queryFailure",
       error: "forced C# tree parse failure",
