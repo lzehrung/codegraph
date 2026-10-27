@@ -93,6 +93,7 @@ Filename results are suggestions only.
 - Config globs are project-root-relative; CLI `--include-glob` / `--ignore-glob` filters are relative to each scan root. For `duplicates`, they do not alter the shared project-index cache. Use `--no-gitignore` only for deliberately included ignored files.
 - Current-state CLI queries reuse and validate the disk index. `init`, `index`, and `sync` are not prerequisites.
 - Check MCP `freshness`; on `stale`, run `refresh_index` and repeat the query. `artifact_build` requires fresh state and write access. `unchecked` comes only from an embedded manual-policy session: it cannot check or build a SQLite artifact, so rebuild the artifact with `codegraph artifact --sqlite`.
+- The MCP server watches project files and refreshes the index in the background by default (`--no-watch` turns that off), so a `stale` answer after a large change burst, such as a branch switch, usually clears on its own.
 - Plain `get_file` / `codegraph file` reads live bytes; optional indexed context can be stale.
 - Recognized sensitive files return summaries or metadata. Enable `--allow-sensitive` / `allowSensitive: true` only for deliberate raw access.
 

@@ -616,6 +616,29 @@ describe("CLI index progress", () => {
     }
   });
 
+  it("leaves the MCP file watcher on by default and forwards --no-watch", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-mcp-watch-"));
+    const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
+
+    try {
+      const captureOptions = {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+        progressPreparationDelayMs: 0,
+      };
+      await captureCli(["mcp", "serve", "--root", root], captureOptions);
+      await captureCli(["mcp", "serve", "--root", root, "--no-watch"], captureOptions);
+      await captureCli(["mcp", "serve", "--root", root, "--no-watch", "--no-warmup"], captureOptions);
+
+      expect(serveSpy.mock.calls[0]?.[0]).not.toHaveProperty("watch");
+      expect(serveSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ watch: false, warmup: "base" }));
+      expect(serveSpy).toHaveBeenNthCalledWith(3, expect.objectContaining({ watch: false, warmup: "off" }));
+    } finally {
+      serveSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports index checks without build/update progress for representative warm cache hits", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-warm-progress-"));
     const file = path.join(root, "main.ts");

@@ -60,7 +60,7 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     return;
   }
 
-  const { handlers, session } = await createWarmedCodegraphMcpResources(options);
+  const { handlers, session, closeWatcher } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const protocolFactory = createCodegraphMcpProtocolFactory(
     handlers,
@@ -86,6 +86,7 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     });
   } finally {
     protocolFactory.stop();
+    closeWatcher();
     await protocolFactory.drain();
     session.invalidate();
   }

@@ -61,6 +61,7 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
     ...(artifactPath !== undefined ? { artifactPath } : {}),
     ...(context.buildOptions !== undefined ? { buildOptions: context.buildOptions } : {}),
     warmup,
+    ...(context.hasFlag("--no-watch") ? { watch: false } : {}),
     ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
     onHttpListen: (info) => {
       context.writeStderrLine(`Codegraph MCP HTTP server listening at ${info.url}`);

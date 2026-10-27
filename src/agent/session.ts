@@ -82,6 +82,11 @@ export type AgentSession = {
   /** Bucketed duplicate-detection analysis for the current index, memoized for the session. */
   loadDuplicateAnalysis?: () => Promise<DuplicatePreparedAnalysis>;
   checkFreshness?: () => Promise<AgentFreshnessResult>;
+  /**
+   * Drops the cached freshness result and any in-flight freshness check so the next `checkFreshness` scans
+   * again. File-watcher hint: the pull check stays the authority. Does not invalidate the index itself.
+   */
+  markChanged?: () => void;
   invalidate: () => void;
 };
 
@@ -384,6 +389,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let lastFreshnessCheckedAt = 0;
   let lastFreshnessResult: AgentFreshnessResult | undefined;
   let freshnessInFlight: Promise<AgentFreshnessResult> | undefined;
+  // Bumped by markChanged. A scan that started under an older generation may have read files before the edit
+  // that bumped it, so it must not cache its result.
+  let changeGeneration = 0;
 
   const invalidate = (): void => {
     runSessionInvalidationHooks(session);
@@ -398,6 +406,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     cachedFileSignatures = undefined;
     cachedConfigurationIdentity = undefined;
     cachedDuplicateAnalysis = undefined;
+    lastFreshnessCheckedAt = 0;
+    lastFreshnessResult = undefined;
+    freshnessInFlight = undefined;
+  };
+
+  const markChanged = (): void => {
+    changeGeneration += 1;
     lastFreshnessCheckedAt = 0;
     lastFreshnessResult = undefined;
     freshnessInFlight = undefined;
@@ -608,6 +623,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     }
     if (freshnessInFlight) return freshnessInFlight;
 
+    const generation = changeGeneration;
     freshnessInFlight = (async (): Promise<AgentFreshnessResult> => {
       if (cachedBase) await cachedBase;
       else if (cachedFilePlan) await cachedFilePlan;
@@ -677,8 +693,10 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
           }
         }
       }
-      lastFreshnessCheckedAt = Date.now();
-      lastFreshnessResult = result;
+      if (generation === changeGeneration) {
+        lastFreshnessCheckedAt = Date.now();
+        lastFreshnessResult = result;
+      }
       return result;
     })().finally(() => {
       freshnessInFlight = undefined;
@@ -694,6 +712,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     loadProject,
     loadDuplicateAnalysis,
     checkFreshness,
+    markChanged,
     invalidate,
   };
   return session;

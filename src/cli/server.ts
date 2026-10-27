@@ -50,6 +50,7 @@ const SERVER_COMMAND_FLAGS: Record<ServerCommand, readonly string[]> = {
     "--warmup",
     "--warmup-symbols",
     "--no-warmup",
+    "--no-watch",
     "--workers",
     "--json",
     "--pretty",
@@ -65,7 +66,7 @@ const FORWARDED_VALUE_OPTIONS = [
   "--resolution-hint",
   "--threads",
 ] as const;
-const FORWARDED_FLAGS = ["--cache-strict", "--cache-verify", "--no-gitignore", "--workers"] as const;
+const FORWARDED_FLAGS = ["--cache-strict", "--cache-verify", "--no-gitignore", "--no-watch", "--workers"] as const;
 
 class ServerUsageError extends Error {}
 type ServerHealth = {

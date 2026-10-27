@@ -75,7 +75,7 @@ export async function startCodegraphMcpHttpServer(
   const mcpToolTimeoutMs = assertMcpToolTimeout(configuredMcpToolTimeout);
   const host = options.host ?? "127.0.0.1",
     lifecycleHealth = await import("./lifecycle-health.js");
-  const { handlers, session } = await createWarmedCodegraphMcpResources(options);
+  const { handlers, session, closeWatcher } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const installedVersionChecker = createInstalledVersionChecker(runtimeIdentity, { warn: () => {} });
   const protocolFactory = createCodegraphMcpProtocolFactory(
@@ -107,6 +107,7 @@ export async function startCodegraphMcpHttpServer(
     closeResourcesPromise ??= (async () => {
       protocolFactory.stop();
       sessionStore.stop();
+      closeWatcher();
       try {
         await closeMcpResources(sessionStore.sessions, modernHandler.close);
       } finally {

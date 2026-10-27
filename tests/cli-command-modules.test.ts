@@ -373,6 +373,7 @@ describe("CLI command modules", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("--stdio");
     expect(MCP_SERVE_HELP_TEXT).toMatch(/--warmup\s/);
     expect(MCP_SERVE_HELP_TEXT).toContain("--warmup-symbols");
+    expect(MCP_SERVE_HELP_TEXT).toContain("--no-watch");
     expect(MCP_SERVE_HELP_TEXT).toContain("--include-glob");
     expect(MCP_SERVE_HELP_TEXT).toContain("--ignore-glob");
     expect(MCP_SERVE_HELP_TEXT).toContain("orient");

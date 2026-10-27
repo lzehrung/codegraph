@@ -525,6 +525,7 @@ The `graph.json` artifact is self-describing (`schemaVersion: 2`, `format: "code
 `createAgentSession()` (from `@lzehrung/codegraph-core/agent`) keeps one in-process project snapshot warm for repeated explore, orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report.
 Session callers can use `freshness: { policy: "check" | "auto" | "manual" }` plus `checkFreshness()` to detect file edits before reusing a warm snapshot. `check` reports stale state without invalidating, `auto` invalidates for bounded changes, and stale results include `changedFileCount`, `omittedChangedFileCount`, `reason`, and a bounded changed-file sample. Freshness checks also validate cached discovery file lists and path-only sessions before full project indexing, reflecting added, deleted, and renamed files under `auto` without forcing semantic graph construction.
 Files that disappear between discovery and signature capture remain detectable as deletions on the next freshness check.
+A host that learns of an edit sooner than the 5-second check interval, for example from its own file watcher, can call `session.markChanged()`. It drops the cached freshness result and any check that is still running, so the next `checkFreshness()` scans again; the call itself does not invalidate the snapshot. A check that started before the call does not cache its result.
 `manual` skips freshness bookkeeping entirely: `checkFreshness()` returns `{ state: "unchecked", reason }` without comparing anything, the snapshot is reused until the caller calls `invalidate()`, and consumers that handle every freshness state must handle `unchecked`. Rename previews and refactor plans report `safe: false` for an unchecked session. Because it records no file signatures, a manual session cannot build a SQLite artifact, and `query_sqlite` rejects a stale artifact instead of rebuilding it; rebuild it from a `check` or `auto` session.
 Set `buildOptions.useNativeWorkers` to `false` to opt out. Automatic native workers use at most
 eight threads and reserve at least one quarter of available CPU capacity when more than one CPU
@@ -559,6 +560,15 @@ Handler sets created without `session` own their session; call `handlers.dispose
 `serveCodegraphMcp()` (from `@lzehrung/codegraph/mcp`) starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution.
 
 `CodegraphMcpServerOptions.mcpToolConcurrency` caps concurrent calls per protocol session (default `4`); saturation returns a retryable busy error. `httpBodyTimeoutMs` bounds HTTP request-body receipt (default `30_000` ms), returning HTTP 408 on expiry; `mcpToolTimeoutMs` bounds each tool execution on stdio and HTTP (default `1_800_000` ms, `0` disables), aborting the handler with a deadline error that names the tool and limit. Supplied values must be whole milliseconds from `0` through `2_147_483_647` for `mcpToolTimeoutMs`, or `1` through `2_147_483_647` for `httpBodyTimeoutMs`; startup throws for other values.
+
+`serveCodegraphMcp()` watches the project root and refreshes the index in the background when Codegraph creates the session, on stdio and on HTTP alike; see [File watcher](./mcp.md#file-watcher). The CLI exposes only `--no-watch`; the other options are library-only:
+
+- `watch: false` turns the watcher off. A supplied `session` is never watched.
+- `watchDebounceMs` (default `500`): quiet time after the last file event before a background refresh starts.
+- `watchMinRefreshIntervalMs` (default `5_000`): minimum time between background refresh starts.
+- `watchIdleMs` (default `1_800_000`; `0` never pauses): pauses the watcher after this long without a tool call. The next tool call resumes it.
+
+The three millisecond options must be whole numbers from `0` through `2_147_483_647`; startup throws for other values.
 
 Concurrent `refresh_index` calls serialize and each applies its requested `warmup` after the preceding refresh completes. Client cancellation returns promptly but retains its concurrency slot until shared work settles, so cancellation cannot create unbounded background work. The MCP SDK aborts only the individual HTTP request when its response socket closes; the shared protocol session remains usable.
 

@@ -41,6 +41,8 @@ codegraph mcp serve --root . --port 7331 --warmup-symbols
 
 `--warmup` builds the base session cache before serving requests (the default). `--warmup-symbols` also builds the detailed symbol graph before serving requests. `--no-warmup` skips both and starts lazily.
 
+The server also watches the project for file changes and refreshes the index in the background. Pass `--no-watch` to turn that off; see [File watcher](#file-watcher).
+
 The shared HTTP endpoint is `http://127.0.0.1:7331/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when another machine or container must reach it.
 
 Stdio servers exit when the client closes stdin, when an IPC parent disconnects, or after `--idle-timeout-ms` of inactivity (default 30 minutes; `0` disables the idle timer). The CLI option is valid only with `--stdio`; HTTP transport has its own 30-minute idle session eviction.
@@ -122,10 +124,30 @@ Text and hybrid searches reuse a prepared handle for `.codegraph/cache/index-v1/
 
 If the sidecar is busy or unavailable, MCP uses the same exact in-memory matcher. [How it works](./how-it-works.md#cache-and-session-behavior) explains the search cache.
 
-Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits. Concurrent refresh, artifact build, and automatic SQLite artifact refresh operations serialize per MCP server so each bundle is written consistently. With write access, `query_sqlite` refreshes codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
+Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits (the [file watcher](#file-watcher) rebuilds in the background after such a burst unless `--no-watch` is set). Concurrent refresh, artifact build, and automatic SQLite artifact refresh operations serialize per MCP server so each bundle is written consistently. With write access, `query_sqlite` refreshes codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
 A session created with `freshness: { policy: "manual" }` (only possible when a library caller passes its own session to `createCodegraphMcpHandlers`) reports `freshness.state: "unchecked"`. It records no file signatures, so it cannot check a SQLite artifact or build a new one: `query_sqlite` rejects a stale artifact with that explanation, and `artifact_build` fails. Rebuild the artifact from a session whose policy is `check` or `auto`, for example with `codegraph artifact --sqlite`.
 `get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server. Legacy paired names (`callers`, `callees`, `supertypes`, `subtypes`, `deps`, and `rdeps`) remain accepted by `tools/call` as aliases, but only the unified tools appear in `tools/list`.
+
+### File watcher
+
+`mcp serve` and `server start` watch the project root while the server runs, unless you pass `--no-watch`. The watcher is a hint: the freshness check that every index-backed tool call runs stays the authority, so a missed event costs speed, never correctness.
+
+- A file event outside `.git`, `node_modules`, `.codegraph`, and `.codegraph-cache` clears the cached freshness result at once. The next query then runs the full check instead of reusing a result that can be up to 5 seconds old.
+- 500 ms after the last event, and at least 5 seconds after the previous background refresh started, the server runs the freshness check and rebuilds the index in the background. A query that arrives during the rebuild waits for it, as on a cold start.
+- The background rebuild also covers a change burst above the automatic refresh limits (50 files or 2 MB, for example a branch switch), which a query alone reports as `stale` until `refresh_index`. A session that cannot read its configuration keeps its snapshot, as it does without the watcher.
+- One refresh runs at a time, and events during it schedule exactly one more. A failed refresh writes `[codegraph] watch refresh failed: <message>` to stderr and leaves the freshness check as it was.
+- After 30 minutes without a tool call, the server closes every watch and cancels pending refreshes. The next tool call reopens the watches and clears the cached freshness result first, so the check sees every edit made during the pause. This matters most for `codegraph server start`, whose process lives until `server stop`.
+- Windows and macOS use one recursive watch on the root. Other platforms use one watch per directory that holds a discovered file, because Node's recursive watching on Linux walks the whole tree, `node_modules` included, and can exhaust inotify watches.
+- If the system runs out of watches or file descriptors, the server logs `file watching disabled: <code>` and relies on the freshness check alone. Network drives and some container mounts may not deliver events; the freshness check still applies.
+- With `--no-warmup`, the watches open on the first tool call. Handlers from `createCodegraphMcpHandlers` and servers started with a caller-supplied `session` are not watched.
+
+The CLI exposes only `--no-watch`. Library callers of `serveCodegraphMcp` can tune the watcher (see the [library API](./library-api.md)):
+
+- `watch`: `false` turns the watcher off. Defaults to on.
+- `watchDebounceMs`: quiet time after the last event. Defaults to `500`.
+- `watchMinRefreshIntervalMs`: minimum time between background refresh starts. Defaults to `5000`.
+- `watchIdleMs`: time without a tool call before the watcher pauses; `0` never pauses. Defaults to `1800000` (30 minutes).
 
 ### `workspace_symbols`
 
