@@ -28,7 +28,7 @@ export function buildByteToStringIndexMap(source: string): ByteToStringIndexMap 
   return { ...map, loneCrLineStarts: collectLineStartOffsets(source) };
 }
 
-function buildByteMap(source: string): ByteToStringIndexMap {
+export function buildByteMap(source: string): ByteToStringIndexMap {
   const byteLength = Buffer.byteLength(source, "utf8");
   if (byteLength === source.length) {
     // Pure ASCII: byte offsets and UTF-16 indexes coincide, so skip building the table.
