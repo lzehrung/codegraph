@@ -6,6 +6,7 @@ import type { ProjectIndexManifestEntry, QueryIndexDiagnostics } from "../../ind
 import { getCodegraphVersion } from "../../util/package-info.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 import { errorMessage } from "../../util/errors.js";
+import { fsyncFile, removeStaleTempFiles } from "../../util/atomic-file.js";
 import type { PreparedQueryIndexFile } from "./content.js";
 import {
   createProjectRootIdentity,
@@ -24,7 +25,6 @@ import {
 } from "./schema.js";
 import { isSqliteBusyError, isSqliteCorruptionError, QueryIndexStore } from "./store.js";
 
-const QUERY_INDEX_TEMP_RETENTION_MS = 24 * 60 * 60 * 1000;
 const QUERY_INDEX_TEMP_PATTERN = /^search-v1(?:\.v\d+)?\.tmp-\d+-[0-9a-f-]+\.sqlite$/u;
 
 export type QueryIndexHandle = {
@@ -173,39 +173,19 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function fsyncFile(filePath: string): Promise<void> {
-  const handle = await fs.open(filePath, "r+");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
 async function removeSqliteCompanions(filePath: string): Promise<void> {
   await Promise.all([fs.rm(`${filePath}-wal`, { force: true }), fs.rm(`${filePath}-shm`, { force: true })]);
 }
 
 async function cleanupAbandonedQueryIndexFiles(paths: QueryIndexPaths): Promise<void> {
-  let entries: Array<{ name: string }>;
-  try {
-    entries = await fs.readdir(paths.cacheRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  const cutoff = Date.now() - QUERY_INDEX_TEMP_RETENTION_MS;
-  for (const entry of entries) {
-    if (!QUERY_INDEX_TEMP_PATTERN.test(entry.name)) continue;
-    const candidate = path.join(paths.cacheRoot, entry.name);
-    try {
-      const stat = await fs.lstat(candidate);
-      if (stat.mtimeMs > cutoff) continue;
+  await removeStaleTempFiles(
+    paths.cacheRoot,
+    (entry) => QUERY_INDEX_TEMP_PATTERN.test(entry.name),
+    async (candidate) => {
       await fs.rm(candidate, { force: true });
       await removeSqliteCompanions(candidate);
-    } catch {
-      // Abandoned artifact cleanup must not block a query.
-    }
-  }
+    },
+  );
 }
 
 async function rebuildCorruptSidecar(

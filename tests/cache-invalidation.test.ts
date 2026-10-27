@@ -393,6 +393,34 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("cleans only stale manifest temporary files when writing", async () => {
+    const root = await mkTmpDir("dg-manifest-stale-temp-");
+    const manifestPath = manifestPathFor(root);
+    await fsp.mkdir(path.dirname(manifestPath), { recursive: true });
+    const tempPath = (marker: string): string =>
+      path.join(path.dirname(manifestPath), `.${path.basename(manifestPath)}.${marker}.tmp`);
+    const staleTempPath = tempPath("123.00000000-0000-0000-0000-000000000001");
+    const freshTempPath = tempPath("456.00000000-0000-0000-0000-000000000002");
+    const unrelatedStalePath = tempPath("789.not-a-writer-uuid");
+    await fsp.writeFile(staleTempPath, "stale", "utf8");
+    await fsp.writeFile(freshTempPath, "active", "utf8");
+    await fsp.writeFile(unrelatedStalePath, "unrelated", "utf8");
+    const staleTime = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+    await fsp.utimes(staleTempPath, staleTime, staleTime);
+    await fsp.utimes(unrelatedStalePath, staleTime, staleTime);
+
+    try {
+      await writeManifest(root, undefined, createManifest(root));
+
+      await expect(fsp.stat(staleTempPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fsp.readFile(freshTempPath, "utf8")).resolves.toBe("active");
+      await expect(fsp.readFile(unrelatedStalePath, "utf8")).resolves.toBe("unrelated");
+      expect((await readManifest(root)).version).toBe(MANIFEST_VERSION);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("disk cache invalidates when content hash changes even if mtime is restored", async () => {
     const root = await mkTmpDir("dg-cache-inv-");
     const utilPath = path.join(root, "util.ts");
@@ -2928,6 +2956,36 @@ describe("Cache invalidation and strict hashing", () => {
     } finally {
       openSpy.mockRestore();
     }
+  });
+
+  it("retries transient snapshot rename contention and leaves no temporary file", async () => {
+    const root = await mkTmpDir("dg-snapshot-rename-retry-");
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const initialSnapshot = await readProjectSnapshot(snapshotPath);
+    index.graph.nodes.add(normalize(path.join(root, "retried-write.ts")));
+
+    const originalRename = fsp.rename.bind(fsp);
+    let snapshotRenames = 0;
+    const renameSpy = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(snapshotPath)) {
+        snapshotRenames += 1;
+        if (snapshotRenames === 1) {
+          throw Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+        }
+      }
+      return await originalRename(from, to);
+    });
+    try {
+      await rewriteProjectSnapshot(root, index);
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(snapshotRenames).toBe(2);
+    expect((await readProjectSnapshot(snapshotPath)).graph).not.toEqual(initialSnapshot.graph);
+    expect(await projectSnapshotTempNames(root)).toEqual([]);
   });
 
   it("does not read unchanged tracked source files for partial cache validation", async () => {
