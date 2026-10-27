@@ -98,7 +98,7 @@ const ORIENT_BUDGETS: Record<
 
 export async function orientCodegraph(request: AgentOrientRequest): Promise<AgentOrientResponse> {
   const root = path.resolve(request.root);
-  const session = createRequestSession(request, { freshness: { policy: "manual" } });
+  const session = createRequestSession({ ...request, root }, { freshness: { policy: "manual" } });
   return await orientCodegraphWithSession(session, { ...request, root });
 }
 

@@ -92,7 +92,10 @@ export async function buildCodegraphArtifact(
 ): Promise<CodegraphArtifactBuildResult> {
   const root = path.resolve(request.root);
   const outDir = path.resolve(root, request.outDir ?? DEFAULT_OUT_DIR);
-  const session = createRequestSession(request, { discovery: { ignoreGlobs: outputIgnoreGlobs(root, outDir) } });
+  const session = createRequestSession(
+    { ...request, root },
+    { discovery: { ignoreGlobs: outputIgnoreGlobs(root, outDir) } },
+  );
   return await buildCodegraphArtifactWithSession(session, request);
 }
 

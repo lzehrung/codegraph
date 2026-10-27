@@ -40,6 +40,15 @@ describe("agent orient", () => {
     expect(response.recommendedNext.length).toBeGreaterThan(0);
     expect(response.recommendedNext.some((next) => next.command.startsWith("codegraph packet get "))).toBe(false);
   });
+  it("reports an absolute root for a relative request root", async () => {
+    const root = await mkTmpDir("cg-agent-orient-relative-");
+    await writeFile(root, "src/index.ts", "export const value = 1;\n");
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+
+    const response = await orientCodegraph({ root: ".", includeRoots: ["src"], budget: "small" });
+
+    expect(response.root).toBe(path.resolve(root));
+  });
   it("emits byte-identical JSON for repeated orientations", async () => {
     const root = await mkTmpDir("cg-agent-orient-repeat-");
     await writeFile(root, "src/index.ts", "export { run } from './run';\n");
