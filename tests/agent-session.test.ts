@@ -14,6 +14,7 @@ import {
   createAgentSession,
   listAgentSessionFiles,
   type AgentProjectSnapshot,
+  type AgentSession,
 } from "../src/agent/session.js";
 import type { QueryIndexHandle } from "../src/agent/query-index/update.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
@@ -1754,6 +1755,81 @@ describe("agent session", () => {
         expect(hold.stats()).toBe(2);
       } finally {
         for (const scan of hold.scans) scan.released.resolve();
+        hold.statSpy.mockRestore();
+        session.invalidate();
+      }
+    });
+
+    // A scan reads main.ts and waits. Then the file is edited, `detach` replaces the session's snapshot, and the scan
+    // finishes: its stats are older than the new baseline, which they would report as changed.
+    async function finishDetachedScanAfterRebuild(
+      prefix: string,
+      detach: (session: AgentSession) => Promise<void>,
+    ): Promise<void> {
+      const { session, snapshot, filePath } = await createLoadedSession(prefix);
+      const hold = holdStatsOfMain(1);
+      const [heldScan] = hold.scans;
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const detached = session.checkFreshness!();
+        await heldScan?.statted.promise;
+        await fs.writeFile(filePath, "export const value = 2222;\n", "utf8");
+        await detach(session);
+        const rebuilt = await session.loadProject({ symbolGraph: "skip" });
+        expect(rebuilt).not.toBe(snapshot);
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+        let invalidations = 0;
+        sessionLifecycleModule.registerSessionInvalidationHook(session, () => {
+          invalidations += 1;
+        });
+
+        heldScan?.released.resolve();
+        const detachedResult = await detached;
+
+        // The rebuilt snapshot survives: no invalidation, no second build.
+        expect(invalidations).toBe(0);
+        expect(await session.loadProject({ symbolGraph: "skip" })).toBe(rebuilt);
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+        // The detached scan still answers its own caller. What that caller loads next was built after the scan began.
+        expect(detachedResult).toEqual({ state: "fresh" });
+      } finally {
+        heldScan?.released.resolve();
+        hold.statSpy.mockRestore();
+        buildSpy.mockRestore();
+        session.invalidate();
+      }
+    }
+
+    it("leaves the rebuilt snapshot alone when a scan that markChanged detached finishes after the rebuild", async () => {
+      await finishDetachedScanAfterRebuild("cg-agent-session-mark-changed-rebuilt-", async (session) => {
+        session.markChanged!();
+        // The replacement scan finds the edit and invalidates; its caller rebuilds.
+        expect(await session.checkFreshness!()).toEqual({ state: "refreshed", changedFiles: ["main.ts"] });
+      });
+    });
+
+    it("leaves the rebuilt snapshot alone when a scan that invalidate detached finishes after the rebuild", async () => {
+      await finishDetachedScanAfterRebuild("cg-agent-session-invalidate-rebuilt-", async (session) => {
+        session.invalidate();
+      });
+    });
+
+    it("still refreshes the baseline it found changed when markChanged detached the scan, so that steady events cannot starve the refresh", async () => {
+      const { session, snapshot, filePath } = await createLoadedSession("cg-agent-session-mark-changed-found-");
+      const hold = holdFirstStatOfMain();
+      try {
+        // The scan reads the edited file, then another event detaches it.
+        await fs.writeFile(filePath, "export const value = 2222;\n", "utf8");
+        const detached = session.checkFreshness!();
+        await hold.scanStatted;
+        session.markChanged!();
+        hold.releaseScan();
+
+        expect(await detached).toEqual({ state: "refreshed", changedFiles: ["main.ts"] });
+        // `refreshed` promises that the next load rebuilds. Without the invalidation it would serve the old snapshot.
+        expect(await session.loadProject({ symbolGraph: "skip" })).not.toBe(snapshot);
+      } finally {
+        hold.releaseScan();
         hold.statSpy.mockRestore();
         session.invalidate();
       }

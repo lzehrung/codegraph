@@ -34,9 +34,10 @@ const isDiscoveryIgnored = picomatch([...DEFAULT_PROJECT_FILE_IGNORES, `**/${PRO
   dot: true,
 });
 
-// Per-directory mode opens a watch for a directory as soon as an event reports it. This many such watches at once
-// keep a build that creates thousands of directories from using up the inotify watches that every process of the
-// user shares; the file list after the next refresh takes over for the rest.
+// Per-directory mode opens a watch for a directory as soon as an event reports it, and keeps it until the directory is
+// removed or a file list names it. This many such watches at once keep a build that creates thousands of directories
+// from using up the inotify watches that every process of the user shares; the file list after the next refresh takes
+// over for the rest.
 const MAX_REPORTED_DIRECTORIES = 128;
 
 /** The part of `fs.FSWatcher` the project watcher uses. */
@@ -156,11 +157,20 @@ async function isDirectory(directory: string): Promise<boolean> {
   }
 }
 
-async function isEmptyDirectory(directory: string): Promise<boolean> {
-  try {
-    return !(await fsp.readdir(directory)).length;
-  } catch {
-    return false;
+/** Adds `directory` and its ancestors up to the root to `directories`, stopping at the first one that is ignored. */
+function addDirectoryWithAncestors(
+  root: string,
+  directories: Set<string>,
+  directory: string,
+  isIgnored: PathMatcher,
+): void {
+  let current = directory;
+  // A directory already in the set brought all its ancestors with it.
+  while (!directories.has(current)) {
+    const relative = path.relative(root, current);
+    if (!isRelativePathInside(relative) || isIgnored(relative)) break;
+    directories.add(current);
+    current = path.dirname(current);
   }
 }
 
@@ -168,14 +178,7 @@ async function isEmptyDirectory(directory: string): Promise<boolean> {
 function collectWatchDirectories(root: string, files: readonly string[], isIgnored: PathMatcher): Set<string> {
   const directories = new Set<string>([root]);
   for (const file of files) {
-    let directory = path.dirname(path.resolve(root, file));
-    // A directory already in the set brought all its ancestors with it.
-    while (!directories.has(directory)) {
-      const relative = path.relative(root, directory);
-      if (!isRelativePathInside(relative) || isIgnored(relative)) break;
-      directories.add(directory);
-      directory = path.dirname(directory);
-    }
+    addDirectoryWithAncestors(root, directories, path.dirname(path.resolve(root, file)), isIgnored);
   }
   return directories;
 }
@@ -184,9 +187,11 @@ function collectWatchDirectories(root: string, files: readonly string[], isIgnor
  * Watches the project for file changes. Windows and macOS use one recursive handle on the root. Other platforms
  * use one non-recursive handle per directory that holds a listed file, because Node walks the whole tree for
  * `recursive: true` there, `node_modules` included, and can exhaust inotify watches.
- * A directory that appears later gets its handle from the event that reports it, not from the next file list. A
- * handle that was lost with its directory is closed (see `namesWatchedDirectory`), and `refreshDirectories`
- * opens it again once the directory exists.
+ * A directory that appears later gets its handle from the event that reports it, not from the next file list, and
+ * keeps it, with the handles of the directories above it, until the directory is removed. No list names a directory
+ * that holds only a placeholder such as `.gitkeep`, yet its first source file must raise an event. A handle that was
+ * lost with its directory is closed (see `namesWatchedDirectory`), and `refreshDirectories` opens it again once the
+ * directory exists.
  * The watcher is a hint: a missed event costs speed, never correctness, because the session's pull check stays
  * the authority.
  */
@@ -345,18 +350,30 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
 
   const applyDirectories = async (files: readonly string[]): Promise<void> => {
     const wanted = collectWatchDirectories(root, files, isIgnored);
-    for (const [directory, handle] of [...handles]) {
+    // Watched even while no handle is open: what the list needs, and the directories above a reported one that stays.
+    const required = new Set(wanted);
+    const reportedKept = new Set<string>();
+    const open = [...handles];
+    for (const [directory, handle] of open) {
       if (wanted.has(directory)) {
+        // The list names it now and keeps its watch from here on.
         reportedDirectories.delete(directory);
         continue;
       }
-      // A reported directory keeps its watch while it is empty, so that its first file raises an event. Once it holds
-      // anything that the file list does not name, discovery ignores it, and so does the watcher.
-      if (reportedDirectories.has(directory) && (await isEmptyDirectory(directory))) continue;
+      if (!reportedDirectories.has(directory)) continue;
+      // No list names a directory that holds only a placeholder, or only more directories. Its first source file
+      // must still raise an event, so the watch stays until the directory is removed, and so do the ones above it. An
+      // ignored directory never got a watch.
+      const exists = await isDirectory(directory);
       if (closed || disabled) return;
-      closeHandle(directory, handle);
+      if (!exists || handles.get(directory) !== handle) continue;
+      reportedKept.add(directory);
+      addDirectoryWithAncestors(root, required, path.dirname(directory), isIgnored);
     }
-    for (const directory of wanted) {
+    for (const [directory, handle] of open) {
+      if (!required.has(directory) && !reportedKept.has(directory)) closeHandle(directory, handle);
+    }
+    for (const directory of required) {
       if (closed || disabled) return;
       if (!handles.has(directory)) openDirectory(directory, false);
     }

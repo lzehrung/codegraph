@@ -1305,6 +1305,61 @@ describe("startProjectWatcher with the real file system", () => {
     },
   );
 
+  it.runIf(process.platform === "win32" || process.platform === "linux")(
+    "keeps hearing a new directory that holds only a placeholder, so that a source file and then a sibling file are reported, with per-directory watches",
+    async () => {
+      const projectRoot = await tempRoots.create("cg-project-watcher-placeholder-");
+      const src = path.join(projectRoot, "src");
+      const feature = path.join(src, "feature");
+      const listed = path.join(src, "a.ts");
+      const first = path.join(feature, "first.ts");
+      await fs.mkdir(src);
+      await fs.writeFile(listed, "export const a = 1;\n");
+      const opened: string[] = [];
+      const reported: Array<{ directory: string; filename: string | null }> = [];
+      let files = [listed];
+      const watcher = startProjectWatcher({
+        root: projectRoot,
+        onChange: vi.fn(),
+        onSettled: vi.fn(),
+        listFiles: async () => files,
+        platform: "linux",
+        watch: (directory, watchOptions, listener) => {
+          opened.push(directory);
+          return fsWatch(directory, watchOptions, (eventType, filename) => {
+            reported.push({ directory, filename });
+            listener(eventType, filename);
+          });
+        },
+      });
+      const heard = (filename: string): boolean =>
+        reported.some((event) => event.directory === feature && event.filename === filename);
+      const timing = { timeout: 10_000, interval: 25 };
+
+      try {
+        await watcher.refreshDirectories();
+        await fs.mkdir(feature);
+        await vi.waitFor(() => expect(opened).toContain(feature), timing);
+
+        // No list names `feature`, because `.gitkeep` is no source file. The refresh that follows must not end its watch.
+        await fs.writeFile(path.join(feature, ".gitkeep"), "");
+        await vi.waitFor(() => expect(heard(".gitkeep")).toBe(true), timing);
+        await watcher.refreshDirectories();
+
+        await fs.writeFile(first, "export const first = 1;\n");
+        await vi.waitFor(() => expect(heard("first.ts")).toBe(true), timing);
+
+        // The next list names `first.ts`, and its sibling is heard as well.
+        files = [listed, first];
+        await watcher.refreshDirectories();
+        await fs.writeFile(path.join(feature, "second.ts"), "export const second = 1;\n");
+        await vi.waitFor(() => expect(heard("second.ts")).toBe(true), timing);
+      } finally {
+        watcher.close();
+      }
+    },
+  );
+
   it("keeps the session's cached freshness result across writes to the output directories that discovery ignores", async () => {
     const projectRoot = await tempRoots.create("cg-project-watcher-ignored-");
     await fs.mkdir(path.join(projectRoot, "src"));
@@ -1371,30 +1426,98 @@ describe("startProjectWatcher with directories that appear", () => {
     return { projectRoot, src, listFiles, ...started };
   }
 
-  it("watches a directory that a rename event reports and the directories inside it, and keeps the watch of an empty one", async () => {
+  it("watches a directory that a rename event reports and the directories inside it, and keeps them until they are removed", async () => {
     const { projectRoot, src, fake, watcher, onChange } = await startInProject();
     const feature = path.join(src, "feature");
     const inner = path.join(feature, "inner");
     const empty = path.join(inner, "empty");
+    const reported = sorted([projectRoot, src, feature, inner, empty]);
     // A `mkdir -p` that finished before the watch on `feature` opened raised no event for `inner` or `empty`.
     await fs.mkdir(empty, { recursive: true });
 
     fake.deliver(src, "feature", "rename");
 
-    await vi.waitFor(
-      () => expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, feature, inner, empty])),
-      timing,
-    );
-    // No file list names them. `feature` and `inner` hold only a directory, `empty` holds nothing: its first file must raise an event.
+    await vi.waitFor(() => expect(fake.openDirectories()).toEqual(reported), timing);
+    // No file list names them. `feature` and `inner` hold only a directory and `empty` holds nothing, yet a source
+    // file can still arrive in any of them.
     await watcher.refreshDirectories();
-    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, empty]));
+    expect(fake.openDirectories()).toEqual(reported);
     expect(fake.deliver(empty, "first.ts")).toBe(1);
-    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(fake.deliver(feature, "next.ts")).toBe(1);
+    expect(onChange).toHaveBeenCalledTimes(3);
 
-    // A file that no list names ends it: discovery ignores such a directory, and so does the watcher.
-    await fs.writeFile(path.join(empty, "build.log"), "x\n");
+    // A removed directory loses its watch at the refresh even when the system sent no event for it.
+    await fs.rm(inner, { recursive: true });
     await watcher.refreshDirectories();
-    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src]));
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, feature]));
+    expect(fake.duplicateOpens).toEqual([]);
+    watcher.close();
+  });
+
+  it("keeps the watch of a directory that holds only a placeholder, so that a source file added later is heard, and a sibling file after it", async () => {
+    const { src, listFiles, fake, watcher, onChange } = await startInProject();
+    const feature = path.join(src, "feature");
+    const first = path.join(feature, "first.ts");
+    await fs.mkdir(feature);
+    fake.deliver(src, "feature", "rename");
+    await vi.waitFor(() => expect(fake.openDirectories()).toContain(feature), timing);
+
+    // `.gitkeep` is no source file, so no list names `feature`, and the directory is no longer empty.
+    await fs.writeFile(path.join(feature, ".gitkeep"), "");
+    expect(fake.deliver(feature, ".gitkeep", "rename")).toBe(1);
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toContain(feature);
+
+    await fs.writeFile(first, "export const first = 1;\n");
+    const changes = onChange.mock.calls.length;
+    expect(fake.deliver(feature, "first.ts", "rename")).toBe(1);
+    expect(onChange).toHaveBeenCalledTimes(changes + 1);
+
+    // The next list names `first.ts`, and a sibling file that arrives after that is heard as well.
+    listFiles.mockImplementation(async () => [path.join(src, "a.ts"), first]);
+    await watcher.refreshDirectories();
+    expect(fake.deliver(feature, "second.ts", "rename")).toBe(1);
+    expect(onChange).toHaveBeenCalledTimes(changes + 2);
+    expect(fake.duplicateOpens).toEqual([]);
+    watcher.close();
+  });
+
+  it("keeps the watches above a reported directory after the file list stops naming them, and closes them once it is removed", async () => {
+    const projectRoot = await tempRoots.create("cg-project-watcher-above-");
+    const src = path.join(projectRoot, "src");
+    const old = path.join(src, "old");
+    const added = path.join(old, "added");
+    await fs.mkdir(old, { recursive: true });
+    let files = [path.join(old, "x.ts")];
+    const { fake, watcher } = startWatcher({ root: projectRoot, platform: "linux", listFiles: async () => files });
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, old]));
+
+    await fs.mkdir(added);
+    fake.deliver(old, "added", "rename");
+    await vi.waitFor(() => expect(fake.openDirectories()).toContain(added), timing);
+
+    // `x.ts` is gone, so no listed file is left. `added` keeps its watch, and so do the directories that lead to it:
+    // a source file next to `added` must still be heard.
+    files = [];
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, old, added]));
+    expect(fake.deliver(old, "y.ts")).toBe(1);
+
+    // A watch that failed opens again at the next refresh, because `added` still needs the directory above it.
+    fake
+      .openHandles()
+      .find((handle) => handle.directory === old)
+      ?.fail(errnoError("EIO"));
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, added]));
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, old, added]));
+
+    // Nothing keeps them once `added` is removed.
+    await fs.rm(added, { recursive: true });
+    fake.removeDirectory(added, "inotify");
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toEqual([projectRoot]);
     expect(fake.duplicateOpens).toEqual([]);
     watcher.close();
   });
