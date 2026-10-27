@@ -411,8 +411,12 @@ function withToolActivity(handlers: CodegraphMcpHandlers, noteActivity: () => vo
 type WarmedCodegraphMcpResources = {
   handlers: CodegraphMcpHandlers;
   session: AgentSession;
-  /** Stops the file watcher and cancels its timers. Safe to call twice; does nothing without a watcher. */
-  closeWatcher: () => void;
+  /**
+   * Stops the file watcher and cancels its timers. Safe to call twice; does nothing without a watcher. The promise
+   * settles once a background refresh that was running has ended. Await it before `session.invalidate()`: until then
+   * that refresh keeps writing the cache and the session's file signatures.
+   */
+  closeWatcher: () => Promise<void>;
 };
 
 export async function createWarmedCodegraphMcpResources(
@@ -456,7 +460,7 @@ export async function createWarmedCodegraphMcpResources(
   return {
     handlers: watcher ? withToolActivity(handlers, watcher.noteActivity) : handlers,
     session,
-    closeWatcher: () => watcher?.close(),
+    closeWatcher: () => watcher?.close() ?? Promise.resolve(),
   };
 }
 export function createCodegraphMcpHandlers(options: CodegraphMcpHandlerOptions): CodegraphMcpHandlers {

@@ -5,7 +5,7 @@ import picomatch from "picomatch";
 import { AGENT_FRESHNESS_CHECK_INTERVAL_MS, type AgentFreshnessResult, type AgentSession } from "../agent/session.js";
 import { PROJECT_CACHE_DIRECTORY } from "../indexer/build-cache/location.js";
 import { isRelativePathInside } from "../util/discovery-path.js";
-import { errorMessage, isFileSystemErrorCode } from "../util/errors.js";
+import { errorMessage, isFileSystemErrorCode, isMissingPathError } from "../util/errors.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { DEFAULT_PROJECT_FILE_IGNORES } from "../util/project-files.js";
 import { DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS } from "./stdio-lifecycle.js";
@@ -104,13 +104,36 @@ function isIgnoredPath(relativePath: string): boolean {
 type PathMatcher = (relativePath: string) => boolean;
 
 /**
+ * `target` with every link in it resolved. What does not exist yet, such as a cache directory before its first write,
+ * keeps its spelling below the nearest ancestor that does. A path that cannot be resolved stays as it is.
+ */
+function resolvePhysicalPath(target: string): string {
+  let existing = target;
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(existing), path.relative(existing, target));
+    } catch (error) {
+      const parent = path.dirname(existing);
+      if (!isMissingPathError(error) || parent === existing) return target;
+      existing = parent;
+    }
+  }
+}
+
+/**
  * Matches the paths relative to `root` that never reach the index: what discovery ignores, and the subtree of a cache
  * directory that was moved into the project (`--cache-dir`, `CODEGRAPH_CACHE_DIR`), which the server writes to itself.
  * A cache directory outside the project, or inside a directory that discovery ignores anyway, adds nothing.
+ * Whether the cache directory lies inside the project is decided on physical paths, because either one can be spelled
+ * through a link: a root that is a symlink or junction, or a cache directory that names the project by its physical
+ * path. The events name their paths relative to the root as it was given, and the match is made on those.
  */
 function createIgnoredPathMatcher(root: string, cacheDirectory: string | undefined): PathMatcher {
   if (!cacheDirectory) return isIgnoredPath;
-  const cacheRelative = path.relative(root, path.resolve(root, cacheDirectory));
+  const cacheRelative = path.relative(
+    resolvePhysicalPath(root),
+    resolvePhysicalPath(path.resolve(root, cacheDirectory)),
+  );
   if (!isRelativePathInside(cacheRelative) || isIgnoredPath(cacheRelative)) return isIgnoredPath;
   // The identity key has the file system's case rules and `/` separators, as the events name paths in either form.
   const cacheKey = fileIdentityKey(cacheRelative);
@@ -451,8 +474,13 @@ export type WatchControllerOptions = {
 export type WatchController = {
   /** Records a tool call: resets the idle timer, and after an idle pause reopens the watches. */
   noteActivity: () => void;
-  /** Closes every handle and cancels every timer. Safe to call twice. */
-  close: () => void;
+  /**
+   * Closes every handle and cancels every timer. Safe to call twice. The promise settles once the background refresh
+   * that was running has ended, and never rejects. A rebuild cannot be cancelled, so a caller that releases the session
+   * waits for it first: one that outlives the release keeps writing the cache and restores the file signatures that
+   * the release dropped.
+   */
+  close: () => Promise<void>;
 };
 
 /** Throws unless `value` is a whole number of milliseconds that a timer accepts. */
@@ -471,6 +499,8 @@ export function assertMcpWatchMs(name: string, value: number | undefined): void 
  * - One refresh runs at a time. A settled burst during it sets one rerun flag.
  * - After `idleMs` without `noteActivity` the watches close. The next `noteActivity` reopens them and calls
  *   `markChanged`, so the pull check sees every edit made during the pause.
+ * - `close` ends the watching for good. The refresh that is running finishes, and `close` returns a promise for it, so
+ *   that the owner of the session can release the session after it.
  */
 export function createWatchController(session: AgentSession, options: WatchControllerOptions): WatchController {
   const minRefreshIntervalMs = options.minRefreshIntervalMs ?? DEFAULT_MCP_WATCH_MIN_REFRESH_INTERVAL_MS;
@@ -480,7 +510,8 @@ export function createWatchController(session: AgentSession, options: WatchContr
   let idleTimer: NodeJS.Timeout | undefined;
   let refreshTimer: NodeJS.Timeout | undefined;
   let lastRefreshEndedAt: number | undefined;
-  let refreshing = false;
+  // The refresh that is running, if any. Only one runs at a time, and `close` hands it out.
+  let activeRefresh: Promise<void> | undefined;
   let rerun = false;
   let closed = false;
 
@@ -490,19 +521,17 @@ export function createWatchController(session: AgentSession, options: WatchContr
     const waitMs =
       lastRefreshEndedAt === undefined ? 0 : Math.max(0, lastRefreshEndedAt + minRefreshIntervalMs - Date.now());
     if (!waitMs) {
-      void runRefresh();
+      startRefresh();
       return;
     }
     refreshTimer = startTimer(() => {
       refreshTimer = undefined;
-      void runRefresh();
+      startRefresh();
     }, waitMs);
   };
 
-  const runRefresh = async (): Promise<void> => {
-    refreshing = true;
-    rerun = false;
-    const current = watcher;
+  // Never rejects: a failure is logged.
+  const refreshSession = async (current: ProjectWatcher | undefined): Promise<void> => {
     try {
       const freshness: AgentFreshnessResult = session.checkFreshness
         ? await session.checkFreshness()
@@ -520,16 +549,22 @@ export function createWatchController(session: AgentSession, options: WatchContr
       await current?.refreshDirectories();
     } catch (error) {
       log(`[codegraph] watch refresh failed: ${errorMessage(error)}`);
-    } finally {
-      lastRefreshEndedAt = Date.now();
-      refreshing = false;
-      if (rerun && watcher) scheduleRefresh();
     }
+  };
+
+  const startRefresh = (): void => {
+    rerun = false;
+    const refresh: Promise<void> = refreshSession(watcher).finally(() => {
+      lastRefreshEndedAt = Date.now();
+      if (activeRefresh === refresh) activeRefresh = undefined;
+      if (rerun && watcher) scheduleRefresh();
+    });
+    activeRefresh = refresh;
   };
 
   const onSettled = (): void => {
     if (!watcher) return;
-    if (refreshing) {
+    if (activeRefresh) {
       rerun = true;
       return;
     }
@@ -587,10 +622,12 @@ export function createWatchController(session: AgentSession, options: WatchContr
     session.markChanged?.();
   };
 
-  const close = (): void => {
-    if (closed) return;
-    closed = true;
-    pause();
+  const close = (): Promise<void> => {
+    if (!closed) {
+      closed = true;
+      pause();
+    }
+    return activeRefresh ?? Promise.resolve();
   };
 
   if (!options.startPaused) open();

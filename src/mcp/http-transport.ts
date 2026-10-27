@@ -107,11 +107,13 @@ export async function startCodegraphMcpHttpServer(
     closeResourcesPromise ??= (async () => {
       protocolFactory.stop();
       sessionStore.stop();
-      closeWatcher();
+      const watcherClosed = closeWatcher();
       try {
         await closeMcpResources(sessionStore.sessions, modernHandler.close);
       } finally {
         await protocolFactory.drain();
+        // A background rebuild writes to the session and its cache until it ends, so the session is released after it.
+        await watcherClosed;
         session.invalidate();
       }
     })();

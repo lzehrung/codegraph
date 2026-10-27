@@ -11,6 +11,7 @@ import { PassThrough } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
+import * as agentSession from "../src/agent/session.js";
 import {
   awaitMcpToolOperation,
   callMcpTool,
@@ -32,6 +33,7 @@ import { MCP_TOOL_REGISTRY } from "../src/mcp/tools.js";
 import { DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
 import type { Graph } from "../src/types.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
+import * as indexerBuild from "../src/indexer/build-index.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createWarmedCodegraphMcpResources } from "../src/mcp/handlers.js";
@@ -40,6 +42,7 @@ import {
   createLinkedTempRoot,
   createTempRootRegistry,
   isSymlinkUnavailable,
+  tryCreateDirectorySymlink,
 } from "./helpers/filesystem.js";
 import type { CodegraphRuntimeIdentity, InstalledVersionChecker } from "../src/runtime-identity.js";
 import { getCodegraphVersion } from "../src/util/package-info.js";
@@ -4296,6 +4299,65 @@ describe("MCP file watcher", () => {
     };
   }
 
+  // Holds every index build that starts after `held.armed` is set until `held.release()`, and records in order what
+  // happens to the session around it.
+  function holdBackgroundRebuild() {
+    const events: string[] = [];
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const held = { armed: false, events, started: started.promise, release: release.resolve };
+    const createSession = agentSession.createAgentSession;
+    vi.spyOn(agentSession, "createAgentSession").mockImplementation((options) => {
+      const session = createSession(options);
+      const { loadProject, invalidate } = session;
+      session.loadProject = async (...args) => {
+        if (held.armed) events.push("loadProject:start");
+        try {
+          return await loadProject(...args);
+        } finally {
+          if (held.armed) events.push("loadProject:end");
+        }
+      };
+      session.invalidate = () => {
+        if (held.armed) events.push("invalidate");
+        invalidate();
+      };
+      return session;
+    });
+    const build = indexerBuild.buildProjectIndexIncremental;
+    vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      if (held.armed) {
+        started.resolve();
+        await release.promise;
+      }
+      return await build(...args);
+    });
+    return held;
+  }
+
+  // serveCodegraphMcp reads the process streams, so stand in for them while `run` serves.
+  async function withStandInStdio<T>(run: (stdin: PassThrough) => Promise<T>): Promise<T> {
+    const stdin = new PassThrough();
+    const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+    const originalStdout = Object.getOwnPropertyDescriptor(process, "stdout");
+    Object.defineProperty(process, "stdin", { value: stdin, configurable: true });
+    Object.defineProperty(process, "stdout", { value: new PassThrough(), configurable: true });
+    try {
+      return await run(stdin);
+    } finally {
+      if (originalStdin) Object.defineProperty(process, "stdin", originalStdin);
+      if (originalStdout) Object.defineProperty(process, "stdout", originalStdout);
+    }
+  }
+
+  // A real delay: the server, its sockets, and the file watch are real, so no fake clock reaches them. A shutdown that
+  // does not wait for the rebuild is done long before this ends, and one that does wait is not shortened by it.
+  async function letShutdownRun(): Promise<void> {
+    const elapsed = Promise.withResolvers<void>();
+    setTimeout(elapsed.resolve, 150);
+    await elapsed.promise;
+  }
+
   async function findSymbol(handlers: CodegraphMcpHandlers, query: string) {
     const response = await handlers.workspace_symbols({ query });
     return { found: response.symbols.some((symbol) => symbol.name === query), freshness: response.freshness };
@@ -4316,7 +4378,7 @@ describe("MCP file watcher", () => {
         interval: 100,
       });
     } finally {
-      resources.closeWatcher();
+      await resources.closeWatcher();
       resources.session.invalidate();
     }
   });
@@ -4363,7 +4425,7 @@ describe("MCP file watcher", () => {
       );
       expect((await findSymbol(resources.handlers, "symbol59")).found).toBe(false);
     } finally {
-      resources.closeWatcher();
+      await resources.closeWatcher();
       resources.session.invalidate();
     }
   });
@@ -4401,8 +4463,8 @@ describe("MCP file watcher", () => {
     try {
       expect(openHandles()).toBeGreaterThan(0);
 
-      resources.closeWatcher();
-      resources.closeWatcher();
+      await resources.closeWatcher();
+      await resources.closeWatcher();
 
       expect(openHandles()).toBe(0);
       // A later tool call does not reopen a closed watcher.
@@ -4410,7 +4472,7 @@ describe("MCP file watcher", () => {
       await findSymbol(resources.handlers, "symbol0");
       expect(watchSpy.mock.calls).toHaveLength(opened);
     } finally {
-      resources.closeWatcher();
+      await resources.closeWatcher();
       resources.session.invalidate();
     }
   });
@@ -4430,8 +4492,8 @@ describe("MCP file watcher", () => {
 
       expect(watchSpy).not.toHaveBeenCalled();
     } finally {
-      disabled.closeWatcher();
-      supplied.closeWatcher();
+      await disabled.closeWatcher();
+      await supplied.closeWatcher();
       disabled.session.invalidate();
       supplied.session.invalidate();
     }
@@ -4448,7 +4510,7 @@ describe("MCP file watcher", () => {
 
       expect(watchSpy).toHaveBeenCalled();
     } finally {
-      resources.closeWatcher();
+      await resources.closeWatcher();
       resources.session.invalidate();
     }
   });
@@ -4482,11 +4544,39 @@ describe("MCP file watcher", () => {
         deliver("f0.ts");
         expect(markChanged).toHaveBeenCalledTimes(1);
       } finally {
-        resources.closeWatcher();
+        await resources.closeWatcher();
         resources.session.invalidate();
       }
     },
   );
+
+  it("does not wake the session for writes into a cache directory that names the project by its physical path, under a root that is a link", async () => {
+    const realRoot = await createProject("cg-mcp-watch-link-real-");
+    const parent = await tempRoots.create("cg-mcp-watch-link-parent-");
+    const linkedRoot = path.join(parent, "alias");
+    if (!(await tryCreateDirectorySymlink(realRoot, linkedRoot))) return;
+    const anchor = path.join(realRoot, ".moved-cache");
+    const deliver = captureWatchListener(linkedRoot);
+    const resources = await createWarmedCodegraphMcpResources({ root: linkedRoot, buildOptions: { cacheDir: anchor } });
+    try {
+      const { index } = await resources.session.loadProject({ symbolGraph: "skip" });
+      const cacheDirectory = index.cacheRootDir ?? "";
+      expect(path.dirname(cacheDirectory)).toBe(anchor);
+      const markChanged = vi.spyOn(resources.session, "markChanged");
+
+      // The watch is on the root as it was given, and names the entries below it from there.
+      deliver(path.relative(realRoot, path.join(cacheDirectory, "manifest.json")));
+      deliver(path.relative(realRoot, path.join(cacheDirectory, "cache", "index-v1", "search-v1.sqlite")));
+      expect(markChanged).not.toHaveBeenCalled();
+
+      // The control: an edit to a project file reaches the session through the same watch.
+      deliver("f0.ts");
+      expect(markChanged).toHaveBeenCalledTimes(1);
+    } finally {
+      await resources.closeWatcher();
+      resources.session.invalidate();
+    }
+  });
 
   it("pauses after the idle time and resumes on the next tool call, whichever tool it is", async () => {
     const root = await createProject("cg-mcp-watch-idle-");
@@ -4506,7 +4596,7 @@ describe("MCP file watcher", () => {
       expect(openHandles()).toBeGreaterThan(0);
       expect(markChanged).toHaveBeenCalledTimes(1);
     } finally {
-      resources.closeWatcher();
+      await resources.closeWatcher();
       resources.session.invalidate();
     }
   });
@@ -4527,13 +4617,7 @@ describe("MCP file watcher", () => {
   it("closes its watches when the stdio server shuts down", async () => {
     const root = await createProject("cg-mcp-watch-stdio-");
     const { openHandles } = spyOnWatches();
-    const stdin = new PassThrough();
-    // serveCodegraphMcp reads the process streams, so stand in for them while it runs.
-    const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
-    const originalStdout = Object.getOwnPropertyDescriptor(process, "stdout");
-    Object.defineProperty(process, "stdin", { value: stdin, configurable: true });
-    Object.defineProperty(process, "stdout", { value: new PassThrough(), configurable: true });
-    try {
+    await withStandInStdio(async (stdin) => {
       const serving = serveCodegraphMcp({ root });
       await vi.waitFor(() => expect(stdin.listenerCount("end")).toBeGreaterThan(0), { timeout: 20_000 });
       expect(openHandles()).toBeGreaterThan(0);
@@ -4542,10 +4626,74 @@ describe("MCP file watcher", () => {
       await serving;
 
       expect(openHandles()).toBe(0);
+    });
+  });
+
+  it("waits for a background rebuild that is running when the HTTP server closes, and releases the session after it", async () => {
+    const root = await createProject("cg-mcp-watch-http-rebuild-");
+    const held = holdBackgroundRebuild();
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      watchDebounceMs: 25,
+      watchMinRefreshIntervalMs: 0,
+    });
+    try {
+      held.armed = true;
+      await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
+      await held.started;
+
+      let closed = false;
+      const closing = httpServer.close().then(() => {
+        closed = true;
+      });
+      await letShutdownRun();
+
+      // Nothing else holds the server open, so only the rebuild can.
+      expect(closed).toBe(false);
+      expect(held.events).toEqual(["loadProject:start"]);
+
+      held.release();
+      await closing;
+      // The rebuild writes the cache and restores the file signatures when it ends, so it must end before the release.
+      expect(held.events).toEqual(["loadProject:start", "loadProject:end", "invalidate"]);
     } finally {
-      if (originalStdin) Object.defineProperty(process, "stdin", originalStdin);
-      if (originalStdout) Object.defineProperty(process, "stdout", originalStdout);
+      held.release();
+      await httpServer.close();
     }
+  });
+
+  it("waits for a background rebuild that is running when the stdio server shuts down, and releases the session after it", async () => {
+    const root = await createProject("cg-mcp-watch-stdio-rebuild-");
+    const held = holdBackgroundRebuild();
+    await withStandInStdio(async (stdin) => {
+      let served = false;
+      const serving = serveCodegraphMcp({ root, watchDebounceMs: 25, watchMinRefreshIntervalMs: 0 }).then(() => {
+        served = true;
+      });
+      try {
+        await vi.waitFor(() => expect(stdin.listenerCount("end")).toBeGreaterThan(0), { timeout: 20_000 });
+        held.armed = true;
+        await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
+        await held.started;
+
+        stdin.end();
+        await letShutdownRun();
+
+        // Nothing else holds the server open, so only the rebuild can.
+        expect(served).toBe(false);
+        expect(held.events).toEqual(["loadProject:start"]);
+
+        held.release();
+        await serving;
+        // The rebuild writes the cache and restores the file signatures when it ends, so it must end before the release.
+        expect(held.events).toEqual(["loadProject:start", "loadProject:end", "invalidate"]);
+      } finally {
+        held.release();
+        stdin.end();
+        await serving;
+      }
+    });
   });
 
   it.each<[string, Partial<CodegraphMcpServerOptions>]>([

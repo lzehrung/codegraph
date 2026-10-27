@@ -17,7 +17,7 @@ import {
   type WatchControllerOptions,
 } from "../src/mcp/project-watcher.js";
 import { isFileIdentityCaseInsensitive, resetFileIdentityCaseSensitivityForTests } from "../src/util/paths.js";
-import { createTempRootRegistry } from "./helpers/filesystem.js";
+import { createTempRootRegistry, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 
 // Nothing below touches this directory: the fake watch factory never reaches the file system.
 const root = path.join(os.tmpdir(), "cg-project-watcher-fake-root");
@@ -171,16 +171,20 @@ function createFakeSession(files: string[]) {
   const calls: string[] = [];
   const checkStarts: number[] = [];
   const checkEnds: number[] = [];
+  const loadEnds: number[] = [];
   const state: {
     freshness: AgentFreshnessResult | Error;
     files: string[];
     hold: Promise<void> | undefined;
+    /** Holds `loadProject`, the rebuild, until it is released. */
+    loadHold: Promise<void> | undefined;
     /** How long a freshness check takes once `hold` is released. */
     checkMs: number;
   } = {
     freshness: { state: "fresh" },
     files,
     hold: undefined,
+    loadHold: undefined,
     checkMs: 0,
   };
   const session: AgentSession = {
@@ -197,6 +201,8 @@ function createFakeSession(files: string[]) {
     },
     loadProject: async (loadOptions) => {
       calls.push(`loadProject:${loadOptions?.symbolGraph}`);
+      await state.loadHold;
+      loadEnds.push(Date.now());
       return snapshot;
     },
     markChanged: () => {
@@ -207,7 +213,7 @@ function createFakeSession(files: string[]) {
     },
   };
   const count = (call: string): number => calls.filter((entry) => entry === call).length;
-  return { session, calls, checkStarts, checkEnds, state, count };
+  return { session, calls, checkStarts, checkEnds, loadEnds, state, count };
 }
 
 function startController(overrides: Partial<WatchControllerOptions> & { fake?: FakeWatch; files?: string[] } = {}) {
@@ -776,8 +782,9 @@ describe("createWatchController", () => {
     // 18_200. An event at 6_000, 12_000, and 18_000 keeps its burst open for 500 ms more, and a refresh starts only once
     // a burst has settled.
     expect(checkStarts).toEqual([500, 6_500, 12_500, 18_500]);
-    controller.close();
+    const closing = controller.close();
     expect(vi.getTimerCount()).toBe(0);
+    await closing;
   });
 
   it("never starts a refresh within the interval after the previous one ended, even when a refresh outlasts the interval", async () => {
@@ -797,7 +804,10 @@ describe("createWatchController", () => {
     expect(checkStarts.length).toBeGreaterThanOrEqual(4);
     const gaps = checkStarts.slice(1).map((start, index) => start - (checkEnds[index] ?? Number.NaN));
     expect(gaps.every((gap) => gap >= 500)).toBe(true);
-    controller.close();
+    // The refresh that is running at the end finishes within its 800 ms.
+    const closing = controller.close();
+    await vi.advanceTimersByTimeAsync(800);
+    await closing;
   });
 
   it("waits for a burst to end before refreshing, however long it lasts", async () => {
@@ -1112,8 +1122,8 @@ describe("createWatchController", () => {
     fake.openHandles()[0]?.emit("src/b.ts");
     expect(vi.getTimerCount()).toBe(2);
 
-    controller.close();
-    controller.close();
+    await controller.close();
+    await controller.close();
 
     expect(fake.openHandles()).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
@@ -1136,8 +1146,16 @@ describe("createWatchController", () => {
       await vi.advanceTimersByTimeAsync(500);
       expect(calls).toEqual(["markChanged", "checkFreshness"]);
 
-      controller.close();
+      let closed = false;
+      const closing = (async () => {
+        await controller.close();
+        closed = true;
+      })();
+      await vi.advanceTimersByTimeAsync(1_000);
+      // The check is still running, and it may replace the session's snapshot before it ends.
+      expect(closed).toBe(false);
       release.resolve();
+      await closing;
       await vi.advanceTimersByTimeAsync(60_000);
 
       // A rebuild now would keep the project and its cache busy after the client has left.
@@ -1145,6 +1163,59 @@ describe("createWatchController", () => {
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+
+  it("waits at close for the rebuild that is running, and starts no refresh after it", async () => {
+    const { fake, controller, calls, checkStarts, loadEnds, state } = startController();
+    const releaseRebuild = Promise.withResolvers<void>();
+    state.freshness = freshnessByState.refreshed;
+    state.loadHold = releaseRebuild.promise;
+    const [handle] = fake.openHandles();
+
+    handle.emit("src/a.ts");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(calls).toEqual(["markChanged", "checkFreshness", "loadProject:skip"]);
+    // A burst that settles during the rebuild would schedule one more refresh.
+    handle.emit("src/b.ts");
+    await vi.advanceTimersByTimeAsync(500);
+
+    let settledCloses = 0;
+    const close = async (): Promise<void> => {
+      await controller.close();
+      settledCloses += 1;
+    };
+    const closings = [close(), close()];
+    await vi.advanceTimersByTimeAsync(60_000);
+    // A caller that releases the session now does it under a rebuild that goes on writing to it.
+    expect(settledCloses).toBe(0);
+    expect(loadEnds).toEqual([]);
+
+    releaseRebuild.resolve();
+    await Promise.all(closings);
+    expect(settledCloses).toBe(2);
+    expect(loadEnds).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(checkStarts).toEqual([500]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("closes at once, and never starts the refresh, when one only waits for its minimum interval", async () => {
+    const { fake, controller, checkStarts } = startController();
+    const [handle] = fake.openHandles();
+    handle.emit("src/a.ts");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(checkStarts).toEqual([500]);
+    // This burst settles at 1_000, and its refresh waits for the 5 s floor, until 5_500. No refresh is running.
+    handle.emit("src/b.ts");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(vi.getTimerCount()).toBe(2);
+
+    await controller.close();
+
+    expect(fake.openHandles()).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(checkStarts).toEqual([500]);
+  });
 });
 
 describe("startProjectWatcher with the real file system", () => {
@@ -1401,7 +1472,7 @@ describe("startProjectWatcher with the real file system", () => {
       answers.add(await session.checkFreshness!());
       expect(answers.size).toBe(2);
     } finally {
-      controller.close();
+      await controller.close();
       session.invalidate();
     }
   });
@@ -1614,6 +1685,84 @@ describe("startProjectWatcher with directories that appear", () => {
 
     expect(fake.openHandles().map((handle) => [handle.directory, handle.recursive])).toEqual([[projectRoot, true]]);
     expect(log).not.toHaveBeenCalled();
+    watcher.close();
+  });
+});
+
+describe("startProjectWatcher with a linked project root", () => {
+  const tempRoots = createTempRootRegistry();
+  afterEach(async () => {
+    await tempRoots.cleanup();
+  });
+
+  // A project directory and a link to it: a symlink, or a junction on Windows. Nothing where the system forbids links.
+  async function createLinkedProject(): Promise<{ real: string; linked: string } | undefined> {
+    const real = await tempRoots.create("cg-project-watcher-link-real-");
+    const parent = await tempRoots.create("cg-project-watcher-link-parent-");
+    const linked = path.join(parent, "alias");
+    return (await tryCreateDirectorySymlink(real, linked)) ? { real, linked } : undefined;
+  }
+
+  // One directory under two names. The events name entries relative to the root as it was given, whichever name the cache
+  // directory carries.
+  it.each([
+    [
+      "a root that is a link and a cache directory that names the project by its physical path",
+      "linked",
+      "real",
+      false,
+    ],
+    ["a root that is a link and a physical cache directory that exists already", "linked", "real", true],
+    ["a physical root and a cache directory that names the project through the link", "real", "linked", false],
+  ] as const)(
+    "ignores the subtree of a cache directory inside the project, with %s",
+    async (_label, rootName, cacheName, exists) => {
+      const project = await createLinkedProject();
+      if (!project) return;
+      const cacheDirectory = path.join(project[cacheName], ".moved-cache", "project-abc");
+      if (exists) await fs.mkdir(cacheDirectory, { recursive: true });
+      const { fake, watcher, onChange } = startWatcher({ root: project[rootName], cacheDirectory });
+      const [handle] = fake.openHandles();
+
+      for (const filename of [
+        ".moved-cache/project-abc",
+        ".moved-cache/project-abc/manifest.json",
+        ".moved-cache\\project-abc\\cache\\index-v1\\search-v1.sqlite",
+      ]) {
+        handle.emit(filename);
+      }
+      expect(onChange).not.toHaveBeenCalled();
+
+      // Paths that only start like the cache directory's are project files.
+      const reported = [".moved-cache/notes.md", ".moved-cache/project-abcd/a.ts", "project-abc/a.ts"];
+      for (const filename of reported) handle.emit(filename);
+      expect(onChange).toHaveBeenCalledTimes(reported.length);
+      watcher.close();
+    },
+  );
+
+  it("opens no watch inside a cache directory that names the project by its physical path, under a root that is a link", async () => {
+    const project = await createLinkedProject();
+    if (!project) return;
+    const moved = path.join(project.linked, ".moved-cache");
+    const cache = path.join(project.real, ".moved-cache", "project-abc");
+    await fs.mkdir(path.join(project.real, "src"));
+    const { fake, watcher } = startWatcher({
+      root: project.linked,
+      platform: "linux",
+      listFiles: async () => [path.join(project.linked, "src", "a.ts")],
+      cacheDirectory: cache,
+    });
+    await watcher.refreshDirectories();
+
+    // The first cache write creates the whole tree under the watch that is open, and the `mkdir -p` raises one event.
+    await fs.mkdir(path.join(cache, "index-v1", "deeper"), { recursive: true });
+    fake.deliver(project.linked, ".moved-cache", "rename");
+    await watcher.refreshDirectories();
+
+    // The directory around the cache is an ordinary one that the event reported. Nothing inside the cache gets a watch.
+    expect(fake.handles.map((handle) => handle.directory)).toContain(moved);
+    expect(fake.handles.filter((handle) => handle.directory.startsWith(path.join(moved, "project-abc")))).toEqual([]);
     watcher.close();
   });
 });
