@@ -63,16 +63,6 @@ function loadNodeSqlite(): NodeSqliteModule {
   }
 }
 
-export function getNodeSqliteLoadError(): Error | undefined {
-  if (sqliteModule) return undefined;
-  try {
-    loadNodeSqlite();
-    return undefined;
-  } catch {
-    return sqliteLoadError;
-  }
-}
-
 export function isNodeSqliteUnavailableError(error: unknown): boolean {
   const message = errorMessage(error);
   return /node:sqlite|No such built-in module:\s*node:sqlite|setReturnArrays is not a function|columns is not a function/i.test(

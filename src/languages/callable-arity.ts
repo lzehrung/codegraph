@@ -22,6 +22,7 @@ import {
   findBalancedParentheses,
   findCommentEnd,
   findOpeningParen,
+  findRegexLiteralEnd,
   splitTopLevelCommaGroups,
 } from "../impact/call-compatibility/text-scanner.js";
 import type { SyntaxNodeLike } from "./types.js";
@@ -658,44 +659,6 @@ function canStartRegexLiteral(text: string, index: number): boolean {
     return true;
   }
   return "([{,=:+-!*?&|;".includes(previous);
-}
-
-function findRegexLiteralEnd(text: string, index: number): number | null {
-  if (text[index] !== "/" || text[index + 1] === "/" || text[index + 1] === "*") {
-    return null;
-  }
-  let escaped = false;
-  let inCharacterClass = false;
-  for (let current = index + 1; current < text.length; current += 1) {
-    const char = text[current];
-    if (char === "\n" || char === "\r") {
-      return -1;
-    }
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (char === "[") {
-      inCharacterClass = true;
-      continue;
-    }
-    if (char === "]") {
-      inCharacterClass = false;
-      continue;
-    }
-    if (char === "/" && !inCharacterClass) {
-      let endIndex = current + 1;
-      while (/[A-Za-z]/.test(text[endIndex] ?? "")) {
-        endIndex += 1;
-      }
-      return endIndex;
-    }
-  }
-  return -1;
 }
 
 /** One parameter of a declaration, reduced to the facts the arity count needs. */

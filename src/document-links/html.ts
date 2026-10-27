@@ -1,6 +1,10 @@
 import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 import { SHARED_HTML_TAG_ATTRS, type DocumentHtmlForm } from "./html-forms.js";
 import { dedupeModuleSpecifiers, markResolutionKind, normalizeLinkSpecifier } from "./shared.js";
+import {
+  matchesCaseInsensitive as matchesHtmlTagName,
+  skipQuotedString as skipHtmlBodyString,
+} from "../util/text-scanning.js";
 
 const HTML_RAW_TEXT_TAGS: Record<string, true> = { script: true, style: true };
 const HTML_LITERAL_BLOCK_TAGS: Record<string, true> = { pre: true, code: true };
@@ -154,31 +158,9 @@ function skipHtmlAttributeValue(source: string, quoteStart: number): number {
   return source.length;
 }
 
-function skipHtmlBodyString(source: string, quoteStart: number): number {
-  const quote = source[quoteStart]!;
-  let index = quoteStart + 1;
-  while (index < source.length) {
-    if (source[index] === "\\") {
-      index += 2;
-      continue;
-    }
-    if (source[index] === quote) return index + 1;
-    index++;
-  }
-  return source.length;
-}
-
 function skipHtmlDelimited(source: string, contentStart: number, closing: string): number {
   const closingIndex = source.indexOf(closing, contentStart);
   return closingIndex === -1 ? source.length : closingIndex + closing.length;
-}
-
-function matchesHtmlTagName(source: string, start: number, tag: string): boolean {
-  if (start + tag.length > source.length) return false;
-  for (let index = 0; index < tag.length; index++) {
-    if (source[start + index]!.toLowerCase() !== tag[index]!) return false;
-  }
-  return true;
 }
 
 function findHtmlCloseTag(

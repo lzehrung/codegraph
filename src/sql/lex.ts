@@ -67,6 +67,19 @@ export function sqlParenDepthAt(text: string, index: number): number {
   return depth;
 }
 
+export function sqlMatchingParen(text: string, openIndex: number): number {
+  let depth = 0;
+  for (let index = openIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "(") depth += 1;
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
 export function splitTopLevelCommaSeparated(text: string): string[] {
   const parts: string[] = [];
   let start = 0;

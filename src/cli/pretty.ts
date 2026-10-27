@@ -18,7 +18,7 @@ function formatLabel(key: string): string {
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }
 
-function formatScalar(value: unknown): string {
+export function formatScalar(value: unknown): string {
   if (value === null || value === undefined) return "none";
   if (typeof value === "boolean") return value ? "yes" : "no";
   if (typeof value === "string") return value || "(empty)";

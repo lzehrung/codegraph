@@ -1,6 +1,7 @@
 import { checkMarkdownLinksInFiles } from "../document-links/check.js";
 import type { FileId } from "../types.js";
 import path from "node:path";
+import { mapChangedFiles } from "./report-shared.js";
 import { type ProjectIndex, type BuildReport } from "../indexer/types.js";
 import { summarizeAnalysis } from "../analysis-summary.js";
 import type {
@@ -23,7 +24,6 @@ import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { findDetailedCycles } from "../graphs/queries.js";
 import { discoverProjectFiles } from "../util/project-files.js";
 import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
-import { newFileRangeForHunk } from "./hunks.js";
 import { createGraphFileResolver, normalizeImpactFileChange, toImpactReportFilePath } from "./path.js";
 import { buildCompactImpactReport } from "./report-compact.js";
 import { buildFullImpactReport } from "./report-full.js";
@@ -52,13 +52,7 @@ export async function buildImpactReport(
     : undefined;
 
   // Build changedFiles summary
-  const changedFiles = normalizedDiffFiles.map((fileChange) => ({
-    file: displayFile(fileChange.path),
-    kind: fileChange.kind,
-    ...(fileChange.oldPath ? { oldFile: displayFile(fileChange.oldPath) } : {}),
-    ...(fileChange.similarityIndex !== undefined ? { similarityIndex: fileChange.similarityIndex } : {}),
-    hunks: fileChange.hunks.map((hunk) => newFileRangeForHunk(hunk)),
-  }));
+  const changedFiles = mapChangedFiles(normalizedDiffFiles, displayFile);
 
   // Build graph data
   const fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }> = [];

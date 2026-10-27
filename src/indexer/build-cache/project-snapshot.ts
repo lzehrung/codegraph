@@ -26,7 +26,6 @@ import type {
   ProjectIndex,
   SymbolDef,
   BuildReport,
-  ParseErrorRange,
 } from "../types.js";
 import {
   buildSymbolGraph,
@@ -45,6 +44,8 @@ import {
   loadAllCachedModules,
   transformPersistedExportFromModule,
   type FileSignature,
+  isParseErrorRange,
+  isRange,
 } from "./module-cache.js";
 import { cacheRoot } from "./location.js";
 import type { ManifestFileEntry } from "./manifest.js";
@@ -1845,17 +1846,6 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   );
 }
 
-function isParseErrorRange(value: unknown): value is ParseErrorRange {
-  if (!value || typeof value !== "object") return false;
-  const range = value as { startIndex?: unknown; endIndex?: unknown };
-  const startIndex = range.startIndex;
-  const endIndex = range.endIndex;
-  if (typeof startIndex !== "number" || typeof endIndex !== "number") return false;
-  return (
-    Number.isSafeInteger(startIndex) && Number.isSafeInteger(endIndex) && startIndex >= 0 && endIndex >= startIndex
-  );
-}
-
 function isSymbolDef(value: unknown): value is SymbolDef {
   if (!value || typeof value !== "object") return false;
   const symbol = value as Partial<SymbolDef>;
@@ -1991,22 +1981,6 @@ function isOptionalRange(value: unknown): boolean {
 
 function isSymbolKind(value: unknown): value is SymbolKind {
   return SNAPSHOT_SYMBOL_KINDS.has(value as SymbolKind);
-}
-
-function isRange(value: unknown): value is Range {
-  if (!value || typeof value !== "object") return false;
-  const range = value as Partial<Range>;
-  return isPos(range.start) && isPos(range.end);
-}
-
-function isPos(value: unknown): value is Pos {
-  if (!value || typeof value !== "object") return false;
-  const pos = value as Partial<Pos>;
-  return (
-    typeof pos.line === "number" &&
-    typeof pos.column === "number" &&
-    (pos.index === undefined || typeof pos.index === "number")
-  );
 }
 
 function isGraphEdge(value: unknown): value is Edge {

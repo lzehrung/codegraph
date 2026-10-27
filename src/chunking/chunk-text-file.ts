@@ -1,6 +1,6 @@
 import type { Chunk } from "./chunk-file.js";
 import { withStableChunkIds } from "./chunk-id.js";
-import { splitTextWithinTokenBudget } from "./chunk-split.js";
+import { countLineBreaks, splitTextWithinTokenBudget } from "./chunk-split.js";
 import { countWhitespaceTokens } from "./tokenizer.js";
 import type { ChunkTokenizer } from "./types.js";
 
@@ -151,14 +151,6 @@ function lineRanges(source: string): Array<{ start: number; end: number; startLi
   }
 
   return ranges;
-}
-
-function countLineBreaks(text: string): number {
-  let count = 0;
-  for (let index = 0; index < text.length; index++) {
-    if (text[index] === "\n") count++;
-  }
-  return count;
 }
 
 function endLineForText(startLine: number, text: string): number {

@@ -263,16 +263,6 @@ export function selectFirstExistingPhpCanonicalName(
   return null;
 }
 
-export function canonicalPhpReferenceName(
-  rawName: string,
-  source: string,
-  tree: SyntaxTreeLike,
-  node: SyntaxNodeLike | null,
-  options?: PhpCanonicalNameOptions,
-): string | null {
-  return canonicalPhpReferenceNames(rawName, source, tree, node, options)[0] ?? null;
-}
-
 /**
  * True when a reference node spells a namespace-qualified path (`App\Name`, `\App\Name`, or
  * `namespace\Name`). A bare `name` is not a qualified path, so PHP could resolve it as a

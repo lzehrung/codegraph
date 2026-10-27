@@ -10,11 +10,7 @@ import { fileIdentityKey } from "../../util/paths.js";
 import { resolveSpecifierTargets } from "../../util/resolution/specifier-targets.js";
 import { resolvePythonSubmoduleExact } from "../../util/resolution/python.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
-import {
-  pythonStatements,
-  pythonTypeCheckingContext,
-  startsPythonCompoundHeader,
-} from "../../util/python-type-checking.js";
+import { pythonTypeCheckingContext, startsPythonCompoundHeader } from "../../util/python-type-checking.js";
 import { buildScopeIndexFromSource } from "../scope.js";
 import type { ImportBinding } from "../types.js";
 import { attributeNamedBindingRanges } from "./binding-ranges.js";
@@ -221,18 +217,9 @@ function isPythonModuleLevelImportPrefix(prefix: string): boolean {
   return true;
 }
 
-// `maskedSrc` has comments/strings blanked to same-length whitespace (offset-preserving), so
-// `keywordStart` and every position derived from it line up with the real source.
-// `isPythonModuleLevelImportPrefix` re-strips its input, which is a harmless no-op here
-// since `maskedSrc` is already comment/string-free content-wise.
 /** Start of the line holding `index`; Python ends lines with LF, CRLF, or a lone CR. */
 function pythonLineStart(text: string, index: number): number {
   return Math.max(text.lastIndexOf("\n", index - 1), text.lastIndexOf("\r", index - 1)) + 1;
-}
-
-function isModuleLevelKeywordInStrippedSource(maskedSrc: string, keywordStart: number): boolean {
-  const lineStart = pythonLineStart(maskedSrc, keywordStart);
-  return isPythonModuleLevelImportPrefix(maskedSrc.slice(lineStart, keywordStart));
 }
 
 function normalizePythonImportStatement(statement: string): string {
@@ -326,31 +313,5 @@ export async function collectPythonImportsFromNativeMatches(
     const prefix = context.source.slice(lineStart, startIndex);
     const moduleLevel = isPythonModuleLevelImportPrefix(prefix);
     await collectPythonImportStatement(context, statementCapture.text, moduleLevel, isTypeOnly(startIndex), startIndex);
-  }
-}
-
-export async function collectPythonImportsFromSource(context: PythonImportExtractionContext): Promise<void> {
-  // Masked (not stripped): comment/string content becomes same-length whitespace instead of
-  // being deleted, so every `match.index`/group position below is an exact offset into
-  // `context.source` and named bindings can be range-attributed the same way the native
-  // match path is.
-  const pySrc = maskPythonCommentsAndStrings(context.source);
-  const isTypeOnly = pythonTypeCheckingContext(context.source);
-  // Each simple statement, including one-line suites and `a; b`, goes through the native
-  // statement parser: `from` imports first, then `import a, b as c` lists.
-  const statements = pythonStatements(pySrc);
-  for (const keyword of ["from", "import"]) {
-    const startsStatement = new RegExp(String.raw`^${keyword}\s`, "u");
-    for (const { start, end } of statements) {
-      if (!startsStatement.test(pySrc.slice(start, end))) continue;
-      const moduleLevel = isModuleLevelKeywordInStrippedSource(pySrc, start);
-      await collectPythonImportStatement(
-        context,
-        context.source.slice(start, end),
-        moduleLevel,
-        isTypeOnly(start),
-        start,
-      );
-    }
   }
 }

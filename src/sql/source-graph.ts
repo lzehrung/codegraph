@@ -266,10 +266,6 @@ export function sqlEdgeTargetFromRaw(raw: string | undefined): { namespace: SqlT
   return { namespace: "relation", name: rest };
 }
 
-export function sqlObjectNameFromEdgeRaw(raw: string | undefined): string | null {
-  return sqlEdgeTargetFromRaw(raw)?.name ?? null;
-}
-
 export function sqlEdgeMatchesChangedObjects(raw: string | undefined, objects: readonly SqlChangedObject[]): boolean {
   const target = sqlEdgeTargetFromRaw(raw);
   if (!target || !objects.length) return false;

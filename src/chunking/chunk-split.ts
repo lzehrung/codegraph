@@ -238,7 +238,7 @@ function lineRanges(
   return ranges;
 }
 
-function countLineBreaks(text: string): number {
+export function countLineBreaks(text: string): number {
   let count = 0;
   for (let index = 0; index < text.length; index++) {
     if (text[index] === "\n") count++;
