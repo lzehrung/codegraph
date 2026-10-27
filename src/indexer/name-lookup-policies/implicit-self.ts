@@ -12,10 +12,18 @@ import {
 import { sliceText } from "../../util/ast.js";
 import {
   csharpAliasQualifiedLookupName,
+  csharpAliasUnprovenReason,
+  csharpChainQualifier,
   implicitSelfCallee,
   isDirectKeywordMemberDeclaration,
 } from "../navigation-goto.js";
-import { csharpLookupName, definitionForBinding } from "../navigation-local.js";
+import {
+  CSHARP_GENERIC_OWNER_REASON,
+  csharpLookupName,
+  csharpQualifiedNameNode,
+  csharpQualifiedThroughGenericOwner,
+  definitionForBinding,
+} from "../navigation-local.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName } from "../navigation-resolve.js";
@@ -92,8 +100,9 @@ export const swiftLookupPolicy: NameLookupPolicy = {
  * file's `using P;` across every directory that declares `P`.
  */
 function csharpQualifiedThroughUsing({ use, lookupName }: NameLookupState): GoToResult | null {
-  if (!lookupName.includes(".")) return null;
-  const hit = resolveCsharpQualifiedName(use.index, use.mod, lookupName, use.node.startIndex);
+  const qualifiedName = csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports);
+  if (!qualifiedName.includes(".")) return null;
+  const hit = resolveCsharpQualifiedName(use.index, use.mod, qualifiedName, use.node.startIndex);
   return hit?.kind === "resolved"
     ? okGoToResult(use.index, hit.def, { resolution: "import", confidence: "high" })
     : null;
@@ -104,6 +113,20 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   fromClosestBinding: ownOverloadDeclaration,
   crossModuleName: ({ use, lookupName }) =>
     csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports),
+  // A dotted name led by a compilation-unit alias that an enclosing namespace shadows, or that reaches a project
+  // with a file of unknown declarations, is unproven, and so is one qualified through a generic type, whose
+  // namespace-qualified spelling drops its type arguments.
+  beforeCrossModule({ use }) {
+    const chainNode = csharpQualifiedNameNode(use.node);
+    if (!chainNode) return undefined;
+    if (csharpQualifiedThroughGenericOwner(chainNode)) {
+      return { status: "not_found", reason: CSHARP_GENERIC_OWNER_REASON };
+    }
+    const lead = csharpChainQualifier(chainNode, use.parsed.source);
+    const reason = lead ? csharpAliasUnprovenReason(use.index, use.mod, lead.qualifier, use.parsed.source) : null;
+    return reason ? { status: "not_found", reason } : undefined;
+  },
+  shadowsModuleAlias: (use) => !!csharpAliasUnprovenReason(use.index, use.mod, use.node, use.parsed.source),
   // A static member function reaches only static members of its type.
   onLocal(state, local) {
     if (!bindsTypeMethod(state) || !isImplicitSelfCall(state)) return undefined;

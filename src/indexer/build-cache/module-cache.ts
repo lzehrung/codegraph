@@ -28,6 +28,7 @@ import {
 } from "../../util/sqlite-schema.js";
 import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex, ParseErrorRange } from "../types.js";
 import { callableIdentityWithFile, isCallableIdentity } from "../callable-identity.js";
+import { isCsharpNamespaceFacts } from "../../util/csharp-tree.js";
 import type { Pos, Range } from "../../types.js";
 import {
   assertFilePathWithinRoot,
@@ -438,6 +439,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   if (!value || typeof value !== "object") return false;
   const mod = value as {
     file?: unknown;
+    csharpNamespaceFacts?: unknown;
     docstringsChecked?: unknown;
     exports?: unknown;
     imports?: unknown;
@@ -452,6 +454,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     mod.imports.every(hasValidImportBindingRanges) &&
     Array.isArray(mod.locals) &&
     mod.locals.every(hasValidCallableSymbol) &&
+    (mod.csharpNamespaceFacts === undefined || isCsharpNamespaceFacts(mod.csharpNamespaceFacts)) &&
     (mod.parseErrorRanges === undefined ||
       (Array.isArray(mod.parseErrorRanges) && mod.parseErrorRanges.every(hasValidParseErrorRange))) &&
     mod.exports.every((entry: unknown) => {

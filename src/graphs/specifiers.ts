@@ -1,13 +1,13 @@
 import { type LanguageSupport } from "../languages.js";
 import {
-  parseCsharpUsingDirective,
   parseJavaImportStatement,
   parseKotlinImportStatement,
   parsePhpImportStatement,
   parseRustImportStatements,
 } from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { recordNativeExecutionOutcome } from "../native/native-backend-report.js";
+import { collectCsharpImportDirectives, csharpUsingDirective, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
+import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import type { BuildReport } from "../indexer/types.js";
 import { errorMessage } from "../util/errors.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../worker/native-extract-worker.js";
@@ -261,6 +261,29 @@ export function collectModuleSpecifiersFromSource(
     return [];
   }
 
+  if (support.id === "csharp") {
+    let tree = opts?.tree;
+    if (!tree) {
+      const parsed = parseCsharpSyntaxTree(source, support);
+      if (!parsed.tree) {
+        if (opts?.file) {
+          recordParserBackendDegradation(opts.report, {
+            file: opts.file,
+            languageId: support.id,
+            ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
+            ...(parsed.error ? { nativeError: parsed.error } : {}),
+          });
+        }
+        return [];
+      }
+      tree = parsed.tree;
+    }
+    for (const directive of collectCsharpImportDirectives(tree)) {
+      const parsed = csharpUsingDirective(directive);
+      if (parsed) out.push({ spec: parsed.value, typeOnly: false });
+    }
+    return normalizeModuleSpecifiers(out);
+  }
   const nativeImportsArray = resolveNativeImportMatches(support, source, opts).matches;
   if (!nativeImportsArray) return [];
   const nativeImportsToProcess = htmlLikeLanguage ? [] : nativeImportsArray;
@@ -322,13 +345,6 @@ export function collectModuleSpecifiersFromSource(
               parsedList.map((parsed) => rustSpecifierForParsedImport(parsed, source, statementStartIndex)),
               rustSeen,
             );
-            continue;
-          }
-        }
-        if (support.id === "csharp") {
-          const parsed = parseCsharpUsingDirective(stmtText);
-          if (parsed) {
-            out.push({ spec: parsed.from, typeOnly: false });
             continue;
           }
         }

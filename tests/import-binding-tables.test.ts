@@ -16,7 +16,6 @@ function declaredCapabilityFields(row: ImportBindingRow): string[] {
   if (row.maskTrivia !== undefined) fields.push("maskTrivia");
   if (row.normalizeDots) fields.push("normalizeDots");
   if (row.statementKeyUsesOffset) fields.push("statementKeyUsesOffset");
-  if (row.alwaysAliased) fields.push("alwaysAliased");
   if (row.rescanTextBindings) fields.push("rescanTextBindings");
   if (row.statementOmittedReason) fields.push("statementOmittedReason");
   if (row.implicitOmittedReason) fields.push("implicitOmittedReason");

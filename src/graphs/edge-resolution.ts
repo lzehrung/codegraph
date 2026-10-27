@@ -6,6 +6,8 @@ import { type WorkspaceConfig } from "../util/workspace.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
 import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../util/resolution-candidates.js";
 import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
+import type { BuildReport } from "../indexer/types.js";
+import type { ParsedFileContext } from "../indexer/parse-context.js";
 
 type ResolvedSpecifierEdge = {
   to: EdgeTo;
@@ -27,6 +29,8 @@ export type ModuleSpecifierResolutionContext = {
   resolutionHints?: string[];
   /** Active extension-to-language mapping, so a file is classified as the language that parses it. */
   languageExtensions?: LanguageExtensionMap;
+  report?: BuildReport;
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
 };
 
 function edgeToResolvedFile(resolved: string): EdgeTo {
@@ -78,6 +82,8 @@ export async function resolveModuleSpecifierEdges(
     ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
     ...(entry.rubyLoadForm ? { rubyLoadForm: entry.rubyLoadForm } : {}),
     ...(resolutionExtensions ? { resolutionExtensions } : {}),
+    ...(context.report ? { report: context.report } : {}),
+    ...(context.parsedFiles ? { parsedFiles: context.parsedFiles } : {}),
   });
 
   if (targets.files.length) {

@@ -129,6 +129,7 @@ export async function collectGraph(
       const parsedEntry = opts?.parsed?.get(fileIdentityKey(file));
       const edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
         ...(parsedEntry ? { parsed: parsedEntry } : {}),
+        ...(opts?.parsed ? { parsedFiles: opts.parsed } : {}),
         resolveNodeModules: !!opts?.resolveNodeModules,
         dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
         resolutionHints,

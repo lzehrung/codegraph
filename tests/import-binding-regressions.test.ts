@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { collectImportsForFile, parseFile } from "../src/indexer.js";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import { buildProjectIndexFromFiles, findReferences, goToDefinition } from "../src/index.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 function simplifyImports(imports: Awaited<ReturnType<typeof collectImportsForFile>>): unknown[] {
   return imports.map((entry) => ({
@@ -98,5 +102,176 @@ describe("import binding regressions", () => {
       from: "aPp\\sUpPoRt\\DEFAULT_NAME",
       resolved: constantTarget,
     });
+  });
+  it("keeps unresolved C# aliases as bindings that shadow imported decoys", async () => {
+    const cases = [
+      { name: "generic alias", target: "N.Box<int>", box: "namespace N; public class Box<T> {}\n" },
+      { name: "array alias", target: "N.Box[]", box: "namespace N; public class Box {}\n" },
+    ];
+    const outcomes: { name: string; hasUnresolvedAlias: boolean; useStatus: string }[] = [];
+    for (const testCase of cases) {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-shadow-"));
+      const main = path.join(root, "Main.cs");
+      const box = path.join(root, "Box.cs");
+      const decoy = path.join(root, "Other.cs");
+      const mainLines = ["using B = " + testCase.target + ";", "using Other;", "class Use { B value; }"];
+      try {
+        await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+        await writeFile(box, testCase.box, "utf8");
+        await writeFile(decoy, "namespace Other; public class B {}\n", "utf8");
+        const index = await buildProjectIndexFromFiles(root, [main, box, decoy]);
+        const importer = index.byFile.get(fileIdentityKey(main));
+        const hasUnresolvedAlias =
+          importer?.imports.some(
+            (entry) =>
+              entry.kind === "named" &&
+              entry.local === "B" &&
+              entry.from === testCase.target &&
+              entry.explicitAlias &&
+              typeof entry.resolved !== "string",
+          ) ?? false;
+
+        const result = await goToDefinition(index, {
+          file: main,
+          line: 3,
+          column: mainLines[2]!.indexOf("B value") + 1,
+        });
+        outcomes.push({ name: testCase.name, hasUnresolvedAlias, useStatus: result.status });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+    expect(outcomes).toEqual(
+      cases.map((testCase) => ({ name: testCase.name, hasUnresolvedAlias: true, useStatus: "not_found" })),
+    );
+  });
+  it("keeps array, nullable, pointer, and ref C# alias targets unresolved", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-wrapped-alias-targets-"));
+    const typeFile = path.join(root, "Box.cs");
+    const main = path.join(root, "Main.cs");
+    const mainLines = [
+      "using A = N.Box[];",
+      "using Q = N.Box?;",
+      "using P = N.Box*;",
+      "using R = ref N.Box;",
+      "class Use {",
+      "  void M() { A.Nested.Run(); }",
+      "}",
+    ];
+    try {
+      await writeFile(
+        typeFile,
+        "namespace N; public class Box { public class Nested { public static void Run() {} } }\n",
+        "utf8",
+      );
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [typeFile, main]);
+      const importer = index.byFile.get(fileIdentityKey(main));
+      const wrappedAliases = new Set(["A", "Q", "P", "R"]);
+      const bindings =
+        importer?.imports.filter((binding) => binding.kind === "named" && wrappedAliases.has(binding.local)) ?? [];
+
+      expect(bindings.map((binding) => (binding.kind === "named" ? binding.local : "")).sort()).toEqual(
+        [...wrappedAliases].sort(),
+      );
+      expect(bindings.every((binding) => typeof binding.resolved !== "string")).toBe(true);
+      const fileTargets = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : ""));
+      expect(fileTargets).not.toContain(fileIdentityKey(typeFile));
+
+      const nested = await goToDefinition(index, {
+        file: main,
+        line: 6,
+        column: mainLines[5]!.indexOf("Nested") + 1,
+      });
+      expect(nested.status).not.toBe("ok");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps every name in an unresolved generic C# alias target an ordinary reference", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-alias-argument-"));
+    const model = path.join(root, "Model.cs");
+    const box = path.join(root, "Box.cs");
+    const main = path.join(root, "Main.cs");
+    const mainLines = ["using B = N.Box<Model>;", "using C = N.Box<Model>.Inner;", "class Use { B value; }"];
+    try {
+      await writeFile(model, "public class Model {}\n", "utf8");
+      const boxSource = "namespace N; public class Box<T> { public class Inner {} }\n";
+      await writeFile(box, boxSource, "utf8");
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [model, box, main]);
+      const aliases = index.byFile
+        .get(fileIdentityKey(main))
+        ?.imports.filter((binding) => binding.kind === "named" && (binding.local === "B" || binding.local === "C"));
+
+      // `imported` names the target type, not a type argument, and neither alias resolves.
+      expect(aliases).toMatchObject([
+        { local: "B", imported: "Box", from: "N.Box<Model>", explicitAlias: true },
+        { local: "C", imported: "Inner", from: "N.Box<Model>.Inner", explicitAlias: true },
+      ]);
+      expect(aliases?.map((binding) => typeof binding.resolved !== "string")).toEqual([true, true]);
+      const alias = await goToDefinition(index, { file: main, line: 3, column: mainLines[2]!.indexOf("B value") + 1 });
+      expect(alias.status).not.toBe("ok");
+
+      const mainSites = async (file: string, column: number): Promise<string[]> => {
+        const references = await findReferences(index, { file, line: 1, column });
+        if (references.status !== "ok") throw new Error(`Expected references for ${path.basename(file)}`);
+        return references.references
+          .filter((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))
+          .map((reference) => `${reference.range.start.line}:${reference.range.start.column}`);
+      };
+      const column = (line: number, name: string): number => mainLines[line - 1]!.indexOf(name) + 1;
+      expect(await mainSites(model, 14)).toEqual([`1:${column(1, "Model")}`, `2:${column(2, "Model")}`]);
+      expect(await mainSites(box, boxSource.indexOf("Box") + 1)).toEqual([
+        `1:${column(1, "Box")}`,
+        `2:${column(2, "Box")}`,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("binds a C# alias target to the declaration without type parameters", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-arity-"));
+    const main = path.join(root, "Main.cs");
+    const plain = path.join(root, "Box.cs");
+    const generic = path.join(root, "BoxOfT.cs");
+    const genericOnly = path.join(root, "Only.cs");
+    const soloGeneric = path.join(root, "Solo.cs");
+    const mainLines = ["using B = N.Box;", "using O = N.Only;", "using S = M.Solo;", "class Use { B value; S solo; }"];
+    try {
+      await writeFile(plain, "namespace N; public class Box {}\n", "utf8");
+      await writeFile(generic, "namespace N; public class Box<T> {}\n", "utf8");
+      await writeFile(genericOnly, "namespace N; public class Only<T> {}\n", "utf8");
+      // The only file that declares namespace `M` declares just the generic type.
+      await writeFile(soloGeneric, "namespace M; public class Solo<T> {}\n", "utf8");
+      await writeFile(main, mainLines.join("\n") + "\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [main, plain, generic, genericOnly, soloGeneric]);
+      const target = (local: string): string | undefined => {
+        const alias = index.byFile
+          .get(fileIdentityKey(main))
+          ?.imports.find((binding) => binding.kind === "named" && binding.local === local);
+        return typeof alias?.resolved === "string" ? fileIdentityKey(alias.resolved) : undefined;
+      };
+
+      // `N.Box` names `Box`, never `Box<T>`, so a generic sibling does not make it ambiguous; `N.Only` and `M.Solo`
+      // name no type, whether their namespace is declared in several files or in one.
+      expect(target("B")).toBe(fileIdentityKey(plain));
+      expect(target("O")).toBeUndefined();
+      expect(target("S")).toBeUndefined();
+      const solo = await goToDefinition(index, {
+        file: main,
+        line: 4,
+        column: mainLines[3]!.indexOf("S solo") + 1,
+      });
+      expect(solo.status).not.toBe("ok");
+      const fileTargets = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : ""));
+      expect(fileTargets).not.toContain(fileIdentityKey(soloGeneric));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

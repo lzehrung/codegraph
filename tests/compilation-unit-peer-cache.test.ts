@@ -5,6 +5,8 @@ import { getCompilationUnitPeers } from "../src/indexer/compilation-units.js";
 import type { ParsedFileContext } from "../src/indexer/parse-context.js";
 import type { ModuleIndex } from "../src/indexer/types.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { CSHARP_SUPPORT } from "../src/languages.js";
+import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../src/util/csharp-tree.js";
 import { makeTestProjectIndex } from "./helpers/narrow.js";
 
 type ScanStats = { visits: number };
@@ -44,12 +46,24 @@ function parsedSource(source: string): ParsedFileContext {
   return { source } as ParsedFileContext;
 }
 
+/** A stub module with the namespace facts the build stores for a C# file; other languages carry none. */
+function moduleFor(entry: IndexedFile): ModuleIndex {
+  const tree = /\.(cs|csharpx)$/.test(entry.file) ? parseCsharpSyntaxTree(entry.source, CSHARP_SUPPORT).tree : null;
+  return {
+    file: entry.file,
+    exports: [],
+    imports: [],
+    locals: [],
+    ...(tree ? { csharpNamespaceFacts: collectCsharpNamespaceFacts(tree) } : {}),
+  };
+}
+
 function stubIndex(files: readonly IndexedFile[]) {
   const byFile = new Map<string, ModuleIndex>();
   const parsed = new Map<string, ParsedFileContext>();
   for (const entry of files) {
     const key = fileIdentityKey(entry.file);
-    byFile.set(key, { file: entry.file, exports: [], imports: [], locals: [] });
+    byFile.set(key, moduleFor(entry));
     parsed.set(key, parsedSource(entry.source));
   }
   const stats = instrumentByFile(byFile);
@@ -59,7 +73,7 @@ function stubIndex(files: readonly IndexedFile[]) {
 
 function addIndexedFile(index: ReturnType<typeof makeTestProjectIndex>, entry: IndexedFile): void {
   const key = fileIdentityKey(entry.file);
-  index.byFile.set(key, { file: entry.file, exports: [], imports: [], locals: [] });
+  index.byFile.set(key, moduleFor(entry));
   const parsed = index.parsed ?? new Map();
   index.parsed = parsed;
   parsed.set(key, parsedSource(entry.source));
@@ -208,7 +222,7 @@ describe("compilation-unit peer cache", () => {
     const csharp: IndexedFile = { file: root + "/cs/A.cs", source: "namespace P; class A {}\n" };
     const unknownCsharp: IndexedFile = { file: root + "/cs-other/B.cs", source: "" };
     const cs = stubIndex([csharp, unknownCsharp]);
-    cs.index.parsed?.delete(fileIdentityKey(unknownCsharp.file));
+    delete cs.index.byFile.get(fileIdentityKey(unknownCsharp.file))?.csharpNamespaceFacts;
     const csharpPeers = getCompilationUnitPeers(cs.index, csharp.file);
     expect(peerKeys(csharpPeers)).toEqual(new Set([fileIdentityKey(csharp.file)]));
     expect(csharpPeers.complete).toBe(false);
@@ -283,5 +297,26 @@ describe("compilation-unit peer cache", () => {
     const after = getCompilationUnitPeers(index, first.file);
     expect(peerKeys(after)).toEqual(new Set([fileIdentityKey(first.file), fileIdentityKey(sibling.file)]));
     expect(after.complete).toBe(true);
+  });
+  it("uses the selected language mapping when extracting C# namespace peers", () => {
+    const root = path.resolve("cg-unit-peer-cache-csharp-extension").replace(/\\/g, "/");
+    const mapped: IndexedFile = {
+      file: path.join(root, "Use.csharpx").replace(/\\/g, "/"),
+      source: "namespace Q; class Use {}\n",
+    };
+    const related: IndexedFile = {
+      file: path.join(root, "Sibling.cs").replace(/\\/g, "/"),
+      source: "namespace Q; class Sibling {}\n",
+    };
+    const decoy: IndexedFile = {
+      file: path.join(root, "Decoy.cs").replace(/\\/g, "/"),
+      source: "namespace P; class Decoy {}\n",
+    };
+    const { index } = stubIndex([mapped, related, decoy]);
+    index.languageExtensions = { ".csharpx": "csharp" };
+
+    expect(peerKeys(getCompilationUnitPeers(index, mapped.file))).toEqual(
+      new Set([mapped, related].map((entry) => fileIdentityKey(entry.file))),
+    );
   });
 });

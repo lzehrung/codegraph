@@ -34,8 +34,6 @@ describe("trivia masking keeps following code visible per language", () => {
     { language: "js", source: 'const a = "Qx9body";', opener: '"', closer: '"', body: "Qx9body" },
     { language: "python", source: 'x = """Qx9body"""', opener: '"""', closer: '"""', body: "Qx9body" },
     { language: "python", source: "x = f'Qx9body {y}'", opener: "f'", closer: "'", body: "Qx9body" },
-    { language: "csharp", source: 'var s = @"Qx9body";', opener: '@"', closer: '"', body: "Qx9body" },
-    { language: "csharp", source: 'var s = """\nQx9body\n""";', opener: '"""', closer: '"""', body: "Qx9body" },
     { language: "go", source: "const s = `Qx9body`", opener: "`", closer: "`", body: "Qx9body" },
     { language: "rust", source: 'let s = r#"Qx9body"#;', opener: 'r#"', closer: '"#', body: "Qx9body" },
     { language: "php", source: "$s = <<<EOT\nQx9body\nEOT;", opener: "<<<EOT", closer: "EOT", body: "Qx9body" },
@@ -63,15 +61,6 @@ describe("trivia masking keeps following code visible per language", () => {
     const masked = maskImportBindingTrivia(source, "go");
     expectMaskedWithFollowingCode(source, masked, "C:\\", "var x = 1");
     expect(masked).toContain("import ");
-  });
-
-  it("does not let a C# verbatim string ending in a backslash blank the rest of the file", () => {
-    const source = 'var s = @"C:\\";\nusing A = B.C;\n';
-    const masked = maskTrivia(source, "csharp");
-    expectMaskedWithFollowingCode(source, masked, "C:\\", "using A = B.C;");
-    // The verbatim delimiters stay visible and the body is blanked: the backslash is data.
-    expect(masked.slice(8, 14)).toBe('@"   "');
-    expect(masked[14]).toBe(";");
   });
 
   it("does not let an apostrophe in a Python comment open a string literal", () => {

@@ -34,6 +34,7 @@ import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import {
+  csharpNamespaceImportDirectories,
   javaKotlinFunctionOverloadIncludes,
   javaStaticNamedImportIncludes,
   resolveExport,
@@ -1038,6 +1039,12 @@ function filesExportingDefinition(
   }
   return [...files.values()];
 }
+function csharpNamespaceImportTargetsDefinition(index: ProjectIndex, imp: ImportBinding, def: SymbolDef): boolean {
+  if (imp.kind !== "namespace") return false;
+  const definitionDirectory = fileIdentityKey(path.posix.dirname(normalizePath(def.file)));
+  const targets = csharpNamespaceImportDirectories(index).get(imp) ?? [];
+  return targets.some((target) => fileIdentityKey(path.posix.dirname(normalizePath(target))) === definitionDirectory);
+}
 
 function getIndexedReferenceCandidateFiles(
   index: ProjectIndex,
@@ -1058,10 +1065,11 @@ function getIndexedReferenceCandidateFiles(
     if (
       moduleIndex.imports.some(
         (imp) =>
-          (imp.kind === "star" ||
+          (languageId === "csharp" && csharpNamespaceImportTargetsDefinition(index, imp, def)) ||
+          ((imp.kind === "star" ||
             imp.kind === "namespace" ||
             (imp.kind === "named" && (imp.mechanism === "python" || isJsTsLanguage(languageId)))) &&
-          importCanReferenceDefinition(index, imp, def, exportedNames, languageId),
+            importCanReferenceDefinition(index, imp, def, exportedNames, languageId)),
       )
     ) {
       files.set(fileIdentityKey(fileId), fileId);
@@ -1130,6 +1138,7 @@ export function getCachedReferenceCandidateFiles(
     if (!moduleIndex) continue;
     if (
       moduleIndex.imports.some((imp) => {
+        if (languageId === "csharp" && csharpNamespaceImportTargetsDefinition(index, imp, def)) return true;
         if (typeof imp.resolved !== "string") return false;
         return (
           exportingFiles.has(fileIdentityKey(imp.resolved)) ||

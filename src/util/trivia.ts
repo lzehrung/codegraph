@@ -509,20 +509,6 @@ function quotedStringConstruct(
       maskSpans: [[index, charEnd]],
       delimitersAreTrivia: false,
     };
-  } else if (form.quoteRun) {
-    let run = 0;
-    while (source[cursor + run] === form.open[0]) run += 1;
-    if (run < form.open.length) return null;
-    const scanned = quoteRunStringEnd(source, cursor + run, form.open[0] ?? '"', run);
-    const bodyStart = cursor + run;
-    const body: TriviaSpan = [bodyStart, scanned.closeStart];
-    return {
-      start: index,
-      end: scanned.end,
-      renderSpans: body[0] < body[1] ? [body] : [],
-      maskSpans: [[index, scanned.end]],
-      delimitersAreTrivia: false,
-    };
   } else {
     if (!source.startsWith(form.open, cursor)) return null;
   }
@@ -624,26 +610,6 @@ function charLiteralEnd(source: string, quoteIndex: number, form: TriviaStringFo
   }
   if (source[cursor + 1] === "'") return cursor + 2;
   return null;
-}
-
-function quoteRunStringEnd(
-  source: string,
-  index: number,
-  quote: string,
-  runLength: number,
-): { end: number; closeStart: number } {
-  let cursor = index;
-  while (cursor < source.length) {
-    if (source[cursor] !== quote) {
-      cursor += 1;
-      continue;
-    }
-    let run = 0;
-    while (source[cursor + run] === quote) run += 1;
-    if (run >= runLength) return { end: cursor + run, closeStart: cursor };
-    cursor += run;
-  }
-  return { end: source.length, closeStart: source.length };
 }
 
 function closeAloneOnItsLine(source: string, closeIndex: number): boolean {

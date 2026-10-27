@@ -64,6 +64,24 @@ export function csharpQualifiedNameNode(node: SyntaxNodeLike): SyntaxNodeLike | 
   return qualified.type === "qualified_name" || qualified.type === "alias_qualified_name" ? qualified : null;
 }
 
+export const CSHARP_GENERIC_OWNER_REASON = "C# name is qualified through a generic type, not a namespace";
+
+/**
+ * Whether a C# qualified name is qualified through a generic type (`N.Outer<int>.Inner`). Its last name
+ * belongs to that constructed type, but the lookup name drops type arguments and would read it as a
+ * member of the namespace `N.Outer`.
+ */
+export function csharpQualifiedThroughGenericOwner(chain: SyntaxNodeLike): boolean {
+  let qualifier = chain.childForFieldName("qualifier");
+  while (qualifier) {
+    if (qualifier.type === "generic_name") return true;
+    if (qualifier.type !== "qualified_name" && qualifier.type !== "alias_qualified_name") return false;
+    if (qualifier.childForFieldName("name")?.type === "generic_name") return true;
+    qualifier = qualifier.childForFieldName("qualifier");
+  }
+  return false;
+}
+
 /** Preserve the full C# namespace or alias path, excluding generic type arguments. */
 export function csharpLookupName(node: SyntaxNodeLike, source: string, fallback: string): string {
   const qualified = csharpQualifiedNameNode(node);

@@ -1,172 +1,163 @@
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
+import {
+  languageExtensionPatterns,
+  normalizeLanguageExtensions,
+  supportForFileWithoutHeaderSample,
+  type LanguageExtensionMap,
+} from "../../languages.js";
 import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../paths.js";
-import { CSHARP_IDENTIFIER_SOURCE, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../identifiers.js";
+import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../identifiers.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
-import { maskTrivia } from "../trivia.js";
 import { selectUniqueCsharpNamespaceTypeFile } from "../../indexer/shared-owner-identity.js";
 import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
 import {
   buildDeclaredContainerIndex,
-  getOrCreateProjectSymbolIndex,
+  type DeclaredContainer,
   type LanguageProjectSymbolIndex,
 } from "./project-symbols.js";
+import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
+import type { BuildReport } from "../../indexer/types.js";
+import type { ParsedFileContext } from "../../indexer/parse-context.js";
+import {
+  CSHARP_FILE_LOCAL_PREFIX,
+  collectCsharpNamespaceFacts,
+  parseCsharpSyntaxTree,
+  type CsharpNamespaceFacts,
+} from "../csharp-tree.js";
 
-// A namespace name may be qualified (`namespace A.B { }`) and either block-scoped (closing
-// `{`) or file-scoped (closing `;`). Both forms declare the same namespace for a file, a file
-// may declare several namespaces, and a block-scoped namespace may nest inside another, so
-// every declaration is indexed under its composed name.
-const CSHARP_NAMESPACE_DECLARATION_PATTERN = new RegExp(
-  String.raw`(?<![\w@.])namespace\s+(${CSHARP_IDENTIFIER_SOURCE}(?:\s*\.\s*${CSHARP_IDENTIFIER_SOURCE})*)\s*[;{]`,
-  "gu",
-);
-// Namespace-direct types only. A nested `class Point` inside another type is not `N.Point`.
-// `delegate` is omitted: its return type sits where a type name would, so a naive match
-// would index `void` from `delegate void Point()`.
-const CSHARP_TYPE_DECLARATION_PATTERN = new RegExp(
-  String.raw`(?<![\w@.])(?:class|struct|interface|enum|record)\s+(?:(?:class|struct)\s+)?(${CSHARP_IDENTIFIER_SOURCE})`,
-  "gu",
-);
-
-type CsharpNamespaceIndexEntry = {
-  namespaces: string[];
-  symbolsByNamespace: ReadonlyMap<string, ReadonlySet<string>>;
+type CsharpProjectNamespaceIndexResult = {
+  index: LanguageProjectSymbolIndex;
+  complete: boolean;
 };
 
 /**
  * A namespace-qualified type name found in more than one declaring file.
  * `found` is the one declaration, or the partial-type representative when every
- * part shares one owner. `ambiguous` and `partial` never name a file: ambiguity
+ * part shares one owner; `parts` is then the number of declaring files, so a caller that needs every
+ * part can tell it holds only one. `ambiguous` and `partial` never name a file: ambiguity
  * is proven, and `partial` means a candidate could not be read so uniqueness is
  * not proven. Callers must not fall through to the first path match.
  */
 export type CsharpNamespaceTypeResolution =
-  | { status: "found"; file: string }
+  | { status: "found"; file: string; parts?: number }
   | { status: "not_found" }
   | { status: "ambiguous" }
   | { status: "partial" };
 
-type CsharpNamespaceScope = {
-  /** Brace depth when the namespace's own `{` was opened, used to close it on the matching `}`. */
-  openedDepth: number;
-  /** Fully qualified name contributed by this block. */
-  name: string;
-};
-
-const csharpNamespaceFileCache = new Map<string, CsharpNamespaceIndexEntry>();
-const csharpProjectNamespaceIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
-
-/**
- * Blanks C# comments and string literals in place, preserving offsets and line breaks, so a
- * namespace scan cannot read `namespace` out of trivia. Over-masking only risks missing a real
- * declaration, never inventing one. Routed through the shared trivia scanner's C# row, which
- * handles verbatim `@""` doubling, raw `"""` quote runs, and ordinary escaped literals.
- */
-function maskCsharpTrivia(source: string): string {
-  return maskTrivia(source, "csharp");
+/** The namespace facts known per file during one build, from a reused module or from the file's own tree. */
+const csharpNamespaceFileCache = new Map<string, CsharpNamespaceFacts>();
+const csharpProjectNamespaceIndexCache = new Map<string, Promise<CsharpProjectNamespaceIndexResult>>();
+const NO_CSHARP_NAMESPACE_FACTS: CsharpNamespaceFacts = { regions: [], types: [] };
+function csharpNamespaceCacheKey(anchor: string, languageExtensions?: LanguageExtensionMap): string {
+  const mappings = Object.entries(normalizeLanguageExtensions(languageExtensions) ?? {});
+  return anchor + "\0" + JSON.stringify(mappings);
+}
+/** The built-in C# suffixes plus every extension the active mapping assigns to C#. */
+function csharpCandidateGlobs(languageExtensions: LanguageExtensionMap | undefined): string[] {
+  const csharpMappings = Object.fromEntries(
+    Object.entries(normalizeLanguageExtensions(languageExtensions) ?? {}).filter(
+      ([, languageId]) => languageId === "csharp",
+    ),
+  );
+  return [...getImportableLanguageGlobs("csharp"), ...languageExtensionPatterns(csharpMappings)];
 }
 
 /**
- * Namespaces a file declares, plus the types declared directly in each one.
- * `@P` and `P` are one namespace, and `namespace Outer { namespace Inner {} }` is
- * `Outer.Inner`, matching compilation-unit identity. Brace depth is tracked on the
- * masked source, so braces inside comments and strings cannot compose a name, and a
- * type nested inside another type is not recorded under the enclosing namespace.
+ * Gives the project scan the namespace facts a build already holds for `file`, so the scan parses nothing for
+ * it. A module's facts come from its own syntax tree and depend on no other file, so they stay valid while the
+ * file's content does. Call this after the build's caches are cleared and before its first resolution.
  */
-function collectCsharpNamespaceIndex(source: string): {
-  namespaces: string[];
-  symbolsByNamespace: Map<string, Set<string>>;
-} {
-  const masked = maskCsharpTrivia(source);
-  const namespaces = new Set<string>();
+export function primeCsharpNamespaceFacts(
+  file: string,
+  facts: CsharpNamespaceFacts,
+  languageExtensions?: LanguageExtensionMap,
+): void {
+  csharpNamespaceFileCache.set(csharpNamespaceCacheKey(fileIdentityKey(file), languageExtensions), facts);
+}
+
+/** The namespaces `facts` declare, each with the types declared directly in it. */
+function declaredContainersOf(facts: CsharpNamespaceFacts): DeclaredContainer[] {
   const symbolsByNamespace = new Map<string, Set<string>>();
-  const scopes: CsharpNamespaceScope[] = [];
-  let fileScoped: string | null = null;
-  let depth = 0;
-  let cursor = 0;
-
-  type ScanEvent = { index: number; kind: "namespace" | "type"; match: RegExpMatchArray };
-  const events: ScanEvent[] = [];
-  for (const match of masked.matchAll(CSHARP_NAMESPACE_DECLARATION_PATTERN)) {
-    events.push({ index: match.index ?? 0, kind: "namespace", match });
+  for (const region of facts.regions) {
+    if (region.name && !symbolsByNamespace.has(region.name)) symbolsByNamespace.set(region.name, new Set<string>());
   }
-  for (const match of masked.matchAll(CSHARP_TYPE_DECLARATION_PATTERN)) {
-    events.push({ index: match.index ?? 0, kind: "type", match });
+  for (const type of facts.types) {
+    const declared = type.startsWith(CSHARP_FILE_LOCAL_PREFIX) ? type.slice(CSHARP_FILE_LOCAL_PREFIX.length) : type;
+    const separator = declared.lastIndexOf(".");
+    if (separator > 0) symbolsByNamespace.get(declared.slice(0, separator))?.add(declared.slice(separator + 1));
   }
-  events.sort((left, right) => left.index - right.index || (left.kind === "namespace" ? -1 : 1));
-
-  const advance = (to: number): void => {
-    for (; cursor < to; cursor += 1) {
-      const ch = masked[cursor];
-      if (ch === "{") {
-        depth += 1;
-      } else if (ch === "}") {
-        depth -= 1;
-        while (scopes.length && scopes[scopes.length - 1]!.openedDepth >= depth) scopes.pop();
-      }
-    }
-  };
-
-  for (const event of events) {
-    advance(event.index);
-    if (event.kind === "namespace") {
-      const namespaceName = event.match[1];
-      if (!namespaceName) continue;
-      const normalized = normalizeCsharpQualifiedName(namespaceName);
-      if (!normalized) continue;
-      const matchEnd = event.index + event.match[0].length;
-      const terminator = masked[matchEnd - 1];
-      cursor = matchEnd;
-      if (terminator !== "{") {
-        // A file-scoped namespace is always top level and does not open a scope.
-        fileScoped = normalized;
-        namespaces.add(normalized);
-        continue;
-      }
-      const enclosing = scopes.length ? scopes[scopes.length - 1]!.name : null;
-      const qualified = enclosing ? `${enclosing}.${normalized}` : normalized;
-      namespaces.add(qualified);
-      scopes.push({ openedDepth: depth, name: qualified });
-      depth += 1;
-      continue;
-    }
-
-    const rawName = event.match[1];
-    if (!rawName) continue;
-    const typeName = normalizeCsharpIdentifier(rawName);
-    if (!typeName) continue;
-    const currentNamespace = scopes.length ? scopes[scopes.length - 1]!.name : fileScoped;
-    if (!currentNamespace) continue;
-    const contentDepth = scopes.length ? scopes[scopes.length - 1]!.openedDepth + 1 : 0;
-    if (depth !== contentDepth) continue;
-    const symbols = symbolsByNamespace.get(currentNamespace) ?? new Set<string>();
-    symbols.add(typeName);
-    symbolsByNamespace.set(currentNamespace, symbols);
-  }
-
-  return { namespaces: Array.from(namespaces), symbolsByNamespace };
+  return Array.from(symbolsByNamespace, ([name, symbols]) => ({ name, symbols }));
 }
 
-async function readCsharpNamespaceIndex(filePath: string): Promise<CsharpNamespaceIndexEntry> {
-  const cached = csharpNamespaceFileCache.get(filePath);
+/**
+ * The namespace facts of one file: the facts a build primed, else those of its retained tree, else those of a
+ * fresh parse. `null` when its tree is unavailable, which leaves the file's declarations unknown.
+ */
+async function readCsharpNamespaceFacts(
+  filePath: string,
+  languageExtensions: LanguageExtensionMap | undefined,
+  report: BuildReport | undefined,
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
+): Promise<CsharpNamespaceFacts | null> {
+  const fileKey = fileIdentityKey(filePath);
+  const cacheKey = csharpNamespaceCacheKey(fileKey, languageExtensions);
+  const cached = csharpNamespaceFileCache.get(cacheKey);
   if (cached) return cached;
 
-  const source = await readUtf8WithoutBom(filePath);
-  const collected = collectCsharpNamespaceIndex(source);
-  const entry = { namespaces: collected.namespaces, symbolsByNamespace: collected.symbolsByNamespace };
-  csharpNamespaceFileCache.set(filePath, entry);
-  return entry;
+  const support = supportForFileWithoutHeaderSample(filePath, languageExtensions);
+  // An active mapping can give a C# suffix to another language; such a file declares no namespace.
+  if (support?.id !== "csharp") return NO_CSHARP_NAMESPACE_FACTS;
+  const retained = parsedFiles?.get(fileKey);
+  let tree = retained?.sup?.id === "csharp" ? retained.tree : undefined;
+  if (!tree) {
+    const parsed = parseCsharpSyntaxTree(await readUtf8WithoutBom(filePath), support);
+    if (!parsed.tree) {
+      recordParserBackendDegradation(report, {
+        file: slashPath(filePath),
+        languageId: support.id,
+        ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
+        ...(parsed.error ? { nativeError: parsed.error } : {}),
+      });
+      return null;
+    }
+    tree = parsed.tree;
+  }
+  const facts = collectCsharpNamespaceFacts(tree);
+  csharpNamespaceFileCache.set(cacheKey, facts);
+  return facts;
 }
 
-async function getCsharpProjectNamespaceIndex(indexRoot: string): Promise<LanguageProjectSymbolIndex> {
-  return await getOrCreateProjectSymbolIndex(csharpProjectNamespaceIndexCache, indexRoot, async () =>
-    buildDeclaredContainerIndex(indexRoot, getImportableLanguageGlobs("csharp"), async (filePath) => {
-      const entry = await readCsharpNamespaceIndex(filePath);
-      return entry.namespaces.map((name) => {
-        const symbols = entry.symbolsByNamespace.get(name);
-        return symbols ? { name, symbols } : { name };
+async function getCsharpProjectNamespaceIndex(
+  indexRoot: string,
+  languageExtensions: LanguageExtensionMap | undefined = undefined,
+  report: BuildReport | undefined = undefined,
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
+): Promise<CsharpProjectNamespaceIndexResult> {
+  const cacheKey = csharpNamespaceCacheKey(indexRoot, languageExtensions);
+  let pending = csharpProjectNamespaceIndexCache.get(cacheKey);
+  if (!pending) {
+    let complete = true;
+    pending = buildDeclaredContainerIndex(indexRoot, csharpCandidateGlobs(languageExtensions), async (filePath) => {
+      let facts: CsharpNamespaceFacts | null;
+      try {
+        facts = await readCsharpNamespaceFacts(filePath, languageExtensions, report, parsedFiles);
+      } catch {
+        complete = false;
+        return [];
+      }
+      if (!facts) {
+        complete = false;
+        return [];
+      }
+      return declaredContainersOf(facts);
+    })
+      .then((index) => ({ index, complete }))
+      .catch((error: unknown) => {
+        csharpProjectNamespaceIndexCache.delete(cacheKey);
+        throw error;
       });
-    }),
-  );
+    csharpProjectNamespaceIndexCache.set(cacheKey, pending);
+  }
+  return await pending;
 }
 
 /**
@@ -179,13 +170,15 @@ export async function resolveCsharpNamespaceImportPaths(
   spec: string,
   fromFile: string,
   languageExtensions?: LanguageExtensionMap,
+  report?: BuildReport,
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
 ): Promise<string[]> {
   const indexRoot = await resolveNearestManifestRoot(projectRoot, fromFile, CSHARP_PACKAGE_MANIFEST_NAMES);
-  const projectIndex = await getCsharpProjectNamespaceIndex(indexRoot);
+  const projectIndex = await getCsharpProjectNamespaceIndex(indexRoot, languageExtensions, report, parsedFiles);
   const normalized = normalizeCsharpQualifiedName(spec);
   const lookup = normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
   if (!lookup) return [];
-  const packageCandidates = projectIndex.filesByPackage.get(lookup) ?? [];
+  const packageCandidates = projectIndex.index.filesByPackage.get(lookup) ?? [];
   const confined: string[] = [];
   for (const candidate of packageCandidates) {
     const hit = await confineResolvedPath(projectRoot, candidate);
@@ -199,8 +192,8 @@ function slashPath(filePath: string): string {
 }
 
 /**
- * The scanner finds candidates by C# filename globs; an active extension mapping can assign one of
- * those suffixes to another language, and such a file is never a C# namespace or type target.
+ * Candidate discovery uses C# filename globs. An active extension mapping can assign one of those
+ * suffixes to another language, and such a file is never a C# namespace or type target.
  */
 function isActiveCsharpFile(file: string, languageExtensions: LanguageExtensionMap | undefined): boolean {
   return !languageExtensions || supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "csharp";
@@ -237,6 +230,8 @@ export async function resolveCsharpNamespaceTypePath(
   typeName: string,
   fromFile: string,
   languageExtensions?: LanguageExtensionMap,
+  report?: BuildReport,
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
 ): Promise<CsharpNamespaceTypeResolution> {
   const normalizedNamespace = normalizeCsharpQualifiedName(namespaceName);
   const namespaceLookup = normalizedNamespace.startsWith("global::")
@@ -246,33 +241,47 @@ export async function resolveCsharpNamespaceTypePath(
   if (!namespaceLookup || !normalizedType) return { status: "not_found" };
 
   const indexRoot = await resolveNearestManifestRoot(projectRoot, fromFile, CSHARP_PACKAGE_MANIFEST_NAMES);
-  const projectIndex = await getCsharpProjectNamespaceIndex(indexRoot);
-  const files = projectIndex.filesByPackageSymbol.get(namespaceLookup)?.get(normalizedType) ?? [];
+  const projectIndexResult = await getCsharpProjectNamespaceIndex(indexRoot, languageExtensions, report, parsedFiles);
+  if (!projectIndexResult.complete) return { status: "partial" };
+  const files = projectIndexResult.index.filesByPackageSymbol.get(namespaceLookup)?.get(normalizedType) ?? [];
   const confined = await confineCsharpTypeFiles(projectRoot, files, languageExtensions);
   if (confined.length === 0) return { status: "not_found" };
   if (confined.length === 1) return { status: "found", file: confined[0]! };
-  return selectUniqueCsharpNamespaceTypeFile(confined, namespaceLookup, normalizedType);
+  const selected = selectUniqueCsharpNamespaceTypeFile(
+    confined,
+    namespaceLookup,
+    normalizedType,
+    languageExtensions,
+    parsedFiles,
+  );
+  return selected.status === "found" ? { ...selected, parts: confined.length } : selected;
 }
 
-/**
- * `N.Point` (and `@N.@Point`) as a type in namespace `N`, after namespace identity
- * normalization. A single-segment spec is not a dotted type. Navigation, references,
- * and the symbol graph follow the import binding this resolves; the dependency graph
- * calls this helper itself because it re-resolves the specifier text.
- */
+/** Resolves a C# namespace-qualified type from its source name. */
 export async function resolveCsharpDottedTypeImportPath(
   projectRoot: string,
   spec: string,
   fromFile: string,
   languageExtensions?: LanguageExtensionMap,
+  report?: BuildReport,
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
 ): Promise<CsharpNamespaceTypeResolution> {
   const normalized = normalizeCsharpQualifiedName(spec);
+  if (normalized.includes("<") || normalized.includes(">")) return { status: "not_found" };
   const body = normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
   const parts = body.split(".").filter(Boolean);
   if (parts.length < 2) return { status: "not_found" };
   const typeName = parts[parts.length - 1]!;
   const namespaceName = parts.slice(0, -1).join(".");
-  return await resolveCsharpNamespaceTypePath(projectRoot, namespaceName, typeName, fromFile, languageExtensions);
+  return await resolveCsharpNamespaceTypePath(
+    projectRoot,
+    namespaceName,
+    typeName,
+    fromFile,
+    languageExtensions,
+    report,
+    parsedFiles,
+  );
 }
 
 export function clearCsharpResolutionCaches(): void {

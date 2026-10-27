@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { supportForFileWithoutHeaderSample } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
 import { getNativeSyntaxTreeExecution } from "../native/tree-sitter-native.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -97,6 +97,31 @@ function csharpEnclosingSegment(name: string, arity: number): string {
   return arity > 0 ? `${name}\`${arity}` : name;
 }
 
+const CSHARP_CONDITIONAL_WRAPPERS: Record<string, true> = { preproc_if: true, preproc_elif: true, preproc_else: true };
+
+/**
+ * The file-scoped `namespace N;` that governs `container`, or `""`. It is a sibling that precedes the
+ * declarations it governs, not their ancestor, so a walk up the tree never meets it.
+ */
+function csharpFileScopedNamespace(container: SyntaxNodeLike, source: string): string {
+  let root: SyntaxNodeLike = container;
+  while (root.parent) root = root.parent;
+  const find = (nodes: readonly SyntaxNodeLike[]): string => {
+    for (const node of nodes) {
+      if (node.startIndex >= container.startIndex) break;
+      if (node.type === "file_scoped_namespace_declaration") {
+        const nsNode =
+          node.childForFieldName("name") ??
+          node.namedChildren.find((child) => child.type === "identifier" || child.type === "qualified_name");
+        return csharpNameText(nsNode ?? null, source);
+      }
+      const wrapped = CSHARP_CONDITIONAL_WRAPPERS[node.type] ? find(node.namedChildren) : "";
+      if (wrapped) return wrapped;
+    }
+    return "";
+  };
+  return find(root.namedChildren);
+}
 /**
  * Namespace + enclosing type names (each carrying its generic arity) + the
  * type name. The container's own arity is stored on
@@ -125,7 +150,8 @@ function getCSharpFullPath(container: SyntaxNodeLike, source: string): string | 
   }
   outer.reverse();
   namespaces.reverse();
-  const parts = [...namespaces, ...outer, typeName];
+  const fileScoped = csharpFileScopedNamespace(container, source);
+  const parts = [...(fileScoped ? [fileScoped] : []), ...namespaces, ...outer, typeName];
   return parts.join(".");
 }
 
@@ -431,7 +457,13 @@ function syntaxNodeRange(node: SyntaxNodeLike): Range {
   };
 }
 
-function parseCsharpOwnerFile(file: string): ParsedFileContext | null {
+function parseCsharpOwnerFile(
+  file: string,
+  languageExtensions: LanguageExtensionMap | undefined,
+  parsedFiles: ReadonlyMap<string, ParsedFileContext> | undefined,
+): ParsedFileContext | null {
+  const retained = parsedFiles?.get(fileIdentityKey(file));
+  if (retained?.sup?.id === "csharp") return retained;
   let source: string;
   try {
     source = fs.readFileSync(file, "utf8");
@@ -439,7 +471,7 @@ function parseCsharpOwnerFile(file: string): ParsedFileContext | null {
     return null;
   }
   if (source.charCodeAt(0) === 0xfeff) source = source.slice(1);
-  const sup = supportForFileWithoutHeaderSample(file);
+  const sup = supportForFileWithoutHeaderSample(file, languageExtensions);
   if (!sup || sup.id !== "csharp") return null;
   const execution = getNativeSyntaxTreeExecution(source, sup);
   if (!execution.tree) return null;
@@ -456,6 +488,8 @@ export function selectUniqueCsharpNamespaceTypeFile(
   files: readonly string[],
   namespaceName: string,
   typeName: string,
+  languageExtensions?: LanguageExtensionMap,
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
 ): { status: "found"; file: string } | { status: "not_found" } | { status: "ambiguous" } | { status: "partial" } {
   const expectedPath = namespaceName + "." + typeName;
   const parsed = new Map<string, ParsedFileContext>();
@@ -463,7 +497,7 @@ export function selectUniqueCsharpNamespaceTypeFile(
   let unreadable = false;
 
   for (const file of files) {
-    const context = parseCsharpOwnerFile(file);
+    const context = parseCsharpOwnerFile(file, languageExtensions, parsedFiles);
     if (!context) {
       unreadable = true;
       continue;
@@ -488,7 +522,10 @@ export function selectUniqueCsharpNamespaceTypeFile(
   if (matches.length === 0) return { status: "not_found" };
   if (matches.length === 1) return { status: "found", file: matches[0]!.file };
 
-  const unique = coalesceEquivalentCsharpPartialExports({ parsed } as ProjectIndex, matches);
+  const unique = coalesceEquivalentCsharpPartialExports(
+    { parsed, ...(languageExtensions ? { languageExtensions } : {}) } as ProjectIndex,
+    matches,
+  );
   if (unique.length === 1) return { status: "found", file: unique[0]!.file };
   return { status: "ambiguous" };
 }

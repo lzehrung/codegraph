@@ -1,4 +1,4 @@
-import type { Dirent } from "node:fs";
+import fs, { type Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
@@ -78,15 +78,30 @@ export async function findNearestFile(startDir: string, stopDir: string, fileNam
   return await findNearestManifest(startDir, stopDir, [fileName]);
 }
 
+/**
+ * The directories from `startDir` up to `stopDir`, nearest first. The walk ends at `stopDir`, at the file
+ * system root, or where the next parent would leave `stopDir`. The async and sync manifest lookups share it.
+ */
+function* ancestorDirectories(startDir: string, stopDir: string): Generator<string> {
+  let dir = path.resolve(startDir);
+  const stop = path.resolve(stopDir);
+  const stopKey = fileIdentityKey(stop);
+  while (true) {
+    yield dir;
+    if (dir === stop || fileIdentityKey(dir) === stopKey) return;
+    const parent = path.dirname(dir);
+    if (parent === dir) return;
+    if (!isFilePathWithinRoot(stop, parent) && fileIdentityKey(parent) !== stopKey) return;
+    dir = parent;
+  }
+}
+
 export async function findNearestManifest(
   startDir: string,
   stopDir: string,
   names: readonly string[],
 ): Promise<string | null> {
-  let dir = path.resolve(startDir);
-  const stop = path.resolve(stopDir);
-  const stopKey = fileIdentityKey(stop);
-  while (true) {
+  for (const dir of ancestorDirectories(startDir, stopDir)) {
     for (const name of names) {
       if (isExtensionManifestPattern(name)) {
         const suffix = name.slice(1).toLowerCase();
@@ -97,13 +112,20 @@ export async function findNearestManifest(
       const candidate = path.join(dir, name);
       if (await fileExists(candidate)) return candidate;
     }
-    if (dir === stop || fileIdentityKey(dir) === stopKey) break;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    if (!isFilePathWithinRoot(stop, parent) && fileIdentityKey(parent) !== stopKey) break;
-    dir = parent;
   }
   return null;
+}
+
+/**
+ * The resolved root and the directory a manifest search starts in, which is `null` for an empty or out-of-root
+ * importer. Those fall back to the root here, not by omitting `fromFile` at call sites.
+ */
+function manifestSearchStart(projectRoot: string, fromFile: string): { root: string; startDir: string | null } {
+  const root = path.resolve(projectRoot);
+  if (!fromFile) return { root, startDir: null };
+  const startDir = path.dirname(path.resolve(fromFile));
+  const withinRoot = fileIdentityKey(startDir) === fileIdentityKey(root) || isFilePathWithinRoot(root, startDir);
+  return { root, startDir: withinRoot ? startDir : null };
 }
 
 export async function resolveNearestManifestRoot(
@@ -111,18 +133,51 @@ export async function resolveNearestManifestRoot(
   fromFile: string,
   names: readonly string[],
 ): Promise<string> {
-  const resolvedRoot = path.resolve(projectRoot);
-  // Empty or out-of-root importers fall back here, not by omitting `fromFile` at call sites.
-  if (!fromFile) return resolvedRoot;
-  const startDir = path.dirname(path.resolve(fromFile));
-  const startKey = fileIdentityKey(startDir);
-  const rootKey = fileIdentityKey(resolvedRoot);
-  if (startKey !== rootKey && !isFilePathWithinRoot(resolvedRoot, startDir)) {
-    return resolvedRoot;
+  const { root, startDir } = manifestSearchStart(projectRoot, fromFile);
+  if (!startDir) return root;
+  const manifest = await findNearestManifest(startDir, root, names);
+  return manifest ? path.dirname(path.resolve(manifest)) : root;
+}
+
+function statIsFileSync(target: string): boolean {
+  try {
+    return fs.statSync(target).isFile();
+  } catch {
+    return false;
   }
-  const manifest = await findNearestManifest(startDir, resolvedRoot, names);
-  if (!manifest) return resolvedRoot;
-  return path.dirname(path.resolve(manifest));
+}
+
+function directoryHasManifestSync(dir: string, name: string): boolean {
+  if (!isExtensionManifestPattern(name)) return statIsFileSync(path.join(dir, name));
+  const suffix = name.slice(1).toLowerCase();
+  let entries: Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  return entries.some((entry) => {
+    if (!entry.name.toLowerCase().endsWith(suffix) || entry.isDirectory()) return false;
+    return entry.isFile() || statIsFileSync(path.join(dir, entry.name));
+  });
+}
+
+/**
+ * {@link resolveNearestManifestRoot} for the one lookup that cannot await: C# alias shadowing runs inside
+ * synchronous name resolution. It walks the same directories under the same nearest-manifest rule, so both name
+ * the same project root. It reads the live file system, as the build does when it resolves a using directive.
+ */
+export function resolveNearestManifestRootSync(
+  projectRoot: string,
+  fromFile: string,
+  names: readonly string[],
+): string {
+  const { root, startDir } = manifestSearchStart(projectRoot, fromFile);
+  if (!startDir) return root;
+  for (const dir of ancestorDirectories(startDir, root)) {
+    if (names.some((name) => directoryHasManifestSync(dir, name))) return dir;
+  }
+  return root;
 }
 
 export async function isDirectory(p: string): Promise<boolean> {

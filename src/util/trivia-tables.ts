@@ -4,9 +4,8 @@
  * language definitions are frozen this wave.
  *
  * Every row is written against the actual language grammar, not against whatever the previous
- * JS-flavored masker happened to accept: a Go raw string has no escape character, a C# verbatim
- * string doubles its closing quote instead of honoring backslash escapes, a Python comment can
- * contain apostrophes, and so on.
+ * JS-flavored masker happened to accept: a Go raw string has no escape character, a Python comment
+ * can contain apostrophes, and so on.
  */
 
 export type TriviaInterpolation = {
@@ -29,12 +28,10 @@ export type TriviaStringForm = {
   close: string;
   /** Escape character inside the literal; omit for raw literals. */
   escape?: string;
-  /** A doubled close delimiter escapes it (C# verbatim `""`). */
+  /** A doubled close delimiter escapes it. */
   doubled?: boolean;
   /** A `#` run between the prefix and `open` must be matched after `close` (Swift extended delimiters, Rust raw strings). */
   hashes?: boolean;
-  /** The open and close are runs of `open[0]` at least `open.length` long (C# raw strings). */
-  quoteRun?: boolean;
   /** The close delimiter only closes when it is alone on its line (Swift multiline strings). */
   closeAloneOnLine?: boolean;
   /** The quote only opens a literal when it parses as a character literal (Rust lifetimes are not chars). */
@@ -107,18 +104,6 @@ const PYTHON_ROW: TriviaRow = {
     { prefix: PYTHON_PLAIN_PREFIX, open: "'''", close: "'''", escape: "\\" },
     { prefix: PYTHON_PLAIN_PREFIX, open: '"', close: '"', escape: "\\" },
     { prefix: PYTHON_PLAIN_PREFIX, open: "'", close: "'", escape: "\\" },
-  ],
-};
-
-const CSHARP_ROW: TriviaRow = {
-  lineComments: ["//"],
-  blockComments: [SLASH_STAR_COMMENT],
-  strings: [
-    // A verbatim (or interpolated verbatim) string doubles its closing quote; the backslash is data.
-    { prefix: "(?:[$][@]|[@][$]|[@])", open: '"', close: '"', doubled: true },
-    { open: '"""', close: '"""', quoteRun: true },
-    { open: '"', close: '"', escape: "\\" },
-    { open: "'", close: "'", escape: "\\" },
   ],
 };
 
@@ -236,7 +221,6 @@ const TRIVIA_ROWS: Record<string, TriviaRow> = {
   typescript: JS_LIKE_ROW,
   jsx: JS_LIKE_ROW,
   python: PYTHON_ROW,
-  csharp: CSHARP_ROW,
   go: GO_ROW,
   rust: RUST_ROW,
   php: PHP_ROW,

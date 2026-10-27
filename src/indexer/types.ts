@@ -9,6 +9,7 @@ import type { Edge, FileId, Graph, ProgressUpdate, Range } from "../types.js";
 import type { ProjectDiscoveryContext, ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util/project-files.js";
 import type { ImportBinding } from "./import-types.js";
 import type { CallableIdentity } from "../languages/callable-arity.js";
+import type { CsharpNamespaceFacts } from "../util/csharp-tree.js";
 
 export type { ImportBinding } from "./import-types.js";
 
@@ -103,6 +104,13 @@ export type ModuleIndex = {
    * consumers whose imports name a container this build changed.
    */
   declaredContainers?: string[];
+  /**
+   * C# only: the namespace regions and declared types of this file alone, read from its own syntax tree
+   * when it is indexed. Every lookup that needs them reads them here instead of parsing the file, and a
+   * lookup that depends on other files' declarations aggregates these over the index when it runs, so a
+   * cached module never holds another file's declarations. Absent when the file's tree was unavailable.
+   */
+  csharpNamespaceFacts?: CsharpNamespaceFacts;
   /** Outermost Tree-sitter ERROR/MISSING ranges. */
   parseErrorRanges?: ParseErrorRange[];
 };

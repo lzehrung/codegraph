@@ -61,12 +61,8 @@ export const CSHARP_DEF: LanguageDefinition = {
     comments: ["comment"],
   },
   graph: {
-    // Path node is `identifier` | `qualified_name` | `alias_qualified_name` (`global::System`).
-    // An identifier/qualified_name alternation misses `alias_qualified_name`, so keep `(_)`.
-    imports: `
-      (using_directive !name (_) @from) @stmt
-      (using_directive name: (identifier) (_) @from) @stmt
-    `,
+    // C# using directives are read from the syntax tree (src/util/csharp-tree.ts), so no imports query runs.
+    imports: "",
     exports: `
       (class_declaration name: (identifier) @name)
       (record_declaration name: (identifier) @name)
@@ -97,13 +93,9 @@ export const CSHARP_DEF: LanguageDefinition = {
       (variable_declarator name: (identifier) @name)
       (declaration_pattern name: (identifier) @name)
     `,
-    // extern alias has no path node in the grammar, so there is no @from.
-    // using path node: identifier | qualified_name | alias_qualified_name — keep `(_)`.
-    importBindings: `
-      (using_directive name: (identifier) @alias (_) @from) @stmt
-      (using_directive !name (_) @from) @stmt
-      (extern_alias_directive name: (identifier) @alias) @stmt
-    `,
+    // C# using and extern-alias directives are read from the syntax tree (src/util/csharp-tree.ts), so no
+    // import-binding query runs.
+    importBindings: "",
   },
   nodeTypes: {
     identifier: ["identifier"],

@@ -1,5 +1,4 @@
 import {
-  parseCsharpUsingDirective,
   parseJavaImportStatement,
   parseKotlinImportStatement,
   parsePhpImportStatement,
@@ -8,7 +7,9 @@ import {
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
 import type { LanguageExtensionMap } from "../../languages.js";
-import { CSHARP_IDENTIFIER_SOURCE, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
+import type { SyntaxNodeLike } from "../../languages/types.js";
+import { csharpExternAlias, csharpUsingDirective, type CsharpUsingDirective } from "../../util/csharp-tree.js";
+import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
 import { extractRustModPathAttribute } from "../../util/resolution/rust.js";
@@ -16,8 +17,9 @@ import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
 import type { Range } from "../../types.js";
 import type { CFamilyIncludeForm, RubyLoadForm } from "../../util/specifiers.js";
-import type { ImportBinding } from "../types.js";
+import type { BuildReport, ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
+import type { ParsedFileContext } from "../parse-context.js";
 
 /**
  * Per-language import-binding registry for statement overrides and implicit native-capture
@@ -25,8 +27,9 @@ import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./
  * file is the only dispatch consumer this wave.
  *
  * One row owns the statement handler, the implicit mapper, and the flags those paths used to
- * spell as `languageId === "..."` chains: trivia masking, JVM/C# dot normalization, Rust
- * statement-key offsets, C# `alwaysAliased` range attribution, and Rust's reduced-mode rescan.
+ * spell as `languageId === "..."` chains: trivia masking, JVM dot normalization, Rust statement-key
+ * offsets, and Rust's reduced-mode rescan. C# binds its directives from syntax-tree nodes
+ * (`applyCsharpImportDirective`), so its row names no statement handler.
  * `text-import-extractors.ts` stays the shared discovery source; this table does not re-scan.
  *
  * `tests/import-binding-tables.test.ts` asserts every registered language has a row, that an
@@ -41,6 +44,8 @@ export type LanguageSpecificImportContext = ImportBindingSink & {
   resolveFrom: ImportResolver;
   /** Active extension-to-language mapping, so a resolved file is classified as the language that parses it. */
   languageExtensions?: LanguageExtensionMap;
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
+  report?: BuildReport;
   getBindings: () => ImportBinding[];
   replaceBindings: (bindings: ImportBinding[]) => void;
 };
@@ -86,15 +91,13 @@ export type ImportBindingRow = {
   appendImplicit?: AppendImplicitImportBinding;
   /** Present only with `applyStatement`. */
   maskTrivia?: StatementTriviaMask;
-  /** Collapse whitespace around `.` after masking (C#, Java, Kotlin). */
+  /** Collapse whitespace around `.` after masking (Java, Kotlin). */
   normalizeDots?: true;
   /**
-   * Include the statement start offset in the override de-dupe key (C#, Rust). Required when the
+   * Include the statement start offset in the override de-dupe key (Rust). Required when the
    * same statement text can appear in several scopes and each must keep its own range.
    */
   statementKeyUsesOffset?: true;
-  /** Named-range attribution treats unaliased `local === imported` as two tokens (C#). */
-  alwaysAliased?: true;
   /** Reduced-mode text bindings re-run even when native already produced some (Rust). */
   rescanTextBindings?: true;
   /** Why the language declares no statement override. */
@@ -107,22 +110,50 @@ type ParsedJvmImportStatement =
   | { kind: "star"; from: string; isStatic?: boolean }
   | { kind: "named"; from: string; imported: string; explicitAlias?: boolean; isStatic?: boolean };
 
+function csharpNodeRange(node: SyntaxNodeLike, source: string, lineStarts: number[]): Range {
+  let startIndex = node.startIndex;
+  if (startIndex && source[startIndex - 1] === "@") startIndex -= 1;
+  return sourceRangeFromOffsets(lineStarts, startIndex, node.endIndex);
+}
+function csharpAliasTargetLeaf(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (node.type === "identifier" || node.type === "predefined_type") return node;
+  // A generic name is its identifier followed by type arguments; only the identifier names the target.
+  if (node.type === "generic_name") return node.namedChildren.find((child) => child.type === "identifier") ?? null;
+  if (node.type === "qualified_name" || node.type === "alias_qualified_name") {
+    const name = node.childForFieldName("name");
+    if (name) return csharpAliasTargetLeaf(name);
+  }
+  for (let index = node.namedChildren.length - 1; index >= 0; index -= 1) {
+    const leaf = csharpAliasTargetLeaf(node.namedChildren[index]!);
+    if (leaf) return leaf;
+  }
+  return null;
+}
+
 function pushCsharpOverride(
   context: LanguageSpecificImportContext,
-  parsed: NonNullable<ReturnType<typeof parseCsharpUsingDirective>>,
+  parsed: CsharpUsingDirective,
   typeOnly: boolean,
   fromValue: string,
   resolved: ResolvedImportTarget,
+  localRange?: Range,
+  importedRange?: Range,
 ): void {
   if (parsed.alias) {
-    const fromParts = parsed.from.split(".");
-    const imported = fromParts[fromParts.length - 1] ?? parsed.alias;
+    const localStart = localRange?.start.index;
+    const importedStart = importedRange?.start.index;
+    const local =
+      localStart === undefined ? parsed.alias.text : context.source.slice(localStart, parsed.alias.endIndex);
+    const imported =
+      importedStart === undefined ? parsed.leaf.text : context.source.slice(importedStart, parsed.leaf.endIndex);
     context.pushBinding({
       kind: "named",
-      local: parsed.alias,
+      local,
       imported,
       from: fromValue,
       explicitAlias: true,
+      ...(localRange ? { localRange } : {}),
+      ...(importedRange ? { importedRange } : {}),
       resolved,
       typeOnly,
     });
@@ -137,139 +168,160 @@ function pushCsharpOverride(
   });
 }
 
-const CSHARP_EXTERN_ALIAS_PATTERN = new RegExp(String.raw`^extern\s+alias\s+(${CSHARP_IDENTIFIER_SOURCE})\s*;$`, "u");
-
-function csharpUsingAliasLocalRange(
-  source: string,
-  statementStartIndex: number | undefined,
-  alias: string,
-): Range | undefined {
-  if (statementStartIndex === undefined || !alias) return undefined;
-  // Comments and string literals can carry `;` and sit between the alias and `=`
-  // (`using X /* ; */ = P;`), so both the statement boundary and the alias match run over
-  // trivia-masked text. Masking is one-for-one with the raw source (masked units become
-  // spaces, newlines survive), so every match offset is the raw-source offset.
-  const masked = maskImportBindingTrivia(source.slice(statementStartIndex), "csharp");
-  const semicolon = masked.indexOf(";");
-  const window = semicolon < 0 ? masked : masked.slice(0, semicolon + 1);
-  const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = window.match(new RegExp(`\\busing\\s+(${escaped})\\s*=`));
-  if (!match || match.index === undefined) return undefined;
-  const aliasOffset = match[0].lastIndexOf(alias);
-  if (aliasOffset < 0) return undefined;
-  const start = statementStartIndex + match.index + aliasOffset;
-  return sourceRangeFromOffsets(collectLineStartOffsets(source), start, start + alias.length);
-}
-
-async function applyCsharpStatementOverride(
+/**
+ * Binds one C# `using` or `extern alias` directive. The node comes from `collectCsharpImportDirectives`, so the
+ * directive is never found again by its text or offset. C# has no type-only imports.
+ */
+export async function applyCsharpImportDirective(
   context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-  statementStartIndex?: number,
-): Promise<boolean> {
-  const externAlias = normalizedStmt.match(CSHARP_EXTERN_ALIAS_PATTERN)?.[1];
+  directive: SyntaxNodeLike,
+): Promise<void> {
+  const typeOnly = false;
+
+  const externAlias = csharpExternAlias(directive);
   if (externAlias) {
-    // `extern alias X;` names a compiler-provided alias for an assembly's extern alias. It has no
-    // first-party or package target, so it stays an unresolved namespace binding and produces no
-    // dependency edge: the graph query does not treat it as an import specifier.
+    // An extern alias names a compiler-provided assembly alias, so it remains unresolved and
+    // does not produce a dependency edge: the graph query does not treat it as an import.
     context.pushBinding({ kind: "namespace", localNS: externAlias, from: externAlias });
-    return true;
+    return;
   }
 
-  const parsed = parseCsharpUsingDirective(normalizedStmt);
-  if (!parsed) return false;
+  const parsed = csharpUsingDirective(directive);
+  if (!parsed) {
+    const alias = directive.childForFieldName("name");
+    if (alias?.type === "identifier") {
+      const target = directive.namedChildren.find((child) => child !== alias && child.type !== "comment");
+      if (target) {
+        const leaf = csharpAliasTargetLeaf(target) ?? target;
+        const unresolved: CsharpUsingDirective = {
+          value: target.text,
+          leaf,
+          rawValue: target.text,
+          alias,
+          isStatic: false,
+          isGlobal: false,
+        };
+        const lineStarts = collectLineStartOffsets(context.source);
+        // The binding stays unresolved, so it cannot restore a target token it claims: only the alias
+        // name is a binding token, and every name in the target remains an ordinary reference.
+        pushCsharpOverride(
+          context,
+          unresolved,
+          typeOnly,
+          unresolved.value,
+          { external: unresolved.value },
+          csharpNodeRange(alias, context.source, lineStarts),
+        );
+      }
+      return;
+    }
+    return;
+  }
+  const lineStarts = parsed.alias ? collectLineStartOffsets(context.source) : undefined;
+  const localRange = parsed.alias && lineStarts ? csharpNodeRange(parsed.alias, context.source, lineStarts) : undefined;
+  const importedRange =
+    parsed.alias && lineStarts ? csharpNodeRange(parsed.leaf, context.source, lineStarts) : undefined;
 
-  // `using static N.T;` imports the static members and nested types of one type. Bind it to the
-  // file that declares `T` only when exactly one file does; otherwise it stays external. A
-  // `global using static` applies to every file of the project, which module-local bindings
-  // cannot express, so it is not bound.
-  if (parsed.isStatic && !/^global\s/u.test(normalizedStmt.trim())) {
+  // Static imports bind to a declaring type only when exactly one file owns that type. A global
+  // static using applies to the whole project, which module-local bindings cannot express.
+  if (parsed.isStatic && !parsed.isGlobal) {
     const typeMatch = await resolveCsharpDottedTypeImportPath(
       context.projectRoot,
-      parsed.from,
+      parsed.value,
       context.file,
       context.languageExtensions,
+      context.report,
+      context.parsedFiles,
     );
-    const qualifiedType = normalizeCsharpQualifiedName(parsed.from).replace(/^global::/u, "");
-    if (typeMatch.status === "found" && qualifiedType.includes(".")) {
+    const qualifiedType = normalizeCsharpQualifiedName(parsed.value).replace(/^global::/u, "");
+    if (typeMatch.status === "found" && !typeMatch.parts && qualifiedType.includes(".")) {
       context.pushBinding({
         kind: "star",
-        from: parsed.from,
+        from: parsed.value,
         resolved: typeMatch.file.replace(/\\/g, "/"),
         typeOnly,
         staticMembersOf: qualifiedType,
       });
-      return true;
+      return;
     }
+    context.pushBinding({
+      kind: "star",
+      from: parsed.rawValue,
+      resolved: { external: parsed.rawValue },
+      typeOnly,
+    });
+    return;
   }
 
-  // A target that is itself a declared namespace is a namespace alias, even when the alias is
-  // written in alias form. Resolving it here keeps the local name a namespace so member
-  // navigation can reach the declaring file instead of treating the last segment as a type.
-  // A namespace split across several files has no single target, so it keeps the local alias
-  // as an unresolved namespace rather than claiming one of the declaring files.
+  // A target declared as a namespace remains a namespace alias, even when written with alias
+  // syntax. Ambiguous namespaces stay unresolved rather than claiming one declaring file.
   const namespaceTargets = await resolveCsharpNamespaceImportPaths(
     context.projectRoot,
-    parsed.from,
+    parsed.value,
     context.file,
     context.languageExtensions,
+    context.report,
+    context.parsedFiles,
   );
   if (parsed.alias && namespaceTargets.length) {
-    const localRange = csharpUsingAliasLocalRange(context.source, statementStartIndex, parsed.alias);
     context.pushBinding({
       kind: "namespace",
-      localNS: parsed.alias,
-      from: parsed.from,
+      localNS: normalizeCsharpIdentifier(parsed.alias.text),
+      from: parsed.value,
       ...(namespaceTargets.length === 1 ? { resolved: namespaceTargets[0]!.replace(/\\/g, "/") } : {}),
       typeOnly,
       ...(localRange ? { localRange } : {}),
     });
-    return true;
+    return;
   }
 
-  let fromValue = parsed.from;
-  // `using N;` names a namespace, which ordinary C# declares across many files. Bind it to the
-  // first declaring file: lookups through the binding qualify the name with `N`, and
-  // namespace-qualified export lookup reaches every file that declares `N` through the
-  // compilation-unit relation. Path-like resolution applies only when no file declares `N`, and
-  // only to a C# file.
-  let resolved: ResolvedImportTarget =
-    !parsed.alias && namespaceTargets.length
-      ? namespaceTargets[0]!.replace(/\\/g, "/")
-      : await context.resolveFrom(fromValue);
+  let fromValue = parsed.value;
+  // A plain using names a namespace, which ordinary C# declares across many files. Bind it to a
+  // representative declaring file; namespace-qualified export lookup reaches all files through
+  // the compilation-unit relation. Path-like resolution applies only when no file declares it.
+  let resolved: ResolvedImportTarget;
   if (parsed.alias) {
-    const fromParts = parsed.from.split(".");
+    resolved = await context.resolveFrom(fromValue);
+  } else if (namespaceTargets.length) {
+    resolved = namespaceTargets[0]!.replace(/\\/g, "/");
+  } else {
+    resolved = await context.resolveFrom(fromValue);
+  }
+  if (parsed.alias) {
+    const fromParts = parsed.value.split(".");
     if (fromParts.length > 1) {
       const fallbackFrom = fromParts.slice(0, -1).join(".");
       if (fallbackFrom) {
-        // The full path isn't itself a declared namespace (checked above): `using PT = N.Point;`
-        // names a TYPE (`Point`) inside namespace `N`. A namespace that lives in one file can
-        // use that file directly. When several files declare it, the type name is resolved
-        // across all of them (partial parts share one owner). An ambiguous set stays external
-        // instead of keeping a path-like first match such as `N/Point.cs`.
+        // A type alias names a type in a namespace. Resolve the type across every namespace file; any
+        // result but one proven declaration stays external instead of selecting a path-like first match
+        // or the namespace's file.
         const fallbackNamespaceTargets = await resolveCsharpNamespaceImportPaths(
           context.projectRoot,
           fallbackFrom,
           context.file,
           context.languageExtensions,
+          context.report,
+          context.parsedFiles,
         );
-        if (fallbackNamespaceTargets.length > 1) {
+        const namespaceDeclared =
+          fallbackNamespaceTargets.length > 1 ||
+          (fallbackNamespaceTargets.length === 1 && typeof resolved !== "string");
+        if (namespaceDeclared) {
           const typeMatch = await resolveCsharpDottedTypeImportPath(
             context.projectRoot,
-            parsed.from,
+            parsed.value,
             context.file,
             context.languageExtensions,
+            context.report,
+            context.parsedFiles,
           );
           if (typeMatch.status === "found") {
             fromValue = fallbackFrom;
             resolved = typeMatch.file;
           } else {
-            fromValue = parsed.from;
-            resolved = { external: parsed.from };
+            fromValue = parsed.value;
+            resolved = { external: parsed.value };
           }
-        } else if (typeof resolved !== "string" && fallbackNamespaceTargets.length === 1) {
-          fromValue = fallbackFrom;
-          resolved = fallbackNamespaceTargets[0]!.replace(/\\/g, "/");
         } else if (typeof resolved !== "string") {
           const fallbackResolved = await context.resolveFrom(fallbackFrom);
           if (typeof fallbackResolved === "string") {
@@ -280,8 +332,7 @@ async function applyCsharpStatementOverride(
       }
     }
   }
-  pushCsharpOverride(context, parsed, typeOnly, fromValue, resolved);
-  return true;
+  pushCsharpOverride(context, parsed, typeOnly, fromValue, resolved, localRange, importedRange);
 }
 
 async function applyJavaStatementOverride(
@@ -491,7 +542,6 @@ function pushNamedImplicitBinding(
   stmtText: string,
   stmtStartIndex: number | undefined,
   source: string | undefined,
-  alwaysAliased: boolean | undefined,
 ): void {
   if (stmtStartIndex !== undefined && source !== undefined) {
     attributeNamedBindingRanges({
@@ -500,7 +550,6 @@ function pushNamedImplicitBinding(
       text: maskImportBindingTrivia(stmtText, context.languageId),
       textStartIndex: stmtStartIndex,
       source,
-      ...(alwaysAliased !== undefined ? { alwaysAliased } : {}),
     });
   }
   context.pushBinding(binding);
@@ -521,28 +570,7 @@ function appendJavaImplicitBinding(
       stmtText,
       stmtStartIndex,
       source,
-      undefined,
     );
-  }
-}
-
-function appendCsharpImplicitBinding(
-  context: LanguageSpecificImportContext,
-  { from, resolved, typeOnly, stmtText, stmtStartIndex, source, alias }: ImplicitImportBindingArgs,
-): void {
-  if (alias) {
-    const fromParts = from.split(".");
-    const imported = fromParts[fromParts.length - 1] ?? alias;
-    pushNamedImplicitBinding(
-      context,
-      { kind: "named", local: alias, imported, from, explicitAlias: true, resolved, typeOnly },
-      stmtText,
-      stmtStartIndex,
-      source,
-      IMPORT_BINDING_ROWS.csharp!.alwaysAliased,
-    );
-  } else {
-    context.pushBinding({ kind: "star", from, resolved, typeOnly });
   }
 }
 
@@ -590,7 +618,6 @@ function appendRustImplicitBinding(
         stmtText,
         stmtStartIndex,
         source,
-        undefined,
       );
     }
   }
@@ -620,7 +647,6 @@ function appendKotlinImplicitBinding(
         stmtText,
         stmtStartIndex,
         source,
-        undefined,
       );
   }
 }
@@ -676,7 +702,6 @@ function appendSwiftImplicitBinding(
       stmtText,
       stmtStartIndex,
       source,
-      undefined,
     );
   }
 }
@@ -730,13 +755,9 @@ export const IMPORT_BINDING_ROWS: Record<string, ImportBindingRow> = {
   },
   css: { omittedReason: STYLESHEET_OMITTED },
   csharp: {
-    applyStatement: applyCsharpStatementOverride,
-    appendImplicit: appendCsharpImplicitBinding,
-    maskTrivia: true,
-    normalizeDots: true,
-    alwaysAliased: true,
-    // `using X = P;` in two namespace blocks is two scoped aliases, each with its own range.
-    statementKeyUsesOffset: true,
+    statementOmittedReason:
+      "C# using directives are bound from syntax-tree nodes by applyCsharpImportDirective, not from statement text.",
+    implicitOmittedReason: "C# using directives are bound from syntax-tree nodes; no native capture is mapped.",
   },
   go: {
     appendImplicit: appendGoImplicitBinding,

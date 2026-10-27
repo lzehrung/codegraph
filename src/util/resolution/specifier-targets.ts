@@ -5,6 +5,8 @@ import { getImportableLanguageExtensions, STYLESHEET_RESOLUTION_EXTENSIONS } fro
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "./csharp.js";
 import { resolveJvmPackageImportPaths } from "./jvm.js";
 import { resolveTerraformModuleSourcePaths } from "./terraform.js";
+import type { BuildReport } from "../../indexer/types.js";
+import type { ParsedFileContext } from "../../indexer/parse-context.js";
 import type { MatchPathFn } from "./tsconfig.js";
 import type {
   CFamilyIncludeForm,
@@ -27,6 +29,8 @@ export type SpecifierTargetMetadata = {
   includeForm?: CFamilyIncludeForm;
   rubyLoadForm?: RubyLoadForm;
   languageExtensions?: LanguageExtensionMap;
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
+  report?: BuildReport;
   /** Distinguishes `import p.C.*` from `import p.C` when both a package and a class exist. */
   jvmPackageWildcard?: true;
   /** Rust tries this spelling before `specifier` when it differs, without `pathAttribute`. */
@@ -178,11 +182,16 @@ async function resolveCsharpOrRubyTargets(
     return { files: [], externalName: specifier };
   }
   if (languageId === "csharp") {
+    if (specifier.includes("<") || specifier.includes(">")) {
+      return { files: [], externalName: metadata.rawSpecifier ?? specifier };
+    }
     const namespaceTargets = await resolveCsharpNamespaceImportPaths(
       metadata.projectRoot,
       specifier,
       file,
       metadata.languageExtensions,
+      metadata.report,
+      metadata.parsedFiles,
     );
     if (namespaceTargets.length) return { files: namespaceTargets, externalName: specifier };
     const typeMatch = await resolveCsharpDottedTypeImportPath(
@@ -190,6 +199,8 @@ async function resolveCsharpOrRubyTargets(
       specifier,
       file,
       metadata.languageExtensions,
+      metadata.report,
+      metadata.parsedFiles,
     );
     if (typeMatch.status === "found") return { files: [typeMatch.file], externalName: specifier };
     if (typeMatch.status === "ambiguous" || typeMatch.status === "partial") {

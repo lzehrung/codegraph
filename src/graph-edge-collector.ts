@@ -6,6 +6,7 @@ import type { WorkspaceConfig } from "./util/workspace.js";
 import { extractDynamicImportSpecifiers, type ModuleSpecifier } from "./util/specifiers.js";
 import { fileIdentityKey } from "./util/paths.js";
 import { edgeKey } from "./util/graph-edges.js";
+import { parseCsharpSyntaxTree } from "./util/csharp-tree.js";
 import type { LogLevel } from "./logging.js";
 import {
   graphOnlyLanguageSupportsImportAliases,
@@ -14,12 +15,13 @@ import {
 } from "./document-links.js";
 import { getCompactImportsExecution } from "./native/tree-sitter-native.js";
 import type { CompactQueryResults, NativeQueryResults } from "./native/tree-sitter-native.js";
-import { recordNativeExecutionOutcome } from "./native/native-backend-report.js";
+import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "./native/native-backend-report.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "./worker/native-extract-worker.js";
 import { collectModuleSpecifiersFromSource } from "./graphs/specifiers.js";
 import { resolveModuleSpecifierEdges } from "./graphs/edge-resolution.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
+import type { ParsedFileContext } from "./indexer/parse-context.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
 import { collectSqlEdgesForFile } from "./sql/source-graph.js";
 import type { SqlFactCache } from "./sql/source-graph.js";
@@ -103,6 +105,7 @@ export async function collectEdgesForFile(
     cachedFileEdgesProjectRoot?: string;
     languageExtensions?: LanguageExtensionMap;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
+    parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
     report?: BuildReport;
     logLevel?: LogLevel;
     allFiles?: readonly string[];
@@ -144,6 +147,7 @@ export async function collectEdgesForFile(
   let src = parsed?.source;
   let embeddedBlocks = parsed?.embeddedBlocks ?? [];
   let compactNativeImports: CompactQueryResults | null = null;
+  let tree = parsed?.tree;
   let graphOnlyLanguage = sup ? isGraphOnlyLanguage(sup.id) : false;
   if (!sup || src === undefined) {
     const prep = await prepareSourceInput(file, { languageExtensions: opts.languageExtensions });
@@ -164,7 +168,9 @@ export async function collectEdgesForFile(
     emitCacheEntry([]);
     return [];
   }
-  if (!parsed && !graphOnlyLanguage) {
+  // C# reads its directives from one syntax tree, so the imports query would parse the file a second time.
+  const queriesImports = !parsed && !graphOnlyLanguage && sup.id !== "csharp";
+  if (queriesImports) {
     const compactExecution = getCompactImportsExecution(src, sup);
     compactNativeImports = compactExecution.results;
     recordNativeExecutionOutcome(opts.report, {
@@ -174,6 +180,29 @@ export async function collectEdgesForFile(
       ...(compactExecution.fallbackReason ? { fallbackReason: compactExecution.fallbackReason } : {}),
       ...(compactExecution.error ? { error: compactExecution.error } : {}),
     });
+  }
+  // A C# file collected without a parsed context has not been accounted for, so its one tree parse is recorded here.
+  if (!parsed && sup.id === "csharp") {
+    const outcome = parseCsharpSyntaxTree(src, sup);
+    recordNativeExecutionOutcome(opts.report, {
+      file: normalizedFile,
+      support: sup,
+      results: outcome.tree,
+      ...(outcome.fallbackReason ? { fallbackReason: outcome.fallbackReason } : {}),
+      ...(outcome.error ? { error: outcome.error } : {}),
+    });
+    if (!outcome.tree) {
+      // Reading the directives would parse the file again, so the failed parse is recorded once and ends collection.
+      recordParserBackendDegradation(opts.report, {
+        file: normalizedFile,
+        languageId: sup.id,
+        ...(outcome.fallbackReason ? { nativeFallbackReason: outcome.fallbackReason } : {}),
+        ...(outcome.error ? { nativeError: outcome.error } : {}),
+      });
+      emitCacheEntry([]);
+      return [];
+    }
+    tree = outcome.tree;
   }
   if (sup.id === "sql") {
     const allFiles = opts.allFiles ?? [normalizedFile];
@@ -186,9 +215,9 @@ export async function collectEdgesForFile(
   }
 
   const specs = collectModuleSpecifiersFromSource(sup, src, {
-    ...(parsed?.tree ? { tree: parsed.tree } : {}),
+    ...(tree ? { tree } : {}),
     ...(parsed && parsed.nativeQueries !== undefined ? { nativeQueries: parsed.nativeQueries } : {}),
-    ...(!parsed && !graphOnlyLanguage ? { compactNativeImports } : {}),
+    ...(queriesImports ? { compactNativeImports } : {}),
     file: normalizedFile,
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
     ...(opts.report ? { report: opts.report } : {}),
@@ -234,6 +263,8 @@ export async function collectEdgesForFile(
       resolveNodeModules: !!opts.resolveNodeModules,
       ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
       ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+      ...(opts.report ? { report: opts.report } : {}),
+      ...(opts.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
     });
   });
 

@@ -4,8 +4,9 @@ import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js
 import { loadWorkspaceConfig, type WorkspaceConfig } from "../util/workspace.js";
 import type { LogLevel } from "../logging.js";
 import { errorMessage } from "../util/errors.js";
-import { recordNativeExecutionOutcome } from "../native/native-backend-report.js";
+import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import type { BuildReport } from "./types.js";
+import type { ParsedFileContext } from "./parse-context.js";
 import { collectModuleSpecifiersFromSource } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LanguageExtensionMap } from "../languages.js";
@@ -13,13 +14,20 @@ import { isGraphOnlyLanguage } from "../document-links.js";
 import { stripJsLikeComments } from "../util/comments.js";
 import {
   assertNativeRequiredAvailable,
+  getNativeExtractionExecution,
   getNativeQueryExecution,
   isNativeRequiredUnavailableError,
 } from "../native/tree-sitter-native.js";
 import type { NativeQueryExecution, NativeQueryResults } from "../native/tree-sitter-native.js";
+import type { SyntaxTreeLike } from "../languages/types.js";
+import {
+  collectCsharpImportDirectives,
+  csharpSyntaxTreeFromNativeExecution,
+  parseCsharpSyntaxTree,
+} from "../util/csharp-tree.js";
+import { applyCsharpImportDirective } from "./imports/import-binding-tables.js";
 import type { ImportResolverOptions, ResolvedImportTarget } from "./imports/context.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./imports/binding-ranges.js";
-import { IMPORT_BINDING_ROWS } from "./imports/import-binding-tables.js";
 import { collectGraphOnlyImports } from "./imports/graph-only.js";
 import { collectJsTextValueRequireImports } from "./imports/js-text-imports.js";
 import {
@@ -40,12 +48,14 @@ export async function collectImportsForFile(
     source?: string;
     sup?: LanguageSupport;
     nativeQueries?: NativeQueryResults | null;
+    tree?: SyntaxTreeLike | null;
     graphOptions?: GraphBuildOptions;
     logLevel?: LogLevel;
     languageExtensions?: LanguageExtensionMap;
     workspaceConfig?: WorkspaceConfig;
     report?: BuildReport;
     matchPath?: MatchPathFn;
+    parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
   },
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
@@ -80,9 +90,40 @@ export async function collectImportsForFile(
   assertNativeRequiredAvailable();
   let nativeExecution: NativeQueryExecution | null = null;
   let resolvedNativeQueries: NativeQueryResults | null = opts?.nativeQueries ?? null;
+  let csharpTree: SyntaxTreeLike | null | undefined = resolvedSup.id === "csharp" ? opts?.tree : undefined;
   if (opts?.nativeQueries === undefined) {
-    nativeExecution = getNativeQueryExecution(resolvedSource, resolvedSup);
-    resolvedNativeQueries = nativeExecution.results;
+    if (resolvedSup.id === "csharp") {
+      const extraction = getNativeExtractionExecution(resolvedSource, resolvedSup);
+      nativeExecution = extraction;
+      resolvedNativeQueries = extraction.results;
+      if (csharpTree === undefined) {
+        const parsed = csharpSyntaxTreeFromNativeExecution(resolvedSource, extraction);
+        csharpTree = parsed.tree;
+        if (!parsed.tree) {
+          recordParserBackendDegradation(opts?.report, {
+            file: file.replace(/\\/g, "/"),
+            languageId: resolvedSup.id,
+            ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
+            ...(parsed.error ? { nativeError: parsed.error } : {}),
+          });
+        }
+      }
+    } else {
+      nativeExecution = getNativeQueryExecution(resolvedSource, resolvedSup);
+      resolvedNativeQueries = nativeExecution.results;
+    }
+  }
+  if (resolvedSup.id === "csharp" && csharpTree === undefined) {
+    const parsed = parseCsharpSyntaxTree(resolvedSource, resolvedSup);
+    csharpTree = parsed.tree;
+    if (!parsed.tree) {
+      recordParserBackendDegradation(opts?.report, {
+        file: file.replace(/\\/g, "/"),
+        languageId: resolvedSup.id,
+        ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
+        ...(parsed.error ? { nativeError: parsed.error } : {}),
+      });
+    }
   }
   if (nativeExecution?.fallbackReason) {
     recordNativeExecutionOutcome(opts?.report, {
@@ -93,9 +134,10 @@ export async function collectImportsForFile(
       ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
     });
   }
-  if (!resolvedNativeQueries) return imports;
+  if (!resolvedNativeQueries && resolvedSup.id !== "csharp") return imports;
 
   if (resolvedSup.id === "python") {
+    if (!resolvedNativeQueries) return imports;
     const context = {
       file,
       projectRoot,
@@ -137,6 +179,8 @@ export async function collectImportsForFile(
         resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
         ...(resolutionHints ? { resolutionHints } : {}),
         ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+        ...(opts?.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
+        ...(opts?.report ? { report: opts.report } : {}),
         ...(resolverOpts?.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
         ...(phpImportType ? { phpImportType } : {}),
         ...(resolutionKind ? { resolutionKind } : {}),
@@ -172,7 +216,9 @@ export async function collectImportsForFile(
     projectRoot,
     source: resolvedSource,
     languageId: resolvedSup.id,
+    ...(opts?.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
     ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+    ...(opts?.report ? { report: opts.report } : {}),
     resolveFrom: (from: string, phpImportType?: "class" | "function" | "const", resolverOpts?: ImportResolverOptions) =>
       resolveFrom(from, phpImportType, {
         ...(stylesheetLanguage ? { resolutionKind: "stylesheet" as const } : {}),
@@ -255,7 +301,6 @@ export async function collectImportsForFile(
         text: maskImportBindingTrivia(stmtText, resolvedSup.id),
         textStartIndex: statementStartIndex,
         source: resolvedSource,
-        alwaysAliased: IMPORT_BINDING_ROWS[resolvedSup.id]?.alwaysAliased,
       });
     }
     return handled;
@@ -270,20 +315,26 @@ export async function collectImportsForFile(
     });
   };
 
-  if (resolvedNativeQueries) {
+  if (resolvedNativeQueries || (resolvedSup.id === "csharp" && csharpTree)) {
     try {
-      await collectNativeCaptureImportBindings(
-        {
-          source: resolvedSource,
-          languageId: resolvedSup.id,
-          isTypeOnly: (stmtText) => resolvedSup.isTypeOnly(stmtText),
-          resolveFrom,
-          pushBinding: (binding) => imports.push(binding),
-          languageContext,
-          applyStatementOverride,
-        },
-        resolvedNativeQueries.importBindings,
-      );
+      if (resolvedSup.id === "csharp" && csharpTree) {
+        for (const directive of collectCsharpImportDirectives(csharpTree)) {
+          await applyCsharpImportDirective(languageContext, directive);
+        }
+      } else if (resolvedNativeQueries) {
+        await collectNativeCaptureImportBindings(
+          {
+            source: resolvedSource,
+            languageId: resolvedSup.id,
+            isTypeOnly: (stmtText) => resolvedSup.isTypeOnly(stmtText),
+            resolveFrom,
+            pushBinding: (binding) => imports.push(binding),
+            languageContext,
+            applyStatementOverride,
+          },
+          resolvedNativeQueries.importBindings,
+        );
+      }
       await finalizeImports();
       // Native capture results are valid even when no bindings match. The CommonJS
       // require supplement below remains native-owned for TS/TSX.

@@ -29,6 +29,8 @@ import {
   type MatchPathFn,
 } from "../util/resolution.js";
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
+import { collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
+import { primeCsharpNamespaceFacts } from "../util/resolution/csharp.js";
 import { resolveJvmPackageImportPaths } from "../util/resolution/jvm.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
@@ -54,7 +56,7 @@ import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { expandStarImports } from "./expand-star-imports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
 import { BloomFilter, buildBloomFilterFromSource } from "../util/bloom-filter.js";
-import { initNativeBackendReport } from "../native/native-backend-report.js";
+import { initNativeBackendReport, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
 import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from "../native/tree-sitter-native.js";
 import { isNodeSqliteUnavailableError } from "../sqlite-driver.js";
@@ -113,8 +115,6 @@ import {
   type ImportBinding,
   type IncrementalBuildOptions,
   type ModuleIndex,
-  type NativeBackendFallbackReason,
-  type ParserBackendDegradationReport,
   type ProjectIndex,
   type ProjectIndexManifestEntry,
   type ParseErrorRange,
@@ -166,54 +166,6 @@ type IndexedFileModuleResult = {
   cacheWrite?: PendingModuleCacheWrite | undefined;
   graphContext: IndexedFileGraphContext;
 };
-
-function initParserBackendDegradationReport(
-  report: BuildReport | undefined,
-): ParserBackendDegradationReport | undefined {
-  if (!report) return undefined;
-  initNativeBackendReport(report);
-  report.backend ??= {
-    native: {
-      available: false,
-      enabled: false,
-      supportedLanguageIds: [],
-      filesUsed: 0,
-      filesFellBack: 0,
-      fallbackReasons: {
-        unavailable: 0,
-        unsupportedLanguage: 0,
-        queryFailure: 0,
-        sourceTooLarge: 0,
-      },
-      byLanguage: {},
-      errors: [],
-    },
-  };
-  report.backend.parser ??= {
-    total: 0,
-    byLanguage: {},
-    files: [],
-  };
-  return report.backend.parser;
-}
-
-function recordParserBackendDegradation(
-  report: BuildReport | undefined,
-  entry: {
-    file: string;
-    languageId: string;
-    nativeFallbackReason?: NativeBackendFallbackReason;
-    nativeError?: string;
-    jsError?: string;
-  },
-): void {
-  const parserReport = initParserBackendDegradationReport(report);
-  if (!parserReport) return;
-  parserReport.total += 1;
-  parserReport.byLanguage[entry.languageId] = (parserReport.byLanguage[entry.languageId] ?? 0) + 1;
-  if (parserReport.files.length >= 20) return;
-  parserReport.files.push(entry);
-}
 
 function isConfinedFileReadError(error: unknown): boolean {
   return (
@@ -429,6 +381,14 @@ function cachedModuleHasExternalImport(mod: ModuleIndex): boolean {
 }
 
 /**
+ * Gives the C# namespace scan the facts a reused module holds, so it parses nothing for that file. They come
+ * from the file's own tree and depend on no other file, so the module's matching signature keeps them valid.
+ */
+function primeReusedCsharpNamespaceFacts(file: string, mod: ModuleIndex, opts: BuildOptions | undefined): void {
+  if (mod.csharpNamespaceFacts) primeCsharpNamespaceFacts(file, mod.csharpNamespaceFacts, opts?.languageExtensions);
+}
+
+/**
  * Declaration-language files that have a cached row, are not in the build, and no longer exist.
  * A deleted file leaves no cache miss, so importers that it satisfied would stay stale.
  * The existence probe separates deleted files from files outside the build scope.
@@ -620,6 +580,7 @@ async function buildIndexedModuleForFile(args: {
     ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
     ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
     ...(args.report ? { report: args.report } : {}),
+    parsedFiles: args.parsedMap,
   };
   const imports =
     nativeSourceLimitSkip || sup.id === "sql"
@@ -627,6 +588,7 @@ async function buildIndexedModuleForFile(args: {
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,
           sup,
+          ...(sup.id === "csharp" && tree ? { tree } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
           ...sharedImportOptions,
         });
@@ -662,6 +624,7 @@ async function buildIndexedModuleForFile(args: {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
   }
+  if (sup.id === "csharp" && tree) mod.csharpNamespaceFacts = collectCsharpNamespaceFacts(tree);
   await resolveCrossModuleSymbolExports(
     args.file,
     mod,
@@ -1766,9 +1729,15 @@ async function buildIndexFromFileListShared(
     );
     for (const file of staleCachedModules) {
       const probe = cacheProbes.get(file);
-      if (probe && !("error" in probe)) cacheProbes.set(file, { ...probe, mod: null });
+      if (probe && !("error" in probe)) {
+        if (probe.mod) primeReusedCsharpNamespaceFacts(file, probe.mod, opts);
+        cacheProbes.set(file, { ...probe, mod: null });
+      }
       cachedGraphEntries?.delete(file);
     }
+  }
+  for (const [file, probe] of cacheProbes) {
+    if (!("error" in probe) && probe.mod) primeReusedCsharpNamespaceFacts(file, probe.mod, opts);
   }
   const cacheMisses = Array.from(cacheProbes, ([file, probe]) =>
     !("error" in probe) && !probe.mod ? file : null,
@@ -1836,6 +1805,7 @@ async function buildIndexFromFileListShared(
             ...(manifest?.projectRoot ? { cachedFileEdgesProjectRoot: manifest.projectRoot } : {}),
             ...(onFileEdges ? { onFileEdges } : {}),
             allFiles: normalizedFiles,
+            parsedFiles: parsedMap,
             ...(sqlFactCache ? { sqlFactCache } : {}),
           });
           if (bloomFilterCache) {
@@ -1895,6 +1865,7 @@ async function buildIndexFromFileListShared(
           ...(manifest?.projectRoot ? { cachedFileEdgesProjectRoot: manifest.projectRoot } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
           allFiles: normalizedFiles,
+          parsedFiles: parsedMap,
           ...(sqlFactCache ? { sqlFactCache } : {}),
         });
         return [file, mod ?? createEmptyModuleIndex(file), edges, cacheWrite] as const;
@@ -2858,6 +2829,8 @@ export async function buildProjectIndexIncremental(
         }
       }
       const reverseDeps = buildTrackedFileReverseDependencies(trackedEntries);
+      // Dependents rebuilt only because a file they depend on changed: their own source may be unchanged.
+      const dependentsToPrime = new Set<string>();
       const invalidateCachedDependents = () => {
         const dependentFilesOfChanged = collectTrackedFileDependents(trackedEntries, changedFiles, reverseDeps);
         for (const file of dependentFilesOfChanged) {
@@ -2867,6 +2840,8 @@ export async function buildProjectIndexIncremental(
             if (fileReport) {
               fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
             }
+          } else if (!changedFiles.has(file)) {
+            dependentsToPrime.add(file);
           }
           markAsChanged(file);
         }
@@ -2890,7 +2865,27 @@ export async function buildProjectIndexIncremental(
         ? await tryLoadPersistedBloomFilters(projectRoot, opts, report)
         : null;
       for (const file of allFiles) {
-        if (changedFiles.has(file)) continue;
+        if (changedFiles.has(file)) {
+          if (
+            dependentsToPrime.has(file) &&
+            supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id === "csharp"
+          ) {
+            const key = fileIdentityKey(file);
+            const sigInfo = fileSignatures.get(file)!;
+            const reusable =
+              snapshotModules?.get(key) ??
+              (cacheEnabled
+                ? tryLoadFromCache(
+                    projectRoot,
+                    file,
+                    await moduleCacheSignatureForFile(file, sigInfo, opts, resolverEnvironmentFingerprint),
+                    opts,
+                  )
+                : null);
+            if (reusable) primeReusedCsharpNamespaceFacts(file, reusable, opts);
+          }
+          continue;
+        }
         const sigInfo = fileSignatures.get(file)!;
         let cached: ModuleIndex | null = null;
         const snapshotMod = snapshotModules?.get(fileIdentityKey(file));
@@ -2903,6 +2898,7 @@ export async function buildProjectIndexIncremental(
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
           modules.set(fileIdentityKey(file), cached);
+          primeReusedCsharpNamespaceFacts(file, cached, opts);
           collectJsonDependencies(cached.imports, jsonDependencies);
           if (bloomFilterCache) {
             const persistedFilter = persistedBloomFilters?.get(file, sigInfo);

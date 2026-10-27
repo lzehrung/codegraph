@@ -19,17 +19,16 @@ export function maskImportBindingTrivia(text: string, languageId: string): strin
 /**
  * Attaches `importedRange`/`localRange` to "named" {@link ImportBinding} entries a producer
  * builds from parsed statement/clause text rather than per-token native captures: native
- * statement overrides (Java/Kotlin/C#/Rust/PHP, in `language-specific.ts`), Python's
+ * statement overrides (Java/Kotlin/Rust/PHP, in `language-specific.ts`), Python's
  * `from ... import ...` clause, Swift's dotted symbol import, and CommonJS destructured
  * `require()` bindings. Direct JS/TS native captures already carry exact node ranges from
  * `native-captures.ts`'s standard-binding path (`pushStandardBindings`) and never reach this
  * function.
  *
  * Every unranged "named" binding in `[fromIndex, end)` contributes its expected source tokens
- * to one flat role sequence in source order: `[imported, local]` for ordinary aliases and
- * `[local, imported]` for C#'s `using Alias = Namespace.Path;`. An explicit alias remains two
- * slots even when both tokens have the same spelling. Only a truly unaliased binding with
- * `local === imported` collapses to one shared token.
+ * to one flat role sequence in source order: `[imported, local]` for aliases. An explicit alias
+ * remains two slots even when both tokens have the same spelling. Only a truly unaliased binding
+ * with `local === imported` collapses to one shared token.
  *
  * The whole sequence is then matched against `text` back to front: the last slot's token must
  * occur, as an exact whole word, somewhere in `text`; the second-to-last slot's token must
@@ -53,15 +52,9 @@ export function attributeNamedBindingRanges(args: {
   text: string;
   textStartIndex: number;
   source: string;
-  /**
-   * True only for producers whose "unaliased" binding can still encode two distinct source
-   * tokens sharing the same spelling (currently just C#'s `using Alias = Namespace.Path;`).
-   * Every other producer's `local === imported` really means "one token, no alias".
-   */
-  alwaysAliased?: boolean | undefined;
 }): void {
-  const { bindings, fromIndex, text, textStartIndex, source, alwaysAliased } = args;
-  const slots = buildRoleSlots(bindings, fromIndex, alwaysAliased);
+  const { bindings, fromIndex, text, textStartIndex, source } = args;
+  const slots = buildRoleSlots(bindings, fromIndex);
   if (!slots.length) return;
 
   const matches = matchRoleSequenceBackward(text, slots);
@@ -86,16 +79,13 @@ export function attributeNamedBindingRanges(args: {
   }
 }
 
-function buildRoleSlots(bindings: ImportBinding[], fromIndex: number, alwaysAliased: boolean | undefined): RoleSlot[] {
+function buildRoleSlots(bindings: ImportBinding[], fromIndex: number): RoleSlot[] {
   const slots: RoleSlot[] = [];
   for (let index = fromIndex; index < bindings.length; index++) {
     const binding = bindings[index]!;
     if (binding.kind !== "named") continue;
     if (binding.importedRange !== undefined || binding.localRange !== undefined) continue;
-    if (alwaysAliased) {
-      slots.push({ bindingIndex: index, field: "localRange", name: binding.local });
-      slots.push({ bindingIndex: index, field: "importedRange", name: binding.imported });
-    } else if (binding.local === binding.imported && !binding.explicitAlias) {
+    if (binding.local === binding.imported && !binding.explicitAlias) {
       slots.push({ bindingIndex: index, field: "importedRange", name: binding.imported });
     } else {
       slots.push({ bindingIndex: index, field: "importedRange", name: binding.imported });
@@ -125,12 +115,11 @@ function matchRoleSequenceBackward(text: string, slots: RoleSlot[]): Array<{ sta
 
 // A broad Unicode word-continuation check using the canonical ID_Continue property (covers
 // combining marks, connector punctuation, and every other continuation category, not just
-// letters/digits/underscore) plus the extra sigils some supported languages allow inside an
-// identifier (`$` for ECMAScript, `@` for a C# verbatim-identifier prefix). False positives
-// here only make the boundary test stricter (a real match gets skipped rather than a
-// partial-identifier match getting accepted), which is the safe direction for a fail-closed
+// letters/digits/underscore) plus the extra sigil ECMAScript permits inside an identifier (`$`).
+// False positives here only make the boundary test stricter (a real match gets skipped rather
+// than a partial-identifier match getting accepted), which is the safe direction for a fail-closed
 // attribution path.
-const IDENTIFIER_CONTINUATION_PATTERN = /[\p{ID_Continue}$@]/u;
+const IDENTIFIER_CONTINUATION_PATTERN = /[\p{ID_Continue}$]/u;
 
 /**
  * True when the character immediately before `index` in `text` is an identifier-continuation

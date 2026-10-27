@@ -5,6 +5,7 @@ import { isPythonReceiverAttributeAssignmentName } from "../languages/definition
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
+import { csharpNamespaceAtIndex, csharpSkipConditionalWrappers } from "../util/csharp-tree.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
   collectMemberAccessChain,
@@ -48,7 +49,12 @@ import {
   type PhpObjectCreationKeyword,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { getCallArgumentCount, memberLookupBinding } from "../languages/callable-arity.js";
-import { getCompilationUnitPeers, getPackageDeclarationName } from "./compilation-units.js";
+import {
+  csharpNamespaceChainDeclares,
+  csharpProjectDeclarationsUnknown,
+  getCompilationUnitPeers,
+  getPackageDeclarationName,
+} from "./compilation-units.js";
 import {
   isExportedDeclaration,
   isJvmPackageSymbolVisible,
@@ -413,10 +419,90 @@ function enclosingImportScope(declarationName: SyntaxNodeLike): SyntaxNodeLike |
   return current?.parent ?? null;
 }
 
+/** The scope of the import whose local name token starts at `start`, found by descending from `root`. */
+function importScopeAt(root: SyntaxNodeLike, start: number): SyntaxNodeLike | null {
+  let nameNode = root;
+  for (;;) {
+    const child = nameNode.namedChildren.find(
+      (candidate) => candidate.startIndex <= start && start < candidate.endIndex,
+    );
+    if (!child) break;
+    nameNode = child;
+  }
+  return enclosingImportScope(nameNode);
+}
+
+const CSHARP_SHADOWED_ALIAS_REASON = "C# alias is shadowed by an enclosing namespace member";
+const CSHARP_INCOMPLETE_ALIAS_REASON = "C# namespace alias may name a type in a project file that could not be read";
+
+/** The leading name `X` of a C# dotted or alias-qualified name (`X.Y.Z`, `X::Y`) and the names it qualifies. */
+export function csharpChainQualifier(
+  chainNode: SyntaxNodeLike,
+  source: string,
+): { qualifier: SyntaxNodeLike; names: string[] } | null {
+  const chain = collectMemberAccessChain({ sup: CSHARP_SUPPORT, source, chainNode });
+  if (!chain || !isReceiverNameNode(CSHARP_SUPPORT, chain.base.type)) return null;
+  return { qualifier: chain.base, names: chain.names };
+}
+
 /**
- * Rewrites a valid C# `using X = Namespace; X::Target` lookup into the dotted form
- * export resolution already understands. `global::` and ordinary dotted names keep
- * their source spelling; an unknown alias stays `X::Target` instead of a bare name.
+ * Whether an enclosing namespace shadows the compilation-unit alias that `qualifier` (the `X` of
+ * `X.Type`) names. C# finds a namespace or type `X` in an enclosing namespace before the alias, so
+ * the answer comes from the index's own C# declarations when the lookup runs, never from the alias
+ * binding a cached module holds. An alias under `#if`, `#elif`, or `#else` belongs to the
+ * compilation unit; an alias inside a block namespace or after a file-scoped namespace header is
+ * namespace-scoped and is not checked. `X::Type` binds only aliases.
+ */
+function csharpAliasShadowedAt(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  qualifier: SyntaxNodeLike,
+  source: string,
+): boolean {
+  if (qualifier.parent?.type === "alias_qualified_name") return false;
+  const name = sliceText(qualifier, source);
+  const alias = innermostNamespaceImport(mod.imports, name, qualifier, CSHARP_SUPPORT.normalizeIdentifier);
+  if (alias?.kind !== "namespace") return false;
+  const aliasStart = alias.localRange?.start.index;
+  if (aliasStart === undefined) return false;
+  let root = qualifier;
+  while (root.parent) root = root.parent;
+  if (csharpSkipConditionalWrappers(importScopeAt(root, aliasStart))?.type !== "compilation_unit") return false;
+  const regions = mod.csharpNamespaceFacts?.regions;
+  // The tree keeps a file-scoped header's directives at the root, but the header's region covers the rest of the file.
+  if (!regions || csharpNamespaceAtIndex(regions, aliasStart)) return false;
+  const enclosing = csharpNamespaceAtIndex(regions, qualifier.startIndex);
+  return !!enclosing && csharpNamespaceChainDeclares(index, mod, enclosing, CSHARP_SUPPORT.normalizeIdentifier(name));
+}
+
+/**
+ * Why a use led by the compilation-unit alias `qualifier` names (`X.Type`, `X::Type`) is unproven, or `null`
+ * when the alias stands. An enclosing namespace can shadow the alias. A project file whose declarations are
+ * unknown (no syntax tree) may declare the same type name as one the alias reaches, so no type found through a
+ * namespace alias is proven to be the only one. Both answers come from the index's own C# declarations when the
+ * lookup runs, never from a flag a cached module holds.
+ */
+export function csharpAliasUnprovenReason(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  qualifier: SyntaxNodeLike,
+  source: string,
+): string | null {
+  if (csharpAliasShadowedAt(index, mod, qualifier, source)) return CSHARP_SHADOWED_ALIAS_REASON;
+  const alias = innermostNamespaceImport(
+    mod.imports,
+    sliceText(qualifier, source),
+    qualifier,
+    CSHARP_SUPPORT.normalizeIdentifier,
+  );
+  return alias?.kind === "namespace" && csharpProjectDeclarationsUnknown(index, mod)
+    ? CSHARP_INCOMPLETE_ALIAS_REASON
+    : null;
+}
+
+/**
+ * Rewrites a valid C# `using X = Namespace;` lookup (`X.Target` or `X::Target`) into the
+ * dotted form export resolution understands. `global::` and unknown aliases keep their source spelling.
  */
 export function csharpAliasQualifiedLookupName(
   node: SyntaxNodeLike,
@@ -427,26 +513,12 @@ export function csharpAliasQualifiedLookupName(
   const raw = csharpLookupName(node, source, fallback);
   if (raw.startsWith("global::")) return raw;
   const chainNode = csharpQualifiedNameNode(node);
-  if (!chainNode || !raw.includes("::")) return raw;
-  const names: string[] = [];
-  let current: SyntaxNodeLike | null = chainNode;
-  let base: SyntaxNodeLike | null = null;
-  while (current && (current.type === "qualified_name" || current.type === "alias_qualified_name")) {
-    const parts = getMemberAccessParts(CSHARP_SUPPORT, current);
-    base = parts.object ?? base;
-    let property = parts.property;
-    if (property?.type === "generic_name") {
-      property = property.childForFieldName("name") ?? property.namedChildren[0] ?? property;
-    }
-    if (property?.type === "identifier") names.push(sliceText(property, source));
-    current = base;
-  }
-  if (!base || !isReceiverNameNode(CSHARP_SUPPORT, base.type) || !names.length) return raw;
-  const alias = sliceText(base, source);
+  const lead = chainNode && csharpChainQualifier(chainNode, source);
+  if (!lead) return raw;
+  const alias = sliceText(lead.qualifier, source);
   if (alias === "global") return raw;
-  const imported = innermostNamespaceImport(imports, alias, base, CSHARP_SUPPORT.normalizeIdentifier);
-  if (!imported) return raw;
-  return `${imported.from}.${[...names].reverse().join(".")}`;
+  const imported = innermostNamespaceImport(imports, alias, lead.qualifier, CSHARP_SUPPORT.normalizeIdentifier);
+  return imported ? `${imported.from}.${lead.names.toReversed().join(".")}` : raw;
 }
 
 /**
@@ -473,15 +545,7 @@ export function innermostNamespaceImport(
   for (const match of matches) {
     const start = match.localRange?.start.index;
     if (start === undefined) continue;
-    let nameNode = root;
-    for (;;) {
-      const child = nameNode.namedChildren.find(
-        (candidate) => candidate.startIndex <= start && start < candidate.endIndex,
-      );
-      if (!child) break;
-      nameNode = child;
-    }
-    const scope = enclosingImportScope(nameNode);
+    const scope = importScopeAt(root, start);
     if (!scope) continue;
     if (start > useNode.startIndex && scope.parent) continue;
     if (scope.startIndex > useNode.startIndex || scope.endIndex < useNode.endIndex) continue;
@@ -663,6 +727,18 @@ export async function resolveMemberAccessDefinition(params: {
     memberNode = parent.parent;
   }
   if (!memberNode) return null;
+  if (sup.id === "csharp") {
+    const lead = csharpChainQualifier(memberNode, source);
+    const reason = lead ? csharpAliasUnprovenReason(index, mod, lead.qualifier, source) : null;
+    if (lead && reason) {
+      // A parameter, local, or member named like the alias is a value that C# binds before any alias,
+      // except after `::`, which reaches aliases only.
+      const scopeIndex = getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree);
+      const closest = findClosestScopeBinding(scopeIndex, sliceText(lead.qualifier, source), lead.qualifier, sup);
+      const aliasQualified = lead.qualifier.parent?.type === "alias_qualified_name";
+      if (aliasQualified || !closest || closest.import) return { status: "not_found", reason };
+    }
+  }
   const { object: obj, property: prop } = getMemberAccessParts(sup, memberNode);
   const optionalMemberTypes = memberAccessTraversalTypes(sup);
 

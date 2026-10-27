@@ -1,4 +1,4 @@
-import { CSHARP_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
+import { JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import {
   parsePhpImportStatement,
   parseRustImportStatements,
@@ -79,25 +79,6 @@ function extractKotlinImports(source: string, sink: TextImportSink): void {
     if (!spec) continue;
     const suffix = match[0].slice(match[0].indexOf(rawSpecifier) + rawSpecifier.length);
     sink.specifier({ spec, typeOnly: false, ...(suffix.includes("*") ? { jvmPackageWildcard: true } : {}) });
-    sink.binding({ raw: source.slice(match.index, match.index + match[0].length), start: match.index });
-  }
-}
-
-const CSHARP_DOTTED_SOURCE = String.raw`${CSHARP_IDENTIFIER_SOURCE}(?:[\t ]*\.[\t ]*${CSHARP_IDENTIFIER_SOURCE})*`;
-const CSHARP_USING_STATEMENT_PATTERN = new RegExp(
-  String.raw`^[\t ]*(?:global[\t ]+)?using[\t ]+(?:${CSHARP_IDENTIFIER_SOURCE}[\t ]*=[\t ]*)?(?:static[\t ]+)?(${CSHARP_DOTTED_SOURCE})[\t ]*;`,
-  "gmu",
-);
-
-function extractCsharpImports(source: string, sink: TextImportSink): void {
-  if (!source.includes("using")) return;
-  const masked = maskImportBindingTrivia(source, "csharp");
-  for (const match of masked.matchAll(CSHARP_USING_STATEMENT_PATTERN)) {
-    const rawSpecifier = match[1];
-    if (!rawSpecifier || match.index === undefined) continue;
-    const spec = rawSpecifier.replace(/\s+/gu, "");
-    if (!spec) continue;
-    sink.specifier({ spec, typeOnly: false });
     sink.binding({ raw: source.slice(match.index, match.index + match[0].length), start: match.index });
   }
 }
@@ -208,7 +189,6 @@ const TEXT_IMPORT_EXTRACTORS: Record<string, TextImportExtractor | undefined> = 
   java: extractJavaImports,
   kotlin: extractKotlinImports,
   rust: extractRustImports,
-  csharp: extractCsharpImports,
   php: extractPhpImports,
 };
 
@@ -217,7 +197,6 @@ const TEXT_IMPORT_BINDING_LANGUAGES: Record<string, true | undefined> = {
   java: true,
   kotlin: true,
   rust: true,
-  csharp: true,
   php: true,
 };
 

@@ -80,8 +80,8 @@ function normalizeGoImports(context: LanguageSpecificImportContext): void {
 /**
  * Recovers import bindings from the shared text extractor registry.
  *
- * Java, Kotlin, C#, and PHP already own bindings when the native query ran, so their text path
- * only fills in when it produced none. Rust always re-scans because its statement override
+ * Java, Kotlin, and PHP already own bindings when the native query ran, so their text path only
+ * fills in when it produced none. Rust always re-scans because its statement override
  * de-duplicates against the bindings that already exist.
  */
 async function appendTextImportBindings(context: LanguageSpecificImportContext): Promise<void> {
@@ -101,7 +101,6 @@ async function appendTextImportBindings(context: LanguageSpecificImportContext):
       text: maskImportBindingTrivia(request.raw, context.languageId),
       textStartIndex: request.start,
       source: context.source,
-      ...(row?.alwaysAliased ? { alwaysAliased: true } : {}),
     });
   }
 }

@@ -47,8 +47,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 91 keeps qualified `case` names and `loop`/`repeat` identifiers out of SQL block tracking.
  * Epoch 92 records tree-sitter ERROR/MISSING ranges per file for `parse_error` reference coverage.
  * Epoch 93 stops indexing an annotation-only Python `self.x: T` as an instance attribute declaration.
+ * Epoch 94 reads C# using directives and namespace declarations from native syntax nodes, and stores each C#
+ * file's own namespace regions and declared types with its module (`csharpNamespaceFacts`) instead of
+ * scanning source text for them.
  */
-export const CORE_ALGORITHM_EPOCH = 93;
+export const CORE_ALGORITHM_EPOCH = 94;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

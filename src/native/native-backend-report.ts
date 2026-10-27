@@ -10,8 +10,12 @@ import type {
   BuildReport,
   NativeBackendFallbackReason,
   NativeBackendLanguageReport,
+  ParserBackendDegradationReport,
 } from "../indexer/types.js";
 import { stringifyUnknown } from "../util/ast.js";
+import { fileIdentityKey } from "../util/paths.js";
+
+const parserDegradedFilesByReport = new WeakMap<BuildReport, Set<string>>();
 
 export type NativeBackendOutcome = {
   usedNative: boolean;
@@ -132,4 +136,28 @@ export function recordNativeExecutionOutcome(report: BuildReport | undefined, ou
     ...(outcome.fallbackReason ? { fallbackReason: outcome.fallbackReason } : {}),
     ...(outcome.error ? { error: outcome.error } : {}),
   });
+}
+
+export function recordParserBackendDegradation(
+  report: BuildReport | undefined,
+  entry: ParserBackendDegradationReport["files"][number],
+): void {
+  const backend = initNativeBackendReport(report);
+  if (!backend || !report) return;
+
+  let degradedFiles = parserDegradedFilesByReport.get(report);
+  if (!degradedFiles) {
+    degradedFiles = new Set();
+    parserDegradedFilesByReport.set(report, degradedFiles);
+  }
+  const key = entry.languageId + "\0" + fileIdentityKey(entry.file);
+  if (degradedFiles.has(key)) return;
+  degradedFiles.add(key);
+
+  backend.parser ??= { total: 0, byLanguage: {}, files: [] };
+  const parserReport = backend.parser;
+  parserReport.total += 1;
+  parserReport.byLanguage[entry.languageId] = (parserReport.byLanguage[entry.languageId] ?? 0) + 1;
+  if (parserReport.files.length >= 20) return;
+  parserReport.files.push(entry);
 }
