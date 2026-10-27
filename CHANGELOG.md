@@ -50,7 +50,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - Disk cache writes of the project snapshot, the bloom filter sidecar, and the detailed symbol graph sidecar now retry a rename that fails with `EBUSY`, `EPERM`, or `ENOTEMPTY` and sync the cache directory afterwards, as index manifest writes already did. Before, one transient file lock during the rename (an antivirus scanner or indexer on Windows) silently dropped the write, so the next run rebuilt that cache instead of reusing it.
 - Type hierarchy (supertypes, subtypes, implementations, and the MCP tools and refactor plan built on them) and review candidate tests now sort by code unit, like call hierarchy, so order, `--limit` survivors, and diamond results no longer depend on the host locale or differ for mixed-case, underscore, or non-ASCII names.
 - A path under a regular file (ENOTDIR) is treated as a missing path by the confined-file nearest-existing-ancestor check and by the `files` and `additionalFiles` normalization, matching Windows on Linux and macOS instead of throwing a raw `ENOTDIR` error.
-- `docs/cli.md` no longer says `index --full` forces a full rebuild; it prints the module details JSON, like `--json`.
+- `docs/cli.md` no longer says `index --full` forces a full rebuild; it prints per-module counts as text and reuses the cache, and `--json` prints the details.
 
 ### Security
 
