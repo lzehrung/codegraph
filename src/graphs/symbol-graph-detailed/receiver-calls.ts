@@ -11,7 +11,7 @@ import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/type
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
-import { sliceText } from "../../util/ast.js";
+import { rootNodeOf, sliceText } from "../../util/ast.js";
 import { foldPhpIdentifierCase, XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { keywordReceiverKind, ownReceiverMemberScope } from "../../util/member-access-tables.js";
@@ -1007,12 +1007,6 @@ function bindingContainerDeclaresNameBefore(
   return visit(node);
 }
 
-function rootOf(node: SyntaxNodeLike): SyntaxNodeLike {
-  let current = node;
-  while (current.parent) current = current.parent;
-  return current;
-}
-
 function findVisiblePriorConstructor(
   receiver: SyntaxNodeLike,
   receiverName: string,
@@ -1029,7 +1023,7 @@ function findVisiblePriorConstructor(
     }
     current = current.parent;
   }
-  return findPriorConstructorInContainer(rootOf(receiver), receiver, receiverName, source, sup);
+  return findPriorConstructorInContainer(rootNodeOf(receiver), receiver, receiverName, source, sup);
 }
 
 /** Constructor or declared type visible at a receiver, without resolving its owner. */

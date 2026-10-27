@@ -1,5 +1,5 @@
 import { findCallees, findCallers, type CallHierarchyResponse } from "../agent/call-hierarchy.js";
-import type { SemanticLocation, SemanticSymbol } from "../agent/semantic.js";
+import { formatSemanticSymbol, type SemanticLocation } from "../agent/semantic.js";
 import { exitWithError, type CliAgentCommandContext } from "./context.js";
 import { CALLEES_HELP_TEXT, CALLERS_HELP_TEXT } from "./help.js";
 import { parseBoundedIntegerOption } from "./options.js";
@@ -66,20 +66,15 @@ export async function handleCallHierarchyCommand(
 
 function formatCallHierarchyResponse(response: CallHierarchyResponse): string {
   const label = response.direction === "incoming" ? "Callers" : "Callees";
-  const lines = [`Target: ${formatSymbol(response.target)}`, `${label}: ${response.entries.length}`];
+  const lines = [`Target: ${formatSemanticSymbol(response.target)}`, `${label}: ${response.entries.length}`];
   for (const entry of response.entries) {
-    lines.push(`${entry.depth}. ${formatSymbol(entry.symbol)}`);
+    lines.push(`${entry.depth}. ${formatSemanticSymbol(entry.symbol)}`);
     for (const callsite of entry.callsites) lines.push(`   ${formatCallsite(callsite)}`);
   }
   appendOmitted(lines, "symbols", response.omittedCounts.symbols);
   appendOmitted(lines, "callsites", response.omittedCounts.callsites);
   appendOmitted(lines, "unresolved sites", response.omittedCounts.unresolvedSites);
   return lines.join("\n");
-}
-
-function formatSymbol(symbol: SemanticSymbol): string {
-  const { file, range } = symbol.location;
-  return `${symbol.name} [${symbol.kind}] ${file}:${range.start.line}:${range.start.column}`;
 }
 
 function formatCallsite(callsite: SemanticLocation): string {

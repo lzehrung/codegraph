@@ -1,7 +1,8 @@
 import type { FileId } from "../types.js";
-import { type ProjectIndex, type SymbolDef } from "../indexer/types.js";
+import { type ProjectIndex } from "../indexer/types.js";
 import { findReferences } from "../indexer/navigation.js";
 import { Semaphore } from "../util/concurrency.js";
+import { changedSymbolToDef } from "./map.js";
 import type { ChangedSymbol, ImpactItem, ImpactOptions, ImpactReason } from "./types.js";
 import type { ReferenceLookupCache } from "./reference-cache.js";
 import { calculateSeverity, selectStrongerImpactReason } from "./severity.js";
@@ -110,12 +111,7 @@ async function analyzeChangedSymbolReferences(
     recordReferenceLookupStarted(workBudget);
   }
 
-  const def: SymbolDef = {
-    file: changedSymbol.file,
-    localName: changedSymbol.name,
-    kind: changedSymbol.kind,
-    range: changedSymbol.range,
-  };
+  const def = changedSymbolToDef(changedSymbol);
 
   const referenceOptions = options.refContext
     ? {

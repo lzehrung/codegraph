@@ -1,16 +1,17 @@
-import { findCallHierarchy, type CallHierarchyDirection } from "../indexer/call-hierarchy.js";
+import { findCallHierarchy, type CallHierarchyDirection, type CallHierarchyMatch } from "../indexer/call-hierarchy.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
 import { semanticProvenance } from "./semantic.js";
 import { requireSemanticSymbol, semanticSymbolFromDef } from "./semantic-symbols.js";
 import {
+  checkSessionFreshness,
   createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
 } from "./session.js";
-import { buildSymbolLookup } from "./symbol-lookup.js";
+import { buildSymbolLookup, type SymbolLookup } from "./symbol-lookup.js";
 
 export type CallHierarchyRequest = {
   root: string;
@@ -61,7 +62,7 @@ async function runCallHierarchy(
   request: CallHierarchyRequest,
   direction: CallHierarchyDirection,
 ): Promise<CallHierarchyResponse> {
-  const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
+  const freshness = await checkSessionFreshness(session);
   const snapshot = await session.loadProject();
   const resolved = requireSemanticSymbol(snapshot, request.handle);
   const result = findCallHierarchy(snapshot.symbolGraph, resolved.id, direction, {
@@ -72,7 +73,27 @@ async function runCallHierarchy(
 
   const lookup = buildSymbolLookup(snapshot);
   const provenance = semanticProvenance(snapshot);
-  const entries = result.entries.flatMap((match): CallHierarchyEntry[] => {
+  const entries = callHierarchyEntries(snapshot, lookup, result.entries, provenance);
+
+  return {
+    ...callResponseEnvelope(snapshot, freshness, result.limit, result.callsiteLimit, {
+      symbols: result.omittedSymbols,
+      callsites: result.omittedCallsites,
+      unresolvedSites: result.unresolvedEdges,
+    }),
+    target: semanticSymbolFromDef(snapshot, resolved.def),
+    direction,
+    entries,
+  };
+}
+
+export function callHierarchyEntries(
+  snapshot: AgentProjectSnapshot,
+  lookup: SymbolLookup,
+  matches: readonly CallHierarchyMatch[],
+  provenance: SemanticProvenance,
+): CallHierarchyEntry[] {
+  return matches.flatMap((match): CallHierarchyEntry[] => {
     const def = lookup.defById.get(match.symbolId);
     if (!def) return [];
     return [
@@ -87,17 +108,6 @@ async function runCallHierarchy(
       },
     ];
   });
-
-  return {
-    ...callResponseEnvelope(snapshot, freshness, result.limit, result.callsiteLimit, {
-      symbols: result.omittedSymbols,
-      callsites: result.omittedCallsites,
-      unresolvedSites: result.unresolvedEdges,
-    }),
-    target: semanticSymbolFromDef(snapshot, resolved.def),
-    direction,
-    entries,
-  };
 }
 
 function callResponseEnvelope(

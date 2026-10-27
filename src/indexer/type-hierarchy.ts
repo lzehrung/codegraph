@@ -1,5 +1,5 @@
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../graphs/symbol-graph.js";
-import { boundList } from "../presentation/bounds.js";
+import { boundList, boundedNonNegativeIntegerOption } from "../presentation/bounds.js";
 import { resolveSymbolId } from "./symbols.js";
 import type { ProjectIndex } from "./types.js";
 
@@ -385,7 +385,5 @@ function normalizeDepth(depth: number | undefined): number {
 }
 
 function normalizeLimit(limit: number | undefined): number {
-  if (limit === undefined) return DEFAULT_HIERARCHY_LIMIT;
-  if (!Number.isInteger(limit) || limit < 0) throw new Error("Hierarchy limit must be a non-negative integer.");
-  return Math.min(limit, MAX_HIERARCHY_LIMIT);
+  return boundedNonNegativeIntegerOption(limit, DEFAULT_HIERARCHY_LIMIT, MAX_HIERARCHY_LIMIT, "Hierarchy limit");
 }

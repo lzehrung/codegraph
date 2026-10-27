@@ -12,6 +12,12 @@ export function skipQuotedString(source: string, quoteStart: number): number {
   return source.length;
 }
 
+/** The index just past the next `closing` marker at or after `contentStart`, or the end of the source when unterminated. */
+export function skipDelimited(source: string, contentStart: number, closing: string): number {
+  const closingIndex = source.indexOf(closing, contentStart);
+  return closingIndex === -1 ? source.length : closingIndex + closing.length;
+}
+
 export function matchesCaseInsensitive(source: string, start: number, value: string): boolean {
   if (start + value.length > source.length) return false;
   for (let index = 0; index < value.length; index++) {

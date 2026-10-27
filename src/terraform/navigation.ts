@@ -1,6 +1,7 @@
 import { createNavigationProvenance, okGoToResult } from "../indexer/navigation-provenance.js";
 import { buildIndexedCandidateCoverage } from "../indexer/navigation-references.js";
 import { rangeContains, sameDef } from "../indexer/reference-context.js";
+import { siteKey } from "../indexer/shared.js";
 import type {
   FindReferencesResult,
   GoToRequest,
@@ -47,10 +48,6 @@ type FindTerraformReferencesOptions = {
   includeDefinition: boolean;
   maxReferences?: number;
 };
-
-function siteKey(file: FileId, range: Range): string {
-  return `${fileIdentityKey(file)}:${range.start.line}:${range.start.column}`;
-}
 
 /** Declarations another module can name: inputs, outputs, and what a resource address names. */
 const CROSS_MODULE_KINDS = new Set(["variable", "output", "module", "resource", "data"]);

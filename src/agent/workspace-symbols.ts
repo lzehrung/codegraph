@@ -7,12 +7,18 @@ import { defaultAgentLimit } from "./bounds.js";
 import { formatAgentSymbolHandle } from "./handles.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import {
+  checkSessionFreshness,
   createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
 } from "./session.js";
-import { semanticProvenance, type SemanticResponseEnvelope, type SemanticSymbol } from "./semantic.js";
+import {
+  formatSemanticSymbol,
+  semanticProvenance,
+  type SemanticResponseEnvelope,
+  type SemanticSymbol,
+} from "./semantic.js";
 
 export type AgentWorkspaceSymbolsRequest = WorkspaceSymbolsRequest & {
   root: string;
@@ -34,7 +40,7 @@ export async function workspaceSymbolsWithSession(
   session: AgentSession,
   request: AgentWorkspaceSymbolsRequest,
 ): Promise<WorkspaceSymbolsResponse> {
-  const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
+  const freshness = await checkSessionFreshness(session);
   const snapshot = await session.loadProject({ symbolGraph: "skip" });
   return await workspaceSymbolsInSnapshot(snapshot, request, freshness);
 }
@@ -88,10 +94,7 @@ export async function workspaceSymbolsInSnapshot(
 export function formatWorkspaceSymbolsResponse(response: WorkspaceSymbolsResponse): string {
   if (!response.symbols.length) return `No workspace symbols matched "${response.query}".`;
   const lines = [`Analysis: ${response.analysis.label}`, `Symbols: ${response.symbols.length}`];
-  for (const symbol of response.symbols) {
-    const { file, range } = symbol.location;
-    lines.push(`${symbol.name} [${symbol.kind}] ${file}:${range.start.line}:${range.start.column}`);
-  }
+  for (const symbol of response.symbols) lines.push(formatSemanticSymbol(symbol));
   if (response.omittedCounts.symbols) lines.push(`Omitted: ${response.omittedCounts.symbols}`);
   return lines.join("\n");
 }

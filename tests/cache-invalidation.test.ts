@@ -1657,7 +1657,6 @@ describe("Cache invalidation and strict hashing", () => {
     };
     await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
 
-    const existsSpy = vi.spyOn(incrementalPlan, "pathExists");
     const accessSpy = vi.spyOn(fsp, "access");
     try {
       const rebuilt = await buildProjectIndexFromFiles(root, [sourcePath, dependencyPath], {
@@ -1665,7 +1664,6 @@ describe("Cache invalidation and strict hashing", () => {
         threads: 1,
       });
 
-      expect(existsSpy).not.toHaveBeenCalledWith(outsideDependency);
       expect(accessSpy).not.toHaveBeenCalledWith(outsideDependency);
       expect(rebuilt.graph.edges).not.toContainEqual(
         expect.objectContaining({
@@ -1681,7 +1679,6 @@ describe("Cache invalidation and strict hashing", () => {
         }),
       );
     } finally {
-      existsSpy.mockRestore();
       accessSpy.mockRestore();
     }
   });

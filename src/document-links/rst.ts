@@ -1,7 +1,7 @@
 import { type ModuleSpecifier } from "../util/specifiers.js";
 import { DOCUMENT_HTML_FORMS } from "./html-forms.js";
 import { extractDocumentHtmlSpecifiers } from "./html.js";
-import { dedupeModuleSpecifiers, normalizeLinkSpecifier, normalizeReferenceLabel } from "./shared.js";
+import { dedupeModuleSpecifiers, normalizeDocumentFileSpecifier, normalizeReferenceLabel } from "./shared.js";
 
 // Sphinx `:ref:`/`:term:` roles are deliberately not extracted here: they
 // target in-document labels (`.. _label:`) or glossary terms, not files, so
@@ -15,11 +15,7 @@ export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
   for (const match of cleaned.matchAll(/`[^`<\n]*<([^>\n]+)>`_/g)) {
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
-    const normalized = normalizeLinkSpecifier(rawSpecifier, {
-      preferRelative: true,
-      resolutionKind: "document",
-      forceRelative: true,
-    });
+    const normalized = normalizeDocumentFileSpecifier(rawSpecifier);
     if (normalized) out.push(normalized);
   }
 
@@ -38,33 +34,21 @@ export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
     const angled = /<([^>\n]+)>\s*$/.exec(body);
     const rawSpecifier = (angled?.[1] ?? body).trim();
     if (!rawSpecifier) continue;
-    const normalized = normalizeLinkSpecifier(rawSpecifier, {
-      preferRelative: true,
-      resolutionKind: "document",
-      forceRelative: true,
-    });
+    const normalized = normalizeDocumentFileSpecifier(rawSpecifier);
     if (normalized) out.push(normalized);
   }
 
   for (const match of cleaned.matchAll(/^\s*\.\.\s+include::\s+([^\s]+)\s*$/gm)) {
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
-    const normalized = normalizeLinkSpecifier(rawSpecifier, {
-      preferRelative: true,
-      resolutionKind: "document",
-      forceRelative: true,
-    });
+    const normalized = normalizeDocumentFileSpecifier(rawSpecifier);
     if (normalized) out.push(normalized);
   }
 
   for (const match of cleaned.matchAll(/^\s*\.\.\s+literalinclude::\s+([^\s]+)\s*$/gm)) {
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
-    const normalized = normalizeLinkSpecifier(rawSpecifier, {
-      preferRelative: true,
-      resolutionKind: "document",
-      forceRelative: true,
-    });
+    const normalized = normalizeDocumentFileSpecifier(rawSpecifier);
     if (normalized) out.push(normalized);
   }
 
@@ -142,11 +126,7 @@ function collectRstTargetDefinitions(source: string): Map<string, ModuleSpecifie
     const label = normalizeReferenceLabel(match[1]);
     const rawSpecifier = match[2];
     if (!label || !rawSpecifier) continue;
-    const normalized = normalizeLinkSpecifier(rawSpecifier, {
-      preferRelative: true,
-      resolutionKind: "document",
-      forceRelative: true,
-    });
+    const normalized = normalizeDocumentFileSpecifier(rawSpecifier);
     if (normalized) out.set(label, normalized);
   }
 
@@ -184,11 +164,7 @@ function extractRstToctreeSpecifiers(source: string): ModuleSpecifier[] {
     const titledMatch = content.match(/<([^>]+)>/);
     const rawSpecifier = titledMatch?.[1]?.trim() ?? content;
     if (/[*?\[\]{}]/.test(rawSpecifier)) continue;
-    const normalized = normalizeLinkSpecifier(rawSpecifier, {
-      preferRelative: true,
-      resolutionKind: "document",
-      forceRelative: true,
-    });
+    const normalized = normalizeDocumentFileSpecifier(rawSpecifier);
     if (normalized) out.push(normalized);
   }
 

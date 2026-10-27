@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { LANG_CONFIGS } from "../bootstrap/tree-sitter-languages.js";
+import { chunkLanguageKey, LANG_CONFIGS } from "../bootstrap/tree-sitter-languages.js";
 import { chunkFile, chunkFileWithSymbols, type Chunk } from "../chunking/chunk-file.js";
 import { chunkTextFile } from "../chunking/chunk-text-file.js";
 import {
@@ -64,11 +64,6 @@ const textLanguageByExtension: Record<string, string> = {
   ".txt": "text",
   ".yaml": "yaml",
   ".yml": "yaml",
-};
-
-const chunkLanguageAliases: Record<string, string> = {
-  js: "javascript",
-  ts: "typescript",
 };
 
 const symbolUnitKinds = new Set<SymbolKind>([
@@ -448,7 +443,7 @@ export function makeDuplicateChunks(
   minTokens: number,
   maxTokens: number,
 ): Chunk[] {
-  const langConfig = LANG_CONFIGS[chunkLanguageAliases[languageId] ?? languageId];
+  const langConfig = LANG_CONFIGS[chunkLanguageKey(languageId)];
   if (langConfig && !textOnly) {
     return chunkFile({ language: langConfig, source, filePath, minTokens, maxTokens, tokenizer: countDuplicateTokens });
   }
@@ -463,7 +458,7 @@ export function makeDuplicateChunksWithSymbols(
   minTokens: number,
   maxTokens: number,
 ): { chunks: Chunk[]; symbolChunks: Chunk[] } {
-  const langConfig = LANG_CONFIGS[chunkLanguageAliases[languageId] ?? languageId];
+  const langConfig = LANG_CONFIGS[chunkLanguageKey(languageId)];
   if (langConfig && !textOnly) {
     return chunkFileWithSymbols({
       language: langConfig,

@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { LANG_CONFIGS } from "../bootstrap/tree-sitter-languages.js";
+import { chunkLanguageKey, LANG_CONFIGS } from "../bootstrap/tree-sitter-languages.js";
 import { chunkFile } from "../chunking/chunk-file.js";
 import { chunkSFCFile } from "../chunking/chunk-sfc.js";
 import { chunkTextFile } from "../chunking/chunk-text-file.js";
@@ -19,11 +19,6 @@ import {
 import { getCliCommandUsage, parsePositiveIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
 
-const chunkLanguageAliases: Record<string, string> = {
-  js: "javascript",
-  ts: "typescript",
-};
-
 const chunkTextLanguageByExtension: Record<string, string> = {
   ".json": "json",
   ".yaml": "yaml",
@@ -33,9 +28,6 @@ const chunkTextLanguageByExtension: Record<string, string> = {
 const supportedChunkLanguageIds = new Set([...Object.keys(LANG_CONFIGS), "vue", "svelte", "json", "yaml", "text"]);
 const chunkLanguageHelp = [...supportedChunkLanguageIds].sort().join(", ");
 
-function normalizeChunkLanguageId(languageId: string): string {
-  return chunkLanguageAliases[languageId] ?? languageId;
-}
 function formatChunkLine(chunk: Chunk): string {
   const lineRange = chunk.startLine === chunk.endLine ? `${chunk.startLine}` : `${chunk.startLine}-${chunk.endLine}`;
   const location = `${chunk.filePath ?? "(input)"}:${lineRange}`;
@@ -73,7 +65,7 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
   }
   const languageOverride = context.getOpt("--language");
   if (languageOverride) {
-    const languageId = normalizeChunkLanguageId(languageOverride);
+    const languageId = chunkLanguageKey(languageOverride);
     const isSupported = supportedChunkLanguageIds.has(languageId);
     if (!isSupported) {
       context.writeStderrLine(
@@ -91,9 +83,9 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
     let languageId: string;
     if (!languageOverride) {
       const support = supportForFile(filePath);
-      languageId = support ? normalizeChunkLanguageId(support.id) : chunkTextLanguageByExtension[ext] || "text";
+      languageId = support ? chunkLanguageKey(support.id) : chunkTextLanguageByExtension[ext] || "text";
     } else {
-      languageId = normalizeChunkLanguageId(languageOverride);
+      languageId = chunkLanguageKey(languageOverride);
     }
 
     const forceText = context.hasFlag("--text");

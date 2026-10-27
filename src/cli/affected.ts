@@ -5,7 +5,7 @@ import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
 import { createGraphFileResolver, normalizeImpactFileChange } from "../impact/path.js";
 import { getDiff } from "../impact/providers/base.js";
 import { compileTestPatterns, createIndexTestFileMatcher, isTestFilePath } from "../impact/test-patterns.js";
-import type { FileChange } from "../impact/types.js";
+import { deletedPathsForChange } from "../review/changes.js";
 import { listDirectDeletedFileImporters } from "../review/deleted.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath, resolveFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
@@ -296,16 +296,6 @@ async function collectChangedFileInputs(context: AffectedCommandContext): Promis
   }
 
   return { files: inputs, deletedFiles };
-}
-
-function deletedPathsForChange(change: FileChange): string[] {
-  if (change.kind === "deleted") {
-    return [change.path];
-  }
-  if (change.kind === "renamed" && change.oldPath) {
-    return [change.oldPath];
-  }
-  return [];
 }
 
 async function buildAffectedReportFromContext(context: AffectedCommandContext): Promise<AffectedTestsReport> {

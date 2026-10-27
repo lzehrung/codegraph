@@ -1,11 +1,17 @@
 import type { Graph } from "../types.js";
 import { type SymbolGraph } from "../graphs/symbol-graph.js";
 
+export type SqliteArtifactFileSignature = {
+  path: string;
+  size: number;
+  mtimeMs: number;
+};
+
 export type SqliteGraphOptions = {
   fileGraph: Graph;
   symbolGraph: SymbolGraph;
   outputPath: string;
-  fileSignatures?: Iterable<{ path: string; size: number; mtimeMs: number }>;
+  fileSignatures?: Iterable<SqliteArtifactFileSignature>;
 };
 
 export type SqliteGraphUpdateOptions = {

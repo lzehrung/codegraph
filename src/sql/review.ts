@@ -1,8 +1,8 @@
 import fsp from "node:fs/promises";
-import path from "node:path";
 import { listProjectFiles } from "../util/project-files.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
+import { isSqlFilePath } from "./classify-sql-file.js";
 import { extractSqlFactsFromSource } from "./extract-facts.js";
 import { normalizeSqlObjectName, sqlObjectLookupKey } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
@@ -48,10 +48,6 @@ const SQL_LITERAL_HINT = new RegExp(
 );
 const SQL_OBJECT_MENTION_RE = new RegExp(SQL_OBJECT_NAME_HINT, "g");
 
-function isSqlFile(filePath: string): boolean {
-  return path.extname(filePath).toLowerCase() === ".sql";
-}
-
 function entryKey(entry: SqlReviewContextEntry): string {
   return `${entry.reason}:${entry.fact.id}:${entry.objectName ?? ""}`;
 }
@@ -80,12 +76,12 @@ async function collectSqlFacts(
   if (includeDiscoveredSqlFiles) {
     const discovered = projectFiles ?? (await listProjectFiles(projectRoot));
     for (const file of discovered) {
-      if (isSqlFile(file)) allSqlFiles.add(normalizePath(file));
+      if (isSqlFilePath(file)) allSqlFiles.add(normalizePath(file));
     }
   }
   for (const changedFile of changedFiles) {
     const normalized = normalizePath(changedFile);
-    if (isSqlFile(normalized)) allSqlFiles.add(normalized);
+    if (isSqlFilePath(normalized)) allSqlFiles.add(normalized);
   }
 
   const factGroups = await mapLimit(Array.from(allSqlFiles), SQL_FACT_READ_CONCURRENCY, async (filePath) => {
@@ -153,7 +149,7 @@ function sqlLiteralsInSource(source: string): string[] {
 async function collectChangedSqlLiteralSources(changedFiles: readonly string[]): Promise<string[]> {
   const sources: string[] = [];
   for (const changedFile of changedFiles) {
-    if (isSqlFile(changedFile)) continue;
+    if (isSqlFilePath(changedFile)) continue;
     const source = await readExistingFile(changedFile);
     if (!source) continue;
     sources.push(...sqlLiteralsInSource(source));
@@ -204,7 +200,7 @@ export async function collectSqlReviewContext(
   const changedFiles = options.changedFiles.map(normalizePath);
   if (!changedFiles.length) return undefined;
 
-  const changedSqlFiles = new Set(changedFiles.filter(isSqlFile));
+  const changedSqlFiles = new Set(changedFiles.filter(isSqlFilePath));
   const changedSqlLiteralSources = await collectChangedSqlLiteralSources(changedFiles);
   if (changedSqlFiles.size === 0 && !changedSqlLiteralSources.length) return undefined;
 

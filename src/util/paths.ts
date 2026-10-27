@@ -3,6 +3,15 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { errorMessage, isMissingPathError } from "./errors.js";
 
+export async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fsp.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function normalizePath(p: string): string {
   return typeof p === "string" ? p.replace(/\\/g, "/") : "";
 }

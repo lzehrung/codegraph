@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fsp, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { delay } from "./concurrency.js";
 
 /** A writer that crashed before its rename leaves a temp file behind; a live writer's is always younger. */
 const STALE_TEMP_FILE_AGE_MS = 24 * 60 * 60 * 1_000;
@@ -15,12 +16,6 @@ function isTransientFileContentionError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const code = (error as NodeJS.ErrnoException).code;
   return code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
-}
-
-function delay(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
-  return promise;
 }
 
 export async function fsyncFile(filePath: string): Promise<void> {

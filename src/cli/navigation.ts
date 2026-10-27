@@ -21,6 +21,7 @@ import {
   parsePositiveIntegerOption,
 } from "./options.js";
 import { parseCliSourceLocation } from "./location.js";
+import { compactModuleLocals } from "./module-locals.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./project-file.js";
 import { writeCliOutput } from "./pretty.js";
 import { exitWithError } from "./context.js";
@@ -220,11 +221,7 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
     context,
     {
       file,
-      locals: mod.locals.map((l) => ({
-        name: l.localName,
-        kind: l.kind,
-        start: l.range.start,
-      })),
+      locals: compactModuleLocals(mod.locals),
       imports: mod.imports,
       exports: mod.exports.map((e) =>
         e.type === "local"

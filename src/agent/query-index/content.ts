@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
-import { LANG_CONFIGS } from "../../bootstrap/tree-sitter-languages.js";
+import { chunkLanguageKey, LANG_CONFIGS } from "../../bootstrap/tree-sitter-languages.js";
 import { chunkFile } from "../../chunking/chunk-file.js";
 import { supportForFile, supportForFileWithSource, type LanguageSupport } from "../../languages.js";
 
@@ -8,10 +8,6 @@ export const MAX_QUERY_INDEX_TEXT_BYTES = 300_000;
 export const QUERY_INDEX_NORMALIZER_VERSION = 2;
 export const QUERY_INDEX_CHUNKER_VERSION = 2;
 
-const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
-  js: "javascript",
-  ts: "typescript",
-};
 function compressQueryText(text: string): Uint8Array {
   const compressed = brotliCompressSync(text, {
     params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
@@ -95,7 +91,7 @@ export function buildQueryTextChunks(file: string, text: string): QueryTextChunk
 }
 
 function chunkQueryText(file: string, text: string, support: LanguageSupport | undefined): QueryTextChunk[] {
-  const languageId = support ? (CHUNK_LANGUAGE_ALIASES[support.id] ?? support.id) : undefined;
+  const languageId = support ? chunkLanguageKey(support.id) : undefined;
   const language = languageId ? LANG_CONFIGS[languageId] : undefined;
   if (language) {
     try {

@@ -4,7 +4,7 @@ import { getHotspots } from "../graphs/hotspots.js";
 import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
 import type { Edge, Graph } from "../types.js";
 import { edgeFromImportBinding } from "../util/graph-edges.js";
-import { isPlainRecord } from "../util/guards.js";
+import { isPlainRecord, readStringRecord } from "../util/guards.js";
 import { normalizePath } from "../util/paths.js";
 import { isCFamilyIncludeForm } from "../util/specifiers.js";
 import { countFilesByLanguage } from "./languages.js";
@@ -28,15 +28,6 @@ interface PortableGraphJson {
     fileEdges: Edge[];
     symbols?: Array<{ file: string; name: string; kind: string }>;
   };
-}
-
-function readStringRecord(value: unknown): Record<string, string> {
-  if (!isPlainRecord(value)) return {};
-  const out: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === "string") out[key] = entry;
-  }
-  return out;
 }
 
 function parseManifest(value: unknown): ArtifactManifest | null {

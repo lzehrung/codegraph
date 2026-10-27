@@ -107,10 +107,6 @@ function applyReviewPresetOptions(opts: ReviewOptions): ReviewOptions {
   };
 }
 
-function comparePaths(left: string, right: string): number {
-  return left.localeCompare(right);
-}
-
 type ReviewIndexStage = {
   index: ProjectIndex;
   existenceByFile: Map<string, boolean>;
@@ -277,7 +273,7 @@ export async function buildReviewReport(
     return report;
   }
 
-  const changedFileList = Array.from(changedFiles).sort(comparePaths);
+  const changedFileList = Array.from(changedFiles).sort((left, right) => left.localeCompare(right));
   const diagnostics: ReviewDiagnostics = {
     missingFiles: [],
     symbolMappingParseFailures: [],

@@ -9,12 +9,12 @@ import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from 
 import { initNativeBackendReport } from "./native/native-backend-report.js";
 import { collectAngularJsFrameworkEdges } from "./graphs/angularjs.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "./languages.js";
+import type { LanguageExtensionMap } from "./languages.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import { collectEdgesForFile, hasBetterProvenance } from "./graph-edge-collector.js";
 import { edgeKey } from "./util/graph-edges.js";
-import { buildSqlFactCache, sqlCorpusSignature } from "./sql/source-graph.js";
+import { buildSqlFactCache, isSqlFile as isSqlFileForLanguage, sqlCorpusSignature } from "./sql/source-graph.js";
 
 type GraphFileSignature = { sig: string; gitSig?: string; cacheSig?: string };
 
@@ -55,8 +55,7 @@ export async function collectGraph(
   assertNativeRequiredAvailable();
   const normalizedFiles = files.map(normalizePath);
   const normalizedAllFiles = (opts?.allFiles ?? files).map(normalizePath);
-  const isSqlFile = (file: string): boolean =>
-    supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id === "sql";
+  const isSqlFile = (file: string): boolean => isSqlFileForLanguage(file, opts?.languageExtensions);
   const hasExplicitReplace = !!opts?.replaceFiles;
   const requestedReplaceSet = hasExplicitReplace
     ? new Set(Array.from(opts.replaceFiles ?? [], (file) => normalizePath(file)))

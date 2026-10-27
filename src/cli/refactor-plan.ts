@@ -1,6 +1,6 @@
 import { buildRefactorPlan, type RefactorPlanResponse } from "../agent/refactor-plan.js";
 import { formatAgentFollowUpAsCli } from "../agent/follow-ups.js";
-import type { SemanticOmittedCounts, SemanticSymbol } from "../agent/semantic.js";
+import { formatSemanticSymbol, type SemanticOmittedCounts } from "../agent/semantic.js";
 import { exitWithError, type CliAgentCommandContext } from "./context.js";
 import { REFACTOR_PLAN_HELP_TEXT } from "./help.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
@@ -57,7 +57,7 @@ export async function handleRefactorPlanCommand(context: RefactorPlanCommandCont
 }
 
 export function formatRefactorPlanResponse(response: RefactorPlanResponse): string {
-  const lines = [`Target: ${formatSymbol(response.target)}`, `Counts: ${formatCounts(response)}`];
+  const lines = [`Target: ${formatSemanticSymbol(response.target)}`, `Counts: ${formatCounts(response)}`];
   if (response.rename) {
     lines.push(`Rename: ${response.target.name} -> ${response.rename.newName}`);
     lines.push(`Rename safe: ${response.rename.safe ? "yes" : "no"}`);
@@ -77,11 +77,6 @@ export function formatRefactorPlanResponse(response: RefactorPlanResponse): stri
     for (const followUp of response.followUps) lines.push(`  ${formatAgentFollowUpAsCli(followUp)}`);
   }
   return lines.join("\n");
-}
-
-function formatSymbol(symbol: SemanticSymbol): string {
-  const { file, range } = symbol.location;
-  return `${symbol.name} [${symbol.kind}] ${file}:${range.start.line}:${range.start.column}`;
 }
 
 function formatCounts(response: RefactorPlanResponse): string {
