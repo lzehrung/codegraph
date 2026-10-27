@@ -1,10 +1,5 @@
 import path from "node:path";
-import {
-  JAVA_IDENTIFIER_SOURCE,
-  KOTLIN_IDENTIFIER_SOURCE,
-  PHP_IDENTIFIER_SOURCE,
-  XID_IDENTIFIER_SOURCE,
-} from "../util/identifiers.js";
+import { PHP_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 import { isAbsoluteFilePath, normalizePath } from "../util/paths.js";
 
 export type ParsedRustImportStatement =
@@ -779,90 +774,6 @@ function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
     return relativePath;
   }
   return `./${relativePath}`;
-}
-
-export const KOTLIN_DOTTED_NAME_SOURCE = String.raw`${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*`;
-const KOTLIN_IMPORT_PATTERN = new RegExp(
-  String.raw`^\s*import\s+(${KOTLIN_DOTTED_NAME_SOURCE}(?:\.\*)?)(?:\s+as\s+(${KOTLIN_IDENTIFIER_SOURCE}))?\s*;?\s*$`,
-  "mu",
-);
-export type ParsedKotlinImportStatement =
-  | {
-      kind: "named";
-      from: string;
-      imported: string;
-      local: string;
-      explicitAlias?: true;
-    }
-  | {
-      kind: "star";
-      from: string;
-    };
-
-export function parseKotlinImportStatement(stmtText: string): ParsedKotlinImportStatement | null {
-  const match = stmtText.trim().match(KOTLIN_IMPORT_PATTERN);
-  const rawSpec = match?.[1];
-  if (!rawSpec) return null;
-  if (rawSpec.endsWith(".*")) {
-    return {
-      kind: "star",
-      from: rawSpec.slice(0, -2),
-    };
-  }
-
-  const parts = rawSpec.split(".");
-  const imported = parts[parts.length - 1];
-  if (!imported) return null;
-  return {
-    kind: "named",
-    from: rawSpec,
-    imported,
-    local: match?.[2] ?? imported,
-    ...(match?.[2] !== undefined ? { explicitAlias: true } : {}),
-  };
-}
-
-export const JAVA_DOTTED_NAME_SOURCE = String.raw`${JAVA_IDENTIFIER_SOURCE}(?:\.${JAVA_IDENTIFIER_SOURCE})*`;
-const JAVA_IMPORT_PATTERN = new RegExp(
-  String.raw`^\s*import\s+(static\s+)?(${JAVA_DOTTED_NAME_SOURCE}(?:\.\*)?)\s*;?\s*$`,
-  "u",
-);
-
-export type ParsedJavaImportStatement =
-  | {
-      kind: "named";
-      from: string;
-      imported: string;
-      isStatic: boolean;
-    }
-  | {
-      kind: "star";
-      from: string;
-      isStatic: boolean;
-    };
-
-export function parseJavaImportStatement(stmtText: string): ParsedJavaImportStatement | null {
-  const match = stmtText.trim().match(JAVA_IMPORT_PATTERN);
-  const rawSpec = match?.[2];
-  if (!rawSpec) return null;
-  const isStatic = !!match?.[1];
-  if (rawSpec.endsWith(".*")) {
-    return {
-      kind: "star",
-      from: rawSpec.slice(0, -2),
-      isStatic,
-    };
-  }
-
-  const parts = rawSpec.split(".");
-  const imported = parts[parts.length - 1];
-  if (!imported) return null;
-  return {
-    kind: "named",
-    from: isStatic ? parts.slice(0, -1).join(".") : rawSpec,
-    imported,
-    isStatic,
-  };
 }
 
 const RUST_IMPORT_KEYWORD_PATTERN = /^(?:pub(?:\s*\([^)]*\))?\s+)?(use|extern\s+crate|mod)\b/;

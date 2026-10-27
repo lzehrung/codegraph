@@ -5,8 +5,9 @@ import { getCompilationUnitPeers } from "../src/indexer/compilation-units.js";
 import type { ParsedFileContext } from "../src/indexer/parse-context.js";
 import type { ModuleIndex } from "../src/indexer/types.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-import { CSHARP_SUPPORT } from "../src/languages.js";
+import { CSHARP_SUPPORT, supportById } from "../src/languages.js";
 import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../src/util/csharp-tree.js";
+import { collectJvmFileFacts, parseJvmSyntaxTree, type JvmLanguageId } from "../src/util/jvm-tree.js";
 import { makeTestProjectIndex } from "./helpers/narrow.js";
 
 type ScanStats = { visits: number };
@@ -46,15 +47,26 @@ function parsedSource(source: string): ParsedFileContext {
   return { source } as ParsedFileContext;
 }
 
-/** A stub module with the namespace facts the build stores for a C# file; other languages carry none. */
+function jvmLanguageOf(file: string): JvmLanguageId | undefined {
+  if (file.endsWith(".java")) return "java";
+  if (/\.(kt|jvm)$/.test(file)) return "kotlin";
+  return undefined;
+}
+
+/** A stub module with the facts the build stores for a C#, Java, or Kotlin file; other languages carry none. */
 function moduleFor(entry: IndexedFile): ModuleIndex {
-  const tree = /\.(cs|csharpx)$/.test(entry.file) ? parseCsharpSyntaxTree(entry.source, CSHARP_SUPPORT).tree : null;
+  const csharpTree = /\.(cs|csharpx)$/.test(entry.file)
+    ? parseCsharpSyntaxTree(entry.source, CSHARP_SUPPORT).tree
+    : null;
+  const jvmLanguage = jvmLanguageOf(entry.file);
+  const jvmTree = jvmLanguage ? parseJvmSyntaxTree(entry.source, supportById(jvmLanguage)!).tree : null;
   return {
     file: entry.file,
     exports: [],
     imports: [],
     locals: [],
-    ...(tree ? { csharpNamespaceFacts: collectCsharpNamespaceFacts(tree) } : {}),
+    ...(csharpTree ? { csharpNamespaceFacts: collectCsharpNamespaceFacts(csharpTree) } : {}),
+    ...(jvmTree && jvmLanguage ? { jvmFacts: collectJvmFileFacts(jvmTree, jvmLanguage) } : {}),
   };
 }
 
@@ -212,7 +224,7 @@ describe("compilation-unit peer cache", () => {
     const java: IndexedFile = { file: root + "/pkg/A.java", source: "package p;\nclass A {}\n" };
     const unknownJava: IndexedFile = { file: root + "/other/B.java", source: "" };
     const jvm = stubIndex([java, unknownJava]);
-    jvm.index.parsed?.delete(fileIdentityKey(unknownJava.file));
+    delete jvm.index.byFile.get(fileIdentityKey(unknownJava.file))?.jvmFacts;
     const javaPeers = getCompilationUnitPeers(jvm.index, java.file);
     expect(peerKeys(javaPeers)).toEqual(new Set([fileIdentityKey(java.file)]));
     expect(javaPeers.complete).toBe(false);

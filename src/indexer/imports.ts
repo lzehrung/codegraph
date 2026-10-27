@@ -25,7 +25,8 @@ import {
   csharpSyntaxTreeFromNativeExecution,
   parseCsharpSyntaxTree,
 } from "../util/csharp-tree.js";
-import { applyCsharpImportDirective } from "./imports/import-binding-tables.js";
+import { collectJvmImportDirectives, isJvmLanguage, jvmPackageName, parseJvmSyntaxTree } from "../util/jvm-tree.js";
+import { applyCsharpImportDirective, applyJvmImportDirective } from "./imports/import-binding-tables.js";
 import type { ImportResolverOptions, ResolvedImportTarget } from "./imports/context.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./imports/binding-ranges.js";
 import { collectGraphOnlyImports } from "./imports/graph-only.js";
@@ -38,7 +39,6 @@ import {
 import { collectNativeCaptureImportBindings } from "./imports/native-captures.js";
 import { collectPythonImportsFromNativeMatches } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
-import { jvmPackageNameFromSource } from "./compilation-units.js";
 import type { ImportBinding } from "./types.js";
 
 export async function collectImportsForFile(
@@ -88,17 +88,20 @@ export async function collectImportsForFile(
 
   const imports: ImportBinding[] = [];
   assertNativeRequiredAvailable();
+  // C# and the JVM languages read their imports from one syntax tree, so none of them has an import query.
+  const jvmLanguageId = isJvmLanguage(resolvedSup.id) ? resolvedSup.id : undefined;
+  const readsTree = resolvedSup.id === "csharp" || !!jvmLanguageId;
   let nativeExecution: NativeQueryExecution | null = null;
   let resolvedNativeQueries: NativeQueryResults | null = opts?.nativeQueries ?? null;
-  let csharpTree: SyntaxTreeLike | null | undefined = resolvedSup.id === "csharp" ? opts?.tree : undefined;
-  if (opts?.nativeQueries === undefined) {
+  let directiveTree: SyntaxTreeLike | null | undefined = readsTree ? opts?.tree : undefined;
+  if (opts?.nativeQueries === undefined && !jvmLanguageId) {
     if (resolvedSup.id === "csharp") {
       const extraction = getNativeExtractionExecution(resolvedSource, resolvedSup);
       nativeExecution = extraction;
       resolvedNativeQueries = extraction.results;
-      if (csharpTree === undefined) {
+      if (directiveTree === undefined) {
         const parsed = csharpSyntaxTreeFromNativeExecution(resolvedSource, extraction);
-        csharpTree = parsed.tree;
+        directiveTree = parsed.tree;
         if (!parsed.tree) {
           recordParserBackendDegradation(opts?.report, {
             file: file.replace(/\\/g, "/"),
@@ -113,9 +116,11 @@ export async function collectImportsForFile(
       resolvedNativeQueries = nativeExecution.results;
     }
   }
-  if (resolvedSup.id === "csharp" && csharpTree === undefined) {
-    const parsed = parseCsharpSyntaxTree(resolvedSource, resolvedSup);
-    csharpTree = parsed.tree;
+  if (readsTree && directiveTree === undefined) {
+    const parsed = jvmLanguageId
+      ? parseJvmSyntaxTree(resolvedSource, resolvedSup)
+      : parseCsharpSyntaxTree(resolvedSource, resolvedSup);
+    directiveTree = parsed.tree;
     if (!parsed.tree) {
       recordParserBackendDegradation(opts?.report, {
         file: file.replace(/\\/g, "/"),
@@ -134,7 +139,7 @@ export async function collectImportsForFile(
       ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
     });
   }
-  if (!resolvedNativeQueries && resolvedSup.id !== "csharp") return imports;
+  if (!resolvedNativeQueries && !readsTree) return imports;
 
   if (resolvedSup.id === "python") {
     if (!resolvedNativeQueries) return imports;
@@ -156,7 +161,7 @@ export async function collectImportsForFile(
   const workspaceConfig = opts?.workspaceConfig ?? (await loadWorkspaceConfig(projectRoot));
   const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();
   const jvmPackageFiles = new Map<string, string[]>();
-  let jvmDeclaredPackage: string | null | undefined;
+  const jvmDeclaredPackage = jvmLanguageId && directiveTree ? jvmPackageName(directiveTree, jvmLanguageId) : null;
 
   const stylesheetLanguage = ["css", "scss", "less"].includes(resolvedSup.id);
   const resolveFrom = async (
@@ -236,45 +241,24 @@ export async function collectImportsForFile(
       if (
         binding.kind === "named" &&
         typeof binding.resolved === "string" &&
-        (resolvedSup.id === "java" || resolvedSup.id === "kotlin")
+        jvmLanguageId &&
+        jvmDeclaredPackage === binding.from.slice(0, binding.from.lastIndexOf("."))
       ) {
-        if (jvmDeclaredPackage === undefined) {
-          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
-        }
-        if (jvmDeclaredPackage === binding.from.slice(0, binding.from.lastIndexOf("."))) {
-          binding.jvmSamePackage = true;
-        }
+        binding.jvmSamePackage = true;
       }
       if (binding.kind !== "star" || typeof binding.resolved !== "string") continue;
       const files = jvmPackageFiles.get(binding.from);
       // A static class wildcard can spell the same name as a package wildcard.
-      if (
-        binding.jvmTypeWildcardName &&
-        files?.includes(binding.resolved) &&
-        (resolvedSup.id === "java" || resolvedSup.id === "kotlin")
-      ) {
+      if (binding.jvmTypeWildcardName && files?.includes(binding.resolved) && jvmLanguageId) {
         binding.jvmPackageFiles = files;
-        binding.jvmPackageLanguageId = resolvedSup.id;
-        if (jvmDeclaredPackage === undefined) {
-          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
-        }
+        binding.jvmPackageLanguageId = jvmLanguageId;
         if (jvmDeclaredPackage !== null && jvmDeclaredPackage === binding.from) binding.jvmSamePackage = true;
       }
-      if (
-        binding.jvmTypeWildcardName &&
-        !binding.jvmPackageFiles &&
-        (resolvedSup.id === "java" || resolvedSup.id === "kotlin")
-      ) {
-        if (jvmDeclaredPackage === undefined) {
-          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
-        }
+      if (binding.jvmTypeWildcardName && !binding.jvmPackageFiles && jvmLanguageId) {
         const typePackage = binding.from.slice(0, -(binding.jvmTypeWildcardName.length + 1));
         if (jvmDeclaredPackage !== null && jvmDeclaredPackage === typePackage) binding.jvmSamePackage = true;
       }
-      if (binding.jvmStaticWildcardName && resolvedSup.id === "java") {
-        if (jvmDeclaredPackage === undefined) {
-          jvmDeclaredPackage = jvmPackageNameFromSource(resolvedSource, resolvedSup.id);
-        }
+      if (binding.jvmStaticWildcardName && jvmLanguageId === "java") {
         const typePackage = binding.from.slice(0, -(binding.jvmStaticWildcardName.length + 1));
         if (jvmDeclaredPackage !== null && jvmDeclaredPackage === typePackage) binding.jvmSamePackage = true;
       }
@@ -315,11 +299,19 @@ export async function collectImportsForFile(
     });
   };
 
-  if (resolvedNativeQueries || (resolvedSup.id === "csharp" && csharpTree)) {
+  if (resolvedNativeQueries || (readsTree && directiveTree)) {
     try {
-      if (resolvedSup.id === "csharp" && csharpTree) {
-        for (const directive of collectCsharpImportDirectives(csharpTree)) {
+      if (directiveTree && resolvedSup.id === "csharp") {
+        for (const directive of collectCsharpImportDirectives(directiveTree)) {
           await applyCsharpImportDirective(languageContext, directive);
+        }
+      } else if (directiveTree && jvmLanguageId) {
+        // A statement written twice binds once.
+        const bound = new Set<string>();
+        for (const directive of collectJvmImportDirectives(directiveTree, jvmLanguageId)) {
+          if (bound.has(directive.statement.text)) continue;
+          bound.add(directive.statement.text);
+          await applyJvmImportDirective(languageContext, directive);
         }
       } else if (resolvedNativeQueries) {
         await collectNativeCaptureImportBindings(

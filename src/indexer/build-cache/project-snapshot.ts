@@ -16,6 +16,7 @@ import { logWithLevel } from "../../logging.js";
 import { SymbolKind } from "../types.js";
 import { callableIdentityWithFile, isCallableIdentity } from "../callable-identity.js";
 import { isCsharpNamespaceFacts } from "../../util/csharp-tree.js";
+import { isJvmFileFacts } from "../../util/jvm-tree.js";
 import { importNodeId } from "../import-types.js";
 import type {
   BackendReport,
@@ -957,6 +958,7 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     ...(mod.docstringsChecked ? { docstringsChecked: true } : {}),
     ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
     ...(mod.csharpNamespaceFacts ? { csharpNamespaceFacts: mod.csharpNamespaceFacts } : {}),
+    ...(mod.jvmFacts ? { jvmFacts: mod.jvmFacts } : {}),
     ...(mod.parseErrorRanges ? { parseErrorRanges: mod.parseErrorRanges } : {}),
   };
 }
@@ -1840,6 +1842,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     Array.isArray(moduleIndex.exports) &&
     moduleIndex.exports.every(isExportEntry) &&
     (moduleIndex.csharpNamespaceFacts === undefined || isCsharpNamespaceFacts(moduleIndex.csharpNamespaceFacts)) &&
+    (moduleIndex.jvmFacts === undefined || isJvmFileFacts(moduleIndex.jvmFacts)) &&
     (moduleIndex.parseErrorRanges === undefined ||
       (Array.isArray(moduleIndex.parseErrorRanges) && moduleIndex.parseErrorRanges.every(isParseErrorRange)))
   );

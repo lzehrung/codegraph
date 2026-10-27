@@ -17,9 +17,8 @@ function findFirstNodeByType(root: SyntaxNodeLike, type: string): SyntaxNodeLike
   }
   return null;
 }
-import { appendImplicitImportBinding } from "../../src/indexer/imports/language-specific.js";
 import type { ImportBinding } from "../../src/indexer/types.js";
-import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
@@ -1041,52 +1040,26 @@ describe("Java inherited package access", () => {
 });
 
 describe("Java lowercase class import bindings", () => {
-  it("creates a named implicit binding for a lowercase class segment and keeps star imports", () => {
-    const bindings: ImportBinding[] = [];
-    const context = {
-      file: "Consumer.java",
-      projectRoot: process.cwd(),
-      source: "import com.example.myClass;",
-      languageId: "java",
-      resolveFrom: async (from: string) => ({ external: from }),
-      pushBinding: (binding: ImportBinding) => {
-        bindings.push(binding);
-      },
-      getBindings: () => bindings,
-      replaceBindings: (next: ImportBinding[]) => {
-        bindings.splice(0, bindings.length, ...next);
-      },
-    };
-
-    appendImplicitImportBinding(context, {
-      from: "com.example.myClass",
-      resolved: { external: "com.example.myClass" },
-      typeOnly: false,
-      stmtText: "import com.example.myClass;",
-    });
-    appendImplicitImportBinding(context, {
-      from: "com.example.*",
-      resolved: { external: "com.example.*" },
-      typeOnly: false,
-      stmtText: "import com.example.*;",
-    });
-
-    expect(bindings).toEqual([
-      {
-        kind: "named",
-        local: "myClass",
-        imported: "myClass",
-        from: "com.example.myClass",
-        resolved: { external: "com.example.myClass" },
-        typeOnly: false,
-      },
-      {
-        kind: "star",
-        from: "com.example.*",
-        resolved: { external: "com.example.*" },
-        typeOnly: false,
-      },
-    ]);
+  it("binds a lowercase class segment as a named import and keeps star imports", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-lowercase-import-"));
+    try {
+      const bindings: ImportBinding[] = await collectImportsForFile(path.join(root, "Consumer.java"), root, {
+        source: "import com.example.myClass;\nimport com.example.*;\n",
+      });
+      expect(bindings).toEqual([
+        expect.objectContaining({
+          kind: "named",
+          local: "myClass",
+          imported: "myClass",
+          from: "com.example.myClass",
+          resolved: { external: "com.example.myClass" },
+          typeOnly: false,
+        }),
+        expect.objectContaining({ kind: "star", from: "com.example", jvmTypeWildcardName: "example", typeOnly: false }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

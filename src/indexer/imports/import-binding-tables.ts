@@ -1,6 +1,4 @@
 import {
-  parseJavaImportStatement,
-  parseKotlinImportStatement,
   parsePhpImportStatement,
   parseRustImportStatements,
   rustImportKeywordOffset,
@@ -9,6 +7,8 @@ import {
 import type { LanguageExtensionMap } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { csharpExternAlias, csharpUsingDirective, type CsharpUsingDirective } from "../../util/csharp-tree.js";
+import type { JvmImportDirective } from "../../util/jvm-tree.js";
+import { toRange } from "../../util/ast.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
@@ -27,9 +27,9 @@ import type { ParsedFileContext } from "../parse-context.js";
  * file is the only dispatch consumer this wave.
  *
  * One row owns the statement handler, the implicit mapper, and the flags those paths used to
- * spell as `languageId === "..."` chains: trivia masking, JVM dot normalization, Rust statement-key
- * offsets, and Rust's reduced-mode rescan. C# binds its directives from syntax-tree nodes
- * (`applyCsharpImportDirective`), so its row names no statement handler.
+ * spell as `languageId === "..."` chains: trivia masking, Rust statement-key offsets, and Rust's
+ * reduced-mode rescan. C# and the JVM languages bind their directives from syntax-tree nodes
+ * (`applyCsharpImportDirective`, `applyJvmImportDirective`), so their rows name no statement handler.
  * `text-import-extractors.ts` stays the shared discovery source; this table does not re-scan.
  *
  * `tests/import-binding-tables.test.ts` asserts every registered language has a row, that an
@@ -61,7 +61,6 @@ export type ImplicitImportBindingArgs = {
   alias?: string;
   /** UTF-16 range of the captured alias token, when the native alias capture proved it. */
   localRange?: Range;
-  wildcard?: boolean;
   includeForm?: CFamilyIncludeForm;
   rubyLoadForm?: RubyLoadForm;
 };
@@ -79,10 +78,10 @@ export type AppendImplicitImportBinding = (
 ) => void;
 
 /**
- * How a statement override prepares text before the parser: mask trivia, mask only PHP `use`
- * statements (includes keep string payloads), or leave the trimmed source untouched (Rust).
+ * How a statement override prepares text before the parser: mask only PHP `use` statements
+ * (includes keep string payloads), or leave the trimmed source untouched (Rust).
  */
-export type StatementTriviaMask = true | false | "use-keyword";
+export type StatementTriviaMask = false | "use-keyword";
 
 export type ImportBindingRow = {
   /** Why the language has no statement override and no implicit mapper. */
@@ -91,8 +90,6 @@ export type ImportBindingRow = {
   appendImplicit?: AppendImplicitImportBinding;
   /** Present only with `applyStatement`. */
   maskTrivia?: StatementTriviaMask;
-  /** Collapse whitespace around `.` after masking (Java, Kotlin). */
-  normalizeDots?: true;
   /**
    * Include the statement start offset in the override de-dupe key (Rust). Required when the
    * same statement text can appear in several scopes and each must keep its own range.
@@ -105,10 +102,6 @@ export type ImportBindingRow = {
   /** Why the language declares no implicit mapper. */
   implicitOmittedReason?: string;
 };
-
-type ParsedJvmImportStatement =
-  | { kind: "star"; from: string; isStatic?: boolean }
-  | { kind: "named"; from: string; imported: string; explicitAlias?: boolean; isStatic?: boolean };
 
 function csharpNodeRange(node: SyntaxNodeLike, source: string, lineStarts: number[]): Range {
   let startIndex = node.startIndex;
@@ -335,77 +328,41 @@ export async function applyCsharpImportDirective(
   pushCsharpOverride(context, parsed, typeOnly, fromValue, resolved, localRange, importedRange);
 }
 
-async function applyJavaStatementOverride(
+/**
+ * Binds one Java or Kotlin `import`. The directive comes from `collectJvmImportDirectives`, so its ranges are its
+ * nodes' own and it is never found again by its text or offset. Neither language has type-only imports.
+ */
+export async function applyJvmImportDirective(
   context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-): Promise<boolean> {
-  return await applyJvmStatementOverride(context, normalizedStmt, typeOnly, parseJavaImportStatement, (parsed) => {
-    if (parsed.kind === "named") return parsed.imported;
-    return undefined;
-  });
-}
-
-async function applyKotlinStatementOverride(
-  context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-): Promise<boolean> {
-  return await applyJvmStatementOverride(context, normalizedStmt, typeOnly, parseKotlinImportStatement, (parsed) => {
-    if (parsed.kind === "named") return parsed.local;
-    return undefined;
-  });
-}
-
-async function applyJvmStatementOverride<TParsed extends ParsedJvmImportStatement>(
-  context: LanguageSpecificImportContext,
-  normalizedStmt: string,
-  typeOnly: boolean,
-  parseStatement: (statement: string) => TParsed | null,
-  localNameFor: (parsed: TParsed) => string | undefined,
-): Promise<boolean> {
-  const parsed = parseStatement(normalizedStmt);
-  if (!parsed) return false;
-  return await pushJvmImportBinding(context, parsed, localNameFor(parsed), typeOnly);
-}
-
-async function pushJvmImportBinding(
-  context: LanguageSpecificImportContext,
-  parsed: ParsedJvmImportStatement,
-  local: string | undefined,
-  typeOnly: boolean,
-): Promise<boolean> {
-  const resolved = await context.resolveFrom(
-    parsed.from,
-    undefined,
-    parsed.kind === "star" && !parsed.isStatic ? { jvmPackageWildcard: true } : undefined,
-  );
-  if (parsed.kind === "star") {
+  { name, leaf, isStatic, wildcard, alias }: JvmImportDirective,
+): Promise<void> {
+  if (wildcard) {
+    const resolved = await context.resolveFrom(name, undefined, isStatic ? undefined : { jvmPackageWildcard: true });
+    const owner = name.slice(name.lastIndexOf(".") + 1);
     context.pushBinding({
       kind: "star",
-      from: parsed.from,
+      from: name,
       resolved,
-      ...(parsed.isStatic
-        ? { jvmStaticWildcardName: parsed.from.slice(parsed.from.lastIndexOf(".") + 1) }
-        : { jvmTypeWildcardName: parsed.from.slice(parsed.from.lastIndexOf(".") + 1) }),
-      typeOnly,
+      ...(isStatic ? { jvmStaticWildcardName: owner } : { jvmTypeWildcardName: owner }),
+      typeOnly: false,
     });
-    return true;
+    return;
   }
-
+  // A static import names a member of its owner, and the owner is what the binding comes from.
+  const from = isStatic ? name.slice(0, Math.max(name.lastIndexOf("."), 0)) : name;
+  const importedRange = toRange(leaf);
   context.pushBinding({
     kind: "named",
-    local: local ?? parsed.imported,
-    imported: parsed.imported,
-    from: parsed.from,
-    ...(parsed.isStatic && context.languageId === "java"
-      ? { jvmStaticWildcardName: parsed.from.slice(parsed.from.lastIndexOf(".") + 1) }
-      : {}),
-    ...(parsed.explicitAlias ? { explicitAlias: true } : {}),
-    resolved,
-    typeOnly,
+    local: alias?.text ?? leaf.text,
+    imported: leaf.text,
+    from,
+    ...(isStatic ? { jvmStaticWildcardName: from.slice(from.lastIndexOf(".") + 1) } : {}),
+    ...(alias ? { explicitAlias: true } : {}),
+    importedRange,
+    localRange: alias ? toRange(alias) : importedRange,
+    resolved: await context.resolveFrom(from),
+    typeOnly: false,
   });
-  return true;
 }
 
 async function applyRustStatementOverride(
@@ -555,25 +512,6 @@ function pushNamedImplicitBinding(
   context.pushBinding(binding);
 }
 
-function appendJavaImplicitBinding(
-  context: LanguageSpecificImportContext,
-  { from, resolved, typeOnly, stmtText, stmtStartIndex, source }: ImplicitImportBindingArgs,
-): void {
-  const parts = from.split(".");
-  const last = parts[parts.length - 1];
-  if (last === "*") {
-    context.pushBinding({ kind: "star", from, resolved, typeOnly });
-  } else if (last) {
-    pushNamedImplicitBinding(
-      context,
-      { kind: "named", local: last, imported: last, from, resolved, typeOnly },
-      stmtText,
-      stmtStartIndex,
-      source,
-    );
-  }
-}
-
 function appendRubyImplicitBinding(
   context: LanguageSpecificImportContext,
   { from, resolved, rubyLoadForm }: ImplicitImportBindingArgs,
@@ -620,34 +558,6 @@ function appendRustImplicitBinding(
         source,
       );
     }
-  }
-}
-
-function appendKotlinImplicitBinding(
-  context: LanguageSpecificImportContext,
-  { from, resolved, typeOnly, stmtText, stmtStartIndex, source, alias, wildcard }: ImplicitImportBindingArgs,
-): void {
-  if (wildcard || from.endsWith(".*")) {
-    context.pushBinding({ kind: "star", from, resolved, typeOnly });
-  } else {
-    const parts = from.split(".");
-    const imported = parts[parts.length - 1];
-    if (imported)
-      pushNamedImplicitBinding(
-        context,
-        {
-          kind: "named",
-          local: alias ?? imported,
-          imported,
-          from,
-          ...(alias !== undefined ? { explicitAlias: true } : {}),
-          resolved,
-          typeOnly,
-        },
-        stmtText,
-        stmtStartIndex,
-        source,
-      );
   }
 }
 
@@ -767,20 +677,18 @@ export const IMPORT_BINDING_ROWS: Record<string, ImportBindingRow> = {
   hbs: { omittedReason: "Handlebars document format; embedded scripts parse as their own language." },
   html: { omittedReason: "Document format; embedded scripts parse as their own language." },
   java: {
-    applyStatement: applyJavaStatementOverride,
-    appendImplicit: appendJavaImplicitBinding,
-    maskTrivia: true,
-    normalizeDots: true,
+    statementOmittedReason:
+      "Java imports are bound from syntax-tree nodes by applyJvmImportDirective, not from statement text.",
+    implicitOmittedReason: "Java imports are bound from syntax-tree nodes; no native capture is mapped.",
   },
   js: {
     statementOmittedReason: ECMASCRIPT_STATEMENT_OMITTED,
     implicitOmittedReason: ECMASCRIPT_IMPLICIT_OMITTED,
   },
   kotlin: {
-    applyStatement: applyKotlinStatementOverride,
-    appendImplicit: appendKotlinImplicitBinding,
-    maskTrivia: true,
-    normalizeDots: true,
+    statementOmittedReason:
+      "Kotlin imports are bound from syntax-tree nodes by applyJvmImportDirective, not from statement text.",
+    implicitOmittedReason: "Kotlin imports are bound from syntax-tree nodes; no native capture is mapped.",
   },
   less: { omittedReason: STYLESHEET_OMITTED },
   markdown: { omittedReason: "Document format; fenced code blocks parse as their own language." },

@@ -10,6 +10,7 @@ import type { ProjectDiscoveryContext, ProjectFileDiscoveryOptions, ProjectFileI
 import type { ImportBinding } from "./import-types.js";
 import type { CallableIdentity } from "../languages/callable-arity.js";
 import type { CsharpNamespaceFacts } from "../util/csharp-tree.js";
+import type { JvmFileFacts } from "../util/jvm-tree.js";
 
 export type { ImportBinding } from "./import-types.js";
 
@@ -111,6 +112,13 @@ export type ModuleIndex = {
    * cached module never holds another file's declarations. Absent when the file's tree was unavailable.
    */
   csharpNamespaceFacts?: CsharpNamespaceFacts;
+  /**
+   * Java and Kotlin only: the package and top-level declared names of this file alone, read from its own syntax
+   * tree when it is indexed. Package lookups read them here instead of parsing the file, and project-wide
+   * lookups combine them across files when they run, so a cached module never holds another file's
+   * declarations. Absent when the file's tree was unavailable.
+   */
+  jvmFacts?: JvmFileFacts;
   /** Outermost Tree-sitter ERROR/MISSING ranges. */
   parseErrorRanges?: ParseErrorRange[];
 };

@@ -60,9 +60,8 @@ export const KOTLIN_DEF: LanguageDefinition = {
     comments: ["line_comment", "block_comment"],
   },
   graph: {
-    imports: `
-      (import (qualified_identifier) @from) @stmt
-    `,
+    // Kotlin imports are read from the syntax tree (src/util/jvm-tree.ts), so no imports query runs.
+    imports: "",
     exports: `
       (source_file
         [
@@ -93,11 +92,8 @@ export const KOTLIN_DEF: LanguageDefinition = {
       (class_parameter (identifier) @name)
       (type_parameter (identifier) @name)
     `,
-    importBindings: `
-      (import (qualified_identifier) @from (identifier) @alias) @stmt
-      (import (qualified_identifier) @from ("*") @wild) @stmt
-      (import (qualified_identifier) @from) @stmt
-    `,
+    // Kotlin imports are read from the syntax tree (src/util/jvm-tree.ts), so no import-binding query runs.
+    importBindings: "",
   },
   nodeTypes: {
     identifier: ["identifier"],

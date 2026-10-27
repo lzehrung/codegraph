@@ -5,18 +5,6 @@ import { hasNonAsciiCodePoint, JAVA_IDENTIFIER_IGNORABLE_SOURCE } from "../../ut
 
 const JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu");
 
-// Pinned tree-sitter-java `import_declaration` children:
-//   anonymous: "import", optional "static", trailing ";"
-//   named: `identifier` (bare `import Foo;`) or `scoped_identifier` (`import a.b.C;`),
-//          optional named `asterisk` (`import a.b.*;`, `import static a.B.*;`)
-// Optional `(asterisk)? @wild` yields one match per statement without a trailing `.`
-// end-anchor, which would treat `;` as a last-child miss if the engine counts anonymous
-// siblings. Java has no import alias.
-const JAVA_IMPORT_QUERY = `
-      (import_declaration (scoped_identifier) @from (asterisk)? @wild) @stmt
-      (import_declaration (identifier) @from (asterisk)? @wild) @stmt
-    `;
-
 export const JAVA_DEF: LanguageDefinition = {
   id: "java",
   extensions: [".java"],
@@ -63,7 +51,8 @@ export const JAVA_DEF: LanguageDefinition = {
     comments: ["line_comment", "block_comment"],
   },
   graph: {
-    imports: JAVA_IMPORT_QUERY,
+    // Java imports are read from the syntax tree (src/util/jvm-tree.ts), so no imports query runs.
+    imports: "",
     exports: `
       (class_declaration name: (identifier) @name)
       (record_declaration name: (identifier) @name)
@@ -87,7 +76,8 @@ export const JAVA_DEF: LanguageDefinition = {
       (spread_parameter (variable_declarator name: (identifier) @name))
       (receiver_parameter (identifier) @name)
     `,
-    importBindings: JAVA_IMPORT_QUERY,
+    // Java imports are read from the syntax tree (src/util/jvm-tree.ts), so no import-binding query runs.
+    importBindings: "",
   },
   nodeTypes: {
     identifier: ["identifier", "type_identifier"],

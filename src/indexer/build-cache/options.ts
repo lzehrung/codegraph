@@ -50,8 +50,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 94 reads C# using directives and namespace declarations from native syntax nodes, and stores each C#
  * file's own namespace regions and declared types with its module (`csharpNamespaceFacts`) instead of
  * scanning source text for them.
+ * Epoch 95 reads Java and Kotlin packages, top-level declared names, and imports from native syntax nodes, and
+ * stores each file's own package and declared names with its module (`jvmFacts`) instead of scanning source text.
  */
-export const CORE_ALGORITHM_EPOCH = 94;
+export const CORE_ALGORITHM_EPOCH = 95;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

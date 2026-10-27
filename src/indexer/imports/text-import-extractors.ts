@@ -1,4 +1,3 @@
-import { JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import {
   parsePhpImportStatement,
   parseRustImportStatements,
@@ -37,51 +36,6 @@ export type TextImportExtractionContext = {
 
 /** A language's text import extractor used by its binding-fallback path. */
 export type TextImportExtractor = (source: string, sink: TextImportSink, context: TextImportExtractionContext) => void;
-
-const JAVA_DOTTED_SOURCE = String.raw`${JAVA_IDENTIFIER_SOURCE}(?:[\t ]*\.[\t ]*${JAVA_IDENTIFIER_SOURCE})*`;
-const JAVA_IMPORT_STATEMENT_PATTERN = new RegExp(
-  String.raw`^[\t ]*import[\t ]+(?:static[\t ]+)?(${JAVA_DOTTED_SOURCE})(?:[\t ]*\.[\t ]*\*)?[\t ]*;`,
-  "gmu",
-);
-
-function extractJavaImports(source: string, sink: TextImportSink): void {
-  if (!source.includes("import")) return;
-  const masked = maskImportBindingTrivia(source, "java");
-  for (const match of masked.matchAll(JAVA_IMPORT_STATEMENT_PATTERN)) {
-    const rawSpecifier = match[1];
-    if (!rawSpecifier || match.index === undefined) continue;
-    const spec = rawSpecifier.replace(/\s+/gu, "");
-    if (!spec) continue;
-    const prefix = match[0].slice(0, match[0].indexOf(rawSpecifier));
-    const suffix = match[0].slice(match[0].indexOf(rawSpecifier) + rawSpecifier.length);
-    sink.specifier({
-      spec,
-      typeOnly: false,
-      ...(suffix.includes("*") && !prefix.includes("static") ? { jvmPackageWildcard: true } : {}),
-    });
-    sink.binding({ raw: source.slice(match.index, match.index + match[0].length), start: match.index });
-  }
-}
-
-const KOTLIN_DOTTED_SOURCE = String.raw`${KOTLIN_IDENTIFIER_SOURCE}(?:[\t ]*\.[\t ]*${KOTLIN_IDENTIFIER_SOURCE})*`;
-const KOTLIN_IMPORT_STATEMENT_PATTERN = new RegExp(
-  String.raw`^[\t ]*import[\t ]+(${KOTLIN_DOTTED_SOURCE})(?:[\t ]*\.[\t ]*\*)?(?:[\t ]+as[\t ]+${KOTLIN_IDENTIFIER_SOURCE})?[\t ]*;?[\t ]*$`,
-  "gmu",
-);
-
-function extractKotlinImports(source: string, sink: TextImportSink): void {
-  if (!source.includes("import")) return;
-  const masked = maskImportBindingTrivia(source, "kotlin");
-  for (const match of masked.matchAll(KOTLIN_IMPORT_STATEMENT_PATTERN)) {
-    const rawSpecifier = match[1];
-    if (!rawSpecifier || match.index === undefined) continue;
-    const spec = rawSpecifier.replace(/\s+/gu, "");
-    if (!spec) continue;
-    const suffix = match[0].slice(match[0].indexOf(rawSpecifier) + rawSpecifier.length);
-    sink.specifier({ spec, typeOnly: false, ...(suffix.includes("*") ? { jvmPackageWildcard: true } : {}) });
-    sink.binding({ raw: source.slice(match.index, match.index + match[0].length), start: match.index });
-  }
-}
 
 const PHP_USE_STATEMENT_PATTERN = /^[\t ]*use[\t ]+/gmu;
 const PHP_INCLUDE_STATEMENT_PATTERN = /^[\t ]*(?:require_once|include_once|require|include)[\t ]+/gmu;
@@ -186,16 +140,12 @@ function extractRustImports(source: string, sink: TextImportSink): void {
  * language is one registry row and no consumer branch.
  */
 const TEXT_IMPORT_EXTRACTORS: Record<string, TextImportExtractor | undefined> = {
-  java: extractJavaImports,
-  kotlin: extractKotlinImports,
   rust: extractRustImports,
   php: extractPhpImports,
 };
 
 /** Languages whose extractor also emits binding requests the indexer can resolve. */
 const TEXT_IMPORT_BINDING_LANGUAGES: Record<string, true | undefined> = {
-  java: true,
-  kotlin: true,
   rust: true,
   php: true,
 };

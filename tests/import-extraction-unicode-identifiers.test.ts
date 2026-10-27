@@ -2,15 +2,10 @@ import { describe, expect, it } from "vitest";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  parseJavaImportStatement,
-  parseKotlinImportStatement,
-  parsePhpImportStatement,
-  parseRustImportStatements,
-} from "../src/languages/import-statement-parsers.js";
+import { parsePhpImportStatement, parseRustImportStatements } from "../src/languages/import-statement-parsers.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import { supportById } from "../src/languages.js";
-import { buildProjectIndex } from "../src/index.js";
+import { buildProjectIndex, collectImportsForFile } from "../src/index.js";
 import { collectNativeCaptureImportBindings } from "../src/indexer/imports/native-captures.js";
 import { finalizeLanguageSpecificImports } from "../src/indexer/imports/language-specific.js";
 import type { ImportBinding } from "../src/indexer/types.js";
@@ -32,6 +27,16 @@ function rangeForToken(source: string, token: string, fromIndex = 0): TokenRange
   const index = source.indexOf(token, fromIndex);
   if (index < 0) throw new Error(`token not found: ${token}`);
   return { start: positionForIndex(source, index), end: positionForIndex(source, index + token.length) };
+}
+
+/** The bindings the real import pipeline produces for one Java or Kotlin source; nothing it names exists on disk. */
+async function jvmImports(fileName: string, source: string): Promise<ImportBinding[]> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-unicode-imports-"));
+  try {
+    return await collectImportsForFile(path.join(root, fileName), root, { source });
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
 }
 
 // C11-adjacent finding: several import/alias extractors used an ASCII-only [A-Za-z_][\w]*
@@ -90,57 +95,29 @@ describe("Import/alias extraction accepts Unicode identifiers", () => {
     ]);
   });
 
-  it("Kotlin: import alias", () => {
-    expect(parseKotlinImportStatement("import com.example.Foo as créer")).toEqual({
-      kind: "named",
-      from: "com.example.Foo",
-      imported: "Foo",
-      local: "créer",
-      explicitAlias: true,
-    });
-    // A dotted segment must itself start with a valid identifier character; a digit
-    // immediately after "." is not part of Kotlin's grammar.
-    expect(parseKotlinImportStatement("import pkg.2mod")).toBeNull();
-    // Kotlin's UnicodeDigit continuation is Nd only; a non-decimal number category (No,
-    // e.g. the "½" fraction) is not a valid identifier continuation.
-    expect(parseKotlinImportStatement("import com.example.Widget\u00bd")).toBeNull();
+  it("Kotlin: import alias", async () => {
+    expect(await jvmImports("Consumer.kt", "import com.example.Foo as créer\n")).toEqual([
+      expect.objectContaining({
+        kind: "named",
+        from: "com.example.Foo",
+        imported: "Foo",
+        local: "créer",
+        explicitAlias: true,
+      }),
+    ]);
   });
 
-  it("Java: import of a Unicode-named class", () => {
-    expect(parseJavaImportStatement("import com.example.Créer;")).toEqual({
-      kind: "named",
-      from: "com.example.Créer",
-      imported: "Créer",
-      isStatic: false,
-    });
-    // JLS JavaLetter includes `$` and connecting-punctuation characters at every position,
-    // not just Unicode letters/digits.
-    expect(parseJavaImportStatement("import com.example.$Widget;")).toEqual({
-      kind: "named",
-      from: "com.example.$Widget",
-      imported: "$Widget",
-      isStatic: false,
-    });
-    // Character.isJavaIdentifierStart accepts a letter-number (Nl) such as a Roman numeral,
-    // and isJavaIdentifierPart accepts an identifier-ignorable formatting character (Cf,
-    // e.g. ZWNJ) in continuation.
-    expect(parseJavaImportStatement("import com.example.\u2160Widget\u200c;")).toEqual({
-      kind: "named",
-      from: "com.example.\u2160Widget\u200c",
-      imported: "\u2160Widget\u200c",
-      isStatic: false,
-    });
-    // A non-decimal number character (No, e.g. the "½" fraction) is not accepted by
-    // isJavaIdentifierPart and must not be folded into the imported name.
-    expect(parseJavaImportStatement("import com.example.Widget\u00bd;")).toBeNull();
-    // isJavaIdentifierPart accepts combining marks (Mn/Mc); a decomposed identifier such as
-    // "café" written as "cafe" + combining acute accent (U+0301) is a single valid import.
-    expect(parseJavaImportStatement("import com.example.cafe\u0301;")).toEqual({
-      kind: "named",
-      from: "com.example.cafe\u0301",
-      imported: "cafe\u0301",
-      isStatic: false,
-    });
+  it("Java: import of a Unicode-named class", async () => {
+    // JLS JavaLetter includes `$` and connecting-punctuation characters at every position, not just Unicode
+    // letters/digits, and isJavaIdentifierPart accepts combining marks (Mn/Mc): a decomposed "café" written as
+    // "cafe" + combining acute accent (U+0301) is a single valid import.
+    const names = ["Créer", "$Widget", "cafe\u0301", "\u2160Widget\u200c"];
+    const source = names.map((name) => `import com.example.${name};`).join("\n") + "\n";
+    expect(await jvmImports("Consumer.java", source)).toEqual(
+      names.map((name) =>
+        expect.objectContaining({ kind: "named", from: `com.example.${name}`, imported: name, local: name }),
+      ),
+    );
   });
 
   it("C#: binds a Unicode namespace alias from its using directive", async () => {

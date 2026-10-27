@@ -1,12 +1,8 @@
 import { type LanguageSupport } from "../languages.js";
-import {
-  parseJavaImportStatement,
-  parseKotlinImportStatement,
-  parsePhpImportStatement,
-  parseRustImportStatements,
-} from "../languages/import-statement-parsers.js";
+import { parsePhpImportStatement, parseRustImportStatements } from "../languages/import-statement-parsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { collectCsharpImportDirectives, csharpUsingDirective, parseCsharpSyntaxTree } from "../util/csharp-tree.js";
+import { collectJvmImportDirectives, isJvmLanguage, parseJvmSyntaxTree } from "../util/jvm-tree.js";
 import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import type { BuildReport } from "../indexer/types.js";
 import { errorMessage } from "../util/errors.js";
@@ -31,7 +27,6 @@ import {
 import { sliceText, unquote } from "../util/ast.js";
 import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rust-test-modules.js";
 import { pythonTypeCheckingContext } from "../util/python-type-checking.js";
-import { maskImportBindingTrivia } from "../indexer/imports/binding-ranges.js";
 import { rustSpecifierForParsedImport } from "../indexer/imports/text-import-extractors.js";
 import {
   cFamilyImportFormFromText,
@@ -261,10 +256,11 @@ export function collectModuleSpecifiersFromSource(
     return [];
   }
 
-  if (support.id === "csharp") {
+  const jvmLanguageId = isJvmLanguage(support.id) ? support.id : undefined;
+  if (support.id === "csharp" || jvmLanguageId) {
     let tree = opts?.tree;
     if (!tree) {
-      const parsed = parseCsharpSyntaxTree(source, support);
+      const parsed = jvmLanguageId ? parseJvmSyntaxTree(source, support) : parseCsharpSyntaxTree(source, support);
       if (!parsed.tree) {
         if (opts?.file) {
           recordParserBackendDegradation(opts.report, {
@@ -278,9 +274,16 @@ export function collectModuleSpecifiersFromSource(
       }
       tree = parsed.tree;
     }
-    for (const directive of collectCsharpImportDirectives(tree)) {
-      const parsed = csharpUsingDirective(directive);
-      if (parsed) out.push({ spec: parsed.value, typeOnly: false });
+    if (jvmLanguageId) {
+      for (const directive of collectJvmImportDirectives(tree, jvmLanguageId)) {
+        const jvmPackageWildcard = directive.wildcard && !directive.isStatic;
+        out.push({ spec: directive.name, typeOnly: false, ...(jvmPackageWildcard ? { jvmPackageWildcard } : {}) });
+      }
+    } else {
+      for (const directive of collectCsharpImportDirectives(tree)) {
+        const parsed = csharpUsingDirective(directive);
+        if (parsed) out.push({ spec: parsed.value, typeOnly: false });
+      }
     }
     return normalizeModuleSpecifiers(out);
   }
@@ -322,17 +325,6 @@ export function collectModuleSpecifiersFromSource(
           const statement = capMap["stmt"];
           if (statement) typeOnly = isPythonTypeOnly(nativeCaptureStartIndex(source, statement));
         }
-        if (support.id === "kotlin") {
-          const parsed = parseKotlinImportStatement(stmtText);
-          if (parsed) {
-            out.push({
-              spec: parsed.from,
-              typeOnly: false,
-              ...(parsed.kind === "star" ? { jvmPackageWildcard: true } : {}),
-            });
-          }
-          continue;
-        }
         if (support.id === "rust") {
           const statement = capMap["stmt"];
           const statementStartIndex = statement ? nativeCaptureStartIndex(source, statement) : undefined;
@@ -351,7 +343,7 @@ export function collectModuleSpecifiersFromSource(
         // PHP clause shapes have no single path node to capture: grouped `use Foo\{A, B}`
         // expands per clause, `use function`/`use const` type the resolution, and a computed
         // include needs its expression folded against the file. The statement parser handles
-        // all three from the @stmt text, like the Kotlin and Rust parsers above.
+        // all three from the @stmt text, like the Rust parser above.
         if (support.id === "php") {
           for (const parsed of parsePhpImportStatement(stmtText, opts?.file)) {
             out.push({
@@ -373,10 +365,6 @@ export function collectModuleSpecifiersFromSource(
         const isCFamily = support.id === "c" || support.id === "cpp";
         // CommonJS require() and TS `import x = require(...)` both use the require condition.
         const exportCondition = isJsFamily && /\brequire\s*\(/.test(stmtText) ? ("require" as const) : undefined;
-        const javaImport =
-          support.id === "java"
-            ? parseJavaImportStatement(maskImportBindingTrivia(stmtText, "java").replace(/\s*\.\s*/gu, "."))
-            : null;
         const methodText = match.captures.find((capture) => capture.name === "method")?.text;
         const rubyLoadForm = support.id === "ruby" && isRubyLoadForm(methodText) ? methodText : undefined;
         for (const capture of match.captures) {
@@ -385,7 +373,6 @@ export function collectModuleSpecifiersFromSource(
           out.push({
             spec: unquote(capture.text),
             typeOnly,
-            ...(javaImport?.kind === "star" && !javaImport.isStatic ? { jvmPackageWildcard: true } : {}),
             ...(stylesheetImport ? { resolutionKind: "stylesheet" } : {}),
             ...(exportCondition ? { exportCondition } : {}),
             ...(includeForm ? { includeForm } : {}),

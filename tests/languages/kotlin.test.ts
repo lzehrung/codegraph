@@ -6,10 +6,8 @@ import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
-import { finalizeLanguageSpecificImports } from "../../src/indexer/imports/language-specific.js";
-import { parseKotlinImportStatement } from "../../src/languages/import-statement-parsers.js";
 import type { ImportBinding } from "../../src/indexer/types.js";
-import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { exportedNameOf } from "../helpers/narrow.js";
@@ -275,31 +273,19 @@ describe("Kotlin native identifier declarations", () => {
   });
 });
 
-describe("Kotlin text fallback imports", () => {
-  it("extracts semicolon-terminated imports when native bindings are empty", async () => {
-    expect(parseKotlinImportStatement("import a.b.C;")).toEqual({
-      kind: "named",
-      from: "a.b.C",
-      imported: "C",
-      local: "C",
-    });
+async function kotlinImports(source: string): Promise<ImportBinding[]> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-imports-"));
+  try {
+    return await collectImportsForFile(path.join(root, "Consumer.kt"), root, { source });
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
 
-    const bindings: ImportBinding[] = [];
+describe("Kotlin import bindings from syntax nodes", () => {
+  it("binds semicolon-terminated imports and aliases with node ranges", async () => {
     const source = "import a.b.C;\nimport a.b.D as Alias;\n";
-    await finalizeLanguageSpecificImports({
-      file: "Consumer.kt",
-      projectRoot: process.cwd(),
-      source,
-      languageId: "kotlin",
-      resolveFrom: async (from) => ({ external: from }),
-      pushBinding: (binding) => {
-        bindings.push(binding);
-      },
-      getBindings: () => bindings,
-      replaceBindings: (next) => {
-        bindings.splice(0, bindings.length, ...next);
-      },
-    });
+    const bindings = await kotlinImports(source);
 
     const importedC = rangeForToken(source, "C");
     const importedD = rangeForToken(source, "D");
@@ -333,25 +319,9 @@ describe("Kotlin text fallback imports", () => {
     expect(localAlias.start.column).not.toBe(importedD.start.column);
   });
 
-  it("extracts imports with nested comments around qualified-name separators", async () => {
-    const bindings: ImportBinding[] = [];
+  it("binds imports with nested comments around qualified-name separators", async () => {
     const source = "import pkg./* outer /* inner */ comment */Target as LocalTarget;\n";
-    await finalizeLanguageSpecificImports({
-      file: "Consumer.kt",
-      projectRoot: process.cwd(),
-      source,
-      languageId: "kotlin",
-      resolveFrom: async (from) => ({ external: from }),
-      pushBinding: (binding) => {
-        bindings.push(binding);
-      },
-      getBindings: () => bindings,
-      replaceBindings: (next) => {
-        bindings.splice(0, bindings.length, ...next);
-      },
-    });
-
-    expect(bindings).toEqual([
+    expect(await kotlinImports(source)).toEqual([
       expect.objectContaining({
         kind: "named",
         imported: "Target",
@@ -365,7 +335,6 @@ describe("Kotlin text fallback imports", () => {
   });
 
   it("ignores import text in raw multiline strings before real imports", async () => {
-    const bindings: ImportBinding[] = [];
     const source = [
       '@file:Suppress("""',
       '"',
@@ -374,22 +343,7 @@ describe("Kotlin text fallback imports", () => {
       "import real.Target as RealTarget",
       "",
     ].join("\n");
-    await finalizeLanguageSpecificImports({
-      file: "Consumer.kt",
-      projectRoot: process.cwd(),
-      source,
-      languageId: "kotlin",
-      resolveFrom: async (from) => ({ external: from }),
-      pushBinding: (binding) => {
-        bindings.push(binding);
-      },
-      getBindings: () => bindings,
-      replaceBindings: (next) => {
-        bindings.splice(0, bindings.length, ...next);
-      },
-    });
-
-    expect(bindings).toEqual([
+    expect(await kotlinImports(source)).toEqual([
       expect.objectContaining({
         kind: "named",
         imported: "Target",

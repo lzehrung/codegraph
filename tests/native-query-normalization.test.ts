@@ -76,11 +76,13 @@ describe("native query normalization", () => {
     expect(support).toBeDefined();
     for (const kind of ["imports", "exports", "locals", "importBindings"] as const) {
       expect(normalizeNativeQueryForSupport(support!, kind, support!.queries[kind])).toBe(support!.queries[kind]);
+      // Node names of the previous Kotlin grammar; tree-sitter-kotlin-ng has none of them.
+      for (const staleNodeName of ["import_header", "simple_identifier", "type_identifier"]) {
+        expect(support!.queries[kind]).not.toContain(staleNodeName);
+      }
     }
-    expect(support!.queries.imports).toContain("(import");
-    expect(support!.queries.imports).not.toContain("import_header");
-    expect(support!.queries.locals).not.toContain("simple_identifier");
-    expect(support!.queries.locals).not.toContain("type_identifier");
+    // Kotlin imports are read from the syntax tree, so the surviving queries are the ones that name kotlin-ng nodes.
+    expect(support!.queries.exports).toContain("(class_declaration name: (identifier) @name)");
     expect(getNativeQueryMetadataForSupport(support!)).toEqual({
       normalizedQueryKinds: [],
       skippedQueryKinds: [],

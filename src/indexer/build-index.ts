@@ -30,8 +30,9 @@ import {
 } from "../util/resolution.js";
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
 import { collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
+import { collectJvmFileFacts, isJvmLanguage } from "../util/jvm-tree.js";
 import { primeCsharpNamespaceFacts } from "../util/resolution/csharp.js";
-import { resolveJvmPackageImportPaths } from "../util/resolution/jvm.js";
+import { primeJvmFileFacts, resolveJvmPackageImportPaths } from "../util/resolution/jvm.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
 import {
@@ -381,11 +382,13 @@ function cachedModuleHasExternalImport(mod: ModuleIndex): boolean {
 }
 
 /**
- * Gives the C# namespace scan the facts a reused module holds, so it parses nothing for that file. They come
- * from the file's own tree and depend on no other file, so the module's matching signature keeps them valid.
+ * Gives the C# namespace scan and the JVM package scan the facts a reused module holds, so they parse nothing for
+ * that file. They come from the file's own tree and depend on no other file, so the module's matching signature
+ * keeps them valid.
  */
-function primeReusedCsharpNamespaceFacts(file: string, mod: ModuleIndex, opts: BuildOptions | undefined): void {
+function primeReusedFileFacts(file: string, mod: ModuleIndex, opts: BuildOptions | undefined): void {
   if (mod.csharpNamespaceFacts) primeCsharpNamespaceFacts(file, mod.csharpNamespaceFacts, opts?.languageExtensions);
+  if (mod.jvmFacts) primeJvmFileFacts(file, mod.jvmFacts);
 }
 
 /**
@@ -557,6 +560,11 @@ async function buildIndexedModuleForFile(args: {
     });
   }
 
+  // The package scan reads this file's facts when its own imports resolve, so they are known before then.
+  const jvmLanguageId = isJvmLanguage(sup.id) ? sup.id : undefined;
+  const jvmFacts = jvmLanguageId && tree ? collectJvmFileFacts(tree, jvmLanguageId) : undefined;
+  if (jvmFacts) primeJvmFileFacts(args.file, jvmFacts);
+
   const lacksParserContext = !graphOnlyLanguage && !nativeQueries;
 
   if (args.bloomFilterCache && !nativeSourceLimitSkip) {
@@ -588,7 +596,7 @@ async function buildIndexedModuleForFile(args: {
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,
           sup,
-          ...(sup.id === "csharp" && tree ? { tree } : {}),
+          ...((sup.id === "csharp" || jvmLanguageId) && tree ? { tree } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
           ...sharedImportOptions,
         });
@@ -625,6 +633,7 @@ async function buildIndexedModuleForFile(args: {
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
   }
   if (sup.id === "csharp" && tree) mod.csharpNamespaceFacts = collectCsharpNamespaceFacts(tree);
+  if (jvmFacts) mod.jvmFacts = jvmFacts;
   await resolveCrossModuleSymbolExports(
     args.file,
     mod,
@@ -1698,6 +1707,9 @@ async function buildIndexFromFileListShared(
         else previousUnavailable.push(file);
       } else cacheMissesByState.added.push(file);
     }
+    // The stale check scans package and namespace declarations, so it reads each reused module's own facts
+    // instead of parsing the file again. A module's facts depend only on its own source, which its signature proves.
+    for (const [file, { mod }] of cachedModules) primeReusedFileFacts(file, mod, opts);
     const { stale: staleCachedModules, deletedDeclarationFiles: retiredDeletions } = await collectStaleCachedModules({
       files: normalizedFiles,
       cachedModules,
@@ -1729,15 +1741,9 @@ async function buildIndexFromFileListShared(
     );
     for (const file of staleCachedModules) {
       const probe = cacheProbes.get(file);
-      if (probe && !("error" in probe)) {
-        if (probe.mod) primeReusedCsharpNamespaceFacts(file, probe.mod, opts);
-        cacheProbes.set(file, { ...probe, mod: null });
-      }
+      if (probe && !("error" in probe)) cacheProbes.set(file, { ...probe, mod: null });
       cachedGraphEntries?.delete(file);
     }
-  }
-  for (const [file, probe] of cacheProbes) {
-    if (!("error" in probe) && probe.mod) primeReusedCsharpNamespaceFacts(file, probe.mod, opts);
   }
   const cacheMisses = Array.from(cacheProbes, ([file, probe]) =>
     !("error" in probe) && !probe.mod ? file : null,
@@ -2866,10 +2872,10 @@ export async function buildProjectIndexIncremental(
         : null;
       for (const file of allFiles) {
         if (changedFiles.has(file)) {
-          if (
-            dependentsToPrime.has(file) &&
-            supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id === "csharp"
-          ) {
+          const dependentLanguage = dependentsToPrime.has(file)
+            ? supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id
+            : undefined;
+          if (dependentLanguage === "csharp" || isJvmLanguage(dependentLanguage)) {
             const key = fileIdentityKey(file);
             const sigInfo = fileSignatures.get(file)!;
             const reusable =
@@ -2882,7 +2888,7 @@ export async function buildProjectIndexIncremental(
                     opts,
                   )
                 : null);
-            if (reusable) primeReusedCsharpNamespaceFacts(file, reusable, opts);
+            if (reusable) primeReusedFileFacts(file, reusable, opts);
           }
           continue;
         }
@@ -2898,7 +2904,7 @@ export async function buildProjectIndexIncremental(
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
           modules.set(fileIdentityKey(file), cached);
-          primeReusedCsharpNamespaceFacts(file, cached, opts);
+          primeReusedFileFacts(file, cached, opts);
           collectJsonDependencies(cached.imports, jsonDependencies);
           if (bloomFilterCache) {
             const persistedFilter = persistedBloomFilters?.get(file, sigInfo);

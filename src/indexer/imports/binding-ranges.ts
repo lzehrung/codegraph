@@ -19,7 +19,7 @@ export function maskImportBindingTrivia(text: string, languageId: string): strin
 /**
  * Attaches `importedRange`/`localRange` to "named" {@link ImportBinding} entries a producer
  * builds from parsed statement/clause text rather than per-token native captures: native
- * statement overrides (Java/Kotlin/Rust/PHP, in `language-specific.ts`), Python's
+ * statement overrides (Rust/PHP, in `language-specific.ts`), Python's
  * `from ... import ...` clause, Swift's dotted symbol import, and CommonJS destructured
  * `require()` bindings. Direct JS/TS native captures already carry exact node ranges from
  * `native-captures.ts`'s standard-binding path (`pushStandardBindings`) and never reach this
@@ -38,7 +38,7 @@ export function maskImportBindingTrivia(text: string, languageId: string): strin
  * *different* binding's `local` token whenever the two literal spellings coincided (e.g.
  * `use a::{Bar as X, Baz as Bar}`, where the first binding's `imported` is "Bar" and the second
  * binding's `local` is also "Bar"). A qualified path's non-final segments repeating the leaf's
- * own spelling (e.g. Java `import com.Bar.Bar;`) is handled the same way: matching from the end
+ * own spelling (e.g. Rust `use a::Bar::Bar;`) is handled the same way: matching from the end
  * naturally lands on the last, real occurrence.
  *
  * If the complete sequence cannot be proven -- any single slot's token is missing before the
