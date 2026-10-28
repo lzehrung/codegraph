@@ -94,13 +94,23 @@ describe("piscinaWorkerExecArgv", () => {
     expect(seen.execArgv).toEqual(["--experimental-require-module", "--require", preloadPath]);
   });
 
-  it("treats a require-module option in NODE_OPTIONS as the host's choice", () => {
-    // The preload require()s an ES module, which needs require(esm). A worker re-reads NODE_OPTIONS, but an execArgv
-    // that turns require(esm) off wins over it, so the pool must not add that option here.
-    const preload = esmPreloadPath.replaceAll("\\", "/");
-    const seen = runHost([], `--experimental-require-module --require="${preload}"`);
+  it.each(["--experimental-require-module", "--experimental_require_module", "--experimental-require-module=true"])(
+    "treats %s in NODE_OPTIONS as the host's choice",
+    (option) => {
+      // The preload require()s an ES module, which needs require(esm). A worker re-reads NODE_OPTIONS, but an execArgv
+      // that turns require(esm) off wins over it, so the pool must not add that option here.
+      const preload = esmPreloadPath.replaceAll("\\", "/");
+      const seen = runHost([], `${option} --require="${preload}"`);
 
-    expect(seen.marker).toBe("esm-preloaded");
-    expect(seen.execArgv).toEqual([]);
+      expect(seen.marker).toBe("esm-preloaded");
+      expect(seen.execArgv).toEqual([]);
+    },
+  );
+
+  it("keeps a host require-module option spelled with underscores", () => {
+    const seen = runHost(["--experimental_require_module", "--require", preloadPath]);
+
+    expect(seen.marker).toBe("preloaded");
+    expect(seen.execArgv).toEqual(["--experimental_require_module", "--require", preloadPath]);
   });
 });

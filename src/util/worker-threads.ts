@@ -72,6 +72,13 @@ const WORKER_INHERITED_FLAGS: Record<string, true> = {
   "--no-experimental-require-module": true,
 };
 
+/** The option name of an `execArgv` or `NODE_OPTIONS` token as Node reads it: without an `=value` part, and with `_`
+ * in a long option name read as `-` (`--experimental_require_module=true` is `--experimental-require-module`). */
+function optionName(token: string): string {
+  const name = token.split("=", 1)[0] ?? token;
+  return name.startsWith("--") ? `--${name.slice(2).replaceAll("_", "-")}` : name;
+}
+
 /** Keeps the options of `execArgv` that a worker thread accepts and needs. An option owns the value tokens (those
  * that do not start with `-`) that follow it, as in `--require ./preload.cjs`. */
 function inheritableExecArgv(execArgv: readonly string[]): string[] {
@@ -79,7 +86,7 @@ function inheritableExecArgv(execArgv: readonly string[]): string[] {
   let keeping = false;
   for (const token of execArgv) {
     if (token.startsWith("-")) {
-      const name = token.split("=", 1)[0] ?? token;
+      const name = optionName(token);
       keeping = Object.hasOwn(WORKER_INHERITED_FLAGS, name) && process.allowedNodeEnvironmentFlags.has(name);
     }
     if (keeping) kept.push(token);
@@ -132,7 +139,7 @@ function nodeOptionsTokens(nodeOptions: string): string[] {
 export function piscinaWorkerExecArgv(): string[] {
   const execArgv = inheritableExecArgv(process.execArgv);
   const hostChoseRequireEsm = [...execArgv, ...nodeOptionsTokens(process.env.NODE_OPTIONS ?? "")].some((token) =>
-    REQUIRE_ESM_FLAGS.includes(token),
+    REQUIRE_ESM_FLAGS.includes(optionName(token)),
   );
   if (!hostChoseRequireEsm && process.allowedNodeEnvironmentFlags.has(NO_REQUIRE_ESM_FLAG)) {
     execArgv.push(NO_REQUIRE_ESM_FLAG);
