@@ -188,6 +188,29 @@ it.runIf(isNativeTreeSitterAvailable())("captures SCSS mixin, function, and vari
   expect(exportNames).toEqual(["$brand", "double", "flex-center"]);
 });
 
+it.runIf(isNativeTreeSitterAvailable())(
+  "defines nothing from a namespaced include or call and keeps the declaration after them",
+  () => {
+    const support = supportById("scss")!;
+    const source = `@use "tools" as t;
+.a {
+  @include t.center;
+  width: t.scale(2);
+  $width: t.scale(4);
+}
+`;
+    const nativeQueries = runNativeLanguageQueries(source, support);
+    expect(nativeQueries).not.toBeNull();
+    const moduleIndex = collectLocalsAndExportsFromSource("app.scss", source, support, [], {
+      ...(nativeQueries ? { nativeQueries } : {}),
+    });
+    const localNames = moduleIndex.locals.map((symbol) => symbol.localName);
+    expect(localNames).toContain("$width");
+    expect(localNames).not.toContain("center");
+    expect(localNames).not.toContain("scale");
+  },
+);
+
 it.runIf(isNativeTreeSitterAvailable())("captures @use and @forward paths wrapped by as *", () => {
   const support = supportById("scss")!;
   const specifiers = collectModuleSpecifiersFromSource(
@@ -877,6 +900,28 @@ describe("SCSS module navigation: lexing, scopes, forwards, imports, and coverag
       },
     );
   });
+
+  it.runIf(native)(
+    "finds the definition behind a namespaced include and call, and the declaration after them",
+    async () => {
+      await withScssProject(
+        {
+          "_tools.scss": "@mixin center { margin: 0 auto; }\n@function scale($n) { @return $n * 2; }\n",
+          "app.scss":
+            '@use "tools" as t;\n.a {\n  @include t.center;\n  width: t.scale(2);\n  $width: t.scale(4);\n}\n',
+        },
+        async (project) => {
+          expect(await scssGoto(project, "app.scss", "t.center", 0, 2)).toBe("_tools.scss:1");
+          const center = await scssRefs(project, "app.scss", "t.center", 0, 2);
+          expect(center.sites).toEqual(["_tools.scss:1", "app.scss:3"]);
+          expect(center.coverage?.state).toBe("complete");
+          const scale = await scssRefs(project, "app.scss", "t.scale(2)", 0, 2);
+          expect(scale.sites).toEqual(["_tools.scss:2", "app.scss:4", "app.scss:5"]);
+          expect(await scssGoto(project, "app.scss", "$width")).toBe("app.scss:5");
+        },
+      );
+    },
+  );
 
   it("scans an unquoted url(...) as one token, whatever quote or comment opener it holds", () => {
     const facts = extractScssFacts(
