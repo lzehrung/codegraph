@@ -1,5 +1,6 @@
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../graphs/symbol-graph.js";
 import { boundList, boundedNonNegativeIntegerOption } from "../presentation/bounds.js";
+import { compareCodeUnits } from "../util/collections.js";
 import { resolveSymbolId } from "./symbols.js";
 import type { ProjectIndex } from "./types.js";
 
@@ -230,7 +231,7 @@ export function findImplementations(
     }
     ambiguous += unresolvedMembers.length;
   }
-  const sortedUnresolved = unresolved.sort((left, right) => left.symbolId.localeCompare(right.symbolId));
+  const sortedUnresolved = unresolved.sort((left, right) => compareCodeUnits(left.symbolId, right.symbolId));
   const matches = [...memberMatches.values()].sort((left, right) => compareImplementationMatches(graph, left, right));
   const boundedMatches = boundList(matches, limit);
   const boundedUnresolved = boundList(sortedUnresolved, limit);
@@ -352,7 +353,7 @@ function isTypeNode(node: SymbolNode): boolean {
 function compareHierarchyEdges(graph: SymbolGraph, left: HierarchyEdge, right: HierarchyEdge): number {
   const leftNode = graph.nodes.get(left.to) ?? graph.nodes.get(left.from);
   const rightNode = graph.nodes.get(right.to) ?? graph.nodes.get(right.from);
-  return compareNodes(leftNode, rightNode) || left.relation.localeCompare(right.relation);
+  return compareNodes(leftNode, rightNode) || compareCodeUnits(left.relation, right.relation);
 }
 
 function compareRelations(
@@ -375,7 +376,11 @@ function compareNodes(left: SymbolNode | undefined, right: SymbolNode | undefine
   if (!left && !right) return 0;
   if (!left) return 1;
   if (!right) return -1;
-  return left.file.localeCompare(right.file) || left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
+  return (
+    compareCodeUnits(left.file, right.file) ||
+    compareCodeUnits(left.name, right.name) ||
+    compareCodeUnits(left.id, right.id)
+  );
 }
 
 function normalizeDepth(depth: number | undefined): number {

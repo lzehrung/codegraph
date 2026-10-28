@@ -2,6 +2,7 @@ import { constants as fsConstants, type BigIntStats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
+import { isMissingPathError } from "./errors.js";
 import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "./paths.js";
 
 export type ConfinedReadableFile = {
@@ -198,8 +199,4 @@ function rewriteNoFollowOpenError(error: unknown, filePath: string): Error {
   }
   if (error instanceof Error) return error;
   return new Error(String(error));
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

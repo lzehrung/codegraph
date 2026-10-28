@@ -15,6 +15,7 @@ import * as indexerNavigation from "../src/indexer/navigation.js";
 import type { BuildReport, IncrementalBuildOptions } from "../src/indexer/types.js";
 import { boundReviewReportForTransport } from "../src/review/types.js";
 import { summarizeChangedFiles } from "../src/review/summaries.js";
+import { listCandidateTestFiles } from "../src/impact/context.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as impactMap from "../src/impact/map.js";
 import { collectDuplicateLeadSummary } from "../src/duplicates-leads.js";
@@ -2885,6 +2886,26 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
         reason: "changedTest",
       },
     ]);
+  });
+  it("orders candidate tests by code unit like listCandidateTestFiles, including under maxCandidates", async () => {
+    const root = await mkTmpDir("dg-review-candidate-order-");
+    const names = ["Zoo.test.ts", "_setup.test.ts", "animals.test.ts", "foo.test.ts", "foo_test.test.ts"];
+    const files = names.map((name) => path.join(root, name));
+    await Promise.all(files.map(async (file) => await fsp.writeFile(file, "export const v = 1;\n", "utf8")));
+    await buildProjectIndex(root, { cache: "disk" });
+    await Promise.all(files.map(async (file) => await fsp.writeFile(file, "export const v = 2;\n", "utf8")));
+
+    const index = await buildProjectIndex(root, { cache: "disk" });
+    const expected = listCandidateTestFiles(index, files, [], { projectRoot: root }).map((candidate) =>
+      normalize(path.relative(root, candidate.file)),
+    );
+    expect(expected).toEqual(["Zoo.test.ts", "_setup.test.ts", "animals.test.ts", "foo.test.ts", "foo_test.test.ts"]);
+
+    const full = await buildReviewReport(root, { cache: "disk", files });
+    expect(full.candidateTests.map((candidate) => candidate.file)).toEqual(expected);
+
+    const limited = await buildReviewReport(root, { cache: "disk", files, maxCandidates: 3 });
+    expect(limited.candidateTests.map((candidate) => candidate.file)).toEqual(expected.slice(0, 3));
   });
 });
 

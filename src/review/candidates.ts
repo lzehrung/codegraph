@@ -1,5 +1,10 @@
 import { performance } from "node:perf_hooks";
-import { candidateConfidenceRank, listCandidateTestFiles, type CandidateTestFile } from "../impact/context.js";
+import {
+  candidateConfidenceRank,
+  compareCandidateTests,
+  listCandidateTestFiles,
+  type CandidateTestFile,
+} from "../impact/context.js";
 import { type ProjectIndex } from "../indexer/types.js";
 import { REVIEW_DEFAULT_CANDIDATE_TEST_LIMIT } from "../presentation/bounds.js";
 import type { FileId } from "../types.js";
@@ -60,13 +65,7 @@ export async function collectReviewCandidateTests(input: {
       ...candidate,
       file: toProjectDisplayPath(input.projectRoot, candidate.file),
     }))
-    .sort((left, right) => {
-      const confidenceCompare = candidateConfidenceRank(right.confidence) - candidateConfidenceRank(left.confidence);
-      if (confidenceCompare !== 0) return confidenceCompare;
-      const fileCompare = left.file.localeCompare(right.file);
-      if (fileCompare !== 0) return fileCompare;
-      return left.reason.localeCompare(right.reason);
-    })
+    .sort(compareCandidateTests)
     .slice(0, maxCandidates);
   if (input.reviewTimings) {
     input.reviewTimings.candidatesMs = Math.round(performance.now() - candidateStart);
