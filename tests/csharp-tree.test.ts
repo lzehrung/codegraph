@@ -1181,6 +1181,50 @@ describe("C# using directive inside a namespace while a project file has no synt
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  describe("a shadowed using beside another using", () => {
+    const lines = ["using Other;", "namespace A {", "  using N;", "  class Use { Thing value; }", "}"];
+    const files = {
+      "Global.cs": "namespace N;\npublic class Different {}\n",
+      "Other.cs": "namespace Other;\npublic class Thing {}\n",
+      "Use.cs": lines.join("\n") + "\n",
+    };
+
+    async function thingTarget(root: string): Promise<string> {
+      const index = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+      const result = await goToDefinition(index, {
+        file: path.join(root, "Use.cs"),
+        line: 4,
+        column: columnOf(lines, 4, "Thing"),
+      });
+      return result.status === "ok" ? path.basename(result.definition.file) : result.status;
+    }
+
+    it("leaves a name unresolved that an unread file's A.N could bring in", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-incomplete-star-"));
+      try {
+        setNativeIndexingFailureFor("CSHARP_DIRECTIVE_SCAN_FAILURE", "forced C# directive scan failure");
+        await writeFixtureFiles(root, { ...files, "Unparsed.cs": unparsed });
+
+        // `using N;` means `A.N` when Unparsed.cs declares it, and `A.N.Thing` would compete with the `Other.Thing` of the
+        // directive before every namespace, which no unread file can shadow.
+        expect(await thingTarget(root)).toBe("not_found");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("binds the other using when every file is read and none declares A.N", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-complete-star-"));
+      try {
+        await writeFixtureFiles(root, files);
+
+        expect(await thingTarget(root)).toBe("Other.cs");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
 });
 describe("C# using-directive discovery", () => {
   const directiveTexts = (source: string): string[] =>

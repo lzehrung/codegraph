@@ -99,6 +99,8 @@ type EdgePassContext = {
   optionalMemberTypes: Set<string>;
   aliasToTargetDef: Map<string, SymbolDef>;
   aliasToTargetModule: Map<string, string>;
+  /** Whether the two alias tables above, built for the whole file, answer for `name` at `node`. */
+  aliasTableAnswers: (name: string, node: SyntaxNodeLike) => boolean;
   resolveIdentifier: (name: string, node: SyntaxNodeLike) => SymbolDef | null;
   /** The shared lookup's raw answer, including steps deferred to async member lookup. */
   resolveName: (name: string, node: SyntaxNodeLike) => NameResolution | null;
@@ -678,7 +680,7 @@ function resolveNamedType(
   );
   if (typed.length === 1) return typed[0]!;
   const imported = context.aliasToTargetDef.get(name);
-  if (imported && declaresMembers(imported)) return imported;
+  if (imported && context.aliasTableAnswers(name, node) && declaresMembers(imported)) return imported;
   // A constructed `Klass.new` type, or (Ruby only) a bare capitalized constant receiver
   // (`Calc.add(1, 2)`), uses Ruby's bare-constant visibility, and only when this file does not
   // already have several classes of that name. Inheritance names stay on resolveIdentifier so
@@ -1169,10 +1171,11 @@ export async function emitFunctionBodyEdges(
         return;
       }
       if (seenAliases.has(name)) return;
-      let target: SymbolDef | null = context.aliasToTargetDef.get(name) ?? null;
+      const tableDef = context.aliasToTargetDef.get(name);
+      let target: SymbolDef | null = tableDef && context.aliasTableAnswers(name, node) ? tableDef : null;
       if (!target) {
         const modFile = context.aliasToTargetModule.get(name);
-        if (modFile && context.moduleAliasIsUnshadowed(name, node)) {
+        if (modFile && context.aliasTableAnswers(name, node) && context.moduleAliasIsUnshadowed(name, node)) {
           let exportedName: string | null = null;
           const parent = node.parent;
           if (

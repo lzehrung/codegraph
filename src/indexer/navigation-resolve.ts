@@ -6,6 +6,8 @@ import type { FileId } from "../types.js";
 import { foldPhpIdentifierCase, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import {
+  csharpNamespaceAt,
+  csharpNamespaceChainDeclares,
   csharpUsingTargetShadowed,
   getCompilationUnitPeers,
   IMPLICIT_UNIT_LANGUAGES,
@@ -806,6 +808,27 @@ export function csharpShadowedImports(index: ProjectIndex): WeakSet<ImportBindin
   }
   csharpShadowedImportCache.set(index, shadowed);
   return shadowed;
+}
+
+/**
+ * Whether `imp` is a C# `using N;` that an enclosing namespace shadows and that may still bring `name` in. The directive
+ * then names the nearer namespace, which no lookup here resolves, so a name that other star imports supply is not the
+ * only candidate and stays unproven. A nearer namespace that declares no such name, and a directive nothing shadows,
+ * never block.
+ */
+export function csharpShadowedStarMayHold(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  imp: ImportBinding,
+  name: string,
+): boolean {
+  if (imp.kind !== "star" || imp.staticMembersOf || imp.csharpDirectiveStartIndex === undefined) return false;
+  if (!csharpShadowedImports(index).has(imp)) return false;
+  const enclosing = csharpNamespaceAt(index, mod.file, imp.csharpDirectiveStartIndex);
+  return (
+    !!enclosing &&
+    csharpNamespaceChainDeclares(index, mod, enclosing, `${normalizeCsharpQualifiedName(imp.from)}.${name}`)
+  );
 }
 
 /**

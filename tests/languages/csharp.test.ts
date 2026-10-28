@@ -17,6 +17,7 @@ import {
   goToDefinition,
   listSymbols,
   type ProjectIndex,
+  type SymbolGraph,
 } from "../../src/index.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
@@ -2389,9 +2390,9 @@ describe("C# partial class members across files", () => {
 
   /**
    * Where `Run` goes in `lines` of Use.cs, whose files declare `N.Plain`, `N.Second`, `Other.B`, and the namespace `RealNs`,
-   * each with a `Nested.Run`.
+   * each with a `Nested.Run`, besides `extraFiles`.
    */
-  async function receiverRunTarget(lines: string[]): Promise<string> {
+  async function receiverRunTarget(lines: string[], extraFiles: Record<string, string> = {}): Promise<string> {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-scope-"));
     try {
       const nested = "public class Nested { public static void Run() {} }";
@@ -2400,6 +2401,7 @@ describe("C# partial class members across files", () => {
         "Second.cs": `namespace N; public class Second { ${nested} }\n`,
         "Other.cs": `namespace Other; public class B { ${nested} }\n`,
         "RealNs.cs": `namespace RealNs; ${nested}\n`,
+        ...extraFiles,
         "Use.cs": lines.join("\n") + "\n",
       });
       const index = await buildProjectIndex(root, { cache: "off" });
@@ -2662,7 +2664,108 @@ describe("C# partial class members across files", () => {
     expect(await receiverRunTarget(lines)).toBe(expected);
   });
 
-  it("reaches the alias of the nearest namespace block in navigation and references", async () => {
+  /** Whether a graph edge leads from a member of the file `from`, not one of its import nodes, to a node of `to`. */
+  function graphReaches(graph: SymbolGraph, from: string, to: string): boolean {
+    return graph.edges.some((edge) => {
+      const source = graph.nodes.get(edge.from);
+      const target = graph.nodes.get(edge.to);
+      return (
+        !!source &&
+        !!target &&
+        source.kind !== "namespaceImport" &&
+        source.kind !== "import" &&
+        normalizePath(source.file) === from &&
+        normalizePath(target.file) === to
+      );
+    });
+  }
+
+  describe("an unresolved alias and a namespace of its name", () => {
+    const nested = "public class Nested { public static void Run() {} }";
+    const boxFiles = {
+      "Box.cs": `namespace N; public class Box<T> { ${nested} }\n`,
+      "GlobalB.cs": `namespace B; ${nested}\n`,
+    };
+
+    it.each([
+      {
+        name: "a generic alias in its namespace block",
+        lines: ["namespace C {", "  using B = N.Box<int>;", "  class Use { void M() { B.Nested.Run(); } }", "}"],
+        expected: "not_found",
+      },
+      {
+        name: "a generic alias before every namespace",
+        lines: ["using B = N.Box<int>;", "namespace C {", "  class Use { void M() { B.Nested.Run(); } }", "}"],
+        expected: "not_found",
+      },
+      {
+        name: "an alias target no file declares",
+        lines: ["namespace C {", "  using B = Missing.Box;", "  class Use { void M() { B.Nested.Run(); } }", "}"],
+        expected: "not_found",
+      },
+      {
+        name: "a generic alias in another namespace block",
+        lines: [
+          "namespace A { using B = N.Box<int>; }",
+          "namespace C {",
+          "  class Use { void M() { B.Nested.Run(); } }",
+          "}",
+        ],
+        expected: "GlobalB.cs",
+      },
+      {
+        name: "no alias",
+        lines: ["namespace C {", "  class Use { void M() { B.Nested.Run(); } }", "}"],
+        expected: "GlobalB.cs",
+      },
+    ])("resolves B.Nested.Run beside a namespace B only where no alias binds B: $name", async ({ lines, expected }) => {
+      // `B` is the alias wherever the alias is in scope, so the namespace `B` that the project declares is not reached.
+      expect(await receiverRunTarget(lines, boxFiles)).toBe(expected);
+    });
+
+    it("keeps references and graph edges off the namespace B as well", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-namespace-decoy-"));
+      try {
+        const useLines = [
+          "namespace C {",
+          "  using B = N.Box<int>;",
+          "  class Use { void M() { B.Nested.Run(); } }",
+          "}",
+        ];
+        const paths = await writeFixtureFiles(root, { ...boxFiles, "Use.cs": useLines.join("\n") + "\n" });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const found = await findReferences(index, {
+          file: paths["GlobalB.cs"]!,
+          line: 1,
+          column: boxFiles["GlobalB.cs"].indexOf("Run") + 1,
+        });
+        if (found.status !== "ok") throw new Error("Expected references for B.Nested.Run");
+        const graph = await buildSymbolGraphDetailed(index);
+        const reachesNamespaceB = graphReaches(graph, paths["Use.cs"]!, paths["GlobalB.cs"]!);
+
+        expect({
+          useLines: found.references
+            .filter((reference) => normalizePath(reference.file) === paths["Use.cs"])
+            .map((reference) => reference.range.start.line),
+          reachesNamespaceB,
+        }).toEqual({ useLines: [], reachesNamespaceB: false });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  /** The files that the graph edges of each Use.cs member reach, by member name. */
+  function filesByCaller(edges: string[]): Record<string, string[]> {
+    const byCaller: Record<string, string[]> = {};
+    for (const edge of edges) {
+      const [caller, , file] = edge.split(" ");
+      byCaller[caller!] = [...new Set([...(byCaller[caller!] ?? []), file!])];
+    }
+    return byCaller;
+  }
+
+  it("reaches the alias of the nearest namespace block in navigation, references, and graph edges", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-nearest-alias-consumers-"));
     try {
       const nested = "public class Nested { public static void Run() {} }";
@@ -2672,6 +2775,7 @@ describe("C# partial class members across files", () => {
       };
       const useLines = [
         "using B = N.Plain;",
+        "class Outer { void Q() { B.Nested.Run(); } }",
         "namespace C {",
         "  using B = N.Second;",
         "  class Use { void M() { B.Nested.Run(); } }",
@@ -2681,7 +2785,7 @@ describe("C# partial class members across files", () => {
       const index = await buildProjectIndex(root, { cache: "off" });
       const useFile = paths["Use.cs"]!;
 
-      const run = await goToDefinition(index, { file: useFile, line: 4, column: columnOf(useLines, 4, "Run") });
+      const outcome = await aliasOutcomeFor(index, paths, files, useLines, [2, 5]);
       const useLinesReferencing = async (name: keyof typeof files): Promise<number[]> => {
         const found = await findReferences(index, {
           file: paths[name]!,
@@ -2694,12 +2798,79 @@ describe("C# partial class members across files", () => {
           .map((reference) => reference.range.start.line);
       };
 
-      // The alias of namespace `C` is found before the one outside it.
+      // The alias of namespace `C` is found before the one outside it, which the code outside `C` still reaches.
       expect({
-        goto: run.status === "ok" && path.basename(run.definition.file),
+        goto: outcome.goto,
         plain: await useLinesReferencing("Plain.cs"),
         second: await useLinesReferencing("Second.cs"),
-      }).toEqual({ goto: "Second.cs", plain: [], second: [4] });
+        edgeFiles: filesByCaller(outcome.edges),
+      }).toEqual({
+        goto: { 2: ["Plain.cs"], 5: ["Second.cs"] },
+        plain: [2],
+        second: [5],
+        edgeFiles: { Q: ["Plain.cs"], M: ["Second.cs"] },
+      });
+      expect(outcome.edges).toEqual(expect.arrayContaining(["Q calls Plain.cs", "M calls Second.cs"]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "an alias in one namespace block and using Other; in another",
+      lines: [
+        "namespace A {",
+        "  using B = N.Plain;",
+        "  class Left { void Q() { B.Nested.Run(); } }",
+        "}",
+        "namespace C {",
+        "  using Other;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: { Q: "Plain.cs", M: "Other.cs" },
+    },
+    {
+      name: "an alias in each of two sibling namespace blocks",
+      lines: [
+        "namespace A {",
+        "  using B = N.Plain;",
+        "  class Left { void Q() { B.Nested.Run(); } }",
+        "}",
+        "namespace C {",
+        "  using B = N.Second;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: { Q: "Plain.cs", M: "Second.cs" },
+    },
+    {
+      name: "an alias in the one namespace block that uses it",
+      lines: ["namespace A {", "  using B = N.Plain;", "  class Left { void Q() { B.Nested.Run(); } }", "}"],
+      expected: { Q: "Plain.cs" },
+    },
+  ])("gives the graph the alias that goto binds: $name", async ({ lines, expected }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-graph-scope-"));
+    try {
+      const nested = "public class Nested { public static void Run() {} }";
+      const files = {
+        "Plain.cs": `namespace N; public class Plain { ${nested} }\n`,
+        "Second.cs": `namespace N; public class Second { ${nested} }\n`,
+        "Other.cs": `namespace Other; public class B { ${nested} }\n`,
+      };
+      const paths = await writeFixtureFiles(root, { ...files, "Use.cs": lines.join("\n") + "\n" });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const probeLines = lines.flatMap((text, position) => (text.includes("Run()") ? [position + 1] : []));
+      const outcome = await aliasOutcomeFor(index, paths, files, lines, probeLines);
+
+      expect(filesByCaller(outcome.edges)).toEqual(
+        Object.fromEntries(Object.entries(expected).map(([caller, file]) => [caller, [file]])),
+      );
+      expect(outcome.edges).toEqual(
+        expect.arrayContaining(Object.entries(expected).map(([caller, file]) => `${caller} calls ${file}`)),
+      );
+      expect(Object.values(outcome.goto).flat()).toEqual(Object.values(expected));
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2821,6 +2992,72 @@ describe("C# partial class members across files", () => {
         expect(bound.goto).toBe("Global.cs");
         expect(bound.references["Global.cs"]).toContain(useLine);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "a nearer namespace that declares the type",
+      nearer: "namespace A.N;\npublic class Thing {}\n",
+      expected: { targets: ["not_found", "not_found"], references: [], reachesOther: false },
+    },
+    {
+      name: "a nearer namespace that declares another type",
+      nearer: "namespace A.N;\npublic class Different {}\n",
+      expected: { targets: ["Other.cs", "Other.cs"], references: [4, 4], reachesOther: true },
+    },
+    {
+      name: "no nearer namespace, so the using names the global one",
+      nearer: null,
+      expected: { targets: ["not_found", "not_found"], references: [], reachesOther: false },
+    },
+  ])("decides a name that using Other; and a shadowed using N; may both supply: $name", async (shadow) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-shadowed-star-"));
+    try {
+      const useLines = [
+        "namespace A {",
+        "  using N;",
+        "  using Other;",
+        "  class Use { Thing value; void Make() { Thing.Run(); } }",
+        "}",
+      ];
+      const thing = "public class Thing { public static void Run() {} }";
+      const otherLines = ["namespace Other;", thing];
+      const paths = await writeFixtureFiles(root, {
+        "Global.cs": `namespace N;\n${thing}\n`,
+        "Other.cs": otherLines.join("\n") + "\n",
+        "Use.cs": useLines.join("\n") + "\n",
+        ...(shadow.nearer ? { "Nearer.cs": shadow.nearer } : {}),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const targets: string[] = [];
+      for (const token of ["Thing value", "Thing.Run"]) {
+        const result = await goToDefinition(index, {
+          file: paths["Use.cs"]!,
+          line: 4,
+          column: columnOf(useLines, 4, token),
+        });
+        targets.push(result.status === "ok" ? path.basename(result.definition.file) : result.status);
+      }
+      const found = await findReferences(index, {
+        file: paths["Other.cs"]!,
+        line: 2,
+        column: columnOf(otherLines, 2, "Thing"),
+      });
+      if (found.status !== "ok") throw new Error("Expected references for Other.Thing");
+      const graph = await buildSymbolGraphDetailed(index);
+      const reachesOther = graphReaches(graph, paths["Use.cs"]!, paths["Other.cs"]!);
+
+      // `using N;` names `A.N` when it exists, so `Thing` may be `A.N.Thing` as well as `Other.Thing`, and is not proven.
+      expect({
+        targets,
+        references: found.references
+          .filter((reference) => normalizePath(reference.file) === paths["Use.cs"])
+          .map((reference) => reference.range.start.line),
+        reachesOther,
+      }).toEqual(shadow.expected);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -552,6 +552,62 @@ function nearestCsharpAlias(
   return nearest;
 }
 
+type CsharpAliasTable = {
+  size: number;
+  /** The type aliases (`using B = N.Plain;`) by local name. */
+  types: Map<string, ImportBinding[]>;
+  /** The namespace aliases (`using X = N;`) by normalized local name. */
+  namespaces: Map<string, ImportBinding[]>;
+};
+
+const csharpAliasTables = new WeakMap<readonly ImportBinding[], CsharpAliasTable>();
+
+/** The explicit aliases of a C# file by name, read from its import list once. A star import's expanded copies are no aliases. */
+function csharpAliasTable(mod: ModuleIndex): CsharpAliasTable {
+  const cached = csharpAliasTables.get(mod.imports);
+  if (cached?.size === mod.imports.length) return cached;
+  const table: CsharpAliasTable = { size: mod.imports.length, types: new Map(), namespaces: new Map() };
+  const add = (aliases: Map<string, ImportBinding[]>, name: string, binding: ImportBinding): void => {
+    const named = aliases.get(name);
+    if (named) named.push(binding);
+    else aliases.set(name, [binding]);
+  };
+  for (const imp of mod.imports) {
+    if (imp.kind === "namespace") {
+      add(table.namespaces, CSHARP_SUPPORT.normalizeIdentifier(imp.localNS), imp);
+    } else if ((imp.kind === "named" || imp.kind === "default") && !isExpandedStarBinding(imp, mod.imports)) {
+      add(table.types, imp.local, imp);
+    }
+  }
+  csharpAliasTables.set(mod.imports, table);
+  return table;
+}
+
+/**
+ * The alias, namespace or type, that C# binds the name `name` to at `useNode`: the one declared in the nearest namespace
+ * block that contains the use. `undefined` when no alias is in scope there.
+ */
+export function csharpAliasAt(mod: ModuleIndex, name: string, useNode: SyntaxNodeLike): ImportBinding | undefined {
+  const namespaceAlias = innermostNamespaceImport(mod.imports, name, useNode, CSHARP_SUPPORT.normalizeIdentifier);
+  const typeAliases = csharpAliasTable(mod).types.get(name) ?? [];
+  return nearestCsharpAlias(mod, namespaceAlias ? [namespaceAlias, ...typeAliases] : typeAliases, useNode.startIndex);
+}
+
+/**
+ * Whether a table of the file's imports keyed by name, built once for the whole file, answers for `name` at `useNode`.
+ * C# aliases bind only inside the block of their directive, so the table is right only for a name that no alias
+ * declares, or whose single alias is the one in scope at the use. A name that two aliases share, or whose alias sits in
+ * another block, has no answer a whole-file table can give.
+ */
+export function csharpAliasTableAnswers(mod: ModuleIndex, name: string, useNode: SyntaxNodeLike): boolean {
+  const table = csharpAliasTable(mod);
+  const types = table.types.get(name);
+  const namespaces = table.namespaces.get(CSHARP_SUPPORT.normalizeIdentifier(name));
+  const declared = (types?.length ?? 0) + (namespaces?.length ?? 0);
+  if (!declared) return true;
+  return declared === 1 && csharpAliasAt(mod, name, useNode) === (types?.[0] ?? namespaces?.[0]);
+}
+
 /**
  * Rewrites a valid C# `using X = Namespace;` lookup (`X.Target` or `X::Target`) into the
  * dotted form export resolution understands. `global::` and unknown aliases keep their source spelling.
@@ -828,20 +884,7 @@ export async function resolveMemberAccessDefinition(params: {
             imp = innermostNamespaceImport(mod.imports, exprName, expr, sup.normalizeIdentifier);
           if (!imp) return null;
         } else {
-          const namespaceAlias = innermostNamespaceImport(mod.imports, exprName, expr, sup.normalizeIdentifier);
-          const typeAliases = mod.imports.filter(
-            (candidate) =>
-              (candidate.kind === "named" || candidate.kind === "default") &&
-              candidate.local === exprName &&
-              !isExpandedStarBinding(candidate, mod.imports),
-          );
-          // An alias binds only where its directive is in scope, and the one of the nearest namespace block wins over the
-          // aliases of the blocks around it, whichever kind each is.
-          imp = nearestCsharpAlias(
-            mod,
-            namespaceAlias ? [namespaceAlias, ...typeAliases] : typeAliases,
-            expr.startIndex,
-          );
+          imp = csharpAliasAt(mod, exprName, expr);
         }
       } else {
         imp = effectiveExplicitBinding(
@@ -960,9 +1003,14 @@ export async function resolveMemberAccessDefinition(params: {
         const memberName = sliceText(subProp, source);
         // `P.Mix` in `P.Mix.M()`: when the leftmost name binds nothing, a C# dotted name is a
         // namespace-qualified type, which qualified export lookup resolves across every file that
-        // declares the namespace.
+        // declares the namespace. An alias in scope binds the name, resolved or not, so it never
+        // falls back to a namespace of that name.
         const dottedRoot = !base && sup.id === "csharp" ? csharpDottedNameRoot(expr) : null;
-        if (dottedRoot && !resolveLexicalBinding?.(dottedRoot)) {
+        if (
+          dottedRoot &&
+          !resolveLexicalBinding?.(dottedRoot) &&
+          !csharpAliasAt(mod, sliceText(dottedRoot, source), dottedRoot)
+        ) {
           return resolveCsharpQualifiedName(index, mod, sliceText(expr, source).replace(/\s+/gu, ""), expr.startIndex);
         }
         if (base?.kind === "namespace") {

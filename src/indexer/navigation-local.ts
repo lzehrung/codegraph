@@ -18,7 +18,12 @@ import {
   closestContainingScope,
 } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
-import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
+import {
+  cjsRequireValueBinding,
+  csharpShadowedStarMayHold,
+  resolveExport,
+  resolveImported,
+} from "./navigation-resolve.js";
 import { phpNamedImportRole } from "./import-types.js";
 import { resolvePhpExplicitImport } from "./php-namespace-symbols.js";
 import { AMBIGUOUS_STAR_IMPORT_REASON } from "./ambiguous-resolution.js";
@@ -562,6 +567,8 @@ export function resolveNamedDefinition(
   }
 
   const starCandidates: StarImportCandidate[] = [];
+  // A star import that an enclosing namespace shadows may still hold the name; it leaves the other candidates unproven.
+  let starBlocked = false;
   let lastWinsResult: GoToResult | null = null;
   const acceptBinding = (result: GoToResult, imp: ImportBinding): GoToResult | null => {
     // A click on the binding's own token names that import, not a later rebinding.
@@ -638,6 +645,8 @@ export function resolveNamedDefinition(
         } else {
           starCandidates.push({ imp, def });
         }
+      } else if (support.id === "csharp" && csharpShadowedStarMayHold(index, mod, imp, name)) {
+        starBlocked = true;
       }
     } else if (imp.kind === "namespace" && support.normalizeIdentifier(imp.localNS) === normalizedName) {
       const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
@@ -745,7 +754,7 @@ export function resolveNamedDefinition(
       }
     }
     if (!starCandidates.length) return null;
-    const decision = decideStarImportCandidates(index, support.id, starCandidates, file);
+    const decision = decideStarImportCandidates(index, support.id, starCandidates, file, starBlocked);
     if (decision.status === "ambiguous") {
       return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
     }

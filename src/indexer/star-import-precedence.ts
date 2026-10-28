@@ -1,7 +1,7 @@
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ImportBinding } from "./import-types.js";
-import { resolveImported } from "./navigation-resolve.js";
+import { csharpShadowedStarMayHold, resolveImported } from "./navigation-resolve.js";
 import { sameDef } from "./reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 import { createUnionFind } from "../util/collections.js";
@@ -353,13 +353,19 @@ function representativeDefinition(
   return [...group].sort(compareSymbolDefs)[0]!;
 }
 
+/**
+ * `blocked` marks a star import that may hold the name but resolved nothing, a C# `using N;` that an enclosing
+ * namespace shadows: it leaves any candidate the other star imports supply unproven.
+ */
 export function decideStarImportCandidates(
   index: ProjectIndex,
   languageId: string,
   candidates: readonly StarImportCandidate[],
   useFile?: string,
+  blocked = false,
 ): StarImportDecision {
   if (!candidates.length) return { status: "none" };
+  if (blocked) return { status: "ambiguous" };
   const groups = groupStarDefinitions(
     index,
     languageId,
@@ -391,16 +397,18 @@ export function resolveStarImportedName(
   name: string,
 ): StarImportDecision {
   const candidates: StarImportCandidate[] = [];
+  let blocked = false;
   for (const imp of mod.imports) {
     if (imp.kind !== "star") continue;
     const def = resolveStarImportedDefinition(index, imp, name, languageId);
     if (def) candidates.push({ imp, def });
+    else blocked ||= languageId === "csharp" && csharpShadowedStarMayHold(index, mod, imp, name);
   }
   if (starImportPrecedence(languageId) === "last-wins") {
     const last = candidates.at(-1);
     return last ? { status: "resolved", imp: last.imp, definition: last.def } : { status: "none" };
   }
-  return decideStarImportCandidates(index, languageId, candidates, mod.file);
+  return decideStarImportCandidates(index, languageId, candidates, mod.file, blocked);
 }
 
 /**
