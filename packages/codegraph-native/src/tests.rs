@@ -892,12 +892,16 @@ fn kotlin_parse_accepts_forms_the_published_grammar_rejects() {
 }
 
 #[test]
-fn kotlin_parse_reads_a_long_run_of_dollars_in_linear_time() {
-    // Only the last two dollars of a run start a template in a `$$` string. The grammar's scanner once returned
-    // one of the dollars before them per call and read the whole run again each time, so 200,000 dollars took about
-    // a minute. The linear parse takes milliseconds; the bound is far from both.
+fn kotlin_parse_reads_long_dollar_and_quote_runs_in_linear_time() {
+    // Only the last two dollars of a run start a template in a `$$` string, and only the last three quotes of a run
+    // close a `$$"""` string. The grammar's scanner once returned one character before them per call and read the
+    // whole run again each time, so 200,000 dollars took about a minute. The linear parse takes milliseconds; the
+    // bound is far from both.
     let run = "$".repeat(200_000);
-    let source = format!("val a = $$\"{run}name\"\nval b = $$\"\"\"x{run}{{name}}\"\"\"\n");
+    let quotes = "\"".repeat(200_000);
+    let source = format!(
+        "val a = $$\"{run}name\"\nval b = $$\"\"\"x{run}{{name}}\"\"\"\nval c = $$\"\"\"y{quotes}\"\"\"\n"
+    );
     let (tree, elapsed) = parse_kotlin_timed(&source, std::time::Duration::from_secs(10));
     assert!(
         elapsed < std::time::Duration::from_secs(2),
