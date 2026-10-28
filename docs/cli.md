@@ -436,6 +436,7 @@ Without `--graph`, each UI load or reload builds the current project graph throu
 
 - It combines indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
 - It removes import declarations and directives before duplicate matching, including Astro/MDX module imports and embedded HTML, Vue, and Svelte script and style blocks.
+- A file is compared as the language the registry assigns it, including a suffix that `languages.extensions` maps to a language. JSON, JSONC, TOML, YAML, and text files are compared as text.
 - Pretty output is the default.
 - `--profile cleanup` and `--profile refactor-roi` are aliases for cleanup triage defaults. In pretty mode they default to `--sort reduced-lines`; in JSON mode they keep similarity order unless `--sort` is explicit. Both profiles also default `--min-confidence medium` and `--min-tokens 80`, and they suppress groups labeled `import-list-noise` or `barrel-export-noise`.
 - Pretty output includes reduced lines, estimated reducible lines, cleanup labels, cluster counts, and a compact summary footer. Use `--no-summary` to suppress the footer.
@@ -1010,7 +1011,7 @@ Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json
 }
 ```
 
-SQL files are part of normal graph output: `.sql` files are discovered by default, SQL-to-SQL object references appear as file edges, and SQL object symbols work with `goto` and `refs` inside SQL files. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. SQL `goto` and `refs` resolve schema-qualified names plus object-level alias/table-qualified references such as `t.id` or `schema.table.id` to table/view definitions, not to column declarations. With `--sql-artifacts`, JSON graph output also includes detailed SQL statement facts and object-candidate metadata. SQL artifact nodes use `sql_statement_fact` and `sql_schema_candidate` truth tiers; they do not assert a current schema and do not globally link application-code strings to SQL objects.
+SQL files are part of normal graph output: `.sql`, `.ddl`, `.pgsql`, and `.mysql` files are discovered by default, a suffix that `languages.extensions` maps to `sql` is treated the same way, SQL-to-SQL object references appear as file edges, and SQL object symbols work with `goto` and `refs` inside SQL files. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. SQL `goto` and `refs` resolve schema-qualified names plus object-level alias/table-qualified references such as `t.id` or `schema.table.id` to table/view definitions, not to column declarations. With `--sql-artifacts`, JSON graph output also includes detailed SQL statement facts and object-candidate metadata. SQL artifact nodes use `sql_statement_fact` and `sql_schema_candidate` truth tiers; they do not assert a current schema and do not globally link application-code strings to SQL objects.
 
 Format notes:
 

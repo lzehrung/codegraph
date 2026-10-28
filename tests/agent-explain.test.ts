@@ -287,6 +287,56 @@ describe("agent explain", () => {
     );
   });
 
+  // `.ddl`, `.pgsql`, and `.mysql` are built-in SQL extensions and `.psql` is a `languages.extensions` mapping.
+  // `.sql` is the control.
+  describe.each([
+    { ext: ".sql" },
+    { ext: ".ddl" },
+    { ext: ".pgsql" },
+    { ext: ".mysql" },
+    { ext: ".psql", languageExtensions: { ".psql": "sql" } },
+  ])("SQL objects in $ext files", ({ ext, languageExtensions }) => {
+    async function mkSqlExtensionRepo(): Promise<string> {
+      const root = await mkTmpDir("cg-agent-explain-sql-ext-");
+      await fs.writeFile(
+        path.join(root, `users${ext}`),
+        "CREATE TABLE public.users (id int primary key);\nCREATE VIEW active_users AS SELECT id FROM public.users;\n",
+      );
+      if (languageExtensions) {
+        await fs.writeFile(
+          path.join(root, "codegraph.config.json"),
+          JSON.stringify({ languages: { extensions: languageExtensions } }),
+        );
+      }
+      return root;
+    }
+
+    it("explains an object by name as a SQL object with its related objects", async () => {
+      const root = await mkSqlExtensionRepo();
+      const explanation = await explainCodegraphTarget({ root, target: "public.users" });
+
+      expect(explanation.target.kind).toBe("sql_object");
+      expect(explanation.relatedSqlObjects).toContainEqual(
+        expect.objectContaining({ name: "active_users", relation: "incoming:reads_from" }),
+      );
+    });
+
+    it("explains the file with the objects it defines and a SQL search follow-up", async () => {
+      const root = await mkSqlExtensionRepo();
+      const explanation = await explainCodegraphTarget({ root, target: `users${ext}` });
+
+      expect(explanation.target.kind).toBe("file");
+      expect(explanation.relatedSqlObjects.map((object) => `${object.relation}:${object.name}`).sort()).toEqual([
+        "same_file:active_users",
+        "same_file:public.users",
+      ]);
+      expect(explanation.followUps).toContainEqual({
+        tool: "search",
+        arguments: { query: `users${ext}`, mode: "sql" },
+      });
+    });
+  });
+
   it("bounds dependency and snippet output", async () => {
     const root = await mkRepo();
     await fs.writeFile(

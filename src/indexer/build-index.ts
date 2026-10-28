@@ -123,6 +123,7 @@ import {
 } from "./types.js";
 import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/file-prep.js";
 
+import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/source-graph.js";
 import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
@@ -1613,10 +1614,7 @@ async function buildIndexFromFileListShared(
   const conc = edgeProbeConcurrency;
   const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   const sqlFiles = normalizedFiles
-    .filter((file) => {
-      if (!languageExtensions) return path.extname(file).toLowerCase() === ".sql";
-      return supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "sql";
-    })
+    .filter((file) => isSqlFilePath(file, languageExtensions))
     .sort((left, right) => left.localeCompare(right));
   const fileSignatures = await prepareFileSignatures({
     projectRoot,
@@ -1638,7 +1636,7 @@ async function buildIndexFromFileListShared(
     sigInfo: FileSignature,
     cachedEdgesEntry: ManifestFileEntry | undefined,
   ): boolean => {
-    if (supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id !== "sql") return false;
+    if (!isSqlFilePath(file, opts?.languageExtensions)) return false;
     if (!cachedEdgesEntry || !sqlCorpusSig || cachedEdgesEntry.sqlCorpusSig !== sqlCorpusSig) return true;
     const matchesGitSig = !!sigInfo.gitSig && !!cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig;
     return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);

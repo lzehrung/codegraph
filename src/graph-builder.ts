@@ -14,7 +14,8 @@ import type { BuildReport } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import { collectEdgesForFile, hasBetterProvenance } from "./graph-edge-collector.js";
 import { edgeKey } from "./util/graph-edges.js";
-import { buildSqlFactCache, isSqlFile as isSqlFileForLanguage, sqlCorpusSignature } from "./sql/source-graph.js";
+import { isSqlFilePath } from "./sql/classify-sql-file.js";
+import { buildSqlFactCache, sqlCorpusSignature } from "./sql/source-graph.js";
 
 type GraphFileSignature = { sig: string; gitSig?: string; cacheSig?: string };
 
@@ -55,7 +56,7 @@ export async function collectGraph(
   assertNativeRequiredAvailable();
   const normalizedFiles = files.map(normalizePath);
   const normalizedAllFiles = (opts?.allFiles ?? files).map(normalizePath);
-  const isSqlFile = (file: string): boolean => isSqlFileForLanguage(file, opts?.languageExtensions);
+  const isSqlFile = (file: string): boolean => isSqlFilePath(file, opts?.languageExtensions);
   const hasExplicitReplace = !!opts?.replaceFiles;
   const requestedReplaceSet = hasExplicitReplace
     ? new Set(Array.from(opts.replaceFiles ?? [], (file) => normalizePath(file)))

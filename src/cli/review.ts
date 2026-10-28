@@ -5,6 +5,7 @@ import { buildReviewReport, type ReviewBuildReport, type ReviewDepth, type Revie
 import type { CandidateTestFile } from "../impact/context.js";
 import { formatRequiredArgumentCount } from "../impact/report-shared.js";
 import type { BuildOptions, CacheLocation, ProjectIndex } from "../indexer/types.js";
+import type { LanguageExtensionMap } from "../languages.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import {
   appendDuplicateLeadSummary,
@@ -28,6 +29,7 @@ import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./o
 export type ReviewCommandContext = {
   projectRootFs: string;
   discoveryOptions: ProjectFileDiscoveryOptions;
+  languageExtensions: LanguageExtensionMap | undefined;
   reportFile: string | undefined;
   commandReport: CommandReport | undefined;
   getOpt: (name: string) => string | undefined;
@@ -291,6 +293,7 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   const maxTests = parseOptionalNonNegativeIntegerOption(maxTestsRaw, "--max-tests");
   const reviewOpts: Parameters<typeof buildReviewReport>[1] = {};
   reviewOpts.discovery = context.discoveryOptions;
+  if (context.languageExtensions) reviewOpts.languageExtensions = context.languageExtensions;
   if (reviewDepth) reviewOpts.reviewDepth = reviewDepth;
   if (base !== undefined) reviewOpts.gitBase = base;
   if (head !== undefined) reviewOpts.gitHead = head;
