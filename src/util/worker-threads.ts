@@ -87,6 +87,33 @@ function inheritableExecArgv(execArgv: readonly string[]): string[] {
   return kept;
 }
 
+/** Splits `NODE_OPTIONS` the way Node does: tokens are separated by spaces, and a double-quoted part may hold spaces
+ * and escape a character with a backslash. */
+function nodeOptionsTokens(nodeOptions: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  let pending = false;
+  for (let i = 0; i < nodeOptions.length; i += 1) {
+    const char = nodeOptions[i] as string;
+    if (inQuotes && char === "\\" && i + 1 < nodeOptions.length) {
+      i += 1;
+      current += nodeOptions[i];
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+      pending = true;
+    } else if (char === " " && !inQuotes) {
+      if (pending || current) tokens.push(current);
+      current = "";
+      pending = false;
+    } else {
+      current += char;
+    }
+  }
+  if (pending || current) tokens.push(current);
+  return tokens;
+}
+
 /**
  * `execArgv` for the worker threads of a Piscina pool. Piscina's worker calls `require()` on its task module before
  * it falls back to `import()`, and this package's workers are ES modules, so on Node 22 that first load runs through
@@ -95,14 +122,18 @@ function inheritableExecArgv(execArgv: readonly string[]): string[] {
  * every worker that has not finished starting. With `require(esm)` off, the `require()` fails at once and the
  * `import()` after it can be interrupted safely.
  *
- * An explicit `execArgv` replaces the options that a worker inherits, so this returns the host's options that
- * {@link WORKER_INHERITED_FLAGS} lists (a host started with `node --require ./preload.cjs` still runs that preload in
- * its workers), followed by `--no-experimental-require-module` when this Node knows it and the host has not set
- * either require-module option itself.
+ * An explicit `execArgv` replaces the command-line options that a worker inherits, so this returns the host's options
+ * that {@link WORKER_INHERITED_FLAGS} lists (a host started with `node --require ./preload.cjs` still runs that preload
+ * in its workers), followed by `--no-experimental-require-module` when this Node knows it and the host has not chosen
+ * a require-module option itself. A worker re-reads `NODE_OPTIONS` from the environment, and its `execArgv` wins over
+ * it, so a require-module option in `NODE_OPTIONS` (for a preload that requires an ES module) counts as the host's
+ * choice too, and appending the flag then would override it.
  */
 export function piscinaWorkerExecArgv(): string[] {
   const execArgv = inheritableExecArgv(process.execArgv);
-  const hostChoseRequireEsm = execArgv.some((token) => REQUIRE_ESM_FLAGS.includes(token));
+  const hostChoseRequireEsm = [...execArgv, ...nodeOptionsTokens(process.env.NODE_OPTIONS ?? "")].some((token) =>
+    REQUIRE_ESM_FLAGS.includes(token),
+  );
   if (!hostChoseRequireEsm && process.allowedNodeEnvironmentFlags.has(NO_REQUIRE_ESM_FLAG)) {
     execArgv.push(NO_REQUIRE_ESM_FLAG);
   }
