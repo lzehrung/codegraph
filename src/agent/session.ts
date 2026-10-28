@@ -82,6 +82,11 @@ export type AgentSession = {
   /** Bucketed duplicate-detection analysis for the current index, memoized for the session. */
   loadDuplicateAnalysis?: () => Promise<DuplicatePreparedAnalysis>;
   checkFreshness?: () => Promise<AgentFreshnessResult>;
+  /**
+   * Drops the cached freshness result and any in-flight freshness check so the next `checkFreshness` scans
+   * again. File-watcher hint: the pull check stays the authority. Does not invalidate the index itself.
+   */
+  markChanged?: () => void;
   invalidate: () => void;
 };
 
@@ -369,6 +374,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let lastFreshnessCheckedAt = 0;
   let lastFreshnessResult: AgentFreshnessResult | undefined;
   let freshnessInFlight: Promise<AgentFreshnessResult> | undefined;
+  // Bumped by markChanged. A scan that started under an older generation may have read files before the edit
+  // that bumped it, so it must not cache its result.
+  let changeGeneration = 0;
 
   const invalidate = (): void => {
     runSessionInvalidationHooks(session);
@@ -383,6 +391,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     cachedFileSignatures = undefined;
     cachedConfigurationIdentity = undefined;
     cachedDuplicateAnalysis = undefined;
+    lastFreshnessCheckedAt = 0;
+    lastFreshnessResult = undefined;
+    freshnessInFlight = undefined;
+  };
+
+  const markChanged = (): void => {
+    changeGeneration += 1;
     lastFreshnessCheckedAt = 0;
     lastFreshnessResult = undefined;
     freshnessInFlight = undefined;
@@ -593,10 +608,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     }
     if (freshnessInFlight) return freshnessInFlight;
 
-    freshnessInFlight = (async (): Promise<AgentFreshnessResult> => {
+    const generation = changeGeneration;
+    const scan: Promise<AgentFreshnessResult> = (async (): Promise<AgentFreshnessResult> => {
       if (cachedBase) await cachedBase;
       else if (cachedFilePlan) await cachedFilePlan;
-      if (!cachedFileSignatures) return { state: "fresh" };
+      // The baseline that this scan checks, read before any file is: the stats below cannot be older than it.
+      const signatures = cachedFileSignatures;
+      if (!signatures) return { state: "fresh" };
       // Share discovery work within this check. File-only sessions have no indexed
       // configuration baseline, so they only need to compare discovery signatures.
       const discoveryContext = createProjectDiscoveryContext(options.root);
@@ -613,9 +631,11 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         resolveAgentSessionFilePlan(options, discoveryContext),
       ]);
       const currentSignatures = await collectAgentFileSignatures(currentFilePlan.files);
-      const signatures = cachedFileSignatures;
+      // `invalidate` dropped that baseline, or a rebuild replaced it, while the files were read. The stats may predate
+      // the replacement and report it as changed. This scan then changes nothing: it neither invalidates the newer
+      // snapshot nor caches, and what its caller loads next was built after the scan began.
+      if (cachedFileSignatures !== signatures) return { state: "fresh" };
       const configurationIdentity = cachedConfigurationIdentity;
-      if (!signatures) return { state: "fresh" };
       const diff = diffAgentFileSignatures(signatures, currentSignatures);
       const configurationChanged =
         !!currentConfigurationIdentity &&
@@ -657,19 +677,26 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
               reason: `changed byte count exceeds ${maxBytes}`,
             };
           } else {
+            // The stats were compared with the baseline that is still the session's, so the change is real even when
+            // markChanged detached this scan. Holding the refresh back would starve it while events keep arriving.
             invalidate();
             result = { state: "refreshed", changedFiles };
           }
         }
       }
-      lastFreshnessCheckedAt = Date.now();
-      lastFreshnessResult = result;
+      if (generation === changeGeneration) {
+        lastFreshnessCheckedAt = Date.now();
+        lastFreshnessResult = result;
+      }
       return result;
     })().finally(() => {
-      freshnessInFlight = undefined;
+      // `markChanged` and `invalidate` detach a running scan, and a newer one may hold the slot by the time this one
+      // ends. That scan is not this one's to clear.
+      if (freshnessInFlight === scan) freshnessInFlight = undefined;
     });
+    freshnessInFlight = scan;
 
-    return freshnessInFlight;
+    return scan;
   };
 
   const session: AgentSession = {
@@ -679,6 +706,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     loadProject,
     loadDuplicateAnalysis,
     checkFreshness,
+    markChanged,
     invalidate,
   };
   return session;

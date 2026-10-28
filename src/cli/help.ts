@@ -410,7 +410,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 export const SERVER_HELP_TEXT = `codegraph server - Manage a shared project-local MCP HTTP server
 
 Usage:
-  codegraph server start [--root <path>] [--host <host>] [--port <1-65535>] [--startup-timeout-ms <1-86400000>] [--json] [--replace] [--warmup | --warmup-symbols | --no-warmup]
+  codegraph server start [--root <path>] [--host <host>] [--port <1-65535>] [--startup-timeout-ms <1-86400000>] [--json] [--replace] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
   codegraph server status [--root <path>] [--json | --pretty]
   codegraph server stop [--root <path>]
 
@@ -421,7 +421,7 @@ Behavior:
 
 Forwarded startup options:
   --cache, --cache-dir, --cache-strict, --cache-verify, --threads, --workers,
-  --include-glob, --ignore-glob, --no-gitignore, and --resolution-hint pass to mcp serve.
+  --include-glob, --ignore-glob, --no-gitignore, --no-watch, and --resolution-hint pass to mcp serve.
 
 Safety:
   The registry stores process metadata and a non-secret credential ID. Its credential remains in the per-user Codegraph state directory, outside the project and separate from compiler cache data. An installed-version change requires an explicit server restart; Codegraph does not replace mapped native files or terminate clients automatically.
@@ -429,7 +429,7 @@ Safety:
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation
 
-Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup]
+Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
 
 Transports:
   --stdio          Serve MCP over stdio (default)
@@ -437,6 +437,7 @@ Transports:
   --warmup        Build the base session cache at startup (default)
   --warmup-symbols Build the base cache and detailed symbol graph at startup
   --no-warmup     Skip startup warmup; the first tool call pays for discovery and building
+  --no-watch      Do not watch project files; rely on the freshness check of each tool call
 
 Index Options:
   --cache <mode>     Session cache mode: disk, memory, off
@@ -455,7 +456,7 @@ Tools are read-only unless --allow-build is passed.
 
 export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent graph navigation
 
-Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup]
+Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
 
 Tools:
   orient          Build a compact first-turn repo packet
@@ -491,6 +492,7 @@ Defaults:
   HTTP transport binds to 127.0.0.1 unless --host is passed and serves /mcp.
   Startup warms the base session cache by default. --warmup-symbols also warms the detailed symbol graph. --no-warmup starts lazily instead, leaving the first tool call to pay for discovery and building.
   Warmup uses the configured session cache and shared index flags.
+  The server watches project files and refreshes the index in the background: 500 ms after the last change, at most once every 5 seconds, and paused after 30 minutes without a tool call. --no-watch relies on the freshness check of each tool call instead.
   Tools are read-only unless --allow-build is passed.
 `;
 

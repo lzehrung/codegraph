@@ -10,9 +10,11 @@ import { DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION } from "../src/indexer/build-cac
 import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import {
   AGENT_FRESHNESS_CHECK_INTERVAL_MS,
+  type AgentFreshnessResult,
   createAgentSession,
   listAgentSessionFiles,
   type AgentProjectSnapshot,
+  type AgentSession,
 } from "../src/agent/session.js";
 import type { QueryIndexHandle } from "../src/agent/query-index/update.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
@@ -1597,6 +1599,241 @@ describe("agent session", () => {
       statSpy.mockRestore();
       dateSpy.mockRestore();
     }
+  });
+
+  describe("markChanged", () => {
+    // Tests that depend on the cached result freeze Date.now so that the 5 s freshness window cannot lapse by itself.
+    async function createLoadedSession(prefix: string) {
+      const root = await mkTmpDir(prefix);
+      const filePath = path.join(root, "main.ts");
+      await fs.writeFile(filePath, "export const value = 1;\n", "utf8");
+      const session = createAgentSession({ root, freshness: { policy: "auto" } });
+      const snapshot = await session.loadProject({ symbolGraph: "skip" });
+      return { session, snapshot, filePath };
+    }
+
+    // Holds the first stat of main.ts after the real stat returned, so a scan can be caught mid-flight having
+    // read the file as it is before an edit.
+    function holdFirstStatOfMain() {
+      const originalStat = fs.stat.bind(fs);
+      const scanStatted = Promise.withResolvers<void>();
+      const releaseScan = Promise.withResolvers<void>();
+      let held = false;
+      const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const stat = await originalStat(...args);
+        if (!held && String(args[0]).endsWith("main.ts")) {
+          held = true;
+          scanStatted.resolve();
+          await releaseScan.promise;
+        }
+        return stat;
+      });
+      return { statSpy, scanStatted: scanStatted.promise, releaseScan: releaseScan.resolve };
+    }
+
+    // Holds the first `holds` stats of main.ts after the real stat returned, one scan each, so that scans can be
+    // caught mid-flight. A scan after those is not held. Counts every stat of main.ts, which is one per scan.
+    function holdStatsOfMain(holds: number) {
+      const originalStat = fs.stat.bind(fs);
+      const scans = Array.from({ length: holds }, () => ({
+        statted: Promise.withResolvers<void>(),
+        released: Promise.withResolvers<void>(),
+      }));
+      let stats = 0;
+      const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const stat = await originalStat(...args);
+        if (String(args[0]).endsWith("main.ts")) {
+          const scan = scans[stats];
+          stats += 1;
+          scan?.statted.resolve();
+          await scan?.released.promise;
+        }
+        return stat;
+      });
+      return { statSpy, scans, stats: () => stats };
+    }
+
+    it("makes the next freshness check rescan inside the cached window", async () => {
+      const { session, filePath } = await createLoadedSession("cg-agent-session-mark-changed-");
+      const dateSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      try {
+        expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
+
+        await fs.writeFile(filePath, "export const value = 2222;\n", "utf8");
+        expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
+
+        session.markChanged!();
+        expect(await session.checkFreshness!()).toEqual({ state: "refreshed", changedFiles: ["main.ts"] });
+      } finally {
+        dateSpy.mockRestore();
+        session.invalidate();
+      }
+    });
+
+    it("drops only the freshness result: an unchanged project keeps its snapshot", async () => {
+      const { session, snapshot } = await createLoadedSession("cg-agent-session-mark-changed-keep-");
+      try {
+        expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
+
+        session.markChanged!();
+
+        expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
+        expect(await session.loadProject({ symbolGraph: "skip" })).toBe(snapshot);
+      } finally {
+        session.invalidate();
+      }
+    });
+
+    it("does not cache the result of a scan that started before the edit that called markChanged", async () => {
+      const { session, filePath } = await createLoadedSession("cg-agent-session-mark-changed-race-");
+      const dateSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      const hold = holdFirstStatOfMain();
+      try {
+        const racing = session.checkFreshness!();
+        await hold.scanStatted;
+        await fs.writeFile(filePath, "export const value = 2222;\n", "utf8");
+        session.markChanged!();
+        hold.releaseScan();
+
+        // The racing scan read the file before the edit, so its own answer is fresh.
+        expect(await racing).toEqual({ state: "fresh" });
+        // That answer must not stand in for a scan of the edited file.
+        expect(await session.checkFreshness!()).toEqual({ state: "refreshed", changedFiles: ["main.ts"] });
+      } finally {
+        hold.releaseScan();
+        hold.statSpy.mockRestore();
+        dateSpy.mockRestore();
+        session.invalidate();
+      }
+    });
+
+    it("starts a new scan instead of joining one that began before the edit", async () => {
+      const { session, filePath } = await createLoadedSession("cg-agent-session-mark-changed-join-");
+      const hold = holdFirstStatOfMain();
+      try {
+        const racing = session.checkFreshness!();
+        await hold.scanStatted;
+        await fs.writeFile(filePath, "export const value = 2222;\n", "utf8");
+        session.markChanged!();
+
+        let second: AgentFreshnessResult | undefined;
+        void session.checkFreshness!().then((result) => {
+          second = result;
+        });
+        // The racing scan is still held, so only a scan of its own can answer.
+        await vi.waitFor(() => expect(second).toEqual({ state: "refreshed", changedFiles: ["main.ts"] }), {
+          timeout: 5_000,
+        });
+        hold.releaseScan();
+        expect(await racing).toEqual({ state: "fresh" });
+      } finally {
+        hold.releaseScan();
+        hold.statSpy.mockRestore();
+        session.invalidate();
+      }
+    });
+
+    it("lets a caller join the scan that replaced a detached one after the detached one has finished", async () => {
+      const { session } = await createLoadedSession("cg-agent-session-mark-changed-replacement-");
+      const hold = holdStatsOfMain(2);
+      const [detachedScan, replacementScan] = hold.scans;
+      try {
+        const detached = session.checkFreshness!();
+        await detachedScan?.statted.promise;
+        session.markChanged!();
+        const replacement = session.checkFreshness!();
+        await replacementScan?.statted.promise;
+
+        // The detached scan ends while the replacement is still pending. Its cleanup must leave the replacement alone.
+        detachedScan?.released.resolve();
+        expect(await detached).toEqual({ state: "fresh" });
+        const joined = session.checkFreshness!();
+        replacementScan?.released.resolve();
+
+        expect(await Promise.all([replacement, joined])).toEqual([{ state: "fresh" }, { state: "fresh" }]);
+        // One scan answered both callers; a third scan would have statted main.ts again.
+        expect(hold.stats()).toBe(2);
+      } finally {
+        for (const scan of hold.scans) scan.released.resolve();
+        hold.statSpy.mockRestore();
+        session.invalidate();
+      }
+    });
+
+    // A scan reads main.ts and waits. Then the file is edited, `detach` replaces the session's snapshot, and the scan
+    // finishes: its stats are older than the new baseline, which they would report as changed.
+    async function finishDetachedScanAfterRebuild(
+      prefix: string,
+      detach: (session: AgentSession) => Promise<void>,
+    ): Promise<void> {
+      const { session, snapshot, filePath } = await createLoadedSession(prefix);
+      const hold = holdStatsOfMain(1);
+      const [heldScan] = hold.scans;
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const detached = session.checkFreshness!();
+        await heldScan?.statted.promise;
+        await fs.writeFile(filePath, "export const value = 2222;\n", "utf8");
+        await detach(session);
+        const rebuilt = await session.loadProject({ symbolGraph: "skip" });
+        expect(rebuilt).not.toBe(snapshot);
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+        let invalidations = 0;
+        sessionLifecycleModule.registerSessionInvalidationHook(session, () => {
+          invalidations += 1;
+        });
+
+        heldScan?.released.resolve();
+        const detachedResult = await detached;
+
+        // The rebuilt snapshot survives: no invalidation, no second build.
+        expect(invalidations).toBe(0);
+        expect(await session.loadProject({ symbolGraph: "skip" })).toBe(rebuilt);
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+        // The detached scan still answers its own caller. What that caller loads next was built after the scan began.
+        expect(detachedResult).toEqual({ state: "fresh" });
+      } finally {
+        heldScan?.released.resolve();
+        hold.statSpy.mockRestore();
+        buildSpy.mockRestore();
+        session.invalidate();
+      }
+    }
+
+    it("leaves the rebuilt snapshot alone when a scan that markChanged detached finishes after the rebuild", async () => {
+      await finishDetachedScanAfterRebuild("cg-agent-session-mark-changed-rebuilt-", async (session) => {
+        session.markChanged!();
+        // The replacement scan finds the edit and invalidates; its caller rebuilds.
+        expect(await session.checkFreshness!()).toEqual({ state: "refreshed", changedFiles: ["main.ts"] });
+      });
+    });
+
+    it("leaves the rebuilt snapshot alone when a scan that invalidate detached finishes after the rebuild", async () => {
+      await finishDetachedScanAfterRebuild("cg-agent-session-invalidate-rebuilt-", async (session) => {
+        session.invalidate();
+      });
+    });
+
+    it("still refreshes the baseline it found changed when markChanged detached the scan, so that steady events cannot starve the refresh", async () => {
+      const { session, snapshot, filePath } = await createLoadedSession("cg-agent-session-mark-changed-found-");
+      const hold = holdFirstStatOfMain();
+      try {
+        // The scan reads the edited file, then another event detaches it.
+        await fs.writeFile(filePath, "export const value = 2222;\n", "utf8");
+        const detached = session.checkFreshness!();
+        await hold.scanStatted;
+        session.markChanged!();
+        hold.releaseScan();
+
+        expect(await detached).toEqual({ state: "refreshed", changedFiles: ["main.ts"] });
+        // `refreshed` promises that the next load rebuilds. Without the invalidation it would serve the old snapshot.
+        expect(await session.loadProject({ symbolGraph: "skip" })).not.toBe(snapshot);
+      } finally {
+        hold.releaseScan();
+        hold.statSpy.mockRestore();
+        session.invalidate();
+      }
+    });
   });
 
   describe("query index sessionStore generation retries (S12)", () => {
