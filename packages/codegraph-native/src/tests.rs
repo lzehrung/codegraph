@@ -795,3 +795,79 @@ fn parse_syntax_tree_rejects_unsupported_languages() {
         "unexpected error: {error}"
     );
 }
+
+/// Parses Kotlin source on a worker thread so a scanner that never returns fails the test
+/// instead of hanging the suite.
+fn parse_kotlin_within_deadline(source: &str) -> tree_sitter::Tree {
+    let owned = source.to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let language = language_for_id("kotlin").expect("kotlin language should exist");
+        let mut parser = Parser::new();
+        parser
+            .set_language(&language)
+            .expect("parser language should be set");
+        let tree = parser.parse(owned, None).expect("source should parse into a tree");
+        let _ = sender.send(tree);
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap_or_else(|_| panic!("Kotlin parse did not return for {source:?}"))
+}
+
+#[test]
+fn kotlin_parse_returns_for_files_ending_mid_annotation() {
+    let truncated_real_snippet =
+        "package demo\n\nclass Repo {\n    val items = listOf(1, 2)\n\n    @Deprecated(\"use find\"\n    @get";
+    for source in [
+        "val x = 1\n\n@Ann",
+        "class A {\n  val x = 1\n  @get",
+        "class A {\n  val x = 1\n  @set:Foo",
+        "class A @",
+        "class A\n@constructor",
+        "val x = 1\n@",
+        "class A {\n  var x = 1\n    @Ann(1",
+        truncated_real_snippet,
+    ] {
+        let tree = parse_kotlin_within_deadline(source);
+        assert_eq!(tree.root_node().kind(), "source_file", "{source:?}");
+        assert_eq!(tree.root_node().end_byte(), source.len(), "{source:?}");
+    }
+}
+
+#[test]
+fn kotlin_parse_accepts_one_line_class_bodies() {
+    let tree = parse_kotlin_within_deadline("class A { val x = 1 }\nclass B { val y = 2 }\n");
+    let root = tree.root_node();
+    assert!(!root.has_error(), "unexpected error: {}", root.to_sexp());
+    let mut cursor = root.walk();
+    let classes: Vec<_> = root
+        .named_children(&mut cursor)
+        .filter(|node| node.kind() == "class_declaration")
+        .collect();
+    assert_eq!(classes.len(), 2, "{}", root.to_sexp());
+}
+
+#[test]
+fn kotlin_parse_accepts_forms_the_published_grammar_rejects() {
+    let cases = [
+        "val items: List<Int> = []\n",
+        "class A { val dynamic = 1\n  fun f() = dynamic }\n",
+        "fun f(x: Int) {\n  val final = x\n  final.toString()\n}\n",
+        "val raw = $$\"price: ${'$'}1 $${1 + 1}\"\n",
+        "class Outer {\n  class Inner\n  private constructor(x: Int)\n}\n",
+        "class ByteString\ninternal actual constructor(\n  data: ByteArray,\n)\n",
+    ];
+    for source in cases {
+        let tree = parse_kotlin_within_deadline(source);
+        let root = tree.root_node();
+        assert!(!root.has_error(), "unexpected error for {source:?}: {}", root.to_sexp());
+    }
+
+    let raw = parse_kotlin_within_deadline("val raw = $$\"a $${b}\"\n");
+    assert!(
+        raw.root_node().to_sexp().contains("multi_dollar_string_literal"),
+        "{}",
+        raw.root_node().to_sexp()
+    );
+}
