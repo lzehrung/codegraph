@@ -275,6 +275,64 @@ describe("Kotlin native identifier declarations", () => {
   });
 });
 
+describe("Kotlin multi-dollar strings", () => {
+  it("reads a template as a reference and a run of fewer dollars as text", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-multi-dollar-"));
+    const file = path.join(root, "Schema.kt").replace(/\\/g, "/");
+    const lines = [
+      'val target = "x"',
+      'val brace = $$"id: $${target} text: $target"',
+      'val name = $$"id: $$target"',
+      'val extra = $$"cost: $$$target"',
+      'val triple = $$$"text: $$target template: $$$target"',
+      'val raw = $$"""',
+      '  {"id": "$${target}", "text": "$target"}',
+      '  """',
+      "",
+    ];
+    await fsp.writeFile(file, lines.join("\n"), "utf8");
+    // The position of `target` in `needle`, which starts with `prefixLength` dollars and braces.
+    const nameIn = (line: number, needle: string, prefixLength: number, last = false) => {
+      const text = lines[line - 1];
+      if (text === undefined) throw new Error(`missing line ${line}`);
+      const index = last ? text.lastIndexOf(needle) : text.indexOf(needle);
+      if (index < 0) throw new Error(`text not found on line ${line}: ${needle}`);
+      return { line, column: index + prefixLength + 1 };
+    };
+    // With a prefix of two dollars `$${target}` and `$$target` are templates, and so is `$$target` after the dollar
+    // of `$$$target`. With a prefix of three, only `$$$target` is.
+    const templates = [
+      nameIn(2, "$${target}", 3),
+      nameIn(3, "$$target", 2),
+      nameIn(4, "$$$target", 3),
+      nameIn(5, "$$$target", 3, true),
+      nameIn(7, "$${target}", 3),
+    ];
+    // Fewer dollars than the prefix are text.
+    const literals = [nameIn(2, '$target"', 1), nameIn(5, "$$target ", 2), nameIn(7, '$target"', 1)];
+    const key = (position: { line: number; column: number }): string => `${position.line}:${position.column}`;
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const references = await findReferences(index, { file, line: 1, column: 5 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") return;
+      const found = references.references.map((reference) => key(reference.range.start));
+      expect(found.sort()).toEqual([{ line: 1, column: 5 }, ...templates].map(key).sort());
+      for (const template of templates) {
+        const definition = await goToDefinition(index, { file, ...template });
+        expect(definition.status).toBe("ok");
+        if (definition.status === "ok") expect(definition.definition.range.start.line).toBe(1);
+      }
+      for (const position of literals) {
+        const definition = await goToDefinition(index, { file, ...position });
+        expect(definition.status).toBe("not_found");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Kotlin text fallback imports", () => {
   it("extracts semicolon-terminated imports when native bindings are empty", async () => {
     expect(parseKotlinImportStatement("import a.b.C;")).toEqual({

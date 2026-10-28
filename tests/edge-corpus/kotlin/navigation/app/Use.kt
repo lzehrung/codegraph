@@ -39,5 +39,14 @@ fun use(): String {
     val decoy = "renderRecord summary compact overload"
     val rawDecoy = """build Formatter payload this@Box"""
     // decoy mention: overload summary this@Box
+    val target = "payload" // @def target
+    val multiBrace = $$"id: $${target}" // @ref target
+    val multiName = $$"id: $$target" // @ref target
+    val multiText = $$"id: $target" // @not-ref target
+    val multiRaw = $$"""{"id": "$${target}"}""" // @ref target
+    // @not-ref-block target
+    val multiRawText = $$"""
+        {"id": "$target"}
+        """
     return label + summary + compact + twin + formatted + boxRead + outer + viaOuter + intOverload + stringOverload + withDefault + pair.left + pairAgain.right + objValue + otherRender + decoy + rawDecoy
 }

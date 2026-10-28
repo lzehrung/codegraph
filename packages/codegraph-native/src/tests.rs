@@ -864,10 +864,10 @@ fn kotlin_parse_accepts_forms_the_published_grammar_rejects() {
         assert!(!root.has_error(), "unexpected error for {source:?}: {}", root.to_sexp());
     }
 
-    let raw = parse_kotlin_within_deadline("val raw = $$\"a $${b}\"\n");
-    assert!(
-        raw.root_node().to_sexp().contains("multi_dollar_string_literal"),
-        "{}",
-        raw.root_node().to_sexp()
-    );
+    let raw = parse_kotlin_within_deadline("val raw = $$\"a $${b} $c\"\n");
+    let sexp = raw.root_node().to_sexp();
+    assert!(sexp.contains("multi_dollar_string_literal"), "{sexp}");
+    // A template is a node with a name, so the name is a reference; `$c` has fewer dollars than the prefix and is text.
+    assert!(sexp.contains("(interpolation (identifier))"), "{sexp}");
+    assert_eq!(sexp.matches("(interpolation").count(), 1, "{sexp}");
 }
