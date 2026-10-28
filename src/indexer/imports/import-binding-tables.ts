@@ -135,6 +135,7 @@ function csharpAliasTargetLeaf(node: SyntaxNodeLike): SyntaxNodeLike | null {
 function pushCsharpOverride(
   context: LanguageSpecificImportContext,
   parsed: CsharpUsingDirective,
+  directiveStartIndex: number,
   typeOnly: boolean,
   fromValue: string,
   resolved: ResolvedImportTarget,
@@ -167,6 +168,7 @@ function pushCsharpOverride(
     from: fromValue,
     resolved,
     typeOnly,
+    csharpDirectiveStartIndex: directiveStartIndex,
   });
 }
 
@@ -209,6 +211,7 @@ export async function applyCsharpImportDirective(
         pushCsharpOverride(
           context,
           unresolved,
+          directive.startIndex,
           typeOnly,
           unresolved.value,
           { external: unresolved.value },
@@ -339,7 +342,7 @@ export async function applyCsharpImportDirective(
       }
     }
   }
-  pushCsharpOverride(context, parsed, typeOnly, fromValue, resolved, localRange, importedRange);
+  pushCsharpOverride(context, parsed, directive.startIndex, typeOnly, fromValue, resolved, localRange, importedRange);
 }
 
 async function applyJavaStatementOverride(

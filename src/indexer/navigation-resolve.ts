@@ -5,7 +5,12 @@ import { isJvmStaticWildcardMember, isJvmTypeWildcardMember, jvmWildcardTypeOwne
 import type { FileId } from "../types.js";
 import { foldPhpIdentifierCase, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
-import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES, isUnitBareNameVisible } from "./compilation-units.js";
+import {
+  csharpUsingTargetShadowed,
+  getCompilationUnitPeers,
+  IMPLICIT_UNIT_LANGUAGES,
+  isUnitBareNameVisible,
+} from "./compilation-units.js";
 import { phpNamedImportRole } from "./import-types.js";
 import { resolvePythonSubmoduleExact } from "../util/resolution/python.js";
 import { PHP_CLASS_LIKE_KINDS } from "./php-namespace-symbols.js";
@@ -778,6 +783,31 @@ export function csharpNamespaceImportDirectories(index: ProjectIndex): Map<Impor
   return result;
 }
 
+const csharpShadowedImportCache = new WeakMap<ProjectIndex, WeakSet<ImportBinding>>();
+
+/**
+ * The C# alias and `using N;` bindings of `index` whose directive an enclosing namespace shadows: a namespace the
+ * directive sits in declares the first segment of its target, so C# means that nearer declaration, and the binding
+ * resolves nothing instead of the global one. Decided from the index's own declarations when the lookup first
+ * runs, never from a flag a cached module holds. Built once per index.
+ */
+export function csharpShadowedImports(index: ProjectIndex): WeakSet<ImportBinding> {
+  const cached = csharpShadowedImportCache.get(index);
+  if (cached) return cached;
+  const shadowed = new WeakSet<ImportBinding>();
+  for (const mod of index.byFile.values()) {
+    if (!mod.csharpNamespaceFacts) continue;
+    for (const imp of mod.imports) {
+      let directiveStart: number | undefined;
+      if (imp.kind === "star") directiveStart = imp.csharpDirectiveStartIndex;
+      else if (imp.kind === "named") directiveStart = imp.localRange?.start.index;
+      if (csharpUsingTargetShadowed(index, mod, directiveStart, imp.from)) shadowed.add(imp);
+    }
+  }
+  csharpShadowedImportCache.set(index, shadowed);
+  return shadowed;
+}
+
 /**
  * A name imported by C# `using N;`, looked up as `N.Name` from one declaring file per
  * directory. Distinct declarations (other than parts of one partial type) are ambiguous. Only
@@ -969,6 +999,7 @@ export function resolveImported(
   // `N.Point` is the only bare-visible match when this file also declares outer `N`.
   // The alias names one namespace, and that qualified name is what every consumer resolves.
   const support = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions);
+  if (support?.id === "csharp" && csharpShadowedImports(index).has(imp)) return null;
   const lookupName = support?.id === "csharp" ? csharpImportLookupName(imp, exportedName) : exportedName;
   if (support?.id === "csharp" && imp.kind === "star" && !imp.staticMembersOf) {
     return resolveCsharpNamespaceImport(index, imp, targetFile, lookupName, {

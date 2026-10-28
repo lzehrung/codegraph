@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { collectImportsForFile, parseFile } from "../src/indexer.js";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { buildProjectIndexFromFiles, findReferences, goToDefinition } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -239,15 +239,25 @@ describe("import binding regressions", () => {
     const generic = path.join(root, "BoxOfT.cs");
     const genericOnly = path.join(root, "Only.cs");
     const soloGeneric = path.join(root, "Solo.cs");
-    const mainLines = ["using B = N.Box;", "using O = N.Only;", "using S = M.Solo;", "class Use { B value; S solo; }"];
+    // The file path mirrors the namespace, so a path-like guess for `P.Mirrored` names this file.
+    const mirrored = path.join(root, "P", "Mirrored.cs");
+    const mainLines = [
+      "using B = N.Box;",
+      "using O = N.Only;",
+      "using S = M.Solo;",
+      "using R = P.Mirrored;",
+      "class Use { B value; S solo; R mirrored; }",
+    ];
     try {
+      await mkdir(path.dirname(mirrored), { recursive: true });
       await writeFile(plain, "namespace N; public class Box {}\n", "utf8");
       await writeFile(generic, "namespace N; public class Box<T> {}\n", "utf8");
       await writeFile(genericOnly, "namespace N; public class Only<T> {}\n", "utf8");
       // The only file that declares namespace `M` declares just the generic type.
       await writeFile(soloGeneric, "namespace M; public class Solo<T> {}\n", "utf8");
+      await writeFile(mirrored, "namespace P; public class Mirrored<T> {}\n", "utf8");
       await writeFile(main, mainLines.join("\n") + "\n", "utf8");
-      const index = await buildProjectIndexFromFiles(root, [main, plain, generic, genericOnly, soloGeneric]);
+      const index = await buildProjectIndexFromFiles(root, [main, plain, generic, genericOnly, soloGeneric, mirrored]);
       const target = (local: string): string | undefined => {
         const alias = index.byFile
           .get(fileIdentityKey(main))
@@ -255,21 +265,26 @@ describe("import binding regressions", () => {
         return typeof alias?.resolved === "string" ? fileIdentityKey(alias.resolved) : undefined;
       };
 
-      // `N.Box` names `Box`, never `Box<T>`, so a generic sibling does not make it ambiguous; `N.Only` and `M.Solo`
-      // name no type, whether their namespace is declared in several files or in one.
+      // `N.Box` names `Box`, never `Box<T>`, so a generic sibling does not make it ambiguous; `N.Only`, `M.Solo`, and
+      // `P.Mirrored` name no type, whether their namespace is declared in several files or in one, and whether or not
+      // a file path mirrors the name.
       expect(target("B")).toBe(fileIdentityKey(plain));
       expect(target("O")).toBeUndefined();
       expect(target("S")).toBeUndefined();
-      const solo = await goToDefinition(index, {
-        file: main,
-        line: 4,
-        column: mainLines[3]!.indexOf("S solo") + 1,
-      });
-      expect(solo.status).not.toBe("ok");
+      expect(target("R")).toBeUndefined();
+      for (const alias of ["S solo", "R mirrored"]) {
+        const result = await goToDefinition(index, {
+          file: main,
+          line: 5,
+          column: mainLines[4]!.indexOf(alias) + 1,
+        });
+        expect(result.status, alias).not.toBe("ok");
+      }
       const fileTargets = index.graph.edges
         .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(main) && edge.to.type === "file")
         .map((edge) => (edge.to.type === "file" ? fileIdentityKey(edge.to.path) : ""));
       expect(fileTargets).not.toContain(fileIdentityKey(soloGeneric));
+      expect(fileTargets).not.toContain(fileIdentityKey(mirrored));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

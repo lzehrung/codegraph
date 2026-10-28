@@ -59,8 +59,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * reusing it.
  * Epoch 97 re-extracts files with the Tree-sitter 0.27 runtime. Its error recovery changes the ERROR/MISSING ranges
  * and the symbols recovered from a file the grammar cannot parse cleanly, such as an SCSS `@include ns.mixin;`.
+ * Epoch 99 records the start of each C# `using` directive on its star binding (`csharpDirectiveStartIndex`), so a
+ * lookup can tell which namespace the directive is written in, and no longer binds a dotted C# type name to a
+ * path-like file when the project declares its namespace.
  */
-export const CORE_ALGORITHM_EPOCH = 97;
+export const CORE_ALGORITHM_EPOCH = 99;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

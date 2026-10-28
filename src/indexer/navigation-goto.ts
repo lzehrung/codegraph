@@ -1,11 +1,11 @@
 import { CSHARP_SUPPORT, supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
-import { pythonPropertyDecorator } from "./python-property-decorator.js";
+import { pythonPropertyDecorator, type PythonPropertyDecorator } from "./python-property-decorator.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
-import { csharpNamespaceAtIndex, csharpSkipConditionalWrappers } from "../util/csharp-tree.js";
+import { csharpNamespaceAtIndex } from "../util/csharp-tree.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
   collectMemberAccessChain,
@@ -54,6 +54,7 @@ import { getCallArgumentCount, memberLookupBinding } from "../languages/callable
 import {
   csharpNamespaceChainDeclares,
   csharpProjectDeclarationsUnknown,
+  csharpUsingTargetShadowed,
   getCompilationUnitPeers,
   getPackageDeclarationName,
 } from "./compilation-units.js";
@@ -435,6 +436,7 @@ function importScopeAt(root: SyntaxNodeLike, start: number): SyntaxNodeLike | nu
 }
 
 const CSHARP_SHADOWED_ALIAS_REASON = "C# alias is shadowed by an enclosing namespace member";
+const CSHARP_SHADOWED_TARGET_REASON = "C# alias target is shadowed by a member of an enclosing namespace";
 const CSHARP_INCOMPLETE_ALIAS_REASON = "C# namespace alias may name a type in a project file that could not be read";
 
 /** The leading name `X` of a C# dotted or alias-qualified name (`X.Y.Z`, `X::Y`) and the names it qualifies. */
@@ -448,12 +450,11 @@ export function csharpChainQualifier(
 }
 
 /**
- * Whether an enclosing namespace shadows the compilation-unit alias that `qualifier` (the `X` of
- * `X.Type`) names. C# finds a namespace or type `X` in an enclosing namespace before the alias, so
- * the answer comes from the index's own C# declarations when the lookup runs, never from the alias
- * binding a cached module holds. An alias under `#if`, `#elif`, or `#else` belongs to the
- * compilation unit; an alias inside a block namespace or after a file-scoped namespace header is
- * namespace-scoped and is not checked. `X::Type` binds only aliases.
+ * Whether a nearer namespace shadows the namespace alias that `qualifier` (the `X` of `X.Type`) names. C# searches
+ * each enclosing namespace together with its own aliases before the next one out, so a namespace or type `X` in a
+ * namespace deeper than the alias's own comes before the alias. The answer comes from the index's own C# declarations
+ * when the lookup runs, never from the alias binding a cached module holds. An alias under `#if`, `#elif`, or
+ * `#else` belongs to the namespace that contains the conditional block. `X::Type` binds only aliases.
  */
 function csharpAliasShadowedAt(
   index: ProjectIndex,
@@ -464,25 +465,29 @@ function csharpAliasShadowedAt(
   if (qualifier.parent?.type === "alias_qualified_name") return false;
   const name = sliceText(qualifier, source);
   const alias = innermostNamespaceImport(mod.imports, name, qualifier, CSHARP_SUPPORT.normalizeIdentifier);
-  if (alias?.kind !== "namespace") return false;
-  const aliasStart = alias.localRange?.start.index;
-  if (aliasStart === undefined) return false;
-  let root = qualifier;
-  while (root.parent) root = root.parent;
-  if (csharpSkipConditionalWrappers(importScopeAt(root, aliasStart))?.type !== "compilation_unit") return false;
+  const aliasStart = alias?.kind === "namespace" ? alias.localRange?.start.index : undefined;
   const regions = mod.csharpNamespaceFacts?.regions;
-  // The tree keeps a file-scoped header's directives at the root, but the header's region covers the rest of the file.
-  if (!regions || csharpNamespaceAtIndex(regions, aliasStart)) return false;
+  if (aliasStart === undefined || !regions) return false;
   const enclosing = csharpNamespaceAtIndex(regions, qualifier.startIndex);
-  return !!enclosing && csharpNamespaceChainDeclares(index, mod, enclosing, CSHARP_SUPPORT.normalizeIdentifier(name));
+  return (
+    !!enclosing &&
+    csharpNamespaceChainDeclares(
+      index,
+      mod,
+      enclosing,
+      CSHARP_SUPPORT.normalizeIdentifier(name),
+      csharpNamespaceAtIndex(regions, aliasStart),
+    )
+  );
 }
 
 /**
- * Why a use led by the compilation-unit alias `qualifier` names (`X.Type`, `X::Type`) is unproven, or `null`
- * when the alias stands. An enclosing namespace can shadow the alias. A project file whose declarations are
- * unknown (no syntax tree) may declare the same type name as one the alias reaches, so no type found through a
- * namespace alias is proven to be the only one. Both answers come from the index's own C# declarations when the
- * lookup runs, never from a flag a cached module holds.
+ * Why a use led by the namespace alias `qualifier` names (`X.Type`, `X::Type`) is unproven, or `null` when the alias
+ * stands. A nearer namespace can shadow the alias, and an enclosing namespace of the alias's own directive can shadow
+ * the first segment of its target. A project file whose declarations are unknown (no syntax tree) may declare the
+ * same type name as one the alias reaches, so no type found through a namespace alias is proven to be the only one.
+ * All three answers come from the index's own C# declarations when the lookup runs, never from a flag a cached
+ * module holds.
  */
 export function csharpAliasUnprovenReason(
   index: ProjectIndex,
@@ -497,9 +502,11 @@ export function csharpAliasUnprovenReason(
     qualifier,
     CSHARP_SUPPORT.normalizeIdentifier,
   );
-  return alias?.kind === "namespace" && csharpProjectDeclarationsUnknown(index, mod)
-    ? CSHARP_INCOMPLETE_ALIAS_REASON
-    : null;
+  if (alias?.kind !== "namespace") return null;
+  if (csharpUsingTargetShadowed(index, mod, alias.localRange?.start.index, alias.from)) {
+    return CSHARP_SHADOWED_TARGET_REASON;
+  }
+  return csharpProjectDeclarationsUnknown(index, mod) ? CSHARP_INCOMPLETE_ALIAS_REASON : null;
 }
 
 /**
@@ -835,6 +842,8 @@ export async function resolveMemberAccessDefinition(params: {
       if (sup.id === "csharp") {
         const local = resolveExport(index, mod.file, exprName, { referenceIndex: expr.startIndex });
         if (local) return local;
+        // An explicit alias binds before any type a `using N;` imports, so one that names no indexed type stays unresolved.
+        if (imp) return null;
       } else {
         const local = mod.locals.find((candidate) => {
           if (candidate.localName === exprName) return true;
@@ -3660,10 +3669,22 @@ async function pythonClassRefFromDef(
   return pending;
 }
 
-function pythonMembersOnClass(classRef: PythonClassRef, member: string, preferInstanceAttributes = false): SymbolDef[] {
+/** How a receiver lookup treats attributes assigned through `self.x = value`; see `pythonMembersOnClass`. */
+type PythonInstanceAttributes = "prefer" | "fallback" | "none";
+
+/**
+ * The members of one class named `member`. `prefer` (`self` and constructed receivers) lets a property decide first and
+ * then an instance attribute beat a class attribute of the same class; `fallback` reaches instance attributes only
+ * when the class has no class-level member; `none` reaches class-level members only.
+ */
+function pythonMembersOnClass(
+  classRef: PythonClassRef,
+  member: string,
+  instanceAttributes: PythonInstanceAttributes = "fallback",
+): SymbolDef[] {
   const normalizeIdentifier = classRef.context.sup.normalizeIdentifier;
   let direct: SymbolDef[] | undefined;
-  if (preferInstanceAttributes) {
+  if (instanceAttributes !== "fallback") {
     direct = findDirectLocalsWithinNode(
       classRef.module.locals,
       member,
@@ -3673,7 +3694,9 @@ function pythonMembersOnClass(classRef: PythonClassRef, member: string, preferIn
     );
     const propertyMembers = pythonPropertyDescriptorMembers(classRef, member, direct);
     if (propertyMembers) return propertyMembers;
-    const instanceAttributes = findPythonInstanceAttributesWithinClass(
+  }
+  if (instanceAttributes === "prefer") {
+    const instanceAttributeMembers = findPythonInstanceAttributesWithinClass(
       classRef.module.locals,
       member,
       classRef.container,
@@ -3682,7 +3705,7 @@ function pythonMembersOnClass(classRef: PythonClassRef, member: string, preferIn
       "self",
     );
     const selectedInstanceAttribute = preferredPythonInstanceAttribute(
-      instanceAttributes,
+      instanceAttributeMembers,
       classRef.container,
       classRef.context,
     );
@@ -3695,7 +3718,7 @@ function pythonMembersOnClass(classRef: PythonClassRef, member: string, preferIn
     classRef.context,
     normalizeIdentifier,
   );
-  if (direct.length) return direct;
+  if (direct.length || instanceAttributes === "none") return direct;
   return findPythonInstanceAttributesWithinClass(
     classRef.module.locals,
     member,
@@ -3739,7 +3762,9 @@ function pythonPropertyDescriptorMembers(
     if (decorated?.type !== "decorated_definition") continue;
     const decorators = decorated.namedChildren.filter((child) => child.type === "decorator");
     const kinds = decorators.map(pythonPropertyDecorator);
-    if (kinds.some((kind) => kind?.kind === "property")) {
+    const replacesGetter = (kind: PythonPropertyDecorator | null): boolean =>
+      kind?.kind === "accessor" && kind.accessor === "getter" && kind.propertyName === member;
+    if (kinds.some((kind) => kind?.kind === "property" || replacesGetter(kind))) {
       propertyGetter = local;
     } else if (
       kinds.some((kind) => kind?.kind === "accessor" && kind.accessor === "setter" && kind.propertyName === member)
@@ -3908,6 +3933,50 @@ async function pythonBaseClassRefs(
   return refs;
 }
 
+/**
+ * Whether the first class of `start`'s hierarchy that declares `member` at class level declares a property. Python
+ * gives such a data descriptor precedence over the instance dictionary, so `self.member = value` in a subclass
+ * writes through the property instead of declaring an attribute; a class attribute that is not a property in a
+ * nearer class hides the property again.
+ */
+async function pythonPropertyDeclaredFirst(
+  index: ProjectIndex,
+  start: PythonClassRef,
+  member: string,
+  loadParsedFile: PythonParsedFileLoader | undefined,
+  cache: PythonReceiverResolutionCache | undefined,
+): Promise<boolean> {
+  const visited = new Set<string>([definitionIdentityKey(start.def)]);
+  let level = [start];
+  for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
+    const declaring = level
+      .map((ref) => ({
+        ref,
+        direct: findDirectLocalsWithinNode(
+          ref.module.locals,
+          member,
+          ref.container,
+          ref.context,
+          ref.context.sup.normalizeIdentifier,
+        ),
+      }))
+      .filter(({ direct }) => direct.length);
+    if (declaring.length)
+      return declaring.some(({ ref, direct }) => pythonPropertyDescriptorMembers(ref, member, direct));
+    const next: PythonClassRef[] = [];
+    for (const ref of level) {
+      for (const parent of await pythonBaseClassRefs(index, ref, loadParsedFile, cache)) {
+        const key = definitionIdentityKey(parent.def);
+        if (visited.has(key)) continue;
+        visited.add(key);
+        next.push(parent);
+      }
+    }
+    level = next;
+  }
+  return false;
+}
+
 async function lookupPythonClassMember(
   index: ProjectIndex,
   start: PythonClassRef,
@@ -3942,6 +4011,11 @@ async function lookupPythonClassMemberUncached(
   loadParsedFile: PythonParsedFileLoader | undefined,
   cache: PythonReceiverResolutionCache | undefined,
 ): Promise<SymbolDef | undefined> {
+  let instanceAttributes: PythonInstanceAttributes = preferInstanceAttributes ? "prefer" : "fallback";
+  // An inherited property takes the write `self.x = value` and the read after it, so no instance attribute shadows it.
+  if (preferInstanceAttributes && (await pythonPropertyDeclaredFirst(index, start, member, loadParsedFile, cache))) {
+    instanceAttributes = "none";
+  }
   const membersByOwner = new Map<string, SymbolDef[]>();
   const parentsByOwner = new Map<string, PythonClassRef[]>();
   const visited = new Set<string>([definitionIdentityKey(start.def)]);
@@ -3949,7 +4023,7 @@ async function lookupPythonClassMemberUncached(
   for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
     let named = false;
     for (const ref of level) {
-      const members = startAtSupertype && !depth ? [] : pythonMembersOnClass(ref, member, preferInstanceAttributes);
+      const members = startAtSupertype && !depth ? [] : pythonMembersOnClass(ref, member, instanceAttributes);
       membersByOwner.set(definitionIdentityKey(ref.def), members);
       if (members.length) named = true;
     }

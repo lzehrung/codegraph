@@ -575,6 +575,80 @@ describe("rename preview", () => {
     expect(result.safe).toBe(false);
     expect(result.unsafeSites.some((site) => site.reason === "unresolved_reference")).toBe(true);
   });
+  it.each([
+    {
+      name: "export-star forwarding",
+      files: {
+        "forward.ts": 'export * from "./alias.js";\n',
+        "barrel.ts": 'export * as group from "./forward.js";\n',
+      },
+    },
+    {
+      name: "named namespace forwarding",
+      files: {
+        "base.ts": 'export * as group from "./alias.js";\n',
+        "barrel.ts": 'export { group } from "./base.js";\n',
+      },
+    },
+    {
+      name: "named namespace forwarding of an export-star",
+      files: {
+        "forward.ts": 'export * from "./alias.js";\n',
+        "base.ts": 'export * as group from "./forward.js";\n',
+        "barrel.ts": 'export { group } from "./base.js";\n',
+      },
+    },
+    {
+      name: "a namespace import of a forwarding barrel",
+      files: {
+        "forward.ts": 'export * from "./alias.js";\n',
+        "barrel.ts": 'export * as group from "./forward.js";\n',
+        "consumer.ts": 'import * as everything from "./barrel.js";\neverything.group.value();\n',
+      },
+    },
+  ])("marks namespace-member rename unsafe when an explicit alias is behind $name", async ({ files }) => {
+    const root = await mkTmpDir("cg-rename-forwarded-export-alias-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function value(): number { return 1; }\n");
+    await fsp.writeFile(path.join(root, "alias.ts"), 'export { value as value } from "./service.js";\n');
+    const consumer = ['import { group } from "./barrel.js";', "group.value();", ""].join("\n");
+    for (const [name, source] of Object.entries({ "consumer.ts": consumer, ...files })) {
+      await fsp.writeFile(path.join(root, name), source);
+    }
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "value", exportedOnly: true });
+    const target = symbols.symbols.find(
+      (symbol) => symbol.name === "value" && symbol.location.file.endsWith("service.ts"),
+    );
+    expect(target).toBeDefined();
+    const result = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "renamedValue" });
+
+    // The public export stays `value`, so `group.value()` must not become `group.renamedValue()`.
+    expect(result.safe).toBe(false);
+    expect(result.unsafeSites.some((site) => site.reason === "unresolved_reference")).toBe(true);
+    expect(result.edits.some((edit) => edit.file === "consumer.ts" && edit.newText === "renamedValue")).toBe(false);
+  });
+  it("renames namespace-member uses through export-star forwarding when no export path is aliased", async () => {
+    const root = await mkTmpDir("cg-rename-forwarded-plain-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function value(): number { return 1; }\n");
+    await fsp.writeFile(path.join(root, "forward.ts"), 'export * from "./service.js";\n');
+    await fsp.writeFile(path.join(root, "barrel.ts"), 'export * as group from "./forward.js";\n');
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      ['import { group } from "./barrel.js";', "group.value();", ""].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "value", exportedOnly: true });
+    const target = symbols.symbols.find(
+      (symbol) => symbol.name === "value" && symbol.location.file.endsWith("service.ts"),
+    );
+    expect(target).toBeDefined();
+    const result = await previewRenameWithSession(session, { root, handle: target!.handle, newName: "renamedValue" });
+
+    expect(result.safe).toBe(true);
+    expect(result.edits).toContainEqual(
+      expect.objectContaining({ file: "consumer.ts", oldText: "value", newText: "renamedValue", kind: "reference" }),
+    );
+  });
   it("renames namespace-member uses when every export path is unaliased", async () => {
     const root = await mkTmpDir("cg-rename-plain-namespace-member-");
     await fsp.writeFile(path.join(root, "service.ts"), "export function value(): number { return 1; }\n");

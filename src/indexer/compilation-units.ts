@@ -2,7 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Range } from "../types.js";
-import { GO_IDENTIFIER_SOURCE, JAVA_IDENTIFIER_SOURCE, KOTLIN_IDENTIFIER_SOURCE } from "../util/identifiers.js";
+import {
+  GO_IDENTIFIER_SOURCE,
+  JAVA_IDENTIFIER_SOURCE,
+  KOTLIN_IDENTIFIER_SOURCE,
+  normalizeCsharpQualifiedName,
+} from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
 import { CSHARP_FILE_LOCAL_PREFIX, csharpNamespaceAtIndex, type CsharpNamespaceRegion } from "../util/csharp-tree.js";
@@ -343,18 +348,21 @@ function csharpProjectDeclaredNames(index: ProjectIndex, file: FileId): Readonly
 /**
  * Whether `namespaceName` or one of its enclosing namespaces (the global namespace excluded) has a
  * namespace or type member called `name` in any indexed C# file of `mod`'s project, or a `file` type of
- * that name in `mod`'s own file, the only one that can see it. Unknown when an indexed C# file of the project
- * has no recorded declarations, which answers `true` because that file could declare it.
+ * that name in `mod`'s own file, the only one that can see it. Only namespaces deeper than `aboveNamespace`
+ * are searched, which skips the ones that C# reaches after the alias or directive declared in it. Unknown when
+ * an indexed C# file of the project has no recorded declarations, which answers `true` because that file could
+ * declare it.
  */
 export function csharpNamespaceChainDeclares(
   index: ProjectIndex,
   mod: ModuleIndex,
   namespaceName: string,
   name: string,
+  aboveNamespace = "",
 ): boolean {
   const names = csharpProjectDeclaredNames(index, mod.file);
   if (!names) return true;
-  for (let end = namespaceName.length; end > 0; end = namespaceName.lastIndexOf(".", end - 1)) {
+  for (let end = namespaceName.length; end > aboveNamespace.length; end = namespaceName.lastIndexOf(".", end - 1)) {
     const declared = `${namespaceName.slice(0, end)}.${name}`;
     if (names.has(declared) || mod.csharpNamespaceFacts?.types.includes(CSHARP_FILE_LOCAL_PREFIX + declared))
       return true;
@@ -368,6 +376,27 @@ export function csharpNamespaceChainDeclares(
  */
 export function csharpProjectDeclarationsUnknown(index: ProjectIndex, mod: ModuleIndex): boolean {
   return !csharpProjectDeclaredNames(index, mod.file);
+}
+
+/**
+ * Whether the using directive that starts at `directiveStart` in `mod` names, as the first segment of `target`, a
+ * namespace or type that an enclosing namespace of the directive declares. C# resolves a directive's name from the
+ * namespace it is written in outward, so `using N.T;` inside `namespace A` means `A.N.T` when `A.N` exists, not the
+ * global `N.T`. A directive outside every namespace, a `global::` name, a generic first segment, and a project with
+ * a file of unknown declarations are not shadowed: nothing proves a nearer declaration.
+ */
+export function csharpUsingTargetShadowed(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  directiveStart: number | undefined,
+  target: string,
+): boolean {
+  const regions = mod.csharpNamespaceFacts?.regions;
+  if (directiveStart === undefined || !regions) return false;
+  const enclosing = csharpNamespaceAtIndex(regions, directiveStart);
+  const first = normalizeCsharpQualifiedName(target).split(".", 1)[0];
+  if (!enclosing || !first || first.startsWith("global::") || first.includes("<")) return false;
+  return !csharpProjectDeclarationsUnknown(index, mod) && csharpNamespaceChainDeclares(index, mod, enclosing, first);
 }
 
 function csharpNamespaceVisibleFromUseFile(

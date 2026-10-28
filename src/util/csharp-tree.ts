@@ -338,13 +338,3 @@ export function isCsharpNamespaceFacts(value: unknown): value is CsharpNamespace
     facts.types.every((type) => typeof type === "string")
   );
 }
-
-/**
- * `node` itself, or its nearest ancestor that is not a `#if`, `#elif`, or `#else` wrapper: the
- * scope a conditionally compiled declaration belongs to.
- */
-export function csharpSkipConditionalWrappers(node: SyntaxNodeLike | null): SyntaxNodeLike | null {
-  let scope = node;
-  while (scope && CSHARP_PREPROCESSOR_WRAPPER_TYPES[scope.type]) scope = scope.parent;
-  return scope;
-}

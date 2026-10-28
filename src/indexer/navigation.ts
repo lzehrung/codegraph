@@ -69,6 +69,7 @@ import {
 import {
   directModuleValueEntry,
   csharpNamespaceImportDirectories,
+  csharpShadowedImports,
   javaStaticNamedImportIncludes,
   resolveExport,
   resolveImported,
@@ -868,12 +869,18 @@ async function findReferencesInternal(
       if (explicitNamespaceMemberAliasFiles.has(fileKey)) return true;
       const targetModule = index.byFile.get(fileKey);
       for (const entry of targetModule?.exports ?? []) {
-        if (entry.type === "namespaceReexport" && modulePathHasAlias(entry.fromModule)) return true;
-        if (entry.type !== "reexport") continue;
-        const hit = resolveExport(index, file, entry.exportedAs, exportOptions);
-        if (hit?.kind === "resolved" && matchesReferenceDefinition(hit.def) && modulePathHasAlias(entry.fromModule)) {
+        // A star or namespace forward keeps an aliased export reachable under the forwarding module's own names.
+        if (
+          (entry.type === "namespaceReexport" || entry.type === "exportStar") &&
+          modulePathHasAlias(entry.fromModule)
+        ) {
           return true;
         }
+        if (entry.type !== "reexport") continue;
+        const hit = resolveExport(index, file, entry.exportedAs, exportOptions);
+        // A named re-export forwards the definition itself or a namespace that can reach it.
+        const forwardsDefinition = hit?.kind === "resolved" && matchesReferenceDefinition(hit.def);
+        if ((forwardsDefinition || hit?.kind === "namespace") && modulePathHasAlias(entry.fromModule)) return true;
       }
       return false;
     };
@@ -1220,7 +1227,9 @@ async function findReferencesInternal(
     for (const imp of module.imports) {
       if (hasReachedCollectionLimit()) break;
       if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) continue;
-      const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
+      // A C# directive that an enclosing namespace shadows resolves nothing, so it is verified like an unresolved import.
+      const targetFile =
+        typeof imp.resolved === "string" && !csharpShadowedImports(index).has(imp) ? imp.resolved : undefined;
       if (!targetFile && parsedContext.sup.id === "csharp" && imp.kind === "namespace") {
         const namespaceTargets = csharpNamespaceImportDirectories(index).get(imp) ?? [];
         const targetDirectories = new Set(
@@ -1911,11 +1920,7 @@ function pythonPropertyAccessorNeedsPartialCoverage(parsedContext: ParsedFileCon
   return decoratedDefinition.namedChildren.some((child) => {
     const decorator = pythonPropertyDecorator(child);
     if (decorator?.kind === "property") return true;
-    return (
-      decorator?.kind === "accessor" &&
-      decorator.propertyName === definition.localName &&
-      (decorator.accessor === "setter" || decorator.accessor === "deleter")
-    );
+    return decorator?.kind === "accessor" && decorator.propertyName === definition.localName;
   });
 }
 

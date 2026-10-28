@@ -1665,3 +1665,118 @@ describe("Python formatted property accessor navigation regressions", () => {
     }
   });
 });
+
+describe("Python inherited and replaced property navigation", () => {
+  /** Goto targets for the `count` token on `gotoLines`, and the references and coverage of the `count` on `defLine`. */
+  async function navigateCount(
+    source: string,
+    gotoLines: readonly number[],
+    defLine: number,
+  ): Promise<{ targets: Array<number | string>; referenceLines: number[]; coverage: string | undefined }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-inherited-property-"));
+    try {
+      const file = path.join(root, "models.py").replace(/\\/g, "/");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const lines = source.split("\n");
+      const column = (line: number): number => lines[line - 1]!.indexOf("count") + 1;
+      const targets: Array<number | string> = [];
+      for (const line of gotoLines) {
+        const result = await goToDefinition(index, { file, line, column: column(line) });
+        targets.push(result.status === "ok" ? result.definition.range.start.line : result.status);
+      }
+      const references = await findReferences(index, { file, line: defLine, column: column(defLine) });
+      if (references.status !== "ok") throw new Error("Expected references for the count definition");
+      return {
+        targets,
+        referenceLines: references.references.map((reference) => reference.range.start.line),
+        coverage: references.referenceCoverage?.state,
+      };
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  const base = [
+    "class Base:",
+    "    def __init__(self):",
+    "        self._count = 0",
+    "    @property",
+    "    def count(self):",
+    "        return self._count",
+    "    @count.setter",
+    "    def count(self, value):",
+    "        self._count = value",
+  ];
+
+  it("resolves self.count in a subclass to an inherited property, not to its __init__ write", async () => {
+    const source = [
+      ...base,
+      "class Child(Base):",
+      "    def __init__(self):",
+      "        super().__init__()",
+      "        self.count = 3",
+      "    def read(self):",
+      "        return self.count",
+      "class GrandChild(Child):",
+      "    def read_again(self):",
+      "        return self.count",
+    ].join("\n");
+    const outcome = await navigateCount(source, [13, 15, 18], 5);
+
+    // The inherited property takes the write and both reads; the write declares no instance attribute.
+    expect(outcome.targets).toEqual([5, 5, 5]);
+    expect(outcome.referenceLines).toEqual(expect.arrayContaining([5, 13, 15, 18]));
+    expect(outcome.coverage).toBe("partial");
+  });
+
+  it.each([
+    { name: "a class attribute that is not a property", override: "    count = 5" },
+    { name: "a plain base attribute", override: "", baseOverride: true },
+  ])("keeps the instance attribute ahead of $name in a nearer class", async ({ override, baseOverride }) => {
+    const parent = baseOverride ? ["class Parent:", "    count = 1"] : base;
+    const source = [
+      ...parent,
+      baseOverride ? "class Written(Parent):" : "class Written(Base):",
+      ...(override ? [override] : []),
+      "    def __init__(self):",
+      "        self.count = 3",
+      "    def read(self):",
+      "        return self.count",
+    ].join("\n");
+    const lines = source.split("\n");
+    const writeLine = lines.findIndex((line) => line.includes("self.count = 3")) + 1;
+    const readLine = lines.findIndex((line) => line.includes("return self.count")) + 1;
+    const outcome = await navigateCount(source, [readLine], writeLine);
+
+    // Only a property in the first class that declares `count` takes precedence over the instance dictionary.
+    expect(outcome.targets).toEqual([writeLine]);
+  });
+
+  it("resolves self.count to the replacing getter and keeps its references partial", async () => {
+    const source = [
+      "class Base:",
+      "    @property",
+      "    def count(self):",
+      "        return 1",
+      "    @count.getter",
+      "    def count(self):",
+      "        return 2",
+      "    def use(self):",
+      "        return self.count",
+      "class Sub(Base):",
+      "    @Base.count.getter",
+      "    def count(self):",
+      "        return 3",
+      "    def again(self):",
+      "        return self.count",
+    ].join("\n");
+    const base = await navigateCount(source, [9], 6);
+    const sub = await navigateCount(source, [15], 12);
+
+    expect(base).toMatchObject({ targets: [6], coverage: "partial" });
+    expect(base.referenceLines).toEqual(expect.arrayContaining([6, 9]));
+    expect(sub).toMatchObject({ targets: [12], coverage: "partial" });
+    expect(sub.referenceLines).toEqual(expect.arrayContaining([12, 15]));
+  });
+});

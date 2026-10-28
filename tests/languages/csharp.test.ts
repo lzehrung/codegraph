@@ -2160,8 +2160,8 @@ describe("C# partial class members across files", () => {
   /**
    * What each consumer of `index` reports for the `Target` and `Run` tokens on `probeLines` of
    * Use.cs: goto results, the Use.cs lines that reference each declared `Target`, and the
-   * detailed-graph edges from Use.cs members (not the alias import node) into the fixture's
-   * other files.
+   * detailed-graph edges from Use.cs members (not the import nodes, which follow the directive's own text) into the
+   * fixture's other files.
    */
   async function aliasOutcomeFor(
     index: ProjectIndex,
@@ -2198,7 +2198,7 @@ describe("C# partial class members across files", () => {
         const from = graph.nodes.get(edge.from);
         const to = graph.nodes.get(edge.to);
         const leavesUse = from && to && normalizePath(from.file) === useFile && normalizePath(to.file) !== useFile;
-        return leavesUse && from.kind !== "namespaceImport"
+        return leavesUse && from.kind !== "namespaceImport" && from.kind !== "import"
           ? [`${from.name} ${edge.label} ${path.basename(to.file)}`]
           : [];
       })
@@ -2310,6 +2310,225 @@ describe("C# partial class members across files", () => {
         references: { "Real.cs": [3, 6, 6], "LocalTarget.cs": [] },
         edges: ["MakeOther instantiates Real.cs"],
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "a generic alias target", alias: "using B = N.Box<int>;" },
+    { name: "an alias target no file declares", alias: "using B = Missing.Box;" },
+  ])("keeps $name bound ahead of a type that using Other; imports", async ({ alias }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-before-star-"));
+    try {
+      const nested = "public class Nested { public static void Run() {} }";
+      const files = {
+        "Box.cs": `namespace N; public class Box<T> { ${nested} }\n`,
+        "Other.cs": `namespace Other; public class B { ${nested} }\n`,
+      };
+      const useLines = [alias, "using Other;", "class Use { void M() { B.Nested.Run(); } }"];
+      const paths = await writeFixtureFiles(root, { ...files, "Use.cs": useLines.join("\n") + "\n" });
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      // The alias is not the type `using Other;` provides, so `B` names nothing the index can find.
+      const run = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line: 3,
+        column: columnOf(useLines, 3, "Run"),
+      });
+      expect(run.status).toBe("not_found");
+      const references = await findReferences(index, {
+        file: paths["Other.cs"]!,
+        line: 1,
+        column: files["Other.cs"].indexOf("Run") + 1,
+      });
+      if (references.status !== "ok") throw new Error("Expected references for Other.B.Nested.Run");
+      expect(references.references.some((reference) => normalizePath(reference.file) === paths["Use.cs"])).toBe(false);
+      const graph = await buildSymbolGraphDetailed(index);
+      const callsOther = graph.edges.some(
+        (edge) =>
+          edge.label === "calls" &&
+          graph.nodes.get(edge.from)?.name === "M" &&
+          normalizePath(graph.nodes.get(edge.to)?.file ?? "") === paths["Other.cs"],
+      );
+      expect(callsOther).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "no alias", lines: ["using Other;"], expected: "Other.cs" },
+    {
+      name: "an alias that names an indexed type",
+      lines: ["using B = N.Plain;", "using Other;"],
+      expected: "Plain.cs",
+    },
+  ])("resolves B.Nested.Run from $name", async ({ lines, expected }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-before-star-control-"));
+    try {
+      const nested = "public class Nested { public static void Run() {} }";
+      const useLines = [...lines, "class Use { void M() { B.Nested.Run(); } }"];
+      const paths = await writeFixtureFiles(root, {
+        "Plain.cs": `namespace N; public class Plain { ${nested} }\n`,
+        "Other.cs": `namespace Other; public class B { ${nested} }\n`,
+        "Use.cs": useLines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const line = useLines.length;
+      const run = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line,
+        column: columnOf(useLines, line, "Run"),
+      });
+      expect(run.status === "ok" && path.basename(run.definition.file)).toBe(expected);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "a namespace deeper than the alias's own",
+      source: "namespace A.B.X; public class Target {}\n",
+      shadows: true,
+      declaresTarget: true,
+    },
+    { name: "an implicit namespace ancestor", source: "namespace A.B.X.Deep; public class Marker {}\n", shadows: true },
+    { name: "a type", source: "namespace A.B; public class X {}\n", shadows: true },
+    { name: "only a generic type", source: "namespace A.B; public class X<T> {}\n", shadows: false },
+    {
+      name: "a namespace under another root",
+      source: "namespace C.B.X; public class Target {}\n",
+      shadows: false,
+      declaresTarget: true,
+    },
+  ])("lets $name named like a namespace-scoped alias shadow it only from a deeper namespace", async (nested) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-scoped-alias-shadow-"));
+    try {
+      const useLines = [
+        "namespace A {",
+        "  using X = Real;",
+        "  class Outer { X.Target direct; }",
+        "  namespace B {",
+        "    class Use { X.Target value; void Make() { var made = new X.Target(); } }",
+        "  }",
+        "}",
+      ];
+      const outcome = await aliasUseOutcome(
+        root,
+        { "Real.cs": "namespace Real; public class Target {}\n", "Nested.cs": nested.source },
+        useLines,
+        [3, 5],
+      );
+
+      // Line 3 sits in the alias's own namespace, which C# reaches after the alias; line 5 sits in `A.B`, a nearer one.
+      expect(outcome).toEqual({
+        goto: { 3: ["Real.cs"], 5: nested.shadows ? ["not_found", "not_found"] : ["Real.cs", "Real.cs"] },
+        references: {
+          "Real.cs": nested.shadows ? [3] : [3, 5, 5],
+          ...(nested.declaresTarget ? { "Nested.cs": [] } : {}),
+        },
+        edges: nested.shadows ? [] : ["Make instantiates Real.cs", "Make uses Real.cs"],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "a file-scoped alias",
+      lines: ["namespace A;", "using T = N.Thing;", "class Use { T value; }"],
+      token: "T",
+    },
+    {
+      name: "a block-scoped alias",
+      lines: ["namespace A {", "  using T = N.Thing;", "  class Use { T value; }", "}"],
+      token: "T",
+    },
+    { name: "a file-scoped using", lines: ["namespace A;", "using N;", "class Use { Thing value; }"], token: "Thing" },
+    {
+      name: "a block-scoped using",
+      lines: ["namespace A {", "  using N;", "  class Use { Thing value; }", "}"],
+      token: "Thing",
+    },
+    {
+      name: "a using in a namespace nested below the declaring one",
+      lines: ["namespace A {", "  namespace B {", "    using N;", "    class Use { Thing value; }", "  }", "}"],
+      token: "Thing",
+    },
+    {
+      name: "a namespace alias",
+      lines: ["namespace A {", "  using X = N;", "  class Use { X.Thing value; }", "}"],
+      token: "Thing",
+    },
+  ])("leaves $name unresolved when an enclosing namespace declares its first segment", async ({ lines, token }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-shadow-"));
+    try {
+      const useLine = lines.findIndex((line) => line.includes("class Use")) + 1;
+      const declaration = "namespace N;\npublic class Thing {}\n";
+      const column = columnOf(["namespace N;", "public class Thing {}"], 2, "Thing");
+      const paths = await writeFixtureFiles(root, {
+        "Global.cs": declaration,
+        "Scoped.cs": "namespace A.N;\npublic class Thing {}\n",
+        "Use.cs": lines.join("\n") + "\n",
+      });
+      const outcomeOf = async (): Promise<{ goto: string; references: Record<string, number[]> }> => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const result = await goToDefinition(index, {
+          file: paths["Use.cs"]!,
+          line: useLine,
+          column: columnOf(lines, useLine, token),
+        });
+        const references: Record<string, number[]> = {};
+        for (const name of ["Global.cs", "Scoped.cs"]) {
+          const found = await findReferences(index, { file: paths[name]!, line: 2, column });
+          if (found.status !== "ok") continue;
+          references[name] = found.references
+            .filter((reference) => normalizePath(reference.file) === paths["Use.cs"])
+            .map((reference) => reference.range.start.line);
+        }
+        return { goto: result.status === "ok" ? path.basename(result.definition.file) : result.status, references };
+      };
+
+      // `A.N` is found before the global `N`; the nearer declaration is not resolved either, so nothing binds.
+      expect(await outcomeOf()).toEqual({ goto: "not_found", references: { "Global.cs": [], "Scoped.cs": [] } });
+
+      // Without `A.N`, and with a nearer namespace of another name, the directive means the global `N`.
+      for (const nearer of [null, "namespace A.M;\npublic class Other {}\n"]) {
+        await rm(path.join(root, "Scoped.cs"), { force: true });
+        if (nearer) await writeFixtureFiles(root, { "Scoped.cs": nearer });
+        const bound = await outcomeOf();
+        expect(bound.goto).toBe("Global.cs");
+        expect(bound.references["Global.cs"]).toContain(useLine);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a using directive outside every namespace on the global declaration", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-global-"));
+    try {
+      const useLines = ["using N;", "using T = N.Thing;", "namespace A {", "  class Use { Thing star; T alias; }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "Global.cs": "namespace N;\npublic class Thing {}\n",
+        "Scoped.cs": "namespace A.N;\npublic class Thing {}\n",
+        "Use.cs": useLines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const targets: string[] = [];
+      for (const token of ["Thing star", "T alias"]) {
+        const result = await goToDefinition(index, {
+          file: paths["Use.cs"]!,
+          line: 4,
+          column: columnOf(useLines, 4, token),
+        });
+        targets.push(result.status === "ok" ? path.basename(result.definition.file) : result.status);
+      }
+      // Compilation-unit directives resolve their target from the global namespace, whatever `A` declares.
+      expect(targets).toEqual(["Global.cs", "Global.cs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2590,23 +2809,76 @@ describe("C# partial class members across files", () => {
       });
     });
 
-    it("keeps a using directive inside a namespace the same warm and cold when another file declares an enclosing namespace", async () => {
+    it("re-decides a using directive inside a namespace when another file changes what the enclosing namespace declares", async () => {
       const directiveLines = [
         "namespace Local {",
         "  using N;",
         "  class Use { Target value; void Make() { var made = new Target(); } }",
         "}",
       ];
+      const bound: AliasOutcome = {
+        goto: { 3: ["Target.cs", "Target.cs"] },
+        references: { "Target.cs": [3, 3] },
+        edges: ["Make instantiates Target.cs", "Make uses Target.cs"],
+      };
+      const unbound: AliasOutcome = {
+        goto: { 3: ["not_found", "not_found"] },
+        references: { "Target.cs": [] },
+        edges: [],
+      };
       await acrossCacheModes(async (mode, root, cacheDir) => {
         const before = { "Target.cs": target("N"), "LocalOther.cs": "namespace Local.Other; public class Marker {}\n" };
         await writeFixtureFiles(root, { ...before, "Use.cs": directiveLines.join("\n") + "\n" });
         const first = await warmAndColdAliasOutcomes(mode, root, cacheDir, before, directiveLines, [3]);
+        expect(first.cold, `${mode} before the change`).toEqual(bound);
         expect(first.warm, `${mode} before the change`).toEqual(first.cold);
 
-        // The directive resolves from its own text and the project's declarations of `N`, not from `Local.N`.
+        // `Local.N` now comes before the global `N` for the directive, which leaves it unresolved.
         const after = { ...before, "LocalOther.cs": "namespace Local.N; public class Marker {}\n" };
         await writeFixtureFiles(root, { "LocalOther.cs": after["LocalOther.cs"] });
         const second = await warmAndColdAliasOutcomes(mode, root, cacheDir, after, directiveLines, [3]);
+        expect(second.cold, `${mode} after the change`).toEqual(unbound);
+        expect(second.warm, `${mode} after the change`).toEqual(second.cold);
+
+        await rm(path.join(root, "LocalOther.cs"));
+        const third = await warmAndColdAliasOutcomes(
+          mode,
+          root,
+          cacheDir,
+          { "Target.cs": before["Target.cs"] },
+          directiveLines,
+          [3],
+        );
+        expect(third.cold, `${mode} after the declaration is deleted`).toEqual(bound);
+        expect(third.warm, `${mode} after the declaration is deleted`).toEqual(third.cold);
+      });
+    });
+
+    it("stops expanding a namespace-scoped alias when another file changes to declare a nearer namespace", async () => {
+      const scopedLines = [
+        "namespace A {",
+        "  using X = Real;",
+        "  namespace B {",
+        "    class Use { X.Target value; void Make() { var made = new X.Target(); } }",
+        "  }",
+        "}",
+      ];
+      const scopedOutcome = (expands: boolean): AliasOutcome => ({
+        goto: { 4: expands ? ["Real.cs", "Real.cs"] : ["not_found", "not_found"] },
+        references: { "Real.cs": expands ? [4, 4] : [], "Nearer.cs": [] },
+        edges: expands ? ["Make instantiates Real.cs", "Make uses Real.cs"] : [],
+      });
+      await acrossCacheModes(async (mode, root, cacheDir) => {
+        const before = { "Real.cs": target("Real"), "Nearer.cs": target("A.B.Other") };
+        await writeFixtureFiles(root, { ...before, "Use.cs": scopedLines.join("\n") + "\n" });
+        const first = await warmAndColdAliasOutcomes(mode, root, cacheDir, before, scopedLines, [4]);
+        expect(first.cold, `${mode} before the change`).toEqual(scopedOutcome(true));
+        expect(first.warm, `${mode} before the change`).toEqual(first.cold);
+
+        const after = { ...before, "Nearer.cs": target("A.B.X") };
+        await writeFixtureFiles(root, { "Nearer.cs": after["Nearer.cs"] });
+        const second = await warmAndColdAliasOutcomes(mode, root, cacheDir, after, scopedLines, [4]);
+        expect(second.cold, `${mode} after the change`).toEqual(scopedOutcome(false));
         expect(second.warm, `${mode} after the change`).toEqual(second.cold);
       });
     });
