@@ -12,6 +12,7 @@ import {
   type ProjectIndex,
   type SymbolDef,
 } from "../indexer/types.js";
+import type { LanguageExtensionMap } from "../languages.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import {
@@ -29,6 +30,7 @@ import { exitWithError } from "./context.js";
 export type NavigationCommandContext = {
   projectRootFs: string;
   discoveryOptions: ProjectFileDiscoveryOptions;
+  languageExtensions: LanguageExtensionMap | undefined;
   positionals: string[];
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
@@ -49,6 +51,7 @@ function indexOptions(context: NavigationCommandContext): LoadCurrentProjectInde
   return {
     onProgress: context.progressHandler,
     discovery: context.discoveryOptions,
+    ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
     ...(cache ? { cache } : {}),
     ...(cacheDir ? { cacheDir } : {}),
     ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),

@@ -384,6 +384,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
       await handleGraphCommand({
         projectRootFs: ctx.projectRootFs,
         discoveryOptions: ctx.discoveryOptions,
+        languageExtensions: ctx.config.languages?.extensions,
         cacheLocation: ctx.config.cache?.location,
         workerOpts: ctx.workerOpts,
         progressHandler: ctx.progressHandler,
@@ -577,6 +578,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
       await handleReviewCommand({
         projectRootFs: ctx.projectRootFs,
         discoveryOptions: ctx.discoveryOptions,
+        languageExtensions: ctx.config.languages?.extensions,
         cacheLocation: ctx.config.cache?.location,
         reportFile: ctx.reportFile,
         commandReport,
@@ -740,6 +742,7 @@ function navigationArgs(ctx: CliProjectContext) {
   return {
     projectRootFs: ctx.projectRootFs,
     discoveryOptions: ctx.discoveryOptions,
+    languageExtensions: ctx.config.languages?.extensions,
     positionals: ctx.parsed.positionals,
     getOpt: ctx.getOpt,
     hasFlag: ctx.hasFlag,

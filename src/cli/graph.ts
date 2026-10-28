@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { buildSymbolGraph, type SymbolEdge, type SymbolGraph, type SymbolNode } from "../graphs/symbol-graph.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
@@ -15,7 +14,9 @@ import {
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { type BuildOptions, type BuildReport, type CacheLocation, type ProjectIndex } from "../indexer/types.js";
 import { summarizeAnalysis } from "../analysis-summary.js";
+import type { LanguageExtensionMap } from "../languages.js";
 import { updateGraphSqlite, writeGraphSqlite } from "../sqlite.js";
+import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
 import type { Edge, Graph } from "../types.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
@@ -53,6 +54,7 @@ function resolveGraphCacheMode(cache: BuildOptions["cache"]): Exclude<BuildOptio
 export type GraphCommandContext = {
   projectRootFs: string;
   discoveryOptions: ProjectFileDiscoveryOptions;
+  languageExtensions: LanguageExtensionMap | undefined;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
   cacheLocation: CacheLocation | undefined;
@@ -239,6 +241,9 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     ...(cacheDir ? { cacheDir } : {}),
     ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),
   };
+  const languageExtensionOptions: Pick<BuildOptions, "languageExtensions"> = context.languageExtensions
+    ? { languageExtensions: context.languageExtensions }
+    : {};
   const stable = true;
   let format: "mermaid" | "dot" | "json" = "mermaid";
   if (context.hasFlag("--json")) {
@@ -300,6 +305,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           discovery: context.discoveryOptions,
           ...context.workerOpts,
           ...cacheDirOptions,
+          ...languageExtensionOptions,
           cache: effectiveCache,
           cacheStrict,
           cacheVerify,
@@ -316,6 +322,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           discovery: context.discoveryOptions,
           ...context.workerOpts,
           ...cacheDirOptions,
+          ...languageExtensionOptions,
           cache: effectiveCache,
           cacheStrict,
           cacheVerify,
@@ -364,6 +371,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       discovery: context.discoveryOptions,
       ...context.workerOpts,
       ...cacheDirOptions,
+      ...languageExtensionOptions,
       cache: effectiveCache,
       cacheStrict,
       cacheVerify,
@@ -426,6 +434,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       discovery: context.discoveryOptions,
       ...context.workerOpts,
       ...cacheDirOptions,
+      ...languageExtensionOptions,
       cache: effectiveCache,
       cacheStrict,
       cacheVerify,
@@ -440,6 +449,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   } else {
     graph = await collectGraph(context.projectRootFs, files, {
       threads,
+      ...languageExtensionOptions,
       resolveNodeModules,
       dynamicImportHeuristics,
       ...(resolutionHints.length ? { resolutionHints } : {}),
@@ -454,7 +464,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   } else if (format === "dot") {
     await writeOut(graphToDOT(graphOut));
   } else {
-    const sqlFiles = includeSqlArtifacts ? files.filter((file) => path.extname(file).toLowerCase() === ".sql") : [];
+    const sqlFiles = includeSqlArtifacts ? files.filter((file) => isSqlFilePath(file, context.languageExtensions)) : [];
     const sqlArtifacts = sqlFiles.length ? await buildSqlArtifactGraphFromFiles(sqlFiles) : undefined;
     const { files: compactFiles, fileEdges } = compactFileGraph(graphOut, stable);
     await writeOut(

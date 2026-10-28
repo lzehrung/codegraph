@@ -117,6 +117,7 @@ function createNavigationContext(overrides: Partial<NavigationCommandContext>): 
   return {
     projectRootFs: projectRoot,
     discoveryOptions: {},
+    languageExtensions: undefined,
     positionals: [],
     getOpt: () => undefined,
     hasFlag: (name) => name === "--json",
@@ -165,6 +166,7 @@ function createGraphContext(overrides: Partial<GraphCommandContext>): GraphComma
   return {
     projectRootFs: projectRoot,
     discoveryOptions: {},
+    languageExtensions: undefined,
     workerOpts: {},
     cacheLocation: undefined,
     progressHandler: undefined,

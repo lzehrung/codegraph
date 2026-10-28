@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, test } from "vitest";
 import { captureCli, runCliOrThrow, stripCliProgressLines } from "./helpers/cli.js";
+import type { Chunk } from "../src/chunking/types.js";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary, collectDuplicateLeadSummary } from "../src/duplicates-leads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
@@ -15,9 +16,12 @@ import {
   DUPLICATE_IDENTIFIER_CONTINUE_RANGES,
   DUPLICATE_IDENTIFIER_START_RANGES,
 } from "../src/duplicate-identifier-ranges.js";
+import type { DuplicateInternalUnit } from "../src/duplicates/types.js";
 import {
   collectDuplicateUnits,
+  formatDuplicateSymbolHandle,
   getDuplicateAstContext,
+  makeSymbolUnit,
   maskDuplicateImportStatements,
 } from "../src/duplicates/units.js";
 import {
@@ -28,7 +32,9 @@ import {
   duplicateUnitCacheVariant,
   duplicateUnitDiskCache,
   tryLoadDuplicateUnitsFromCache,
+  writeDuplicateUnitsToCache,
 } from "../src/duplicates/unit-cache.js";
+import { SymbolKind, type ProjectIndex, type SymbolDef } from "../src/indexer/types.js";
 import { cacheRelativePath } from "../src/indexer/build-cache/module-cache.js";
 import { brotliCompressSync } from "node:zlib";
 import {
@@ -3095,6 +3101,120 @@ test("C5: duplicate units cached under a previous tokenizer revision are not reu
   }
 });
 
+test("C5: duplicate units cached by cache version 8 are not reused for an unchanged .ddl file", async () => {
+  const root = await makeTempProject();
+  let index: ProjectIndex | undefined;
+  try {
+    const file = await writeProjectFile(
+      root,
+      "db/users.ddl",
+      "CREATE TABLE users (\n  id integer primary key,\n  email text not null\n);\n",
+    );
+    const options = {
+      projectRoot: root,
+      files: [file],
+      includeSmall: true,
+      minTokens: 1,
+      maxTokens: 400,
+      shingleSize: 3,
+      windowSize: 20,
+    };
+    const expected = (await collectDuplicateUnits(await buildProjectIndex(root, { cache: "off" }), options)).units;
+    expect(expected.map((unit) => unit.handle)).toEqual(["chunk:db%2Fusers.ddl:1"]);
+
+    index = await buildProjectIndex(root, { cache: "disk" });
+    // Without a mapping the variant has the shape version 8 wrote, so only its `version` differs.
+    const legacyVariant = JSON.stringify({
+      ...(JSON.parse(duplicateUnitCacheVariant(index, 1, 400, 3, 20, root)) as Record<string, unknown>),
+      version: 8,
+    });
+    const symbolHandle = formatDuplicateSymbolHandle("db/users.ddl", "users", 1, 14);
+    const legacyUnit: DuplicateInternalUnit = {
+      ...expected[0]!,
+      kind: "symbol",
+      name: "users",
+      symbolKind: SymbolKind.Table,
+      handle: symbolHandle,
+      symbolHandle,
+    };
+    writeDuplicateUnitsToCache(index, file, legacyVariant, [legacyUnit], root);
+    // The seeded entry is intact, so the recomputation below is the version rejecting it, not a malformed row.
+    expect(tryLoadDuplicateUnitsFromCache(index, file, legacyVariant, root)?.map((unit) => unit.handle)).toEqual([
+      symbolHandle,
+    ]);
+    const diskDb = duplicateUnitDiskCache(index);
+    if (!diskDb?.db) throw new Error("expected an open duplicate-unit cache database");
+    diskDb.db.prepare("UPDATE duplicate_unit_cache SET version = ? WHERE variant = ?").run(8, legacyVariant);
+
+    const collection = await collectDuplicateUnits(index, options);
+
+    // The stale `symbol:` unit is gone and the file's real units come back.
+    expect(collection.units.map((unit) => unit.handle)).toEqual(expected.map((unit) => unit.handle));
+  } finally {
+    if (index) closeDuplicateUnitCacheForIndex(index);
+  }
+});
+
+test("C5: cached duplicate units follow the language mapping that classified the file", async () => {
+  const root = await makeTempProject();
+  const indexes: ProjectIndex[] = [];
+  try {
+    // `.h` is a built-in suffix, so the file keeps its signature in every run; only the mapping changes.
+    const file = await writeProjectFile(
+      root,
+      "include/twice.h",
+      "int twice(int value) {\n  return value + value;\n}\n",
+    );
+    const options = {
+      projectRoot: root,
+      files: [file],
+      includeSmall: true,
+      minTokens: 1,
+      maxTokens: 400,
+      shingleSize: 3,
+      windowSize: 20,
+    };
+    const collect = async (languageExtensions?: Record<string, string>): Promise<DuplicateInternalUnit[]> => {
+      const index = await buildProjectIndex(root, {
+        cache: "disk",
+        ...(languageExtensions ? { languageExtensions } : {}),
+      });
+      indexes.push(index);
+      return (await collectDuplicateUnits(index, options)).units;
+    };
+
+    const asCpp = await collect({ ".h": "cpp" });
+    expect(new Set(asCpp.map((unit) => unit.languageId))).toEqual(new Set(["cpp"]));
+
+    // The mapping is gone, so the header reads as C again and the cached C++ units must not be served.
+    const asC = await collect();
+    expect(new Set(asC.map((unit) => unit.languageId))).toEqual(new Set(["c"]));
+
+    // The same mapping spelled differently finds what its first run cached, so the variant is not always a miss.
+    const again = await buildProjectIndex(root, { cache: "disk", languageExtensions: { ".H": " CPP " } });
+    indexes.push(again);
+    const variant = duplicateUnitCacheVariant(again, 1, 400, 3, 20, root);
+    expect(tryLoadDuplicateUnitsFromCache(again, file, variant, root)).toEqual(asCpp);
+  } finally {
+    for (const index of indexes) closeDuplicateUnitCacheForIndex(index);
+  }
+});
+
+test("C5: duplicate unit cache variant is keyed by the normalized language mapping", async () => {
+  const root = await makeTempProject();
+  await writeProjectFile(root, "src/anchor.ts", "export const anchor = true;\n");
+  const index = await buildProjectIndex(root, { cache: "off" });
+  const variantFor = (languageExtensions?: Record<string, string>): string =>
+    duplicateUnitCacheVariant({ ...index, ...(languageExtensions ? { languageExtensions } : {}) }, 1, 400, 3, 20, root);
+
+  expect(variantFor({ ".psql": "sql" })).not.toBe(variantFor());
+  expect(variantFor({ ".psql": "sql" })).not.toBe(variantFor({ ".psql": "cpp" }));
+  // Spellings that normalize to one classification, or to none, share one set of cached units.
+  expect(variantFor({ ".PSQL": " SQL " })).toBe(variantFor({ ".psql": "sql" }));
+  expect(variantFor({ ".unknown": "no-such-language" })).toBe(variantFor());
+  expect(variantFor({})).toBe(variantFor());
+});
+
 test("C5: duplicate unit cache signature prefers the content-hash cacheSig over the weak sig", async () => {
   const root = await makeTempProject();
   let index;
@@ -3159,4 +3279,114 @@ test("C5: caches duplicate-only files by content signature", async () => {
   } finally {
     if (index) closeDuplicateUnitCacheForIndex(index);
   }
+});
+
+describe("duplicate unit SQL handles", () => {
+  const usersChunk: Chunk = {
+    id: "chunk-users",
+    languageId: "sql",
+    type: "create",
+    name: "users",
+    startLine: 1,
+    endLine: 3,
+    text: "CREATE TABLE users (\n  id integer,\n  email text\n);",
+    tokenCount: 12,
+  };
+
+  async function symbolIn(root: string, relativeFile: string, kind: SymbolKind, name: string): Promise<SymbolDef> {
+    const file = await writeProjectFile(root, relativeFile, "");
+    return { file, localName: name, kind, range: { start: { line: 1, column: 14 }, end: { line: 3, column: 2 } } };
+  }
+
+  // `.ddl`, `.pgsql`, and `.mysql` are built-in SQL extensions. `.sql` is the control.
+  test.each([".sql", ".ddl", ".pgsql", ".mysql"])(
+    "gives a table in a %s file the portable sql: handle",
+    async (ext) => {
+      const root = await makeTempProject();
+      const table = await symbolIn(root, `db/users${ext}`, SymbolKind.Table, "users");
+
+      const unit = makeSymbolUnit(table, usersChunk, root, 3, 4, undefined);
+
+      expect(unit?.sqlHandle).toBe(`sql:users:db%2Fusers${ext}:1`);
+      expect(unit?.symbolHandle).toBeUndefined();
+      expect(unit?.handle).toBe(unit?.sqlHandle);
+    },
+  );
+
+  test("follows languages.extensions and keeps code symbols on symbol: handles", async () => {
+    const root = await makeTempProject();
+    const mapped = await symbolIn(root, "db/users.psql", SymbolKind.Table, "users");
+    const code = await symbolIn(root, "src/users.ts", SymbolKind.Function, "users");
+
+    expect(makeSymbolUnit(mapped, usersChunk, root, 3, 4, undefined, { ".psql": "sql" })?.sqlHandle).toBe(
+      "sql:users:db%2Fusers.psql:1",
+    );
+    expect(makeSymbolUnit(mapped, usersChunk, root, 3, 4, undefined)?.sqlHandle).toBeUndefined();
+    const codeUnit = makeSymbolUnit(code, usersChunk, root, 3, 4, undefined, { ".psql": "sql" });
+    expect(codeUnit?.sqlHandle).toBeUndefined();
+    expect(codeUnit?.symbolHandle).toBe("symbol:src%2Fusers.ts:users:1:14");
+  });
+});
+
+describe("duplicate units and languages.extensions", () => {
+  const sqlTable = (name: string): string =>
+    `CREATE TABLE ${name} (\n  id integer primary key,\n  email text not null,\n  created_at timestamp default now()\n);\n`;
+
+  // `.psql` is a languages.extensions mapping to sql. `.sql` is built in and is the control.
+  async function sqlProject(): Promise<{ root: string; files: string[] }> {
+    const root = await makeTempProject();
+    await writeProjectFile(root, "src/anchor.ts", "export const anchor = true;\n");
+    const files = [
+      await writeProjectFile(root, "db/accounts.psql", sqlTable("accounts")),
+      await writeProjectFile(root, "db/members.sql", sqlTable("members")),
+    ];
+    return { root, files };
+  }
+
+  test("collects units for a suffix that maps to sql and none while the suffix is unmapped", async () => {
+    const { root, files } = await sqlProject();
+    const options = {
+      projectRoot: root,
+      files,
+      includeSmall: true,
+      minTokens: 1,
+      maxTokens: 400,
+      shingleSize: 3,
+      windowSize: 20,
+    };
+
+    const mapped = await buildProjectIndex(root, { cache: "off", languageExtensions: { ".psql": "sql" } });
+    const mappedUnits = (await collectDuplicateUnits(mapped, options)).units;
+    expect([...new Set(mappedUnits.map((unit) => unit.file))]).toEqual(["db/accounts.psql", "db/members.sql"]);
+    expect([...new Set(mappedUnits.map((unit) => unit.languageId))]).toEqual(["sql"]);
+    // The AST shape comes from the same SQL grammar that parses the built-in suffix.
+    expect(mappedUnits.filter((unit) => unit.astShapeHash === undefined).map((unit) => unit.handle)).toEqual([]);
+
+    const unmapped = await buildProjectIndex(root, { cache: "off" });
+    const unmappedUnits = (await collectDuplicateUnits(unmapped, options)).units;
+    expect([...new Set(unmappedUnits.map((unit) => unit.file))]).toEqual(["db/members.sql"]);
+  });
+
+  test("reports a clone between a mapped suffix and a built-in SQL file only while the suffix is mapped", async () => {
+    const { root, files } = await sqlProject();
+    const detect = async (languageExtensions?: Record<string, string>) => {
+      const index = await buildProjectIndex(root, {
+        cache: "off",
+        ...(languageExtensions ? { languageExtensions } : {}),
+      });
+      return await findDuplicates(index, {
+        projectRoot: root,
+        files,
+        minTokens: 10,
+        includeSmall: true,
+        minConfidence: "high",
+      });
+    };
+
+    const mapped = await detect({ ".psql": "sql" });
+    expect(mapped.groups.map((group) => group.locations.map((location) => location.file).sort())).toEqual([
+      ["db/accounts.psql", "db/members.sql"],
+    ]);
+    expect((await detect()).groups).toEqual([]);
+  });
 });

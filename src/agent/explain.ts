@@ -30,6 +30,7 @@ import {
   AGENT_EXPLAIN_REVIEW_TASK_LIMIT,
 } from "../presentation/bounds.js";
 import { buildReviewReport } from "../review.js";
+import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "../sql/extract-facts.js";
 import type { SqlStatementFact } from "../sql/types.js";
 import type { Range } from "../types.js";
@@ -49,7 +50,6 @@ import {
 import {
   collectDefinitionFollowUps,
   collectFileFollowUps as collectCommonFileFollowUps,
-  isAgentSqlFile,
   isAgentSqlObjectNode,
   normalizeAgentFilePath,
   resolveAgentSnapshotFile,
@@ -311,7 +311,7 @@ function resolveSymbolHandle(
     const file = resolveAgentSnapshotFile(snapshot, parsed.file);
     if (!file) return null;
     for (const def of lookup.defById.values()) {
-      if (isAgentSqlFile(def.file)) continue;
+      if (isSqlFilePath(def.file, snapshot.index.languageExtensions)) continue;
       if (normalizePath(def.file) !== file) continue;
       if (def.localName !== parsed.name) continue;
       if (def.range.start.line !== parsed.line || def.range.start.column !== parsed.column) continue;
@@ -370,7 +370,7 @@ function findSymbolByName(
   }
 
   const defMatches = [...lookup.defById.values()]
-    .filter((def) => !isAgentSqlFile(def.file) && def.localName === name)
+    .filter((def) => !isSqlFilePath(def.file, snapshot.index.languageExtensions) && def.localName === name)
     .sort(compareSymbolDefs);
   const def = defMatches[0];
   return def ? symbolTarget(def, snapshot.symbolGraph.nodes.get(defNodeId(def))) : null;
@@ -845,7 +845,9 @@ async function collectRelatedSqlObjects(
   file: string,
   limit: number,
 ): Promise<BoundedAgentList<AgentExplanationSqlObject>> {
-  if (resolved.kind !== "sql_object" && !isAgentSqlFile(file)) return emptyAgentBoundedList();
+  if (resolved.kind !== "sql_object" && !isSqlFilePath(file, snapshot.index.languageExtensions)) {
+    return emptyAgentBoundedList();
+  }
 
   const sqlObjects = collectSqlObjectNodes(snapshot, lookup);
   const targetName = resolved.kind === "sql_object" ? (resolved.node?.name ?? resolved.def.localName) : undefined;
@@ -980,7 +982,9 @@ async function addRelatedSqlObjectsFromFacts(
 }
 
 async function collectSqlFacts(snapshot: AgentProjectSnapshot): Promise<Map<string, SqlStatementFact[]>> {
-  const sqlFiles = snapshot.files.filter(isAgentSqlFile).sort((left, right) => left.localeCompare(right));
+  const sqlFiles = snapshot.files
+    .filter((file) => isSqlFilePath(file, snapshot.index.languageExtensions))
+    .sort((left, right) => left.localeCompare(right));
   const entries = await mapLimit(sqlFiles, SQL_FACT_READ_CONCURRENCY, async (file) => {
     const facts = extractSqlFactsFromSource(file, await fs.readFile(file, "utf8"));
     return [file, facts] as const;
@@ -1075,7 +1079,7 @@ function collectFollowUps(
     );
   }
 
-  if (isAgentSqlFile(relFile)) {
+  if (isSqlFilePath(relFile, snapshot.index.languageExtensions)) {
     add(toolFollowUp("search", { query: relFile, mode: "sql" }));
   }
 

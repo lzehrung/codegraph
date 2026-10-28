@@ -173,6 +173,161 @@ describe("CLI regressions", () => {
     );
   });
 
+  // `.ddl`, `.pgsql`, and `.mysql` are built-in SQL extensions and `.psql` is a `languages.extensions` mapping.
+  // `.sql` is the control.
+  describe.each([
+    { ext: ".sql" },
+    { ext: ".ddl" },
+    { ext: ".pgsql" },
+    { ext: ".mysql" },
+    { ext: ".psql", languageExtensions: { ".psql": "sql" } },
+  ])("SQL schema in a $ext file", ({ ext, languageExtensions }) => {
+    async function withSqlRoot(run: (root: string) => Promise<void>): Promise<void> {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-sql-ext-"));
+      try {
+        await fsp.mkdir(path.join(root, "db"), { recursive: true });
+        await fsp.writeFile(path.join(root, "db", `schema${ext}`), "CREATE TABLE users (id integer);\n", "utf8");
+        await fsp.writeFile(path.join(root, "db", "queries.sql"), "SELECT id FROM users;\n", "utf8");
+        if (languageExtensions) {
+          await fsp.writeFile(
+            path.join(root, "codegraph.config.json"),
+            JSON.stringify({ languages: { extensions: languageExtensions } }),
+            "utf8",
+          );
+        }
+        await run(root);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    }
+
+    it("graph --sql-artifacts lists the file's statements", async () => {
+      await withSqlRoot(async (root) => {
+        const stdout = await runCliCommand(["graph", "--stdout", "--root", root, "--sql-artifacts", "--json"]);
+        const graph = JSON.parse(stdout) as { sqlArtifacts?: { nodes: Array<{ kind: string; filePath?: string }> } };
+
+        expect(
+          graph.sqlArtifacts?.nodes
+            .filter((node) => node.kind === "sql_file")
+            .map((node) => path.basename(node.filePath ?? ""))
+            .sort(),
+        ).toEqual(["queries.sql", `schema${ext}`]);
+      });
+    });
+
+    it("graph builds the file's edge, table symbol, and SQLite export", async () => {
+      await withSqlRoot(async (root) => {
+        const edges = JSON.parse(await runCliCommand(["graph", "--stdout", "--root", root, "--json"])) as {
+          files: string[];
+          fileEdges: Array<{ from: number; to: { type: string; path?: number }; raw: string }>;
+        };
+        const symbols = JSON.parse(
+          await runCliCommand(["graph", "--stdout", "--root", root, "--symbols-only", "--json"]),
+        ) as { files: string[]; symbols: Array<{ file: number; name: string; kind: string }> };
+        const dbPath = path.join(root, "graph.sqlite");
+        await runCliCommand(["graph", "--root", root, "--sqlite", dbPath]);
+        const exported = JSON.parse(
+          await runCliCommand(["sql", "--json", "--db", dbPath, "--query", "SELECT name, kind FROM symbols;"]),
+        ) as { rows: unknown[][] };
+
+        expect(
+          edges.fileEdges.map((edge) => ({
+            from: path.basename(edges.files[edge.from] ?? ""),
+            to: path.basename(edges.files[edge.to.path ?? -1] ?? ""),
+            raw: edge.raw,
+          })),
+        ).toEqual([{ from: "queries.sql", to: `schema${ext}`, raw: "sql:reads_from:users" }]);
+        expect(
+          symbols.symbols.map((symbol) => ({
+            file: path.basename(symbols.files[symbol.file] ?? ""),
+            name: symbol.name,
+            kind: symbol.kind,
+          })),
+        ).toEqual([{ file: `schema${ext}`, name: "users", kind: "table" }]);
+        expect(exported.rows).toEqual([["users", "table"]]);
+      });
+    });
+
+    it("review lists the statements of the changed schema", async () => {
+      await withSqlRoot(async (root) => {
+        git(root, ["init"]);
+        git(root, ["add", "."]);
+        git(root, ["commit", "-m", "base"]);
+        await fsp.writeFile(
+          path.join(root, "db", `schema${ext}`),
+          "CREATE TABLE users (id integer, age integer);\n",
+          "utf8",
+        );
+
+        const report = JSON.parse(await runCliCommand(["review", "--root", root, "--json"])) as {
+          sqlContext?: { entries: Array<{ reason: string; objectName: string | null }> };
+        };
+
+        expect(report.sqlContext?.entries).toEqual([
+          expect.objectContaining({ reason: "changed_sql_file", objectName: "users" }),
+        ]);
+      });
+    });
+
+    it("goto, refs, and dumpmod resolve the table across files", async () => {
+      await withSqlRoot(async (root) => {
+        const goto = JSON.parse(
+          (await runCliWithExit(["goto", "--json", "db/queries.sql:1:16", "--root", root], root)).stdout,
+        ) as { status: string; definition?: { file: string; localName: string } };
+        const refs = JSON.parse(
+          (await runCliWithExit(["refs", "--json", `db/schema${ext}:1:14`, "--root", root], root)).stdout,
+        ) as { status: string; references?: Array<{ file: string }> };
+        const dumpmod = JSON.parse(
+          (await runCliWithExit(["dumpmod", "--json", `db/schema${ext}`, "--root", root], root)).stdout,
+        ) as { locals?: Array<{ name: string; kind: string }> };
+
+        expect(goto.status).toBe("ok");
+        expect(normalize(goto.definition?.file ?? "")).toBe(`${normalize(root)}/db/schema${ext}`);
+        expect(refs.status).toBe("ok");
+        expect(refs.references?.map((reference) => path.basename(reference.file)).sort()).toEqual([
+          "queries.sql",
+          `schema${ext}`,
+        ]);
+        expect(dumpmod.locals).toEqual([expect.objectContaining({ name: "users", kind: "table" })]);
+      });
+    });
+  });
+
+  it("goto, refs, and dumpmod honor languages.extensions for a non-SQL language", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-language-extensions-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "codegraph.config.json"),
+        JSON.stringify({ languages: { extensions: { ".es6x": "js" } } }),
+        "utf8",
+      );
+      await fsp.writeFile(path.join(root, "helper.es6x"), "export function helper() { return 1; }\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "main.es6x"),
+        'import { helper } from "./helper.es6x";\nexport const value = helper();\n',
+        "utf8",
+      );
+
+      const goto = JSON.parse(
+        (await runCliWithExit(["goto", "--json", "main.es6x:2:22", "--root", root], root)).stdout,
+      ) as { status: string; definition?: { file: string } };
+      const refs = JSON.parse(
+        (await runCliWithExit(["refs", "--json", "helper.es6x:1:17", "--root", root], root)).stdout,
+      ) as { status: string; references?: Array<{ file: string }> };
+      const dumpmod = JSON.parse(
+        (await runCliWithExit(["dumpmod", "--json", "helper.es6x", "--root", root], root)).stdout,
+      ) as { locals?: Array<{ name: string }> };
+
+      expect(goto.status).toBe("ok");
+      expect(normalize(goto.definition?.file ?? "")).toBe(`${normalize(root)}/helper.es6x`);
+      expect(refs.status).toBe("ok");
+      expect(refs.references?.map((reference) => path.basename(reference.file))).toContain("main.es6x");
+      expect(dumpmod.locals).toEqual([expect.objectContaining({ name: "helper" })]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("version prints the package version", async () => {
     const stdout = await runCliCommand(["version"]);
     expect(stdout.trim()).toBe(packageJson.version);
