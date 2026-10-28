@@ -35,11 +35,11 @@ const isDiscoveryIgnored = picomatch([...DEFAULT_PROJECT_FILE_IGNORES, `**/${PRO
 });
 
 // Per-directory mode keeps a watch for as long as its directory exists, although no file list names the directory: for
-// one that an event reported, and for one that a list named until its last source file was deleted. This many such
-// watches at once, not counting the ones that a file list names as well, keep a build that creates or empties
-// thousands of directories from using up the inotify watches that every process of the user shares. Past the limit an
-// event opens no watch, and a directory that the list stopped naming loses its watch; the file list after the next
-// refresh takes over for the rest.
+// one that an event reported, and for one that a list named until its last source file was deleted. The watches above
+// such a directory stay too. This many watches that no file list names stay open at once, those above included, so
+// that a build that creates or empties thousands of directories cannot use up the inotify watches that every process
+// of the user shares. Past the limit an event opens no watch, and the next refresh closes the watches that were opened
+// longest ago until the rest fit.
 const MAX_RETAINED_DIRECTORIES = 128;
 
 /** The part of `fs.FSWatcher` the project watcher uses. */
@@ -182,21 +182,29 @@ async function isDirectory(directory: string): Promise<boolean> {
   }
 }
 
-/** Adds `directory` and its ancestors up to the root to `directories`, stopping at the first one that is ignored. */
+/**
+ * Adds `directory` and its ancestors up to the root to `directories`, stopping at the first one that `directories`
+ * already holds or that is ignored. When that would add more than `room` directories, it adds none and returns false.
+ */
 function addDirectoryWithAncestors(
   root: string,
   directories: Set<string>,
   directory: string,
   isIgnored: PathMatcher,
-): void {
+  room = Infinity,
+): boolean {
+  const added: string[] = [];
   let current = directory;
   // A directory already in the set brought all its ancestors with it.
   while (!directories.has(current)) {
     const relative = path.relative(root, current);
     if (!isRelativePathInside(relative) || isIgnored(relative)) break;
-    directories.add(current);
+    added.push(current);
     current = path.dirname(current);
   }
+  if (added.length > room) return false;
+  for (const entry of added) directories.add(entry);
+  return true;
 }
 
 /** The root, every directory that holds a listed file, and their ancestors up to the root. */
@@ -212,13 +220,13 @@ function collectWatchDirectories(root: string, files: readonly string[], isIgnor
  * Watches the project for file changes. Windows and macOS use one recursive handle on the root. Other platforms
  * use one non-recursive handle per directory that holds a listed file, because Node walks the whole tree for
  * `recursive: true` there, `node_modules` included, and can exhaust inotify watches.
- * A directory that appears later gets its handle from the event that reports it, not from the next file list, and
- * keeps it, with the handles of the directories above it, until the directory is removed. No list names a directory
- * that holds only a placeholder such as `.gitkeep`, yet its first source file must raise an event. The same goes for
- * a directory that a list named for a while: once its last source file is deleted, a placeholder may remain, and a
- * source file added again must raise an event. At most `MAX_RETAINED_DIRECTORIES` handles that no list names stay at
- * once. A handle that was lost with its directory is closed (see `namesWatchedDirectory`), and `refreshDirectories`
- * opens it again once the directory exists.
+ * A directory that appears later gets its handle from the event that reports it, not from the next file list. No list
+ * names a directory that holds only a placeholder such as `.gitkeep`, yet its first source file must raise an event.
+ * The same goes for a directory that a list named for a while: once its last source file is deleted, a placeholder may
+ * remain, and a source file added again must raise an event. So a handle that no list names stays, with the handles of
+ * the directories above it, until its directory is removed. At most `MAX_RETAINED_DIRECTORIES` of them stay at once,
+ * and the refresh closes the ones that were opened longest ago when more qualify. A handle that was lost with its
+ * directory is closed (see `namesWatchedDirectory`), and `refreshDirectories` opens it again once the directory exists.
  * The watcher is a hint: a missed event costs speed, never correctness, because the session's pull check stays
  * the authority.
  */
@@ -231,11 +239,11 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
   const watch: ProjectWatchFactory = options.watch ?? fs.watch;
   const log = options.log ?? ((message: string): void => console.error(message));
   const handles = new Map<string, ProjectWatchHandle>();
-  // Per-directory mode: directories whose watch outlives the file list. An event reported them, or a list named them
-  // until it stopped. The watch stays until the directory is removed, whether or not a file list names it.
+  // Per-directory mode: the open handles that no file list names, because an event reported their directory, or a list
+  // named it until it stopped, or it lies above one of those. They stay while their directory exists, up to the limit.
   const retainedDirectories = new Set<string>();
-  // What the latest file list needs a watch for. A retained directory among them does not count toward the limit.
-  let listedDirectories: ReadonlySet<string> = new Set();
+  // What the latest file list needs a watch for. The root is in every list.
+  let listedDirectories: ReadonlySet<string> = new Set([root]);
   // Reported directories whose watch is still to open, in the order the events arrived.
   const pendingDirectories = new Set<string>();
   let debounceTimer: NodeJS.Timeout | undefined;
@@ -324,24 +332,19 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
       noteChange();
     });
     handles.set(directory, handle);
+    if (!listedDirectories.has(directory)) retainedDirectories.add(directory);
   };
 
-  // True once this many retained directories hold a watch that no file list accounts for.
-  const retainedLimitReached = (): boolean => {
-    if (retainedDirectories.size < MAX_RETAINED_DIRECTORIES) return false;
-    let unlisted = 0;
-    for (const directory of retainedDirectories) {
-      if (!listedDirectories.has(directory)) unlisted += 1;
-    }
-    return unlisted >= MAX_RETAINED_DIRECTORIES;
-  };
+  // True when a watch for `directory` would be one more that no file list names, beyond the limit on those.
+  const retainedLimitReached = (directory: string): boolean =>
+    !listedDirectories.has(directory) && retainedDirectories.size >= MAX_RETAINED_DIRECTORIES;
 
   // Watches a directory that an event reported, if it still is one. A `mkdir -p` or a copy may have filled it before
   // this watch opened, which raised no event, so the directories inside it are queued too.
   const watchReportedDirectory = async (directory: string): Promise<void> => {
     const relative = path.relative(root, directory);
     if (!isRelativePathInside(relative) || isIgnored(relative) || handles.has(directory)) return;
-    if (retainedLimitReached()) return;
+    if (retainedLimitReached(directory)) return;
     let stats: fs.Stats;
     try {
       stats = await fsp.lstat(directory);
@@ -349,11 +352,10 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
       // Gone again: the next refresh sees the final state.
       return;
     }
-    // A link is not followed, as in discovery.
-    if (!stats.isDirectory() || closed || disabled || handles.has(directory)) return;
+    // A link is not followed, as in discovery. A refresh may have filled the limit while the directory was checked.
+    if (!stats.isDirectory() || closed || disabled || handles.has(directory) || retainedLimitReached(directory)) return;
     openDirectory(directory, false);
     if (!handles.has(directory)) return;
-    retainedDirectories.add(directory);
     let entries: fs.Dirent[];
     try {
       entries = await fsp.readdir(directory, { withFileTypes: true });
@@ -390,36 +392,32 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
 
   const applyDirectories = async (files: readonly string[]): Promise<void> => {
     const wanted = collectWatchDirectories(root, files, isIgnored);
-    const previouslyListed = listedDirectories;
-    listedDirectories = wanted;
-    // Watched even while no handle is open: what the list needs, and the directories above a retained one that stays.
-    const required = new Set(wanted);
-    const kept = new Set<string>();
-    const open = [...handles];
-    for (const [directory, handle] of open) {
-      // A directory that the list names is required, and stays retained if it was.
+    // A watch that the list no longer names stays while its directory exists: a source file that is added there later
+    // raises an event on no other watch. No more than MAX_RETAINED_DIRECTORIES of them can stay, the newest first, so
+    // the check stops after that many directories that still exist, and the rest are rejected unseen.
+    const rejected = new Map<string, ProjectWatchHandle>();
+    let present = 0;
+    for (const [directory, handle] of [...handles].reverse()) {
       if (wanted.has(directory)) continue;
-      const retained = retainedDirectories.has(directory);
-      // Neither retained nor named by the list that this one replaces: only a retained directory below it can need it.
-      if (!retained && !previouslyListed.has(directory)) continue;
-      // No list names a directory that holds only a placeholder, or only more directories, and none names one whose
-      // last source file was deleted while a placeholder remains. Its first source file must still raise an event, so
-      // the watch stays until the directory is removed, and so do the ones above it. An ignored directory never got
-      // a watch.
-      const exists = await isDirectory(directory);
+      if (present < MAX_RETAINED_DIRECTORIES && (await isDirectory(directory))) present += 1;
+      else rejected.set(directory, handle);
       if (closed || disabled) return;
-      if (!exists || handles.get(directory) !== handle) continue;
-      // A directory that the previous list named joins the retained ones only while the limit has room, so that a
-      // build that empties thousands of directories cannot keep thousands of watches.
-      if (!retained) {
-        if (retainedLimitReached()) continue;
-        retainedDirectories.add(directory);
-      }
-      kept.add(directory);
-      addDirectoryWithAncestors(root, required, path.dirname(directory), isIgnored);
     }
-    for (const [directory, handle] of open) {
-      if (!required.has(directory) && !kept.has(directory)) closeHandle(directory, handle);
+    // Nothing awaits from here on, so no event opens or closes a watch before this ends. A watch that an event opened
+    // while the directories were looked at is not rejected, and competes as the newest.
+    // Watched even while no handle is open: what the list needs, and what stays with the directories above it.
+    const required = new Set(wanted);
+    for (const [directory, handle] of [...handles].reverse()) {
+      if (wanted.has(directory) || rejected.get(directory) === handle) continue;
+      // A directory stays with the ones above it that nothing else keeps, or not at all: all of them count.
+      const room = MAX_RETAINED_DIRECTORIES - (required.size - wanted.size);
+      addDirectoryWithAncestors(root, required, directory, isIgnored, room);
+    }
+    listedDirectories = wanted;
+    retainedDirectories.clear();
+    for (const [directory, handle] of [...handles]) {
+      if (!required.has(directory)) closeHandle(directory, handle);
+      else if (!wanted.has(directory)) retainedDirectories.add(directory);
     }
     for (const directory of required) {
       if (closed || disabled) return;

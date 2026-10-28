@@ -1936,7 +1936,7 @@ describe("startProjectWatcher with directories that appear", () => {
     watcher.close();
   });
 
-  it("keeps the watches above a reported directory after the file list stops naming them, and closes the one that only it needed once it is removed", async () => {
+  it("keeps the watches above a reported directory after the file list stops naming them, and closes the reported one once it is removed", async () => {
     const projectRoot = await tempRoots.create("cg-project-watcher-above-");
     const src = path.join(projectRoot, "src");
     const old = path.join(src, "old");
@@ -1967,12 +1967,12 @@ describe("startProjectWatcher with directories that appear", () => {
     await watcher.refreshDirectories();
     expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, old, added]));
 
-    // `old` came back only because `added` needs the directory above it, so it goes with `added`. `src` is a directory
-    // that a list named and that still exists, so it keeps its watch.
+    // Nothing keeps `added` once it is removed. `old` and `src` are directories that a list named and that still exist,
+    // so they keep their watches.
     await fs.rm(added, { recursive: true });
     fake.removeDirectory(added, "inotify");
     await watcher.refreshDirectories();
-    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src]));
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, old]));
     expect(fake.duplicateOpens).toEqual([]);
     watcher.close();
   });
@@ -2035,6 +2035,128 @@ describe("startProjectWatcher with directories that appear", () => {
     expect(fake.openHandles()).toHaveLength(1 + 128);
     expect(fake.duplicateOpens).toEqual([]);
     watcher.close();
+  });
+
+  it("keeps at most 128 watches that no file list names when two batches of directories that events reported entered the list and left it again, and closes the older batch", async () => {
+    const { projectRoot, src, listFiles, fake, watcher } = await startInProject();
+    const reportBatch = async (prefix: string): Promise<string[]> => {
+      const directories = Array.from({ length: 128 }, (_, index) => path.join(src, `${prefix}${index}`));
+      await Promise.all(directories.map((directory) => fs.mkdir(directory)));
+      for (const directory of directories) fake.deliver(src, path.basename(directory), "rename");
+      // A refresh waits for the events that are still being opened.
+      await watcher.refreshDirectories();
+      return directories;
+    };
+
+    const older = await reportBatch("older");
+    expect(fake.openHandles()).toHaveLength(2 + 128);
+    // The list names every directory of the first batch. They no longer count toward the limit, so the second batch is
+    // let through.
+    listFiles.mockImplementation(async () => [
+      path.join(src, "a.ts"),
+      ...older.map((directory) => path.join(directory, "x.ts")),
+    ]);
+    await watcher.refreshDirectories();
+    const newer = await reportBatch("newer");
+    expect(fake.openHandles()).toHaveLength(2 + 128 + 128);
+
+    // Both batches left the list: 256 directories that exist and that no list names, for 128 watches. The watches that
+    // were opened longest ago close first.
+    listFiles.mockImplementation(async () => [path.join(src, "a.ts")]);
+    await watcher.refreshDirectories();
+    expect(fake.openHandles()).toHaveLength(2 + 128);
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, ...newer]));
+    expect(fake.duplicateOpens).toEqual([]);
+    watcher.close();
+  });
+
+  it("counts the watches above the directories that stay toward the 128, so that nested trees cannot keep thousands", async () => {
+    const projectRoot = await tempRoots.create("cg-project-watcher-nested-");
+    const chains = Array.from({ length: 40 }, (_, index) => path.join(projectRoot, `tree${index}`, "one", "two"));
+    await Promise.all(chains.map((chain) => fs.mkdir(chain, { recursive: true })));
+    let files = chains.map((chain) => path.join(chain, "x.ts"));
+    const { fake, watcher } = startWatcher({ root: projectRoot, platform: "linux", listFiles: async () => files });
+    await watcher.refreshDirectories();
+    // The list names the three directories of every chain.
+    expect(fake.openHandles()).toHaveLength(1 + 3 * 40);
+
+    // An event reports a directory below every chain.
+    const leaves = chains.map((chain, index) => path.join(chain, `leaf${index}`));
+    await Promise.all(leaves.map((leaf) => fs.mkdir(leaf)));
+    chains.forEach((chain, index) => fake.deliver(chain, `leaf${index}`, "rename"));
+    await watcher.refreshDirectories();
+    expect(fake.openHandles()).toHaveLength(1 + 3 * 40 + 40);
+
+    // No source file is left: 40 leaves and the 120 directories above them are 160 watches that no list names, for 128.
+    files = [];
+    await watcher.refreshDirectories();
+    const open = fake.openDirectories();
+    expect(open).toHaveLength(1 + 128);
+    // A watch that stays has the one above it, so no tree is left half open.
+    for (const directory of open) {
+      if (directory !== projectRoot) expect(open).toContain(path.dirname(directory));
+    }
+    // The newest tree stays whole, and the oldest one is closed down to the root.
+    const oldest = path.join(projectRoot, "tree0");
+    expect(open).toContain(leaves[39]);
+    expect(open.filter((directory) => directory === oldest || directory.startsWith(oldest + path.sep))).toEqual([]);
+    expect(fake.duplicateOpens).toEqual([]);
+    watcher.close();
+  });
+
+  it("keeps a watch that an event opened while a refresh was checking the directories, counts it toward the 128, and refuses the one that no longer fits", async () => {
+    const { src, fake, watcher } = await startInProject();
+    const names = Array.from({ length: 127 }, (_, index) => `held${index}`);
+    await Promise.all(names.map((name) => fs.mkdir(path.join(src, name))));
+    for (const name of names) fake.deliver(src, name, "rename");
+    await watcher.refreshDirectories();
+    expect(fake.openHandles()).toHaveLength(2 + 127);
+
+    // The refresh checks the newest directory first, and that check waits.
+    const newest = path.join(src, names[126] ?? "");
+    const realStat = fs.stat.bind(fs);
+    const checking = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      if (String(args[0]) === newest) {
+        checking.resolve();
+        await release.promise;
+      }
+      return await realStat(...args);
+    });
+    try {
+      const refreshing = watcher.refreshDirectories();
+      await checking.promise;
+
+      // Two events report a directory each while it waits, and the limit has room for the first one only.
+      const fitting = path.join(src, "fitting");
+      const surplus = path.join(src, "surplus");
+      await fs.mkdir(fitting);
+      await fs.mkdir(surplus);
+      fake.deliver(src, "fitting", "rename");
+      await vi.waitFor(() => expect(fake.openDirectories()).toContain(fitting), timing);
+      fake.deliver(src, "surplus", "rename");
+
+      release.resolve();
+      await refreshing;
+      // The refresh did not take the watch that the event opened for one that it looked at, and it counted it.
+      await watcher.refreshDirectories();
+      expect(fake.openHandles()).toHaveLength(2 + 128);
+      expect(fake.openDirectories()).toContain(fitting);
+      expect(fake.openDirectories()).not.toContain(surplus);
+
+      // The limit is full: the next directory that an event reports gets no watch.
+      const later = path.join(src, "later");
+      await fs.mkdir(later);
+      fake.deliver(src, "later", "rename");
+      await watcher.refreshDirectories();
+      expect(fake.openDirectories()).not.toContain(later);
+      expect(fake.openHandles()).toHaveLength(2 + 128);
+    } finally {
+      release.resolve();
+      statSpy.mockRestore();
+      watcher.close();
+    }
   });
 
   it("opens no watch for a file, an ignored directory, or an entry that is gone, however the events name them", async () => {
