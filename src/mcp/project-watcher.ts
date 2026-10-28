@@ -496,9 +496,10 @@ export type WatchController = {
   noteActivity: () => void;
   /**
    * Closes every handle and cancels every timer. Safe to call twice. The promise settles once the background refresh
-   * that was running has ended, and never rejects. A refresh that still waits for its turn then checks and rebuilds
-   * nothing. A rebuild cannot be cancelled, so a caller that releases the session waits for it first: one that
-   * outlives the release keeps writing the cache and restores the file signatures that the release dropped.
+   * that was running and every read of the file list that had started have ended, and never rejects. A refresh that
+   * still waits for its turn then checks and rebuilds nothing, and a read that still waits reads nothing. Neither can
+   * be cancelled once it runs, so a caller that releases the session waits for them first: one that outlives the
+   * release keeps writing the cache and restores the file signatures that the release dropped.
    */
   close: () => Promise<void>;
 };
@@ -523,8 +524,9 @@ export function assertMcpWatchMs(name: string, value: number | undefined): void 
  *   read of the file list for the per-directory watches takes a turn as well.
  * - After `idleMs` without `noteActivity` the watches close, and a refresh that waits for its turn gives it up. The
  *   next `noteActivity` reopens them and calls `markChanged`, so the pull check sees every edit made during the pause.
- * - `close` ends the watching for good. The refresh that is running finishes, and `close` returns a promise for it, so
- *   that the owner of the session can release the session after it.
+ * - `close` ends the watching for good. The refresh that is running finishes, and so does every read of the file list
+ *   that has started. `close` returns a promise for them, so that the owner of the session can release the session
+ *   after them. A read that still waits for its turn gives it up.
  */
 export function createWatchController(session: AgentSession, options: WatchControllerOptions): WatchController {
   const minRefreshIntervalMs = options.minRefreshIntervalMs ?? DEFAULT_MCP_WATCH_MIN_REFRESH_INTERVAL_MS;
@@ -534,8 +536,10 @@ export function createWatchController(session: AgentSession, options: WatchContr
   let idleTimer: NodeJS.Timeout | undefined;
   let refreshTimer: NodeJS.Timeout | undefined;
   let lastRefreshEndedAt: number | undefined;
-  // The refresh that is running, if any. Only one runs at a time, and `close` hands it out.
+  // The refresh that is running, if any. Only one runs at a time, and `close` waits for it.
   let activeRefresh: Promise<void> | undefined;
+  // The reads of the file list that took their turn of `runExclusive` and have not ended. `close` waits for them too.
+  const activeReads = new Set<Promise<unknown>>();
   let rerun = false;
   let closed = false;
   // Bumped by every event and by `pause`. A refresh keeps the value it started under, and gives up its turn of
@@ -648,14 +652,22 @@ export function createWatchController(session: AgentSession, options: WatchContr
   // Reads the file list for the directory scans of one watcher, in a turn of `runExclusive`. The first read of a session
   // that nothing has loaded discovers the project and records the file signatures that the freshness check compares
   // with. A read that ran beside `refresh_index` and ended last would replace the signatures of the snapshot that the
-  // rebuild produced.
+  // rebuild produced. One that ended after the owner released the session would record them into the released session,
+  // so a read that runs stays in `activeReads` until it ends.
   const readFiles = async (token: number): Promise<readonly string[]> => {
     let files: readonly string[] = [];
     await options.runExclusive(async () => {
       // The watcher paused or closed while the read waited. Nothing uses the list, and a session that its owner
       // released must not load the project again.
       if (token !== watcherToken) return;
-      files = (await session.listFiles?.()) ?? [];
+      // Tracked in the tick of the check, so that a `close` right after it finds every read that was not skipped.
+      const read = (async (): Promise<readonly string[]> => (await session.listFiles?.()) ?? [])();
+      activeReads.add(read);
+      try {
+        files = await read;
+      } finally {
+        activeReads.delete(read);
+      }
     });
     return files;
   };
@@ -688,12 +700,14 @@ export function createWatchController(session: AgentSession, options: WatchContr
     session.markChanged?.();
   };
 
-  const close = (): Promise<void> => {
+  const close = async (): Promise<void> => {
     if (!closed) {
       closed = true;
       pause();
     }
-    return activeRefresh ?? Promise.resolve();
+    // Neither the refresh nor a read can be cancelled, and either writes to the session until it ends. Their failures
+    // are logged where they happened, so none rejects here.
+    await Promise.allSettled([activeRefresh, ...activeReads]);
   };
 
   if (!options.startPaused) open();

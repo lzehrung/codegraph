@@ -1388,6 +1388,51 @@ describe("createWatchController", () => {
     },
   );
 
+  it("waits at close for the read of the file list that is running, and uses nothing that it read", async () => {
+    const read = Promise.withResolvers<void>();
+    const { fake, controller, calls } = startController({
+      platform: "linux",
+      files: [at("src", "a.ts")],
+      listHold: read.promise,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["listFiles"]);
+
+    let closed = false;
+    const closing = controller.close().then(() => {
+      closed = true;
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    // The read cannot be cancelled, and the first read of a session that nothing has loaded records its file signatures
+    // when it ends. A caller that releases the session now would get them back.
+    expect(closed).toBe(false);
+
+    read.resolve();
+    await closing;
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // The list belongs to a watcher that ended, so no watch opens for it.
+    expect(calls).toEqual(["listFiles"]);
+    expect(fake.openHandles()).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("settles at close, and does not reject, when the read of the file list that it waited for failed", async () => {
+    const read = Promise.withResolvers<void>();
+    const { controller } = startController({
+      platform: "linux",
+      files: [at("src", "a.ts")],
+      listHold: read.promise,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const closing = controller.close();
+    read.reject(new Error("discovery failed"));
+
+    // A caller that releases the session after `close` would never get to it if this rejected.
+    await expect(closing).resolves.toBeUndefined();
+  });
+
   it("completes a background refresh, and the directory scan that follows it, behind a lock that serves one operation at a time", async () => {
     const { fake, calls, state } = startController({
       platform: "linux",
@@ -1698,6 +1743,65 @@ describe("startProjectWatcher with the real file system", () => {
     } finally {
       await controller.close();
       session.invalidate();
+    }
+  });
+
+  it("waits at close for the first read of the file list to record its file signatures, so that the release after it leaves the session empty", async () => {
+    const projectRoot = await tempRoots.create("cg-project-watcher-first-read-");
+    await fs.mkdir(path.join(projectRoot, "src"));
+    await fs.writeFile(path.join(projectRoot, "src", "main.ts"), "export const value = 1;\n");
+    const session = createAgentSession({
+      root: projectRoot,
+      buildOptions: { cache: "off" },
+      freshness: { policy: "auto" },
+    });
+    const events: string[] = [];
+    // The first read of the file list of a session that nothing has loaded ends by recording the size and modification
+    // time of every listed file. Holding the first of those stats holds the read.
+    const realStat = fs.stat.bind(fs);
+    const recording = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let held = false;
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      if (held || path.extname(String(args[0])) !== ".ts") return await realStat(...args);
+      held = true;
+      recording.resolve();
+      await release.promise;
+      const stats = await realStat(...args);
+      events.push("recorded");
+      return stats;
+    });
+    // Per-directory watches, as on Linux, are what read the file list. A server that started without warmup has loaded
+    // nothing yet, so its watcher makes the first read.
+    const controller = createWatchController(session, {
+      root: projectRoot,
+      platform: "linux",
+      watch: createFakeWatch().watch,
+      log: vi.fn(),
+      runExclusive: (operation) => operation(),
+    });
+
+    try {
+      await recording.promise;
+      const closing = controller.close();
+      // The read ends only after `close` was called, as when the server shuts down in the middle of it.
+      release.resolve();
+      await closing;
+      // What the owner does after `close`.
+      events.push("released");
+      session.invalidate();
+
+      // A read that ended after the release would record its file signatures into the session that was just released.
+      expect(events).toEqual(["recorded", "released"]);
+      // A session that holds a baseline checks the files against it. An empty one answers without a stat.
+      statSpy.mockClear();
+      expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
+      expect(statSpy).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await controller.close();
+      session.invalidate();
+      statSpy.mockRestore();
     }
   });
 });

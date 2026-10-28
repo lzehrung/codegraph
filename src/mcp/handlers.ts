@@ -413,8 +413,8 @@ type WarmedCodegraphMcpResources = {
   session: AgentSession;
   /**
    * Stops the file watcher and cancels its timers. Safe to call twice; does nothing without a watcher. The promise
-   * settles once a background refresh that was running has ended. Await it before `session.invalidate()`: until then
-   * that refresh keeps writing the cache and the session's file signatures.
+   * settles once a background refresh that was running, and every read of the file list that had started, have ended.
+   * Await it before `session.invalidate()`: until then they keep writing the cache and the session's file signatures.
    */
   closeWatcher: () => Promise<void>;
 };

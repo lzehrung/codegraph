@@ -88,7 +88,8 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     protocolFactory.stop();
     const watcherClosed = closeWatcher();
     await protocolFactory.drain();
-    // A background rebuild writes to the session and its cache until it ends, so the session is released after it.
+    // A background rebuild or a read of the file list writes to the session until it ends, so the session is released
+    // after them.
     await watcherClosed;
     session.invalidate();
   }

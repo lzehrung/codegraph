@@ -4832,6 +4832,117 @@ describe("MCP file watcher", () => {
     });
   });
 
+  // Only per-directory watching reads the file list, and Windows and macOS watch the root recursively instead.
+  it.runIf(process.platform === "linux")(
+    "waits for the watcher's first read of the file list when the HTTP server closes, and releases the session after it",
+    async () => {
+      const root = await createProject("cg-mcp-watch-http-first-read-");
+      await fs.writeFile(path.join(root, "notes.md"), "notes\n", "utf8");
+      const held = holdFileSignatures(root);
+      const httpServer = await startCodegraphMcpHttpServer({ root, port: 0, warmup: "off" });
+      try {
+        const initialize = await postMcpJson(httpServer.url, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-11-25",
+            capabilities: {},
+            clientInfo: { name: "codegraph-watch-first-read-test", version: "1.0.0" },
+          },
+        });
+        // With `warmup: "off"` the first tool call opens the watches, and the watcher reads the file list for them.
+        // `get_file` on a file that discovery does not list leaves the session alone, so that read is the first.
+        await postMcpJson(
+          httpServer.url,
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: { name: "get_file", arguments: { file: "notes.md" } },
+          },
+          initialize.response.headers.get("mcp-session-id") ?? undefined,
+        );
+        await held.started;
+
+        let closed = false;
+        const closing = httpServer.close().then(() => {
+          closed = true;
+        });
+        await letShutdownRun();
+
+        // Nothing else holds the server open, so only the read can.
+        expect(closed).toBe(false);
+        expect(held.events).toEqual(["signatures:start"]);
+
+        held.release();
+        await closing;
+        // The read records the file signatures when it ends, so it must end before the release.
+        expect(held.events).toEqual(["signatures:start", "signatures:end", "invalidate"]);
+      } finally {
+        held.release();
+        await httpServer.close();
+      }
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "waits for the watcher's first read of the file list when the stdio server shuts down, and releases the session after it",
+    async () => {
+      const root = await createProject("cg-mcp-watch-stdio-first-read-");
+      await fs.writeFile(path.join(root, "notes.md"), "notes\n", "utf8");
+      const held = holdFileSignatures(root);
+      await withStandInStdio(async (stdin) => {
+        let served = false;
+        const serving = serveCodegraphMcp({ root, warmup: "off" }).then(() => {
+          served = true;
+        });
+        try {
+          await vi.waitFor(() => expect(stdin.listenerCount("end")).toBeGreaterThan(0), { timeout: 20_000 });
+          // With `warmup: "off"` the first tool call opens the watches, and the watcher reads the file list for them.
+          // `get_file` on a file that discovery does not list leaves the session alone, so that read is the first.
+          const frames = [
+            {
+              jsonrpc: "2.0",
+              id: 1,
+              method: "initialize",
+              params: {
+                protocolVersion: "2025-11-25",
+                capabilities: {},
+                clientInfo: { name: "codegraph-watch-first-read-test", version: "1.0.0" },
+              },
+            },
+            { jsonrpc: "2.0", method: "notifications/initialized" },
+            {
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/call",
+              params: { name: "get_file", arguments: { file: "notes.md" } },
+            },
+          ];
+          stdin.write(frames.map((frame) => JSON.stringify(frame)).join("\n") + "\n");
+          await held.started;
+
+          stdin.end();
+          await letShutdownRun();
+
+          // Nothing else holds the server open, so only the read can.
+          expect(served).toBe(false);
+          expect(held.events).toEqual(["signatures:start"]);
+
+          held.release();
+          await serving;
+          // The read records the file signatures when it ends, so it must end before the release.
+          expect(held.events).toEqual(["signatures:start", "signatures:end", "invalidate"]);
+        } finally {
+          held.release();
+          stdin.end();
+          await serving;
+        }
+      });
+    },
+  );
+
   it.each<[string, Partial<CodegraphMcpServerOptions>]>([
     ["watchDebounceMs", { watchDebounceMs: -1 }],
     ["watchMinRefreshIntervalMs", { watchMinRefreshIntervalMs: 1.5 }],
