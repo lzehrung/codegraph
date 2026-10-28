@@ -491,7 +491,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "mcp",
     commandSchema(
-      [...SHARED_BUILD_FLAGS, "--allow-build", "--stdio", "--warmup", "--warmup-symbols", "--no-warmup"],
+      [...SHARED_BUILD_FLAGS, "--allow-build", "--stdio", "--warmup", "--warmup-symbols", "--no-warmup", "--no-watch"],
       [...SHARED_BUILD_OPTIONS, "--artifact", "--host", "--port", "--idle-timeout-ms"],
       {
         kind: "max",
@@ -511,6 +511,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         "--warmup",
         "--warmup-symbols",
         "--no-warmup",
+        "--no-watch",
         "--workers",
         ...JSON_OUTPUT_FLAGS,
       ],

@@ -9,6 +9,7 @@ import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
 import type { SqliteArtifactFileSignature } from "../sqlite/types.js";
 import { isPlainRecord } from "../util/guards.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
+import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { createAgentFileLookup, normalizeAgentFilePath } from "./normalize.js";
 import { createRequestSession } from "./session.js";
@@ -562,7 +563,7 @@ function buildPortableSymbolIdMap(snapshot: AgentProjectSnapshot): Map<string, s
     for (const local of moduleIndex.locals) {
       const relFile = normalizeAgentFilePath(snapshot.root, local.file);
       const id = defNodeId(local);
-      const isSqlObject = local.file.toLowerCase().endsWith(".sql");
+      const isSqlObject = isSqlFilePath(local.file, snapshot.index.languageExtensions);
       byId.set(
         id,
         isSqlObject

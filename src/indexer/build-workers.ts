@@ -18,7 +18,7 @@ import type {
 } from "../worker/native-extract-worker.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES, NATIVE_WORKER_BATCH_SIZE } from "../worker/native-extract-worker.js";
 import { prepareFileForIndexing, type PreparedFileContext } from "./parse-context.js";
-import type { BuildOptions, BuildReport, WorkerPoolReport } from "./types.js";
+import type { BuildOptions, BuildReport, ModuleIndex, WorkerPoolReport } from "./types.js";
 
 /**
  * Files below which the pool costs more than it saves, so auto mode stays single-threaded.
@@ -221,6 +221,19 @@ function recordPreparedNativeExecutionOutcome(report: BuildReport | undefined, p
     ...(prepared.nativeFallbackReason ? { fallbackReason: prepared.nativeFallbackReason } : {}),
     ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
   });
+}
+
+/**
+ * The native outcome a module is indexed with. It mirrors what `recordPreparedNativeExecutionOutcome` counts for the
+ * file, so a summary read from the modules agrees with the build report: native query results mean native parsed the
+ * file, a fallback reason means native skipped it, and graph-only languages are neither.
+ */
+export function preparedNativeOutcome(
+  prepared: Pick<PreparedFileContext, "sup" | "nativeQueries" | "nativeFallbackReason">,
+): ModuleIndex["nativeOutcome"] {
+  if (isGraphOnlyLanguage(prepared.sup.id)) return undefined;
+  if (prepared.nativeQueries) return "used";
+  return prepared.nativeFallbackReason ? "skipped" : undefined;
 }
 
 function createOversizedNativeSourceSkip(file: string, support: LanguageSupport, source: string): PreparedFileContext {

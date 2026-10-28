@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Piscina } from "piscina";
 import { findPackageRoot } from "../util/package-info.js";
+import { piscinaWorkerExecArgv } from "../util/worker-threads.js";
 import { markWindowsProcessDrainRequired } from "../util/windows-process-drain.js";
 import type { RawSqlResult } from "./types.js";
 import type { RawQueryWorkerTask } from "./raw-query-worker.js";
@@ -166,6 +167,7 @@ export async function runRawSqlQueryInWorker(
     markWindowsProcessDrainRequired();
     return new Piscina<RawQueryWorkerTask, RawSqlResult>({
       filename: workerPath,
+      execArgv: piscinaWorkerExecArgv(),
       minThreads: 1,
       maxThreads: 1,
       idleTimeout: 5_000,

@@ -117,6 +117,7 @@ function createNavigationContext(overrides: Partial<NavigationCommandContext>): 
   return {
     projectRootFs: projectRoot,
     discoveryOptions: {},
+    languageExtensions: undefined,
     positionals: [],
     getOpt: () => undefined,
     hasFlag: (name) => name === "--json",
@@ -165,6 +166,7 @@ function createGraphContext(overrides: Partial<GraphCommandContext>): GraphComma
   return {
     projectRootFs: projectRoot,
     discoveryOptions: {},
+    languageExtensions: undefined,
     workerOpts: {},
     cacheLocation: undefined,
     progressHandler: undefined,
@@ -373,6 +375,7 @@ describe("CLI command modules", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("--stdio");
     expect(MCP_SERVE_HELP_TEXT).toMatch(/--warmup\s/);
     expect(MCP_SERVE_HELP_TEXT).toContain("--warmup-symbols");
+    expect(MCP_SERVE_HELP_TEXT).toContain("--no-watch");
     expect(MCP_SERVE_HELP_TEXT).toContain("--include-glob");
     expect(MCP_SERVE_HELP_TEXT).toContain("--ignore-glob");
     expect(MCP_SERVE_HELP_TEXT).toContain("orient");
@@ -1008,6 +1011,44 @@ describe("CLI command modules", () => {
     expect(backendCalls).toHaveLength(1);
     expect(backendCalls[0]?.showProgress).toBe(false);
     expect(backendCalls[0]?.report).toBeDefined();
+  });
+
+  test("graph --json --cache disk --cache-verify keeps the native backend when the module cache serves every file", async () => {
+    const root = await mkTmpDir("codegraph-graph-cache-verify-analysis-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const reports: Array<BuildReport | undefined> = [];
+    const runGraph = async (): Promise<Record<string, unknown>> => {
+      const stdout: string[] = [];
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+          getOpt: (name) => (name === "--cache" ? "disk" : undefined),
+          hasFlag: (name) => name === "--stdout" || name === "--json" || name === "--cache-verify",
+          writeStdoutLine: (message) => stdout.push(message),
+          maybeWriteNativeBackendStatus: (report) => {
+            reports.push(report);
+          },
+        }),
+      );
+      return readJsonRecord(readJsonRecord(JSON.parse(stdout[0] ?? "{}")).analysis);
+    };
+
+    try {
+      const cold = await runGraph();
+      const warm = await runGraph();
+
+      expect(reports[0]?.backend?.native.filesUsed).toBe(1);
+      // The warm run parses nothing, so its build report alone cannot show that native indexed the file.
+      expect(reports[1]?.backend?.native.filesUsed).toBe(0);
+      expect(reports[1]?.cache?.hits).toBe(1);
+      expect(cold).toMatchObject({ mode: "semantic", backend: "native", nativeFilesUsed: 1, label: "native semantic" });
+      expect(warm).toMatchObject({ mode: "semantic", backend: "native", nativeFilesUsed: 1, label: "native semantic" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   test("graph human output keeps the mermaid contract and backend reporting without progress", async () => {

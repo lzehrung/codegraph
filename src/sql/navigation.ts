@@ -82,7 +82,7 @@ function rangeForToken(line: number, column: number, length: number): Range {
 function sqlFiles(index: ProjectIndex): string[] {
   return Array.from(index.byFile.values())
     .map((module) => normalizePath(module.file))
-    .filter(isSqlFilePath)
+    .filter((file) => isSqlFilePath(file, index.languageExtensions))
     .sort((left, right) => left.localeCompare(right));
 }
 function getSqlNavigationCache(index: ProjectIndex): NonNullable<ProjectIndex["sqlNavigation"]> {
@@ -710,7 +710,7 @@ export async function sqlPositionIsProvenObjectOrRoutineMention(
   index: ProjectIndex,
   req: GoToRequest,
 ): Promise<boolean> {
-  if (!isSqlFilePath(req.file)) return false;
+  if (!isSqlFilePath(req.file, index.languageExtensions)) return false;
   const facts = await sqlFactsForFile(index, req.file);
   const routineLookups = await getSqlRoutineLookups(index);
   for (const statement of sqlStatementSlices(facts)) {
@@ -725,7 +725,7 @@ export async function sqlPositionIsProvenObjectOrRoutineMention(
 }
 
 export async function goToSqlDefinition(index: ProjectIndex, req: GoToRequest): Promise<GoToResult | null> {
-  if (!isSqlFilePath(req.file)) return null;
+  if (!isSqlFilePath(req.file, index.languageExtensions)) return null;
   const source = await sourceForFile(req.file, index);
   const lookup = getSqlDefinitionLookup(index);
   const routineLookups = await getSqlRoutineLookups(index);
@@ -793,7 +793,7 @@ export async function findSqlReferences(
   requested: SymbolDef,
   options?: FindSqlReferencesOptions,
 ): Promise<FindReferencesResult | null> {
-  if (!isSqlFilePath(requested.file)) return null;
+  if (!isSqlFilePath(requested.file, index.languageExtensions)) return null;
   const definition = indexedSqlDefinition(index, requested);
   // Without the indexed definition no lookup can match, and an empty list would claim a complete scan.
   if (!definition) return { status: "not_found", reason: "SQL definition is not in the index" };

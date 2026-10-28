@@ -52,6 +52,7 @@ import { isGraphOnlyLanguage } from "../document-links.js";
 import { attemptParsePreparedFileContext, type ParsedFileContext } from "./parse-context.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { collectImportsForFile } from "./imports.js";
+import type { ImportDegradedHook } from "./imports/context.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { expandStarImports } from "./expand-star-imports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
@@ -123,6 +124,7 @@ import {
 } from "./types.js";
 import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/file-prep.js";
 
+import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/source-graph.js";
 import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
@@ -130,6 +132,7 @@ import {
   prepareFileContextForBuild,
   countNativeWorkerEligibleFiles,
   emptyWorkerPoolSetup,
+  preparedNativeOutcome,
   setupWorkerPool,
   teardownWorkerPool,
   type WorkerPoolSetupResult,
@@ -183,6 +186,15 @@ function createEmptyModuleIndex(file: string): ModuleIndex {
 /** A file with no language support: nothing is parsed, so it has no parse errors. */
 function unparsedModuleIndex(file: string): ModuleIndex {
   return { ...createEmptyModuleIndex(file), parseErrorRanges: [] };
+}
+
+/**
+ * A file whose processing failed. Its symbols are missing from the index, so it is flagged as parser-degraded: the flag
+ * keeps the analysis summary incomplete, and marks a module that is never written to the module cache, so the project
+ * snapshot embeds it instead of leaving its stale disk row to be restored.
+ */
+function failedModuleIndex(file: string): ModuleIndex {
+  return { ...createEmptyModuleIndex(file), parserDegraded: true };
 }
 
 function collectParseErrorRanges(tree: ProjectedSyntaxTree): ParseErrorRange[] {
@@ -499,6 +511,16 @@ async function buildIndexedModuleForFile(args: {
   );
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let tree: SyntaxTreeLike | undefined;
+  // Every degradation recorded below also marks the module, including a failed import extraction of the file's source
+  // or of one of its embedded blocks. A later build that reuses the module from a cache has no report of this one, and
+  // still counts the file.
+  let parserDegraded = false;
+  // Set when a lookup over other files, not this file's own extraction, left part of its imports unresolved.
+  let importLookupIncomplete = false;
+  const recordTreeUnavailable = (entry: Parameters<typeof recordParserBackendDegradation>[1]): void => {
+    parserDegraded = true;
+    recordParserBackendDegradation(args.report, entry);
+  };
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id),
     nativeSourceLimitSkip = prepared.nativeFallbackReason === "sourceTooLarge";
 
@@ -524,7 +546,7 @@ async function buildIndexedModuleForFile(args: {
       tree = parsed.tree;
       setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     } else {
-      recordParserBackendDegradation(args.report, {
+      recordTreeUnavailable({
         file: args.file,
         languageId: prepared.sup.id,
         ...(parseAttempt.nativeFallbackReason ? { nativeFallbackReason: parseAttempt.nativeFallbackReason } : {}),
@@ -540,7 +562,7 @@ async function buildIndexedModuleForFile(args: {
       tree = parsed.tree;
       setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     } else {
-      recordParserBackendDegradation(args.report, {
+      recordTreeUnavailable({
         file: args.file,
         languageId: sup.id,
         ...(parseAttempt.nativeFallbackReason ? { nativeFallbackReason: parseAttempt.nativeFallbackReason } : {}),
@@ -549,7 +571,7 @@ async function buildIndexedModuleForFile(args: {
     }
   }
   if (sup.id === "sql" && !tree) {
-    recordParserBackendDegradation(args.report, {
+    recordTreeUnavailable({
       file: args.file,
       languageId: sup.id,
       ...(prepared.nativeFallbackReason ? { nativeFallbackReason: prepared.nativeFallbackReason } : {}),
@@ -571,6 +593,11 @@ async function buildIndexedModuleForFile(args: {
     args.bloomFilterCache.set(args.file, filter);
   }
 
+  // A failed extraction leaves this file's imports incomplete, so it marks the module like a missing syntax tree.
+  const onDegraded: ImportDegradedHook = (cause) => {
+    parserDegraded = true;
+    if (cause === "lookup") importLookupIncomplete = true;
+  };
   // Single builder so an option added here always reaches both the primary source and
   // every embedded (SFC) block, instead of one path silently missing a future option.
   const sharedImportOptions = {
@@ -581,6 +608,7 @@ async function buildIndexedModuleForFile(args: {
     ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
     ...(args.report ? { report: args.report } : {}),
     parsedFiles: args.parsedMap,
+    onDegraded,
   };
   const imports =
     nativeSourceLimitSkip || sup.id === "sql"
@@ -620,6 +648,10 @@ async function buildIndexedModuleForFile(args: {
   if (tree instanceof ProjectedSyntaxTree) mod.parseErrorRanges = collectParseErrorRanges(tree);
   else if (graphOnlyLanguage) mod.parseErrorRanges = [];
   else delete mod.parseErrorRanges;
+  const nativeOutcome = preparedNativeOutcome(prepared);
+  if (nativeOutcome) mod.nativeOutcome = nativeOutcome;
+  if (parserDegraded) mod.parserDegraded = true;
+  if (importLookupIncomplete) mod.importLookupIncomplete = true;
   if (sup.id === "cpp") {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
@@ -1150,7 +1182,9 @@ async function buildProjectIndexFromExport(
  * - it changed;
  * - an import or re-export target no longer exists;
  * - an added file can satisfy one of its specifiers;
- * - it resolves imports through namespace or package declarations, and a file it depends on changed.
+ * - it resolves imports through namespace or package declarations, and a file it depends on changed;
+ * - a lookup of its imports over other files could not read one of them (`importLookupIncomplete`). Nothing records
+ *   that file when no module covers it, so the file reading again changes no signature, manifest edge, or cache row.
  *
  * With a manifest, the manifest gives the previous files and edges.
  * Without one (a memory cache, or a disk cache that no manifest-writing build has seen),
@@ -1181,6 +1215,9 @@ async function collectStaleCachedModules(args: {
   const { cachedModules, manifestFiles } = args;
   if (!cachedModules.size) return { stale: new Set<string>(), deletedDeclarationFiles: [] };
   const stale = await cachedModulesWithMissingTargets(cachedModules, args.concurrency);
+  for (const [file, { mod }] of cachedModules) {
+    if (mod.importLookupIncomplete) stale.add(file);
+  }
   const resolvesFromDeclarations = (file: string): boolean =>
     DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(
       supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "",
@@ -1588,10 +1625,7 @@ async function buildIndexFromFileListShared(
   const conc = edgeProbeConcurrency;
   const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   const sqlFiles = normalizedFiles
-    .filter((file) => {
-      if (!languageExtensions) return path.extname(file).toLowerCase() === ".sql";
-      return supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "sql";
-    })
+    .filter((file) => isSqlFilePath(file, languageExtensions))
     .sort((left, right) => left.localeCompare(right));
   const fileSignatures = await prepareFileSignatures({
     projectRoot,
@@ -1613,7 +1647,7 @@ async function buildIndexFromFileListShared(
     sigInfo: FileSignature,
     cachedEdgesEntry: ManifestFileEntry | undefined,
   ): boolean => {
-    if (supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id !== "sql") return false;
+    if (!isSqlFilePath(file, opts?.languageExtensions)) return false;
     if (!cachedEdgesEntry || !sqlCorpusSig || cachedEdgesEntry.sqlCorpusSig !== sqlCorpusSig) return true;
     const matchesGitSig = !!sigInfo.gitSig && !!cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig;
     return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);
@@ -1877,7 +1911,7 @@ async function buildIndexFromFileListShared(
         }
         recordFileFailure(report, file, error);
         logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file}:`, error);
-        return [file, createEmptyModuleIndex(file), []] as const;
+        return [file, failedModuleIndex(file), []] as const;
       } finally {
         processedFiles += 1;
         if (opts?.onProgress && buildStartedAt !== undefined) {
@@ -2895,7 +2929,12 @@ export async function buildProjectIndexIncremental(
           const cacheSig = await moduleCacheSignatureForFile(file, sigInfo, opts, resolverEnvironmentFingerprint);
           cached = tryLoadFromCache(projectRoot, file, cacheSig, opts, report);
         }
-        if (cached) {
+        if (cached?.importLookupIncomplete) {
+          // See collectStaleCachedModules: extract this importer again. Its own namespace facts stay valid, so the
+          // project scan reads them from the cached module instead of parsing the file.
+          primeReusedCsharpNamespaceFacts(file, cached, opts);
+          changedFiles.add(file);
+        } else if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
           modules.set(fileIdentityKey(file), cached);
           primeReusedCsharpNamespaceFacts(file, cached, opts);
@@ -3014,7 +3053,7 @@ export async function buildProjectIndexIncremental(
             }
             recordFileFailure(report, file, error);
             logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file}:`, error);
-            return [file, createEmptyModuleIndex(file), undefined] as const;
+            return [file, failedModuleIndex(file), undefined] as const;
           } finally {
             if (opts?.onProgress) {
               opts.onProgress({

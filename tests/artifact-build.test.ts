@@ -86,6 +86,40 @@ describe("artifact build", () => {
     ).toBeTruthy();
   });
 
+  // `.ddl`, `.pgsql`, and `.mysql` are built-in SQL extensions and `.psql` is a `languages.extensions` mapping.
+  // `.sql` is the control.
+  describe.each([
+    { ext: ".sql" },
+    { ext: ".ddl" },
+    { ext: ".pgsql" },
+    { ext: ".mysql" },
+    { ext: ".psql", languageExtensions: { ".psql": "sql" } },
+  ])("SQL objects in $ext files", ({ ext, languageExtensions }) => {
+    it("writes graph JSON ids as sql: handles for SQL objects and symbol: handles for code", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-sql-ext-"));
+      const outDir = path.join(root, "codegraph-out");
+      await fs.writeFile(path.join(root, `users${ext}`), "CREATE TABLE public.users (id int primary key);\n");
+      await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+      if (languageExtensions) {
+        await fs.writeFile(
+          path.join(root, "codegraph.config.json"),
+          JSON.stringify({ languages: { extensions: languageExtensions } }),
+        );
+      }
+
+      await buildCodegraphArtifact({ root, outDir, graphJson: true });
+
+      const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
+        symbols: Array<{ id: string; name: string; kind: string }>;
+      };
+      const table = graph.symbols.find((symbol) => symbol.name === "public.users");
+      const validate = graph.symbols.find((symbol) => symbol.name === "validateUser");
+      expect(table?.kind).toBe("table");
+      expect(table?.id).toBe(`sql:public.users:users${ext}:1`);
+      expect(validate?.id).toMatch(/^symbol:auth\.ts:validateUser:1:\d+$/);
+    });
+  });
+
   it("adds the root-confined viewer handoff only when the report includes graph JSON", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-viewer-"));
     const graphOutDir = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-viewer-outside-"));

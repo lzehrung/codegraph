@@ -113,6 +113,30 @@ export type ModuleIndex = {
   csharpNamespaceFacts?: CsharpNamespaceFacts;
   /** Outermost Tree-sitter ERROR/MISSING ranges. */
   parseErrorRanges?: ParseErrorRange[];
+  /**
+   * How native tree-sitter handled this file when it was indexed: `used` when native query results produced the
+   * module, `skipped` when native fell back (for example `sourceTooLarge`). Absent for files native does not parse,
+   * such as graph-only languages. Cached with the module so the analysis summary describes every indexed file,
+   * not only the files the current build parsed.
+   */
+  nativeOutcome?: "used" | "skipped";
+  /**
+   * Set only when part of this file was not indexed: its syntax tree could not be built, the imports of its source or of
+   * an embedded block (a Vue or Svelte style or template block) could not be extracted, a lookup over other project files
+   * could not read one of them (`importLookupIncomplete`), or processing the file failed.
+   * The module then came from the extractions that worked, or is empty. Cached with the module, like `nativeOutcome`, so
+   * the analysis summary keeps counting the file as parser-degraded after a build reuses it from the module cache or
+   * the project snapshot, when that build's report no longer records the degradation.
+   */
+  parserDegraded?: boolean;
+  /**
+   * Set, together with `parserDegraded`, when a lookup over other project files could not read one of them, so an
+   * import of this file may have stayed unresolved only because of it (a C# alias or static using whose type lookup
+   * found a C# file of the project unreadable). That file can read again without this file changing, and no signature
+   * or manifest edge tracks it when no module covers it, such as a file that discovery ignores. A build therefore
+   * extracts this module again instead of reusing it.
+   */
+  importLookupIncomplete?: boolean;
 };
 
 export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "namespace"; file: FileId };

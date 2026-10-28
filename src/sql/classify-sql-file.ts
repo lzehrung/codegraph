@@ -1,4 +1,5 @@
 import path from "node:path";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
 import type { SqlFileRole } from "./types.js";
 
 const MIGRATION_NAME_RE = /^(?:\d{3,}|\d{14}|v\d+__)[\w.-]*\.sql$/i;
@@ -12,8 +13,13 @@ function countMatches(source: string, pattern: RegExp): number {
   return Array.from(source.matchAll(pattern)).length;
 }
 
-export function isSqlFilePath(filePath: string): boolean {
-  return path.extname(filePath).toLowerCase() === ".sql";
+/**
+ * Reads a file as SQL when the language registry does: a built-in SQL extension (`.sql`, `.ddl`, `.pgsql`,
+ * `.mysql`) or one that `languages.extensions` maps to SQL. Every SQL decision goes through this predicate, so
+ * no consumer disagrees with the indexer about which files are SQL.
+ */
+export function isSqlFilePath(filePath: string, languageExtensions?: LanguageExtensionMap): boolean {
+  return supportForFileWithoutHeaderSample(filePath, languageExtensions)?.id === "sql";
 }
 
 export function classifySqlFile(filePath: string, source: string): SqlFileRole {

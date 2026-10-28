@@ -30,6 +30,7 @@ import { requireSemanticSymbol, resolveSemanticSymbol } from "../agent/semantic-
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { parseQualifiedSymbolPath } from "../indexer/symbols.js";
+import { resolveCacheLocation } from "../indexer/build-cache/location.js";
 import { analyzeImpactFromDiff, type CompactImpactReport } from "../impact/index.js";
 import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 import { buildReviewReport, type ReviewDepth } from "../review.js";
@@ -67,6 +68,7 @@ import {
 } from "./tools.js";
 import { type CodegraphRuntimeIdentity } from "../runtime-identity.js";
 import { assertWritableDirectoryRealPathWithinRoot, resolveArtifactSqlitePathCandidate } from "./security.js";
+import { assertMcpWatchMs, createWatchController } from "./project-watcher.js";
 
 /** `"off"` skips warmup, leaving the first tool call to pay for discovery and building. */
 export type CodegraphMcpWarmupMode = "off" | "base" | "symbols";
@@ -85,6 +87,21 @@ export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
    * when `session` is supplied explicitly. Pass `"off"` to always start lazily.
    */
   warmup?: CodegraphMcpWarmupMode;
+  /**
+   * Watches the project for file changes and refreshes the index in the background. Defaults to `true` when
+   * Codegraph creates the session itself; has no effect when `session` is supplied. Pass `false` to leave
+   * freshness to the check that every tool call runs.
+   */
+  watch?: boolean;
+  /** Milliseconds of quiet after the last file event before a background refresh starts. Defaults to 500. */
+  watchDebounceMs?: number;
+  /** Minimum milliseconds between background refresh starts. Defaults to 5 seconds. */
+  watchMinRefreshIntervalMs?: number;
+  /**
+   * Pauses the watcher after this many milliseconds without a tool call; the next call resumes it. Use 0 to
+   * never pause. Defaults to 30 minutes.
+   */
+  watchIdleMs?: number;
   host?: string;
   port?: number;
   /** Stdio-only idle exit timeout in ms. Use 0 to disable. Defaults to 30 minutes. */
@@ -342,6 +359,18 @@ function createCodegraphMcpSession(options: CodegraphMcpHandlerOptions, root: st
   );
 }
 
+/**
+ * Where the session writes its disk cache, for the watcher to ignore. A setting that cannot be resolved fails the
+ * session's own first use of the cache with the same error, so the watcher has nothing to ignore until then.
+ */
+function resolveWatchedCacheDirectory(root: string, buildOptions: BuildOptions | undefined): string | undefined {
+  try {
+    return resolveCacheLocation(root, buildOptions).path;
+  } catch {
+    return undefined;
+  }
+}
+
 function startCodegraphMcpWarmup(
   session: AgentSession,
   warmup: CodegraphMcpWarmupMode | undefined,
@@ -357,9 +386,39 @@ function startCodegraphMcpWarmup(
   return session.loadProject({ symbolGraph: "skip" });
 }
 
+/**
+ * Reports every tool call to the watcher, so its idle timer counts calls and a paused watcher resumes on the
+ * next one. This wraps the handler set instead of `checkMcpFreshness` because tools such as `workspace_symbols`,
+ * `calls`, and `get_file` reach the session's freshness check through their own `*WithSession` helpers.
+ */
+function withToolActivity(handlers: CodegraphMcpHandlers, noteActivity: () => void): CodegraphMcpHandlers {
+  return new Proxy(handlers, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (typeof value !== "function" || property === "dispose") return value;
+      return (...args: unknown[]): unknown => {
+        noteActivity();
+        return Reflect.apply(value, target, args);
+      };
+    },
+  });
+}
+
 type WarmedCodegraphMcpResources = {
   handlers: CodegraphMcpHandlers;
   session: AgentSession;
+  /**
+   * Stops the file watcher and cancels its timers. Safe to call twice; does nothing without a watcher. The promise
+   * settles once a background refresh that was running, and every read of the file list that had started, have ended.
+   * Await it before `session.invalidate()`: until then they keep writing the cache and the session's file signatures.
+   */
+  closeWatcher: () => Promise<void>;
+};
+
+type CodegraphMcpHandlerSet = {
+  handlers: CodegraphMcpHandlers;
+  /** Runs `operation` in its turn of the lock that `refresh_index`, `artifact_build`, and the SQLite rebuild take. */
+  runExclusive: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 export async function createWarmedCodegraphMcpResources(
@@ -367,28 +426,56 @@ export async function createWarmedCodegraphMcpResources(
 ): Promise<WarmedCodegraphMcpResources> {
   const root = path.resolve(options.root);
   const sessionProvidedExplicitly = options.session !== undefined;
-  const session = createCodegraphMcpSession(options, root);
-  await startCodegraphMcpWarmup(session, options.warmup, sessionProvidedExplicitly);
-  const { warmup, host, port, onHttpListen, ...handlerOptions } = options;
-  void warmup;
+  const {
+    warmup,
+    host,
+    port,
+    onHttpListen,
+    watch,
+    watchDebounceMs,
+    watchMinRefreshIntervalMs,
+    watchIdleMs,
+    ...handlerOptions
+  } = options;
   void host;
   void port;
   void onHttpListen;
+  assertMcpWatchMs("watchDebounceMs", watchDebounceMs);
+  assertMcpWatchMs("watchMinRefreshIntervalMs", watchMinRefreshIntervalMs);
+  assertMcpWatchMs("watchIdleMs", watchIdleMs);
+  const session = createCodegraphMcpSession(options, root);
+  await startCodegraphMcpWarmup(session, warmup, sessionProvidedExplicitly);
+  const { handlers, runExclusive } = createCodegraphMcpHandlersForSession({ ...handlerOptions, root }, session);
+  // Only a session that Codegraph created is watched; a caller that passes its own session manages freshness.
+  // Lazy startup (`warmup: "off"`) stays lazy: the watches open on the first tool call.
+  const watcher =
+    sessionProvidedExplicitly || watch === false
+      ? undefined
+      : createWatchController(session, {
+          root,
+          runExclusive,
+          cacheDirectory: resolveWatchedCacheDirectory(root, options.buildOptions),
+          debounceMs: watchDebounceMs,
+          minRefreshIntervalMs: watchMinRefreshIntervalMs,
+          idleMs: watchIdleMs,
+          startPaused: warmup === "off",
+        });
   return {
-    handlers: createCodegraphMcpHandlersForSession({ ...handlerOptions, root }, session),
+    handlers: watcher ? withToolActivity(handlers, watcher.noteActivity) : handlers,
     session,
+    closeWatcher: () => watcher?.close() ?? Promise.resolve(),
   };
 }
 export function createCodegraphMcpHandlers(options: CodegraphMcpHandlerOptions): CodegraphMcpHandlers {
   const root = path.resolve(options.root);
   const session = createCodegraphMcpSession(options, root);
-  return createCodegraphMcpHandlersForSession(options, session);
+  return createCodegraphMcpHandlersForSession(options, session).handlers;
 }
 
 function createCodegraphMcpHandlersForSession(
   options: CodegraphMcpHandlerOptions,
   session: AgentSession,
-): CodegraphMcpHandlers {
+): CodegraphMcpHandlerSet {
   const root = path.resolve(options.root);
   const readOnly = options.readOnly ?? true;
   const realRoot = fs.realpath(root);
@@ -403,6 +490,9 @@ function createCodegraphMcpHandlersForSession(
   let refreshPromise: Promise<void> | undefined;
   let refreshEpoch = 0;
 
+  // One turn at a time for everything that rebuilds the session's index or writes artifacts: `refresh_index`,
+  // `artifact_build`, the SQLite rebuild for `query_sqlite`, and the watcher's background refresh. Two of them in
+  // flight would leave the file signatures of whichever build ended last, whatever snapshot the session serves.
   let artifactWritePromise: Promise<void> | undefined;
   const withArtifactWriteLock = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = artifactWritePromise;
@@ -1094,9 +1184,7 @@ function createCodegraphMcpHandlersForSession(
   };
 
   return {
-    ...searchHandlers,
-    ...navigationHandlers,
-    ...reviewHandlers,
-    ...artifactHandlers,
+    handlers: { ...searchHandlers, ...navigationHandlers, ...reviewHandlers, ...artifactHandlers },
+    runExclusive: withArtifactWriteLock,
   };
 }

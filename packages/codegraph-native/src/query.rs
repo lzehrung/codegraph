@@ -300,7 +300,7 @@ pub(crate) fn execute_query(
 
     while let Some(query_match) = matches.next() {
         let captures = query_match
-            .captures
+            .captures()
             .iter()
             .map(|capture| capture_to_object(source, capture, capture_names))
             .collect();
@@ -337,7 +337,7 @@ pub(crate) fn execute_query_cached(
 
         while let Some(query_match) = matches.next() {
             let captures = query_match
-                .captures
+                .captures()
                 .iter()
                 .map(|capture| capture_to_object(source, capture, capture_names))
                 .collect();
@@ -491,7 +491,7 @@ fn try_execute_merged_language_queries_with_limit(
                         ))
                     })?;
                 let captures = query_match
-                    .captures
+                    .captures()
                     .iter()
                     .map(|capture| capture_to_object(source, capture, capture_names))
                     .collect();
@@ -588,7 +588,7 @@ pub(crate) fn execute_query_compact(
 
         while let Some(query_match) = matches.next() {
             let captures = query_match
-                .captures
+                .captures()
                 .iter()
                 .map(|capture| capture_to_compact(source, capture, capture_names))
                 .collect();

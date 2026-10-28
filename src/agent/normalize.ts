@@ -39,10 +39,6 @@ export function resolveAgentSnapshotFile(snapshot: AgentFileSnapshot, candidate:
   return location.file === candidate ? null : resolveCandidate(location.file);
 }
 
-export function isAgentSqlFile(file: string): boolean {
-  return file.toLowerCase().endsWith(".sql");
-}
-
 export function isAgentSqlObjectNode(node: { kind: string }): boolean {
   return node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine";
 }

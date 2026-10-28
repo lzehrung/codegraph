@@ -45,6 +45,7 @@ import {
   loadAllCachedModules,
   transformPersistedExportFromModule,
   type FileSignature,
+  isOptionalNativeOutcome,
   isOptionalRange,
   isParseErrorRange,
   isRange,
@@ -902,10 +903,19 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     ...(mod.docstringsChecked ? { docstringsChecked: true } : {}),
     ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
     ...(mod.csharpNamespaceFacts ? { csharpNamespaceFacts: mod.csharpNamespaceFacts } : {}),
+    ...(mod.nativeOutcome ? { nativeOutcome: mod.nativeOutcome } : {}),
+    ...(mod.parserDegraded ? { parserDegraded: true } : {}),
+    ...(mod.importLookupIncomplete ? { importLookupIncomplete: true } : {}),
     ...(mod.parseErrorRanges ? { parseErrorRanges: mod.parseErrorRanges } : {}),
   };
 }
 
+/**
+ * The modules the snapshot embeds. A module with a disk-cache row is left out, and a load restores it from that row.
+ * A module native skipped, or whose parser degraded, may not be written to the cache: its row is then the stale one
+ * from before the file changed, such as before it grew past the native size limit or began to fail processing. Embed
+ * it: at load the snapshot's copy wins over the row.
+ */
 function modulesForThinSnapshot(
   index: ProjectIndex,
   projectRoot: string,
@@ -914,7 +924,12 @@ function modulesForThinSnapshot(
   const modules = [...index.byFile.values()];
   const cachedFiles = listDiskCachedModuleFiles(projectRoot, opts);
   if (!cachedFiles) return modules;
-  return modules.filter((module) => !cachedFiles.has(cacheRelativePath(projectRoot, module.file)));
+  return modules.filter(
+    (module) =>
+      module.nativeOutcome === "skipped" ||
+      module.parserDegraded ||
+      !cachedFiles.has(cacheRelativePath(projectRoot, module.file)),
+  );
 }
 
 function collectSnapshotModules(
@@ -1778,6 +1793,9 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   return (
     typeof moduleIndex.file === "string" &&
     isOptionalBoolean(moduleIndex.docstringsChecked) &&
+    isOptionalNativeOutcome(moduleIndex.nativeOutcome) &&
+    isOptionalBoolean(moduleIndex.parserDegraded) &&
+    isOptionalBoolean(moduleIndex.importLookupIncomplete) &&
     Array.isArray(moduleIndex.locals) &&
     moduleIndex.locals.every(isSymbolDef) &&
     Array.isArray(moduleIndex.imports) &&

@@ -26,7 +26,7 @@ import {
   parseCsharpSyntaxTree,
 } from "../util/csharp-tree.js";
 import { applyCsharpImportDirective } from "./imports/import-binding-tables.js";
-import type { ImportResolverOptions, ResolvedImportTarget } from "./imports/context.js";
+import type { ImportDegradedHook, ImportResolverOptions, ResolvedImportTarget } from "./imports/context.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./imports/binding-ranges.js";
 import { collectGraphOnlyImports } from "./imports/graph-only.js";
 import { collectJsTextValueRequireImports } from "./imports/js-text-imports.js";
@@ -56,6 +56,15 @@ export async function collectImportsForFile(
     report?: BuildReport;
     matchPath?: MatchPathFn;
     parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
+    /**
+     * Called each time extraction fails and leaves this source's imports incomplete: native fell back for the source, a
+     * C# syntax tree could not be built, reading the native captures threw, or (`"lookup"`) a C# alias or static using
+     * could not prove its type because the lookup over other project files could not read one of them. `report` records
+     * the failure for this build only, so a caller that keeps the imports, such as a module that a later build reuses
+     * from a cache, keeps the failure with them. A `"lookup"` failure belongs to files outside this source, which can
+     * read again without this source changing, so that caller should retry the source instead of reusing it.
+     */
+    onDegraded?: ImportDegradedHook;
   },
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
@@ -106,6 +115,7 @@ export async function collectImportsForFile(
             ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
             ...(parsed.error ? { nativeError: parsed.error } : {}),
           });
+          opts?.onDegraded?.();
         }
       }
     } else {
@@ -123,6 +133,7 @@ export async function collectImportsForFile(
         ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
         ...(parsed.error ? { nativeError: parsed.error } : {}),
       });
+      opts?.onDegraded?.();
     }
   }
   if (nativeExecution?.fallbackReason) {
@@ -133,6 +144,7 @@ export async function collectImportsForFile(
       fallbackReason: nativeExecution.fallbackReason,
       ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
     });
+    opts?.onDegraded?.();
   }
   if (!resolvedNativeQueries && resolvedSup.id !== "csharp") return imports;
 
@@ -218,6 +230,7 @@ export async function collectImportsForFile(
     languageId: resolvedSup.id,
     ...(opts?.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
     ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+    ...(opts?.onDegraded ? { onDegraded: opts.onDegraded } : {}),
     ...(opts?.report ? { report: opts.report } : {}),
     resolveFrom: (from: string, phpImportType?: "class" | "function" | "const", resolverOpts?: ImportResolverOptions) =>
       resolveFrom(from, phpImportType, {
@@ -355,6 +368,7 @@ export async function collectImportsForFile(
         fallbackReason: "queryFailure",
         error: errorMessage(error),
       });
+      opts?.onDegraded?.();
       return [];
     }
   }

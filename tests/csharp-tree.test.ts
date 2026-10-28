@@ -23,10 +23,10 @@ import {
 } from "../src/native/tree-sitter-native.js";
 import { loadBinding } from "../src/native/runtime.js";
 import { getCsharpNamespaceRegions } from "../src/indexer/compilation-units.js";
-import type { BuildReport, ProjectIndex } from "../src/indexer/types.js";
+import type { BuildReport, ImportBinding, ProjectIndex } from "../src/indexer/types.js";
 import type { ParsedFileContext } from "../src/indexer/parse-context.js";
 import { clearMemoryCache } from "../src/indexer/build-cache.js";
-import { fileIdentityKey } from "../src/util/paths.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { captureCli } from "./helpers/cli.js";
 import {
@@ -724,6 +724,125 @@ describe("C# namespace resolution failures and parser reporting", () => {
       });
       expect(report.backend?.parser?.files).toHaveLength(1);
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["an alias of a type", "using B = N.Box;\nclass Main { B value; }\n"],
+    ["a static using of a type", "using static N.Box;\nclass Main {}\n"],
+  ])(
+    "marks the imports incomplete when a candidate file cannot be read while resolving %s, and resolves it once the file reads",
+    async (_form, source) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-lookup-degraded-"));
+      const main = path.join(root, "Main.cs");
+      const targets = (bindings: ImportBinding[]): Array<string | { external: string } | undefined> =>
+        bindings.map((binding) =>
+          typeof binding.resolved === "string" ? path.basename(binding.resolved) : binding.resolved,
+        );
+      try {
+        await writeFile(main, source, "utf8");
+        await writeFile(path.join(root, "Box.cs"), "namespace N; public class Box {}\n", "utf8");
+        await writeFile(
+          path.join(root, "Unparsed.cs"),
+          "// CSHARP_LOOKUP_DEGRADED\nnamespace N; class Other {}\n",
+          "utf8",
+        );
+        setNativeTreeParseFailureFor("CSHARP_LOOKUP_DEGRADED", "forced C# lookup parse failure");
+
+        // Unparsed.cs could declare `N.Box` too, so the type is unproven and the directive stays external.
+        const onDegraded = vi.fn();
+        const unproven = await collectImportsForFile(main, root, { source, sup: CSHARP_SUPPORT, onDegraded });
+        expect(targets(unproven)).toEqual([{ external: "N.Box" }]);
+        expect(onDegraded).toHaveBeenCalledTimes(1);
+        expect(onDegraded).toHaveBeenCalledWith("lookup");
+
+        __resetNativeTreeSitterBindingForTests();
+        clearCsharpResolutionCaches();
+        const recoveredDegraded = vi.fn();
+        const proven = await collectImportsForFile(main, root, {
+          source,
+          sup: CSHARP_SUPPORT,
+          onDegraded: recoveredDegraded,
+        });
+        expect(targets(proven)).toEqual(["Box.cs"]);
+        expect(recoveredDegraded).not.toHaveBeenCalled();
+      } finally {
+        clearCsharpResolutionCaches();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps the imports complete for directives that need no unique type while a candidate file cannot be read", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-lookup-not-degraded-"));
+    const main = path.join(root, "Main.cs");
+    try {
+      await writeFile(main, "class Main {}\n", "utf8");
+      await writeFile(path.join(root, "Box.cs"), "namespace N; public class Box {}\n", "utf8");
+      await writeFile(
+        path.join(root, "Unparsed.cs"),
+        "// CSHARP_LOOKUP_DEGRADED\nnamespace N; class Other {}\n",
+        "utf8",
+      );
+      setNativeTreeParseFailureFor("CSHARP_LOOKUP_DEGRADED", "forced C# lookup parse failure");
+
+      // A plain using binds to any file that declares the namespace, so one unreadable file leaves it as proven as before.
+      // An alias of a type outside the project, and a global static using, need no unique project type either.
+      for (const directive of [
+        "using N;",
+        "using System.Text;",
+        "using Json = System.Text.Json.JsonSerializer;",
+        "global using static N.Box;",
+      ]) {
+        const onDegraded = vi.fn();
+        await collectImportsForFile(main, root, {
+          source: `${directive}\nclass Main {}\n`,
+          sup: CSHARP_SUPPORT,
+          onDegraded,
+        });
+        expect(onDegraded, directive).not.toHaveBeenCalled();
+      }
+    } finally {
+      clearCsharpResolutionCaches();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("extracts an alias importer again once a file that discovery ignores reads again (memory cache)", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-ignored-recovery-"));
+    try {
+      await writeFixtureFiles(root, {
+        "Main.cs": "using B = N.Box;\nclass Main { B value; }\n",
+        "Box.cs": "namespace N; public class Box {}\n",
+        "Unparsed.cs": "// CSHARP_IGNORED_SCAN_FAILURE\nnamespace N; class Other {}\n",
+      });
+      // Discovery ignores Unparsed.cs, so no module covers it, but the namespace scan still reads it.
+      const options = {
+        cache: "memory" as const,
+        threads: 1,
+        useNativeWorkers: false,
+        discovery: { ignoreGlobs: ["Unparsed.cs"], globRoot: root },
+      };
+      const mainKey = fileIdentityKey(normalizePath(path.join(root, "Main.cs")));
+      const aliasTarget = (index: ProjectIndex): string | { external: string } | undefined => {
+        const alias = index.byFile.get(mainKey)?.imports.find((binding) => binding.kind === "named");
+        return typeof alias?.resolved === "string" ? path.basename(alias.resolved) : alias?.resolved;
+      };
+
+      setNativeIndexingFailureFor("CSHARP_IGNORED_SCAN_FAILURE", "forced C# ignored-file scan failure");
+      const failed = await buildProjectIndex(root, options);
+      expect(failed.byFile.get(mainKey)).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      expect(aliasTarget(failed)).toEqual({ external: "N.Box" });
+
+      // Main.cs, Box.cs, and the cache are unchanged, but Unparsed.cs reads now.
+      __resetNativeTreeSitterBindingForTests();
+      const recovered = await buildProjectIndex(root, options);
+      expect(recovered.byFile.get(mainKey)?.parserDegraded).toBeUndefined();
+      expect(recovered.byFile.get(mainKey)?.importLookupIncomplete).toBeUndefined();
+      expect(aliasTarget(recovered)).toBe("Box.cs");
+    } finally {
+      clearMemoryCache();
       await rm(root, { recursive: true, force: true });
     }
   });
