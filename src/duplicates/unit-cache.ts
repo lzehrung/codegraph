@@ -5,12 +5,14 @@ import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } 
 import { normalizeLanguageExtensions } from "../languages.js";
 import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
 import {
+  getNativeRuntimeFingerprint,
   getNativeTreeSitterSupportedLanguageIds,
   isNativeDuplicateTokenizationAvailable,
 } from "../native/tree-sitter-native.js";
 import { SqliteDatabase, isNodeSqliteUsable, nodeSqliteUnavailableError } from "../sqlite-driver.js";
 import { logWithLevel } from "../logging.js";
 import { cacheDatabasePath, reportMissingNodeSqlite } from "../indexer/build-cache/module-cache.js";
+import { CORE_ALGORITHM_EPOCH, LANGUAGE_BEHAVIOR_EPOCH } from "../indexer/build-cache/options.js";
 import {
   createSqliteTableIfMissing,
   ensureSqliteVersionedTableSchema,
@@ -133,6 +135,16 @@ function writeDuplicateUnitMemoryCache(key: string, entry: DuplicateUnitCacheEnt
   duplicateUnitMemoryCacheBytes += entryBytes;
 }
 
+/**
+ * Identity of one unit-collection configuration, stored as the `variant` half of the cache key.
+ *
+ * A cached unit holds parser- and index-derived facts (chunk boundaries, symbol units built from
+ * module locals, AST-shape hashes), while the file signature only names the file's content. The
+ * two epochs and the native runtime therefore key the variant, as they key every other derived
+ * cache: any future epoch bump or runtime change misses and recomputes the units, with no
+ * separate DUPLICATE_UNIT_CACHE_VERSION bump. The runtime fingerprint is hashed to keep the key
+ * short, since it embeds the addon's paths.
+ */
 export function duplicateUnitCacheVariant(
   index: ProjectIndex,
   minTokens: number,
@@ -145,10 +157,13 @@ export function duplicateUnitCacheVariant(
   return JSON.stringify({
     version: DUPLICATE_UNIT_CACHE_VERSION,
     tokenizerRevision: DUPLICATE_TOKENIZER_REVISION,
+    coreAlgorithmEpoch: CORE_ALGORITHM_EPOCH,
+    languageBehaviorEpoch: LANGUAGE_BEHAVIOR_EPOCH,
     projectRoot: normalizedProjectRoot,
     languageExtensions: normalizeLanguageExtensions(index.languageExtensions),
     nativeDuplicateTokens: isNativeDuplicateTokenizationAvailable(),
     nativeSyntaxLanguages: getNativeTreeSitterSupportedLanguageIds(),
+    nativeRuntime: crypto.createHash("sha256").update(getNativeRuntimeFingerprint()).digest("hex"),
     minTokens,
     maxTokens,
     shingleSize,

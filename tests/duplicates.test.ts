@@ -3,13 +3,19 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { captureCli, runCliOrThrow, stripCliProgressLines } from "./helpers/cli.js";
 import type { Chunk } from "../src/chunking/types.js";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary, collectDuplicateLeadSummary } from "../src/duplicates-leads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
-import { getNativeDuplicateTokens, isNativeDuplicateTokenizationAvailable } from "../src/native/tree-sitter-native.js";
+import {
+  __resetNativeTreeSitterBindingForTests,
+  __setNativeTreeSitterBindingForTests,
+  getNativeDuplicateTokens,
+  isNativeDuplicateTokenizationAvailable,
+} from "../src/native/tree-sitter-native.js";
+import { loadBinding } from "../src/native/runtime.js";
 import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
 import { normalizeDuplicateSourceTokens } from "../src/duplicate-token-normalization.js";
 import {
@@ -35,6 +41,8 @@ import {
   writeDuplicateUnitsToCache,
 } from "../src/duplicates/unit-cache.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../src/indexer/types.js";
+import { CORE_ALGORITHM_EPOCH, LANGUAGE_BEHAVIOR_EPOCH } from "../src/indexer/build-cache/options.js";
+import type * as BuildCacheOptions from "../src/indexer/build-cache/options.js";
 import { cacheRelativePath } from "../src/indexer/build-cache/module-cache.js";
 import { brotliCompressSync } from "node:zlib";
 import {
@@ -3100,6 +3108,132 @@ test("C5: duplicate units cached under a previous tokenizer revision are not reu
     }
   }
 });
+
+/** An earlier build whose duplicate-unit cache rows a current build must not serve. */
+type PreviousDuplicateUnitCacheBuild = {
+  name: string;
+  coreAlgorithmEpoch?: number;
+  languageBehaviorEpoch?: number;
+  nativeRuntimePackageVersion?: string;
+  omittedVariantKeys?: string[];
+};
+
+/**
+ * The variant that earlier build keyed its rows with. The production function derives it wherever it can, so the result
+ * follows whatever that function really reads.
+ */
+async function duplicateUnitCacheVariantOfPreviousBuild(
+  build: PreviousDuplicateUnitCacheBuild,
+  index: ProjectIndex,
+  root: string,
+  currentVariant: string,
+): Promise<string> {
+  if (build.omittedVariantKeys) {
+    const variant = JSON.parse(currentVariant) as Record<string, unknown>;
+    for (const key of build.omittedVariantKeys) Reflect.deleteProperty(variant, key);
+    return JSON.stringify(variant);
+  }
+  if (build.nativeRuntimePackageVersion) {
+    const state = loadBinding();
+    if (!state.loaded) throw new Error("expected the native addon to load");
+    __setNativeTreeSitterBindingForTests({
+      ...state,
+      origin: { ...state.origin, packageVersion: build.nativeRuntimePackageVersion },
+    });
+    try {
+      return duplicateUnitCacheVariant(index, 1, 400, 3, 20, root);
+    } finally {
+      __resetNativeTreeSitterBindingForTests();
+    }
+  }
+  // The epochs are constants the production function reads from its own import, so it is loaded again with other values.
+  vi.resetModules();
+  vi.doMock("../src/indexer/build-cache/options.js", async () => ({
+    ...(await vi.importActual<typeof BuildCacheOptions>("../src/indexer/build-cache/options.js")),
+    CORE_ALGORITHM_EPOCH: build.coreAlgorithmEpoch ?? CORE_ALGORITHM_EPOCH,
+    LANGUAGE_BEHAVIOR_EPOCH: build.languageBehaviorEpoch ?? LANGUAGE_BEHAVIOR_EPOCH,
+  }));
+  try {
+    // A static import cannot work here: the module must evaluate after the mock, in a registry reset for it.
+    const unitCache = await import("../src/duplicates/unit-cache.js");
+    return unitCache.duplicateUnitCacheVariant(index, 1, 400, 3, 20, root);
+  } finally {
+    vi.doUnmock("../src/indexer/build-cache/options.js");
+    vi.resetModules();
+  }
+}
+
+const previousBuildsOfDuplicateUnitCache: PreviousDuplicateUnitCacheBuild[] = [
+  { name: "core algorithm epoch", coreAlgorithmEpoch: CORE_ALGORITHM_EPOCH - 1 },
+  { name: "language behavior epoch", languageBehaviorEpoch: LANGUAGE_BEHAVIOR_EPOCH - 1 },
+  { name: "native runtime", nativeRuntimePackageVersion: "0.0.0-previous-runtime" },
+  // A release whose variant held neither epoch nor the runtime.
+  {
+    name: "release without epoch or runtime keys",
+    omittedVariantKeys: ["coreAlgorithmEpoch", "languageBehaviorEpoch", "nativeRuntime"],
+  },
+];
+
+for (const previousBuild of previousBuildsOfDuplicateUnitCache) {
+  test(`C5: duplicate units cached by a previous ${previousBuild.name} are recomputed, not reused`, async () => {
+    const root = await makeTempProject();
+    let index: ProjectIndex | undefined;
+    try {
+      const file = await writeProjectFile(
+        root,
+        "src/invoice.ts",
+        [
+          "export function processInvoiceItems(items: Array<{ price: number; qty: number }>): number {",
+          "  let sum = 0;",
+          "  for (const item of items) {",
+          "    sum += item.price * item.qty;",
+          "  }",
+          "  return sum;",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      index = await buildProjectIndex(root, { cache: "disk" });
+      const variant = duplicateUnitCacheVariant(index, 1, 400, 3, 20, root);
+      const previousVariant = await duplicateUnitCacheVariantOfPreviousBuild(previousBuild, index, root, variant);
+      // Equal variants would give both builds one cache row, so a runtime or epoch change could never miss.
+      expect(previousVariant).not.toBe(variant);
+
+      const diskDb = duplicateUnitDiskCache(index);
+      if (!diskDb?.statements) throw new Error("expected an open duplicate-unit cache database");
+      const sig = duplicateUnitCacheSignature(index, file, root);
+      if (!sig) throw new Error("expected a duplicate-unit cache signature");
+      // An intact row that holds no units: serving it would hide every unit of the file.
+      diskDb.statements.write.run(
+        cacheRelativePath(root, file),
+        previousVariant,
+        sig,
+        DUPLICATE_UNIT_CACHE_VERSION,
+        brotliCompressSync(Buffer.from("[]", "utf8")),
+        Date.now(),
+      );
+
+      expect(tryLoadDuplicateUnitsFromCache(index, file, previousVariant, root)).toEqual([]);
+      expect(tryLoadDuplicateUnitsFromCache(index, file, variant, root)).toBeNull();
+      const collection = await collectDuplicateUnits(index, {
+        projectRoot: root,
+        files: [file],
+        includeSmall: true,
+        minTokens: 1,
+        maxTokens: 400,
+        shingleSize: 3,
+        windowSize: 20,
+      });
+      expect(collection.units.some((unit) => unit.name === "processInvoiceItems")).toBe(true);
+      // The recomputed units are stored under the current variant, so the next load serves them.
+      expect(
+        tryLoadDuplicateUnitsFromCache(index, file, variant, root)?.some((unit) => unit.name === "processInvoiceItems"),
+      ).toBe(true);
+    } finally {
+      if (index) closeDuplicateUnitCacheForIndex(index);
+    }
+  });
+}
 
 test("C5: duplicate units cached by cache version 8 are not reused for an unchanged .ddl file", async () => {
   const root = await makeTempProject();
