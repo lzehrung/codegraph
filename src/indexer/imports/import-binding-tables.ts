@@ -18,7 +18,7 @@ import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOf
 import type { Range } from "../../types.js";
 import type { CFamilyIncludeForm, RubyLoadForm } from "../../util/specifiers.js";
 import type { BuildReport, ImportBinding } from "../types.js";
-import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
+import type { ImportBindingSink, ImportDegradedHook, ImportResolver, ResolvedImportTarget } from "./context.js";
 import type { ParsedFileContext } from "../parse-context.js";
 
 /**
@@ -46,6 +46,8 @@ export type LanguageSpecificImportContext = ImportBindingSink & {
   languageExtensions?: LanguageExtensionMap;
   parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
   report?: BuildReport;
+  /** Reports that this file's imports are incomplete, so the module that holds them is marked parser-degraded. */
+  onDegraded?: ImportDegradedHook;
   getBindings: () => ImportBinding[];
   replaceBindings: (bindings: ImportBinding[]) => void;
 };
@@ -233,6 +235,9 @@ export async function applyCsharpImportDirective(
       context.report,
       context.parsedFiles,
     );
+    // `partial`: a C# file of the project could not be read, so it may declare the type too and the binding stays
+    // external. The module records that, so a later build resolves it again once every file reads.
+    if (typeMatch.status === "partial") context.onDegraded?.("lookup");
     const qualifiedType = normalizeCsharpQualifiedName(parsed.value).replace(/^global::/u, "");
     if (typeMatch.status === "found" && !typeMatch.parts && qualifiedType.includes(".")) {
       context.pushBinding({
@@ -315,6 +320,8 @@ export async function applyCsharpImportDirective(
             context.report,
             context.parsedFiles,
           );
+          // `partial` leaves the alias external and marks the module, as for a static using.
+          if (typeMatch.status === "partial") context.onDegraded?.("lookup");
           if (typeMatch.status === "found") {
             fromValue = fallbackFrom;
             resolved = typeMatch.file;

@@ -52,6 +52,7 @@ import { isGraphOnlyLanguage } from "../document-links.js";
 import { attemptParsePreparedFileContext, type ParsedFileContext } from "./parse-context.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { collectImportsForFile } from "./imports.js";
+import type { ImportDegradedHook } from "./imports/context.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { expandStarImports } from "./expand-star-imports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
@@ -514,6 +515,8 @@ async function buildIndexedModuleForFile(args: {
   // or of one of its embedded blocks. A later build that reuses the module from a cache has no report of this one, and
   // still counts the file.
   let parserDegraded = false;
+  // Set when a lookup over other files, not this file's own extraction, left part of its imports unresolved.
+  let importLookupIncomplete = false;
   const recordTreeUnavailable = (entry: Parameters<typeof recordParserBackendDegradation>[1]): void => {
     parserDegraded = true;
     recordParserBackendDegradation(args.report, entry);
@@ -590,6 +593,11 @@ async function buildIndexedModuleForFile(args: {
     args.bloomFilterCache.set(args.file, filter);
   }
 
+  // A failed extraction leaves this file's imports incomplete, so it marks the module like a missing syntax tree.
+  const onDegraded: ImportDegradedHook = (cause) => {
+    parserDegraded = true;
+    if (cause === "lookup") importLookupIncomplete = true;
+  };
   // Single builder so an option added here always reaches both the primary source and
   // every embedded (SFC) block, instead of one path silently missing a future option.
   const sharedImportOptions = {
@@ -600,10 +608,7 @@ async function buildIndexedModuleForFile(args: {
     ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
     ...(args.report ? { report: args.report } : {}),
     parsedFiles: args.parsedMap,
-    // A failed extraction leaves this file's imports incomplete, so it marks the module like a missing syntax tree.
-    onDegraded: () => {
-      parserDegraded = true;
-    },
+    onDegraded,
   };
   const imports =
     nativeSourceLimitSkip || sup.id === "sql"
@@ -646,6 +651,7 @@ async function buildIndexedModuleForFile(args: {
   const nativeOutcome = preparedNativeOutcome(prepared);
   if (nativeOutcome) mod.nativeOutcome = nativeOutcome;
   if (parserDegraded) mod.parserDegraded = true;
+  if (importLookupIncomplete) mod.importLookupIncomplete = true;
   if (sup.id === "cpp") {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
@@ -1176,7 +1182,9 @@ async function buildProjectIndexFromExport(
  * - it changed;
  * - an import or re-export target no longer exists;
  * - an added file can satisfy one of its specifiers;
- * - it resolves imports through namespace or package declarations, and a file it depends on changed.
+ * - it resolves imports through namespace or package declarations, and a file it depends on changed;
+ * - a lookup of its imports over other files could not read one of them (`importLookupIncomplete`). Nothing records
+ *   that file when no module covers it, so the file reading again changes no signature, manifest edge, or cache row.
  *
  * With a manifest, the manifest gives the previous files and edges.
  * Without one (a memory cache, or a disk cache that no manifest-writing build has seen),
@@ -1207,6 +1215,9 @@ async function collectStaleCachedModules(args: {
   const { cachedModules, manifestFiles } = args;
   if (!cachedModules.size) return { stale: new Set<string>(), deletedDeclarationFiles: [] };
   const stale = await cachedModulesWithMissingTargets(cachedModules, args.concurrency);
+  for (const [file, { mod }] of cachedModules) {
+    if (mod.importLookupIncomplete) stale.add(file);
+  }
   const resolvesFromDeclarations = (file: string): boolean =>
     DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(
       supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "",
@@ -2918,7 +2929,12 @@ export async function buildProjectIndexIncremental(
           const cacheSig = await moduleCacheSignatureForFile(file, sigInfo, opts, resolverEnvironmentFingerprint);
           cached = tryLoadFromCache(projectRoot, file, cacheSig, opts, report);
         }
-        if (cached) {
+        if (cached?.importLookupIncomplete) {
+          // See collectStaleCachedModules: extract this importer again. Its own namespace facts stay valid, so the
+          // project scan reads them from the cached module instead of parsing the file.
+          primeReusedCsharpNamespaceFacts(file, cached, opts);
+          changedFiles.add(file);
+        } else if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
           modules.set(fileIdentityKey(file), cached);
           primeReusedCsharpNamespaceFacts(file, cached, opts);

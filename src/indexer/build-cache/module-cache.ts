@@ -440,6 +440,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   const mod = value as {
     file?: unknown;
     csharpNamespaceFacts?: unknown;
+    importLookupIncomplete?: unknown;
     docstringsChecked?: unknown;
     exports?: unknown;
     imports?: unknown;
@@ -453,6 +454,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     (mod.docstringsChecked === undefined || typeof mod.docstringsChecked === "boolean") &&
     isOptionalNativeOutcome(mod.nativeOutcome) &&
     (mod.parserDegraded === undefined || typeof mod.parserDegraded === "boolean") &&
+    (mod.importLookupIncomplete === undefined || typeof mod.importLookupIncomplete === "boolean") &&
     Array.isArray(mod.exports) &&
     Array.isArray(mod.imports) &&
     mod.imports.every(hasValidImportBindingRanges) &&
