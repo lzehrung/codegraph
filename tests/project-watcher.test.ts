@@ -1699,6 +1699,51 @@ describe("startProjectWatcher with the real file system", () => {
     },
   );
 
+  it.runIf(process.platform === "win32" || process.platform === "linux")(
+    "keeps hearing a directory that held the only listed source file at startup, so that a source file added after that file was deleted is reported, with per-directory watches",
+    async () => {
+      const projectRoot = await tempRoots.create("cg-project-watcher-startup-");
+      const feature = path.join(projectRoot, "feature");
+      const listed = path.join(feature, "first.ts");
+      await fs.mkdir(feature);
+      await fs.writeFile(listed, "export const first = 1;\n");
+      await fs.writeFile(path.join(feature, ".gitkeep"), "");
+      const reported: Array<{ directory: string; filename: string | null }> = [];
+      let files = [listed];
+      const watcher = startProjectWatcher({
+        root: projectRoot,
+        onChange: vi.fn(),
+        onSettled: vi.fn(),
+        listFiles: async () => files,
+        platform: "linux",
+        watch: (directory, watchOptions, listener) =>
+          fsWatch(directory, watchOptions, (eventType, filename) => {
+            reported.push({ directory, filename });
+            listener(eventType, filename);
+          }),
+      });
+      const heardSince = (count: number, filename: string): boolean =>
+        reported.slice(count).some((event) => event.directory === feature && event.filename === filename);
+      const timing = { timeout: 10_000, interval: 25 };
+
+      try {
+        await watcher.refreshDirectories();
+        // The watch of `feature` was opened for the list at startup, not for an event.
+        await fs.rm(listed);
+        await vi.waitFor(() => expect(heardSince(0, "first.ts")).toBe(true), timing);
+
+        // No list names `feature` any more, yet `.gitkeep` stays. The refresh must not end its watch.
+        files = [];
+        await watcher.refreshDirectories();
+        const heardBefore = reported.length;
+        await fs.writeFile(listed, "export const first = 2;\n");
+        await vi.waitFor(() => expect(heardSince(heardBefore, "first.ts")).toBe(true), timing);
+      } finally {
+        watcher.close();
+      }
+    },
+  );
+
   it("keeps the session's cached freshness result across writes to the output directories that discovery ignores", async () => {
     const projectRoot = await tempRoots.create("cg-project-watcher-ignored-");
     await fs.mkdir(path.join(projectRoot, "src"));
@@ -1891,7 +1936,7 @@ describe("startProjectWatcher with directories that appear", () => {
     watcher.close();
   });
 
-  it("keeps the watches above a reported directory after the file list stops naming them, and closes them once it is removed", async () => {
+  it("keeps the watches above a reported directory after the file list stops naming them, and closes the one that only it needed once it is removed", async () => {
     const projectRoot = await tempRoots.create("cg-project-watcher-above-");
     const src = path.join(projectRoot, "src");
     const old = path.join(src, "old");
@@ -1922,11 +1967,72 @@ describe("startProjectWatcher with directories that appear", () => {
     await watcher.refreshDirectories();
     expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, old, added]));
 
-    // Nothing keeps them once `added` is removed.
+    // `old` came back only because `added` needs the directory above it, so it goes with `added`. `src` is a directory
+    // that a list named and that still exists, so it keeps its watch.
     await fs.rm(added, { recursive: true });
     fake.removeDirectory(added, "inotify");
     await watcher.refreshDirectories();
-    expect(fake.openDirectories()).toEqual([projectRoot]);
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src]));
+    expect(fake.duplicateOpens).toEqual([]);
+    watcher.close();
+  });
+
+  it("keeps the watch of a directory that the file list named at startup after its last source file was deleted, so that a source file added later is heard, and closes it once the directory is removed", async () => {
+    const projectRoot = await tempRoots.create("cg-project-watcher-startup-");
+    const src = path.join(projectRoot, "src");
+    const lib = path.join(src, "lib");
+    const other = path.join(projectRoot, "other");
+    const first = path.join(lib, "first.ts");
+    const remaining = path.join(other, "b.ts");
+    await fs.mkdir(lib, { recursive: true });
+    await fs.mkdir(other);
+    await fs.writeFile(first, "export const first = 1;\n");
+    await fs.writeFile(path.join(lib, ".gitkeep"), "");
+    await fs.writeFile(remaining, "export const b = 1;\n");
+    let files = [first, remaining];
+    const { fake, watcher, onChange } = startWatcher({
+      root: projectRoot,
+      platform: "linux",
+      listFiles: async () => files,
+    });
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, lib, other]));
+
+    // `first.ts` is deleted, so no list names `lib` or `src` any more, yet `.gitkeep` stays in `lib`. Both keep their
+    // watch, and the source file that comes back is heard.
+    await fs.rm(first);
+    files = [remaining];
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, lib, other]));
+    await fs.writeFile(first, "export const first = 2;\n");
+    const changes = onChange.mock.calls.length;
+    expect(fake.deliver(lib, "first.ts", "rename")).toBe(1);
+    expect(onChange).toHaveBeenCalledTimes(changes + 1);
+
+    // Nothing keeps a directory that was removed. The one above it stays, and reports the directory when it is made again.
+    await fs.rm(lib, { recursive: true });
+    fake.removeDirectory(lib, "inotify");
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toEqual(sorted([projectRoot, src, other]));
+    expect(fake.deliver(src, "lib", "rename")).toBe(1);
+    expect(fake.duplicateOpens).toEqual([]);
+    watcher.close();
+  });
+
+  it("keeps at most 128 directories that the file list stopped naming, so that a build that empties thousands of directories cannot hold thousands of watches", async () => {
+    const projectRoot = await tempRoots.create("cg-project-watcher-emptied-");
+    const names = Array.from({ length: 130 }, (_, index) => `emptied${index}`);
+    await Promise.all(names.map((name) => fs.mkdir(path.join(projectRoot, name))));
+    let files = names.map((name) => path.join(projectRoot, name, "a.ts"));
+    const { fake, watcher } = startWatcher({ root: projectRoot, platform: "linux", listFiles: async () => files });
+    await watcher.refreshDirectories();
+    // A file list needs a watch for every directory that it names, however many there are.
+    expect(fake.openHandles()).toHaveLength(1 + 130);
+
+    // No source file is left, and every directory stays. Only 128 of them keep their watch.
+    files = [];
+    await watcher.refreshDirectories();
+    expect(fake.openHandles()).toHaveLength(1 + 128);
     expect(fake.duplicateOpens).toEqual([]);
     watcher.close();
   });
