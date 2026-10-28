@@ -2387,6 +2387,179 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  /** Where `Run` goes in `lines` of Use.cs, whose files declare `N.Plain`, `N.Second`, and `Other.B`, each with a `Nested.Run`. */
+  async function receiverRunTarget(lines: string[]): Promise<string> {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-scope-"));
+    try {
+      const nested = "public class Nested { public static void Run() {} }";
+      const paths = await writeFixtureFiles(root, {
+        "Plain.cs": `namespace N; public class Plain { ${nested} }\n`,
+        "Second.cs": `namespace N; public class Second { ${nested} }\n`,
+        "Other.cs": `namespace Other; public class B { ${nested} }\n`,
+        "Use.cs": lines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const line = lines.findIndex((text) => text.includes("Run()")) + 1;
+      const run = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line,
+        column: columnOf(lines, line, "Run"),
+      });
+      return run.status === "ok" ? path.basename(run.definition.file) : run.status;
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it.each([
+    {
+      name: "a sibling namespace block",
+      lines: [
+        "namespace A { using B = Missing.Box; }",
+        "namespace C {",
+        "  using Other;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Other.cs",
+    },
+    {
+      name: "a reopened block of the same namespace",
+      lines: [
+        "namespace A { using B = Missing.Box; }",
+        "namespace A {",
+        "  using Other;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Other.cs",
+    },
+    {
+      name: "a generic alias in a sibling namespace block",
+      lines: [
+        "namespace A { using B = N.Box<int>; }",
+        "namespace C {",
+        "  using Other;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Other.cs",
+    },
+    {
+      name: "the block that declares it",
+      lines: [
+        "namespace A {",
+        "  using B = Missing.Box;",
+        "  using Other;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "not_found",
+    },
+    {
+      name: "a namespace nested in the block that declares it",
+      lines: [
+        "namespace A {",
+        "  using B = Missing.Box;",
+        "  using Other;",
+        "  namespace C { class Use { void M() { B.Nested.Run(); } } }",
+        "}",
+      ],
+      expected: "not_found",
+    },
+    {
+      name: "a namespace after an alias before every namespace",
+      lines: ["using B = Missing.Box;", "using Other;", "namespace C { class Use { void M() { B.Nested.Run(); } } }"],
+      expected: "not_found",
+    },
+    {
+      name: "a file-scoped namespace after its own alias",
+      lines: ["namespace C;", "using B = Missing.Box;", "using Other;", "class Use { void M() { B.Nested.Run(); } }"],
+      expected: "not_found",
+    },
+    {
+      name: "a namespace after an alias under #if",
+      lines: [
+        "#if FEATURE",
+        "using B = Missing.Box;",
+        "#endif",
+        "using Other;",
+        "namespace C { class Use { void M() { B.Nested.Run(); } } }",
+      ],
+      expected: "not_found",
+    },
+  ])(
+    "keeps an unresolved alias ahead of using Other; only where it is in scope: $name",
+    async ({ lines, expected }) => {
+      expect(await receiverRunTarget(lines)).toBe(expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "sibling namespace blocks",
+      lines: [
+        "namespace A { using B = N.Plain; }",
+        "namespace C {",
+        "  using B = N.Second;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Second.cs",
+    },
+    {
+      name: "an unresolved alias in a sibling block and a resolved one in scope",
+      lines: [
+        "namespace A { using B = Missing.Box; }",
+        "namespace C {",
+        "  using B = N.Second;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Second.cs",
+    },
+  ])("binds the alias that is in scope when $name each declare one", async ({ lines, expected }) => {
+    expect(await receiverRunTarget(lines)).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "a resolved alias in a sibling namespace block",
+      lines: [
+        "namespace A { using B = N.Plain; }",
+        "namespace C {",
+        "  using Other;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Other.cs",
+    },
+    {
+      name: "a resolved alias in a reopened block of the same namespace",
+      lines: [
+        "namespace A { using B = N.Plain; }",
+        "namespace A {",
+        "  using Other;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Other.cs",
+    },
+    {
+      name: "a resolved alias in the namespace block that declares it",
+      lines: [
+        "namespace A {",
+        "  using B = N.Plain;",
+        "  using Other;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Plain.cs",
+    },
+  ])("binds an alias only where it is in scope: $name", async ({ lines, expected }) => {
+    expect(await receiverRunTarget(lines)).toBe(expected);
+  });
+
   it.each([
     {
       name: "a namespace deeper than the alias's own",

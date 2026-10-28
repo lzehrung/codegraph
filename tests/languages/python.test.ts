@@ -1779,4 +1779,143 @@ describe("Python inherited and replaced property navigation", () => {
     expect(sub).toMatchObject({ targets: [12], coverage: "partial" });
     expect(sub.referenceLines).toEqual(expect.arrayContaining([12, 15]));
   });
+
+  /** `Root.count` is a plain attribute and `Right.count` a property; `Child` derives from both through `bases`. */
+  const mixinSource = (bases: string, rightExtendsRoot: boolean): string =>
+    [
+      "class Root:",
+      "    count = 0",
+      "class Left(Root):",
+      "    pass",
+      rightExtendsRoot ? "class Right(Root):" : "class Right:",
+      "    @property",
+      "    def count(self):",
+      "        return 1",
+      `class Child(${bases}):`,
+      "    def __init__(self):",
+      "        self.count = 3",
+      "    def read(self):",
+      "        return self.count",
+    ].join("\n");
+
+  it.each(["Left, Right", "Right, Left"])(
+    "leaves self.count unresolved when Child(%s) reaches a plain attribute and a property that the bases do not order",
+    async (bases) => {
+      const outcome = await navigateCount(mixinSource(bases, false), [11, 13], 7);
+
+      // Only the method resolution order says whether Root.count or Right.count comes first, so neither may be chosen.
+      expect(outcome.targets).toEqual(["not_found", "not_found"]);
+      expect(outcome.referenceLines).toEqual([7]);
+      expect(outcome.coverage).toBe("partial");
+    },
+  );
+
+  it.each(["Left, Right", "Right, Left"])(
+    "resolves self.count to the property when Right extends the class with the plain attribute: Child(%s)",
+    async (bases) => {
+      const outcome = await navigateCount(mixinSource(bases, true), [11, 13], 7);
+
+      // A subclass comes before its bases in every order, so Right.count is first whichever base is listed first.
+      expect(outcome.targets).toEqual([7, 7]);
+      expect(outcome.referenceLines).toEqual(expect.arrayContaining([7, 11, 13]));
+    },
+  );
+
+  it("resolves self.count to a property that a diamond reaches through both bases", async () => {
+    const source = [
+      ...base,
+      "class Left(Base):",
+      "    pass",
+      "class Right(Base):",
+      "    pass",
+      "class Child(Left, Right):",
+      "    def __init__(self):",
+      "        self.count = 3",
+      "    def read(self):",
+      "        return self.count",
+    ].join("\n");
+    const outcome = await navigateCount(source, [16, 18], 5);
+
+    expect(outcome.targets).toEqual([5, 5]);
+    expect(outcome.referenceLines).toEqual(expect.arrayContaining([5, 16, 18]));
+  });
+
+  it("keeps the instance attribute when a plain class attribute replaces the property later in the class", async () => {
+    const source = [
+      "class Counter:",
+      "    @property",
+      "    def count(self):",
+      "        return 1",
+      "    count = 0",
+      "    def write(self):",
+      "        self.count = 3",
+      "    def read(self):",
+      "        return self.count",
+    ].join("\n");
+    const outcome = await navigateCount(source, [7, 9], 5);
+
+    // The class-level binding that runs last is `count = 0`, which is no descriptor, so the write declares an attribute.
+    expect(outcome.targets).toEqual([7, 7]);
+  });
+
+  it.each([
+    {
+      name: "a plain class attribute before the property",
+      lines: [
+        "class Counter:",
+        "    count = 0",
+        "    @property",
+        "    def count(self):",
+        "        return 1",
+        "    def write(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ],
+      probes: [7, 9],
+      property: 4,
+    },
+    {
+      name: "a deleter after the setter",
+      lines: [
+        "class Counter:",
+        "    @property",
+        "    def count(self):",
+        "        return 1",
+        "    @count.setter",
+        "    def count(self, value):",
+        "        pass",
+        "    @count.deleter",
+        "    def count(self):",
+        "        pass",
+        "    def write(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ],
+      probes: [12, 14],
+      property: 3,
+    },
+    {
+      name: "an annotation without a value after the property",
+      lines: [
+        "class Counter:",
+        "    @property",
+        "    def count(self):",
+        "        return 1",
+        "    count: int",
+        "    def write(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ],
+      probes: [7, 9],
+      property: 3,
+    },
+  ])("keeps the property as the class-level binding with $name", async ({ lines, probes, property }) => {
+    const outcome = await navigateCount(lines.join("\n"), probes, property);
+
+    expect(outcome.targets).toEqual([property, property]);
+    expect(outcome.coverage).toBe("partial");
+  });
 });

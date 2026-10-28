@@ -211,20 +211,28 @@ export function csharpExternAlias(node: SyntaxNodeLike): string | null {
 }
 
 /**
- * The namespace enclosing `position` in a file's regions (`""` for the global namespace): the containing
- * region that starts last, which is the innermost of properly nested regions. Without a position, `""`.
+ * The region enclosing `position` in a file's regions: the containing region that starts last, which is the innermost
+ * of properly nested regions. `undefined` outside every region and without a position.
  */
-export function csharpNamespaceAtIndex(
+export function csharpNamespaceRegionAtIndex(
   regions: readonly CsharpNamespaceRegion[],
   position: number | undefined,
-): string {
-  if (position === undefined) return "";
+): CsharpNamespaceRegion | undefined {
+  if (position === undefined) return undefined;
   let innermost: CsharpNamespaceRegion | undefined;
   for (const region of regions) {
     if (position < region.start || position >= region.end) continue;
     if (!innermost || region.start >= innermost.start) innermost = region;
   }
-  return innermost?.name ?? "";
+  return innermost;
+}
+
+/** The namespace enclosing `position` in a file's regions (`""` for the global namespace, and without a position). */
+export function csharpNamespaceAtIndex(
+  regions: readonly CsharpNamespaceRegion[],
+  position: number | undefined,
+): string {
+  return csharpNamespaceRegionAtIndex(regions, position)?.name ?? "";
 }
 
 /**
