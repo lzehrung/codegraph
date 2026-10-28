@@ -1152,7 +1152,10 @@ describe("codegraph MCP handlers", () => {
   });
 
   it("refreshes legacy HTTP session activity after a request outlives its idle window", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Fake only the idle clock and the eviction interval, and move them solely through the explicit advances below.
+    // Faking every timer under shouldAdvanceTime stalled the fetch client's own setImmediate hops until the next 20 ms
+    // tick, so the follow-up aged the session in fake time and could arrive after it had idled out.
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-completion-touch-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
     const backingSession = createAgentSession({ root });
