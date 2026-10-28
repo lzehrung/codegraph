@@ -12,7 +12,7 @@ import {
   graphToMermaidSymbolsWithFiles,
 } from "../graphs/symbol-render.js";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
-import { type BuildOptions, type BuildReport, type CacheLocation } from "../indexer/types.js";
+import { type BuildOptions, type BuildReport, type CacheLocation, type ProjectIndex } from "../indexer/types.js";
 import { summarizeAnalysis } from "../analysis-summary.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import { updateGraphSqlite, writeGraphSqlite } from "../sqlite.js";
@@ -424,8 +424,11 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     return;
   }
   let graph: Graph;
+  // A cache-verify build serves unchanged files from the module cache, so its report counts only the files it
+  // parsed. The index also records how native handled the files it reused, so the summary reads both.
+  let verifiedIndex: ProjectIndex | undefined;
   if (cacheVerify) {
-    const index = await buildProjectIndexFromFiles(context.projectRootFs, files, {
+    verifiedIndex = await buildProjectIndexFromFiles(context.projectRootFs, files, {
       onProgress: context.progressHandler,
       threads,
       discovery: context.discoveryOptions,
@@ -442,7 +445,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       },
       report: indexReport,
     });
-    graph = index.graph;
+    graph = verifiedIndex.graph;
   } else {
     graph = await collectGraph(context.projectRootFs, files, {
       threads,
@@ -454,7 +457,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     });
   }
   context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
-  const analysis = summarizeAnalysis({ report: indexReport });
+  const analysis = summarizeAnalysis({ index: verifiedIndex, report: indexReport });
   const graphOut = stable ? stabilizeGraph(graph) : graph;
   if (format === "mermaid") {
     await writeOut(graphToMermaid(graphOut));

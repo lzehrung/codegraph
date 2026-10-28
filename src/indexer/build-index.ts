@@ -131,6 +131,7 @@ import {
   prepareFileContextForBuild,
   countNativeWorkerEligibleFiles,
   emptyWorkerPoolSetup,
+  preparedNativeOutcome,
   setupWorkerPool,
   teardownWorkerPool,
   type WorkerPoolSetupResult,
@@ -184,6 +185,15 @@ function createEmptyModuleIndex(file: string): ModuleIndex {
 /** A file with no language support: nothing is parsed, so it has no parse errors. */
 function unparsedModuleIndex(file: string): ModuleIndex {
   return { ...createEmptyModuleIndex(file), parseErrorRanges: [] };
+}
+
+/**
+ * A file whose processing failed. Its symbols are missing from the index, so it is flagged as parser-degraded: the flag
+ * keeps the analysis summary incomplete, and marks a module that is never written to the module cache, so the project
+ * snapshot embeds it instead of leaving its stale disk row to be restored.
+ */
+function failedModuleIndex(file: string): ModuleIndex {
+  return { ...createEmptyModuleIndex(file), parserDegraded: true };
 }
 
 function collectParseErrorRanges(tree: ProjectedSyntaxTree): ParseErrorRange[] {
@@ -500,6 +510,14 @@ async function buildIndexedModuleForFile(args: {
   );
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let tree: SyntaxTreeLike | undefined;
+  // Every degradation recorded below also marks the module, including a failed import extraction of the file's source
+  // or of one of its embedded blocks. A later build that reuses the module from a cache has no report of this one, and
+  // still counts the file.
+  let parserDegraded = false;
+  const recordTreeUnavailable = (entry: Parameters<typeof recordParserBackendDegradation>[1]): void => {
+    parserDegraded = true;
+    recordParserBackendDegradation(args.report, entry);
+  };
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id),
     nativeSourceLimitSkip = prepared.nativeFallbackReason === "sourceTooLarge";
 
@@ -525,7 +543,7 @@ async function buildIndexedModuleForFile(args: {
       tree = parsed.tree;
       setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     } else {
-      recordParserBackendDegradation(args.report, {
+      recordTreeUnavailable({
         file: args.file,
         languageId: prepared.sup.id,
         ...(parseAttempt.nativeFallbackReason ? { nativeFallbackReason: parseAttempt.nativeFallbackReason } : {}),
@@ -541,7 +559,7 @@ async function buildIndexedModuleForFile(args: {
       tree = parsed.tree;
       setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     } else {
-      recordParserBackendDegradation(args.report, {
+      recordTreeUnavailable({
         file: args.file,
         languageId: sup.id,
         ...(parseAttempt.nativeFallbackReason ? { nativeFallbackReason: parseAttempt.nativeFallbackReason } : {}),
@@ -550,7 +568,7 @@ async function buildIndexedModuleForFile(args: {
     }
   }
   if (sup.id === "sql" && !tree) {
-    recordParserBackendDegradation(args.report, {
+    recordTreeUnavailable({
       file: args.file,
       languageId: sup.id,
       ...(prepared.nativeFallbackReason ? { nativeFallbackReason: prepared.nativeFallbackReason } : {}),
@@ -582,6 +600,10 @@ async function buildIndexedModuleForFile(args: {
     ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
     ...(args.report ? { report: args.report } : {}),
     parsedFiles: args.parsedMap,
+    // A failed extraction leaves this file's imports incomplete, so it marks the module like a missing syntax tree.
+    onDegraded: () => {
+      parserDegraded = true;
+    },
   };
   const imports =
     nativeSourceLimitSkip || sup.id === "sql"
@@ -621,6 +643,9 @@ async function buildIndexedModuleForFile(args: {
   if (tree instanceof ProjectedSyntaxTree) mod.parseErrorRanges = collectParseErrorRanges(tree);
   else if (graphOnlyLanguage) mod.parseErrorRanges = [];
   else delete mod.parseErrorRanges;
+  const nativeOutcome = preparedNativeOutcome(prepared);
+  if (nativeOutcome) mod.nativeOutcome = nativeOutcome;
+  if (parserDegraded) mod.parserDegraded = true;
   if (sup.id === "cpp") {
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
@@ -1875,7 +1900,7 @@ async function buildIndexFromFileListShared(
         }
         recordFileFailure(report, file, error);
         logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file}:`, error);
-        return [file, createEmptyModuleIndex(file), []] as const;
+        return [file, failedModuleIndex(file), []] as const;
       } finally {
         processedFiles += 1;
         if (opts?.onProgress && buildStartedAt !== undefined) {
@@ -3012,7 +3037,7 @@ export async function buildProjectIndexIncremental(
             }
             recordFileFailure(report, file, error);
             logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file}:`, error);
-            return [file, createEmptyModuleIndex(file), undefined] as const;
+            return [file, failedModuleIndex(file), undefined] as const;
           } finally {
             if (opts?.onProgress) {
               opts.onProgress({

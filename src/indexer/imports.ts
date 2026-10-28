@@ -56,6 +56,13 @@ export async function collectImportsForFile(
     report?: BuildReport;
     matchPath?: MatchPathFn;
     parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
+    /**
+     * Called each time extraction fails and leaves this source's imports incomplete: native fell back for the source, a
+     * C# syntax tree could not be built, or reading the native captures threw. `report` records the failure for this
+     * build only, so a caller that keeps the imports, such as a module that a later build reuses from a cache, keeps
+     * the failure with them.
+     */
+    onDegraded?: () => void;
   },
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
@@ -106,6 +113,7 @@ export async function collectImportsForFile(
             ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
             ...(parsed.error ? { nativeError: parsed.error } : {}),
           });
+          opts?.onDegraded?.();
         }
       }
     } else {
@@ -123,6 +131,7 @@ export async function collectImportsForFile(
         ...(parsed.fallbackReason ? { nativeFallbackReason: parsed.fallbackReason } : {}),
         ...(parsed.error ? { nativeError: parsed.error } : {}),
       });
+      opts?.onDegraded?.();
     }
   }
   if (nativeExecution?.fallbackReason) {
@@ -133,6 +142,7 @@ export async function collectImportsForFile(
       fallbackReason: nativeExecution.fallbackReason,
       ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
     });
+    opts?.onDegraded?.();
   }
   if (!resolvedNativeQueries && resolvedSup.id !== "csharp") return imports;
 
@@ -355,6 +365,7 @@ export async function collectImportsForFile(
         fallbackReason: "queryFailure",
         error: errorMessage(error),
       });
+      opts?.onDegraded?.();
       return [];
     }
   }

@@ -983,7 +983,7 @@ Human-readable output is optimized for compact reading by people or models and m
 
 Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json` returns the structured file graph shown below; add `--output <path>` to write any selected format to a file.
 
-`graph` JSON output is always compact: `files` lists each path once, and every edge references source and target files by their integer offset into `files` instead of repeating the path string. This keeps output size proportional to the number of distinct files rather than the number of edges. Every JSON graph payload (with or without `--symbols`) ends with an `analysis` object describing the parse backend (`mode: "semantic"`, `backend`, `label`, and skipped-file counts), mirroring what `index --json` reports.
+`graph` JSON output is always compact: `files` lists each path once, and every edge references source and target files by their integer offset into `files` instead of repeating the path string. This keeps output size proportional to the number of distinct files rather than the number of edges. Every JSON graph payload (with or without `--symbols`) ends with an `analysis` object describing the parse backend (`mode: "semantic"`, `backend`, `label`, and skipped-file counts), mirroring what `index --json` reports. The native file counts cover every indexed file, including modules reused from the cache, so a warm or incremental run reports the same `backend` and skipped files as a cold one.
 
 ```json
 {

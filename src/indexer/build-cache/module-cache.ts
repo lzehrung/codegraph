@@ -444,11 +444,15 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     exports?: unknown;
     imports?: unknown;
     locals?: unknown;
+    nativeOutcome?: unknown;
     parseErrorRanges?: unknown;
+    parserDegraded?: unknown;
   };
   return (
     typeof mod.file === "string" &&
     (mod.docstringsChecked === undefined || typeof mod.docstringsChecked === "boolean") &&
+    isOptionalNativeOutcome(mod.nativeOutcome) &&
+    (mod.parserDegraded === undefined || typeof mod.parserDegraded === "boolean") &&
     Array.isArray(mod.exports) &&
     Array.isArray(mod.imports) &&
     mod.imports.every(hasValidImportBindingRanges) &&
@@ -463,6 +467,10 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
       return local.type !== "local" || hasValidCallableSymbol(local.target);
     })
   );
+}
+
+export function isOptionalNativeOutcome(value: unknown): value is ModuleIndex["nativeOutcome"] {
+  return value === undefined || value === "used" || value === "skipped";
 }
 
 export function isParseErrorRange(value: unknown): value is ParseErrorRange {
