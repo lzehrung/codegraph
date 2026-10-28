@@ -48,5 +48,9 @@ fun use(): String {
     val multiRawText = $$"""
         {"id": "$target"}
         """
+    val _under = "underscore" // @def underscore=_under
+    val multiUnder = $$"id: $$_under" // @ref underscore
+    val multiUnderText = $$"id: $_under" // @not-ref underscore
+    val rawUnder = """id: $_under""" // @ref underscore
     return label + summary + compact + twin + formatted + boxRead + outer + viaOuter + intOverload + stringOverload + withDefault + pair.left + pairAgain.right + objValue + otherRender + decoy + rawDecoy
 }

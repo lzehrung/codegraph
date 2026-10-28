@@ -870,4 +870,11 @@ fn kotlin_parse_accepts_forms_the_published_grammar_rejects() {
     // A template is a node with a name, so the name is a reference; `$c` has fewer dollars than the prefix and is text.
     assert!(sexp.contains("(interpolation (identifier))"), "{sexp}");
     assert_eq!(sexp.matches("(interpolation").count(), 1, "{sexp}");
+
+    // A letter above ASCII, `_` or a quoted name starts a template on every platform. `$\u{f1}ame` has fewer dollars
+    // than the prefix and is text.
+    let names = parse_kotlin_within_deadline("val raw = $$\"a $$\u{f1}ame $$_x $$`my name` $\u{f1}ame\"\n");
+    let sexp = names.root_node().to_sexp();
+    assert!(!names.root_node().has_error(), "{sexp}");
+    assert_eq!(sexp.matches("(interpolation").count(), 3, "{sexp}");
 }

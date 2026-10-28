@@ -8,7 +8,7 @@ import { buildProjectIndex, findReferences, goToDefinition } from "../../src/ind
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { finalizeLanguageSpecificImports } from "../../src/indexer/imports/language-specific.js";
 import { parseKotlinImportStatement } from "../../src/languages/import-statement-parsers.js";
-import type { ImportBinding } from "../../src/indexer/types.js";
+import type { ImportBinding, ProjectIndex } from "../../src/indexer/types.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./callable-consumer-fixtures.js";
@@ -276,6 +276,43 @@ describe("Kotlin native identifier declarations", () => {
 });
 
 describe("Kotlin multi-dollar strings", () => {
+  type Position = { line: number; column: number };
+  const keyOf = (position: Position): string => `${position.line}:${position.column}`;
+  // The position of a name in a line: `needle` is the first (or last) text on the line that holds it, and the name
+  // starts `offset` characters into it, after the dollars.
+  const nameIn = (lines: string[], line: number, needle: string, offset: number, last = false): Position => {
+    const text = lines[line - 1];
+    if (text === undefined) throw new Error(`missing line ${line}`);
+    const index = last ? text.lastIndexOf(needle) : text.indexOf(needle);
+    if (index < 0) throw new Error(`text not found on line ${line}: ${needle}`);
+    return { line, column: index + offset + 1 };
+  };
+  // The references of the name declared at `declaration` are the declaration and every template, and the coverage is
+  // complete. Go-to-definition resolves each template to the declaration and finds nothing at a literal.
+  const expectTemplates = async (
+    index: ProjectIndex,
+    file: string,
+    declaration: Position,
+    templates: Position[],
+    literals: Position[],
+  ): Promise<void> => {
+    const references = await findReferences(index, { file, ...declaration });
+    expect(references.status).toBe("ok");
+    if (references.status !== "ok") return;
+    expect(references.referenceCoverage?.state).toBe("complete");
+    const found = references.references.map((reference) => keyOf(reference.range.start));
+    expect(found.sort()).toEqual([declaration, ...templates].map(keyOf).sort());
+    for (const template of templates) {
+      const definition = await goToDefinition(index, { file, ...template });
+      expect(definition.status).toBe("ok");
+      if (definition.status === "ok") expect(definition.definition.range.start.line).toBe(declaration.line);
+    }
+    for (const literal of literals) {
+      const definition = await goToDefinition(index, { file, ...literal });
+      expect(definition.status).toBe("not_found");
+    }
+  };
+
   it("reads a template as a reference and a run of fewer dollars as text", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-multi-dollar-"));
     const file = path.join(root, "Schema.kt").replace(/\\/g, "/");
@@ -291,41 +328,77 @@ describe("Kotlin multi-dollar strings", () => {
       "",
     ];
     await fsp.writeFile(file, lines.join("\n"), "utf8");
-    // The position of `target` in `needle`, which starts with `prefixLength` dollars and braces.
-    const nameIn = (line: number, needle: string, prefixLength: number, last = false) => {
-      const text = lines[line - 1];
-      if (text === undefined) throw new Error(`missing line ${line}`);
-      const index = last ? text.lastIndexOf(needle) : text.indexOf(needle);
-      if (index < 0) throw new Error(`text not found on line ${line}: ${needle}`);
-      return { line, column: index + prefixLength + 1 };
-    };
     // With a prefix of two dollars `$${target}` and `$$target` are templates, and so is `$$target` after the dollar
     // of `$$$target`. With a prefix of three, only `$$$target` is.
     const templates = [
-      nameIn(2, "$${target}", 3),
-      nameIn(3, "$$target", 2),
-      nameIn(4, "$$$target", 3),
-      nameIn(5, "$$$target", 3, true),
-      nameIn(7, "$${target}", 3),
+      nameIn(lines, 2, "$${target}", 3),
+      nameIn(lines, 3, "$$target", 2),
+      nameIn(lines, 4, "$$$target", 3),
+      nameIn(lines, 5, "$$$target", 3, true),
+      nameIn(lines, 7, "$${target}", 3),
     ];
     // Fewer dollars than the prefix are text.
-    const literals = [nameIn(2, '$target"', 1), nameIn(5, "$$target ", 2), nameIn(7, '$target"', 1)];
-    const key = (position: { line: number; column: number }): string => `${position.line}:${position.column}`;
+    const literals = [
+      nameIn(lines, 2, '$target"', 1),
+      nameIn(lines, 5, "$$target ", 2),
+      nameIn(lines, 7, '$target"', 1),
+    ];
     try {
       const index = await buildProjectIndex(root, { cache: "off" });
-      const references = await findReferences(index, { file, line: 1, column: 5 });
-      expect(references.status).toBe("ok");
-      if (references.status !== "ok") return;
-      const found = references.references.map((reference) => key(reference.range.start));
-      expect(found.sort()).toEqual([{ line: 1, column: 5 }, ...templates].map(key).sort());
-      for (const template of templates) {
-        const definition = await goToDefinition(index, { file, ...template });
-        expect(definition.status).toBe("ok");
-        if (definition.status === "ok") expect(definition.definition.range.start.line).toBe(1);
-      }
-      for (const position of literals) {
-        const definition = await goToDefinition(index, { file, ...position });
-        expect(definition.status).toBe("not_found");
+      await expectTemplates(index, file, { line: 1, column: 5 }, templates, literals);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("starts a template at a letter above ASCII, an underscore or a closed backtick name", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-multi-dollar-names-"));
+    const file = path.join(root, "Names.kt").replace(/\\/g, "/");
+    // \u00f1 is a letter with a tilde. The scanner decides from the first character of the name, so a letter above
+    // ASCII has to start a template on every platform, as `_` and a backtick name do.
+    const lines = [
+      'val \u00f1ame = "n"',
+      "val _under = 1",
+      'val `my name` = "q"',
+      'val short = $$"a $$\u00f1ame b $$_under c $$`my name` d"',
+      'val raw = $$"""a $$\u00f1ame b $$_under c $$`my name` d"""',
+      'val text = $$"a $\u00f1ame b $_under c $`my name` d"',
+      'val open = $$"a $$`my name b"',
+      'val single = """a $\u00f1ame b $_under c $`my name` d"""',
+      "",
+    ];
+    await fsp.writeFile(file, lines.join("\n"), "utf8");
+    // Templates: two dollars in the multi-dollar strings, one dollar in the raw string with one. Literals: one dollar
+    // in a string with two, and a backtick name that does not close on its line.
+    const names = [
+      {
+        declaration: { line: 1, column: 5 },
+        templates: [
+          nameIn(lines, 4, "$$\u00f1ame", 2),
+          nameIn(lines, 5, "$$\u00f1ame", 2),
+          nameIn(lines, 8, "$\u00f1ame", 1),
+        ],
+        literals: [nameIn(lines, 6, "$\u00f1ame", 1)],
+      },
+      {
+        declaration: { line: 2, column: 5 },
+        templates: [nameIn(lines, 4, "$$_under", 2), nameIn(lines, 5, "$$_under", 2), nameIn(lines, 8, "$_under", 1)],
+        literals: [nameIn(lines, 6, "$_under", 1)],
+      },
+      {
+        declaration: { line: 3, column: 5 },
+        templates: [
+          nameIn(lines, 4, "$$`my name`", 2),
+          nameIn(lines, 5, "$$`my name`", 2),
+          nameIn(lines, 8, "$`my name`", 1),
+        ],
+        literals: [nameIn(lines, 6, "$`my name`", 1), nameIn(lines, 7, "$$`my name", 2)],
+      },
+    ];
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const name of names) {
+        await expectTemplates(index, file, name.declaration, name.templates, name.literals);
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
