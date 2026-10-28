@@ -974,7 +974,7 @@ export function resolveCppVisibleStaticCallableName(
       if (start === undefined || (fileKey === useFileKey && start >= node.startIndex)) continue;
       if (parsed === undefined) parsed = loadParsedFile(moduleEntry.file);
       if (!parsed) break;
-      const position = { row: def.range.start.line - 1, column: def.range.start.column - 1 };
+      const position = toTreeSitterPosition(def.range.start);
       let current: SyntaxNodeLike | null = parsed.tree.rootNode.descendantForPosition(position, position);
       let staticMember = false;
       while (current && !CPP_MEMBER_CONTAINER_TYPES.has(current.type)) {

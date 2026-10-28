@@ -101,6 +101,21 @@ export function normalizeLinkSpecifier(
   };
 }
 
+export function normalizeDocumentSpecifier(rawSpecifier: string): ModuleSpecifier | null {
+  return normalizeLinkSpecifier(rawSpecifier, {
+    preferRelative: true,
+    resolutionKind: "document",
+  });
+}
+
+export function normalizeDocumentFileSpecifier(rawSpecifier: string): ModuleSpecifier | null {
+  return normalizeLinkSpecifier(rawSpecifier, {
+    preferRelative: true,
+    resolutionKind: "document",
+    forceRelative: true,
+  });
+}
+
 export function markResolutionKind(
   entries: ModuleSpecifier[],
   resolutionKind: ModuleSpecifierResolutionKind,

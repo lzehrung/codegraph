@@ -503,8 +503,8 @@ export function isMemberAccessPropertyRange(parsed: ParsedFileContext, range: Ra
     startIndex !== undefined
       ? parsed.tree.rootNode.descendantForIndex(startIndex, range.end.index ?? startIndex)
       : parsed.tree.rootNode.descendantForPosition(
-          { row: range.start.line - 1, column: range.start.column - 1 },
-          { row: range.start.line - 1, column: range.start.column - 1 },
+          toTreeSitterPosition(range.start),
+          toTreeSitterPosition(range.start),
         );
   const parent = node.parent;
   if (!parent || !isMemberAccessNode(parsed.sup, parent)) return false;

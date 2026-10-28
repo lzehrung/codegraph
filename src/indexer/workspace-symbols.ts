@@ -5,7 +5,7 @@ import { ensureParsedContext } from "./parse-context.js";
 import { getCachedScope } from "./navigation-references.js";
 import { resolveImported } from "./navigation-resolve.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
-import { boundList } from "../presentation/bounds.js";
+import { boundList, boundedNonNegativeIntegerOption } from "../presentation/bounds.js";
 import type { ImportBinding, ProjectIndex, SymbolDef, SymbolKind } from "./types.js";
 import { importNodeId } from "./import-types.js";
 import { compareCodeUnits } from "../util/collections.js";
@@ -273,7 +273,10 @@ function fileSurfaceRank(file: string): number {
 }
 
 function normalizeLimit(limit: number | undefined): number {
-  if (limit === undefined) return DEFAULT_WORKSPACE_SYMBOL_LIMIT;
-  if (!Number.isInteger(limit) || limit < 0) throw new Error("Workspace symbol limit must be a non-negative integer.");
-  return Math.min(limit, MAX_WORKSPACE_SYMBOL_LIMIT);
+  return boundedNonNegativeIntegerOption(
+    limit,
+    DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+    MAX_WORKSPACE_SYMBOL_LIMIT,
+    "Workspace symbol limit",
+  );
 }

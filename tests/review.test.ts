@@ -691,6 +691,39 @@ describe("Review report", () => {
     expect(report.head).toBe("HEAD");
   });
 
+  it("describes the index a reused report holds when a later review finds no changes", async () => {
+    const root = await mkTmpDir("dg-review-no-changes-analysis-");
+    try {
+      runGit(root, ["init"]);
+      runGit(root, ["config", "user.email", "test@git.local"]);
+      runGit(root, ["config", "user.name", "Codegraph Bot"]);
+      await fsp.mkdir(path.join(root, "docs"), { recursive: true });
+      await fsp.writeFile(path.join(root, "tracked.ts"), "export const value = 1;\n", "utf8");
+      await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n", "utf8");
+      runGit(root, ["add", "tracked.ts", "docs"]);
+      runGit(root, ["commit", "-m", "initial"]);
+      const base = runGit(root, ["rev-parse", "HEAD"]);
+      // Warm the module cache, so the review below parses only the file its range changes.
+      await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+      runGit(root, ["add", "docs"]);
+      runGit(root, ["commit", "-m", "docs"]);
+
+      const report: ReviewBuildReport = { timings: {} };
+      const changed = await buildReviewReport(root, { gitBase: base, gitHead: "HEAD", cache: "disk", report });
+      const unchanged = await buildReviewReport(root, { gitBase: "HEAD", gitHead: "HEAD", cache: "disk", report });
+
+      expect(changed.status).toBe("ok");
+      expect(unchanged.status).toBe("no_changes");
+      // The review build parsed only the docs file, so its build report alone cannot show that native indexed tracked.ts.
+      expect(report.indexReport?.backend?.native.filesUsed).toBe(0);
+      expect(changed.analysis).toMatchObject({ backend: "native", nativeFilesUsed: 1 });
+      expect(unchanged.analysis).toMatchObject({ backend: "native", nativeFilesUsed: 1 });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("applies discovery filters to changed git comparisons", async () => {
     const root = await mkTmpDir("dg-review-git-changed-discovery-");
     runGit(root, ["init"]);

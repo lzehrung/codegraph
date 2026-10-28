@@ -10,6 +10,7 @@ import { fileIdentityKey } from "../util/paths.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "./types.js";
 
+import { definitionIdentityKey } from "./reference-context.js";
 import { toTreeSitterPosition } from "./shared.js";
 /**
  * Owner identity shared by C# `partial` type parts and Swift types/extensions.
@@ -351,13 +352,8 @@ function csharpContainerAtRange(tree: SyntaxTreeLike, range: Range): SyntaxNodeL
 
 const partialExportIdentities = new WeakMap<ProjectIndex, Map<string, SharedOwnerIdentity | null>>();
 
-function definitionIdentityCacheKey(def: SymbolDef): string {
-  const start = def.range.start;
-  return `${fileIdentityKey(def.file)}:${start.index ?? `${start.line}:${start.column}`}`;
-}
-
 function csharpPartialExportIdentity(index: ProjectIndex, def: SymbolDef): SharedOwnerIdentity | null {
-  const cacheKey = definitionIdentityCacheKey(def);
+  const cacheKey = definitionIdentityKey(def);
   let cache = partialExportIdentities.get(index);
   if (!cache) {
     cache = new Map();

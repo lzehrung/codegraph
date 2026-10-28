@@ -1,7 +1,7 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./import-types.js";
-import { sliceText } from "../util/ast.js";
+import { containsNode, sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import { SymbolKind } from "./types.js";
 
@@ -327,10 +327,6 @@ const PHP_SCOPED_CLASS_EXPRESSION_TYPES = new Set([
   "scoped_property_access_expression",
   "class_constant_access_expression",
 ]);
-
-function containsNode(container: SyntaxNodeLike, node: SyntaxNodeLike): boolean {
-  return container.startIndex <= node.startIndex && container.endIndex >= node.endIndex;
-}
 
 function phpArgumentsNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
   return (

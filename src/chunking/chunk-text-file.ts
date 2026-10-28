@@ -1,6 +1,6 @@
 import type { Chunk } from "./chunk-file.js";
 import { withStableChunkIds } from "./chunk-id.js";
-import { countLineBreaks, splitTextWithinTokenBudget } from "./chunk-split.js";
+import { countLineBreaks, endLineForText, lineRanges, splitTextWithinTokenBudget } from "./chunk-split.js";
 import { countWhitespaceTokens } from "./tokenizer.js";
 import type { ChunkTokenizer } from "./types.js";
 
@@ -57,7 +57,7 @@ export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
     currentTokens = 0;
   };
 
-  for (const line of lineRanges(source)) {
+  for (const line of lineRanges(source, 0, source.length, 1)) {
     const lineTokens = tokenizer(source.slice(line.start, line.end));
     if (lineTokens > maxTokens) {
       flush();
@@ -132,28 +132,4 @@ function pushBoundedRange(
     });
     segmentStartLine += countLineBreaks(segment);
   }
-}
-
-function lineRanges(source: string): Array<{ start: number; end: number; startLine: number }> {
-  const ranges: Array<{ start: number; end: number; startLine: number }> = [];
-  let start = 0;
-  let line = 1;
-
-  for (let offset = 0; offset < source.length; offset++) {
-    if (source[offset] !== "\n") continue;
-    ranges.push({ start, end: offset + 1, startLine: line });
-    start = offset + 1;
-    line++;
-  }
-
-  if (start < source.length) {
-    ranges.push({ start, end: source.length, startLine: line });
-  }
-
-  return ranges;
-}
-
-function endLineForText(startLine: number, text: string): number {
-  const lineBreaks = countLineBreaks(text);
-  return startLine + lineBreaks - (text.endsWith("\n") ? 1 : 0);
 }

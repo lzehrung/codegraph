@@ -1,6 +1,6 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
-import { toRange } from "../util/ast.js";
+import { containsNode, toRange } from "../util/ast.js";
 
 /**
  * Terraform declarations and references proven from HCL syntax.
@@ -150,10 +150,6 @@ function sameNode(left: SyntaxNodeLike | null | undefined, right: SyntaxNodeLike
     left.startIndex === right.startIndex &&
     left.endIndex === right.endIndex
   );
-}
-
-function containsNode(ancestor: SyntaxNodeLike, node: SyntaxNodeLike): boolean {
-  return node.startIndex >= ancestor.startIndex && node.endIndex <= ancestor.endIndex;
 }
 
 function blockTypeName(block: SyntaxNodeLike): string | undefined {

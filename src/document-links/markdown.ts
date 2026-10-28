@@ -7,7 +7,7 @@ import {
   dedupeModuleSpecifiers,
   isObviouslyDynamicSpecifier,
   markResolutionKind,
-  normalizeLinkSpecifier,
+  normalizeDocumentSpecifier,
   normalizeReferenceLabel,
 } from "./shared.js";
 
@@ -137,10 +137,7 @@ function extractMarkdownModuleSpecifiersFromSanitized(
   const out: ModuleSpecifier[] = [];
 
   for (const destination of collectMarkdownInlineLinkDestinations(sanitized)) {
-    const normalized = normalizeLinkSpecifier(destination, {
-      preferRelative: true,
-      resolutionKind: "document",
-    });
+    const normalized = normalizeDocumentSpecifier(destination);
     if (normalized) out.push(normalized);
   }
 
@@ -152,10 +149,7 @@ function extractMarkdownModuleSpecifiersFromSanitized(
     if (match.index !== undefined && isMarkdownAngleDestinationInLinkSyntax(sanitized, match.index)) continue;
     if (candidate.startsWith("/") || candidate.startsWith("?")) continue;
     if (!isLikelyMarkdownAutolinkTarget(candidate)) continue;
-    const normalized = normalizeLinkSpecifier(candidate, {
-      preferRelative: true,
-      resolutionKind: "document",
-    });
+    const normalized = normalizeDocumentSpecifier(candidate);
     if (normalized) out.push(normalized);
   }
 
@@ -274,10 +268,7 @@ function collectMarkdownReferenceDefinitions(source: string): Map<string, Module
       lineStart = endIndex;
       continue;
     }
-    const normalized = normalizeLinkSpecifier(rawDestination, {
-      preferRelative: true,
-      resolutionKind: "document",
-    });
+    const normalized = normalizeDocumentSpecifier(rawDestination);
     if (normalized && !out.has(label)) out.set(label, normalized);
     lineStart = endIndex;
   }

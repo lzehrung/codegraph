@@ -20,16 +20,14 @@
  * `import` and `require` are mutually exclusive and selected by
  * {@link PackageExportConditionMode}. Unspecified mode defaults to `import`.
  */
+import { isPlainRecord } from "./guards.js";
+
 export type PackageExportConditionMode = "import" | "require";
 
 const SHARED_PACKAGE_EXPORT_CONDITIONS = ["node-addons", "node", "module-sync", "module", "default"] as const;
 
 function activePackageExportConditions(mode: PackageExportConditionMode): ReadonlySet<string> {
   return new Set<string>([...SHARED_PACKAGE_EXPORT_CONDITIONS, mode]);
-}
-
-function isExportTargetRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function collectPackageExportTargets(
@@ -50,7 +48,7 @@ function collectPackageExportTargets(
     }
     return targets;
   }
-  if (!isExportTargetRecord(target)) return [];
+  if (!isPlainRecord(target)) return [];
 
   // Author key order, not a hard-coded priority list. Restored from pre-c1680788.
   for (const [condition, conditionTarget] of Object.entries(target)) {
@@ -82,7 +80,7 @@ export function resolvePackageExportTargets(
   if (typeof exportsField === "string" || Array.isArray(exportsField)) {
     return subpath === "." ? (collectPackageExportTargets(exportsField, conditions) ?? []) : [];
   }
-  if (!isExportTargetRecord(exportsField)) return [];
+  if (!isPlainRecord(exportsField)) return [];
 
   const exportKeys = Object.keys(exportsField);
   const hasSubpathMap = exportKeys.some((key) => key.startsWith("."));

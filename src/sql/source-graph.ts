@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 
 import { uniqueByKey } from "../util/collections.js";
-import { edgeKey } from "../util/graph-edges.js";
+import { uniqueEdgePusher } from "../util/graph-edges.js";
 import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
 import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
@@ -71,7 +71,7 @@ type SqlDefinitionCandidateMatch = {
   confidence: number;
 };
 
-function isSqlFile(filePath: string, languageExtensions?: LanguageExtensionMap): boolean {
+export function isSqlFile(filePath: string, languageExtensions?: LanguageExtensionMap): boolean {
   return supportForFileWithoutHeaderSample(filePath, languageExtensions)?.id === "sql";
 }
 
@@ -355,13 +355,7 @@ export async function collectSqlEdgesForFile(
   const cache = factCache ?? (await buildSqlFactCache(allFiles, languageExtensions));
   const currentFacts = cache.factsByFile.get(normalizedFile) ?? [];
   const edges: Edge[] = [];
-  const seen = new Set<string>();
-  const addEdge = (edge: Edge): void => {
-    const key = edgeKey(edge);
-    if (seen.has(key)) return;
-    seen.add(key);
-    edges.push(edge);
-  };
+  const addEdge = uniqueEdgePusher(edges);
   // A call in a `FROM` list reads a routine, not a table of that name. Only a name that an indexed
   // routine carries is one: `FROM users (NOLOCK)` reads a table, and so does a call to a function
   // that the indexed files do not define. Navigation applies the same rule.

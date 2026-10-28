@@ -38,6 +38,7 @@ import {
   resolveAgentSnapshotFile,
 } from "./normalize.js";
 import {
+  checkSessionFreshness,
   withRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
@@ -262,7 +263,7 @@ export async function searchCodegraphWithSession(
   session: AgentSession,
   request: AgentSearchRequest,
 ): Promise<AgentSearchResponse> {
-  const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
+  const freshness = await checkSessionFreshness(session);
   if (canUsePathFastPath(request) && session.listFiles && session.root) {
     const files = await session.listFiles();
     return searchPathOnly(session.root, files, request, freshness);

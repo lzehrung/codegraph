@@ -6,6 +6,7 @@ import { defNodeId } from "../graphs/symbol-graph.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { Edge } from "../types.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
+import type { SqliteArtifactFileSignature } from "../sqlite/types.js";
 import { isPlainRecord } from "../util/guards.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
@@ -110,7 +111,7 @@ export async function buildCodegraphArtifactWithSession(
   const selected = normalizeArtifactSelection(request);
   const filterOutDir = path.resolve(root, request.filterOutDir ?? request.outDir ?? DEFAULT_OUT_DIR);
   const snapshot = await filterSnapshotForOutputDirectory(await session.loadProject(), filterOutDir);
-  const sqliteSignatures: Array<{ path: string; size: number; mtimeMs: number }> = [];
+  const sqliteSignatures: SqliteArtifactFileSignature[] = [];
   let sqliteFileSignatures = { signed: 0, skipped: 0 };
   if (selected.sqlite) {
     const snapshotFileSignatures = snapshot.fileSignatures;

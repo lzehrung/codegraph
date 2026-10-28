@@ -4,18 +4,20 @@ import {
   findTypeHierarchy,
   type TypeHierarchyDirection,
   type TypeHierarchyRelationKind,
+  type TypeHierarchyRelationMatch,
 } from "../indexer/type-hierarchy.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
 import { semanticProvenance } from "./semantic.js";
 import { requireSemanticSymbol, semanticSymbolFromDef } from "./semantic-symbols.js";
 import {
+  checkSessionFreshness,
   createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
 } from "./session.js";
-import { buildSymbolLookup } from "./symbol-lookup.js";
+import { buildSymbolLookup, type SymbolLookup } from "./symbol-lookup.js";
 
 export type TypeHierarchyRequest = {
   root: string;
@@ -80,7 +82,7 @@ export async function findImplementationsWithSession(
   session: AgentSession,
   request: TypeHierarchyRequest,
 ): Promise<ImplementationsResponse> {
-  const freshness = await checkFreshness(session);
+  const freshness = await checkSessionFreshness(session);
   const snapshot = await session.loadProject();
   const resolved = requireSemanticSymbol(snapshot, request.handle);
   const result = queryImplementations(snapshot.index, snapshot.symbolGraph, resolved.id, {
@@ -119,7 +121,7 @@ async function runTypeHierarchy(
   request: TypeHierarchyRequest,
   direction: TypeHierarchyDirection,
 ): Promise<TypeHierarchyResponse> {
-  const freshness = await checkFreshness(session);
+  const freshness = await checkSessionFreshness(session);
   const snapshot = await session.loadProject();
   const resolved = requireSemanticSymbol(snapshot, request.handle);
   const result = findTypeHierarchy(snapshot.symbolGraph, resolved.id, direction, {
@@ -129,7 +131,22 @@ async function runTypeHierarchy(
   if (result.status !== "ok") throw new Error(result.reason);
   const lookup = buildSymbolLookup(snapshot);
   const provenance = semanticProvenance(snapshot);
-  const relations = result.relations.flatMap((match): TypeHierarchyRelation[] => {
+  const relations = typeHierarchyRelations(snapshot, lookup, result.relations, provenance);
+  return {
+    ...responseEnvelope(snapshot, freshness, result.limit, result.omitted),
+    target: semanticSymbolFromDef(snapshot, resolved.def),
+    direction,
+    relations,
+  };
+}
+
+export function typeHierarchyRelations(
+  snapshot: AgentProjectSnapshot,
+  lookup: SymbolLookup,
+  matches: readonly TypeHierarchyRelationMatch[],
+  provenance: SemanticProvenance,
+): TypeHierarchyRelation[] {
+  return matches.flatMap((match): TypeHierarchyRelation[] => {
     const def = lookup.defById.get(match.targetId);
     if (!def) return [];
     return [
@@ -149,16 +166,6 @@ async function runTypeHierarchy(
       },
     ];
   });
-  return {
-    ...responseEnvelope(snapshot, freshness, result.limit, result.omitted),
-    target: semanticSymbolFromDef(snapshot, resolved.def),
-    direction,
-    relations,
-  };
-}
-
-async function checkFreshness(session: AgentSession): Promise<AgentFreshnessResult> {
-  return session.checkFreshness ? await session.checkFreshness() : { state: "fresh" };
 }
 
 function responseEnvelope(

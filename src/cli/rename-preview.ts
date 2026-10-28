@@ -5,7 +5,7 @@ import {
   type RenamePreviewResponse,
   type RenameUnsafeSite,
 } from "../agent/rename-preview.js";
-import type { SemanticSymbol } from "../agent/semantic.js";
+import { formatSemanticSymbol } from "../agent/semantic.js";
 import { exitWithError, type CliAgentCommandContext } from "./context.js";
 import { RENAME_PREVIEW_HELP_TEXT } from "./help.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
@@ -52,7 +52,7 @@ export async function handleRenamePreviewCommand(context: RenamePreviewCommandCo
 
 function formatRenamePreviewResponse(response: RenamePreviewResponse): string {
   const lines = [
-    `Target: ${formatSymbol(response.target)}`,
+    `Target: ${formatSemanticSymbol(response.target)}`,
     `New name: ${response.newName}`,
     `Safe: ${response.safe ? "yes" : "no"}`,
     `Edits: ${response.edits.length}`,
@@ -73,11 +73,6 @@ function formatRenamePreviewResponse(response: RenamePreviewResponse): string {
   }
   if (response.omittedCounts.edits) lines.push(`Omitted edits: ${response.omittedCounts.edits}`);
   return lines.join("\n");
-}
-
-function formatSymbol(symbol: SemanticSymbol): string {
-  const { file, range } = symbol.location;
-  return `${symbol.name} [${symbol.kind}] ${file}:${range.start.line}:${range.start.column}`;
 }
 
 function formatEdit(edit: RenameEdit): string {

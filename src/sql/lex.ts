@@ -614,7 +614,7 @@ function atBackward(trivia: SqlTriviaBoundaries, index: number): number {
   return table[index] ?? index;
 }
 
-function atForward(trivia: SqlTriviaBoundaries, index: number): number {
+export function atForward(trivia: SqlTriviaBoundaries, index: number): number {
   const table = trivia.forward;
   if (index < 0) return table[0] ?? 0;
   if (index >= table.length) return table[table.length - 1] ?? index;

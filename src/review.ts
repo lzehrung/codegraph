@@ -107,10 +107,6 @@ function applyReviewPresetOptions(opts: ReviewOptions): ReviewOptions {
   };
 }
 
-function comparePaths(left: string, right: string): number {
-  return left.localeCompare(right);
-}
-
 type ReviewIndexStage = {
   index: ProjectIndex;
   existenceByFile: Map<string, boolean>;
@@ -255,7 +251,9 @@ export async function buildReviewReport(
     const report: ReviewReport = {
       schemaVersion: REVIEW_SCHEMA_VERSION,
       status: "no_changes",
-      ...(reviewReport?.indexReport ? { analysis: summarizeAnalysis({ report: reviewReport.indexReport }) } : {}),
+      ...(reviewReport?.indexReport
+        ? { analysis: summarizeAnalysis({ index: reviewReport.index, report: reviewReport.indexReport }) }
+        : {}),
       projectFiles,
       summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
       riskSummary,
@@ -277,7 +275,7 @@ export async function buildReviewReport(
     return report;
   }
 
-  const changedFileList = Array.from(changedFiles).sort(comparePaths);
+  const changedFileList = Array.from(changedFiles).sort((left, right) => left.localeCompare(right));
   const diagnostics: ReviewDiagnostics = {
     missingFiles: [],
     symbolMappingParseFailures: [],

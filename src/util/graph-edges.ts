@@ -42,6 +42,17 @@ export function edgeKey(edge: Edge, rawIsIdentity = true, filePath: (file: strin
   return `${from}\0${edge.to.type}\0${target}\0${raw}\0${typeOnly}\0${edge.includeForm ?? ""}`;
 }
 
+/** Appends edges to `edges`, keeping only the first edge of each {@link edgeKey} identity. */
+export function uniqueEdgePusher(edges: Edge[]): (edge: Edge) => void {
+  const seen = new Set<string>();
+  return (edge) => {
+    const key = edgeKey(edge);
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push(edge);
+  };
+}
+
 export function compareEdges(left: Edge, right: Edge): number {
   const fromCompare = left.from.localeCompare(right.from);
   if (fromCompare) return fromCompare;

@@ -5,20 +5,10 @@ import { isAnalysisComplete, summarizeAnalysis, type AnalysisSummary } from "../
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
+import type { CommandReport } from "./context.js";
+import { compactModuleLocals } from "./module-locals.js";
 import { parseCacheModeOption, parseNonNegativeIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
-
-type CommandTimingReport = {
-  totalMs?: number;
-  resolveFilesMs?: number;
-  commandMs?: number;
-};
-
-type IndexCommandReport = {
-  command: string;
-  timings: CommandTimingReport;
-  index?: BuildReport;
-};
 
 type IndexPrettyOutput = {
   files: number;
@@ -68,14 +58,14 @@ export type IndexCommandContext = {
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
   writeStderrLine: (message: string) => void;
-  writeCommandReport: (report: IndexCommandReport, reportFile: string | undefined) => Promise<void>;
+  writeCommandReport: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
   maybeWriteNativeBackendStatus: (report: BuildReport | undefined, showProgress: boolean) => void;
   showProgress: boolean;
 };
 
 export async function handleIndexCommand(context: IndexCommandContext): Promise<void> {
   const verbose = context.hasFlag("--verbose");
-  const commandReport: IndexCommandReport | undefined = context.reportEnabled
+  const commandReport: CommandReport | undefined = context.reportEnabled
     ? { command: "index", timings: {} }
     : undefined;
   const commandStart = performance.now();
@@ -136,11 +126,7 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
   if (full) {
     const modules = [...index.byFile.values()].map((m) => ({
       file: m.file,
-      locals: m.locals.map((l) => ({
-        name: l.localName,
-        kind: l.kind,
-        start: l.range.start,
-      })),
+      locals: compactModuleLocals(m.locals),
       exports: m.exports,
       imports: m.imports,
     }));

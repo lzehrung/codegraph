@@ -81,6 +81,26 @@ describe("type hierarchy", () => {
     expect(result.relations).toEqual([{ targetId: "b", relation: "extends", depth: 1 }]);
   });
 
+  it("rejects invalid depth and limit options by name", () => {
+    const graph = {
+      nodes: new Map([["a", { id: "a", file: "a.ts", name: "A", kind: "class" as const }]]),
+      edges: [],
+    };
+    expect(() => findTypeHierarchy(graph, "a", "super", { depth: 0 })).toThrow(
+      "Hierarchy depth must be a positive integer.",
+    );
+    expect(() => findTypeHierarchy(graph, "a", "super", { depth: -1 })).toThrow(
+      "Hierarchy depth must be a positive integer.",
+    );
+    expect(() => findTypeHierarchy(graph, "a", "super", { limit: -1 })).toThrow(
+      "Hierarchy limit must be a non-negative integer.",
+    );
+    expect(() => findTypeHierarchy(graph, "a", "super", { limit: 1.5 })).toThrow(
+      "Hierarchy limit must be a non-negative integer.",
+    );
+    expect(findTypeHierarchy(graph, "a", "super", { depth: 99, limit: 0 })).toMatchObject({ status: "ok", limit: 0 });
+  });
+
   it("finds proven type and interface-member implementations without unrelated name matches", async () => {
     const { index, graph, byName } = await hierarchyFixture();
     const service = byName.get("Service");
