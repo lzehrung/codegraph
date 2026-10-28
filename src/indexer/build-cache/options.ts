@@ -54,8 +54,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * (`parserDegraded`: no syntax tree, a failed import extraction of its source or of an embedded block, or a processing
  * failure) so the analysis summary counts files reused from the module cache or the project snapshot, not only the
  * files a build parsed.
+ * Epoch 96 marks a C# module whose alias or static using type lookup could not read every C# file of its project
+ * (`parserDegraded` and `importLookupIncomplete`), and extracts such a module again on the next build instead of
+ * reusing it.
  */
-export const CORE_ALGORITHM_EPOCH = 95;
+export const CORE_ALGORITHM_EPOCH = 96;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

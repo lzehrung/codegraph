@@ -207,6 +207,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - An alias for a namespace split across files stays unresolved; one with no first-party declaration stays external.
 - `X::Target` and `global::Ns.Target` resolve against same-directory declarations; `X.Type.Member` needs a single-file alias binding.
 - `X::Type` and `X.Type` stay unresolved while a project C# file has no readable syntax tree.
+- A `using static N.T;`, or a `using X = N.T;` whose namespace `N` a readable file declares, stays external while a project C# file cannot be read, even one that discovery ignores. The importer counts as degraded in `analysis`, and the next build that changes a file extracts it again. A plain `using N;` is not counted: it binds any readable file that declares `N`.
 - An alias use `X.Type` is unresolved when an enclosing namespace chain declares a namespace or non-generic type `X` (aliases inside block namespaces or after a file-scoped header are not checked).
 - A name qualified through a generic type (`N.Outer<int>.Inner`) is unresolved.
 - `using static N.T;` binds one file and imports accessible static members, constants, and nested types, not instance or extension members; a name two directives provide stays unresolved.
