@@ -797,8 +797,11 @@ fn parse_syntax_tree_rejects_unsupported_languages() {
 }
 
 /// Parses Kotlin source on a worker thread so a scanner that never returns fails the test
-/// instead of hanging the suite.
-fn parse_kotlin_within_deadline(source: &str) -> tree_sitter::Tree {
+/// instead of hanging the suite. Also returns how long the parse took.
+fn parse_kotlin_timed(
+    source: &str,
+    deadline: std::time::Duration,
+) -> (tree_sitter::Tree, std::time::Duration) {
     let owned = source.to_string();
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -807,12 +810,21 @@ fn parse_kotlin_within_deadline(source: &str) -> tree_sitter::Tree {
         parser
             .set_language(&language)
             .expect("parser language should be set");
+        let started = std::time::Instant::now();
         let tree = parser.parse(owned, None).expect("source should parse into a tree");
-        let _ = sender.send(tree);
+        let _ = sender.send((tree, started.elapsed()));
     });
-    receiver
-        .recv_timeout(std::time::Duration::from_secs(20))
-        .unwrap_or_else(|_| panic!("Kotlin parse did not return for {source:?}"))
+    receiver.recv_timeout(deadline).unwrap_or_else(|_| {
+        let head: String = source.chars().take(80).collect();
+        panic!(
+            "Kotlin parse of {} bytes did not return within {deadline:?}: {head:?}",
+            source.len()
+        )
+    })
+}
+
+fn parse_kotlin_within_deadline(source: &str) -> tree_sitter::Tree {
+    parse_kotlin_timed(source, std::time::Duration::from_secs(20)).0
 }
 
 #[test]
@@ -877,4 +889,33 @@ fn kotlin_parse_accepts_forms_the_published_grammar_rejects() {
     let sexp = names.root_node().to_sexp();
     assert!(!names.root_node().has_error(), "{sexp}");
     assert_eq!(sexp.matches("(interpolation").count(), 3, "{sexp}");
+}
+
+#[test]
+fn kotlin_parse_reads_a_long_run_of_dollars_in_linear_time() {
+    // Only the last two dollars of a run start a template in a `$$` string. The grammar's scanner once returned
+    // one of the dollars before them per call and read the whole run again each time, so 200,000 dollars took about
+    // a minute. The linear parse takes milliseconds; the bound is far from both.
+    let run = "$".repeat(200_000);
+    let source = format!("val a = $$\"{run}name\"\nval b = $$\"\"\"x{run}{{name}}\"\"\"\n");
+    let (tree, elapsed) = parse_kotlin_timed(&source, std::time::Duration::from_secs(10));
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "the parse took {elapsed:?}"
+    );
+    let root = tree.root_node();
+    assert!(!root.has_error(), "unexpected parse error");
+
+    let mut templates = Vec::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "interpolation" {
+            templates.push((node.start_byte(), &source[node.byte_range()]));
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    templates.sort();
+    let texts: Vec<&str> = templates.iter().map(|(_, text)| *text).collect();
+    assert_eq!(texts, ["$$name", "$${name}"]);
 }

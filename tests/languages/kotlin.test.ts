@@ -316,6 +316,7 @@ describe("Kotlin multi-dollar strings", () => {
   it("reads a template as a reference and a run of fewer dollars as text", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-multi-dollar-"));
     const file = path.join(root, "Schema.kt").replace(/\\/g, "/");
+    const run = "$".repeat(40);
     const lines = [
       'val target = "x"',
       'val brace = $$"id: $${target} text: $target"',
@@ -325,17 +326,20 @@ describe("Kotlin multi-dollar strings", () => {
       'val raw = $$"""',
       '  {"id": "$${target}", "text": "$target"}',
       '  """',
+      `val long = $$"cost: ${run}target"`,
       "",
     ];
     await fsp.writeFile(file, lines.join("\n"), "utf8");
     // With a prefix of two dollars `$${target}` and `$$target` are templates, and so is `$$target` after the dollar
-    // of `$$$target`. With a prefix of three, only `$$$target` is.
+    // of `$$$target`. With a prefix of three, only `$$$target` is. Of a run of forty dollars only the last two start a
+    // template.
     const templates = [
       nameIn(lines, 2, "$${target}", 3),
       nameIn(lines, 3, "$$target", 2),
       nameIn(lines, 4, "$$$target", 3),
       nameIn(lines, 5, "$$$target", 3, true),
       nameIn(lines, 7, "$${target}", 3),
+      nameIn(lines, 9, "$$target", 2),
     ];
     // Fewer dollars than the prefix are text.
     const literals = [
