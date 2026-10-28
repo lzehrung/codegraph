@@ -6,7 +6,15 @@ import { searchCodegraphWithSession } from "../src/agent/search.js";
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 import { isAnalysisComplete, summarizeAnalysis, type AnalysisSummary } from "../src/analysis-summary.js";
-import { buildProjectIndex, buildProjectIndexIncremental, type BuildOptions, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
+  type BackendReport,
+  type BuildOptions,
+  type BuildReport,
+  type NativeBackendReport,
+} from "../src/index.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import * as filePrep from "../src/languages/file-prep.js";
 import * as nativeCaptures from "../src/indexer/imports/native-captures.js";
@@ -340,7 +348,13 @@ describe("analysis summary", () => {
       "docs/guide.md": "# Guide\n",
     });
     const degradedKey = fileIdentityKey(normalizePath(path.join(root, scenario.degradedFile)));
-    const degraded = { backend: "native", parserDegradedFiles: 1, ...scenario.counts };
+    // A file native skipped that also lacks a syntax tree is both counted as fallen back and as degraded, and is one file.
+    const degraded = {
+      backend: "native",
+      parserDegradedFiles: 1,
+      label: "native semantic (1 file(s) skipped)",
+      ...scenario.counts,
+    };
 
     scenario.fail(scenario.marker);
     const cold = await build(root, { logLevel: "silent" });
@@ -464,6 +478,87 @@ describe("analysis summary", () => {
     expect((await renamePreviewInFreshSession(root)).safe).toBe(true);
   });
 
+  it.each(["vue", "svelte"] as const)(
+    "counts a skipped file and a %s component with a failed style block as two skipped files when a rebuild reuses their modules",
+    async (framework) => {
+      const component = `src/Comp.${framework}`;
+      const root = await createProject("cg-analysis-mixed-failure-", {
+        "src/big.ts": oversizedSource(),
+        [component]: componentSource(framework, "styleQueryMarker"),
+        "src/_colors.scss": "$primary: red;\n",
+        "src/small.ts": "export const small = 1;\n",
+        "docs/guide.md": "# Guide\n",
+      });
+      const bigKey = fileIdentityKey(normalizePath(path.join(root, "src", "big.ts")));
+      const componentKey = fileIdentityKey(normalizePath(path.join(root, component)));
+      const quiet = { logLevel: "silent" } as const;
+      // Native skipped big.ts and could not index the component's style block, so two different files are incomplete.
+      const mixed = {
+        backend: "native",
+        parserDegradedFiles: 1,
+        nativeFilesFellBack: 1,
+        label: "native semantic (2 file(s) skipped)",
+      };
+
+      failNativeBlockQueriesFor("styleQueryMarker");
+      const cold = await build(root, quiet);
+      // The build report counts the failed style block as a native fallback beside the oversized file.
+      expect(cold.report.backend?.native).toMatchObject({ filesFellBack: 2, fallbackReasons: { queryFailure: 1 } });
+      expect(cold.index.byFile.get(bigKey)).toMatchObject({ nativeOutcome: "skipped" });
+      expect(cold.index.byFile.get(componentKey)).toMatchObject({ nativeOutcome: "used", parserDegraded: true });
+      expect(cold.analysis).toMatchObject(mixed);
+      expect(isAnalysisComplete(cold.analysis)).toBe(false);
+
+      // From here nothing fails, so only the stored modules can say that the component was degraded.
+      __resetNativeTreeSitterBindingForTests();
+      await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+      const afterDocsEdit = await build(root, quiet);
+      expect(afterDocsEdit.report.backend?.native.fallbackReasons.queryFailure).toBe(0);
+      expect(afterDocsEdit.index.byFile.get(bigKey)).toMatchObject({ nativeOutcome: "skipped" });
+      expect(afterDocsEdit.index.byFile.get(componentKey)).toMatchObject({
+        nativeOutcome: "used",
+        parserDegraded: true,
+      });
+      expect(afterDocsEdit.analysis).toMatchObject(mixed);
+      expect(isAnalysisComplete(afterDocsEdit.analysis)).toBe(false);
+
+      // A session that loads the project next reads the same summary, and does not call a rename safe.
+      const freshSession = await analysisInFreshSession(root);
+      expect(freshSession).toMatchObject(mixed);
+      expect(isAnalysisComplete(freshSession)).toBe(false);
+      const incompleteRename = await renamePreviewInFreshSession(root);
+      expect(incompleteRename.safe).toBe(false);
+      expect(incompleteRename.unsafeSites.map((site) => site.reason)).toContain("parse_degraded");
+
+      // With neither the manifest nor the project snapshot, the module cache alone serves the build.
+      await fsp.rm(path.join(cacheDir(root), "manifest.json"));
+      await fsp.rm(path.join(cacheDir(root), "project-index-snapshot.json"));
+      const moduleCacheOnly = await build(root, quiet);
+      expect(moduleCacheOnly.report.cache?.hits).toBeGreaterThan(0);
+      expect(moduleCacheOnly.analysis).toMatchObject(mixed);
+      expect(isAnalysisComplete(moduleCacheOnly.analysis)).toBe(false);
+
+      // Repairing one file leaves the other counted, and repairing both completes the summary.
+      await fsp.writeFile(path.join(root, "src", "big.ts"), "export const big = 1;\n", "utf8");
+      const afterSkippedRepair = await build(root, quiet);
+      expect(afterSkippedRepair.analysis).toMatchObject({
+        parserDegradedFiles: 1,
+        nativeFilesFellBack: 0,
+        label: "native semantic (1 file(s) skipped)",
+      });
+      await fsp.writeFile(path.join(root, component), componentSource(framework, "styleRepaired"), "utf8");
+      const afterRepair = await build(root, quiet);
+      expect(afterRepair.analysis).toMatchObject({
+        parserDegradedFiles: 0,
+        nativeFilesFellBack: 0,
+        label: "native semantic",
+      });
+      expect(isAnalysisComplete(afterRepair.analysis)).toBe(true);
+      expect(isAnalysisComplete(await analysisInFreshSession(root))).toBe(true);
+      expect((await renamePreviewInFreshSession(root)).safe).toBe(true);
+    },
+  );
+
   it.each(["incremental", "full"] as const)(
     "keeps a cached file counted as degraded when processing it fails (%s build), instead of restoring its old module",
     async (failingBuild) => {
@@ -519,6 +614,90 @@ describe("analysis summary", () => {
       expect(isAnalysisComplete(await analysisInFreshSession(root))).toBe(true);
     },
   );
+
+  it("adds a file the build report names that the index holds no module for, and counts an indexed file once", async () => {
+    const root = await createProject("cg-analysis-report-only-file-", {
+      "src/big.ts": oversizedSource(),
+      "src/Main.cs": "using A = N.Box;\nclass Main {}\n",
+      "src/Box.cs": "namespace N; public class Box {}\n",
+      "src/Hidden.cs": "// REPORT_ONLY_DEGRADED\nnamespace Other; class Hidden {}\n",
+    });
+    const [big, main, box, hidden] = ["big.ts", "Main.cs", "Box.cs", "Hidden.cs"].map((file) =>
+      path.join(root, "src", file),
+    );
+    const hiddenKey = fileIdentityKey(normalizePath(hidden));
+    const parserDegradedKeys = (report: BuildReport): string[] | undefined =>
+      report.backend?.parser?.files.map((entry) => fileIdentityKey(entry.file));
+    // Native skipped big.ts and Hidden.cs has no syntax tree, so two different files are incomplete.
+    const incomplete = {
+      backend: "native",
+      parserDegradedFiles: 1,
+      nativeFilesFellBack: 1,
+      label: "native semantic (2 file(s) skipped)",
+    };
+    const options = { threads: 1, logLevel: "silent" } as const;
+
+    failNativeTreeReconstructionFor("REPORT_ONLY_DEGRADED");
+
+    // The type alias in Main.cs makes the build read every C# file under the root for the namespace it names. The
+    // report then names Hidden.cs, which this index holds no module for.
+    const outsideReport: BuildReport = { timings: {} };
+    const outside = await buildProjectIndexFromFiles(root, [big, main, box], { ...options, report: outsideReport });
+    expect(outside.byFile.has(hiddenKey)).toBe(false);
+    expect(parserDegradedKeys(outsideReport)).toEqual([hiddenKey]);
+    expect(summarizeAnalysis({ index: outside, report: outsideReport })).toMatchObject(incomplete);
+    expect(summarizeAnalysis({ index: outside, report: { timings: {} } })).toMatchObject({
+      parserDegradedFiles: 0,
+      nativeFilesFellBack: 1,
+      label: "native semantic (1 file(s) skipped)",
+    });
+
+    // The report may name that file again as a native fallback, and repeat it. It is still one file.
+    const fallback = { file: hidden, languageId: "csharp", reason: "queryFailure", message: "forced" } as const;
+    outsideReport.backend?.native.errors.push(fallback, fallback);
+    expect(summarizeAnalysis({ index: outside, report: outsideReport })).toMatchObject({
+      parserDegradedFiles: 1,
+      nativeFilesFellBack: 2,
+      label: "native semantic (2 file(s) skipped)",
+    });
+
+    // Once the index holds Hidden.cs its module records the degradation, and the report naming it again adds nothing.
+    const insideReport: BuildReport = { timings: {} };
+    const inside = await buildProjectIndexFromFiles(root, [big, main, box, hidden], {
+      ...options,
+      report: insideReport,
+    });
+    expect(inside.byFile.get(hiddenKey)).toMatchObject({ parserDegraded: true });
+    expect(parserDegradedKeys(insideReport)).toEqual([hiddenKey]);
+    expect(summarizeAnalysis({ index: inside, report: insideReport })).toMatchObject(incomplete);
+  });
+
+  it("flags skipped and degraded files from the build report alone when no index is given", () => {
+    const native: NativeBackendReport = {
+      available: true,
+      enabled: true,
+      supportedLanguageIds: ["ts"],
+      filesUsed: 3,
+      filesFellBack: 0,
+      fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0, sourceTooLarge: 0 },
+      byLanguage: {},
+      errors: [],
+    };
+    const summarize = (backend: BackendReport): AnalysisSummary =>
+      summarizeAnalysis({ report: { timings: {}, backend } });
+
+    const clean = summarize({ native });
+    expect(clean).toMatchObject({ backend: "native", label: "native semantic" });
+    expect(isAnalysisComplete(clean)).toBe(true);
+
+    const skipped = summarize({ native: { ...native, filesFellBack: 1 } });
+    const degraded = summarize({ native, parser: { total: 1, byLanguage: { ts: 1 }, files: [] } });
+    for (const summary of [skipped, degraded]) {
+      expect(summary).toMatchObject({ backend: "native", label: "native semantic (1 file(s) skipped)" });
+      expect(isAnalysisComplete(summary)).toBe(false);
+    }
+    expect(summarizeAnalysis({})).toMatchObject({ backend: "unknown", label: "semantic" });
+  });
 
   it("reports an unknown backend when no native-supported file is indexed", async () => {
     const root = await createProject("cg-analysis-graph-only-", {
