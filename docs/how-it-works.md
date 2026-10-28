@@ -44,6 +44,8 @@ The loader requires the cached path and records both the package-owned source an
 
 The native addon is required. If it cannot load, Codegraph returns an error; run `codegraph doctor` to diagnose the installation. A file over the native size limit is skipped with `sourceTooLarge` in the backend report. A failed native query reports `queryFailure` and does not trigger regex recovery. A valid empty query result stays empty. Graph-only document and stylesheet extraction is unchanged.
 
+Each indexed module records whether native parsed or skipped its file, and whether part of it could not be indexed (its syntax tree could not be built, the imports of its source or of an embedded Vue or Svelte block could not be extracted, or its processing failed), so the `analysis` summary and its skipped-file count describe the whole index, including files reused from the cache, not only the files the latest build parsed. The label counts each skipped or degraded file once, and a build report adds only a file it names that the index holds no module for, such as a C# file read only to find a namespace. `backend: "unknown"` means no indexed file was parsed natively, as in a project of Markdown and other graph-only files.
+
 ## Resolution and graph construction
 
 Extraction produces raw module specifiers. Resolution then turns them into graph targets:

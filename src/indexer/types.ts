@@ -113,6 +113,21 @@ export type ModuleIndex = {
   csharpNamespaceFacts?: CsharpNamespaceFacts;
   /** Outermost Tree-sitter ERROR/MISSING ranges. */
   parseErrorRanges?: ParseErrorRange[];
+  /**
+   * How native tree-sitter handled this file when it was indexed: `used` when native query results produced the
+   * module, `skipped` when native fell back (for example `sourceTooLarge`). Absent for files native does not parse,
+   * such as graph-only languages. Cached with the module so the analysis summary describes every indexed file,
+   * not only the files the current build parsed.
+   */
+  nativeOutcome?: "used" | "skipped";
+  /**
+   * Set only when part of this file was not indexed: its syntax tree could not be built, the imports of its source or of
+   * an embedded block (a Vue or Svelte style or template block) could not be extracted, or processing the file failed.
+   * The module then came from the extractions that worked, or is empty. Cached with the module, like `nativeOutcome`, so
+   * the analysis summary keeps counting the file as parser-degraded after a build reuses it from the module cache or
+   * the project snapshot, when that build's report no longer records the degradation.
+   */
+  parserDegraded?: boolean;
 };
 
 export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "namespace"; file: FileId };

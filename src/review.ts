@@ -251,7 +251,9 @@ export async function buildReviewReport(
     const report: ReviewReport = {
       schemaVersion: REVIEW_SCHEMA_VERSION,
       status: "no_changes",
-      ...(reviewReport?.indexReport ? { analysis: summarizeAnalysis({ report: reviewReport.indexReport }) } : {}),
+      ...(reviewReport?.indexReport
+        ? { analysis: summarizeAnalysis({ index: reviewReport.index, report: reviewReport.indexReport }) }
+        : {}),
       projectFiles,
       summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
       riskSummary,
