@@ -43,6 +43,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage. Each entry names 
 | Glob-stable duplicate cache  | `tests/duplicates.test.ts` | Changing one or more `--ignore-glob` filters reuses a valid project index without rebuilding or updating it.                                                                                     | Internal regression test    | 2026-09-09 |
 | Inline Rust module bodies    | `tests/duplicates.test.ts` | Duplicate analysis scans bodies of inline `mod x { ... }` items. Only the `mod x;` declaration form is masked as an import.                                                                      | Internal regression fixture | 2026-09-12 |
 | Ruby and Zig import masking  | `tests/duplicates.test.ts` | Static Ruby `load`/`autoload` calls and Zig `@cImport` blocks are masked during duplicate analysis; dynamic paths and following code stay visible.                                               | Internal regression test    | 2026-09-12 |
+| Duplicate cache invalidation | `tests/duplicates.test.ts` | Cached duplicate units are keyed by the core algorithm epoch, the language behavior epoch, and the native runtime, so an upgrade that changes parsing or indexing never serves stale units.      | Internal regression test    | 2026-10-28 |
 
 ## Callable and reference consumer contracts
 
