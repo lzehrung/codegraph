@@ -5,7 +5,11 @@ import { isPythonReceiverAttributeAssignmentName } from "../languages/definition
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
-import { csharpNamespaceAtIndex, csharpNamespaceRegionAtIndex } from "../util/csharp-tree.js";
+import {
+  csharpNamespaceAtIndex,
+  csharpNamespaceRegionAtIndex,
+  type CsharpNamespaceRegion,
+} from "../util/csharp-tree.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
   collectMemberAccessChain,
@@ -511,17 +515,41 @@ export function csharpAliasUnprovenReason(
 }
 
 /**
- * Whether the alias `binding` is in scope at `useIndex`: the block of the namespace its directive sits in contains the
- * use, and a directive before every namespace belongs to the whole file. The scope comes from the file's own namespace
- * regions, so an alias under `#if` keeps the scope of the block around it. A binding or file with no recorded
- * position counts as in scope.
+ * The namespace block whose directives include the alias `binding`, read from the file's own namespace regions, so an
+ * alias under `#if` keeps the scope of the block around it. `undefined` for the compilation unit, and for a binding or
+ * file with no recorded position.
  */
-function csharpAliasInScope(mod: ModuleIndex, binding: ImportBinding, useIndex: number): boolean {
-  const aliasStart = binding.kind === "named" ? binding.localRange?.start.index : undefined;
+function csharpAliasRegion(mod: ModuleIndex, binding: ImportBinding): CsharpNamespaceRegion | undefined {
+  const aliasStart =
+    binding.kind === "named" || binding.kind === "namespace" ? binding.localRange?.start.index : undefined;
   const regions = mod.csharpNamespaceFacts?.regions;
-  if (aliasStart === undefined || !regions) return true;
-  const scope = csharpNamespaceRegionAtIndex(regions, aliasStart);
-  return !scope || (scope.start <= useIndex && useIndex < scope.end);
+  return regions ? csharpNamespaceRegionAtIndex(regions, aliasStart) : undefined;
+}
+
+/**
+ * The alias of `candidates` that C# finds first for a use at `useIndex`. An alias binds only inside the block of the
+ * namespace its directive sits in (a directive before every namespace belongs to the whole file), and the aliases of a
+ * block come before those of the blocks around it, so of the aliases in scope the one in the smallest block wins. A
+ * binding or file with no recorded position counts as in scope and as outermost. Aliases of one block can only differ
+ * under conditional compilation, and the first stays.
+ */
+function nearestCsharpAlias(
+  mod: ModuleIndex,
+  candidates: readonly ImportBinding[],
+  useIndex: number,
+): ImportBinding | undefined {
+  let nearest: ImportBinding | undefined;
+  let nearestSpan = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const region = csharpAliasRegion(mod, candidate);
+    if (region && (useIndex < region.start || useIndex >= region.end)) continue;
+    const span = region ? region.end - region.start : Number.POSITIVE_INFINITY;
+    if (!nearest || span < nearestSpan) {
+      nearest = candidate;
+      nearestSpan = span;
+    }
+  }
+  return nearest;
 }
 
 /**
@@ -800,18 +828,20 @@ export async function resolveMemberAccessDefinition(params: {
             imp = innermostNamespaceImport(mod.imports, exprName, expr, sup.normalizeIdentifier);
           if (!imp) return null;
         } else {
-          imp = innermostNamespaceImport(mod.imports, exprName, expr, sup.normalizeIdentifier);
-          if (!imp) {
-            // An alias binds only where its directive is in scope: not from another namespace block, and where two blocks
-            // each declare one, the one in scope at the use.
-            imp = mod.imports.find(
-              (candidate) =>
-                (candidate.kind === "named" || candidate.kind === "default") &&
-                candidate.local === exprName &&
-                !isExpandedStarBinding(candidate, mod.imports) &&
-                csharpAliasInScope(mod, candidate, expr.startIndex),
-            );
-          }
+          const namespaceAlias = innermostNamespaceImport(mod.imports, exprName, expr, sup.normalizeIdentifier);
+          const typeAliases = mod.imports.filter(
+            (candidate) =>
+              (candidate.kind === "named" || candidate.kind === "default") &&
+              candidate.local === exprName &&
+              !isExpandedStarBinding(candidate, mod.imports),
+          );
+          // An alias binds only where its directive is in scope, and the one of the nearest namespace block wins over the
+          // aliases of the blocks around it, whichever kind each is.
+          imp = nearestCsharpAlias(
+            mod,
+            namespaceAlias ? [namespaceAlias, ...typeAliases] : typeAliases,
+            expr.startIndex,
+          );
         }
       } else {
         imp = effectiveExplicitBinding(
@@ -3691,10 +3721,29 @@ async function pythonClassRefFromDef(
 /** How a receiver lookup treats attributes assigned through `self.x = value`; see `pythonMembersOnClass`. */
 type PythonInstanceAttributes = "prefer" | "fallback" | "none";
 
+/** Whether `nameNode` names a class-level annotation without a value (`count: int`), which declares a type and binds nothing. */
+function isPythonValuelessAnnotation(nameNode: SyntaxNodeLike): boolean {
+  const assignment = nameNode.parent;
+  return (
+    assignment?.type === "assignment" &&
+    assignment.childForFieldName("left")?.id === nameNode.id &&
+    !assignment.childForFieldName("right")
+  );
+}
+
+/** The `locals` of `classRef` that bind their name in the class namespace: every one but an annotation without a value. */
+function pythonBindingLocals(classRef: PythonClassRef, locals: readonly SymbolDef[]): SymbolDef[] {
+  return locals.filter((local) => {
+    const nameNode = nameNodeForDef(classRef.context, local);
+    return !nameNode || !isPythonValuelessAnnotation(nameNode);
+  });
+}
+
 /**
  * The members of one class named `member`. `prefer` (`self` and constructed receivers) lets a property decide first and
  * then an instance attribute beat a class attribute of the same class; `fallback` reaches instance attributes only
- * when the class has no class-level member; `none` reaches class-level members only.
+ * when the class has no class-level member; `none` (a property of the hierarchy decides the name) reaches the class-level
+ * bindings only, and an annotation without a value is none of them.
  */
 function pythonMembersOnClass(
   classRef: PythonClassRef,
@@ -3713,6 +3762,7 @@ function pythonMembersOnClass(
     );
     const propertyMembers = pythonPropertyDescriptorMembers(classRef, member, direct);
     if (propertyMembers) return propertyMembers;
+    if (instanceAttributes === "none") return pythonBindingLocals(classRef, direct);
   }
   if (instanceAttributes === "prefer") {
     const instanceAttributeMembers = findPythonInstanceAttributesWithinClass(
@@ -3737,7 +3787,7 @@ function pythonMembersOnClass(
     classRef.context,
     normalizeIdentifier,
   );
-  if (direct.length || instanceAttributes === "none") return direct;
+  if (direct.length) return direct;
   return findPythonInstanceAttributesWithinClass(
     classRef.module.locals,
     member,
@@ -3760,58 +3810,63 @@ function pythonPropertyRole(
 }
 
 /**
- * The property descriptor that `member` is in `classRef`, or `null` when it is not one. The class-level binding that
- * runs last decides what the name is in the class namespace, so a property that a later plain binding replaces
- * (`count = 0` after `@property def count`) is no property. An annotation without a value binds nothing.
+ * What the class-level binding that `nameNode` names does to the property `member` holds: `property` makes a new one whose
+ * getter is the binding (`property(...)`, `@property`, a replacing `@member.getter`), `update` changes the one an
+ * earlier binding made (`@member.setter`, `@member.deleter`), `plain` replaces it with something else, and `annotation`
+ * (`member: int`) binds nothing.
+ */
+function pythonPropertyBinding(
+  classRef: PythonClassRef,
+  nameNode: SyntaxNodeLike,
+  member: string,
+): "property" | "update" | "plain" | "annotation" {
+  if (isPythonValuelessAnnotation(nameNode)) return "annotation";
+  const assignment = nameNode.parent;
+  if (assignment?.type === "assignment" && assignment.childForFieldName("left")?.id === nameNode.id) {
+    const value = assignment.childForFieldName("right");
+    const callee = value?.type === "call" ? value.childForFieldName("function") : null;
+    const argumentsNode = value?.childForFieldName("arguments");
+    return callee?.text === "property" && (argumentsNode?.namedChildren.length ?? 0) >= 1 ? "property" : "plain";
+  }
+  let functionNode: SyntaxNodeLike | null = nameNode;
+  while (functionNode && functionNode.id !== classRef.container.id && functionNode.type !== "function_definition") {
+    functionNode = functionNode.parent;
+  }
+  const decorated = functionNode?.type === "function_definition" ? functionNode.parent : null;
+  const decorators =
+    decorated?.type === "decorated_definition"
+      ? decorated.namedChildren.filter((child) => child.type === "decorator")
+      : [];
+  const role = pythonPropertyRole(decorators.map(pythonPropertyDecorator), member);
+  if (role === "getter") return "property";
+  return role ? "update" : "plain";
+}
+
+/**
+ * The property descriptor that `member` is in `classRef`, or `null` when it is not one. The class-level bindings of the
+ * name run in source order and the last one decides what the name holds: `property(...)`, `@property`, and a replacing
+ * `@member.getter` each make a new property whose getter is that definition, `@member.setter` and `@member.deleter` keep
+ * the property an earlier binding made, so its getter stays the target, and any other binding replaces the property
+ * (`count = 0` after `@property def count`). An annotation without a value binds nothing.
  */
 function pythonPropertyDescriptorMembers(
   classRef: PythonClassRef,
   member: string,
   directMembers: readonly SymbolDef[],
 ): SymbolDef[] | null {
-  let propertyAssignment: SymbolDef | undefined;
-  let propertyGetter: SymbolDef | undefined;
-  let propertySetter: SymbolDef | undefined;
-  let lastPropertyStart = -1;
-  let lastPlainStart = -1;
-  for (const local of directMembers) {
+  let descriptor: SymbolDef | undefined;
+  const inSourceOrder = [...directMembers].sort(
+    (left, right) => (left.range.start.index ?? 0) - (right.range.start.index ?? 0),
+  );
+  for (const local of inSourceOrder) {
     const nameNode = nameNodeForDef(classRef.context, local);
-    const localStart = local.range.start.index;
-    if (!nameNode || localStart === undefined) continue;
-    const assignment = nameNode.parent;
-    if (assignment?.type === "assignment" && assignment.childForFieldName("left")?.id === nameNode.id) {
-      const value = assignment.childForFieldName("right");
-      if (!value) continue;
-      const propertyName = value.type === "call" ? value.childForFieldName("function") : null;
-      const argumentsNode = value.childForFieldName("arguments");
-      if (propertyName?.text === "property" && (argumentsNode?.namedChildren.length ?? 0) >= 1) {
-        propertyAssignment = local;
-        lastPropertyStart = Math.max(lastPropertyStart, localStart);
-      } else {
-        lastPlainStart = Math.max(lastPlainStart, localStart);
-      }
-      continue;
-    }
-    let functionNode: SyntaxNodeLike | null = nameNode;
-    while (functionNode && functionNode.id !== classRef.container.id && functionNode.type !== "function_definition") {
-      functionNode = functionNode.parent;
-    }
-    const decorated = functionNode?.type === "function_definition" ? functionNode.parent : null;
-    const decorators =
-      decorated?.type === "decorated_definition"
-        ? decorated.namedChildren.filter((child) => child.type === "decorator")
-        : [];
-    const role = pythonPropertyRole(decorators.map(pythonPropertyDecorator), member);
-    if (!role) {
-      lastPlainStart = Math.max(lastPlainStart, localStart);
-      continue;
-    }
-    lastPropertyStart = Math.max(lastPropertyStart, localStart);
-    if (role === "getter") propertyGetter = local;
-    else if (role === "setter") propertySetter = local;
+    if (!nameNode) continue;
+    const binding = pythonPropertyBinding(classRef, nameNode, member);
+    if (binding === "property") descriptor = local;
+    else if (binding === "update") descriptor ??= local;
+    else if (binding === "plain") descriptor = undefined;
   }
-  const descriptor = propertyAssignment ?? propertyGetter ?? propertySetter;
-  return descriptor && lastPropertyStart > lastPlainStart ? [descriptor] : null;
+  return descriptor ? [descriptor] : null;
 }
 
 function findPythonInstanceAttributesWithinClass(
@@ -3975,13 +4030,14 @@ async function pythonBaseClassRefs(
 type PythonPropertyPrecedence = "property" | "attribute" | "unproven";
 
 /**
- * What decides `self.member` in `start`'s hierarchy: `property` when the first class that declares `member` at class
- * level declares a property, `attribute` when it declares anything else or no class declares it, and `unproven` when
- * the method resolution order would have to say. Python gives a property (a data descriptor) precedence over the
- * instance dictionary, so `self.member = value` writes through it instead of declaring an attribute, while a plain
- * class-level binding found first leaves the instance attribute in charge. Along one chain of single bases the nearest
- * declaration is first. With several bases the order is not rebuilt: a subclass always comes before its bases, so the
- * answer holds when every declaring class that has no declaring subclass agrees.
+ * What decides `self.member` in `start`'s hierarchy: `property` when the first class that binds `member` at class level
+ * binds a property, `attribute` when it binds anything else or no class binds it, and `unproven` when the method
+ * resolution order would have to say. An annotation without a value (`member: int`) binds nothing. Python gives a
+ * property (a data descriptor) precedence over the instance dictionary, so `self.member = value` writes through it
+ * instead of declaring an attribute, while a plain class-level binding found first leaves the instance attribute in
+ * charge. Along one chain of single bases the nearest binding is first. With several bases the order is not rebuilt: a
+ * subclass always comes before its bases, so the answer holds when every binding class that has no binding subclass
+ * agrees.
  */
 async function pythonPropertyPrecedence(
   index: ProjectIndex,
@@ -4000,14 +4056,17 @@ async function pythonPropertyPrecedence(
     const next: PythonClassRef[] = [];
     for (const ref of level) {
       const key = definitionIdentityKey(ref.def);
-      const direct = findDirectLocalsWithinNode(
-        ref.module.locals,
-        member,
-        ref.container,
-        ref.context,
-        ref.context.sup.normalizeIdentifier,
+      const bindings = pythonBindingLocals(
+        ref,
+        findDirectLocalsWithinNode(
+          ref.module.locals,
+          member,
+          ref.container,
+          ref.context,
+          ref.context.sup.normalizeIdentifier,
+        ),
       );
-      if (direct.length) declaresProperty.set(key, !!pythonPropertyDescriptorMembers(ref, member, direct));
+      if (bindings.length) declaresProperty.set(key, !!pythonPropertyDescriptorMembers(ref, member, bindings));
       const bases = await pythonBaseClassRefs(index, ref, loadParsedFile, cache);
       baseKeys.set(
         key,

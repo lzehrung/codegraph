@@ -2387,7 +2387,10 @@ describe("C# partial class members across files", () => {
     }
   });
 
-  /** Where `Run` goes in `lines` of Use.cs, whose files declare `N.Plain`, `N.Second`, and `Other.B`, each with a `Nested.Run`. */
+  /**
+   * Where `Run` goes in `lines` of Use.cs, whose files declare `N.Plain`, `N.Second`, `Other.B`, and the namespace `RealNs`,
+   * each with a `Nested.Run`.
+   */
   async function receiverRunTarget(lines: string[]): Promise<string> {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-scope-"));
     try {
@@ -2396,6 +2399,7 @@ describe("C# partial class members across files", () => {
         "Plain.cs": `namespace N; public class Plain { ${nested} }\n`,
         "Second.cs": `namespace N; public class Second { ${nested} }\n`,
         "Other.cs": `namespace Other; public class B { ${nested} }\n`,
+        "RealNs.cs": `namespace RealNs; ${nested}\n`,
         "Use.cs": lines.join("\n") + "\n",
       });
       const index = await buildProjectIndex(root, { cache: "off" });
@@ -2558,6 +2562,147 @@ describe("C# partial class members across files", () => {
     },
   ])("binds an alias only where it is in scope: $name", async ({ lines, expected }) => {
     expect(await receiverRunTarget(lines)).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "a block beside an alias before every namespace",
+      lines: [
+        "using B = N.Plain;",
+        "namespace C {",
+        "  using B = N.Second;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Second.cs",
+    },
+    {
+      name: "a block inside a block",
+      lines: [
+        "namespace A {",
+        "  using B = N.Plain;",
+        "  namespace C {",
+        "    using B = N.Second;",
+        "    class Use { void M() { B.Nested.Run(); } }",
+        "  }",
+        "}",
+      ],
+      expected: "Second.cs",
+    },
+    {
+      name: "a file-scoped namespace after an alias before it",
+      lines: [
+        "using B = N.Plain;",
+        "namespace C;",
+        "using B = N.Second;",
+        "class Use { void M() { B.Nested.Run(); } }",
+      ],
+      expected: "Second.cs",
+    },
+    {
+      name: "an unresolved alias in the nearer block",
+      lines: [
+        "using B = N.Plain;",
+        "namespace C {",
+        "  using B = Missing.Box;",
+        "  using Other;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "not_found",
+    },
+    {
+      name: "an unresolved alias in the outer block",
+      lines: [
+        "using B = Missing.Box;",
+        "using Other;",
+        "namespace C {",
+        "  using B = N.Second;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Second.cs",
+    },
+    {
+      name: "a namespace alias outside and a type alias inside",
+      lines: [
+        "using B = RealNs;",
+        "namespace C {",
+        "  using B = N.Second;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "Second.cs",
+    },
+    {
+      name: "a type alias outside and a namespace alias inside",
+      lines: [
+        "using B = N.Plain;",
+        "namespace C {",
+        "  using B = RealNs;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ],
+      expected: "RealNs.cs",
+    },
+    {
+      name: "a use in the outer block, which the nested alias does not reach",
+      lines: [
+        "namespace A {",
+        "  using B = N.Plain;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "  namespace C {",
+        "    using B = N.Second;",
+        "  }",
+        "}",
+      ],
+      expected: "Plain.cs",
+    },
+  ])("binds the alias of the nearest namespace block: $name", async ({ lines, expected }) => {
+    expect(await receiverRunTarget(lines)).toBe(expected);
+  });
+
+  it("reaches the alias of the nearest namespace block in navigation and references", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-nearest-alias-consumers-"));
+    try {
+      const nested = "public class Nested { public static void Run() {} }";
+      const files: Record<"Plain.cs" | "Second.cs", string> = {
+        "Plain.cs": `namespace N; public class Plain { ${nested} }\n`,
+        "Second.cs": `namespace N; public class Second { ${nested} }\n`,
+      };
+      const useLines = [
+        "using B = N.Plain;",
+        "namespace C {",
+        "  using B = N.Second;",
+        "  class Use { void M() { B.Nested.Run(); } }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, { ...files, "Use.cs": useLines.join("\n") + "\n" });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const useFile = paths["Use.cs"]!;
+
+      const run = await goToDefinition(index, { file: useFile, line: 4, column: columnOf(useLines, 4, "Run") });
+      const useLinesReferencing = async (name: keyof typeof files): Promise<number[]> => {
+        const found = await findReferences(index, {
+          file: paths[name]!,
+          line: 1,
+          column: files[name].indexOf("Run") + 1,
+        });
+        if (found.status !== "ok") throw new Error(`Expected references for ${name}`);
+        return found.references
+          .filter((reference) => normalizePath(reference.file) === useFile)
+          .map((reference) => reference.range.start.line);
+      };
+
+      // The alias of namespace `C` is found before the one outside it.
+      expect({
+        goto: run.status === "ok" && path.basename(run.definition.file),
+        plain: await useLinesReferencing("Plain.cs"),
+        second: await useLinesReferencing("Second.cs"),
+      }).toEqual({ goto: "Second.cs", plain: [], second: [4] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it.each([

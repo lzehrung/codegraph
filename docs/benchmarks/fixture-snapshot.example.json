@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-28T21:32:00.690Z",
+  "generatedAt": "2026-10-28T22:16:29.384Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v24.22.1",
-  "numTotalTests": 963,
+  "numTotalTests": 982,
   "numFailedTests": 0,
   "languages": [
     {
@@ -44,8 +44,8 @@
       "files": [
         "tests/languages/csharp.test.ts"
       ],
-      "tests": 122,
-      "passed": 122,
+      "tests": 131,
+      "passed": 131,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -187,8 +187,8 @@
       "files": [
         "tests/languages/python.test.ts"
       ],
-      "tests": 57,
-      "passed": 57,
+      "tests": 67,
+      "passed": 67,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

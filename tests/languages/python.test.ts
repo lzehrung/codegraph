@@ -1918,4 +1918,128 @@ describe("Python inherited and replaced property navigation", () => {
     expect(outcome.targets).toEqual([property, property]);
     expect(outcome.coverage).toBe("partial");
   });
+
+  /** A `Counter` class whose `count` property comes from `form` (lines 4 and on), then an instance write and read. */
+  const counterWith = (form: string[]): string[] => [
+    "class Counter:",
+    "    def get_count(self):",
+    "        return 1",
+    ...form,
+    "    def write(self):",
+    "        self.count = 3",
+    "    def read(self):",
+    "        return self.count",
+  ];
+
+  it.each([
+    {
+      name: "a getter that replaces a property() assignment",
+      form: ["    count = property(get_count)", "    @count.getter", "    def count(self):", "        return 2"],
+      target: 6,
+    },
+    {
+      name: "a property that replaces a property() assignment",
+      form: ["    count = property(get_count)", "    @property", "    def count(self):", "        return 2"],
+      target: 6,
+    },
+    {
+      name: "a property() assignment that replaces a property",
+      form: ["    @property", "    def count(self):", "        return 2", "    count = property(get_count)"],
+      target: 7,
+    },
+    {
+      name: "a setter that updates a property() assignment",
+      form: ["    count = property(get_count)", "    @count.setter", "    def count(self, value):", "        pass"],
+      target: 4,
+    },
+    {
+      name: "a deleter that updates a property() assignment",
+      form: ["    count = property(get_count)", "    @count.deleter", "    def count(self):", "        pass"],
+      target: 4,
+    },
+  ])("resolves self.count to the last binding that makes the property: $name", async ({ form, target }) => {
+    const lines = counterWith(form);
+    const write = lines.findIndex((text) => text.includes("self.count = 3")) + 1;
+    const outcome = await navigateCount(lines.join("\n"), [write, write + 2], target);
+
+    // A getter or constructor replaces the property, so its definition is the target; a setter or deleter updates
+    // the property and leaves the getter or constructor that made it as the target.
+    expect(outcome.targets).toEqual([target, target]);
+    expect(outcome.referenceLines).toEqual(expect.arrayContaining([target, write, write + 2]));
+  });
+
+  it.each([
+    {
+      name: "an annotation without a value in the subclass",
+      lines: [
+        ...base,
+        "class Child(Base):",
+        "    count: int",
+        "    def __init__(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ],
+    },
+    {
+      name: "an annotation in a class between the subclass and the property",
+      lines: [
+        ...base,
+        "class Mid(Base):",
+        "    count: int",
+        "class Child(Mid):",
+        "    def __init__(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ],
+    },
+    {
+      name: "an annotation in a base that comes before the property's class",
+      lines: [
+        ...base,
+        "class Left:",
+        "    count: int",
+        "class Child(Left, Base):",
+        "    def __init__(self):",
+        "        self.count = 3",
+        "    def read(self):",
+        "        return self.count",
+      ],
+    },
+  ])("resolves self.count past $name to the inherited property", async ({ lines }) => {
+    const write = lines.findIndex((text) => text.includes("self.count = 3")) + 1;
+    const annotation = lines.findIndex((text) => text.trim() === "count: int") + 1;
+    const outcome = await navigateCount(lines.join("\n"), [write, write + 2], 5);
+    const annotated = await navigateCount(lines.join("\n"), [], annotation);
+
+    // `count: int` declares a type and binds nothing, so the property of `Base` still decides the name.
+    expect(outcome.targets).toEqual([5, 5]);
+    expect(outcome.referenceLines).toEqual(expect.arrayContaining([5, write, write + 2]));
+    expect(annotated.referenceLines).toEqual([annotation]);
+  });
+
+  it("keeps the instance attribute when the subclass gives the annotated name a value", async () => {
+    const source = [
+      ...base,
+      "class Child(Base):",
+      "    count: int = 5",
+      "    def __init__(self):",
+      "        self.count = 3",
+      "    def read(self):",
+      "        return self.count",
+    ].join("\n");
+    const outcome = await navigateCount(source, [13, 15], 11);
+
+    // `count: int = 5` is a class-level binding that is no descriptor, so the write declares an instance attribute.
+    expect(outcome.targets).toEqual([13, 13]);
+  });
+
+  it("resolves self.count to an annotation without a value when no class of the hierarchy has a property", async () => {
+    const source = ["class Child:", "    count: int", "    def read(self):", "        return self.count"].join("\n");
+    const outcome = await navigateCount(source, [4], 2);
+
+    expect(outcome.targets).toEqual([2]);
+    expect(outcome.referenceLines).toEqual(expect.arrayContaining([2, 4]));
+  });
 });
