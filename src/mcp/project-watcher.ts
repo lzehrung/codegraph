@@ -34,10 +34,10 @@ const isDiscoveryIgnored = picomatch([...DEFAULT_PROJECT_FILE_IGNORES, `**/${PRO
   dot: true,
 });
 
-// Per-directory mode opens a watch for a directory as soon as an event reports it, and keeps it until the directory is
-// removed or a file list names it. This many such watches at once keep a build that creates thousands of directories
-// from using up the inotify watches that every process of the user shares; the file list after the next refresh takes
-// over for the rest.
+// Per-directory mode opens a watch for a directory as soon as an event reports it, and keeps it for as long as the
+// directory exists. This many such watches at once, not counting the ones that a file list names as well, keep a build
+// that creates thousands of directories from using up the inotify watches that every process of the user shares; the
+// file list after the next refresh takes over for the rest.
 const MAX_REPORTED_DIRECTORIES = 128;
 
 /** The part of `fs.FSWatcher` the project watcher uses. */
@@ -212,9 +212,10 @@ function collectWatchDirectories(root: string, files: readonly string[], isIgnor
  * `recursive: true` there, `node_modules` included, and can exhaust inotify watches.
  * A directory that appears later gets its handle from the event that reports it, not from the next file list, and
  * keeps it, with the handles of the directories above it, until the directory is removed. No list names a directory
- * that holds only a placeholder such as `.gitkeep`, yet its first source file must raise an event. A handle that was
- * lost with its directory is closed (see `namesWatchedDirectory`), and `refreshDirectories` opens it again once the
- * directory exists.
+ * that holds only a placeholder such as `.gitkeep`, yet its first source file must raise an event. The same goes for
+ * a directory that a list named for a while: once its last source file is deleted, a placeholder may remain, and a
+ * source file added again must raise an event. A handle that was lost with its directory is closed (see
+ * `namesWatchedDirectory`), and `refreshDirectories` opens it again once the directory exists.
  * The watcher is a hint: a missed event costs speed, never correctness, because the session's pull check stays
  * the authority.
  */
@@ -227,8 +228,11 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
   const watch: ProjectWatchFactory = options.watch ?? fs.watch;
   const log = options.log ?? ((message: string): void => console.error(message));
   const handles = new Map<string, ProjectWatchHandle>();
-  // Per-directory mode: directories that hold a watch because an event reported them, before a file list named them.
+  // Per-directory mode: directories that hold a watch because an event reported them. The watch stays until the
+  // directory is removed, whether or not a file list names it.
   const reportedDirectories = new Set<string>();
+  // What the latest file list needs a watch for. A reported directory among them does not count toward the limit.
+  let listedDirectories: ReadonlySet<string> = new Set();
   // Reported directories whose watch is still to open, in the order the events arrived.
   const pendingDirectories = new Set<string>();
   let debounceTimer: NodeJS.Timeout | undefined;
@@ -319,12 +323,22 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
     handles.set(directory, handle);
   };
 
+  // True once this many reported directories hold a watch that no file list accounts for.
+  const reportedLimitReached = (): boolean => {
+    if (reportedDirectories.size < MAX_REPORTED_DIRECTORIES) return false;
+    let unlisted = 0;
+    for (const directory of reportedDirectories) {
+      if (!listedDirectories.has(directory)) unlisted += 1;
+    }
+    return unlisted >= MAX_REPORTED_DIRECTORIES;
+  };
+
   // Watches a directory that an event reported, if it still is one. A `mkdir -p` or a copy may have filled it before
   // this watch opened, which raised no event, so the directories inside it are queued too.
   const watchReportedDirectory = async (directory: string): Promise<void> => {
     const relative = path.relative(root, directory);
     if (!isRelativePathInside(relative) || isIgnored(relative) || handles.has(directory)) return;
-    if (reportedDirectories.size >= MAX_REPORTED_DIRECTORIES) return;
+    if (reportedLimitReached()) return;
     let stats: fs.Stats;
     try {
       stats = await fsp.lstat(directory);
@@ -373,17 +387,15 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
 
   const applyDirectories = async (files: readonly string[]): Promise<void> => {
     const wanted = collectWatchDirectories(root, files, isIgnored);
+    listedDirectories = wanted;
     // Watched even while no handle is open: what the list needs, and the directories above a reported one that stays.
     const required = new Set(wanted);
     const reportedKept = new Set<string>();
     const open = [...handles];
     for (const [directory, handle] of open) {
-      if (wanted.has(directory)) {
-        // The list names it now and keeps its watch from here on.
-        reportedDirectories.delete(directory);
-        continue;
-      }
-      if (!reportedDirectories.has(directory)) continue;
+      // A reported directory that the list names is required, and stays reported: once its last source file is
+      // deleted the list stops naming it, and the placeholder that remains must not end the watch.
+      if (wanted.has(directory) || !reportedDirectories.has(directory)) continue;
       // No list names a directory that holds only a placeholder, or only more directories. Its first source file
       // must still raise an event, so the watch stays until the directory is removed, and so do the ones above it. An
       // ignored directory never got a watch.
@@ -460,7 +472,8 @@ export type WatchControllerOptions = {
    * Runs `operation` once every operation that rebuilds the session's index or writes its artifacts has ended, and
    * keeps the next one waiting until it ends. The MCP handlers pass the lock that `refresh_index`, `artifact_build`,
    * and the SQLite rebuild take. A background refresh that overlapped one of them would leave the file signatures of
-   * whichever build ended last, whatever snapshot the session serves.
+   * whichever build ended last, whatever snapshot the session serves. The same goes for a read of the file list for
+   * the per-directory watches, because the first read of a session that nothing has loaded records file signatures.
    */
   runExclusive: (operation: () => Promise<void>) => Promise<void>;
   /** The directory that the session writes its disk cache to; see {@link ProjectWatcherOptions.cacheDirectory}. */
@@ -501,12 +514,15 @@ export function assertMcpWatchMs(name: string, value: number | undefined): void 
 /**
  * Turns file events into background refreshes of an MCP-owned session.
  * - Every event clears the session's cached freshness result at once (`markChanged`). It also cancels the refresh
- *   and the rerun that an earlier burst scheduled, so that none starts while events still arrive.
+ *   and the rerun that an earlier burst scheduled, so that none starts while events still arrive. A refresh that
+ *   already waits for its turn of `runExclusive` gives the turn up when it comes: the burst that the event belongs to
+ *   starts its own refresh when it settles.
  * - A settled burst starts a refresh, no sooner than `minRefreshIntervalMs` after the previous one ended.
  * - One refresh runs at a time. A settled burst during it sets one rerun flag. Its freshness check, invalidation, and
- *   rebuild run in one turn of `runExclusive`, so they never overlap an explicit refresh or an artifact build.
- * - After `idleMs` without `noteActivity` the watches close. The next `noteActivity` reopens them and calls
- *   `markChanged`, so the pull check sees every edit made during the pause.
+ *   rebuild run in one turn of `runExclusive`, so they never overlap an explicit refresh or an artifact build. Every
+ *   read of the file list for the per-directory watches takes a turn as well.
+ * - After `idleMs` without `noteActivity` the watches close, and a refresh that waits for its turn gives it up. The
+ *   next `noteActivity` reopens them and calls `markChanged`, so the pull check sees every edit made during the pause.
  * - `close` ends the watching for good. The refresh that is running finishes, and `close` returns a promise for it, so
  *   that the owner of the session can release the session after it.
  */
@@ -522,6 +538,13 @@ export function createWatchController(session: AgentSession, options: WatchContr
   let activeRefresh: Promise<void> | undefined;
   let rerun = false;
   let closed = false;
+  // Bumped by every event and by `pause`. A refresh keeps the value it started under, and gives up its turn of
+  // `runExclusive` when the value has moved by the time the turn comes: an event reopened the burst, so the refresh
+  // that its settling starts is the one that counts, or the watching ended.
+  let turnToken = 0;
+  // Bumped when a watcher opens and when it pauses, so that a read of the file list that waited for its turn can tell
+  // whether the watcher that asked for it is still the open one.
+  let watcherToken = 0;
 
   const scheduleRefresh = (): void => {
     if (refreshTimer) return;
@@ -540,9 +563,6 @@ export function createWatchController(session: AgentSession, options: WatchContr
 
   // Runs in one turn of `runExclusive`, so that no other refresh replaces the session between the check and the rebuild.
   const checkAndRebuild = async (): Promise<void> => {
-    // The server closed while this refresh waited for its turn: even the check would keep the project busy after its
-    // client left.
-    if (closed) return;
     const freshness: AgentFreshnessResult = session.checkFreshness
       ? await session.checkFreshness()
       : { state: "fresh" };
@@ -557,21 +577,30 @@ export function createWatchController(session: AgentSession, options: WatchContr
     }
   };
 
-  // Never rejects: a failure is logged.
-  const refreshSession = async (current: ProjectWatcher | undefined): Promise<void> => {
+  // Never rejects: a failure is logged. Resolves to whether the refresh took its turn.
+  const refreshSession = async (current: ProjectWatcher | undefined, token: number): Promise<boolean> => {
+    let tookTurn = false;
     try {
-      await options.runExclusive(checkAndRebuild);
+      await options.runExclusive(async () => {
+        // The turn comes after every refresh and build that held the session, however long those take. Events since
+        // this refresh started reopened its burst, and a pause or a close ended the watching, so it is not due now.
+        if (token !== turnToken) return;
+        tookTurn = true;
+        await checkAndRebuild();
+      });
       // After every refresh, so a directory that a query already rebuilt around still gets its watch.
-      await current?.refreshDirectories();
+      if (tookTurn) await current?.refreshDirectories();
     } catch (error) {
       log(`[codegraph] watch refresh failed: ${errorMessage(error)}`);
     }
+    return tookTurn;
   };
 
   const startRefresh = (): void => {
     rerun = false;
-    const refresh: Promise<void> = refreshSession(watcher).finally(() => {
-      lastRefreshEndedAt = Date.now();
+    const refresh: Promise<void> = refreshSession(watcher, turnToken).then((tookTurn) => {
+      // A refresh that gave up its turn did nothing, so it does not push the next one back.
+      if (tookTurn) lastRefreshEndedAt = Date.now();
       if (activeRefresh === refresh) activeRefresh = undefined;
       if (rerun && watcher) scheduleRefresh();
     });
@@ -588,11 +617,13 @@ export function createWatchController(session: AgentSession, options: WatchContr
   };
 
   // The burst that this event belongs to schedules its own refresh when it settles. One that an earlier burst armed
-  // would start in the middle of this one, so it goes now.
+  // would start in the middle of this one, so it goes now: its timer is cancelled, and a refresh that already waits
+  // for its turn gives the turn up.
   const onChange = (): void => {
     clearTimeout(refreshTimer);
     refreshTimer = undefined;
     rerun = false;
+    turnToken += 1;
     session.markChanged?.();
   };
 
@@ -602,6 +633,8 @@ export function createWatchController(session: AgentSession, options: WatchContr
     idleTimer = undefined;
     refreshTimer = undefined;
     rerun = false;
+    turnToken += 1;
+    watcherToken += 1;
     watcher?.close();
     watcher = undefined;
   };
@@ -612,13 +645,30 @@ export function createWatchController(session: AgentSession, options: WatchContr
     if (idleMs) idleTimer = startTimer(pause, idleMs);
   };
 
+  // Reads the file list for the directory scans of one watcher, in a turn of `runExclusive`. The first read of a session
+  // that nothing has loaded discovers the project and records the file signatures that the freshness check compares
+  // with. A read that ran beside `refresh_index` and ended last would replace the signatures of the snapshot that the
+  // rebuild produced.
+  const readFiles = async (token: number): Promise<readonly string[]> => {
+    let files: readonly string[] = [];
+    await options.runExclusive(async () => {
+      // The watcher paused or closed while the read waited. Nothing uses the list, and a session that its owner
+      // released must not load the project again.
+      if (token !== watcherToken) return;
+      files = (await session.listFiles?.()) ?? [];
+    });
+    return files;
+  };
+
   const open = (): void => {
+    watcherToken += 1;
+    const token = watcherToken;
     watcher = startProjectWatcher({
       root: options.root,
       cacheDirectory: options.cacheDirectory,
       onChange,
       onSettled,
-      listFiles: async () => (await session.listFiles?.()) ?? [],
+      listFiles: () => readFiles(token),
       debounceMs: options.debounceMs,
       platform: options.platform,
       watch: options.watch,

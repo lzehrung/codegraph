@@ -14,6 +14,7 @@ import {
   startProjectWatcher,
   type ProjectWatchFactory,
   type ProjectWatcherOptions,
+  type WatchController,
   type WatchControllerOptions,
 } from "../src/mcp/project-watcher.js";
 import { isFileIdentityCaseInsensitive, resetFileIdentityCaseSensitivityForTests } from "../src/util/paths.js";
@@ -178,6 +179,8 @@ function createFakeSession(files: string[]) {
     hold: Promise<void> | undefined;
     /** Holds `loadProject`, the rebuild, until it is released. */
     loadHold: Promise<void> | undefined;
+    /** Holds `listFiles`, the read of the file list, until it is released. */
+    listHold: Promise<void> | undefined;
     /** How long a freshness check takes once `hold` is released. */
     checkMs: number;
   } = {
@@ -185,11 +188,16 @@ function createFakeSession(files: string[]) {
     files,
     hold: undefined,
     loadHold: undefined,
+    listHold: undefined,
     checkMs: 0,
   };
   const session: AgentSession = {
     root,
-    listFiles: async () => [...state.files],
+    listFiles: async () => {
+      calls.push("listFiles");
+      await state.listHold;
+      return [...state.files];
+    },
     checkFreshness: async () => {
       calls.push("checkFreshness");
       checkStarts.push(Date.now());
@@ -216,9 +224,12 @@ function createFakeSession(files: string[]) {
   return { session, calls, checkStarts, checkEnds, loadEnds, state, count };
 }
 
-function startController(overrides: Partial<WatchControllerOptions> & { fake?: FakeWatch; files?: string[] } = {}) {
-  const { fake = createFakeWatch(), files = [], ...controllerOverrides } = overrides;
+function startController(
+  overrides: Partial<WatchControllerOptions> & { fake?: FakeWatch; files?: string[]; listHold?: Promise<void> } = {},
+) {
+  const { fake = createFakeWatch(), files = [], listHold, ...controllerOverrides } = overrides;
   const fakeSession = createFakeSession(files);
+  fakeSession.state.listHold = listHold;
   const log = vi.fn();
   const controller = createWatchController(fakeSession.session, {
     root,
@@ -230,6 +241,16 @@ function startController(overrides: Partial<WatchControllerOptions> & { fake?: F
     ...controllerOverrides,
   });
   return { fake, controller, log, ...fakeSession };
+}
+
+/** Stands in for the lock that the MCP handlers pass as `runExclusive`: one operation at a time, in the order asked. */
+function createExclusiveRunner(): (operation: () => Promise<void>) => Promise<void> {
+  let tail: Promise<void> = Promise.resolve();
+  return (operation) => {
+    const turn = tail.then(operation);
+    tail = turn.catch(() => undefined);
+    return turn;
+  };
 }
 
 describe("startProjectWatcher", () => {
@@ -1257,6 +1278,134 @@ describe("createWatchController", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("gives up a refresh that waited for its turn when a newer event restarted the burst, and refreshes when that burst settles", async () => {
+    const turn = Promise.withResolvers<void>();
+    const { fake, calls, checkStarts } = startController({
+      runExclusive: async (operation) => {
+        await turn.promise;
+        await operation();
+      },
+    });
+    const [handle] = fake.openHandles();
+
+    handle.emit("src/a.ts");
+    await vi.advanceTimersByTimeAsync(500);
+    // This burst settled, and its refresh waits behind another refresh or an artifact build.
+    expect(calls).toEqual(["markChanged"]);
+    // A newer burst starts, and the session comes free in the middle of it.
+    handle.emit("src/b.ts");
+    await vi.advanceTimersByTimeAsync(300);
+    turn.resolve();
+    await vi.advanceTimersByTimeAsync(199);
+
+    // The refresh that waited belongs to the old burst, so it starts nothing while the new one still gets events.
+    expect(checkStarts).toEqual([]);
+    // The new burst settles at 1_000. The refresh that gave up did no work, so no interval holds this one back.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(checkStarts).toEqual([1_000]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(checkStarts).toEqual([1_000]);
+  });
+
+  it("gives up a refresh that waited for its turn when the watcher paused, and starts none after it", async () => {
+    const turn = Promise.withResolvers<void>();
+    const { fake, calls, state } = startController({
+      idleMs: 2_000,
+      runExclusive: async (operation) => {
+        await turn.promise;
+        await operation();
+      },
+    });
+    state.freshness = freshnessByState.stale;
+
+    fake.openHandles()[0]?.emit("src/a.ts");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(calls).toEqual(["markChanged"]);
+    // The idle time runs out at 2_000, long before the session comes free.
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(fake.openHandles()).toHaveLength(0);
+
+    turn.resolve();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // The watching ended, and a check or a rebuild now would keep the project busy while nobody uses it.
+    expect(calls).toEqual(["markChanged"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("holds a refresh_index behind the first read of the file list, which would otherwise end after the rebuild and replace its file signatures", async () => {
+    const read = Promise.withResolvers<void>();
+    const runExclusive = createExclusiveRunner();
+    const { fake, calls } = startController({
+      platform: "linux",
+      files: [at("src", "a.ts")],
+      listHold: read.promise,
+      runExclusive,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["listFiles"]);
+
+    // What `refresh_index` does under the same lock: it drops the session's state and rebuilds it.
+    const refreshIndex = runExclusive(async () => {
+      calls.push("refresh_index");
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toEqual(["listFiles"]);
+
+    read.resolve();
+    await refreshIndex;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["listFiles", "refresh_index"]);
+    expect(fake.openDirectories()).toEqual(sorted([root, at("src")]));
+  });
+
+  it.each([
+    ["the idle time ran out", (_controller: WatchController) => vi.advanceTimersByTimeAsync(1_000)],
+    ["the server closed", (controller: WatchController) => controller.close()],
+  ] as const)(
+    "reads no file list for a watcher that ended while its read waited for the session, because %s",
+    async (_label, end) => {
+      const turn = Promise.withResolvers<void>();
+      const { fake, controller, calls } = startController({
+        platform: "linux",
+        idleMs: 1_000,
+        files: [at("src", "a.ts")],
+        runExclusive: async (operation) => {
+          await turn.promise;
+          await operation();
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toEqual([]);
+
+      await end(controller);
+      turn.resolve();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // Nothing uses the list of a watcher that ended, and a session that its owner released must not load the project again.
+      expect(calls).toEqual([]);
+      expect(fake.openHandles()).toHaveLength(0);
+    },
+  );
+
+  it("completes a background refresh, and the directory scan that follows it, behind a lock that serves one operation at a time", async () => {
+    const { fake, calls, state } = startController({
+      platform: "linux",
+      files: [at("src", "a.ts")],
+      runExclusive: createExclusiveRunner(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fake.openDirectories()).toEqual(sorted([root, at("src")]));
+
+    state.files = [at("src", "a.ts"), at("lib", "b.ts")];
+    fake.openHandles()[0]?.emit("lib");
+    await vi.advanceTimersByTimeAsync(500);
+
+    // The check takes one turn, and the read of the file list after it takes another.
+    expect(calls).toEqual(["listFiles", "markChanged", "checkFreshness", "listFiles"]);
+    expect(fake.openDirectories()).toEqual(sorted([root, at("src"), at("lib")]));
+  });
+
   it("closes at once, and never starts the refresh, when one only waits for its minimum interval", async () => {
     const { fake, controller, checkStarts } = startController();
     const [handle] = fake.openHandles();
@@ -1436,7 +1585,7 @@ describe("startProjectWatcher with the real file system", () => {
   );
 
   it.runIf(process.platform === "win32" || process.platform === "linux")(
-    "keeps hearing a new directory that holds only a placeholder, so that a source file and then a sibling file are reported, with per-directory watches",
+    "keeps hearing a new directory that holds only a placeholder, so that a source file and then a sibling file are reported, and the source file again after it was deleted, with per-directory watches",
     async () => {
       const projectRoot = await tempRoots.create("cg-project-watcher-placeholder-");
       const src = path.join(projectRoot, "src");
@@ -1484,6 +1633,21 @@ describe("startProjectWatcher with the real file system", () => {
         await watcher.refreshDirectories();
         await fs.writeFile(path.join(feature, "second.ts"), "export const second = 1;\n");
         await vi.waitFor(() => expect(heard("second.ts")).toBe(true), timing);
+
+        // `first.ts` is deleted, so no list names `feature` any more, yet `.gitkeep` stays: so does the watch, and the
+        // source file that comes back is heard.
+        await fs.rm(first);
+        files = [listed];
+        await watcher.refreshDirectories();
+        const heardBefore = reported.length;
+        await fs.writeFile(first, "export const first = 2;\n");
+        await vi.waitFor(
+          () =>
+            expect(
+              reported.slice(heardBefore).some((event) => event.directory === feature && event.filename === "first.ts"),
+            ).toBe(true),
+          timing,
+        );
       } finally {
         watcher.close();
       }
@@ -1585,7 +1749,7 @@ describe("startProjectWatcher with directories that appear", () => {
     watcher.close();
   });
 
-  it("keeps the watch of a directory that holds only a placeholder, so that a source file added later is heard, and a sibling file after it", async () => {
+  it("keeps the watch of a directory that holds only a placeholder, so that a source file added later is heard, and a sibling file after it, and the source file again after it was deleted", async () => {
     const { src, listFiles, fake, watcher, onChange } = await startInProject();
     const feature = path.join(src, "feature");
     const first = path.join(feature, "first.ts");
@@ -1609,6 +1773,16 @@ describe("startProjectWatcher with directories that appear", () => {
     await watcher.refreshDirectories();
     expect(fake.deliver(feature, "second.ts", "rename")).toBe(1);
     expect(onChange).toHaveBeenCalledTimes(changes + 2);
+
+    // `first.ts` is deleted, so no list names `feature` any more, yet `.gitkeep` stays: so does the watch, and the
+    // source file that comes back is heard.
+    await fs.rm(first);
+    listFiles.mockImplementation(async () => [path.join(src, "a.ts")]);
+    await watcher.refreshDirectories();
+    expect(fake.openDirectories()).toContain(feature);
+    await fs.writeFile(first, "export const first = 2;\n");
+    expect(fake.deliver(feature, "first.ts", "rename")).toBe(1);
+    expect(onChange).toHaveBeenCalledTimes(changes + 3);
     expect(fake.duplicateOpens).toEqual([]);
     watcher.close();
   });
@@ -1702,6 +1876,28 @@ describe("startProjectWatcher with directories that appear", () => {
 
     // The root, `src`, and the 128 directories that the limit let through.
     expect(fake.openHandles()).toHaveLength(2 + 128);
+    watcher.close();
+  });
+
+  it("counts only the reported directories that no file list names toward the 128, so that a project that grew since then still hears new ones", async () => {
+    const { src, listFiles, fake, watcher } = await startInProject();
+    const names = Array.from({ length: 128 }, (_, index) => `generated${index}`);
+    await Promise.all(names.map((name) => fs.mkdir(path.join(src, name))));
+    for (const name of names) fake.deliver(src, name, "rename");
+    await watcher.refreshDirectories();
+    expect(fake.openHandles()).toHaveLength(2 + 128);
+
+    // The next list names every one of them. It accounts for their watches now, so they no longer use up the limit.
+    listFiles.mockImplementation(async () => [
+      path.join(src, "a.ts"),
+      ...names.map((name) => path.join(src, name, "x.ts")),
+    ]);
+    await watcher.refreshDirectories();
+    const later = path.join(src, "later");
+    await fs.mkdir(later);
+    fake.deliver(src, "later", "rename");
+
+    await vi.waitFor(() => expect(fake.openDirectories()).toContain(later), timing);
     watcher.close();
   });
 

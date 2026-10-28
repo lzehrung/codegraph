@@ -4335,6 +4335,48 @@ describe("MCP file watcher", () => {
     return held;
   }
 
+  // Holds the first read of a project file's size and modification time, which is how a session records its file
+  // signatures, until `held.release()`, and records in order what happens to the session around it. Discovery itself
+  // reads no file's metadata, so the read that is held belongs to the first file list that a session loads.
+  function holdFileSignatures(root: string) {
+    const events: string[] = [];
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const held = { events, started: started.promise, release: release.resolve };
+    const createSession = agentSession.createAgentSession;
+    vi.spyOn(agentSession, "createAgentSession").mockImplementation((options) => {
+      const session = createSession(options);
+      const { loadProject, invalidate } = session;
+      session.loadProject = async (...args) => {
+        events.push("loadProject:start");
+        try {
+          return await loadProject(...args);
+        } finally {
+          events.push("loadProject:end");
+        }
+      };
+      session.invalidate = () => {
+        events.push("invalidate");
+        invalidate();
+      };
+      return session;
+    });
+    const realStat = fs.stat.bind(fs);
+    let armed = true;
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const target = String(args[0]);
+      if (armed && target.startsWith(root) && target.endsWith(".ts")) {
+        armed = false;
+        events.push("signatures:start");
+        started.resolve();
+        await release.promise;
+        events.push("signatures:end");
+      }
+      return await realStat(...args);
+    });
+    return held;
+  }
+
   // serveCodegraphMcp reads the process streams, so stand in for them while `run` serves.
   async function withStandInStdio<T>(run: (stdin: PassThrough) => Promise<T>): Promise<T> {
     const stdin = new PassThrough();
@@ -4674,6 +4716,54 @@ describe("MCP file watcher", () => {
       resources.session.invalidate();
     }
   });
+
+  // Only per-directory watching reads the file list, and Windows and macOS watch the root recursively instead.
+  it.runIf(process.platform === "linux")(
+    "runs refresh_index after the watcher's first read of the file list, so that the read cannot end later and replace the rebuild's file signatures",
+    async () => {
+      const root = await createProject("cg-mcp-watch-first-read-");
+      const held = holdFileSignatures(root);
+      const resources = await createWarmedCodegraphMcpResources({
+        root,
+        warmup: "off",
+        watchDebounceMs: 25,
+        watchMinRefreshIntervalMs: 0,
+      });
+      try {
+        // With `warmup: "off"` the first tool call opens the watches, and the watcher reads the file list for them.
+        const refreshed = resources.handlers.refresh_index({ warmup: "base" });
+        await held.started;
+        // The read that is held listed the project without this file, so only a build that starts later knows it.
+        await fs.writeFile(path.join(root, "late.ts"), "export function lateSymbol() { return 3; }\n", "utf8");
+
+        // Run at once, the refresh would drop the session state under the read and rebuild beside it. The read, ending
+        // last, would then replace the file signatures of the snapshot that is served.
+        expect(held.events).toEqual(["signatures:start"]);
+
+        held.release();
+        await refreshed;
+
+        expect(held.events).toEqual([
+          "signatures:start",
+          "signatures:end",
+          "invalidate",
+          "loadProject:start",
+          "loadProject:end",
+        ]);
+        // Ends the 5 s window as an event would, so that the query checks the project against the session's baseline.
+        resources.session.markChanged?.();
+        // The baseline is the rebuild's, so it knows `late.ts` as the snapshot that is served does.
+        expect(await findSymbol(resources.handlers, "lateSymbol")).toEqual({
+          found: true,
+          freshness: { state: "fresh" },
+        });
+      } finally {
+        held.release();
+        await resources.closeWatcher();
+        resources.session.invalidate();
+      }
+    },
+  );
 
   it("waits for a background rebuild that is running when the HTTP server closes, and releases the session after it", async () => {
     const root = await createProject("cg-mcp-watch-http-rebuild-");
