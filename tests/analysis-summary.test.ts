@@ -3,13 +3,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { previewRenameWithSession, type RenamePreviewResponse } from "../src/agent/rename-preview.js";
 import { searchCodegraphWithSession } from "../src/agent/search.js";
-import { createAgentSession, type AgentSession } from "../src/agent/session.js";
+import { createAgentSession, type AgentSession, type AgentSessionOptions } from "../src/agent/session.js";
 import { workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 import { isAnalysisComplete, summarizeAnalysis, type AnalysisSummary } from "../src/analysis-summary.js";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
   buildProjectIndexIncremental,
+  goToDefinition,
   type BackendReport,
   type BuildOptions,
   type BuildReport,
@@ -93,10 +94,10 @@ function componentSource(framework: "vue" | "svelte", styleComment: string): str
   return `${script}${markup}<style lang="scss">\n/* ${styleComment} */\n@use "./colors";\n</style>\n`;
 }
 
-async function build(
-  root: string,
-  options: Pick<BuildOptions, "logLevel"> = {},
-): Promise<{ analysis: AnalysisSummary; report: BuildReport; index: ProjectIndex }> {
+/** What one build of a test project yields: its index, its report, and the analysis summary read from both. */
+type BuildStage = { analysis: AnalysisSummary; report: BuildReport; index: ProjectIndex };
+
+async function build(root: string, options: Pick<BuildOptions, "logLevel" | "discovery"> = {}): Promise<BuildStage> {
   const report: BuildReport = { timings: {} };
   const index = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report, ...options });
   return { analysis: summarizeAnalysis({ index, report }), report, index };
@@ -105,16 +106,19 @@ async function build(
 /** A full-discovery build, which probes the module cache for every file instead of reconciling the manifest. */
 async function buildFull(
   root: string,
-  options: Pick<BuildOptions, "logLevel"> = {},
-): Promise<{ analysis: AnalysisSummary; report: BuildReport; index: ProjectIndex }> {
+  options: Pick<BuildOptions, "logLevel" | "discovery"> = {},
+): Promise<BuildStage> {
   const report: BuildReport = { timings: {} };
   const index = await buildProjectIndex(root, { cache: "disk", threads: 1, report, ...options });
   return { analysis: summarizeAnalysis({ index, report }), report, index };
 }
 
 /** The analysis summary a new agent process reads when it loads the project. */
-async function analysisInFreshSession(root: string): Promise<AnalysisSummary> {
-  const session = createAgentSession({ root, buildOptions: { cache: "disk" } });
+async function analysisInFreshSession(
+  root: string,
+  discovery?: AgentSessionOptions["discovery"],
+): Promise<AnalysisSummary> {
+  const session = createAgentSession({ root, ...(discovery ? { discovery } : {}), buildOptions: { cache: "disk" } });
   sessions.push(session);
   return (await session.loadProject({ symbolGraph: "skip" })).analysis;
 }
@@ -626,14 +630,16 @@ describe("analysis summary", () => {
       path.join(root, "src", file),
     );
     const hiddenKey = fileIdentityKey(normalizePath(hidden));
+    const mainKey = fileIdentityKey(normalizePath(main));
     const parserDegradedKeys = (report: BuildReport): string[] | undefined =>
       report.backend?.parser?.files.map((entry) => fileIdentityKey(entry.file));
-    // Native skipped big.ts and Hidden.cs has no syntax tree, so two different files are incomplete.
+    // Native skipped big.ts, Hidden.cs has no syntax tree, and Main.cs's alias could not prove `N.Box` while the lookup
+    // could not read Hidden.cs, so three different files are incomplete.
     const incomplete = {
       backend: "native",
-      parserDegradedFiles: 1,
+      parserDegradedFiles: 2,
       nativeFilesFellBack: 1,
-      label: "native semantic (2 file(s) skipped)",
+      label: "native semantic (3 file(s) skipped)",
     };
     const options = { threads: 1, logLevel: "silent" } as const;
 
@@ -645,20 +651,22 @@ describe("analysis summary", () => {
     const outside = await buildProjectIndexFromFiles(root, [big, main, box], { ...options, report: outsideReport });
     expect(outside.byFile.has(hiddenKey)).toBe(false);
     expect(parserDegradedKeys(outsideReport)).toEqual([hiddenKey]);
+    expect(outside.byFile.get(mainKey)).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
     expect(summarizeAnalysis({ index: outside, report: outsideReport })).toMatchObject(incomplete);
+    // Without the report, only Main.cs's own module keeps the failed lookup counted.
     expect(summarizeAnalysis({ index: outside, report: { timings: {} } })).toMatchObject({
-      parserDegradedFiles: 0,
+      parserDegradedFiles: 1,
       nativeFilesFellBack: 1,
-      label: "native semantic (1 file(s) skipped)",
+      label: "native semantic (2 file(s) skipped)",
     });
 
     // The report may name that file again as a native fallback, and repeat it. It is still one file.
     const fallback = { file: hidden, languageId: "csharp", reason: "queryFailure", message: "forced" } as const;
     outsideReport.backend?.native.errors.push(fallback, fallback);
     expect(summarizeAnalysis({ index: outside, report: outsideReport })).toMatchObject({
-      parserDegradedFiles: 1,
+      parserDegradedFiles: 2,
       nativeFilesFellBack: 2,
-      label: "native semantic (2 file(s) skipped)",
+      label: "native semantic (3 file(s) skipped)",
     });
 
     // Once the index holds Hidden.cs its module records the degradation, and the report naming it again adds nothing.
@@ -668,6 +676,7 @@ describe("analysis summary", () => {
       report: insideReport,
     });
     expect(inside.byFile.get(hiddenKey)).toMatchObject({ parserDegraded: true });
+    expect(inside.byFile.get(mainKey)).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
     expect(parserDegradedKeys(insideReport)).toEqual([hiddenKey]);
     expect(summarizeAnalysis({ index: inside, report: insideReport })).toMatchObject(incomplete);
   });
@@ -712,4 +721,93 @@ describe("analysis summary", () => {
       expect(stage.analysis).toMatchObject({ backend: "unknown", nativeFilesUsed: 0, label: "semantic" });
     }
   });
+
+  it.each(["incremental", "full"] as const)(
+    "keeps a C# importer counted as degraded while a namespace lookup cannot read a file outside the index, and re-resolves its alias once the file reads again (%s build)",
+    async (buildMode) => {
+      const root = await createProject("cg-analysis-csharp-lookup-", {
+        "src/Consumer.cs": "using X = N.Thing;\nclass Consumer { X value; }\n",
+        "src/StaticUse.cs": "using static N.Thing;\nclass StaticUse {}\n",
+        "src/Plain.cs": "using N;\nclass Plain { Thing value; }\n",
+        "src/Thing.cs": "namespace N { public class Thing {} }\n",
+        // Declares `N`, so looking up `N.Thing` reads it. Discovery ignores it, so no module of the index covers it.
+        "src/Bad.cs": "// BAD_NAMESPACE_FILE\nnamespace N { public class Other {} }\n",
+        "docs/guide.md": "# Guide\n",
+      });
+      const discovery = { ignoreGlobs: ["src/Bad.cs"], globRoot: root };
+      const quiet: Pick<BuildOptions, "logLevel" | "discovery"> = { logLevel: "silent", discovery };
+      const run = (): Promise<BuildStage> => (buildMode === "full" ? buildFull(root, quiet) : build(root, quiet));
+      const key = (name: string): string => fileIdentityKey(normalizePath(path.join(root, "src", name)));
+      const degradedModules = (stage: BuildStage): string[] =>
+        ["Consumer.cs", "StaticUse.cs", "Plain.cs", "Thing.cs"].filter(
+          (name) => stage.index.byFile.get(key(name))?.parserDegraded,
+        );
+      const aliasTarget = (stage: BuildStage): string | { external: string } | undefined => {
+        const alias = stage.index.byFile
+          .get(key("Consumer.cs"))
+          ?.imports.find((binding) => binding.kind === "named" && binding.local === "X");
+        return typeof alias?.resolved === "string" ? path.basename(alias.resolved) : alias?.resolved;
+      };
+      const aliasGoto = async (stage: BuildStage): Promise<string> => {
+        const result = await goToDefinition(stage.index, {
+          file: path.join(root, "src", "Consumer.cs"),
+          line: 2,
+          column: "class Consumer { X value; }".indexOf("X") + 1,
+        });
+        return result.status === "ok" ? path.basename(result.definition.file) : result.status;
+      };
+      let docsEdits = 0;
+      const editDocs = async (): Promise<void> => {
+        docsEdits += 1;
+        await fsp.writeFile(path.join(root, "docs", "guide.md"), `# Guide\n\nEdit ${docsEdits}.\n`, "utf8");
+      };
+      // The alias and the static using each need the one declaration of `N.Thing`, which Bad.cs could dispute. The
+      // plain `using N;` binds to any file that declares `N`, so it stays complete.
+      const blocked = {
+        backend: "native",
+        parserDegradedFiles: 3,
+        nativeFilesFellBack: 0,
+        label: "native semantic (3 file(s) skipped)",
+      };
+      const expectBlocked = async (stage: BuildStage): Promise<void> => {
+        expect(stage.analysis).toMatchObject(blocked);
+        expect(isAnalysisComplete(stage.analysis)).toBe(false);
+        expect(degradedModules(stage)).toEqual(["Consumer.cs", "StaticUse.cs"]);
+        expect(aliasTarget(stage)).toEqual({ external: "N.Thing" });
+        expect(await aliasGoto(stage)).toBe("not_found");
+      };
+
+      failNativeExtractionFor("BAD_NAMESPACE_FILE");
+      const cold = await run();
+      expect(cold.index.byFile.has(key("Bad.cs"))).toBe(false);
+      expect(cold.report.backend?.parser?.files.map((entry) => path.basename(entry.file))).toEqual(["Bad.cs"]);
+      await expectBlocked(cold);
+
+      // The rebuild reads Bad.cs again and still cannot, so the importers stay counted.
+      await editDocs();
+      const afterDocsEdit = await run();
+      expect(afterDocsEdit.report.backend?.parser?.files.map((entry) => path.basename(entry.file))).toEqual(["Bad.cs"]);
+      await expectBlocked(afterDocsEdit);
+      await expectBlocked(await run());
+      expect(await analysisInFreshSession(root, discovery)).toMatchObject(blocked);
+
+      // Nothing about Consumer.cs, StaticUse.cs, or any indexed file changed, but Bad.cs reads now, so the next
+      // rebuild resolves both again.
+      __resetNativeTreeSitterBindingForTests();
+      await editDocs();
+      const recovered = await run();
+      expect(recovered.analysis).toMatchObject({
+        parserDegradedFiles: 0,
+        nativeFilesFellBack: 0,
+        label: "native semantic",
+      });
+      expect(isAnalysisComplete(recovered.analysis)).toBe(true);
+      expect(degradedModules(recovered)).toEqual([]);
+      expect(aliasTarget(recovered)).toBe("Thing.cs");
+      expect(await aliasGoto(recovered)).toBe("Thing.cs");
+      const recoveredSession = await analysisInFreshSession(root, discovery);
+      expect(recoveredSession).toMatchObject({ parserDegradedFiles: 0, label: "native semantic" });
+      expect(isAnalysisComplete(recoveredSession)).toBe(true);
+    },
+  );
 });

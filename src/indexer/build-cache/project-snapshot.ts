@@ -905,6 +905,7 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     ...(mod.csharpNamespaceFacts ? { csharpNamespaceFacts: mod.csharpNamespaceFacts } : {}),
     ...(mod.nativeOutcome ? { nativeOutcome: mod.nativeOutcome } : {}),
     ...(mod.parserDegraded ? { parserDegraded: true } : {}),
+    ...(mod.importLookupIncomplete ? { importLookupIncomplete: true } : {}),
     ...(mod.parseErrorRanges ? { parseErrorRanges: mod.parseErrorRanges } : {}),
   };
 }
@@ -1794,6 +1795,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     isOptionalBoolean(moduleIndex.docstringsChecked) &&
     isOptionalNativeOutcome(moduleIndex.nativeOutcome) &&
     isOptionalBoolean(moduleIndex.parserDegraded) &&
+    isOptionalBoolean(moduleIndex.importLookupIncomplete) &&
     Array.isArray(moduleIndex.locals) &&
     moduleIndex.locals.every(isSymbolDef) &&
     Array.isArray(moduleIndex.imports) &&
