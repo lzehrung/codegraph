@@ -1536,11 +1536,11 @@ describe("package metadata", () => {
     expect(devDependencies["eslint-plugin-import"]).toBeUndefined();
   });
 
-  it("keeps the MCP Node adapter above the GHSA-frvp-7c67-39w9 fix", () => {
+  it("keeps the MCP Node adapter above the GHSA-frvp-7c67-39w9 and GHSA-rmxm-3fg6-px4f fixes", () => {
     const rootPackage = readJson("package.json");
     const overrides = readStringRecord(rootPackage.overrides);
 
-    expect(overrides["@hono/node-server"]).toBe("^2.0.5");
+    expect(overrides["@hono/node-server"]).toBe("^2.1.3");
   });
 
   it("keeps all publishable workspaces under the packages directory", () => {

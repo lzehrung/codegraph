@@ -67,6 +67,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Security
 
 - Update `zod` to 4.6.6 or later to fix GHSA-mrhx-c7xc-m3w5, where validating oversized constrained collections could exhaust memory. Codegraph validates MCP tool arguments with zod.
+- Update `@hono/node-server` (used by the MCP HTTP transport) to 2.1.3 or later to fix GHSA-rmxm-3fg6-px4f, where `serveStatic` decoded request paths twice and could bypass middleware on static paths. Codegraph does not call `serveStatic`.
 - Update the MCP SDK to `@modelcontextprotocol/server` 2.3.1 and `@modelcontextprotocol/node` 2.1.1 to fix GHSA-jm63-cq47-j5jp (shared HTTP transports could deliver one client's messages to another), GHSA-46jr-4wx8-v453 (one request could exhaust server memory during validation), and GHSA-rvq5-wwqv-78pq (bearer tokens for another service were accepted). With this SDK, a stdio server closes when stdin ends, so a request still unanswered at that moment gets no reply; clients that keep stdin open are unaffected.
 
 ## [3.0.1] - 2026-10-17
