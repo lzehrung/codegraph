@@ -12,6 +12,13 @@ import type {
 
 const MIN_SIMILARITY_HINT_INDEX = 80;
 
+/**
+ * Fewest distinct pairs a targeted run counts shared fingerprint buckets for. The count table only bounds
+ * memory, so a small pair limit must not shrink it: a pair the table cannot hold is indistinguishable from
+ * one that qualifies, and every later sighting of it would be counted as skipped.
+ */
+const MIN_FILTERED_FINGERPRINT_TABLE = 1_000_000;
+
 /** Targeted analysis: only pairs that touch a target unit are candidates. */
 export type CandidateFilter = {
   unit: UnitFilter;
@@ -454,7 +461,8 @@ function eligibleFingerprintBuckets(
 
 /**
  * Fingerprint evidence for a targeted run: count the shared buckets of each pair that touches a target.
- * The count table is bounded by the pair limit, so a pathological target set cannot grow it without bound.
+ * The count table holds at most `max(pair limit, MIN_FILTERED_FINGERPRINT_TABLE)` pairs, so a pathological
+ * target set cannot grow it without bound; each sighting of a pair past that counts as skipped.
  */
 function addFilteredFingerprintPairs(
   state: PairState,
@@ -462,6 +470,7 @@ function addFilteredFingerprintPairs(
   filter: CandidateFilter,
 ): void {
   const { index, pairs } = state;
+  const tableLimit = Math.max(state.limit, MIN_FILTERED_FINGERPRINT_TABLE);
   const sharedBuckets = new Map<number, number>();
   const secondSighting = new Map<number, [DuplicateInternalUnit, DuplicateInternalUnit]>();
   const consideredBuckets = new Map<number, Set<number>>();
@@ -477,7 +486,7 @@ function addFilteredFingerprintPairs(
     }
     forEachFilteredBucketPair(index, bucket, filter, (left, right, key) => {
       const next = (sharedBuckets.get(key) ?? 0) + 1;
-      if (next === 1 && sharedBuckets.size >= state.limit) {
+      if (next === 1 && sharedBuckets.size >= tableLimit) {
         state.skipped++;
         return;
       }

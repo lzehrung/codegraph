@@ -101,6 +101,7 @@ export type DuplicateDetectionOptions = {
    * Upper bound on candidate pairs kept for scoring. Evidence kinds are admitted in order of strength
    * (exact text, normalized tokens, AST shape, Git similarity, shared fingerprints); pairs past the bound are
    * skipped and counted in `omittedCounts.candidatePairs`, and `stats.candidatePairBudget` reports the bound.
+   * Duplicate contexts for several targets share one bound, and each reports the whole call's skips.
    */
   maxCandidatePairs?: number;
   /** Count candidate duplicate groups without scoring every pair. */
@@ -126,6 +127,7 @@ export type DuplicateDetectionOmittedCounts = {
   oversizedBuckets: number;
   belowThresholdUnits: number;
   overlappingPairs: number;
+  /** Candidate pairs left out of scoring: those past `maxPairs` plus those `maxCandidatePairs` never admitted. */
   candidatePairs: number;
 };
 

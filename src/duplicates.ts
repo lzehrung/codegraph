@@ -17,6 +17,7 @@ import type {
   DuplicateContextResult,
   DuplicateDetectionOptions,
   DuplicateDetectionResult,
+  DuplicateDetectionStats,
   DuplicateGroup,
   DuplicateInternalUnit,
   DuplicatePreparedAnalysis,
@@ -81,6 +82,17 @@ type CandidateCollection = {
   oversizedBuckets: number;
   skippedPairs: number;
 };
+
+type CandidatePairBudget = NonNullable<DuplicateDetectionStats["candidatePairBudget"]>;
+
+/**
+ * The candidate pairs a result leaves out of scoring: the pairs `maxPairs` left uncompared plus the pair
+ * occurrences `maxCandidatePairs` never admitted. Every path that consumes either bound reports them here,
+ * so a whole-project result and a target's context count the skips alike.
+ */
+function omittedCandidatePairs(uncomparedPairs: number, budget: CandidatePairBudget | undefined): number {
+  return uncomparedPairs + (budget?.skipped ?? 0);
+}
 
 /**
  * Collects the duplicate units and pairs them. The units and their fingerprint buckets stay local to
@@ -168,7 +180,7 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
         oversizedBuckets,
         belowThresholdUnits,
         overlappingPairs: 0,
-        candidatePairs: countComparableCandidatePairs(pairs, crossFileOnly) + skippedPairs,
+        candidatePairs: omittedCandidatePairs(countComparableCandidatePairs(pairs, crossFileOnly), candidatePairBudget),
       },
       stats: {
         comparedPairs: 0,
@@ -230,7 +242,7 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
       oversizedBuckets,
       belowThresholdUnits,
       overlappingPairs,
-      candidatePairs: skippedCandidatePairs + skippedPairs,
+      candidatePairs: omittedCandidatePairs(skippedCandidatePairs, candidatePairBudget),
     },
     stats: {
       comparedPairs,
@@ -370,7 +382,12 @@ function duplicateContextFromResult(
       ...result.omittedCounts,
       groups: omittedGroups,
       rawSuggestions: Math.max(0, rawSuggestions.length - limitedRawSuggestions.length),
-      candidatePairs: result.perTargetSkippedCandidateCounts?.get(duplicateTargetKey(normalizedTarget)) ?? 0,
+      // The pair limit is shared by every target of one call, so each context carries the whole call's skips,
+      // as it carries the call's `oversizedBuckets` and `overlappingPairs`.
+      candidatePairs: omittedCandidatePairs(
+        result.perTargetSkippedCandidateCounts?.get(duplicateTargetKey(normalizedTarget)) ?? 0,
+        result.stats.candidatePairBudget,
+      ),
     },
     stats: {
       ...result.stats,
@@ -526,6 +543,7 @@ async function findDuplicatesTouchingTargets(
       filter: { unit: touchesTarget, pair: touchesAnyTarget },
     },
   );
+  const candidatePairBudget = skippedPairs ? { limit: maxCandidatePairs, skipped: skippedPairs } : undefined;
   const suggestions: DuplicateSuggestion[] = [];
   let overlappingPairs = 0;
   let comparedPairs = 0;
@@ -587,12 +605,12 @@ async function findDuplicatesTouchingTargets(
       oversizedBuckets,
       belowThresholdUnits,
       overlappingPairs,
-      candidatePairs: skippedCandidatePairs,
+      candidatePairs: omittedCandidatePairs(skippedCandidatePairs, candidatePairBudget),
     },
     stats: {
       comparedPairs,
       candidatePairs: pairs.size,
-      ...(skippedPairs ? { candidatePairBudget: { limit: maxCandidatePairs, skipped: skippedPairs } } : {}),
+      ...(candidatePairBudget ? { candidatePairBudget } : {}),
     },
     perTargetCandidateCounts: targetCandidateCounts,
     perTargetComparedCounts: targetCompareCounts,

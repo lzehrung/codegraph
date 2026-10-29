@@ -5,7 +5,12 @@ import { afterEach, describe, expect, test } from "vitest";
 import { buildCandidatePairs, prepareDuplicateCandidateBuckets } from "../src/duplicates/candidates.js";
 import type { DuplicateInternalUnit, PairEvidence } from "../src/duplicates/types.js";
 import { buildInternalUnit } from "../src/duplicates/units.js";
-import { buildProjectIndex, findDuplicates } from "../src/index.js";
+import {
+  findDuplicateContextsWithPreparedAnalysis,
+  findDuplicatesWithPreparedAnalysis,
+  prepareDuplicateAnalysis,
+} from "../src/duplicates.js";
+import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
 import type { ProgressUpdate } from "../src/types.js";
 import { captureCli } from "./helpers/cli.js";
 
@@ -302,6 +307,28 @@ describe("duplicate candidate pairs", () => {
         );
       }
     });
+
+    test("counts a targeted run's skipped pairs once per kind of evidence, however small the limit", async () => {
+      const isTarget = (unit: DuplicateInternalUnit) => unit.file === "src/near-0.ts";
+      const filter = {
+        unit: isTarget,
+        pair: (left: DuplicateInternalUnit, right: DuplicateInternalUnit) => isTarget(left) || isTarget(right),
+      };
+      const run = async (maxCandidatePairs: number) =>
+        await buildCandidatePairs(prepareDuplicateCandidateBuckets(units), { ...options, maxCandidatePairs, filter });
+
+      const all = await run(1_000_000);
+      const limited = await run(1);
+
+      const dropped = all.pairs.size - limited.pairs.size;
+      // Identical text, identical normalized tokens, identical AST shape, and shared fingerprints each propose a pair.
+      const evidenceKinds = 4;
+      expect(all.skippedPairs).toBe(0);
+      expect(limited.pairs.size).toBe(1);
+      expect(dropped).toBeGreaterThan(0);
+      expect(limited.skippedPairs).toBeGreaterThanOrEqual(dropped);
+      expect(limited.skippedPairs).toBeLessThanOrEqual(dropped * evidenceKinds);
+    });
   });
 });
 
@@ -352,6 +379,92 @@ describe("duplicate detection at scale", () => {
     expect(limited.omittedCounts.candidatePairs).toBe(limited.stats.candidatePairBudget?.skipped);
     expect(limited.stats.comparedPairs).toBeLessThanOrEqual(2);
     expect(limited.groups.length).toBeGreaterThan(0);
+  });
+
+  test("a count-only run adds the skipped candidate pairs to the pairs it leaves unscored", async () => {
+    const root = await makeClonedProject(4);
+    const index = await buildProjectIndex(root);
+
+    const result = await findDuplicates(index, { countOnly: true, maxCandidatePairs: 2 });
+
+    const skipped = result.stats.candidatePairBudget?.skipped ?? 0;
+    expect(skipped).toBeGreaterThan(0);
+    expect(result.stats.comparedPairs).toBe(0);
+    expect(result.omittedCounts.candidatePairs).toBeGreaterThanOrEqual(skipped);
+    expect(result.omittedCounts.candidatePairs).toBeLessThanOrEqual(skipped + result.stats.candidatePairs);
+  });
+
+  test("a duplicate context reports the candidate pairs the limit skipped, like the whole-project result", async () => {
+    const root = await makeClonedProject(4);
+    const index = await buildProjectIndex(root);
+    const target = { file: "src/copy0.ts" };
+
+    const unlimited = await findDuplicateContext(index, target, { minConfidence: "high", limit: 5 });
+    const limited = await findDuplicateContext(index, target, {
+      minConfidence: "high",
+      limit: 5,
+      maxCandidatePairs: 1,
+    });
+
+    expect(unlimited.stats.candidatePairBudget).toBeUndefined();
+    expect(unlimited.omittedCounts.candidatePairs).toBe(0);
+    expect(limited.stats.candidatePairBudget?.limit).toBe(1);
+    expect(limited.stats.candidatePairBudget?.skipped).toBeGreaterThan(0);
+    expect(limited.omittedCounts.candidatePairs).toBe(limited.stats.candidatePairBudget?.skipped);
+  });
+
+  test("a duplicate context adds the pairs the limit skipped to the pairs maxPairs left uncompared", async () => {
+    const root = await makeClonedProject(4);
+    const index = await buildProjectIndex(root);
+
+    const result = await findDuplicateContext(
+      index,
+      { file: "src/copy0.ts" },
+      { minConfidence: "high", limit: 5, maxPairs: 0, maxCandidatePairs: 3 },
+    );
+
+    const skippedByLimit = result.stats.candidatePairBudget?.skipped ?? 0;
+    expect(result.stats.comparedPairs).toBe(0);
+    expect(result.stats.candidatePairs).toBeGreaterThan(0);
+    expect(skippedByLimit).toBeGreaterThan(0);
+    expect(result.omittedCounts.candidatePairs).toBe(result.stats.candidatePairs + skippedByLimit);
+  });
+
+  test("duplicate contexts for several targets share one limit and each report its skips", async () => {
+    const root = await makeClonedProject(4);
+    const index = await buildProjectIndex(root);
+
+    const contexts = await findDuplicateContexts(index, [{ file: "src/copy0.ts" }, { file: "src/copy1.ts" }], {
+      minConfidence: "high",
+      limit: 5,
+      maxCandidatePairs: 2,
+    });
+
+    expect(contexts).toHaveLength(2);
+    for (const context of contexts) {
+      expect(context.stats.candidatePairBudget?.limit).toBe(2);
+      expect(context.stats.candidatePairBudget?.skipped).toBeGreaterThan(0);
+      expect(context.omittedCounts.candidatePairs).toBe(context.stats.candidatePairBudget?.skipped);
+    }
+    expect(contexts[1]?.stats.candidatePairBudget).toEqual(contexts[0]?.stats.candidatePairBudget);
+  });
+
+  test("a prepared analysis reports the same skipped candidate pairs as a direct call", async () => {
+    const root = await makeClonedProject(4);
+    const index = await buildProjectIndex(root);
+    const prepared = await prepareDuplicateAnalysis(index);
+    const targets = [{ file: "src/copy0.ts" }, { file: "src/copy2.ts" }];
+    const options = { minConfidence: "high", limit: 5, maxCandidatePairs: 2 } as const;
+
+    const direct = await findDuplicateContexts(index, targets, options);
+    const viaPrepared = await findDuplicateContextsWithPreparedAnalysis(prepared, targets, options);
+    const wholeProject = await findDuplicates(index, options);
+    const wholeProjectViaPrepared = await findDuplicatesWithPreparedAnalysis(prepared, options);
+
+    expect(direct[0]?.omittedCounts.candidatePairs).toBeGreaterThan(0);
+    expect(viaPrepared).toEqual(direct);
+    expect(wholeProject.omittedCounts.candidatePairs).toBeGreaterThan(0);
+    expect(wholeProjectViaPrepared).toEqual(wholeProject);
   });
 
   test("rejects a candidate pair limit outside the supported range", async () => {
