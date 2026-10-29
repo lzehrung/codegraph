@@ -193,7 +193,7 @@ Limits
 Recommended next: codegraph file src/review.ts
 ```
 
-Real output includes counts, copyable follow-ups, explicit limits, and omission counts.
+Real output includes counts, copyable follow-ups, and the limits that applied; `--json` adds the omission counts.
 
 A worktree review is optimized for a different job:
 
@@ -214,7 +214,7 @@ Structured output carries the underlying changed files, symbols, graph edges, re
 
 ### Spend context on the problem, not repository discovery
 
-`explore` runs one ranked search and packages context around the top hits: source for the first few, dependency paths between them, files that depend on them (two levels), candidate tests, and follow-up commands. Every list is bounded and reports what it omitted. It is a starting point for reading, not an answer: results are only as good as the search terms. The CLI includes source by default; MCP `explore` leaves it out (`includeSource` defaults to `false`) and names the follow-up request to make instead.
+`explore` runs one ranked search and packages context around the top hits: source for the first few, dependency paths between them, files that depend on them (two levels), candidate tests, and follow-up commands. Every list is bounded; `--json` reports how many anchors, packets, paths, dependents, and candidate tests were left out (follow-ups are capped without a count). It is a starting point for reading, not an answer: results are only as good as the search terms. The CLI includes source by default; MCP `explore` leaves it out (`includeSource` defaults to `false`) and names the follow-up request to make instead.
 
 ### Ground the next action
 
