@@ -7,7 +7,7 @@ import {
   getOrCreateProjectSymbolIndex,
   type LanguageProjectSymbolIndex,
 } from "./project-symbols.js";
-import { collectJvmFileFacts, jvmPackageName, type JvmFileFacts } from "../jvm-tree.js";
+import { collectJvmFileFacts, isJvmPackageKnown, jvmPackageName, type JvmFileFacts } from "../jvm-tree.js";
 import { parseSyntaxTree, type JvmLanguageId } from "../syntax-tree.js";
 import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../paths.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
@@ -21,8 +21,8 @@ type JvmImportResolutionOptions = {
 /**
  * The files of a project by package and declared name, and the files whose declarations are not all in it. A file is
  * `incomplete` when it has no usable syntax tree or a syntax error left declarations unread: it is in its package with
- * the names that were read, and may declare any other name its language allows there. A file whose package could not
- * be read at all is `unplaced`: it may be in any package, and may declare any name.
+ * the names that were read, and may declare any other name its language allows there. A file whose package clause was
+ * not read, or that could not be read at all, is `unplaced`: it may be in any package, and may declare any name.
  */
 type JvmProjectSymbolIndex = LanguageProjectSymbolIndex & {
   incompleteFilesByPackage: Map<string, string[]>;
@@ -50,10 +50,17 @@ export function primeJvmFileFacts(file: string, facts: JvmFileFacts): void {
 /** How much of a file's start is parsed for its package clause when the whole file has no usable tree. */
 const PACKAGE_HEAD_CHARS = 64 * 1024;
 
+/** The start of a file that is parsed for its package clause, ended at a line break so no clause is cut short. */
+function packageHead(source: string): string {
+  if (source.length <= PACKAGE_HEAD_CHARS) return source;
+  const head = source.slice(0, PACKAGE_HEAD_CHARS);
+  return head.slice(0, head.lastIndexOf("\n") + 1) || head;
+}
+
 /**
  * The facts of one file. A file without a usable tree (too large, too many nodes, a parse failure) is known by its
  * package clause alone, read from a bounded parse of its head: it stays in the package index with no names, marked
- * `incomplete`. `null` when even that parse fails.
+ * `incomplete`, when the head holds the clause; otherwise its package is unknown. `null` when even that parse fails.
  */
 async function readJvmFileFacts(filePath: string, languageId: JvmLanguageId): Promise<JvmFileFacts | null> {
   const key = fileIdentityKey(filePath);
@@ -64,7 +71,7 @@ async function readJvmFileFacts(filePath: string, languageId: JvmLanguageId): Pr
   const support = supportById(languageId);
   const tooLarge = Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES;
   const tree = support && !tooLarge ? parseSyntaxTree(source, support).tree : null;
-  const head = support && !tree ? parseSyntaxTree(source.slice(0, PACKAGE_HEAD_CHARS), support).tree : null;
+  const head = support && !tree ? parseSyntaxTree(packageHead(source), support).tree : null;
   let facts: JvmFileFacts | null = null;
   if (tree) facts = collectJvmFileFacts(tree, languageId);
   else if (head) facts = { packageName: jvmPackageName(head, languageId), symbols: [], incomplete: true };
@@ -94,10 +101,10 @@ async function getJvmLanguageProjectSymbolIndex(
       indexRoot,
       getImportableLanguageGlobs(languageId),
       async (filePath) => {
-        // A file that cannot be read or parsed at all is kept as unplaced, not dropped, so no lookup proves a name
-        // past it.
+        // A file that cannot be read or parsed, or whose package clause was not read, is kept as unplaced, not dropped,
+        // so no lookup proves a name past it.
         const facts = await readJvmFileFacts(filePath, languageId).catch(() => null);
-        if (!facts) {
+        if (!facts || !isJvmPackageKnown(facts)) {
           unplacedFiles.push(filePath);
           return [];
         }
@@ -284,7 +291,7 @@ async function findJvmImport(
  */
 async function importerMayShare(options: JvmImportResolutionOptions, packageName: string): Promise<boolean> {
   const facts = await readJvmFileFacts(options.fromFile, options.languageId).catch(() => null);
-  return !facts || facts.packageName === packageName;
+  return !facts || !isJvmPackageKnown(facts) || facts.packageName === packageName;
 }
 
 /**

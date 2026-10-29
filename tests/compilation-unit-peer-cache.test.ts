@@ -229,6 +229,12 @@ describe("compilation-unit peer cache", () => {
     expect(javaPeers.complete).toBe(false);
     const unnamed = stubIndex([java, { file: root + "/other/C.java", source: "class C {}\n" }]);
     expect(getCompilationUnitPeers(unnamed.index, java.file).complete).toBe(true);
+    // A syntax error that hides the package clause leaves the package unknown, as a file without facts does; one after
+    // the clause leaves the package read.
+    const hiddenClause = stubIndex([java, { file: root + "/other/D.kt", source: ")\npackage p\nclass D\n" }]);
+    expect(getCompilationUnitPeers(hiddenClause.index, java.file).complete).toBe(false);
+    const lateError = stubIndex([java, { file: root + "/other/E.kt", source: "package q\n)\nclass E\n" }]);
+    expect(getCompilationUnitPeers(lateError.index, java.file).complete).toBe(true);
 
     const csharp: IndexedFile = { file: root + "/cs/A.cs", source: "namespace P; class A {}\n" };
     const unknownCsharp: IndexedFile = { file: root + "/cs-other/B.cs", source: "" };

@@ -18,7 +18,7 @@ const JAVA_TYPE_DECLARATION_TYPES: Record<string, true> = {
  * declarations combine these facts when they run.
  */
 export type JvmFileFacts = {
-  /** The declared package, or `null` for the unnamed package. */
+  /** The declared package, or `null` for the unnamed package, or when `incomplete` and no clause was read. */
   packageName: string | null;
   /** Top-level declared names an import can name. */
   symbols: string[];
@@ -121,6 +121,15 @@ export function collectJvmFileFacts(tree: SyntaxTreeLike, languageId: JvmLanguag
     ...(languageId === "kotlin" ? { javaTypes: [...javaTypes] } : {}),
     ...(incomplete ? { incomplete: true as const } : {}),
   };
+}
+
+/**
+ * Whether the file's package is proven: it declares one, or it was read to its end and declares none. An `incomplete`
+ * file with no package clause may have lost the clause to a syntax error or to the part of the file that was not
+ * parsed, so it may belong to any package.
+ */
+export function isJvmPackageKnown(facts: JvmFileFacts): boolean {
+  return !!facts.packageName || !facts.incomplete;
 }
 
 /** Whether a persisted value has the shape of {@link JvmFileFacts}. Both cache layers validate rows with it. */

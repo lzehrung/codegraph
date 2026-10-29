@@ -21,6 +21,7 @@ import {
 } from "../src/util/jvm-tree.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { parseSyntaxTree, type JvmLanguageId } from "../src/util/syntax-tree.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/worker/native-extract-worker.js";
 
 function treeFor(languageId: JvmLanguageId, source: string): SyntaxTreeLike {
   const tree = parseSyntaxTree(source, supportById(languageId)!).tree;
@@ -899,6 +900,101 @@ describe("JVM importers beside a package file with a syntax error", () => {
       });
       expect(index.byFile.has(fileIdentityKey(normalizePath(path.join(root, "p/Gap.kt"))))).toBe(false);
       expect(outcomes(index, root).UseSelect).toBe(expected.UseSelect);
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("JVM files whose package clause was not read", () => {
+  // Peer.kt declares `select(Int)` in package `p`. A file whose clause was not read may be in `p` too, and may declare
+  // `select(String)` there. The oversized file is past the native size limit, so only its first 64 KiB is parsed, and
+  // that is nothing but comments.
+  const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+  const cases: Array<{ name: string; contents: string; hidden: boolean }> = [
+    { name: "a syntax error before the clause", contents: ")\npackage p\n\nfun select(x: String) = x\n", hidden: true },
+    {
+      name: "comments that fill the parsed head of an oversized file",
+      contents: `${padding}package p\n\nfun select(x: String) = x\n`,
+      hidden: true,
+    },
+    {
+      // The clause starts 9 characters before the end of the head: `package p` is all the head holds of `package pq`.
+      name: "a clause that the end of the parsed head cuts short",
+      contents: `${"// padding\n".repeat(5957)}package pq\n\nfun select(x: String) = x\n${padding}`,
+      hidden: true,
+    },
+    // A file read to its end that has no clause is in the unnamed package, which no import of `p` can name.
+    { name: "a file with no clause, read to its end", contents: "fun select(x: String) = x\n", hidden: false },
+  ];
+  for (const { name, contents, hidden } of cases) {
+    it(`${hidden ? "leaves a name unresolved and marks importers" : "binds a name and leaves importers unmarked"} beside ${name}`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-unread-clause-"));
+      try {
+        const sources: Record<string, string> = {
+          "p/Peer.kt": "package p\n\nfun select(x: Int) = x\n",
+          "p/Other.kt": contents,
+          "app/UseSelect.kt": "package app\n\nimport p.select\n",
+          "app/UseStar.kt": "package app\n\nimport p.*\n",
+          "app/UseStarJava.java": "package app;\n\nimport p.*;\n\nclass UseStarJava {}\n",
+        };
+        for (const [file, text] of Object.entries(sources)) {
+          await mkdir(path.dirname(path.join(root, file)), { recursive: true });
+          await writeFile(path.join(root, file), text, "utf8");
+        }
+        const index = await buildProjectIndex(root, { cache: "memory", threads: 1, useNativeWorkers: false });
+        const moduleOf = (relative: string) =>
+          index.byFile.get(fileIdentityKey(normalizePath(path.join(root, relative))));
+
+        const select = moduleOf("app/UseSelect.kt");
+        expect(select?.importLookupIncomplete).toBe(hidden ? true : undefined);
+        const resolved = select?.imports[0]?.resolved;
+        expect(typeof resolved === "string" ? path.basename(resolved) : resolved).toEqual(
+          hidden ? { external: "p.select" } : "Peer.kt",
+        );
+        // The wildcard names every file of `p`: it lists the one it can place, and is marked while another may belong.
+        for (const relative of ["app/UseStar.kt", "app/UseStarJava.java"]) {
+          const star = moduleOf(relative);
+          expect(star?.importLookupIncomplete, relative).toBe(hidden ? true : undefined);
+          expect(
+            star?.imports
+              .find((binding) => binding.kind === "star")
+              ?.jvmPackageFiles?.map((file) => path.basename(file)),
+            relative,
+          ).toEqual(["Peer.kt"]);
+        }
+      } finally {
+        clearMemoryCache();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // Only an importer in the package itself can name a package-private Java type of it, and Gap.java may declare one
+  // under any name. An importer whose own clause was not read may be in that package.
+  it("counts an incomplete Java file as a possible declarer for an importer whose own package is unread", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-unread-importer-"));
+    try {
+      const sources: Record<string, string> = {
+        "p/Gap.java": "package p;\n)\nclass Gap {}\n",
+        "app/Known.java": "package app;\n\nimport p.Hidden;\n\nclass Known {}\n",
+        "app/Unknown.java": "package ;\n\nimport p.Hidden;\n\nclass Unknown {}\n",
+      };
+      for (const [file, text] of Object.entries(sources)) {
+        await mkdir(path.dirname(path.join(root, file)), { recursive: true });
+        await writeFile(path.join(root, file), text, "utf8");
+      }
+      const index = await buildProjectIndex(root, { cache: "memory", threads: 1, useNativeWorkers: false });
+      const moduleOf = (relative: string) =>
+        index.byFile.get(fileIdentityKey(normalizePath(path.join(root, relative))));
+
+      for (const relative of ["app/Known.java", "app/Unknown.java"]) {
+        expect(moduleOf(relative)?.imports[0]?.resolved, relative).toEqual({ external: "p.Hidden" });
+      }
+      // Another package can import only the public type that Gap.java's name spells, which is not `Hidden`.
+      expect(moduleOf("app/Known.java")?.importLookupIncomplete).toBeUndefined();
+      expect(moduleOf("app/Unknown.java")?.importLookupIncomplete).toBe(true);
     } finally {
       clearMemoryCache();
       await rm(root, { recursive: true, force: true });

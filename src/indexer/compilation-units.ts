@@ -6,6 +6,7 @@ import { GO_IDENTIFIER_SOURCE, normalizeCsharpQualifiedName } from "../util/iden
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
 import { CSHARP_FILE_LOCAL_PREFIX, csharpNamespaceAtIndex, type CsharpNamespaceRegion } from "../util/csharp-tree.js";
+import { isJvmPackageKnown } from "../util/jvm-tree.js";
 import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRootSync } from "../util/resolution/files.js";
 import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
 import type { ModuleIndex, ProjectIndex } from "./types.js";
@@ -115,9 +116,9 @@ function unitDeclarationSource(index: ProjectIndex, filePath: string, fileKey: s
 }
 
 /**
- * The declared package name of a Go or JVM file, or `null` when the file declares none. A JVM file is
- * unreadable when its module stored no facts, because its tree was unavailable when it was indexed; a Go
- * file is unreadable when its source cannot be read.
+ * The declared package name of a Go or JVM file, or `null` when the file declares none. A JVM file is unreadable when
+ * its module stored no facts, because its tree was unavailable when it was indexed, or when a syntax error left its
+ * package clause unread; a Go file is unreadable when its source cannot be read.
  */
 function packageDeclarationFor(
   index: ProjectIndex,
@@ -127,7 +128,7 @@ function packageDeclarationFor(
   const fileKey = fileIdentityKey(filePath);
   if (languageId !== "go") {
     const facts = index.byFile.get(fileKey)?.jvmFacts;
-    return { name: facts?.packageName ?? null, readable: !!facts };
+    return { name: facts?.packageName ?? null, readable: !!facts && isJvmPackageKnown(facts) };
   }
   let cache = packageNameCaches.get(index);
   if (!cache) {
