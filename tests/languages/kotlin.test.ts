@@ -906,6 +906,50 @@ describe("Kotlin package files without a usable syntax tree", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  // `import p.*` names every declaration of package `p`, so a file of `p` that was not read in full may declare names the
+  // wildcard binds. The wildcard still lists the file; its importer is marked, as a named import is.
+  it("marks the importer of a package wildcard while a package file was not read in full, and still lists the file", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-wildcard-incomplete-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        // Big.kt is over the native limit past `Unread`, and Gap.kt has a syntax error at the top after `Before`.
+        "big/Small.kt": ["package com.acme.big", "", "class Known", ""].join("\n"),
+        "big/Big.kt": `package com.acme.big\n\nclass Unread\n${padding}`,
+        "gap/Peer.kt": ["package com.acme.gap", "", "class Peer", ""].join("\n"),
+        "gap/Gap.kt": ["package com.acme.gap", "", "class Before", ")", "fun after() = 1", ""].join("\n"),
+        "q/Other.kt": ["package com.acme.q", "", "class Quiet", ""].join("\n"),
+        "app/UseBig.kt": ["package com.acme.app", "", "import com.acme.big.*", ""].join("\n"),
+        "app/UseGap.kt": ["package com.acme.app", "", "import com.acme.gap.*", ""].join("\n"),
+        "app/UseQuiet.kt": ["package com.acme.app", "", "import com.acme.q.*", ""].join("\n"),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      expect(
+        moduleOf("gap/Gap.kt")?.parseErrorRanges?.length,
+        "the pinned grammar no longer fails on Gap.kt",
+      ).toBeTruthy();
+      const starFiles = (relative: string): string[] | undefined =>
+        moduleOf(relative)
+          ?.imports.find((binding) => binding.kind === "star")
+          ?.jvmPackageFiles?.map((file) => path.basename(file));
+      // The file stays in its package either way: the wildcard lists it, and the importer is marked.
+      expect(starFiles("app/UseBig.kt")).toEqual(["Big.kt", "Small.kt"]);
+      expect(starFiles("app/UseGap.kt")).toEqual(["Gap.kt", "Peer.kt"]);
+      for (const importer of ["app/UseBig.kt", "app/UseGap.kt"]) {
+        expect(moduleOf(importer), importer).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      }
+      // A package whose files all read has nothing to mark.
+      expect(starFiles("app/UseQuiet.kt")).toEqual(["Other.kt"]);
+      expect(moduleOf("app/UseQuiet.kt")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/UseQuiet.kt")?.importLookupIncomplete).toBeUndefined();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Kotlin package files with a syntax error", () => {

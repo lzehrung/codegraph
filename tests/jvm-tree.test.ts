@@ -632,57 +632,197 @@ describe("JVM importers while a package file has no readable syntax tree", () =>
 
   // An owner that was not read leaves each form of import of it unresolved and marked. Once the owner reads, with no
   // change to any importer, each resolves again, for its binding and for its dependency edge.
-  it("resolves a static or wildcard import again once its owner reads (memory cache)", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-owner-recovery-"));
+  for (const cache of ["memory", "disk"] as const) {
+    it(`resolves a static or wildcard import again once its owner reads (${cache} cache)`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-owner-recovery-"));
+      const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-owner-recovery-cache-"));
+      try {
+        const marker = "// JVM_OWNER_UNREADABLE";
+        // The marker is past the 64 KiB head, so Hidden.kt keeps its package while its declarations are unknown.
+        const sources: Record<string, string> = {
+          "p/Hidden.kt": `package p\n\nobject Hidden { fun run() {} }\n${"// padding\n".repeat(7000)}${marker}\n`,
+          "app/UseStatic.java": "package app;\n\nimport static p.Hidden.run;\n\nclass UseStatic {}\n",
+          "app/UseStaticStar.java": "package app;\n\nimport static p.Hidden.*;\n\nclass UseStaticStar {}\n",
+          "app/UseTypeStar.java": "package app;\n\nimport p.Hidden.*;\n\nclass UseTypeStar {}\n",
+        };
+        for (const [name, contents] of Object.entries(sources)) {
+          await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+          await writeFile(path.join(root, name), contents, "utf8");
+        }
+        const options = { cache, cacheDir, threads: 1, useNativeWorkers: false };
+        const importers = ["app/UseStatic.java", "app/UseStaticStar.java", "app/UseTypeStar.java"];
+        /** What an importer's binding and edges resolve to, and whether its module is marked to be extracted again. */
+        const outcome = (index: ProjectIndex, relative: string) => {
+          const key = fileIdentityKey(normalizePath(path.join(root, relative)));
+          const resolved = index.byFile.get(key)?.imports[0]?.resolved;
+          return {
+            binding: typeof resolved === "string" ? path.basename(resolved) : "external",
+            edges: index.graph.edges
+              .filter((edge) => fileIdentityKey(edge.from) === key)
+              .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : "external")),
+            marked: !!index.byFile.get(key)?.importLookupIncomplete,
+          };
+        };
+
+        setNativeIndexingFailureFor(marker);
+        const failed = await buildProjectIndex(root, options);
+        for (const relative of importers) {
+          expect(outcome(failed, relative), relative).toEqual({
+            binding: "external",
+            edges: ["external"],
+            marked: true,
+          });
+        }
+
+        // Hidden.kt reads now and declares the object `Hidden`; nothing else changed. A disk cache is read again.
+        __resetNativeTreeSitterBindingForTests();
+        if (cache === "disk") clearMemoryCache();
+        const recovered = await buildProjectIndex(root, options);
+        for (const relative of importers) {
+          expect(outcome(recovered, relative), relative).toEqual({
+            binding: "Hidden.kt",
+            edges: ["Hidden.kt"],
+            marked: false,
+          });
+        }
+      } finally {
+        clearMemoryCache();
+        await rm(root, { recursive: true, force: true });
+        await rm(cacheDir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // `import p.*` names every file of package `p`. A file whose package cannot be read may be one of them, whichever
+  // package the wildcard names, so no wildcard of the project proves its package while such a file exists.
+  it("marks a package wildcard importer while a file whose package cannot be read may belong to the package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-wildcard-unplaced-"));
     try {
-      const marker = "// JVM_OWNER_UNREADABLE";
-      // The marker is past the 64 KiB head, so Hidden.kt keeps its package while its declarations are unknown.
+      const marker = "// JVM_WILDCARD_PACKAGE_UNREADABLE";
+      // The marker is inside the 64 KiB head, so neither the whole file nor its head parses: the package of Broken.kt
+      // and of Gone.kt is unknown, though each declares one.
       const sources: Record<string, string> = {
-        "p/Hidden.kt": `package p\n\nobject Hidden { fun run() {} }\n${"// padding\n".repeat(7000)}${marker}\n`,
-        "app/UseStatic.java": "package app;\n\nimport static p.Hidden.run;\n\nclass UseStatic {}\n",
-        "app/UseStaticStar.java": "package app;\n\nimport static p.Hidden.*;\n\nclass UseStaticStar {}\n",
-        "app/UseTypeStar.java": "package app;\n\nimport p.Hidden.*;\n\nclass UseTypeStar {}\n",
+        "p/Small.kt": "package p\n\nclass Known\n",
+        "p/Broken.kt": `package p\n\n${marker}\nclass Late\n`,
+        "solo/Gone.kt": `package solo\n\n${marker}\nclass Gone\n`,
+        "d/Member.kt": "package com.acme.d\n\nclass Member\n",
+        "app/UseP.kt": "package app\n\nimport p.*\n\nclass UseP\n",
+        "app/UsePJava.java": "package app;\n\nimport p.*;\n\nclass UsePJava {}\n",
+        "app/UseSolo.kt": "package app\n\nimport solo.*\n\nclass UseSolo\n",
+        "app/UseSoloJava.java": "package app;\n\nimport solo.*;\n\nclass UseSoloJava {}\n",
+        "app/UseDotted.kt": "package app\n\nimport com.acme.d.*\n\nclass UseDotted\n",
       };
       for (const [name, contents] of Object.entries(sources)) {
         await mkdir(path.dirname(path.join(root, name)), { recursive: true });
         await writeFile(path.join(root, name), contents, "utf8");
       }
-      const options = { cache: "memory" as const, threads: 1, useNativeWorkers: false };
-      const importers = ["app/UseStatic.java", "app/UseStaticStar.java", "app/UseTypeStar.java"];
-      /** What an importer's binding and edges resolve to, and whether its module is marked to be extracted again. */
-      const outcome = (index: ProjectIndex, relative: string) => {
-        const key = fileIdentityKey(normalizePath(path.join(root, relative)));
-        const resolved = index.byFile.get(key)?.imports[0]?.resolved;
-        return {
-          binding: typeof resolved === "string" ? path.basename(resolved) : "external",
-          edges: index.graph.edges
-            .filter((edge) => fileIdentityKey(edge.from) === key)
-            .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : "external")),
-          marked: !!index.byFile.get(key)?.importLookupIncomplete,
-        };
-      };
+      const moduleOf = (index: ProjectIndex, relative: string) =>
+        index.byFile.get(fileIdentityKey(normalizePath(path.join(root, relative))));
+      /** The files a wildcard binding covers, by name. */
+      const starFiles = (index: ProjectIndex, relative: string): string[] | undefined =>
+        moduleOf(index, relative)
+          ?.imports.find((binding) => binding.kind === "star")
+          ?.jvmPackageFiles?.map((file) => path.basename(file));
 
       setNativeIndexingFailureFor(marker);
-      const failed = await buildProjectIndex(root, options);
-      for (const relative of importers) {
-        expect(outcome(failed, relative), relative).toEqual({ binding: "external", edges: ["external"], marked: true });
-      }
+      const index = await buildProjectIndex(root, { cache: "memory", threads: 1, useNativeWorkers: false });
 
-      // Hidden.kt reads now and declares the object `Hidden`; nothing else changed.
-      __resetNativeTreeSitterBindingForTests();
-      const recovered = await buildProjectIndex(root, options);
-      for (const relative of importers) {
-        expect(outcome(recovered, relative), relative).toEqual({
-          binding: "Hidden.kt",
-          edges: ["Hidden.kt"],
-          marked: false,
+      expect(
+        moduleOf(index, "p/Broken.kt")?.jvmFacts,
+        "the forced failure no longer reaches Broken.kt",
+      ).toBeUndefined();
+      // Whether the package has readable files (p, com.acme.d) or none (solo), and from either language, the wildcard
+      // leaves out the files it could not place and is marked, so that a later build lists them once they read.
+      for (const relative of [
+        "app/UseP.kt",
+        "app/UsePJava.java",
+        "app/UseSolo.kt",
+        "app/UseSoloJava.java",
+        "app/UseDotted.kt",
+      ]) {
+        expect(moduleOf(index, relative), relative).toMatchObject({
+          parserDegraded: true,
+          importLookupIncomplete: true,
         });
       }
+      expect(starFiles(index, "app/UseP.kt")).toEqual(["Small.kt"]);
+      expect(starFiles(index, "app/UsePJava.java")).toEqual(["Small.kt"]);
+      expect(starFiles(index, "app/UseSolo.kt")).toBeUndefined();
+      expect(starFiles(index, "app/UseDotted.kt")).toEqual(["Member.kt"]);
     } finally {
       clearMemoryCache();
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  // Nothing records a file that no module covers, so the file reading again changes no signature, manifest edge, or cache
+  // row. The marked wildcard importer is how the next build lists it.
+  for (const cache of ["memory", "disk"] as const) {
+    it(`lists a file in a package wildcard once it reads, though discovery ignores it (${cache} cache)`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-wildcard-recovery-"));
+      const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-wildcard-recovery-cache-"));
+      try {
+        const marker = "// JVM_WILDCARD_FILE_IGNORED";
+        const sources: Record<string, string> = {
+          "p/Small.kt": "package p\n\nclass Known\n",
+          "p/Broken.kt": `package p\n\n${marker}\nclass Late\n`,
+          "app/UseP.kt": "package app\n\nimport p.*\n\nclass UseP\n",
+          "app/UsePJava.java": "package app;\n\nimport p.*;\n\nclass UsePJava {}\n",
+        };
+        for (const [name, contents] of Object.entries(sources)) {
+          await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+          await writeFile(path.join(root, name), contents, "utf8");
+        }
+        // Discovery ignores Broken.kt, so no module covers it, but the package scan still reads it.
+        const options = {
+          cache,
+          cacheDir,
+          threads: 1,
+          useNativeWorkers: false,
+          discovery: { ignoreGlobs: ["p/Broken.kt"], globRoot: root },
+        };
+        const importers = ["app/UseP.kt", "app/UsePJava.java"];
+        /** What a wildcard importer covers: the files of its binding and of its file edges, and whether it is marked. */
+        const outcome = (index: ProjectIndex, relative: string) => {
+          const key = fileIdentityKey(normalizePath(path.join(root, relative)));
+          const module = index.byFile.get(key);
+          return {
+            binding: module?.imports
+              .find((binding) => binding.kind === "star")
+              ?.jvmPackageFiles?.map((file) => path.basename(file)),
+            edges: index.graph.edges
+              .filter((edge) => fileIdentityKey(edge.from) === key && edge.to.type === "file")
+              .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : ""))
+              .sort(),
+            marked: !!module?.importLookupIncomplete,
+          };
+        };
+
+        setNativeIndexingFailureFor(marker);
+        const failed = await buildProjectIndex(root, options);
+        for (const relative of importers) {
+          // The precondition: the wildcard cannot list Broken.kt while its package is unknown.
+          expect(outcome(failed, relative).binding, relative).toEqual(["Small.kt"]);
+        }
+
+        // Broken.kt reads now and declares package p; no importer, module, or cache row changed. A disk cache is read again.
+        __resetNativeTreeSitterBindingForTests();
+        if (cache === "disk") clearMemoryCache();
+        const recovered = await buildProjectIndex(root, options);
+        for (const relative of importers) {
+          expect(outcome(recovered, relative), relative).toEqual({
+            binding: ["Broken.kt", "Small.kt"],
+            edges: ["Broken.kt", "Small.kt"],
+            marked: false,
+          });
+        }
+      } finally {
+        clearMemoryCache();
+        await rm(root, { recursive: true, force: true });
+        await rm(cacheDir, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 describe("JVM importers beside a package file with a syntax error", () => {

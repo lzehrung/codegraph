@@ -29,7 +29,10 @@ type JvmProjectSymbolIndex = LanguageProjectSymbolIndex & {
   unplacedFiles: string[];
 };
 
-/** A named import's target file, and whether an incomplete file kept the lookup from proving it. */
+/**
+ * An import's target file, and whether a file that was not read in full kept the lookup from proving it. A package
+ * wildcard (`p.*`) names every file of its package, so its `file` is only the first of them.
+ */
 type JvmImportLookup = { file: string | null; incomplete: boolean };
 
 const kotlinImportResolutionCache = new Map<string, JvmImportLookup>();
@@ -141,18 +144,14 @@ async function jvmIndexRoot(projectRoot: string, fromFile: string): Promise<stri
   return await resolveNearestManifestRoot(projectRoot, fromFile, JVM_PACKAGE_MANIFEST_NAMES);
 }
 
-export async function resolveJvmPackageImportPaths(
-  projectRoot: string,
-  spec: string,
-  fromFile: string,
-): Promise<string[]> {
-  const indexRoot = await jvmIndexRoot(projectRoot, fromFile);
+/** The files of package `packageName` in both languages, sorted, that lie inside the project. */
+async function jvmPackageFiles(projectRoot: string, indexRoot: string, packageName: string): Promise<string[]> {
   const [javaIndex, kotlinIndex] = await Promise.all([
     getJavaProjectSymbolIndex(indexRoot),
     getKotlinProjectSymbolIndex(indexRoot),
   ]);
-  const packageFiles = new Set(javaIndex.filesByPackage.get(spec) ?? []);
-  for (const file of kotlinIndex.filesByPackage.get(spec) ?? []) packageFiles.add(file);
+  const packageFiles = new Set(javaIndex.filesByPackage.get(packageName) ?? []);
+  for (const file of kotlinIndex.filesByPackage.get(packageName) ?? []) packageFiles.add(file);
   const packageCandidates = [...packageFiles].sort((left, right) => left.localeCompare(right));
   const confined: string[] = [];
   for (const candidate of packageCandidates) {
@@ -160,6 +159,14 @@ export async function resolveJvmPackageImportPaths(
     if (hit) confined.push(hit);
   }
   return confined;
+}
+
+export async function resolveJvmPackageImportPaths(
+  projectRoot: string,
+  spec: string,
+  fromFile: string,
+): Promise<string[]> {
+  return await jvmPackageFiles(projectRoot, await jvmIndexRoot(projectRoot, fromFile), spec);
 }
 
 /**
@@ -178,6 +185,15 @@ function incompleteDeclarers(
   const files = [...(index.incompleteFilesByPackage.get(packageName) ?? []), ...index.unplacedFiles];
   if (languageId === "kotlin" || importerSharesPackage) return files;
   return files.filter((file) => path.parse(file).name === name);
+}
+
+/**
+ * Whether the files of `packageName` are not all known in full. A file whose package could not be read may be one of
+ * them, and one that was not read in full may declare names the package has besides the ones read. `import p.*` names
+ * every file of `p` in either language, so it asks both indexes.
+ */
+function packageFilesIncomplete(indexes: readonly JvmProjectSymbolIndex[], packageName: string): boolean {
+  return indexes.some((index) => index.unplacedFiles.length || index.incompleteFilesByPackage.get(packageName)?.length);
 }
 
 /** The package of a dotted name: everything before its last segment. */
@@ -210,11 +226,14 @@ async function findJvmImport(
   const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
 
   if (importedName === "*") {
-    const file = await confineJvmResolvedPath(
-      projectRoot,
-      packageCandidates[0] ? path.resolve(packageCandidates[0]) : null,
-    );
-    return { file, incomplete: false };
+    // `p.*` names every file of package `p`, in either language, and is complete only while all of them are known in
+    // full.
+    const [files, javaIndex, kotlinIndex] = await Promise.all([
+      jvmPackageFiles(projectRoot, indexRoot, packageName),
+      getJavaProjectSymbolIndex(indexRoot),
+      getKotlinProjectSymbolIndex(indexRoot),
+    ]);
+    return { file: files[0] ?? null, incomplete: packageFilesIncomplete([javaIndex, kotlinIndex], packageName) };
   }
   const otherLanguageId = options.languageId === "java" ? "kotlin" : "java";
   const otherIndex = await getJvmProjectSymbolIndex(indexRoot, otherLanguageId);
@@ -272,7 +291,8 @@ async function importerMayShare(options: JvmImportResolutionOptions, packageName
  * The file a named import (`com.acme.Type`) names, and whether an incomplete file kept the lookup from proving it. An
  * incomplete lookup has no file: callers must not guess one from the name, and its importer is incomplete until that
  * file reads. Every form of import asks this for its `from` name: the type, the owner of a static member, or the type
- * of a wildcard.
+ * of a wildcard. A package wildcard also asks it for `p.*`, the files of package `p`, which no lookup proves while a
+ * file whose package could not be read may be one of them, or one of them was not read in full.
  */
 export async function lookupJvmImport(
   projectRoot: string,

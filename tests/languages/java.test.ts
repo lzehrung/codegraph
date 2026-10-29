@@ -1338,6 +1338,45 @@ describe("Java package files without a usable syntax tree", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  // `import p.*;` names every public type of package `p`, whichever language declares it, so a file of `p` that was not
+  // read in full may declare types the wildcard binds. The wildcard still lists the file; its importer is marked.
+  it("marks the importer of a package wildcard while a package file was not read in full, and still lists the file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-wildcard-incomplete-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        "bigj/Small.java": "package com.acme.bigj;\n\npublic class Small {}\n",
+        "bigj/Big.java": `package com.acme.bigj;\n\npublic class Big {}\n${padding}`,
+        "bigk/Peer.java": "package com.acme.bigk;\n\npublic class Peer {}\n",
+        "bigk/Hidden.kt": `package com.acme.bigk\n\nclass Hidden\n${padding}`,
+        "q/Other.java": "package com.acme.q;\n\npublic class Other {}\n",
+        "app/UseBigJ.java": "package com.acme.app;\n\nimport com.acme.bigj.*;\n\nclass UseBigJ {}\n",
+        "app/UseBigK.java": "package com.acme.app;\n\nimport com.acme.bigk.*;\n\nclass UseBigK {}\n",
+        "app/UseQuiet.java": "package com.acme.app;\n\nimport com.acme.q.*;\n\nclass UseQuiet {}\n",
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      const starFiles = (relative: string): string[] | undefined =>
+        moduleOf(relative)
+          ?.imports.find((binding) => binding.kind === "star")
+          ?.jvmPackageFiles?.map((file) => path.basename(file));
+      // The file stays in its package either way: the wildcard lists it, and the importer is marked.
+      expect(starFiles("app/UseBigJ.java")).toEqual(["Big.java", "Small.java"]);
+      expect(starFiles("app/UseBigK.java")).toEqual(["Hidden.kt", "Peer.java"]);
+      for (const importer of ["app/UseBigJ.java", "app/UseBigK.java"]) {
+        expect(moduleOf(importer), importer).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      }
+      // A package whose files all read has nothing to mark.
+      expect(starFiles("app/UseQuiet.java")).toEqual(["Other.java"]);
+      expect(moduleOf("app/UseQuiet.java")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/UseQuiet.java")?.importLookupIncomplete).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Java same-package sibling classes", () => {
