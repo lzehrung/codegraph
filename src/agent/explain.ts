@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import type { AnalysisSummary } from "../analysis-summary.js";
 import {
   findDuplicateContext,
+  findDuplicateContextsWithPreparedAnalysis,
+  type DuplicateDetectionOptions,
   type DuplicateGroup,
   type DuplicateSuggestion,
   type DuplicateTarget,
@@ -71,6 +73,8 @@ export type AgentExplainTarget = {
   maxSnippets?: number;
   maxSymbols?: number;
   maxDuplicates?: number;
+  /** @internal Skips the duplicate context, for a caller that discards it: `duplicates` stays empty. */
+  skipDuplicates?: boolean;
 };
 
 export type AgentExplanationTarget = {
@@ -222,7 +226,7 @@ export async function explainCodegraphTargetWithSession(
   const snapshot = await session.loadProject();
   const lookup = buildSymbolLookup(snapshot);
   const resolved = resolveTarget(snapshot, lookup, request.target);
-  return await buildExplanation(snapshot, lookup, resolved, request);
+  return await buildExplanation(snapshot, lookup, resolved, request, session);
 }
 
 /**
@@ -437,6 +441,7 @@ async function buildExplanation(
   lookup: SymbolLookup,
   resolved: ResolvedExplainTarget,
   request: AgentExplainTarget,
+  session: AgentSession,
 ): Promise<AgentExplanation> {
   const maxDependencies = defaultAgentLimit(
     request.maxDependencies,
@@ -490,7 +495,9 @@ async function buildExplanation(
   const references = referenceContext.references;
   const snippets = referenceContext.snippets;
   const relatedSqlObjects = await collectRelatedSqlObjects(snapshot, lookup, resolved, file, maxRelatedSqlObjects);
-  const duplicates = await collectDuplicateContext(snapshot, resolved, relFile, maxDuplicates);
+  const duplicates = request.skipDuplicates
+    ? emptyAgentBoundedList<AgentExplanationDuplicate>()
+    : await collectDuplicateContext(snapshot, session, resolved, relFile, maxDuplicates);
   const followUps = collectFollowUps(snapshot, resolved, boundedSymbols.items, relFile, duplicates.items);
   const changedContext = await collectChangedContext(request);
 
@@ -669,6 +676,7 @@ function compareDependencies(left: AgentExplanationDependency, right: AgentExpla
 
 async function collectDuplicateContext(
   snapshot: AgentProjectSnapshot,
+  session: AgentSession,
   resolved: Exclude<ResolvedExplainTarget, { kind: "not_found" }>,
   relFile: string,
   limit: number,
@@ -682,13 +690,18 @@ async function collectDuplicateContext(
           startLine: resolved.def.range.start.line,
           endLine: resolved.def.range.end.line,
         };
-  const result = await findDuplicateContext(snapshot.index, target, {
+  const options: DuplicateDetectionOptions = {
     projectRoot: snapshot.root,
     minConfidence: "medium",
     includeSameFile: true,
     limit,
     maxPairs: AGENT_DUPLICATE_MAX_PAIRS,
-  });
+  };
+  // The session prepares the duplicate analysis once, so a call that waited for it reuses it instead of scanning again.
+  const analysis = await session.loadDuplicateAnalysis?.();
+  const result = analysis
+    ? (await findDuplicateContextsWithPreparedAnalysis(analysis, [target], options))[0]!
+    : await findDuplicateContext(snapshot.index, target, options);
   return {
     items: result.groups.map((group) => summarizeDuplicateGroup(group, result.target)),
     omitted: result.omittedCounts.groups + result.omittedCounts.candidatePairs,

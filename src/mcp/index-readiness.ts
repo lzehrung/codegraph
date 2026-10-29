@@ -1,3 +1,4 @@
+import { parseReviewHandle } from "../agent/packet.js";
 import { registerSessionInvalidationHook } from "../agent/session-lifecycle.js";
 import type { AgentSession } from "../agent/session.js";
 import { parseQualifiedSymbolPath } from "../indexer/symbols.js";
@@ -35,16 +36,19 @@ export function assertMcpIndexWait(value: number): number {
 }
 
 /**
- * A build that a tool call can wait for. Each stage includes the project index.
+ * What a tool call can wait for. Each build stage includes the project index, and a wait on one ends with the
+ * session's freshness check: when files changed it replaces the session, and the builds run again for the new one.
  * - `index`: the project index, which every index-backed tool reads.
  * - `graph`: the in-memory symbol graph that hybrid, symbol, and graph searches read.
  * - `query`: the session query index that hybrid and text searches read.
  * - `symbols`: the detailed symbol graph that handle-based tools such as `calls` and `get_symbol` read.
- * - `duplicates`: the duplicate analysis that `review` reads to add duplicate-sibling tasks.
- * - `warmup`: the whole startup warmup, which `refresh_index` takes its turn after.
+ * - `duplicates`: the duplicate analysis that `review` and `packet_get` read, for duplicate-sibling tasks and context.
+ * - `freshness`: the check alone, for a handler that runs it without needing a build. It waits for a running build.
+ * - `idle`: every build that runs, whichever call started it. A turn of the lock that `refresh_index` and
+ *   `artifact_build` take starts after them.
  */
-export type McpIndexStage = "index" | "graph" | "query" | "symbols" | "duplicates" | "warmup";
-type McpBuildStage = Exclude<McpIndexStage, "warmup">;
+export type McpIndexStage = McpBuildStage | "idle";
+type McpBuildStage = "index" | "graph" | "query" | "symbols" | "duplicates" | "freshness";
 
 /** What the build is doing. A count appears only when the work has a measurable total. */
 export type McpIndexProgress = {
@@ -111,8 +115,6 @@ export type McpIndexReadinessOptions = {
   waitMs: number;
   /** Which builds the startup warmup runs. */
   warmup: CodegraphMcpWarmupMode;
-  /** Runs `operation` in its turn of the lock that `refresh_index`, `artifact_build`, and the file watcher share. */
-  runExclusive: <T>(operation: () => Promise<T>) => Promise<T>;
   progress: McpBuildProgress;
   log?: (message: string) => void;
   now?: () => number;
@@ -124,12 +126,21 @@ export type McpIndexReadiness = {
    * its failure is logged: the next call that needs the index builds it again and reports that error itself.
    */
   startWarmup: () => void;
-  /** Settles when the warmup has ended, at once when none was started. Never rejects. */
-  warmupSettled: () => Promise<void>;
   /**
-   * Waits for the builds that `stages` name. Every call shares the one build that the session runs for each stage, and
-   * a stage that is already built returns at once. Past the budget it throws {@link McpIndexBuildingError}; the build
-   * continues, and the next call waits for what is left of it.
+   * Settles when no build runs, at once when none was started: the warmup, and every build that a call started,
+   * including one whose call stopped waiting. Builds that start while it waits count too. Never rejects.
+   */
+  buildsSettled: () => Promise<void>;
+  /**
+   * Runs `operation` once no build runs, with no build starting between that moment and the first synchronous step of
+   * `operation`. An operation that replaces the session starts this way: a build that outlived the replacement would
+   * write its file signatures over those of the new session.
+   */
+  whenIdle: <T>(operation: () => Promise<T>) => Promise<T>;
+  /**
+   * Waits for the builds that `stages` name, then for the freshness check; see {@link McpIndexStage}. Every call
+   * shares the one build that the session runs for each stage, and a stage that is already built returns at once. Past
+   * the budget it throws {@link McpIndexBuildingError}; the build continues, and the next call waits for what is left.
    */
   waitFor: (tool: string, stages: readonly McpIndexStage[], signal?: AbortSignal) => Promise<void>;
 };
@@ -140,8 +151,15 @@ const STAGE_ACTIVITY: Record<McpBuildStage, string> = {
   query: "Building search index",
   symbols: "Building detailed symbol graph",
   duplicates: "Preparing duplicate analysis",
+  freshness: "Checking the project for changed files",
 };
-const STAGES_BY_PRIORITY: readonly McpBuildStage[] = ["index", "graph", "symbols", "duplicates", "query"];
+const STAGES_BY_PRIORITY: readonly McpBuildStage[] = ["index", "graph", "symbols", "duplicates", "query", "freshness"];
+
+/**
+ * How often one call runs its builds again because the session was replaced while it waited. A session that keeps
+ * being replaced leaves the rest to the freshness check of the call's own handler.
+ */
+const MAX_READINESS_ATTEMPTS = 3;
 
 /**
  * Settles with `"ready"` when `build` settles, rethrows its failure, or settles with `"timeout"` after `budgetMs`.
@@ -152,7 +170,11 @@ function settleWithinBudget(
   budgetMs: number,
   signal: AbortSignal | undefined,
 ): Promise<"ready" | "timeout"> {
-  if (signal?.aborted) return Promise.reject(mcpCancellationError(signal));
+  if (signal?.aborted) {
+    // The build goes on without this call, and may still fail: its failure is not this call's to report.
+    build.catch(() => undefined);
+    return Promise.reject(mcpCancellationError(signal));
+  }
   const { promise, resolve, reject } = Promise.withResolvers<"ready" | "timeout">();
   let timer: NodeJS.Timeout | undefined;
   const onAbort = (): void => {
@@ -187,29 +209,50 @@ function settleWithinBudget(
 export function createMcpIndexReadiness(session: AgentSession, options: McpIndexReadinessOptions): McpIndexReadiness {
   const now = options.now ?? ((): number => performance.now());
   const log = options.log ?? ((message: string): void => console.error(message));
-  // The builds that are running, one promise per stage. The session already shares its own build between callers;
-  // this is what tells a waiter which stage is running and since when.
+  // Every build from its start until it settles, whether or not a call still waits for it: the warmup, the shared build
+  // of each stage, and each call's wait for its stages. A replacement of the session and the shutdown wait for all of
+  // them. Each one consumes its own failure, so a build that nobody waits for cannot end as an unhandled rejection.
+  const builds = new Set<Promise<unknown>>();
+  // The build that each stage shares between calls, for the session as it is now. The session already shares its own
+  // build between callers; this is what tells a waiter which stage is running and since when.
   const running = new Map<McpBuildStage, Promise<void>>();
   let buildStartedAt: number | undefined;
-  let warmup: Promise<void> = Promise.resolve();
+  // Counts the replacements of the session, so that a call can tell that its builds served a session that is gone.
+  let generation = 0;
   let warmupStarted = false;
 
-  // A rebuilt session shares nothing with the builds of the one it replaced. `registerSessionInvalidationHook` runs a
-  // hook once, so it registers itself again.
+  // A rebuilt session shares nothing with the builds of the one it replaced. They go on, and `builds` keeps them.
+  // `registerSessionInvalidationHook` runs a hook once, so it registers itself again.
   const forgetBuildsOnInvalidation = (): void => {
     registerSessionInvalidationHook(session, () => {
       running.clear();
       buildStartedAt = undefined;
+      generation += 1;
       forgetBuildsOnInvalidation();
     });
   };
   forgetBuildsOnInvalidation();
 
+  const track = <T>(build: Promise<T>): Promise<T> => {
+    builds.add(build);
+    const ended = (): void => {
+      builds.delete(build);
+    };
+    build.then(ended, ended);
+    return build;
+  };
+  const whenIdle = async <T>(operation: () => Promise<T>): Promise<T> => {
+    while (builds.size) await Promise.allSettled([...builds]);
+    // Nothing awaits between the last check and the call, so no build starts in between.
+    return await operation();
+  };
+  const settled = (): Promise<void> => whenIdle(() => Promise.resolve());
+
   const share = (stage: McpBuildStage, build: () => Promise<void>): Promise<void> => {
     const existing = running.get(stage);
     if (existing) return existing;
     buildStartedAt ??= now();
-    const promise = build();
+    const promise = track(build());
     running.set(stage, promise);
     const finish = (): void => {
       if (running.get(stage) === promise) running.delete(stage);
@@ -246,13 +289,18 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
       await buildIndex();
       await session.loadDuplicateAnalysis?.();
     });
+  const buildFreshness = (): Promise<void> =>
+    share("freshness", async () => {
+      await session.checkFreshness?.();
+    });
   const startStage = (stage: McpIndexStage): Promise<void> => {
-    if (stage === "warmup") return warmup;
     if (stage === "graph") return buildGraph();
     if (stage === "query") return buildQuery();
     if (stage === "symbols") return buildSymbols();
     if (stage === "duplicates") return buildDuplicates();
-    return buildIndex();
+    if (stage === "index") return buildIndex();
+    // The check that ends every wait is the `freshness` stage, and `idle` is no build.
+    return Promise.resolve();
   };
 
   const startWarmup = (): void => {
@@ -260,17 +308,17 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
     warmupStarted = true;
     if (options.warmup === "off") return;
     const detailed = options.warmup === "symbols";
-    // In the shared turn, so that `refresh_index`, `artifact_build`, and a background refresh wait for the warmup
-    // instead of replacing the session under it.
-    warmup = options
-      .runExclusive(async () => {
-        const stages = [buildGraph(), buildQuery()];
-        if (detailed) stages.push(buildSymbols());
-        await Promise.all(stages);
-      })
-      .catch((error: unknown) => {
-        log(`[codegraph] MCP startup warmup failed: ${describeMcpRuntimeError(error)}`);
-      });
+    const stages = [buildGraph(), buildQuery()];
+    if (detailed) stages.push(buildSymbols());
+    // The failure is logged here, where nobody else can report it: the next call that needs a build runs it again.
+    void track(
+      Promise.all(stages).then(
+        () => undefined,
+        (error: unknown) => {
+          log(`[codegraph] MCP startup warmup failed: ${describeMcpRuntimeError(error)}`);
+        },
+      ),
+    );
   };
 
   const describeProgress = (waitedMs: number): McpIndexProgress => {
@@ -288,10 +336,25 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
     return { activity: stage ? STAGE_ACTIVITY[stage] : "Waiting for the index build", elapsedMs };
   };
 
+  // The builds of `stages`, then the freshness check that the handler runs next. When files changed, the check replaces
+  // the session and the builds above served the old one, so they run again inside the same wait.
+  const ensure = async (stages: readonly McpIndexStage[]): Promise<void> => {
+    for (let attempt = 0; attempt < MAX_READINESS_ATTEMPTS; attempt += 1) {
+      const built = generation;
+      await Promise.all(stages.map(startStage));
+      await buildFreshness();
+      if (built === generation) return;
+    }
+  };
+
   const waitFor = async (tool: string, stages: readonly McpIndexStage[], signal?: AbortSignal): Promise<void> => {
     if (!stages.length) return;
     const startedAt = now();
-    const ready = Promise.all(stages.map(startStage));
+    const ready = (async (): Promise<void> => {
+      if (stages.some((stage) => stage !== "idle")) await track(ensure(stages));
+      // After the builds of this call, which are over: `idle` waits for the ones of the other calls.
+      if (stages.includes("idle")) await settled();
+    })();
     const outcome = await settleWithinBudget(ready, options.waitMs, signal);
     if (outcome === "ready") return;
     const waitedMs = Math.round(now() - startedAt);
@@ -310,7 +373,7 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
     });
   };
 
-  return { startWarmup, warmupSettled: () => warmup, waitFor };
+  return { startWarmup, buildsSettled: settled, whenIdle, waitFor };
 }
 
 /** What a resolver may ask beyond the request itself. */
@@ -332,6 +395,7 @@ function isReviewRange(
 const NO_STAGES: readonly McpIndexStage[] = [];
 const INDEX_STAGES: readonly McpIndexStage[] = ["index"];
 const SYMBOL_GRAPH_STAGES: readonly McpIndexStage[] = ["symbols"];
+const FRESHNESS_STAGES: readonly McpIndexStage[] = ["freshness"];
 
 // Mirrors what `searchCodegraphWithSession` loads: the symbol graph for hybrid, symbol, and graph modes, and the query
 // index for hybrid and text modes. Path and SQL searches read the project index only.
@@ -372,13 +436,25 @@ export const MCP_STAGES_BY_HANDLER = {
   },
   // Only a graph context needs the index; the bytes of a file are read from disk.
   get_file: (request) => (request.includeGraphContext ? INDEX_STAGES : NO_STAGES),
-  // A qualified `file::symbol` path resolves in the project index; any other handle goes through the explain path.
+  // A qualified `file::symbol` path resolves in the project index; any other handle goes through the explain path,
+  // without the duplicate context that refs would discard.
   refs: (request) => {
     const handle = request.handle;
     return typeof handle === "string" && !parseQualifiedSymbolPath(handle) ? SYMBOL_GRAPH_STAGES : INDEX_STAGES;
   },
   get_symbol: () => SYMBOL_GRAPH_STAGES,
-  packet_get: () => SYMBOL_GRAPH_STAGES,
+  // A packet reads the detailed symbol graph, and a file or symbol packet also the duplicate context of its target
+  // from the session's duplicate analysis, which a SQL handle does not need. A review packet reads what `review` does.
+  // A review target that is invalid, or has no changed file, builds nothing, but the call's freshness check waits.
+  packet_get: async (request, context) => {
+    const target = request.target;
+    if (typeof target !== "string") return SYMBOL_GRAPH_STAGES;
+    if (target.startsWith("review:")) {
+      const range = parseReviewHandle(target);
+      return range && (await context.reviewRangeHasChanges(range)) ? ["duplicates"] : FRESHNESS_STAGES;
+    }
+    return target.startsWith("sql:") ? SYMBOL_GRAPH_STAGES : ["symbols", "duplicates"];
+  },
   calls: () => SYMBOL_GRAPH_STAGES,
   callers: () => SYMBOL_GRAPH_STAGES,
   callees: () => SYMBOL_GRAPH_STAGES,
@@ -388,10 +464,12 @@ export const MCP_STAGES_BY_HANDLER = {
   implementations: () => SYMBOL_GRAPH_STAGES,
   rename_preview: () => SYMBOL_GRAPH_STAGES,
   refactor_plan: () => SYMBOL_GRAPH_STAGES,
-  artifact_build: () => SYMBOL_GRAPH_STAGES,
-  // Answers from the SQLite artifact. Its freshness check asks the session only when the artifact is stale.
+  // Takes its turn of the lock, which starts once no build runs.
+  artifact_build: () => ["symbols", "idle"],
+  // Answers from the SQLite artifact, so a fresh one never waits. The handler waits for the session itself, within the
+  // same budget, when the artifact is stale.
   query_sqlite: () => NO_STAGES,
-  refresh_index: () => ["warmup"],
+  refresh_index: () => ["idle"],
 } satisfies Record<string, McpStageResolver>;
 
 /**

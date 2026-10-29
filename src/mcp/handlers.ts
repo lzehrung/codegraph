@@ -79,6 +79,7 @@ import {
   withIndexReadiness,
   type CodegraphMcpWarmupMode,
   type McpBuildProgress,
+  type McpIndexReadiness,
 } from "./index-readiness.js";
 
 export type { CodegraphMcpWarmupMode };
@@ -459,16 +460,19 @@ export type CodegraphMcpResources = {
    */
   startWarmup: () => void;
   /**
-   * Settles when the startup warmup has ended, at once when none was started, and never rejects: a failure is logged.
-   * Await it, with `closeWatcher`, before `session.invalidate()`: the warmup keeps building and writing the cache
-   * until it ends.
+   * Settles when no build runs, at once when none was started, and never rejects: a warmup failure is logged. That
+   * covers the startup warmup and every build that a tool call started, including one whose call stopped waiting.
+   * Await it, with `closeWatcher`, before `session.invalidate()`: the builds keep writing the cache until they end.
    */
-  warmupSettled: () => Promise<void>;
+  buildsSettled: () => Promise<void>;
 };
 
 type CodegraphMcpHandlerSet = {
   handlers: CodegraphMcpHandlers;
-  /** Runs `operation` in its turn of the lock that `refresh_index`, `artifact_build`, and the SQLite rebuild take. */
+  /**
+   * Runs `operation` in its turn of the lock that `refresh_index`, `artifact_build`, and the SQLite rebuild take. A turn
+   * starts once no build runs.
+   */
   runExclusive: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Whether the range of a `review` request has a changed file. Asks git once per request object. */
   reviewRangeHasChanges: (request: { base: string; head: string }) => Promise<boolean>;
@@ -503,16 +507,16 @@ export function createCodegraphMcpResources(options: CodegraphMcpServerOptions):
   const indexWaitMs = assertMcpIndexWait(mcpIndexWaitMs ?? DEFAULT_MCP_INDEX_WAIT_MS);
   const buildProgress = createMcpBuildProgress();
   const session = createCodegraphMcpSession(options, root, buildProgress);
-  const { handlers, runExclusive, reviewRangeHasChanges } = createCodegraphMcpHandlersForSession(
-    { ...handlerOptions, root },
-    session,
-  );
   const readiness = createMcpIndexReadiness(session, {
     waitMs: indexWaitMs,
     warmup: resolveStartupWarmupMode(warmup, sessionProvidedExplicitly),
-    runExclusive,
     progress: buildProgress,
   });
+  const { handlers, runExclusive, reviewRangeHasChanges } = createCodegraphMcpHandlersForSession(
+    { ...handlerOptions, root },
+    session,
+    readiness,
+  );
   // Only a session that Codegraph created is watched; a caller that passes its own session manages freshness.
   // Lazy startup (`warmup: "off"`) stays lazy: the watches open on the first tool call.
   const watcher =
@@ -533,7 +537,7 @@ export function createCodegraphMcpResources(options: CodegraphMcpServerOptions):
     session,
     closeWatcher: () => watcher?.close() ?? Promise.resolve(),
     startWarmup: readiness.startWarmup,
-    warmupSettled: readiness.warmupSettled,
+    buildsSettled: readiness.buildsSettled,
   };
 }
 
@@ -546,6 +550,8 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpHandlerOptions):
 function createCodegraphMcpHandlersForSession(
   options: CodegraphMcpHandlerOptions,
   session: AgentSession,
+  // The session's builds. Without it the handlers build what they need themselves, with no budget.
+  readiness?: Pick<McpIndexReadiness, "waitFor" | "whenIdle">,
 ): CodegraphMcpHandlerSet {
   const root = path.resolve(options.root);
   const readOnly = options.readOnly ?? true;
@@ -563,7 +569,9 @@ function createCodegraphMcpHandlersForSession(
 
   // One turn at a time for everything that rebuilds the session's index or writes artifacts: `refresh_index`,
   // `artifact_build`, the SQLite rebuild for `query_sqlite`, and the watcher's background refresh. Two of them in
-  // flight would leave the file signatures of whichever build ended last, whatever snapshot the session serves.
+  // flight would leave the file signatures of whichever build ended last, whatever snapshot the session serves. A turn
+  // also starts only once no build runs, with nothing awaiting between that moment and the operation: what replaces
+  // the session must not do so under a build that still writes to it.
   let artifactWritePromise: Promise<void> | undefined;
   const withArtifactWriteLock = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = artifactWritePromise;
@@ -571,7 +579,7 @@ function createCodegraphMcpHandlersForSession(
     artifactWritePromise = complete.promise;
     try {
       if (previous) await previous.catch(() => undefined);
-      return await operation();
+      return await (readiness?.whenIdle(operation) ?? operation());
     } finally {
       complete.resolve();
       if (artifactWritePromise === complete.promise) artifactWritePromise = undefined;
@@ -1059,6 +1067,7 @@ function createCodegraphMcpHandlersForSession(
             root,
             target: handle,
             maxReferences: limit,
+            skipDuplicates: true,
           });
           return {
             references: explanation.references,
@@ -1191,6 +1200,13 @@ function createCodegraphMcpHandlersForSession(
       let realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       let artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
       if (artifactFreshness.state !== "fresh") {
+        // Only this path asks the session, so a fresh artifact answers at once. The freshness check below waits for a
+        // build that is running, and an automatic rebuild of the artifact loads the detailed symbol graph.
+        await readiness?.waitFor(
+          "query_sqlite",
+          canRefreshSqliteArtifact() ? ["symbols", "idle"] : ["freshness"],
+          executionOptions?.signal,
+        );
         const sessionFreshness = await checkSessionFreshness(session);
         // An unchecked (manual) session cannot prove its snapshot matches disk, so rebuilding
         // the artifact from it is as unsafe as rebuilding from a known-stale one.

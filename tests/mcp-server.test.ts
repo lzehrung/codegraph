@@ -4325,8 +4325,8 @@ describe("MCP file watcher", () => {
       return resources;
     });
     return {
-      warmupSettled: async (): Promise<void> => {
-        await Promise.all(created.map(async (resources) => await resources.warmupSettled()));
+      buildsSettled: async (): Promise<void> => {
+        await Promise.all(created.map(async (resources) => await resources.buildsSettled()));
       },
     };
   }
@@ -4715,7 +4715,7 @@ describe("MCP file watcher", () => {
       // The first build belongs to the startup warmup that a server starts once it is serving; the rebuild that the
       // test holds is the watcher's, after it.
       resources.startWarmup();
-      await resources.warmupSettled();
+      await resources.buildsSettled();
       held.armed = true;
       await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
       await held.started;
@@ -4813,7 +4813,7 @@ describe("MCP file watcher", () => {
     });
     try {
       // The startup warmup ends first; the rebuild that the test holds is the watcher's.
-      await serverResources.warmupSettled();
+      await serverResources.buildsSettled();
       held.armed = true;
       await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
       await held.started;
@@ -4849,7 +4849,7 @@ describe("MCP file watcher", () => {
       });
       try {
         await vi.waitFor(() => expect(stdin.listenerCount("end")).toBeGreaterThan(0), { timeout: 20_000 });
-        await serverResources.warmupSettled();
+        await serverResources.buildsSettled();
         held.armed = true;
         await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
         await held.started;

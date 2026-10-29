@@ -75,7 +75,7 @@ export async function startCodegraphMcpHttpServer(
   const mcpToolTimeoutMs = assertMcpToolTimeout(configuredMcpToolTimeout);
   const host = options.host ?? "127.0.0.1",
     lifecycleHealth = await import("./lifecycle-health.js");
-  const { handlers, session, closeWatcher, startWarmup, warmupSettled } = createCodegraphMcpResources(options);
+  const { handlers, session, closeWatcher, startWarmup, buildsSettled } = createCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const installedVersionChecker = createInstalledVersionChecker(runtimeIdentity, { warn: () => {} });
   const protocolFactory = createCodegraphMcpProtocolFactory(
@@ -112,10 +112,10 @@ export async function startCodegraphMcpHttpServer(
         await closeMcpResources(sessionStore.sessions, modernHandler.close);
       } finally {
         await protocolFactory.drain();
-        // The startup warmup, a background rebuild, or a read of the file list writes to the session until it ends, so
-        // the session is released after them.
+        // The startup warmup, a build that a tool call started, a background rebuild, or a read of the file list writes
+        // to the session until it ends, so the session is released after them.
         await watcherClosed;
-        await warmupSettled();
+        await buildsSettled();
         session.invalidate();
       }
     })();

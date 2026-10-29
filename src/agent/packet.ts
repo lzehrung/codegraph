@@ -45,7 +45,7 @@ export async function getCodegraphPacketWithSession(
 ): Promise<AgentPacketResponse> {
   const kind = inferPacketKind(request.target);
   if (kind === "review") {
-    return await buildReviewPacket(request);
+    return await buildReviewPacket(request, session);
   }
 
   return await buildExplainPacket(session, request, kind);
@@ -97,17 +97,23 @@ function packetKindForResolvedTarget(kind: AgentExplanation["target"]["kind"]): 
   return "file";
 }
 
-async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPacketResponse> {
+async function buildReviewPacket(request: AgentPacketRequest, session?: AgentSession): Promise<AgentPacketResponse> {
   const range = parseReviewHandle(request.target);
   if (!range) {
     throw new Error("Invalid review packet target. Expected review:base=<encoded-ref>;head=<encoded-ref>.");
   }
   const report = boundReviewReportForTransport(
-    await buildReviewReport(request.root, {
-      gitBase: range.base,
-      gitHead: range.head,
-      reviewDepth: "minimal",
-    }),
+    await buildReviewReport(
+      request.root,
+      { gitBase: range.base, gitHead: range.head, reviewDepth: "minimal" },
+      // The session builds the project index and the duplicate analysis once, for every report that reads them.
+      session
+        ? {
+            loadIndex: async () => (await session.loadProject({ symbolGraph: "skip" })).index,
+            ...(session.loadDuplicateAnalysis ? { loadDuplicateAnalysis: session.loadDuplicateAnalysis } : {}),
+          }
+        : undefined,
+    ),
   );
   return {
     schemaVersion: 2,
@@ -124,7 +130,7 @@ async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPack
   };
 }
 
-function parseReviewHandle(target: string): { base: string; head: string } | null {
+export function parseReviewHandle(target: string): { base: string; head: string } | null {
   if (!target.startsWith("review:")) return null;
   const fields = new Map<string, string>();
   for (const part of target.slice("review:".length).split(";")) {
