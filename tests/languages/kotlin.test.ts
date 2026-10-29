@@ -442,9 +442,9 @@ describe("Kotlin imports with a same-named package", () => {
   });
 });
 
-describe("Kotlin declarations after a syntax error", () => {
-  // The pinned grammar cannot parse two one-line class bodies in a row: Handlers.kt's tree ends in an ERROR node after
-  // `Early`, and the declarations after it are read from the text the tree left out.
+describe("Kotlin declarations in one-line class bodies", () => {
+  // The published grammar ended the tree in an ERROR node after two one-line class bodies in a row; the pinned fork reads
+  // them, so every declaration after `Early` is a top-level name an import can reach.
   const handlers = [
     "package com.acme.handlers",
     "",
@@ -506,7 +506,7 @@ describe("Kotlin declarations after a syntax error", () => {
         ...Object.fromEntries(importedNames.map((name) => [name, handlersFile])),
         PlainHandler: plainFile,
         plainHandler: plainFile,
-        // Members of the swallowed bodies are not top-level declarations.
+        // Members of the one-line bodies are not top-level declarations.
         handle: "external",
         all: "external",
       });

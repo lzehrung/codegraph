@@ -1,6 +1,5 @@
-import { supportById } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { parseSyntaxTree, type JvmLanguageId } from "./syntax-tree.js";
+import type { JvmLanguageId } from "./syntax-tree.js";
 
 /** Nodes that spell a dotted name: Java `scoped_identifier` and Kotlin `qualified_identifier`. */
 const NAME_NODE_TYPES: Record<string, true> = { identifier: true, scoped_identifier: true, qualified_identifier: true };
@@ -49,17 +48,13 @@ function nameIdentifiers(node: SyntaxNodeLike, out: SyntaxNodeLike[] = []): Synt
   return out;
 }
 
-/** The children of a node outside braces, how many braces they leave open, and the last child. */
-type ScannedChildren = { outside: SyntaxNodeLike[]; open: number; last: SyntaxNodeLike | null };
-
-function scanChildren(parent: SyntaxNodeLike): ScannedChildren {
+/** The children of a node that are not inside braces. */
+function childrenOutsideBraces(parent: SyntaxNodeLike): SyntaxNodeLike[] {
   const outside: SyntaxNodeLike[] = [];
   let open = 0;
-  let last: SyntaxNodeLike | null = null;
   for (let index = 0; ; index += 1) {
     const child = parent.child(index);
-    if (!child) return { outside, open, last };
-    last = child;
+    if (!child) return outside;
     if (child.type === "{") open += 1;
     else if (child.type === "}") open = Math.max(0, open - 1);
     else if (!open) outside.push(child);
@@ -72,7 +67,7 @@ function scanChildren(parent: SyntaxNodeLike): ScannedChildren {
  * outside braces, which count as top-level too.
  */
 function topLevelNodes(parent: SyntaxNodeLike): SyntaxNodeLike[] {
-  const nodes = scanChildren(parent).outside.flatMap((node) => (node.type === "ERROR" ? topLevelNodes(node) : [node]));
+  const nodes = childrenOutsideBraces(parent).flatMap((node) => (node.type === "ERROR" ? topLevelNodes(node) : [node]));
   return parent.type === "ERROR" ? [parent, ...nodes] : nodes;
 }
 
@@ -111,66 +106,23 @@ function kotlinFunctionSymbol(node: SyntaxNodeLike): string | undefined {
   }
 }
 
-/** What re-reading the text a syntax error left out of a tree may cost: the parses and characters one file may use. */
-export const MAX_UNREAD_PARSES = 256;
-export const MAX_UNREAD_CHARS = 1024 * 1024;
-
-/**
- * The text of an ERROR node that can be parsed again: the declaration its children begin, and the text after them. The
- * grammar skips that text without building nodes for it, as when two one-line Kotlin class bodies follow each other.
- * Only an ERROR whose braces balance holds whole declarations and leaves the text after it outside braces. A part is
- * returned only when it is shorter than the `size` of the text it was read from, so reading parts of parts always ends.
- */
-function unreadParts(error: SyntaxNodeLike, size: number): string[] {
-  const { open, last } = scanChildren(error);
-  const cut = last ? last.endIndex - error.startIndex : 0;
-  if (open || cut <= 0) return [];
-  const text = error.text;
-  const parts: string[] = [];
-  if (cut < size) parts.push(text.slice(0, cut));
-  if (cut < text.length) parts.push(text.slice(cut));
-  return parts;
-}
-
-/**
- * The package and top-level declared names of one file. A syntax error can leave the end of a file out of its tree: that
- * text, and the declaration the ERROR node begins, are parsed again within the limits above so their names count too.
- * Names the limits cannot reach stay undeclared.
- */
+/** The package and top-level declared names of one file. An ERROR node declares nothing; the nodes around it still count. */
 export function collectJvmFileFacts(tree: SyntaxTreeLike, languageId: JvmLanguageId): JvmFileFacts {
   const symbols = new Set<string>();
   const javaTypes = new Set<string>();
-  const unread: string[] = [];
-  const read = (root: SyntaxNodeLike): void => {
-    const size = root.endIndex - root.startIndex;
-    for (const member of topLevelNodes(root)) {
-      let name: string | undefined;
-      if (member.type === "ERROR") {
-        unread.push(...unreadParts(member, size));
-      } else if (languageId === "java") {
-        if (JAVA_TYPE_DECLARATION_TYPES[member.type]) name = member.childForFieldName("name")?.text;
-      } else if (member.type === "class_declaration" || member.type === "object_declaration") {
-        name = member.childForFieldName("name")?.text;
-        if (name) javaTypes.add(name);
-      } else if (member.type === "type_alias") {
-        name = member.childForFieldName("type")?.text;
-      } else if (member.type === "function_declaration") {
-        name = kotlinFunctionSymbol(member);
-      }
-      if (name) symbols.add(name);
+  for (const member of topLevelNodes(tree.rootNode)) {
+    let name: string | undefined;
+    if (languageId === "java") {
+      if (JAVA_TYPE_DECLARATION_TYPES[member.type]) name = member.childForFieldName("name")?.text;
+    } else if (member.type === "class_declaration" || member.type === "object_declaration") {
+      name = member.childForFieldName("name")?.text;
+      if (name) javaTypes.add(name);
+    } else if (member.type === "type_alias") {
+      name = member.childForFieldName("type")?.text;
+    } else if (member.type === "function_declaration") {
+      name = kotlinFunctionSymbol(member);
     }
-  };
-  read(tree.rootNode);
-  // Each part parsed can leave more text behind its own ERROR, so `unread` grows while it is read.
-  const support = supportById(languageId);
-  let parses = 0;
-  let chars = 0;
-  for (const text of unread) {
-    parses += 1;
-    chars += text.length;
-    if (!support || parses > MAX_UNREAD_PARSES || chars > MAX_UNREAD_CHARS) break;
-    const part = parseSyntaxTree(text, support).tree;
-    if (part) read(part.rootNode);
+    if (name) symbols.add(name);
   }
   const packageName = jvmPackageName(tree, languageId);
   return languageId === "java"
