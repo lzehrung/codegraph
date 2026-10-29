@@ -221,6 +221,8 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 
 ## Kotlin
 
+- The native grammar is a pinned fork of `tree-sitter-kotlin-ng` with upstream parser fixes, including multi-dollar strings (`$$"..."`, whose `$${name}` and `$$name` templates are references and whose shorter runs of dollars are text) and collection literals (`[]`). No Kotlin form that the corpus checks leave unparsed is known; a file that still ends in an `ERROR` declares only the names read before it, and its references stay `partial`.
+- The pinned grammar reads no identifier written with CJK ideographs or Hangul syllables, or with letters above U+10915: the generator that wrote it keeps only the end points of those ranges. A file that has one ends in an `ERROR` and its references stay `partial`. Backtick names, kana, and Latin, Greek, and Cyrillic letters are read, in templates too.
 - Custom `codegraph grep --query` patterns must use `tree-sitter-kotlin-ng` node names: `identifier`, not `simple_identifier` or `type_identifier`.
 - `import pkg.*` considers top-level callables from every file in the package and picks an overload by argument count; a call two candidates accept stays unresolved.
 - Wildcards import top-level package declarations, never class or companion members; same-named declarations in another package are not imported.
