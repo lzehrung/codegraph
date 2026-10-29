@@ -42,6 +42,7 @@ import {
   findBalancedParentheses,
 } from "./call-compatibility/text-scanner.js";
 
+import { changedSymbolToDef } from "./map.js";
 import type { ReferenceLookupCache } from "./reference-cache.js";
 import { findAncestorOfTypes } from "./signature-node-utils.js";
 import type { CallCompatibilityHint, ChangedSymbol, ImpactDiagnostics } from "./types.js";
@@ -447,12 +448,7 @@ async function collectVerifiedCallsiteReferences(
   const refs: Reference[] = [];
   const seen = new Set<string>();
   const languageId = parsedDefinition.sup.id;
-  const def: SymbolDef = {
-    file: changedSymbol.file,
-    localName: changedSymbol.name,
-    kind: changedSymbol.kind,
-    range: changedSymbol.range,
-  };
+  const def = changedSymbolToDef(changedSymbol);
   let candidateFiles: Set<string> | undefined;
   if ((languageId === "c" || languageId === "cpp") && changedSymbol.kind === SymbolKind.Function) {
     candidateFiles = new Set<string>();
@@ -816,14 +812,10 @@ export async function attachCallCompatibilityHints(
       continue;
     }
     const module = index.byFile.get(fileIdentityKey(changedSymbol.file));
-    const referenceDef: SymbolDef = module?.locals.find(
-      (local) => local.kind === changedSymbol.kind && sameRangeStart(local.range, changedSymbol.range),
-    ) ?? {
-      file: changedSymbol.file,
-      localName: changedSymbol.name,
-      kind: changedSymbol.kind,
-      range: changedSymbol.range,
-    };
+    const referenceDef: SymbolDef =
+      module?.locals.find(
+        (local) => local.kind === changedSymbol.kind && sameRangeStart(local.range, changedSymbol.range),
+      ) ?? changedSymbolToDef(changedSymbol);
     const signature: CallableSignature | null = referenceDef.callable?.arity
       ? { ...referenceDef.callable.arity, confidence: "high" }
       : extractCallableSignature({

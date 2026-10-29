@@ -795,3 +795,131 @@ fn parse_syntax_tree_rejects_unsupported_languages() {
         "unexpected error: {error}"
     );
 }
+
+/// Parses Kotlin source on a worker thread so a scanner that never returns fails the test
+/// instead of hanging the suite. Also returns how long the parse took.
+fn parse_kotlin_timed(
+    source: &str,
+    deadline: std::time::Duration,
+) -> (tree_sitter::Tree, std::time::Duration) {
+    let owned = source.to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let language = language_for_id("kotlin").expect("kotlin language should exist");
+        let mut parser = Parser::new();
+        parser
+            .set_language(&language)
+            .expect("parser language should be set");
+        let started = std::time::Instant::now();
+        let tree = parser.parse(owned, None).expect("source should parse into a tree");
+        let _ = sender.send((tree, started.elapsed()));
+    });
+    receiver.recv_timeout(deadline).unwrap_or_else(|_| {
+        let head: String = source.chars().take(80).collect();
+        panic!(
+            "Kotlin parse of {} bytes did not return within {deadline:?}: {head:?}",
+            source.len()
+        )
+    })
+}
+
+fn parse_kotlin_within_deadline(source: &str) -> tree_sitter::Tree {
+    parse_kotlin_timed(source, std::time::Duration::from_secs(20)).0
+}
+
+#[test]
+fn kotlin_parse_returns_for_files_ending_mid_annotation() {
+    let truncated_real_snippet =
+        "package demo\n\nclass Repo {\n    val items = listOf(1, 2)\n\n    @Deprecated(\"use find\"\n    @get";
+    for source in [
+        "val x = 1\n\n@Ann",
+        "class A {\n  val x = 1\n  @get",
+        "class A {\n  val x = 1\n  @set:Foo",
+        "class A @",
+        "class A\n@constructor",
+        "val x = 1\n@",
+        "class A {\n  var x = 1\n    @Ann(1",
+        truncated_real_snippet,
+    ] {
+        let tree = parse_kotlin_within_deadline(source);
+        assert_eq!(tree.root_node().kind(), "source_file", "{source:?}");
+        assert_eq!(tree.root_node().end_byte(), source.len(), "{source:?}");
+    }
+}
+
+#[test]
+fn kotlin_parse_accepts_one_line_class_bodies() {
+    let tree = parse_kotlin_within_deadline("class A { val x = 1 }\nclass B { val y = 2 }\n");
+    let root = tree.root_node();
+    assert!(!root.has_error(), "unexpected error: {}", root.to_sexp());
+    let mut cursor = root.walk();
+    let classes: Vec<_> = root
+        .named_children(&mut cursor)
+        .filter(|node| node.kind() == "class_declaration")
+        .collect();
+    assert_eq!(classes.len(), 2, "{}", root.to_sexp());
+}
+
+#[test]
+fn kotlin_parse_accepts_forms_the_published_grammar_rejects() {
+    let cases = [
+        "val items: List<Int> = []\n",
+        "class A { val dynamic = 1\n  fun f() = dynamic }\n",
+        "fun f(x: Int) {\n  val final = x\n  final.toString()\n}\n",
+        "val raw = $$\"price: ${'$'}1 $${1 + 1}\"\n",
+        "class Outer {\n  class Inner\n  private constructor(x: Int)\n}\n",
+        "class ByteString\ninternal actual constructor(\n  data: ByteArray,\n)\n",
+    ];
+    for source in cases {
+        let tree = parse_kotlin_within_deadline(source);
+        let root = tree.root_node();
+        assert!(!root.has_error(), "unexpected error for {source:?}: {}", root.to_sexp());
+    }
+
+    let raw = parse_kotlin_within_deadline("val raw = $$\"a $${b} $c\"\n");
+    let sexp = raw.root_node().to_sexp();
+    assert!(sexp.contains("multi_dollar_string_literal"), "{sexp}");
+    // A template is a node with a name, so the name is a reference; `$c` has fewer dollars than the prefix and is text.
+    assert!(sexp.contains("(interpolation (identifier))"), "{sexp}");
+    assert_eq!(sexp.matches("(interpolation").count(), 1, "{sexp}");
+
+    // A letter above ASCII, `_` or a quoted name starts a template on every platform. `$\u{f1}ame` has fewer dollars
+    // than the prefix and is text.
+    let names = parse_kotlin_within_deadline("val raw = $$\"a $$\u{f1}ame $$_x $$`my name` $\u{f1}ame\"\n");
+    let sexp = names.root_node().to_sexp();
+    assert!(!names.root_node().has_error(), "{sexp}");
+    assert_eq!(sexp.matches("(interpolation").count(), 3, "{sexp}");
+}
+
+#[test]
+fn kotlin_parse_reads_long_dollar_and_quote_runs_in_linear_time() {
+    // Only the last two dollars of a run start a template in a `$$` string, and only the last three quotes of a run
+    // close a `$$"""` string. The grammar's scanner once returned one character before them per call and read the
+    // whole run again each time, so 200,000 dollars took about a minute. The linear parse takes milliseconds; the
+    // bound is far from both.
+    let run = "$".repeat(200_000);
+    let quotes = "\"".repeat(200_000);
+    let source = format!(
+        "val a = $$\"{run}name\"\nval b = $$\"\"\"x{run}{{name}}\"\"\"\nval c = $$\"\"\"y{quotes}\"\"\"\n"
+    );
+    let (tree, elapsed) = parse_kotlin_timed(&source, std::time::Duration::from_secs(10));
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "the parse took {elapsed:?}"
+    );
+    let root = tree.root_node();
+    assert!(!root.has_error(), "unexpected parse error");
+
+    let mut templates = Vec::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "interpolation" {
+            templates.push((node.start_byte(), &source[node.byte_range()]));
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    templates.sort();
+    let texts: Vec<&str> = templates.iter().map(|(_, text)| *text).collect();
+    assert_eq!(texts, ["$$name", "$${name}"]);
+}

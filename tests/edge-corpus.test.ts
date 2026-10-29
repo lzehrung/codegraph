@@ -353,7 +353,12 @@ describe("Tree-sitter edge corpus", () => {
           const parsed = parsedByFile.get(marker.file);
           const identifierName = requestedIdentifier ?? target.name;
           const identifiers = parsed ? identifierNodesOnLine(parsed, marker.line) : [];
-          const candidates = identifiers.filter((node) => node.text === identifierName);
+          let candidates = identifiers.filter((node) => node.text === identifierName);
+          // A used name the grammar left in an ERROR node, such as the member of an SCSS `@include ns.member;`,
+          // binds to the one named leaf spelled that way, as a declaring token does for @def.
+          if (!candidates.length && parsed) {
+            candidates = namedLeavesOnLine(parsed, marker.line).filter((node) => node.text === identifierName);
+          }
           const selected = candidates.length === 1 ? candidates[0] : undefined;
           if (!selected) {
             failures.push(

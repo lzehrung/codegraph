@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { buildSymbolGraph, type SymbolEdge, type SymbolGraph, type SymbolNode } from "../graphs/symbol-graph.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
@@ -13,13 +12,16 @@ import {
   graphToMermaidSymbolsWithFiles,
 } from "../graphs/symbol-render.js";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
-import { type BuildOptions, type BuildReport, type CacheLocation } from "../indexer/types.js";
+import { type BuildOptions, type BuildReport, type CacheLocation, type ProjectIndex } from "../indexer/types.js";
 import { summarizeAnalysis } from "../analysis-summary.js";
+import type { LanguageExtensionMap } from "../languages.js";
 import { updateGraphSqlite, writeGraphSqlite } from "../sqlite.js";
+import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
 import type { Edge, Graph } from "../types.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
+import { toJSON, type CommandReport } from "./context.js";
 import {
   parseCacheModeOption,
   parseNonNegativeIntegerOption,
@@ -45,18 +47,6 @@ export type CompactSymbolProjection = {
   symbolIdIndex: string[];
 };
 
-type CommandTimingReport = {
-  totalMs?: number;
-  resolveFilesMs?: number;
-  commandMs?: number;
-};
-
-type GraphCommandReport = {
-  command: string;
-  timings: CommandTimingReport;
-  index?: BuildReport;
-};
-
 function resolveGraphCacheMode(cache: BuildOptions["cache"]): Exclude<BuildOptions["cache"], undefined> {
   return cache ?? "disk";
 }
@@ -64,6 +54,7 @@ function resolveGraphCacheMode(cache: BuildOptions["cache"]): Exclude<BuildOptio
 export type GraphCommandContext = {
   projectRootFs: string;
   discoveryOptions: ProjectFileDiscoveryOptions;
+  languageExtensions: LanguageExtensionMap | undefined;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
   cacheLocation: CacheLocation | undefined;
@@ -88,13 +79,9 @@ export type GraphCommandContext = {
   } | null>;
   writeStdoutLine: (message: string) => void;
   setStderrFilePath: (filePath: string | undefined) => void;
-  writeCommandReport: (report: GraphCommandReport, reportFile: string | undefined) => Promise<void>;
+  writeCommandReport: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
   maybeWriteNativeBackendStatus: (report: BuildReport | undefined, showProgress: boolean) => void;
 };
-
-function toJSON(obj: unknown): string {
-  return JSON.stringify(obj, null, 2);
-}
 
 export function compactFileGraph(fgraph: Graph, stable = false): CompactFileProjection {
   const files = [...fgraph.nodes].sort();
@@ -229,7 +216,7 @@ function stabilizeSymbolGraph(graph: SymbolGraph): SymbolGraph {
 }
 
 export async function handleGraphCommand(context: GraphCommandContext): Promise<void> {
-  const commandReport: GraphCommandReport | undefined = context.reportEnabled
+  const commandReport: CommandReport | undefined = context.reportEnabled
     ? { command: "graph", timings: {} }
     : undefined;
   const commandStart = performance.now();
@@ -254,6 +241,9 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     ...(cacheDir ? { cacheDir } : {}),
     ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),
   };
+  const languageExtensionOptions: Pick<BuildOptions, "languageExtensions"> = context.languageExtensions
+    ? { languageExtensions: context.languageExtensions }
+    : {};
   const stable = true;
   let format: "mermaid" | "dot" | "json" = "mermaid";
   if (context.hasFlag("--json")) {
@@ -315,6 +305,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           discovery: context.discoveryOptions,
           ...context.workerOpts,
           ...cacheDirOptions,
+          ...languageExtensionOptions,
           cache: effectiveCache,
           cacheStrict,
           cacheVerify,
@@ -331,6 +322,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           discovery: context.discoveryOptions,
           ...context.workerOpts,
           ...cacheDirOptions,
+          ...languageExtensionOptions,
           cache: effectiveCache,
           cacheStrict,
           cacheVerify,
@@ -379,6 +371,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       discovery: context.discoveryOptions,
       ...context.workerOpts,
       ...cacheDirOptions,
+      ...languageExtensionOptions,
       cache: effectiveCache,
       cacheStrict,
       cacheVerify,
@@ -431,13 +424,17 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     return;
   }
   let graph: Graph;
+  // A cache-verify build serves unchanged files from the module cache, so its report counts only the files it
+  // parsed. The index also records how native handled the files it reused, so the summary reads both.
+  let verifiedIndex: ProjectIndex | undefined;
   if (cacheVerify) {
-    const index = await buildProjectIndexFromFiles(context.projectRootFs, files, {
+    verifiedIndex = await buildProjectIndexFromFiles(context.projectRootFs, files, {
       onProgress: context.progressHandler,
       threads,
       discovery: context.discoveryOptions,
       ...context.workerOpts,
       ...cacheDirOptions,
+      ...languageExtensionOptions,
       cache: effectiveCache,
       cacheStrict,
       cacheVerify,
@@ -448,10 +445,11 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       },
       report: indexReport,
     });
-    graph = index.graph;
+    graph = verifiedIndex.graph;
   } else {
     graph = await collectGraph(context.projectRootFs, files, {
       threads,
+      ...languageExtensionOptions,
       resolveNodeModules,
       dynamicImportHeuristics,
       ...(resolutionHints.length ? { resolutionHints } : {}),
@@ -459,14 +457,14 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     });
   }
   context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
-  const analysis = summarizeAnalysis({ report: indexReport });
+  const analysis = summarizeAnalysis({ index: verifiedIndex, report: indexReport });
   const graphOut = stable ? stabilizeGraph(graph) : graph;
   if (format === "mermaid") {
     await writeOut(graphToMermaid(graphOut));
   } else if (format === "dot") {
     await writeOut(graphToDOT(graphOut));
   } else {
-    const sqlFiles = includeSqlArtifacts ? files.filter((file) => path.extname(file).toLowerCase() === ".sql") : [];
+    const sqlFiles = includeSqlArtifacts ? files.filter((file) => isSqlFilePath(file, context.languageExtensions)) : [];
     const sqlArtifacts = sqlFiles.length ? await buildSqlArtifactGraphFromFiles(sqlFiles) : undefined;
     const { files: compactFiles, fileEdges } = compactFileGraph(graphOut, stable);
     await writeOut(

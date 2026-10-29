@@ -4,7 +4,8 @@ import { formatMarkdownLinkCheckResult } from "./links.js";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import { formatRequiredArgumentCount } from "../impact/report-shared.js";
-import type { BuildOptions, BuildReport, CacheLocation, ProjectIndex } from "../indexer/types.js";
+import type { BuildOptions, CacheLocation, ProjectIndex } from "../indexer/types.js";
+import type { LanguageExtensionMap } from "../languages.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import {
   appendDuplicateLeadSummary,
@@ -21,27 +22,16 @@ import {
 } from "../presentation/bounds.js";
 import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import type { CommandReport } from "./context.js";
 import { duplicateSimilarityHintsFromChanges } from "./duplicate-similarity.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
-
-type CommandTimingReport = {
-  totalMs?: number;
-  resolveFilesMs?: number;
-  commandMs?: number;
-};
-
-type ReviewCommandReport = {
-  command: string;
-  timings: CommandTimingReport;
-  index?: BuildReport;
-  review?: ReviewBuildReport;
-};
 
 export type ReviewCommandContext = {
   projectRootFs: string;
   discoveryOptions: ProjectFileDiscoveryOptions;
+  languageExtensions: LanguageExtensionMap | undefined;
   reportFile: string | undefined;
-  commandReport: ReviewCommandReport | undefined;
+  commandReport: CommandReport | undefined;
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
   useNativeWorkers: boolean;
@@ -51,7 +41,7 @@ export type ReviewCommandContext = {
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
   writeStderrLine: (message: string) => void;
-  writeCommandReport: (report: ReviewCommandReport, reportFile: string | undefined) => Promise<void>;
+  writeCommandReport: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
   exit: (code: number) => never;
 };
 
@@ -303,6 +293,7 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   const maxTests = parseOptionalNonNegativeIntegerOption(maxTestsRaw, "--max-tests");
   const reviewOpts: Parameters<typeof buildReviewReport>[1] = {};
   reviewOpts.discovery = context.discoveryOptions;
+  if (context.languageExtensions) reviewOpts.languageExtensions = context.languageExtensions;
   if (reviewDepth) reviewOpts.reviewDepth = reviewDepth;
   if (base !== undefined) reviewOpts.gitBase = base;
   if (head !== undefined) reviewOpts.gitHead = head;

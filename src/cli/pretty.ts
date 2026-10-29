@@ -1,3 +1,5 @@
+import { isPlainRecord } from "../util/guards.js";
+
 type PrettyOutputContext = {
   hasFlag: (name: string) => boolean;
   writeJSONLine: (value: unknown) => void;
@@ -5,10 +7,6 @@ type PrettyOutputContext = {
 };
 
 type PrettyRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is PrettyRecord {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function formatLabel(key: string): string {
   const words = key
@@ -18,7 +16,7 @@ function formatLabel(key: string): string {
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }
 
-function formatScalar(value: unknown): string {
+export function formatScalar(value: unknown): string {
   if (value === null || value === undefined) return "none";
   if (typeof value === "boolean") return value ? "yes" : "no";
   if (typeof value === "string") return value || "(empty)";
@@ -34,7 +32,7 @@ function appendRecord(lines: string[], value: PrettyRecord, indent: string): voi
   }
   for (const [key, item] of entries) {
     const label = formatLabel(key);
-    if (Array.isArray(item) || isRecord(item)) {
+    if (Array.isArray(item) || isPlainRecord(item)) {
       lines.push(`${indent}${label}:`);
       appendValue(lines, item, `${indent}  `);
     } else {
@@ -49,9 +47,9 @@ function appendArray(lines: string[], values: readonly unknown[], indent: string
     return;
   }
   for (const value of values) {
-    if (isRecord(value)) {
+    if (isPlainRecord(value)) {
       const entries = Object.entries(value);
-      const firstScalar = entries.find(([, item]) => !Array.isArray(item) && !isRecord(item));
+      const firstScalar = entries.find(([, item]) => !Array.isArray(item) && !isPlainRecord(item));
       if (!firstScalar) {
         lines.push(`${indent}-`);
         appendRecord(lines, value, `${indent}  `);
@@ -75,7 +73,7 @@ function appendArray(lines: string[], values: readonly unknown[], indent: string
 function appendValue(lines: string[], value: unknown, indent: string): void {
   if (Array.isArray(value)) {
     appendArray(lines, value, indent);
-  } else if (isRecord(value)) {
+  } else if (isPlainRecord(value)) {
     appendRecord(lines, value, indent);
   } else {
     lines.push(`${indent}${formatScalar(value)}`);

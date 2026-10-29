@@ -3,8 +3,8 @@ import path from "node:path";
 import { getHotspots } from "../graphs/hotspots.js";
 import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
 import type { Edge, Graph } from "../types.js";
-import { edgeFromImportBinding, edgeKey } from "../util/graph-edges.js";
-import { isPlainRecord } from "../util/guards.js";
+import { edgeFromImportBinding } from "../util/graph-edges.js";
+import { isPlainRecord, readStringRecord } from "../util/guards.js";
 import { normalizePath } from "../util/paths.js";
 import { isCFamilyIncludeForm } from "../util/specifiers.js";
 import { countFilesByLanguage } from "./languages.js";
@@ -14,6 +14,7 @@ import {
   type ArchitectureSnapshot,
   type ArchitectureUnresolvedImport,
 } from "./types.js";
+import { toArchitectureGraphEdges } from "./graph-edges.js";
 
 interface ArtifactManifest {
   artifacts: { graphJson: string };
@@ -27,15 +28,6 @@ interface PortableGraphJson {
     fileEdges: Edge[];
     symbols?: Array<{ file: string; name: string; kind: string }>;
   };
-}
-
-function readStringRecord(value: unknown): Record<string, string> {
-  if (!isPlainRecord(value)) return {};
-  const out: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === "string") out[key] = entry;
-  }
-  return out;
 }
 
 function parseManifest(value: unknown): ArtifactManifest | null {
@@ -128,22 +120,8 @@ function parseGraphJson(value: unknown): PortableGraphJson {
   };
 }
 
-function edgeTarget(edge: Edge): string {
-  if (edge.to.type === "file") return edge.to.path;
-  return `external:${edge.to.name}`;
-}
-
 function graphEdges(edges: readonly Edge[]): ArchitectureGraphEdge[] {
-  return edges
-    .map((edge) => ({
-      key: edgeKey(edge),
-      from: edge.from,
-      to: edgeTarget(edge),
-      raw: edge.raw,
-      ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
-      ...(edge.includeForm ? { includeForm: edge.includeForm } : {}),
-    }))
-    .sort((left, right) => left.key.localeCompare(right.key));
+  return toArchitectureGraphEdges(edges);
 }
 
 function unresolvedImports(graph: Graph): { total: number; imports: ArchitectureUnresolvedImport[] } {

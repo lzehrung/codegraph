@@ -1,5 +1,6 @@
 import { buildIndexedCandidateCoverage } from "../indexer/navigation-references.js";
 import { createNavigationProvenance, okGoToResult } from "../indexer/navigation-provenance.js";
+import { siteKey } from "../indexer/shared.js";
 import type {
   FindReferencesResult,
   GoToRequest,
@@ -32,10 +33,6 @@ type FindScssReferencesOptions = {
   includeDefinition: boolean;
   maxReferences?: number;
 };
-
-function siteKey(file: FileId, range: Reference["range"]): string {
-  return `${fileIdentityKey(file)}:${range.start.line}:${range.start.column}`;
-}
 
 /** A name that only a module can supply: a miss there never falls back to the generic walker. */
 function isModuleSite(use: ScssUse): boolean {

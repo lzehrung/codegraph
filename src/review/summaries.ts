@@ -13,12 +13,17 @@ import {
 import { symbolId } from "../indexer/symbols.js";
 import { attachCallCompatibilityHints } from "../impact/call-compatibility.js";
 import { computeMemberResolutionCoverage } from "../impact/member-resolution-coverage.js";
-import { collectChangedLines, locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "../impact/map.js";
+import {
+  changedSymbolToDef,
+  collectChangedLines,
+  locateChangedSymbolsWithLines,
+  mapChangedLinesToSymbols,
+} from "../impact/map.js";
 import type { CallCompatibilityHint, ChangedSymbol, FileChange, Hunk } from "../impact/types.js";
 import type { FileId, Range } from "../types.js";
 import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
 import { mapLimit } from "../util/concurrency.js";
-import { collectLineStartOffsets } from "../util/lines.js";
+import { collectLineStartOffsets, positionAtOffset } from "../util/lines.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import type { DeletedFileSnapshot } from "./deleted.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
@@ -49,10 +54,6 @@ const REVIEW_EXPORT_STATEMENT_PATTERNS = [
 ];
 
 type ReviewableExportEntry = Exclude<ExportEntry, { type: "local" }>;
-
-function relativePath(root: string, file: string): string {
-  return toProjectDisplayPath(root, file);
-}
 
 function sortSymbols(symbols: SymbolDef[]): SymbolDef[] {
   return symbols.slice().sort((left, right) => symbolId(left).localeCompare(symbolId(right)));
@@ -136,18 +137,6 @@ type ExportStatement = {
   specifiers: ExportSpecifier[];
 };
 
-// 1-based line number for a character offset, mirroring src/languages/sfc.ts.
-function lineForOffset(lineStarts: readonly number[], offset: number): number {
-  let lo = 0;
-  let hi = lineStarts.length - 1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (lineStarts[mid]! <= offset) lo = mid + 1;
-    else hi = mid - 1;
-  }
-  return hi + 1;
-}
-
 // Locate whole re-export declarations, which may span multiple lines: an export
 // brace list broken across lines followed by a from-clause counts as one
 // declaration. Statements are found on comment/string-masked source so literals
@@ -168,8 +157,8 @@ function listExportStatements(source: string): ExportStatement[] {
       const specifiers = parseExportSpecifiers(text);
       if (!specifiers.length) continue;
       statements.push({
-        startLine: lineForOffset(lineStarts, match.index),
-        endLine: lineForOffset(lineStarts, match.index + match[0].length - 1),
+        startLine: positionAtOffset(lineStarts, match.index).line,
+        endLine: positionAtOffset(lineStarts, match.index + match[0].length - 1).line,
         specifiers,
       });
     }
@@ -329,7 +318,7 @@ function rangeSnippet(source: string, range: Range): string {
 function reviewFileDiffMetadata(projectRoot: string, diffChange: FileChange | undefined): ReviewDiffMetadata {
   if (!diffChange) return {};
   return {
-    ...(diffChange.oldPath ? { oldFile: relativePath(projectRoot, diffChange.oldPath) } : {}),
+    ...(diffChange.oldPath ? { oldFile: toProjectDisplayPath(projectRoot, diffChange.oldPath) } : {}),
     ...(diffChange.similarityIndex !== undefined ? { similarityIndex: diffChange.similarityIndex } : {}),
     ...(diffChange.modeChanged ? { modeChanged: true } : {}),
   };
@@ -487,16 +476,11 @@ export async function summarizeChangedFiles(input: {
       }
       const { changedSymbols, changedLines, parseFailed } = await locateChangedSymbolsWithLines(index, file, hunks);
       if (parseFailed) {
-        diagnostics.symbolMappingParseFailures.push(relativePath(projectRoot, file));
+        diagnostics.symbolMappingParseFailures.push(toProjectDisplayPath(projectRoot, file));
       }
       const uniqueSymbols = new Map<string, SymbolDef>();
       for (const symbol of changedSymbols) {
-        uniqueSymbols.set(symbol.id, {
-          file: symbol.file,
-          localName: symbol.name,
-          kind: symbol.kind,
-          range: symbol.range,
-        });
+        uniqueSymbols.set(symbol.id, changedSymbolToDef(symbol));
       }
       const locals = sortSymbols(Array.from(uniqueSymbols.values()));
       const handles = locals.map((local) => symbolId(local));
@@ -586,11 +570,13 @@ export async function summarizeChangedFiles(input: {
         callsiteCoverage = refs.referenceCoverage.affectedFiles
           ? {
               ...refs.referenceCoverage,
-              affectedFiles: refs.referenceCoverage.affectedFiles.map((file) => relativePath(projectRoot, file)),
+              affectedFiles: refs.referenceCoverage.affectedFiles.map((file) =>
+                toProjectDisplayPath(projectRoot, file),
+              ),
             }
           : refs.referenceCoverage;
         const limited = refs.references.map((ref) => ({
-          file: relativePath(projectRoot, ref.file),
+          file: toProjectDisplayPath(projectRoot, ref.file),
           range: ref.range,
         }));
         if (limited.length) callsites = limited;
@@ -616,7 +602,7 @@ export async function summarizeChangedFiles(input: {
         const isDeletedByDiff = diffKindsByFile.get(file) === "deleted";
         return {
           summary: {
-            file: relativePath(projectRoot, file),
+            file: toProjectDisplayPath(projectRoot, file),
             status: isDeletedByDiff ? "deleted" : "updated",
             ...diffMetadata,
             isBinary: true,
@@ -656,7 +642,7 @@ export async function summarizeChangedFiles(input: {
         ];
         return {
           summary: {
-            file: relativePath(projectRoot, file),
+            file: toProjectDisplayPath(projectRoot, file),
             status: "deleted",
             ...diffMetadata,
             symbols,
@@ -669,7 +655,7 @@ export async function summarizeChangedFiles(input: {
         const isDeletedByDiff = diffKindsByFile.get(file) === "deleted";
         const isMissingExplicitInput = !fileExistsOnDisk && explicitFiles.has(file) && !isDeletedByDiff;
         if (isMissingExplicitInput) {
-          diagnostics.missingFiles.push(relativePath(projectRoot, file));
+          diagnostics.missingFiles.push(toProjectDisplayPath(projectRoot, file));
         }
         // Existing non-indexed files (scripts, docs, extensionless) are still updates.
         // Only report deleted when the diff/disk evidence says the path is gone.
@@ -681,7 +667,7 @@ export async function summarizeChangedFiles(input: {
         }
         return {
           summary: {
-            file: relativePath(projectRoot, file),
+            file: toProjectDisplayPath(projectRoot, file),
             status,
             ...diffMetadata,
             symbols: [],
@@ -698,7 +684,7 @@ export async function summarizeChangedFiles(input: {
       const symbols = [...localSymbols, ...exportSummaryGroups.changed];
       return {
         summary: {
-          file: relativePath(projectRoot, file),
+          file: toProjectDisplayPath(projectRoot, file),
           status: "updated",
           ...diffMetadata,
           symbols,

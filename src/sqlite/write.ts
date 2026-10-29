@@ -1,17 +1,11 @@
 import { type SymbolGraph, type SymbolNode } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
 import type { SqliteDatabase } from "../sqlite-driver.js";
-import type { SqliteGraphOptions, SqliteGraphUpdateOptions } from "./types.js";
+import type { SqliteArtifactFileSignature, SqliteGraphOptions, SqliteGraphUpdateOptions } from "./types.js";
 import { execRowsParams } from "./common.js";
 import { withSqliteDatabase } from "./database.js";
 import { GRAPH_SNAPSHOT_RETENTION } from "./schema.js";
 export const SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY = "artifact_file_signatures_v1";
-
-type SqliteArtifactFileSignature = {
-  path: string;
-  size: number;
-  mtimeMs: number;
-};
 
 function normalizeSqliteArtifactFileSignatures(
   signatures: Iterable<SqliteArtifactFileSignature>,

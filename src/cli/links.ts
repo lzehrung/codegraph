@@ -1,6 +1,7 @@
 import { checkMarkdownLinks } from "../document-links/check.js";
 import type { MarkdownLinkCheckResult } from "../document-links/check.js";
 import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
+import { compareCodeUnits } from "../util/collections.js";
 
 export type LinksCommandContext = {
   projectRootFs: string;
@@ -11,17 +12,11 @@ export type LinksCommandContext = {
   exit: (code: number) => never;
 };
 
-function compareText(left: string, right: string): number {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
-}
-
 function compareFailures(
   left: MarkdownLinkCheckResult["failures"][number],
   right: MarkdownLinkCheckResult["failures"][number],
 ): number {
-  const fileComparison = compareText(left.file, right.file);
+  const fileComparison = compareCodeUnits(left.file, right.file);
   if (fileComparison) return fileComparison;
 
   const lineComparison = left.range.start.line - right.range.start.line;
@@ -30,10 +25,10 @@ function compareFailures(
   const columnComparison = left.range.start.column - right.range.start.column;
   if (columnComparison) return columnComparison;
 
-  const reasonComparison = compareText(left.reason, right.reason);
+  const reasonComparison = compareCodeUnits(left.reason, right.reason);
   if (reasonComparison) return reasonComparison;
 
-  return compareText(left.raw, right.raw);
+  return compareCodeUnits(left.raw, right.raw);
 }
 
 export function formatMarkdownLinkCheckResult(result: MarkdownLinkCheckResult, verbose: boolean): string {

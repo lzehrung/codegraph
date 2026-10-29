@@ -266,6 +266,16 @@ describe("shared MCP server lifecycle", () => {
     expect((await readRegistry(root)).url).toBe(`http://0.0.0.0:${port}/mcp`);
   });
 
+  it("starts a server that accepts --no-watch", async () => {
+    const root = await createTestRoot();
+    const port = await reservePort();
+
+    const start = await runCli(["server", "start", "--root", root, "--port", String(port), "--no-watch"]);
+
+    expect(start.exitCode).toBe(0);
+    expect((await readRegistry(root)).url).toBe(`http://127.0.0.1:${port}/mcp`);
+  });
+
   it("preserves caller-relative cache paths when starting a server", async () => {
     const root = await createTestRoot();
     const callerCwd = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-mcp-server-caller-"));

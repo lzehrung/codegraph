@@ -442,15 +442,21 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     file?: unknown;
     csharpNamespaceFacts?: unknown;
     jvmFacts?: unknown;
+    importLookupIncomplete?: unknown;
     docstringsChecked?: unknown;
     exports?: unknown;
     imports?: unknown;
     locals?: unknown;
+    nativeOutcome?: unknown;
     parseErrorRanges?: unknown;
+    parserDegraded?: unknown;
   };
   return (
     typeof mod.file === "string" &&
     (mod.docstringsChecked === undefined || typeof mod.docstringsChecked === "boolean") &&
+    isOptionalNativeOutcome(mod.nativeOutcome) &&
+    (mod.parserDegraded === undefined || typeof mod.parserDegraded === "boolean") &&
+    (mod.importLookupIncomplete === undefined || typeof mod.importLookupIncomplete === "boolean") &&
     Array.isArray(mod.exports) &&
     Array.isArray(mod.imports) &&
     mod.imports.every(hasValidImportBindingRanges) &&
@@ -459,7 +465,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     (mod.csharpNamespaceFacts === undefined || isCsharpNamespaceFacts(mod.csharpNamespaceFacts)) &&
     (mod.jvmFacts === undefined || isJvmFileFacts(mod.jvmFacts)) &&
     (mod.parseErrorRanges === undefined ||
-      (Array.isArray(mod.parseErrorRanges) && mod.parseErrorRanges.every(hasValidParseErrorRange))) &&
+      (Array.isArray(mod.parseErrorRanges) && mod.parseErrorRanges.every(isParseErrorRange))) &&
     mod.exports.every((entry: unknown) => {
       if (!entry || typeof entry !== "object") return false;
       const local = entry as { type?: unknown; target?: unknown };
@@ -468,7 +474,11 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   );
 }
 
-function hasValidParseErrorRange(value: unknown): value is ParseErrorRange {
+export function isOptionalNativeOutcome(value: unknown): value is ModuleIndex["nativeOutcome"] {
+  return value === undefined || value === "used" || value === "skipped";
+}
+
+export function isParseErrorRange(value: unknown): value is ParseErrorRange {
   if (!value || typeof value !== "object") return false;
   const range = value as { startIndex?: unknown; endIndex?: unknown };
   const startIndex = range.startIndex;
@@ -515,6 +525,7 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     jvmTypeOwnerStartIndex?: unknown;
     jvmTypeWildcardName?: unknown;
     jvmStaticWildcardName?: unknown;
+    csharpDirectiveStartIndex?: unknown;
     jvmPackageFiles?: unknown;
     jvmPackageLanguageId?: unknown;
     jvmSamePackage?: unknown;
@@ -525,6 +536,7 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     isOptionalRange(binding.importedRange) &&
     isOptionalRange(binding.localRange) &&
     (binding.jvmTypeOwnerStartIndex === undefined || typeof binding.jvmTypeOwnerStartIndex === "number") &&
+    (binding.csharpDirectiveStartIndex === undefined || typeof binding.csharpDirectiveStartIndex === "number") &&
     (binding.jvmTypeWildcardName === undefined || typeof binding.jvmTypeWildcardName === "string") &&
     (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&
     (binding.jvmPackageFiles === undefined ||
@@ -537,11 +549,11 @@ function hasValidImportBindingRanges(value: unknown): boolean {
   );
 }
 
-function isOptionalRange(value: unknown): boolean {
+export function isOptionalRange(value: unknown): boolean {
   return value === undefined || isRange(value);
 }
 
-function isRange(value: unknown): value is Range {
+export function isRange(value: unknown): value is Range {
   if (!value || typeof value !== "object") return false;
   const range = value as Partial<Range>;
   return isPos(range.start) && isPos(range.end);

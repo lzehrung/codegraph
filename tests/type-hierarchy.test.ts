@@ -1,7 +1,8 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
+import type { SymbolGraph } from "../src/graphs/symbol-graph.js";
 import { findImplementations, findTypeHierarchy } from "../src/indexer/type-hierarchy.js";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -79,6 +80,26 @@ describe("type hierarchy", () => {
     expect(result).toMatchObject({ status: "ok", omitted: 1 });
     if (result.status !== "ok") return;
     expect(result.relations).toEqual([{ targetId: "b", relation: "extends", depth: 1 }]);
+  });
+
+  it("rejects invalid depth and limit options by name", () => {
+    const graph = {
+      nodes: new Map([["a", { id: "a", file: "a.ts", name: "A", kind: "class" as const }]]),
+      edges: [],
+    };
+    expect(() => findTypeHierarchy(graph, "a", "super", { depth: 0 })).toThrow(
+      "Hierarchy depth must be a positive integer.",
+    );
+    expect(() => findTypeHierarchy(graph, "a", "super", { depth: -1 })).toThrow(
+      "Hierarchy depth must be a positive integer.",
+    );
+    expect(() => findTypeHierarchy(graph, "a", "super", { limit: -1 })).toThrow(
+      "Hierarchy limit must be a non-negative integer.",
+    );
+    expect(() => findTypeHierarchy(graph, "a", "super", { limit: 1.5 })).toThrow(
+      "Hierarchy limit must be a non-negative integer.",
+    );
+    expect(findTypeHierarchy(graph, "a", "super", { depth: 99, limit: 0 })).toMatchObject({ status: "ok", limit: 0 });
   });
 
   it("finds proven type and interface-member implementations without unrelated name matches", async () => {
@@ -235,6 +256,85 @@ describe("type hierarchy", () => {
     expect(pastImplLimit).toMatchObject({ status: "ok", omitted: 1 });
     if (pastImplLimit.status === "ok") {
       expect(pastImplLimit.implementations).toHaveLength(1);
+    }
+  });
+
+  it("orders relations and implementations by locale-independent code units", async () => {
+    const root = await mkTmpDir("cg-type-hierarchy-order-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export interface Service { run(): void }\n");
+    await fsp.writeFile(
+      path.join(root, "impl.ts"),
+      [
+        'import type { Service } from "./service.js";',
+        "export class apple implements Service { run(): void {} }",
+        "export class _under implements Service { run(): void {} }",
+        "export class Zed implements Service { run(): void {} }",
+        "export class \u00c9clair implements Service { run(): void {} }",
+      ].join("\n"),
+    );
+    const index = await buildProjectIndex(root);
+    const graph = await buildSymbolGraphDetailed(index);
+    const service = [...graph.nodes.values()].find((node) => node.name === "Service");
+    expect(service).toBeDefined();
+
+    const localeSpy = vi.spyOn(String.prototype, "localeCompare");
+    try {
+      const result = findImplementations(index, graph, service!.id);
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.implementations.map((match) => graph.nodes.get(match.symbolId)?.name)).toEqual([
+        "Zed",
+        "_under",
+        "apple",
+        "\u00c9clair",
+      ]);
+      expect(localeSpy).not.toHaveBeenCalled();
+    } finally {
+      localeSpy.mockRestore();
+    }
+  });
+
+  it("orders direct relations, files, and diamond parents by code units without locale collation", () => {
+    const node = (id: string, file: string, name: string) => ({
+      id,
+      file,
+      name,
+      kind: "class" as const,
+    });
+    const graph: SymbolGraph = {
+      nodes: new Map([
+        ["child", node("child", "child.ts", "Child")],
+        ["zebra", node("zebra", "zebra.ts", "Zebra")],
+        ["arger", node("arger", "\u00c4rger.ts", "Arger")],
+        ["upper", node("upper", "Z.ts", "Upper")],
+        ["lower", node("lower", "a.ts", "lower")],
+        ["shared", node("shared", "shared.ts", "Shared")],
+      ]),
+      edges: [
+        { from: "child", to: "arger", label: "extends" },
+        { from: "child", to: "zebra", label: "extends" },
+        { from: "child", to: "lower", label: "extends" },
+        { from: "child", to: "upper", label: "extends" },
+        { from: "arger", to: "shared", label: "extends" },
+        { from: "zebra", to: "shared", label: "implements" },
+      ],
+    };
+
+    const localeSpy = vi.spyOn(String.prototype, "localeCompare");
+    try {
+      const result = findTypeHierarchy(graph, "child", "super", { depth: 3 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.relations.map((relation) => [relation.targetId, relation.relation, relation.depth])).toEqual([
+        ["upper", "extends", 1],
+        ["lower", "extends", 1],
+        ["zebra", "extends", 1],
+        ["arger", "extends", 1],
+        ["shared", "implements", 2],
+      ]);
+      expect(localeSpy).not.toHaveBeenCalled();
+    } finally {
+      localeSpy.mockRestore();
     }
   });
 });

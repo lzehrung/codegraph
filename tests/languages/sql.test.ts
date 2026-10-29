@@ -2285,3 +2285,134 @@ describe("SQL routine call sites", () => {
     });
   });
 });
+
+describe("SQL file extensions", () => {
+  // `.sql` is the control. `.ddl`, `.pgsql`, and `.mysql` are built-in SQL extensions, and `.psql` is a
+  // `languages.extensions` mapping, so a file reads as SQL by registry, not by the literal `.sql`.
+  const extensionCases: ReadonlyArray<{ ext: string; languageExtensions?: Record<string, string> }> = [
+    { ext: ".sql" },
+    { ext: ".ddl" },
+    { ext: ".pgsql" },
+    { ext: ".mysql" },
+    { ext: ".psql", languageExtensions: { ".psql": "sql" } },
+  ];
+  const schemaText = "CREATE TABLE users (id integer primary key, email text);";
+  const reportText = "SELECT email FROM users;";
+  const queryText = "SELECT id FROM users;";
+  const usersColumn = (line: string): number => line.indexOf("users") + 1;
+
+  type ExtensionProject = {
+    root: string;
+    schema: string;
+    report: string;
+    queries: string;
+    index: ProjectIndex;
+  };
+
+  /** A schema and a report in the extension under test, and a `.sql` query file that reads the same table. */
+  async function withExtensionProject(
+    ext: string,
+    languageExtensions: Record<string, string> | undefined,
+    run: (project: ExtensionProject) => Promise<void>,
+  ): Promise<void> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-extension-"));
+    try {
+      const schema = path.join(root, "db", `schema${ext}`).replace(/\\/g, "/");
+      const report = path.join(root, "db", `report${ext}`).replace(/\\/g, "/");
+      const queries = path.join(root, "db", "queries.sql").replace(/\\/g, "/");
+      await fsp.mkdir(path.join(root, "db"), { recursive: true });
+      await fsp.writeFile(schema, `${schemaText}\n`, "utf8");
+      await fsp.writeFile(report, `${reportText}\n`, "utf8");
+      await fsp.writeFile(queries, `${queryText}\n`, "utf8");
+      if (languageExtensions) {
+        await fsp.writeFile(
+          path.join(root, "codegraph.config.json"),
+          JSON.stringify({ languages: { extensions: languageExtensions } }),
+          "utf8",
+        );
+      }
+      const index = await buildProjectIndex(root, {
+        cache: "memory",
+        ...(languageExtensions ? { languageExtensions } : {}),
+      });
+      await run({ root, schema, report, queries, index });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  describe.each(extensionCases)("$ext", ({ ext, languageExtensions }) => {
+    // The declaration of `users` and the two uses of it, in each file of the project.
+    const expectedSites = [
+      `db/schema${ext}:1:${usersColumn(schemaText)}`,
+      `db/report${ext}:1:${usersColumn(reportText)}`,
+      `db/queries.sql:1:${usersColumn(queryText)}`,
+    ].sort();
+
+    it("resolves a use to the definition in a schema of that extension", async () => {
+      await withExtensionProject(ext, languageExtensions, async (project) => {
+        for (const [file, text] of [
+          [project.queries, queryText],
+          [project.report, reportText],
+        ] as const) {
+          const result = await goToDefinition(project.index, { file, line: 1, column: usersColumn(text) });
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") continue;
+          expect(result.definition.file).toBe(project.schema);
+          expect(result.definition.kind).toBe("table");
+          expect(result.definition.range.start.line).toBe(1);
+        }
+      });
+    });
+
+    it("finds the declaration and every use of a definition with complete coverage", async () => {
+      await withExtensionProject(ext, languageExtensions, async (project) => {
+        const fromDefinition = await findReferences(project.index, {
+          file: project.schema,
+          line: 1,
+          column: usersColumn(schemaText),
+        });
+        const fromUse = await findReferences(project.index, {
+          file: project.queries,
+          line: 1,
+          column: usersColumn(queryText),
+        });
+
+        for (const result of [fromDefinition, fromUse]) {
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") continue;
+          const sites = result.references.map(
+            (reference) =>
+              `${path.relative(project.root, reference.file).replace(/\\/g, "/")}:${reference.range.start.line}:${reference.range.start.column}`,
+          );
+          expect(sites.sort()).toEqual(expectedSites);
+          expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        }
+      });
+    });
+
+    it("previews a rename that edits the declaration and every use", async () => {
+      await withExtensionProject(ext, languageExtensions, async (project) => {
+        const session = createAgentSession({ root: project.root, freshness: { policy: "check" } });
+        try {
+          const symbols = await workspaceSymbolsWithSession(session, { root: project.root, query: "users" });
+          const target = symbols.symbols.find((symbol) => symbol.name === "users");
+          if (!target) throw new Error("Expected the symbol users");
+          const preview = await previewRenameWithSession(session, {
+            root: project.root,
+            handle: target.handle,
+            newName: "accounts",
+          });
+
+          const sites = preview.edits.map((edit) => `${edit.file}:${edit.range.start.line}:${edit.range.start.column}`);
+          expect(sites.sort()).toEqual(expectedSites);
+          expect(new Set(preview.edits.map((edit) => edit.oldText))).toEqual(new Set(["users"]));
+          // Rename reports the declaration's own statement as an unsafe site in every extension. No use is.
+          expect(preview.unsafeSites.filter((site) => site.location.file !== `db/schema${ext}`)).toEqual([]);
+        } finally {
+          session.invalidate();
+        }
+      });
+    });
+  });
+});

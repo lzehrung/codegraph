@@ -18,3 +18,6 @@ export function errorMessage(error: unknown): string {
 export function isFileSystemErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && String(error.code) === code;
 }
+export function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
+  return isFileSystemErrorCode(error, "ENOENT") || isFileSystemErrorCode(error, "ENOTDIR");
+}

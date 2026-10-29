@@ -1,3 +1,4 @@
+import { newFileRangeForHunk } from "./hunks.js";
 import type { FileId } from "../types.js";
 import type {
   CallCompatibilityHint,
@@ -9,7 +10,22 @@ import type {
   ImpactTopItem,
   ReexportChainEntry,
   CompactImpactReport,
+  FileChange,
+  ImpactReport,
 } from "./types.js";
+
+export function mapChangedFiles(
+  changes: readonly FileChange[],
+  displayFile: (file: FileId) => FileId,
+): ImpactReport["changedFiles"] {
+  return changes.map((change) => ({
+    file: displayFile(change.path),
+    kind: change.kind,
+    ...(change.oldPath ? { oldFile: displayFile(change.oldPath) } : {}),
+    ...(change.similarityIndex !== undefined ? { similarityIndex: change.similarityIndex } : {}),
+    hunks: change.hunks.map((hunk) => newFileRangeForHunk(hunk)),
+  }));
+}
 
 type MappedImpactCycleEdge<TFile extends FileId | number> = {
   from: TFile;

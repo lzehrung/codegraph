@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { boundList } from "../presentation/bounds.js";
-import { buildProjectIndexIncremental } from "../indexer/build-index.js";
+import { buildProjectIndexIncremental, emitIndexCheckActivity, emitIndexCheckStart } from "../indexer/build-index.js";
 import { resolveIncrementalFilePlan, type IncrementalFilePlan } from "../indexer/incremental-plan.js";
 import { computeConfigHash } from "../indexer/build-cache/manifest.js";
 import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
@@ -23,6 +23,7 @@ import { createAgentFileLookup } from "./normalize.js";
 import { summarizeAnalysis, type AnalysisSummary } from "../analysis-summary.js";
 import { runSessionInvalidationHooks } from "./session-lifecycle.js";
 import { prepareDuplicateAnalysis, type DuplicatePreparedAnalysis } from "../duplicates.js";
+import { isMissingPathError } from "../util/errors.js";
 
 export type AgentProjectSnapshot = {
   root: string;
@@ -81,8 +82,18 @@ export type AgentSession = {
   /** Bucketed duplicate-detection analysis for the current index, memoized for the session. */
   loadDuplicateAnalysis?: () => Promise<DuplicatePreparedAnalysis>;
   checkFreshness?: () => Promise<AgentFreshnessResult>;
+  /**
+   * Drops the cached freshness result and any in-flight freshness check so the next `checkFreshness` scans
+   * again. File-watcher hint: the pull check stays the authority. Does not invalidate the index itself.
+   */
+  markChanged?: () => void;
   invalidate: () => void;
 };
+
+/** A session without a freshness check reports itself fresh. */
+export async function checkSessionFreshness(session: AgentSession): Promise<AgentFreshnessResult> {
+  return session.checkFreshness ? await session.checkFreshness() : { state: "fresh" };
+}
 
 export function assertNoPrebuiltSessionWithBuildOptions(
   options: { session?: AgentSession; buildOptions?: BuildOptions },
@@ -157,18 +168,6 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
   };
 }
 
-function emitAgentFilePlanProgress(options: AgentSessionOptions): void {
-  options.buildOptions?.onProgress?.({
-    type: "progress",
-    phase: "start",
-    mode: "check",
-    message: "Discovering source files",
-    activity: "Discovering source files",
-    current: 0,
-    total: 0,
-  });
-}
-
 /**
  * Report discovery work while it runs. Discovery walks or Git-lists the whole project
  * before any file is parsed, and on a project holding a large ignored tree that phase can
@@ -178,18 +177,10 @@ function emitAgentFilePlanProgress(options: AgentSessionOptions): void {
 function agentDiscoveryProgressReporter(
   options: AgentSessionOptions,
 ): ((progress: { activity: string; current: number; total: number }) => void) | undefined {
-  const onProgress = options.buildOptions?.onProgress;
-  if (!onProgress) return undefined;
+  const buildOptions = options.buildOptions;
+  if (!buildOptions?.onProgress) return undefined;
   return ({ activity, current, total }) => {
-    onProgress({
-      type: "progress",
-      phase: "update",
-      mode: "check",
-      message: activity,
-      activity,
-      current,
-      total,
-    });
+    emitIndexCheckActivity(buildOptions, activity, current, total);
   };
 }
 
@@ -225,7 +216,7 @@ async function resolveAgentSessionFilePlan(
   const { DEFAULT_PROJECT_PATTERNS } = await import("../util/project-files.js");
   const customPatterns = languageExtensionPatterns(languageExtensions);
   const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
-  emitAgentFilePlanProgress(options);
+  emitIndexCheckStart(options.buildOptions, "Discovering source files");
   const onDiscoveryProgress = agentDiscoveryProgressReporter(options);
   const files = await listProjectFilesWithGitCandidates(options.root, patterns, {
     ...discoveryOptions,
@@ -247,12 +238,6 @@ export async function listAgentSessionFiles(
   discoveryContext?: ProjectDiscoveryContext,
 ): Promise<string[]> {
   return (await resolveAgentSessionFilePlan(options, discoveryContext)).files;
-}
-
-function isMissingStatRace(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  if (!("code" in error)) return false;
-  return error.code === "ENOENT" || error.code === "ENOTDIR";
 }
 
 function summarizeChangedFiles(files: readonly string[]): {
@@ -283,7 +268,7 @@ async function collectAgentFileSignatures(files: readonly string[]): Promise<Map
         mtimeMs: stat.mtimeMs,
       });
     } catch (error) {
-      if (isMissingStatRace(error)) return;
+      if (isMissingPathError(error)) return;
       throw new Error(`Unable to verify freshness for ${resolvedFile}`, { cause: error });
     }
   });
@@ -350,6 +335,29 @@ function diffAgentFileSignatures(
   return { changedFiles, changedBytes };
 }
 
+export function createRequestSession(
+  request: Pick<AgentSessionOptions, "root" | "buildOptions">,
+  extra: Omit<AgentSessionOptions, "root" | "buildOptions"> = {},
+): AgentSession {
+  return createAgentSession({
+    root: request.root,
+    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
+    ...extra,
+  });
+}
+
+export async function withRequestSession<T>(
+  request: Pick<AgentSessionOptions, "root" | "buildOptions">,
+  run: (session: AgentSession) => Promise<T>,
+  extra: Omit<AgentSessionOptions, "root" | "buildOptions"> = {},
+): Promise<T> {
+  const session = createRequestSession(request, extra);
+  try {
+    return await run(session);
+  } finally {
+    session.invalidate();
+  }
+}
 export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let cachedFilePlan: Promise<AgentSessionFilePlan> | undefined;
   let cachedFiles: Promise<string[]> | undefined;
@@ -366,6 +374,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let lastFreshnessCheckedAt = 0;
   let lastFreshnessResult: AgentFreshnessResult | undefined;
   let freshnessInFlight: Promise<AgentFreshnessResult> | undefined;
+  // Bumped by markChanged. A scan that started under an older generation may have read files before the edit
+  // that bumped it, so it must not cache its result.
+  let changeGeneration = 0;
 
   const invalidate = (): void => {
     runSessionInvalidationHooks(session);
@@ -380,6 +391,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     cachedFileSignatures = undefined;
     cachedConfigurationIdentity = undefined;
     cachedDuplicateAnalysis = undefined;
+    lastFreshnessCheckedAt = 0;
+    lastFreshnessResult = undefined;
+    freshnessInFlight = undefined;
+  };
+
+  const markChanged = (): void => {
+    changeGeneration += 1;
     lastFreshnessCheckedAt = 0;
     lastFreshnessResult = undefined;
     freshnessInFlight = undefined;
@@ -590,10 +608,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     }
     if (freshnessInFlight) return freshnessInFlight;
 
-    freshnessInFlight = (async (): Promise<AgentFreshnessResult> => {
+    const generation = changeGeneration;
+    const scan: Promise<AgentFreshnessResult> = (async (): Promise<AgentFreshnessResult> => {
       if (cachedBase) await cachedBase;
       else if (cachedFilePlan) await cachedFilePlan;
-      if (!cachedFileSignatures) return { state: "fresh" };
+      // The baseline that this scan checks, read before any file is: the stats below cannot be older than it.
+      const signatures = cachedFileSignatures;
+      if (!signatures) return { state: "fresh" };
       // Share discovery work within this check. File-only sessions have no indexed
       // configuration baseline, so they only need to compare discovery signatures.
       const discoveryContext = createProjectDiscoveryContext(options.root);
@@ -610,9 +631,11 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         resolveAgentSessionFilePlan(options, discoveryContext),
       ]);
       const currentSignatures = await collectAgentFileSignatures(currentFilePlan.files);
-      const signatures = cachedFileSignatures;
+      // `invalidate` dropped that baseline, or a rebuild replaced it, while the files were read. The stats may predate
+      // the replacement and report it as changed. This scan then changes nothing: it neither invalidates the newer
+      // snapshot nor caches, and what its caller loads next was built after the scan began.
+      if (cachedFileSignatures !== signatures) return { state: "fresh" };
       const configurationIdentity = cachedConfigurationIdentity;
-      if (!signatures) return { state: "fresh" };
       const diff = diffAgentFileSignatures(signatures, currentSignatures);
       const configurationChanged =
         !!currentConfigurationIdentity &&
@@ -654,19 +677,26 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
               reason: `changed byte count exceeds ${maxBytes}`,
             };
           } else {
+            // The stats were compared with the baseline that is still the session's, so the change is real even when
+            // markChanged detached this scan. Holding the refresh back would starve it while events keep arriving.
             invalidate();
             result = { state: "refreshed", changedFiles };
           }
         }
       }
-      lastFreshnessCheckedAt = Date.now();
-      lastFreshnessResult = result;
+      if (generation === changeGeneration) {
+        lastFreshnessCheckedAt = Date.now();
+        lastFreshnessResult = result;
+      }
       return result;
     })().finally(() => {
-      freshnessInFlight = undefined;
+      // `markChanged` and `invalidate` detach a running scan, and a newer one may hold the slot by the time this one
+      // ends. That scan is not this one's to clear.
+      if (freshnessInFlight === scan) freshnessInFlight = undefined;
     });
+    freshnessInFlight = scan;
 
-    return freshnessInFlight;
+    return scan;
   };
 
   const session: AgentSession = {
@@ -676,6 +706,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     loadProject,
     loadDuplicateAnalysis,
     checkFreshness,
+    markChanged,
     invalidate,
   };
   return session;

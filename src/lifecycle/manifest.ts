@@ -3,8 +3,10 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { computeConfigHash, loadManifest } from "../indexer/build-cache/manifest.js";
+import { emitIndexCheckStart } from "../indexer/build-index.js";
 import { logWithLevel } from "../logging.js";
 import { mapLimit } from "../util/concurrency.js";
+import { isMissingPathError } from "../util/errors.js";
 import { createProjectDiscoveryContext, type ProjectDiscoveryContext } from "../util/project-files.js";
 import { normalizeGraphOptions, summarizeBuildOptions } from "../indexer/build-cache/options.js";
 import type { BuildOptions } from "../indexer/types.js";
@@ -88,7 +90,7 @@ export async function initCodegraphLifecycle(
   root: string,
   options: { buildOptions?: BuildOptions; force?: boolean; updateGitignore?: boolean } = {},
 ): Promise<CodegraphLifecycleSyncResult> {
-  emitLifecyclePostBuildProgress(options.buildOptions, "Updating Git ignore policy");
+  emitIndexCheckStart(options.buildOptions, "Updating Git ignore policy");
   const gitignore = await prepareCodegraphLifecycleGitignore(root, {
     updateGitignore: options.updateGitignore ?? true,
   });
@@ -116,7 +118,7 @@ export async function syncCodegraphLifecycle(
 ): Promise<CodegraphLifecycleSyncResult> {
   let gitignore: CodegraphLifecycleGitignoreResult | undefined;
   if (options.init) {
-    emitLifecyclePostBuildProgress(options.buildOptions, "Updating Git ignore policy");
+    emitIndexCheckStart(options.buildOptions, "Updating Git ignore policy");
     gitignore = await prepareCodegraphLifecycleGitignore(root, {
       updateGitignore: options.updateGitignore ?? true,
     });
@@ -142,7 +144,7 @@ async function syncCodegraphLifecycleCore(
     existing,
     options.force ? { force: true } : {},
   );
-  emitLifecyclePostBuildProgress(options.buildOptions, "Writing lifecycle manifest");
+  emitIndexCheckStart(options.buildOptions, "Writing lifecycle manifest");
   await writeLifecycleManifest(root, manifest);
   const thenCount = existing?.fileCount ?? 0;
   const fallbackTotalDelta = manifest.fileCount - thenCount;
@@ -266,7 +268,7 @@ async function buildLifecycleManifest(
   // same process; recomputing would reopen a window where config could change between
   // the build and the lifecycle record.
   const configHash = await resolveLifecycleConfigHash(root, sessionBuildOptions, buildOptions);
-  emitLifecyclePostBuildProgress(buildOptions, "Hashing file signatures");
+  emitIndexCheckStart(buildOptions, "Hashing file signatures");
   let fileSignatureHash = hashManifestEntries(
     snapshot.files,
     root,
@@ -274,7 +276,7 @@ async function buildLifecycleManifest(
     snapshot.index.manifestSignaturesFresh,
   );
   if (!fileSignatureHash) {
-    emitLifecyclePostBuildProgress(buildOptions, "Hashing discovered files");
+    emitIndexCheckStart(buildOptions, "Hashing discovered files");
     fileSignatureHash = await hashDiscoveredFiles(snapshot.files, root);
   }
   const files = discoveredFileRelativePaths(snapshot.files, root);
@@ -341,20 +343,6 @@ async function writeLifecycleManifest(root: string, manifest: CodegraphLifecycle
   }
 }
 
-function emitLifecyclePostBuildProgress(buildOptions: BuildOptions | undefined, activity: string): void {
-  // Mirror emitIndexCheckStart: a named check phase with no count, so the CLI
-  // spinner/log identifies remaining work instead of sitting silent after Built.
-  buildOptions?.onProgress?.({
-    type: "progress",
-    phase: "start",
-    mode: "check",
-    message: activity,
-    activity,
-    current: 0,
-    total: 0,
-  });
-}
-
 function withIndexTeardownProgress(buildOptions: BuildOptions | undefined): BuildOptions {
   const onProgress = buildOptions?.onProgress;
   if (!onProgress) return { ...(buildOptions ?? {}) };
@@ -371,7 +359,7 @@ function withIndexTeardownProgress(buildOptions: BuildOptions | undefined): Buil
         update.mode === "update" ||
         (update.mode === "check" && update.message === "Checked project index");
       if (!indexFinished) return;
-      emitLifecyclePostBuildProgress(buildOptions, "Closing disk cache");
+      emitIndexCheckStart(buildOptions, "Closing disk cache");
     },
   };
 }
@@ -381,14 +369,14 @@ async function resolveLifecycleConfigHash(
   sessionBuildOptions: BuildOptions,
   buildOptions: BuildOptions | undefined,
 ): Promise<string> {
-  emitLifecyclePostBuildProgress(buildOptions, "Reading index config hash");
+  emitIndexCheckStart(buildOptions, "Reading index config hash");
   const indexManifest = await loadManifest(root, sessionBuildOptions);
   const storedHash = indexManifest?.configHash;
   if (storedHash) return storedHash;
   // Index manifest missing or has no configHash (older cache, persist skipped, or
   // empty hash from a failed enumeration). Fall back so init/sync never write a
   // weaker lifecycle hash than they do today.
-  emitLifecyclePostBuildProgress(buildOptions, "Hashing project config");
+  emitIndexCheckStart(buildOptions, "Hashing project config");
   return await hashConfig(root, buildOptions?.logLevel);
 }
 
@@ -434,12 +422,6 @@ function diffLifecycleFileCounts(
 }
 
 const FILE_SIGNATURE_STAT_CONCURRENCY = 64;
-
-function isMissingStatRace(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  if (!("code" in error)) return false;
-  return error.code === "ENOENT" || error.code === "ENOTDIR";
-}
 
 function hashManifestEntries(
   files: readonly string[],
@@ -495,7 +477,7 @@ async function hashDiscoveredFiles(files: readonly string[], root: string): Prom
       const stat = await fsp.stat(file);
       signatures.set(file, { size: stat.size, mtimeMs: stat.mtimeMs });
     } catch (error) {
-      if (isMissingStatRace(error)) return;
+      if (isMissingPathError(error)) return;
       throw new CodegraphLifecycleUserError(`Unable to verify file signature for ${file}: ${stringifyError(error)}`);
     }
   });

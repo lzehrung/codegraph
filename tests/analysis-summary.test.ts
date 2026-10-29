@@ -1,0 +1,813 @@
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { previewRenameWithSession, type RenamePreviewResponse } from "../src/agent/rename-preview.js";
+import { searchCodegraphWithSession } from "../src/agent/search.js";
+import { createAgentSession, type AgentSession, type AgentSessionOptions } from "../src/agent/session.js";
+import { workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
+import { isAnalysisComplete, summarizeAnalysis, type AnalysisSummary } from "../src/analysis-summary.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
+  goToDefinition,
+  type BackendReport,
+  type BuildOptions,
+  type BuildReport,
+  type NativeBackendReport,
+} from "../src/index.js";
+import type { ProjectIndex } from "../src/indexer.js";
+import * as filePrep from "../src/languages/file-prep.js";
+import * as nativeCaptures from "../src/indexer/imports/native-captures.js";
+import { __resetNativeTreeSitterBindingForTests } from "../src/native/tree-sitter-native.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
+import { createTempRootRegistry } from "./helpers/filesystem.js";
+import {
+  failNativeBlockQueriesFor,
+  failNativeExtractionFor,
+  failNativeTreeReconstructionFor,
+} from "./helpers/native-tree.js";
+
+const roots = createTempRootRegistry();
+const sessions: AgentSession[] = [];
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  __resetNativeTreeSitterBindingForTests();
+  for (const session of sessions.splice(0)) session.invalidate();
+  await roots.cleanup();
+});
+
+function cacheDir(root: string): string {
+  return path.join(root, ".codegraph", "cache", "index-v1");
+}
+
+async function createProject(prefix: string, files: Record<string, string>): Promise<string> {
+  const root = await roots.create(prefix);
+  for (const [file, text] of Object.entries(files)) {
+    await fsp.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await fsp.writeFile(path.join(root, file), text, "utf8");
+  }
+  return root;
+}
+
+function projectFiles(): Record<string, string> {
+  return {
+    "src/auth.ts": "export function validateUser(token: string) {\n  return token.length > 2;\n}\n",
+    "src/other.ts": "export const betaMarker = 'beta only';\n",
+    "docs/guide.md": "# Security guide\n\nValidate user sessions before issuing credentials.\n",
+    "package.json": '{"name":"analysis-summary-fixture"}\n',
+  };
+}
+
+/** A TypeScript file past the native source limit, so native skips it with `sourceTooLarge`. */
+function oversizedSource(): string {
+  return `export const big = 1;\n// ${"x".repeat(9 * 1024 * 1024)}\n`;
+}
+
+/** A file whose syntax tree is unavailable once `fail` has broken native handling of sources containing `marker`. */
+type TreeFailureScenario = {
+  degradedFile: string;
+  source: string;
+  marker: string;
+  fail: (marker: string) => void;
+  counts: Pick<AnalysisSummary, "nativeFilesUsed" | "nativeFilesFellBack">;
+};
+
+/** A file that extracts, while a later extraction pass over part of it fails and leaves its imports incomplete. */
+type PartialExtractionScenario = {
+  degradedFile: string;
+  /** Every file the scenario indexes, including the degraded one. */
+  files: Record<string, string>;
+  /** Breaks the one extraction pass, and leaves the rest of the file's extraction working. */
+  fail: () => void;
+  /** The file once it no longer triggers the failure. */
+  repairedSource: string;
+  /** The specifiers the repaired file imports. */
+  repairedImports: string[];
+};
+
+/** A single-file component whose script extracts and whose style block imports `./colors`. */
+function componentSource(framework: "vue" | "svelte", styleComment: string): string {
+  const script = '<script lang="ts">\nexport const compValue = 1;\n</script>\n';
+  const markup = framework === "vue" ? "<template><div /></template>\n" : "<div />\n";
+  return `${script}${markup}<style lang="scss">\n/* ${styleComment} */\n@use "./colors";\n</style>\n`;
+}
+
+/** What one build of a test project yields: its index, its report, and the analysis summary read from both. */
+type BuildStage = { analysis: AnalysisSummary; report: BuildReport; index: ProjectIndex };
+
+async function build(root: string, options: Pick<BuildOptions, "logLevel" | "discovery"> = {}): Promise<BuildStage> {
+  const report: BuildReport = { timings: {} };
+  const index = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report, ...options });
+  return { analysis: summarizeAnalysis({ index, report }), report, index };
+}
+
+/** A full-discovery build, which probes the module cache for every file instead of reconciling the manifest. */
+async function buildFull(
+  root: string,
+  options: Pick<BuildOptions, "logLevel" | "discovery"> = {},
+): Promise<BuildStage> {
+  const report: BuildReport = { timings: {} };
+  const index = await buildProjectIndex(root, { cache: "disk", threads: 1, report, ...options });
+  return { analysis: summarizeAnalysis({ index, report }), report, index };
+}
+
+/** The analysis summary a new agent process reads when it loads the project. */
+async function analysisInFreshSession(
+  root: string,
+  discovery?: AgentSessionOptions["discovery"],
+): Promise<AnalysisSummary> {
+  const session = createAgentSession({ root, ...(discovery ? { discovery } : {}), buildOptions: { cache: "disk" } });
+  sessions.push(session);
+  return (await session.loadProject({ symbolGraph: "skip" })).analysis;
+}
+
+/** Previews renaming `small`, a healthy export, in a fresh session. The summary alone decides whether that is safe. */
+async function renamePreviewInFreshSession(root: string): Promise<RenamePreviewResponse> {
+  const session = createAgentSession({ root, buildOptions: { cache: "disk" } });
+  sessions.push(session);
+  const symbols = await workspaceSymbolsWithSession(session, { root, query: "small", exportedOnly: true });
+  const target = symbols.symbols.find((symbol) => symbol.name === "small");
+  if (!target) throw new Error("Expected the small export in the project index.");
+  return await previewRenameWithSession(session, { root, handle: target.handle, newName: "tiny" });
+}
+
+/** Searches in a fresh session, as a new agent process would, and reports the backend each layer names. */
+async function searchInFreshSession(root: string): Promise<{ analysisBackend: string; resultBackends: string[] }> {
+  const session = createAgentSession({ root, buildOptions: { cache: "disk" } });
+  sessions.push(session);
+  const response = await searchCodegraphWithSession(session, { root, query: "validate user", mode: "text", limit: 10 });
+  const snapshot = await session.loadProject({ symbolGraph: "skip" });
+  return {
+    analysisBackend: snapshot.analysis.backend,
+    resultBackends: response.results.map((result) => result.provenance.backend),
+  };
+}
+
+describe("analysis summary", () => {
+  it("keeps the native backend for a cold build, a warm session, and a rebuild after editing only docs", async () => {
+    const root = await createProject("cg-analysis-session-", projectFiles());
+
+    const cold = await searchInFreshSession(root);
+    const warm = await searchInFreshSession(root);
+    await fsp.writeFile(
+      path.join(root, "docs", "guide.md"),
+      "# Security guide\n\nValidate user sessions before issuing credentials, then revoke them.\n",
+      "utf8",
+    );
+    const afterDocsEdit = await searchInFreshSession(root);
+
+    for (const stage of [cold, warm, afterDocsEdit]) {
+      expect(stage.analysisBackend).toBe("native");
+      expect(stage.resultBackends.length).toBeGreaterThan(0);
+      expect(new Set(stage.resultBackends)).toEqual(new Set(["native"]));
+    }
+  });
+
+  it("counts files whose modules the build reused from the module cache", async () => {
+    const root = await createProject("cg-analysis-module-cache-", projectFiles());
+    const cold = await build(root);
+    expect(cold.analysis).toMatchObject({ backend: "native", nativeFilesUsed: 2, nativeFilesFellBack: 0 });
+
+    // Without a manifest or project snapshot the next build is served by the module cache alone, as when two
+    // sessions index one project at once and the later one finds the earlier one's parsed modules.
+    await fsp.rm(path.join(cacheDir(root), "manifest.json"));
+    await fsp.rm(path.join(cacheDir(root), "project-index-snapshot.json"));
+    const cached = await build(root);
+
+    expect(cached.report.cache?.hits).toBeGreaterThan(0);
+    expect(cached.report.backend?.native.filesUsed).toBe(0);
+    expect(cached.analysis).toMatchObject({
+      backend: "native",
+      nativeFilesUsed: 2,
+      nativeFilesFellBack: 0,
+      label: "native semantic",
+    });
+  });
+
+  it("keeps the native backend when a rebuild parses only a docs file", async () => {
+    const root = await createProject("cg-analysis-docs-edit-", projectFiles());
+    await build(root);
+
+    await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Security guide\n\nEdited.\n", "utf8");
+    const rebuilt = await build(root);
+
+    expect(rebuilt.report.backend?.native.filesUsed).toBe(0);
+    expect(rebuilt.analysis).toMatchObject({ backend: "native", nativeFilesUsed: 2, label: "native semantic" });
+  });
+
+  it("keeps a skipped oversized file counted when a rebuild reuses its module", async () => {
+    const root = await createProject("cg-analysis-skipped-", {
+      "src/big.ts": oversizedSource(),
+      "src/small.ts": "export const small = 1;\n",
+      "docs/guide.md": "# Guide\n",
+    });
+
+    const cold = await build(root);
+    await fsp.writeFile(path.join(root, "src", "small.ts"), "export const small = 2;\n", "utf8");
+    const afterCodeEdit = await build(root);
+    await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+    const afterDocsEdit = await build(root);
+
+    for (const stage of [cold, afterCodeEdit, afterDocsEdit]) {
+      expect(stage.analysis).toMatchObject({
+        backend: "native",
+        nativeFilesUsed: 1,
+        nativeFilesFellBack: 1,
+        label: "native semantic (1 file(s) skipped)",
+      });
+      expect(isAnalysisComplete(stage.analysis)).toBe(false);
+    }
+  });
+
+  it("keeps a file counted as skipped when it passed the native limit after the cache held its parsed module", async () => {
+    const root = await createProject("cg-analysis-skipped-after-parse-", {
+      "src/big.ts": "export const big = 1;\n",
+      "src/small.ts": "export const small = 1;\n",
+      "docs/guide.md": "# Guide\n",
+    });
+    const bigKey = fileIdentityKey(normalizePath(path.join(root, "src", "big.ts")));
+
+    const parsed = await build(root);
+    expect(parsed.index.byFile.get(bigKey)?.locals.map((local) => local.localName)).toEqual(["big"]);
+
+    // The module cache keeps the row from big.ts's last parse, and native now skips the file. Only the project
+    // snapshot can record the skip, so a rebuild that reuses the snapshot must still find it there.
+    await fsp.writeFile(path.join(root, "src", "big.ts"), oversizedSource(), "utf8");
+    const afterGrowth = await build(root);
+    const afterNoChange = await build(root);
+    await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+    const afterDocsEdit = await build(root);
+
+    for (const stage of [afterGrowth, afterNoChange, afterDocsEdit]) {
+      expect(stage.analysis).toMatchObject({
+        backend: "native",
+        nativeFilesUsed: 1,
+        nativeFilesFellBack: 1,
+        label: "native semantic (1 file(s) skipped)",
+      });
+      expect(isAnalysisComplete(stage.analysis)).toBe(false);
+      // The skipped file keeps none of the symbols from before it grew.
+      expect(stage.index.byFile.get(bigKey)).toMatchObject({ nativeOutcome: "skipped", locals: [] });
+    }
+
+    // A session that loads the project next reads the same summary.
+    const session = createAgentSession({ root, buildOptions: { cache: "disk" } });
+    sessions.push(session);
+    const snapshot = await session.loadProject({ symbolGraph: "skip" });
+    expect(snapshot.analysis).toMatchObject({ nativeFilesFellBack: 1 });
+    expect(isAnalysisComplete(snapshot.analysis)).toBe(false);
+  });
+
+  it("keeps a file counted as parser-degraded when its syntax tree could not be rebuilt and a rebuild reuses its module", async () => {
+    const root = await createProject("cg-analysis-parser-degraded-", {
+      "src/treeless.ts": "export const treelessMarker = 1;\n",
+      "src/small.ts": "export const small = 1;\n",
+      "docs/guide.md": "# Guide\n",
+    });
+    const treelessKey = fileIdentityKey(normalizePath(path.join(root, "src", "treeless.ts")));
+    const degraded = {
+      backend: "native",
+      parserDegradedFiles: 1,
+      nativeFilesUsed: 2,
+      nativeFilesFellBack: 0,
+      label: "native semantic (1 file(s) skipped)",
+    };
+
+    failNativeTreeReconstructionFor("treelessMarker");
+    const cold = await build(root);
+    // Native queries succeeded for both files, but one file's syntax tree could not be rebuilt.
+    expect(cold.report.backend?.native).toMatchObject({ filesUsed: 2, filesFellBack: 0 });
+    expect(cold.report.backend?.parser).toMatchObject({ total: 1, byLanguage: { ts: 1 } });
+    expect(cold.analysis).toMatchObject(degraded);
+    expect(cold.index.byFile.get(treelessKey)).toMatchObject({ nativeOutcome: "used", parserDegraded: true });
+
+    // From here the real parser could rebuild the tree, so only the stored module can say it was degraded.
+    __resetNativeTreeSitterBindingForTests();
+    await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+    const afterDocsEdit = await build(root);
+    expect(afterDocsEdit.report.backend?.parser).toBeUndefined();
+    expect(afterDocsEdit.analysis).toMatchObject(degraded);
+    expect(isAnalysisComplete(afterDocsEdit.analysis)).toBe(false);
+
+    // A session that loads the project next reads the same summary, and does not call a rename safe.
+    const freshSession = await analysisInFreshSession(root);
+    expect(freshSession).toMatchObject(degraded);
+    expect(isAnalysisComplete(freshSession)).toBe(false);
+    const degradedRename = await renamePreviewInFreshSession(root);
+    expect(degradedRename.safe).toBe(false);
+    expect(degradedRename.unsafeSites.map((site) => site.reason)).toEqual(["parse_degraded"]);
+
+    // With neither the manifest nor the project snapshot, the module cache alone serves the build.
+    await fsp.rm(path.join(cacheDir(root), "manifest.json"));
+    await fsp.rm(path.join(cacheDir(root), "project-index-snapshot.json"));
+    const moduleCacheOnly = await build(root);
+    expect(moduleCacheOnly.report.cache?.hits).toBeGreaterThan(0);
+    expect(moduleCacheOnly.report.backend?.parser).toBeUndefined();
+    expect(moduleCacheOnly.analysis).toMatchObject(degraded);
+    expect(isAnalysisComplete(moduleCacheOnly.analysis)).toBe(false);
+    expect(moduleCacheOnly.index.byFile.get(treelessKey)).toMatchObject({ parserDegraded: true });
+
+    // Once the file is edited and its tree can be rebuilt again, it is no longer counted.
+    await fsp.writeFile(path.join(root, "src", "treeless.ts"), "export const rebuilt = 2;\n", "utf8");
+    const afterRepair = await build(root);
+    expect(afterRepair.analysis).toMatchObject({
+      parserDegradedFiles: 0,
+      nativeFilesUsed: 2,
+      label: "native semantic",
+    });
+    expect(isAnalysisComplete(afterRepair.analysis)).toBe(true);
+    expect(afterRepair.index.byFile.get(treelessKey)?.parserDegraded).toBeUndefined();
+    expect(isAnalysisComplete(await analysisInFreshSession(root))).toBe(true);
+    expect((await renamePreviewInFreshSession(root)).safe).toBe(true);
+  });
+
+  it.each<[string, TreeFailureScenario]>([
+    [
+      "native extraction and the standalone parse both fail",
+      {
+        degradedFile: "src/native-down.ts",
+        source: "export const nativeDownMarker = 1;\n",
+        marker: "nativeDownMarker",
+        fail: failNativeExtractionFor,
+        // Native skipped the file, so it counts as fallen back and not as used.
+        counts: { nativeFilesUsed: 1, nativeFilesFellBack: 1 },
+      },
+    ],
+    [
+      "a SQL file's extraction carries no syntax tree",
+      {
+        degradedFile: "db/schema.sql",
+        source: "CREATE TABLE sqlTreelessMarker (id integer);\n",
+        marker: "sqlTreelessMarker",
+        fail: failNativeTreeReconstructionFor,
+        counts: { nativeFilesUsed: 2, nativeFilesFellBack: 0 },
+      },
+    ],
+  ])("keeps a file counted as parser-degraded when %s and a rebuild reuses its module", async (_title, scenario) => {
+    const root = await createProject("cg-analysis-parser-degraded-sites-", {
+      [scenario.degradedFile]: scenario.source,
+      "src/small.ts": "export const small = 1;\n",
+      "docs/guide.md": "# Guide\n",
+    });
+    const degradedKey = fileIdentityKey(normalizePath(path.join(root, scenario.degradedFile)));
+    // A file native skipped that also lacks a syntax tree is both counted as fallen back and as degraded, and is one file.
+    const degraded = {
+      backend: "native",
+      parserDegradedFiles: 1,
+      label: "native semantic (1 file(s) skipped)",
+      ...scenario.counts,
+    };
+
+    scenario.fail(scenario.marker);
+    const cold = await build(root, { logLevel: "silent" });
+    expect(cold.index.byFile.get(degradedKey)).toMatchObject({ parserDegraded: true });
+    expect(cold.analysis).toMatchObject(degraded);
+
+    __resetNativeTreeSitterBindingForTests();
+    await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+    const afterDocsEdit = await build(root, { logLevel: "silent" });
+    expect(afterDocsEdit.report.backend?.parser).toBeUndefined();
+    expect(afterDocsEdit.analysis).toMatchObject(degraded);
+    expect(afterDocsEdit.index.byFile.get(degradedKey)).toMatchObject({ parserDegraded: true });
+    expect(await analysisInFreshSession(root)).toMatchObject(degraded);
+  });
+
+  it.each<[string, PartialExtractionScenario]>([
+    [
+      "a Vue style block's query fails after its script extracted",
+      {
+        degradedFile: "src/Comp.vue",
+        files: {
+          "src/Comp.vue": componentSource("vue", "styleQueryMarker"),
+          "src/_colors.scss": "$primary: red;\n",
+        },
+        fail: () => failNativeBlockQueriesFor("styleQueryMarker"),
+        repairedSource: componentSource("vue", "styleRepaired"),
+        repairedImports: ["./colors"],
+      },
+    ],
+    [
+      "a Svelte style block's query fails after its script extracted",
+      {
+        degradedFile: "src/Comp.svelte",
+        files: {
+          "src/Comp.svelte": componentSource("svelte", "styleQueryMarker"),
+          "src/_colors.scss": "$primary: red;\n",
+        },
+        fail: () => failNativeBlockQueriesFor("styleQueryMarker"),
+        repairedSource: componentSource("svelte", "styleRepaired"),
+        repairedImports: ["./colors"],
+      },
+    ],
+    [
+      "reading a source's import captures throws after its native queries succeeded",
+      {
+        degradedFile: "src/broken.ts",
+        files: { "src/broken.ts": 'import { small } from "./small";\nexport const brokenMarker = small;\n' },
+        fail: () => {
+          const collect = nativeCaptures.collectNativeCaptureImportBindings;
+          vi.spyOn(nativeCaptures, "collectNativeCaptureImportBindings").mockImplementation(
+            async (context, matches) => {
+              if (context.source.includes("brokenMarker")) throw new Error("forced import capture failure");
+              await collect(context, matches);
+            },
+          );
+        },
+        repairedSource: 'import { small } from "./small";\nexport const repaired = small;\n',
+        repairedImports: ["./small"],
+      },
+    ],
+  ])("keeps a file counted as parser-degraded when %s and a rebuild reuses its module", async (_title, scenario) => {
+    const root = await createProject("cg-analysis-partial-extraction-", {
+      ...scenario.files,
+      "src/small.ts": "export const small = 1;\n",
+      "docs/guide.md": "# Guide\n",
+    });
+    const degradedKey = fileIdentityKey(normalizePath(path.join(root, scenario.degradedFile)));
+    const importedSpecifiers = (stage: { index: ProjectIndex }): string[] | undefined =>
+      stage.index.byFile.get(degradedKey)?.imports.map((binding) => binding.from);
+    const quiet = { logLevel: "silent" } as const;
+    const degraded = { backend: "native", parserDegradedFiles: 1, label: "native semantic (1 file(s) skipped)" };
+
+    scenario.fail();
+    const cold = await build(root, quiet);
+    // Native extracted the file's script or source, so the file counts as used, and one part of it fell back.
+    expect(cold.report.backend?.native).toMatchObject({ filesFellBack: 1, fallbackReasons: { queryFailure: 1 } });
+    expect(cold.report.backend?.parser).toBeUndefined();
+    expect(cold.index.byFile.get(degradedKey)).toMatchObject({ nativeOutcome: "used", parserDegraded: true });
+    expect(importedSpecifiers(cold)).toEqual([]);
+    expect(cold.analysis).toMatchObject(degraded);
+    expect(isAnalysisComplete(cold.analysis)).toBe(false);
+
+    // From here nothing fails, so only the stored module can say that part of the file was not extracted.
+    __resetNativeTreeSitterBindingForTests();
+    vi.restoreAllMocks();
+    await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+    const afterDocsEdit = await build(root, quiet);
+    expect(afterDocsEdit.report.backend?.native.filesFellBack).toBe(0);
+    expect(afterDocsEdit.analysis).toMatchObject(degraded);
+    expect(afterDocsEdit.analysis.nativeFilesUsed).toBe(cold.analysis.nativeFilesUsed);
+    expect(afterDocsEdit.index.byFile.get(degradedKey)).toMatchObject({ nativeOutcome: "used", parserDegraded: true });
+    expect(importedSpecifiers(afterDocsEdit)).toEqual([]);
+    expect(isAnalysisComplete(afterDocsEdit.analysis)).toBe(false);
+
+    // A session that loads the project next reads the same summary, and does not call a rename safe.
+    const freshSession = await analysisInFreshSession(root);
+    expect(freshSession).toMatchObject(degraded);
+    expect(isAnalysisComplete(freshSession)).toBe(false);
+    const degradedRename = await renamePreviewInFreshSession(root);
+    expect(degradedRename.safe).toBe(false);
+    expect(degradedRename.unsafeSites.map((site) => site.reason)).toContain("parse_degraded");
+
+    // With neither the manifest nor the project snapshot, the module cache alone serves the build.
+    await fsp.rm(path.join(cacheDir(root), "manifest.json"));
+    await fsp.rm(path.join(cacheDir(root), "project-index-snapshot.json"));
+    const moduleCacheOnly = await build(root, quiet);
+    expect(moduleCacheOnly.report.cache?.hits).toBeGreaterThan(0);
+    expect(moduleCacheOnly.report.backend?.native.filesFellBack).toBe(0);
+    expect(moduleCacheOnly.analysis).toMatchObject(degraded);
+    expect(moduleCacheOnly.index.byFile.get(degradedKey)).toMatchObject({ parserDegraded: true });
+    expect(isAnalysisComplete(moduleCacheOnly.analysis)).toBe(false);
+
+    // Once the file is edited and extracts cleanly, it is indexed with its imports and no longer counted.
+    await fsp.writeFile(path.join(root, scenario.degradedFile), scenario.repairedSource, "utf8");
+    const afterRepair = await build(root, quiet);
+    expect(afterRepair.analysis).toMatchObject({ parserDegradedFiles: 0, label: "native semantic" });
+    expect(afterRepair.index.byFile.get(degradedKey)?.parserDegraded).toBeUndefined();
+    expect(importedSpecifiers(afterRepair)).toEqual(scenario.repairedImports);
+    expect(isAnalysisComplete(afterRepair.analysis)).toBe(true);
+    expect(isAnalysisComplete(await analysisInFreshSession(root))).toBe(true);
+    expect((await renamePreviewInFreshSession(root)).safe).toBe(true);
+  });
+
+  it.each(["vue", "svelte"] as const)(
+    "counts a skipped file and a %s component with a failed style block as two skipped files when a rebuild reuses their modules",
+    async (framework) => {
+      const component = `src/Comp.${framework}`;
+      const root = await createProject("cg-analysis-mixed-failure-", {
+        "src/big.ts": oversizedSource(),
+        [component]: componentSource(framework, "styleQueryMarker"),
+        "src/_colors.scss": "$primary: red;\n",
+        "src/small.ts": "export const small = 1;\n",
+        "docs/guide.md": "# Guide\n",
+      });
+      const bigKey = fileIdentityKey(normalizePath(path.join(root, "src", "big.ts")));
+      const componentKey = fileIdentityKey(normalizePath(path.join(root, component)));
+      const quiet = { logLevel: "silent" } as const;
+      // Native skipped big.ts and could not index the component's style block, so two different files are incomplete.
+      const mixed = {
+        backend: "native",
+        parserDegradedFiles: 1,
+        nativeFilesFellBack: 1,
+        label: "native semantic (2 file(s) skipped)",
+      };
+
+      failNativeBlockQueriesFor("styleQueryMarker");
+      const cold = await build(root, quiet);
+      // The build report counts the failed style block as a native fallback beside the oversized file.
+      expect(cold.report.backend?.native).toMatchObject({ filesFellBack: 2, fallbackReasons: { queryFailure: 1 } });
+      expect(cold.index.byFile.get(bigKey)).toMatchObject({ nativeOutcome: "skipped" });
+      expect(cold.index.byFile.get(componentKey)).toMatchObject({ nativeOutcome: "used", parserDegraded: true });
+      expect(cold.analysis).toMatchObject(mixed);
+      expect(isAnalysisComplete(cold.analysis)).toBe(false);
+
+      // From here nothing fails, so only the stored modules can say that the component was degraded.
+      __resetNativeTreeSitterBindingForTests();
+      await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+      const afterDocsEdit = await build(root, quiet);
+      expect(afterDocsEdit.report.backend?.native.fallbackReasons.queryFailure).toBe(0);
+      expect(afterDocsEdit.index.byFile.get(bigKey)).toMatchObject({ nativeOutcome: "skipped" });
+      expect(afterDocsEdit.index.byFile.get(componentKey)).toMatchObject({
+        nativeOutcome: "used",
+        parserDegraded: true,
+      });
+      expect(afterDocsEdit.analysis).toMatchObject(mixed);
+      expect(isAnalysisComplete(afterDocsEdit.analysis)).toBe(false);
+
+      // A session that loads the project next reads the same summary, and does not call a rename safe.
+      const freshSession = await analysisInFreshSession(root);
+      expect(freshSession).toMatchObject(mixed);
+      expect(isAnalysisComplete(freshSession)).toBe(false);
+      const incompleteRename = await renamePreviewInFreshSession(root);
+      expect(incompleteRename.safe).toBe(false);
+      expect(incompleteRename.unsafeSites.map((site) => site.reason)).toContain("parse_degraded");
+
+      // With neither the manifest nor the project snapshot, the module cache alone serves the build.
+      await fsp.rm(path.join(cacheDir(root), "manifest.json"));
+      await fsp.rm(path.join(cacheDir(root), "project-index-snapshot.json"));
+      const moduleCacheOnly = await build(root, quiet);
+      expect(moduleCacheOnly.report.cache?.hits).toBeGreaterThan(0);
+      expect(moduleCacheOnly.analysis).toMatchObject(mixed);
+      expect(isAnalysisComplete(moduleCacheOnly.analysis)).toBe(false);
+
+      // Repairing one file leaves the other counted, and repairing both completes the summary.
+      await fsp.writeFile(path.join(root, "src", "big.ts"), "export const big = 1;\n", "utf8");
+      const afterSkippedRepair = await build(root, quiet);
+      expect(afterSkippedRepair.analysis).toMatchObject({
+        parserDegradedFiles: 1,
+        nativeFilesFellBack: 0,
+        label: "native semantic (1 file(s) skipped)",
+      });
+      await fsp.writeFile(path.join(root, component), componentSource(framework, "styleRepaired"), "utf8");
+      const afterRepair = await build(root, quiet);
+      expect(afterRepair.analysis).toMatchObject({
+        parserDegradedFiles: 0,
+        nativeFilesFellBack: 0,
+        label: "native semantic",
+      });
+      expect(isAnalysisComplete(afterRepair.analysis)).toBe(true);
+      expect(isAnalysisComplete(await analysisInFreshSession(root))).toBe(true);
+      expect((await renamePreviewInFreshSession(root)).safe).toBe(true);
+    },
+  );
+
+  it.each(["incremental", "full"] as const)(
+    "keeps a cached file counted as degraded when processing it fails (%s build), instead of restoring its old module",
+    async (failingBuild) => {
+      const root = await createProject("cg-analysis-failed-file-", {
+        "src/flaky.ts": "export const before = 1;\n",
+        "src/small.ts": "export const small = 1;\n",
+        "docs/guide.md": "# Guide\n",
+      });
+      const flakyKey = fileIdentityKey(normalizePath(path.join(root, "src", "flaky.ts")));
+      const localNames = (stage: { index: ProjectIndex }): string[] | undefined =>
+        stage.index.byFile.get(flakyKey)?.locals.map((local) => local.localName);
+      const quiet = { logLevel: "silent" } as const;
+
+      const cold = await build(root, quiet);
+      expect(localNames(cold)).toEqual(["before"]);
+      expect(isAnalysisComplete(cold.analysis)).toBe(true);
+
+      // The disk cache now holds flaky.ts's parsed module. Editing the file makes that row stale, and processing fails.
+      await fsp.writeFile(path.join(root, "src", "flaky.ts"), "export const after = 2;\n", "utf8");
+      const prepareSourceInput = filePrep.prepareSourceInput;
+      const failing = vi
+        .spyOn(filePrep, "prepareSourceInput")
+        .mockImplementation((file, options) =>
+          file.endsWith("flaky.ts")
+            ? Promise.reject(new Error("injected processing failure"))
+            : prepareSourceInput(file, options),
+        );
+      const afterFailure = failingBuild === "full" ? await buildFull(root, quiet) : await build(root, quiet);
+      failing.mockRestore();
+      expect(afterFailure.report.files?.failed).toBe(1);
+
+      await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+      const afterDocsEdit = await build(root, quiet);
+      const afterNoChange = await build(root, quiet);
+
+      // The stale row still holds the old symbols, but the index must not bring them back for a file that failed.
+      for (const stage of [afterFailure, afterDocsEdit, afterNoChange]) {
+        expect(localNames(stage)).toEqual([]);
+        expect(stage.index.byFile.get(flakyKey)).toMatchObject({ parserDegraded: true });
+        expect(stage.analysis).toMatchObject({ parserDegradedFiles: 1 });
+        expect(isAnalysisComplete(stage.analysis)).toBe(false);
+      }
+      const freshSession = await analysisInFreshSession(root);
+      expect(freshSession).toMatchObject({ parserDegradedFiles: 1 });
+      expect(isAnalysisComplete(freshSession)).toBe(false);
+
+      // Once the file processes again it is indexed normally.
+      await fsp.writeFile(path.join(root, "src", "flaky.ts"), "export const fixed = 3;\n", "utf8");
+      const afterRepair = await build(root, quiet);
+      expect(localNames(afterRepair)).toEqual(["fixed"]);
+      expect(afterRepair.index.byFile.get(flakyKey)?.parserDegraded).toBeUndefined();
+      expect(isAnalysisComplete(afterRepair.analysis)).toBe(true);
+      expect(isAnalysisComplete(await analysisInFreshSession(root))).toBe(true);
+    },
+  );
+
+  it("adds a file the build report names that the index holds no module for, and counts an indexed file once", async () => {
+    const root = await createProject("cg-analysis-report-only-file-", {
+      "src/big.ts": oversizedSource(),
+      "src/Main.cs": "using A = N.Box;\nclass Main {}\n",
+      "src/Box.cs": "namespace N; public class Box {}\n",
+      "src/Hidden.cs": "// REPORT_ONLY_DEGRADED\nnamespace Other; class Hidden {}\n",
+    });
+    const [big, main, box, hidden] = ["big.ts", "Main.cs", "Box.cs", "Hidden.cs"].map((file) =>
+      path.join(root, "src", file),
+    );
+    const hiddenKey = fileIdentityKey(normalizePath(hidden));
+    const mainKey = fileIdentityKey(normalizePath(main));
+    const parserDegradedKeys = (report: BuildReport): string[] | undefined =>
+      report.backend?.parser?.files.map((entry) => fileIdentityKey(entry.file));
+    // Native skipped big.ts, Hidden.cs has no syntax tree, and Main.cs's alias could not prove `N.Box` while the lookup
+    // could not read Hidden.cs, so three different files are incomplete.
+    const incomplete = {
+      backend: "native",
+      parserDegradedFiles: 2,
+      nativeFilesFellBack: 1,
+      label: "native semantic (3 file(s) skipped)",
+    };
+    const options = { threads: 1, logLevel: "silent" } as const;
+
+    failNativeTreeReconstructionFor("REPORT_ONLY_DEGRADED");
+
+    // The type alias in Main.cs makes the build read every C# file under the root for the namespace it names. The
+    // report then names Hidden.cs, which this index holds no module for.
+    const outsideReport: BuildReport = { timings: {} };
+    const outside = await buildProjectIndexFromFiles(root, [big, main, box], { ...options, report: outsideReport });
+    expect(outside.byFile.has(hiddenKey)).toBe(false);
+    expect(parserDegradedKeys(outsideReport)).toEqual([hiddenKey]);
+    expect(outside.byFile.get(mainKey)).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+    expect(summarizeAnalysis({ index: outside, report: outsideReport })).toMatchObject(incomplete);
+    // Without the report, only Main.cs's own module keeps the failed lookup counted.
+    expect(summarizeAnalysis({ index: outside, report: { timings: {} } })).toMatchObject({
+      parserDegradedFiles: 1,
+      nativeFilesFellBack: 1,
+      label: "native semantic (2 file(s) skipped)",
+    });
+
+    // The report may name that file again as a native fallback, and repeat it. It is still one file.
+    const fallback = { file: hidden, languageId: "csharp", reason: "queryFailure", message: "forced" } as const;
+    outsideReport.backend?.native.errors.push(fallback, fallback);
+    expect(summarizeAnalysis({ index: outside, report: outsideReport })).toMatchObject({
+      parserDegradedFiles: 2,
+      nativeFilesFellBack: 2,
+      label: "native semantic (3 file(s) skipped)",
+    });
+
+    // Once the index holds Hidden.cs its module records the degradation, and the report naming it again adds nothing.
+    const insideReport: BuildReport = { timings: {} };
+    const inside = await buildProjectIndexFromFiles(root, [big, main, box, hidden], {
+      ...options,
+      report: insideReport,
+    });
+    expect(inside.byFile.get(hiddenKey)).toMatchObject({ parserDegraded: true });
+    expect(inside.byFile.get(mainKey)).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+    expect(parserDegradedKeys(insideReport)).toEqual([hiddenKey]);
+    expect(summarizeAnalysis({ index: inside, report: insideReport })).toMatchObject(incomplete);
+  });
+
+  it("flags skipped and degraded files from the build report alone when no index is given", () => {
+    const native: NativeBackendReport = {
+      available: true,
+      enabled: true,
+      supportedLanguageIds: ["ts"],
+      filesUsed: 3,
+      filesFellBack: 0,
+      fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0, sourceTooLarge: 0 },
+      byLanguage: {},
+      errors: [],
+    };
+    const summarize = (backend: BackendReport): AnalysisSummary =>
+      summarizeAnalysis({ report: { timings: {}, backend } });
+
+    const clean = summarize({ native });
+    expect(clean).toMatchObject({ backend: "native", label: "native semantic" });
+    expect(isAnalysisComplete(clean)).toBe(true);
+
+    const skipped = summarize({ native: { ...native, filesFellBack: 1 } });
+    const degraded = summarize({ native, parser: { total: 1, byLanguage: { ts: 1 }, files: [] } });
+    for (const summary of [skipped, degraded]) {
+      expect(summary).toMatchObject({ backend: "native", label: "native semantic (1 file(s) skipped)" });
+      expect(isAnalysisComplete(summary)).toBe(false);
+    }
+    expect(summarizeAnalysis({})).toMatchObject({ backend: "unknown", label: "semantic" });
+  });
+
+  it("reports an unknown backend when no native-supported file is indexed", async () => {
+    const root = await createProject("cg-analysis-graph-only-", {
+      "README.md": "# Readme\n\nSee [guide](docs/guide.md).\n",
+      "docs/guide.md": "# Guide\n",
+    });
+
+    const cold = await build(root);
+    const warm = await build(root);
+
+    for (const stage of [cold, warm]) {
+      expect(stage.analysis).toMatchObject({ backend: "unknown", nativeFilesUsed: 0, label: "semantic" });
+    }
+  });
+
+  it.each(["incremental", "full"] as const)(
+    "keeps a C# importer counted as degraded while a namespace lookup cannot read a file outside the index, and re-resolves its alias once the file reads again (%s build)",
+    async (buildMode) => {
+      const root = await createProject("cg-analysis-csharp-lookup-", {
+        "src/Consumer.cs": "using X = N.Thing;\nclass Consumer { X value; }\n",
+        "src/StaticUse.cs": "using static N.Thing;\nclass StaticUse {}\n",
+        "src/Plain.cs": "using N;\nclass Plain { Thing value; }\n",
+        "src/Thing.cs": "namespace N { public class Thing {} }\n",
+        // Declares `N`, so looking up `N.Thing` reads it. Discovery ignores it, so no module of the index covers it.
+        "src/Bad.cs": "// BAD_NAMESPACE_FILE\nnamespace N { public class Other {} }\n",
+        "docs/guide.md": "# Guide\n",
+      });
+      const discovery = { ignoreGlobs: ["src/Bad.cs"], globRoot: root };
+      const quiet: Pick<BuildOptions, "logLevel" | "discovery"> = { logLevel: "silent", discovery };
+      const run = (): Promise<BuildStage> => (buildMode === "full" ? buildFull(root, quiet) : build(root, quiet));
+      const key = (name: string): string => fileIdentityKey(normalizePath(path.join(root, "src", name)));
+      const degradedModules = (stage: BuildStage): string[] =>
+        ["Consumer.cs", "StaticUse.cs", "Plain.cs", "Thing.cs"].filter(
+          (name) => stage.index.byFile.get(key(name))?.parserDegraded,
+        );
+      const aliasTarget = (stage: BuildStage): string | { external: string } | undefined => {
+        const alias = stage.index.byFile
+          .get(key("Consumer.cs"))
+          ?.imports.find((binding) => binding.kind === "named" && binding.local === "X");
+        return typeof alias?.resolved === "string" ? path.basename(alias.resolved) : alias?.resolved;
+      };
+      const aliasGoto = async (stage: BuildStage): Promise<string> => {
+        const result = await goToDefinition(stage.index, {
+          file: path.join(root, "src", "Consumer.cs"),
+          line: 2,
+          column: "class Consumer { X value; }".indexOf("X") + 1,
+        });
+        return result.status === "ok" ? path.basename(result.definition.file) : result.status;
+      };
+      let docsEdits = 0;
+      const editDocs = async (): Promise<void> => {
+        docsEdits += 1;
+        await fsp.writeFile(path.join(root, "docs", "guide.md"), `# Guide\n\nEdit ${docsEdits}.\n`, "utf8");
+      };
+      // The alias and the static using each need the one declaration of `N.Thing`, which Bad.cs could dispute. The
+      // plain `using N;` binds to any file that declares `N`, so it stays complete.
+      const blocked = {
+        backend: "native",
+        parserDegradedFiles: 3,
+        nativeFilesFellBack: 0,
+        label: "native semantic (3 file(s) skipped)",
+      };
+      const expectBlocked = async (stage: BuildStage): Promise<void> => {
+        expect(stage.analysis).toMatchObject(blocked);
+        expect(isAnalysisComplete(stage.analysis)).toBe(false);
+        expect(degradedModules(stage)).toEqual(["Consumer.cs", "StaticUse.cs"]);
+        expect(aliasTarget(stage)).toEqual({ external: "N.Thing" });
+        expect(await aliasGoto(stage)).toBe("not_found");
+      };
+
+      failNativeExtractionFor("BAD_NAMESPACE_FILE");
+      const cold = await run();
+      expect(cold.index.byFile.has(key("Bad.cs"))).toBe(false);
+      expect(cold.report.backend?.parser?.files.map((entry) => path.basename(entry.file))).toEqual(["Bad.cs"]);
+      await expectBlocked(cold);
+
+      // The rebuild reads Bad.cs again and still cannot, so the importers stay counted.
+      await editDocs();
+      const afterDocsEdit = await run();
+      expect(afterDocsEdit.report.backend?.parser?.files.map((entry) => path.basename(entry.file))).toEqual(["Bad.cs"]);
+      await expectBlocked(afterDocsEdit);
+      await expectBlocked(await run());
+      expect(await analysisInFreshSession(root, discovery)).toMatchObject(blocked);
+
+      // Nothing about Consumer.cs, StaticUse.cs, or any indexed file changed, but Bad.cs reads now, so the next
+      // rebuild resolves both again.
+      __resetNativeTreeSitterBindingForTests();
+      await editDocs();
+      const recovered = await run();
+      expect(recovered.analysis).toMatchObject({
+        parserDegradedFiles: 0,
+        nativeFilesFellBack: 0,
+        label: "native semantic",
+      });
+      expect(isAnalysisComplete(recovered.analysis)).toBe(true);
+      expect(degradedModules(recovered)).toEqual([]);
+      expect(aliasTarget(recovered)).toBe("Thing.cs");
+      expect(await aliasGoto(recovered)).toBe("Thing.cs");
+      const recoveredSession = await analysisInFreshSession(root, discovery);
+      expect(recoveredSession).toMatchObject({ parserDegradedFiles: 0, label: "native semantic" });
+      expect(isAnalysisComplete(recoveredSession)).toBe(true);
+    },
+  );
+});

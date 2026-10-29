@@ -6,10 +6,12 @@ import {
   SQL_OBJECT_NAME_PATTERN,
   sqlObjectLookupKey,
   sqlParenDepthAt,
+  sqlMatchingParen as matchingParen,
   sqlSourceClauses,
 } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
 import { findSqlRoutineMentions, type SqlRoutineMention } from "./routine-mentions.js";
+import { skipWhitespace } from "../util/text-scanning.js";
 
 export type SqlNameSpan = { name: string; start: number; end: number };
 
@@ -90,12 +92,6 @@ function ctePattern(): RegExp {
 }
 const ON_RE = /\bon\s+/gi;
 
-function skipWhitespace(text: string, index: number): number {
-  let cursor = index;
-  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) cursor += 1;
-  return cursor;
-}
-
 function readName(text: string, index: number): SqlNameSpan | null {
   let cursor = skipWhitespace(text, index);
   while (cursor < text.length) {
@@ -112,19 +108,6 @@ function readName(text: string, index: number): SqlNameSpan | null {
     cursor = skipWhitespace(text, end);
   }
   return null;
-}
-
-function matchingParen(text: string, openIndex: number): number {
-  let depth = 0;
-  for (let index = openIndex; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "(") depth += 1;
-    if (char === ")") {
-      depth -= 1;
-      if (depth === 0) return index;
-    }
-  }
-  return -1;
 }
 
 function addName(spans: SqlNameSpan[], named: SqlNameSpan | null): void {

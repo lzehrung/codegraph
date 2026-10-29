@@ -15,6 +15,7 @@ import * as indexerNavigation from "../src/indexer/navigation.js";
 import type { BuildReport, IncrementalBuildOptions } from "../src/indexer/types.js";
 import { boundReviewReportForTransport } from "../src/review/types.js";
 import { summarizeChangedFiles } from "../src/review/summaries.js";
+import { listCandidateTestFiles } from "../src/impact/context.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as impactMap from "../src/impact/map.js";
 import { collectDuplicateLeadSummary } from "../src/duplicates-leads.js";
@@ -689,6 +690,39 @@ describe("Review report", () => {
     expect(report.status).toBe("no_changes");
     expect(report.base).toBe("HEAD");
     expect(report.head).toBe("HEAD");
+  });
+
+  it("describes the index a reused report holds when a later review finds no changes", async () => {
+    const root = await mkTmpDir("dg-review-no-changes-analysis-");
+    try {
+      runGit(root, ["init"]);
+      runGit(root, ["config", "user.email", "test@git.local"]);
+      runGit(root, ["config", "user.name", "Codegraph Bot"]);
+      await fsp.mkdir(path.join(root, "docs"), { recursive: true });
+      await fsp.writeFile(path.join(root, "tracked.ts"), "export const value = 1;\n", "utf8");
+      await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n", "utf8");
+      runGit(root, ["add", "tracked.ts", "docs"]);
+      runGit(root, ["commit", "-m", "initial"]);
+      const base = runGit(root, ["rev-parse", "HEAD"]);
+      // Warm the module cache, so the review below parses only the file its range changes.
+      await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n\nEdited.\n", "utf8");
+      runGit(root, ["add", "docs"]);
+      runGit(root, ["commit", "-m", "docs"]);
+
+      const report: ReviewBuildReport = { timings: {} };
+      const changed = await buildReviewReport(root, { gitBase: base, gitHead: "HEAD", cache: "disk", report });
+      const unchanged = await buildReviewReport(root, { gitBase: "HEAD", gitHead: "HEAD", cache: "disk", report });
+
+      expect(changed.status).toBe("ok");
+      expect(unchanged.status).toBe("no_changes");
+      // The review build parsed only the docs file, so its build report alone cannot show that native indexed tracked.ts.
+      expect(report.indexReport?.backend?.native.filesUsed).toBe(0);
+      expect(changed.analysis).toMatchObject({ backend: "native", nativeFilesUsed: 1 });
+      expect(unchanged.analysis).toMatchObject({ backend: "native", nativeFilesUsed: 1 });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 
   it("applies discovery filters to changed git comparisons", async () => {
@@ -2852,6 +2886,26 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
         reason: "changedTest",
       },
     ]);
+  });
+  it("orders candidate tests by code unit like listCandidateTestFiles, including under maxCandidates", async () => {
+    const root = await mkTmpDir("dg-review-candidate-order-");
+    const names = ["Zoo.test.ts", "_setup.test.ts", "animals.test.ts", "foo.test.ts", "foo_test.test.ts"];
+    const files = names.map((name) => path.join(root, name));
+    await Promise.all(files.map(async (file) => await fsp.writeFile(file, "export const v = 1;\n", "utf8")));
+    await buildProjectIndex(root, { cache: "disk" });
+    await Promise.all(files.map(async (file) => await fsp.writeFile(file, "export const v = 2;\n", "utf8")));
+
+    const index = await buildProjectIndex(root, { cache: "disk" });
+    const expected = listCandidateTestFiles(index, files, [], { projectRoot: root }).map((candidate) =>
+      normalize(path.relative(root, candidate.file)),
+    );
+    expect(expected).toEqual(["Zoo.test.ts", "_setup.test.ts", "animals.test.ts", "foo.test.ts", "foo_test.test.ts"]);
+
+    const full = await buildReviewReport(root, { cache: "disk", files });
+    expect(full.candidateTests.map((candidate) => candidate.file)).toEqual(expected);
+
+    const limited = await buildReviewReport(root, { cache: "disk", files, maxCandidates: 3 });
+    expect(limited.candidateTests.map((candidate) => candidate.file)).toEqual(expected.slice(0, 3));
   });
 });
 

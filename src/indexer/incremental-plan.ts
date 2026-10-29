@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import fsp from "node:fs/promises";
 import {
   diffBuildOptions,
   loadManifest,
@@ -11,7 +10,7 @@ import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
 import { listChangedFiles, listUntrackedFiles, type GitDiscoveryCache } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
 import { IMPORT_RESOLUTION_ROWS, type ExternalSpecifierSeparator } from "./import-resolution-tables.js";
-import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath, pathExists } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS, stripKnownResolutionExtension } from "../util/resolution-candidates.js";
 import {
@@ -35,15 +34,6 @@ export type TrackedManifestFilePlan = {
 
 /** Bound concurrent existence probes so warm builds don't stall the event loop. */
 export const PATH_EXISTS_PROBE_CONCURRENCY = 64;
-
-export async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fsp.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Probe unique paths once with bounded concurrency. Scaling: O(unique paths)

@@ -4,8 +4,9 @@ import path from "node:path";
 import type { AgentProjectSnapshot } from "../session.js";
 import type { ProjectIndexManifestEntry, QueryIndexDiagnostics } from "../../indexer/types.js";
 import { getCodegraphVersion } from "../../util/package-info.js";
-import { fileIdentityKey, normalizePath } from "../../util/paths.js";
+import { fileIdentityKey, normalizePath, pathExists } from "../../util/paths.js";
 import { errorMessage } from "../../util/errors.js";
+import { fsyncFile, removeStaleTempFiles } from "../../util/atomic-file.js";
 import type { PreparedQueryIndexFile } from "./content.js";
 import {
   createProjectRootIdentity,
@@ -24,7 +25,6 @@ import {
 } from "./schema.js";
 import { isSqliteBusyError, isSqliteCorruptionError, QueryIndexStore } from "./store.js";
 
-const QUERY_INDEX_TEMP_RETENTION_MS = 24 * 60 * 60 * 1000;
 const QUERY_INDEX_TEMP_PATTERN = /^search-v1(?:\.v\d+)?\.tmp-\d+-[0-9a-f-]+\.sqlite$/u;
 
 export type QueryIndexHandle = {
@@ -164,48 +164,19 @@ async function pathIsSymlink(filePath: string): Promise<boolean> {
   }
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function fsyncFile(filePath: string): Promise<void> {
-  const handle = await fs.open(filePath, "r+");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
 async function removeSqliteCompanions(filePath: string): Promise<void> {
   await Promise.all([fs.rm(`${filePath}-wal`, { force: true }), fs.rm(`${filePath}-shm`, { force: true })]);
 }
 
 async function cleanupAbandonedQueryIndexFiles(paths: QueryIndexPaths): Promise<void> {
-  let entries: Array<{ name: string }>;
-  try {
-    entries = await fs.readdir(paths.cacheRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  const cutoff = Date.now() - QUERY_INDEX_TEMP_RETENTION_MS;
-  for (const entry of entries) {
-    if (!QUERY_INDEX_TEMP_PATTERN.test(entry.name)) continue;
-    const candidate = path.join(paths.cacheRoot, entry.name);
-    try {
-      const stat = await fs.lstat(candidate);
-      if (stat.mtimeMs > cutoff) continue;
+  await removeStaleTempFiles(
+    paths.cacheRoot,
+    (entry) => QUERY_INDEX_TEMP_PATTERN.test(entry.name),
+    async (candidate) => {
       await fs.rm(candidate, { force: true });
       await removeSqliteCompanions(candidate);
-    } catch {
-      // Abandoned artifact cleanup must not block a query.
-    }
-  }
+    },
+  );
 }
 
 async function rebuildCorruptSidecar(
@@ -219,7 +190,7 @@ async function rebuildCorruptSidecar(
   );
   await fs.rm(paths.corrupt, { force: true });
   await removeSqliteCompanions(paths.corrupt);
-  if (await fileExists(paths.sidecar)) await fs.rename(paths.sidecar, paths.corrupt);
+  if (await pathExists(paths.sidecar)) await fs.rename(paths.sidecar, paths.corrupt);
   await removeSqliteCompanions(paths.sidecar);
 
   let temporaryStore: QueryIndexStore | undefined;
@@ -260,7 +231,7 @@ export async function ensureQueryIndex(snapshot: AgentProjectSnapshot): Promise<
   await cleanupAbandonedQueryIndexFiles(paths);
 
   if (await pathIsSymlink(paths.sidecar)) return { store: null, diagnostics };
-  const existedBefore = await fileExists(paths.sidecar);
+  const existedBefore = await pathExists(paths.sidecar);
   const openStarted = performance.now();
   let store: QueryIndexStore | undefined;
   try {

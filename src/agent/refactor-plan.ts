@@ -1,5 +1,5 @@
 import { findCallHierarchy, type CallHierarchyDirection, type CallHierarchyResult } from "../indexer/call-hierarchy.js";
-import { boundList } from "../presentation/bounds.js";
+import { boundedNonNegativeIntegerOption, boundList } from "../presentation/bounds.js";
 import { findReferences } from "../indexer/navigation.js";
 import {
   findImplementations as queryImplementations,
@@ -13,12 +13,14 @@ import { shapeCandidateTests } from "./candidate-tests.js";
 import { classifySensitiveFile } from "./file-view.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import { previewRenameInSnapshot, type RenameCandidateTest, type RenamePreviewResponse } from "./rename-preview.js";
-import type { CallHierarchyEntry } from "./call-hierarchy.js";
-import type { ImplementationEntry, TypeHierarchyRelation } from "./type-hierarchy.js";
+import { callHierarchyEntries, type CallHierarchyEntry } from "./call-hierarchy.js";
+import { typeHierarchyRelations, type ImplementationEntry, type TypeHierarchyRelation } from "./type-hierarchy.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
+import { semanticProvenance } from "./semantic.js";
 import { requireSemanticSymbol, semanticSymbolFromDef } from "./semantic-symbols.js";
 import {
-  createAgentSession,
+  checkSessionFreshness,
+  createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
@@ -64,10 +66,7 @@ const DEFAULT_REFACTOR_RELATION_LIMIT = 100;
 const MAX_REFACTOR_SECTION_LIMIT = 500;
 
 export async function buildRefactorPlan(request: RefactorPlanRequest): Promise<RefactorPlanResponse> {
-  const session = createAgentSession({
-    root: request.root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-  });
+  const session = createRequestSession(request);
   return await buildRefactorPlanWithSession(session, request);
 }
 
@@ -75,7 +74,7 @@ export async function buildRefactorPlanWithSession(
   session: AgentSession,
   request: RefactorPlanRequest,
 ): Promise<RefactorPlanResponse> {
-  const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
+  const freshness = await checkSessionFreshness(session);
   const snapshot = await session.loadProject();
   return await buildRefactorPlanInSnapshot(snapshot, request, freshness);
 }
@@ -89,7 +88,7 @@ export async function buildRefactorPlanInSnapshot(
   const referenceLimit = boundedSectionLimit(request.maxReferences, DEFAULT_REFACTOR_REFERENCE_LIMIT, "maxReferences");
   const callerLimit = boundedSectionLimit(request.maxCallers, DEFAULT_REFACTOR_RELATION_LIMIT, "maxCallers");
   const hierarchyLimit = boundedSectionLimit(request.maxHierarchy, DEFAULT_REFACTOR_RELATION_LIMIT, "maxHierarchy");
-  const provenance = relationshipProvenance(snapshot);
+  const provenance = semanticProvenance(snapshot);
   const lookup = buildSymbolLookup(snapshot);
 
   const referenceResult = await findReferences(
@@ -253,21 +252,7 @@ function normalizeCallSection(
   provenance: SemanticProvenance,
 ): CallHierarchyEntry[] {
   if (result.status !== "ok" || result.direction !== direction) return [];
-  return result.entries.flatMap((entry): CallHierarchyEntry[] => {
-    const def = lookup.defById.get(entry.symbolId);
-    if (!def) return [];
-    return [
-      {
-        symbol: semanticSymbolFromDef(snapshot, def),
-        callsites: entry.callsites.map((site) => ({
-          file: normalizeAgentFilePath(snapshot.root, site.file),
-          range: site.range,
-        })),
-        depth: entry.depth,
-        provenance,
-      },
-    ];
-  });
+  return callHierarchyEntries(snapshot, lookup, result.entries, provenance);
 }
 
 function normalizeHierarchySection(
@@ -278,26 +263,7 @@ function normalizeHierarchySection(
   provenance: SemanticProvenance,
 ): TypeHierarchyRelation[] {
   if (result.status !== "ok" || result.direction !== direction) return [];
-  return result.relations.flatMap((relation): TypeHierarchyRelation[] => {
-    const def = lookup.defById.get(relation.targetId);
-    if (!def) return [];
-    return [
-      {
-        type: semanticSymbolFromDef(snapshot, def),
-        relation: relation.relation,
-        ...(relation.site
-          ? {
-              declarationSite: {
-                file: normalizeAgentFilePath(snapshot.root, relation.site.file),
-                range: relation.site.range,
-              },
-            }
-          : {}),
-        depth: relation.depth,
-        provenance,
-      },
-    ];
-  });
+  return typeHierarchyRelations(snapshot, lookup, result.relations, provenance);
 }
 
 function callOmitted(result: CallHierarchyResult): number {
@@ -308,16 +274,6 @@ function hierarchyOmitted(result: TypeHierarchyResult): number {
   return result.status === "ok" ? result.omitted : 0;
 }
 
-function relationshipProvenance(snapshot: AgentProjectSnapshot): SemanticProvenance {
-  return {
-    capability: "semantic",
-    backend: snapshot.analysis.backend,
-    confidence: "high",
-  };
-}
-
 function boundedSectionLimit(value: number | undefined, defaultValue: number, name: string): number {
-  if (value === undefined) return defaultValue;
-  if (!Number.isInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer.`);
-  return Math.min(value, MAX_REFACTOR_SECTION_LIMIT);
+  return boundedNonNegativeIntegerOption(value, defaultValue, MAX_REFACTOR_SECTION_LIMIT, name);
 }

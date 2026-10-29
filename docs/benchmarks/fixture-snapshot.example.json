@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-27T11:17:10.376Z",
+  "generatedAt": "2026-10-29T03:35:28.470Z",
   "source": "tests/languages/*.test.ts via vitest",
-  "nodeVersion": "v22.16.0",
-  "numTotalTests": 905,
+  "nodeVersion": "v24.22.1",
+  "numTotalTests": 1010,
   "numFailedTests": 0,
   "languages": [
     {
@@ -44,8 +44,8 @@
       "files": [
         "tests/languages/csharp.test.ts"
       ],
-      "tests": 92,
-      "passed": 92,
+      "tests": 147,
+      "passed": 147,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -132,8 +132,8 @@
       "files": [
         "tests/languages/kotlin.test.ts"
       ],
-      "tests": 28,
-      "passed": 28,
+      "tests": 31,
+      "passed": 31,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -187,8 +187,8 @@
       "files": [
         "tests/languages/python.test.ts"
       ],
-      "tests": 44,
-      "passed": 44,
+      "tests": 74,
+      "passed": 74,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -231,8 +231,8 @@
       "files": [
         "tests/languages/scss.test.ts"
       ],
-      "tests": 144,
-      "passed": 144,
+      "tests": 146,
+      "passed": 146,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -242,8 +242,8 @@
       "files": [
         "tests/languages/sql.test.ts"
       ],
-      "tests": 73,
-      "passed": 73,
+      "tests": 88,
+      "passed": 88,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

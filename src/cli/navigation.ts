@@ -12,6 +12,7 @@ import {
   type ProjectIndex,
   type SymbolDef,
 } from "../indexer/types.js";
+import type { LanguageExtensionMap } from "../languages.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import {
@@ -21,6 +22,7 @@ import {
   parsePositiveIntegerOption,
 } from "./options.js";
 import { parseCliSourceLocation } from "./location.js";
+import { compactModuleLocals } from "./module-locals.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./project-file.js";
 import { writeCliOutput } from "./pretty.js";
 import { exitWithError } from "./context.js";
@@ -28,6 +30,7 @@ import { exitWithError } from "./context.js";
 export type NavigationCommandContext = {
   projectRootFs: string;
   discoveryOptions: ProjectFileDiscoveryOptions;
+  languageExtensions: LanguageExtensionMap | undefined;
   positionals: string[];
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
@@ -48,6 +51,7 @@ function indexOptions(context: NavigationCommandContext): LoadCurrentProjectInde
   return {
     onProgress: context.progressHandler,
     discovery: context.discoveryOptions,
+    ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
     ...(cache ? { cache } : {}),
     ...(cacheDir ? { cacheDir } : {}),
     ...(context.cacheLocation ? { cacheLocation: context.cacheLocation } : {}),
@@ -220,11 +224,7 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
     context,
     {
       file,
-      locals: mod.locals.map((l) => ({
-        name: l.localName,
-        kind: l.kind,
-        start: l.range.start,
-      })),
+      locals: compactModuleLocals(mod.locals),
       imports: mod.imports,
       exports: mod.exports.map((e) =>
         e.type === "local"

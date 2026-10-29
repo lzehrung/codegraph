@@ -93,6 +93,7 @@ Filename results are suggestions only.
 - Config globs are project-root-relative; CLI `--include-glob` / `--ignore-glob` filters are relative to each scan root. For `duplicates`, they do not alter the shared project-index cache. Use `--no-gitignore` only for deliberately included ignored files.
 - Current-state CLI queries reuse and validate the disk index. `init`, `index`, and `sync` are not prerequisites.
 - Check MCP `freshness`; on `stale`, run `refresh_index` and repeat the query. `artifact_build` requires fresh state and write access. `unchecked` comes only from an embedded manual-policy session: it cannot check or build a SQLite artifact, so rebuild the artifact with `codegraph artifact --sqlite`.
+- The MCP server watches project files and refreshes the index in the background by default (`--no-watch` turns that off), so a `stale` answer after a large change burst, such as a branch switch, usually clears on its own.
 - Plain `get_file` / `codegraph file` reads live bytes; optional indexed context can be stale.
 - Recognized sensitive files return summaries or metadata. Enable `--allow-sensitive` / `allowSensitive: true` only for deliberate raw access.
 
@@ -104,6 +105,7 @@ Filename results are suggestions only.
 - Specialized reads: `codegraph grep --query` for syntax trees, `codegraph chunk` for embeddings, and `codegraph dumpmod` for indexed module data.
 - Compare architecture across revisions: `codegraph drift` or `codegraph graph-delta`.
 - Export graphs with `codegraph graph --json`, which uses native import queries for source languages; `codegraph viewer` is for people. Create bundles with `codegraph artifact build` / MCP `artifact_build`; query SQLite exports with `codegraph sql` / MCP `query_sqlite`.
+- SQL tools (navigation, review context, explain, duplicates, `graph --sql-artifacts`) treat every SQL suffix the language registry knows (`.sql`, `.ddl`, `.pgsql`, `.mysql`) plus `languages.extensions` mappings from `codegraph.config.json` as SQL. CLI `goto`, `refs`, `dumpmod`, `graph`, and `review` honor those mappings too.
 - If MCP startup or transport fails, do not keep retrying that server. Run `codegraph doctor` to check the required native addon, then use the CLI if it is available. Doctor separates loaded grammars from graph-only languages.
 - First CLI queries may build an index; progress goes to stderr. Use `codegraph orient --report` to diagnose index costs.
 - After a Codegraph update, restart or reload the owning MCP client. `refresh_index` refreshes project state, not running tool code.

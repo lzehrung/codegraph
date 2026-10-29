@@ -1,5 +1,6 @@
 import { registerSessionInvalidationHook } from "../src/agent/session-lifecycle.js";
 import { ensureSessionQueryIndex } from "../src/agent/query-index/session-store.js";
+import fsSync, { type FSWatcher, type WatchListener } from "node:fs";
 import fs from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
@@ -8,8 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
+import * as agentSession from "../src/agent/session.js";
 import {
   awaitMcpToolOperation,
   callMcpTool,
@@ -18,7 +20,9 @@ import {
   createCodegraphMcpProtocolServerWithTracker,
   createParseErrorReportingStdin,
   listCodegraphMcpTools,
+  serveCodegraphMcp,
   startCodegraphMcpHttpServer,
+  type CodegraphMcpServerOptions,
   DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
   type CodegraphMcpHandlers,
   type McpToolConcurrencyTracker,
@@ -29,9 +33,17 @@ import { MCP_TOOL_REGISTRY } from "../src/mcp/tools.js";
 import { DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
 import type { Graph } from "../src/types.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
+import * as indexerBuild from "../src/indexer/build-index.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
-import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
+import { createWarmedCodegraphMcpResources } from "../src/mcp/handlers.js";
+import {
+  createArtifactOutputWithStaleFile,
+  createLinkedTempRoot,
+  createTempRootRegistry,
+  isSymlinkUnavailable,
+  tryCreateDirectorySymlink,
+} from "./helpers/filesystem.js";
 import type { CodegraphRuntimeIdentity, InstalledVersionChecker } from "../src/runtime-identity.js";
 import { getCodegraphVersion } from "../src/util/package-info.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -1140,7 +1152,10 @@ describe("codegraph MCP handlers", () => {
   });
 
   it("refreshes legacy HTTP session activity after a request outlives its idle window", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Fake only the idle clock and the eviction interval, and move them solely through the explicit advances below.
+    // Faking every timer under shouldAdvanceTime stalled the fetch client's own setImmediate hops until the next 20 ms
+    // tick, so the follow-up aged the session in fake time and could arrive after it had idled out.
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-completion-touch-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
     const backingSession = createAgentSession({ root });
@@ -4229,5 +4244,720 @@ describe("MCP legacy session capacity and error-handling regressions", () => {
     } finally {
       await httpServer.close();
     }
+  });
+});
+
+describe("MCP file watcher", () => {
+  const tempRoots = createTempRootRegistry();
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    await tempRoots.cleanup();
+  });
+
+  async function createProject(prefix: string, files = 1): Promise<string> {
+    const root = await tempRoots.create(prefix);
+    for (let index = 0; index < files; index += 1) {
+      await fs.writeFile(
+        path.join(root, `f${index}.ts`),
+        `export function symbol${index}() { return ${index}; }\n`,
+        "utf8",
+      );
+    }
+    return root;
+  }
+
+  // Wraps the real `fs.watch`, so the watches are real, and counts the handles that are not yet closed.
+  function spyOnWatches() {
+    const realWatch = fsSync.watch;
+    const opened: FSWatcher[] = [];
+    const closed = new Set<FSWatcher>();
+    const watchSpy = vi.spyOn(fsSync, "watch").mockImplementation((...args) => {
+      const watcher = realWatch(...args);
+      const realClose = watcher.close.bind(watcher);
+      watcher.close = () => {
+        closed.add(watcher);
+        realClose();
+      };
+      opened.push(watcher);
+      return watcher;
+    });
+    return { watchSpy, openHandles: (): number => opened.filter((watcher) => !closed.has(watcher)).length };
+  }
+
+  // Wraps the real `fs.watch` and keeps the listener that the server registers for `directory`, so that a test can
+  // deliver an event itself.
+  function captureWatchListener(directory: string) {
+    const realWatch = fsSync.watch;
+    let listener: WatchListener<string> | undefined;
+    vi.spyOn(fsSync, "watch").mockImplementation((...args) => {
+      const registered = args.find((arg) => typeof arg === "function");
+      if (registered && path.resolve(String(args[0])) === path.resolve(directory)) listener = registered;
+      return realWatch(...args);
+    });
+    return (filename: string): void => {
+      if (!listener) throw new Error(`The server opened no watch for ${directory}.`);
+      listener("change", filename);
+    };
+  }
+
+  // Holds every index build that starts after `held.armed` is set until `held.release()`, and records in order what
+  // happens to the session around it.
+  function holdBackgroundRebuild() {
+    const events: string[] = [];
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const held = { armed: false, events, started: started.promise, release: release.resolve };
+    const createSession = agentSession.createAgentSession;
+    vi.spyOn(agentSession, "createAgentSession").mockImplementation((options) => {
+      const session = createSession(options);
+      const { loadProject, invalidate } = session;
+      session.loadProject = async (...args) => {
+        if (held.armed) events.push("loadProject:start");
+        try {
+          return await loadProject(...args);
+        } finally {
+          if (held.armed) events.push("loadProject:end");
+        }
+      };
+      session.invalidate = () => {
+        if (held.armed) events.push("invalidate");
+        invalidate();
+      };
+      return session;
+    });
+    const build = indexerBuild.buildProjectIndexIncremental;
+    vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      if (held.armed) {
+        started.resolve();
+        await release.promise;
+      }
+      return await build(...args);
+    });
+    return held;
+  }
+
+  // Holds the first read of a project file's size and modification time, which is how a session records its file
+  // signatures, until `held.release()`, and records in order what happens to the session around it. Discovery itself
+  // reads no file's metadata, so the read that is held belongs to the first file list that a session loads.
+  function holdFileSignatures(root: string) {
+    const events: string[] = [];
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const held = { events, started: started.promise, release: release.resolve };
+    const createSession = agentSession.createAgentSession;
+    vi.spyOn(agentSession, "createAgentSession").mockImplementation((options) => {
+      const session = createSession(options);
+      const { loadProject, invalidate } = session;
+      session.loadProject = async (...args) => {
+        events.push("loadProject:start");
+        try {
+          return await loadProject(...args);
+        } finally {
+          events.push("loadProject:end");
+        }
+      };
+      session.invalidate = () => {
+        events.push("invalidate");
+        invalidate();
+      };
+      return session;
+    });
+    const realStat = fs.stat.bind(fs);
+    let armed = true;
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const target = String(args[0]);
+      if (armed && target.startsWith(root) && target.endsWith(".ts")) {
+        armed = false;
+        events.push("signatures:start");
+        started.resolve();
+        await release.promise;
+        events.push("signatures:end");
+      }
+      return await realStat(...args);
+    });
+    return held;
+  }
+
+  // serveCodegraphMcp reads the process streams, so stand in for them while `run` serves.
+  async function withStandInStdio<T>(run: (stdin: PassThrough) => Promise<T>): Promise<T> {
+    const stdin = new PassThrough();
+    const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+    const originalStdout = Object.getOwnPropertyDescriptor(process, "stdout");
+    Object.defineProperty(process, "stdin", { value: stdin, configurable: true });
+    Object.defineProperty(process, "stdout", { value: new PassThrough(), configurable: true });
+    try {
+      return await run(stdin);
+    } finally {
+      if (originalStdin) Object.defineProperty(process, "stdin", originalStdin);
+      if (originalStdout) Object.defineProperty(process, "stdout", originalStdout);
+    }
+  }
+
+  // A real delay: the server, its sockets, and the file watch are real, so no fake clock reaches them. A shutdown that
+  // does not wait for the rebuild is done long before this ends, and one that does wait is not shortened by it.
+  async function letShutdownRun(): Promise<void> {
+    const elapsed = Promise.withResolvers<void>();
+    setTimeout(elapsed.resolve, 150);
+    await elapsed.promise;
+  }
+
+  async function findSymbol(handlers: CodegraphMcpHandlers, query: string) {
+    const response = await handlers.workspace_symbols({ query });
+    return { found: response.symbols.some((symbol) => symbol.name === query), freshness: response.freshness };
+  }
+
+  it("answers from an edit made on disk without refresh_index, inside the freshness window", async () => {
+    const root = await createProject("cg-mcp-watch-edit-");
+    const resources = await createWarmedCodegraphMcpResources({ root });
+    // A frozen clock keeps the 5 s pull-check window open for the whole test, so only the watcher can end it.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      expect((await findSymbol(resources.handlers, "symbol0")).found).toBe(true);
+
+      await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
+
+      await vi.waitFor(async () => expect((await findSymbol(resources.handlers, "addedSymbol")).found).toBe(true), {
+        timeout: 10_000,
+        interval: 100,
+      });
+    } finally {
+      await resources.closeWatcher();
+      resources.session.invalidate();
+    }
+  });
+
+  it("leaves an edit unseen inside the freshness window when nothing hints at it", async () => {
+    const root = await createProject("cg-mcp-watch-off-");
+    const resources = await createWarmedCodegraphMcpResources({ root, watch: false });
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      expect((await findSymbol(resources.handlers, "symbol0")).found).toBe(true);
+
+      await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
+
+      // The control for the test above: the cached "fresh" result still answers.
+      expect((await findSymbol(resources.handlers, "addedSymbol")).found).toBe(false);
+    } finally {
+      resources.session.invalidate();
+    }
+  });
+
+  it("rebuilds in the background after a change burst above the auto-refresh limit", async () => {
+    const root = await createProject("cg-mcp-watch-burst-", 60);
+    const resources = await createWarmedCodegraphMcpResources({ root });
+    try {
+      expect((await findSymbol(resources.handlers, "symbol59")).found).toBe(true);
+
+      await Promise.all(
+        Array.from({ length: 60 }, (_, index) =>
+          fs.writeFile(
+            path.join(root, `f${index}.ts`),
+            `export function renamed${index}() { return ${index}; }\n`,
+            "utf8",
+          ),
+        ),
+      );
+
+      // A query alone would report "stale" and keep doing so; the background refresh rebuilds the index.
+      await vi.waitFor(
+        async () => {
+          const renamed = await findSymbol(resources.handlers, "renamed59");
+          expect(renamed).toEqual({ found: true, freshness: { state: "fresh" } });
+        },
+        { timeout: 20_000, interval: 100 },
+      );
+      expect((await findSymbol(resources.handlers, "symbol59")).found).toBe(false);
+    } finally {
+      await resources.closeWatcher();
+      resources.session.invalidate();
+    }
+  });
+
+  it("reports a burst above the auto-refresh limit as stale when watch is false", async () => {
+    const root = await createProject("cg-mcp-watch-burst-off-", 60);
+    const resources = await createWarmedCodegraphMcpResources({ root, watch: false });
+    try {
+      await findSymbol(resources.handlers, "symbol59");
+      await Promise.all(
+        Array.from({ length: 60 }, (_, index) =>
+          fs.writeFile(
+            path.join(root, `f${index}.ts`),
+            `export function renamed${index}() { return ${index}; }\n`,
+            "utf8",
+          ),
+        ),
+      );
+      // Ends the 5 s window as an event would, so the query scans the project.
+      resources.session.markChanged?.();
+
+      const renamed = await findSymbol(resources.handlers, "renamed59");
+
+      expect(renamed.found).toBe(false);
+      expect(renamed.freshness).toMatchObject({ state: "stale", changedFileCount: 60 });
+    } finally {
+      resources.session.invalidate();
+    }
+  });
+
+  it("opens watches for a session it creates, and closeWatcher closes every one of them", async () => {
+    const root = await createProject("cg-mcp-watch-close-");
+    const { watchSpy, openHandles } = spyOnWatches();
+    const resources = await createWarmedCodegraphMcpResources({ root });
+    try {
+      expect(openHandles()).toBeGreaterThan(0);
+
+      await resources.closeWatcher();
+      await resources.closeWatcher();
+
+      expect(openHandles()).toBe(0);
+      // A later tool call does not reopen a closed watcher.
+      const opened = watchSpy.mock.calls.length;
+      await findSymbol(resources.handlers, "symbol0");
+      expect(watchSpy.mock.calls).toHaveLength(opened);
+    } finally {
+      await resources.closeWatcher();
+      resources.session.invalidate();
+    }
+  });
+
+  it("opens no watch when watch is false or when the caller supplies the session", async () => {
+    const root = await createProject("cg-mcp-watch-none-");
+    const { watchSpy } = spyOnWatches();
+    const disabled = await createWarmedCodegraphMcpResources({ root, watch: false });
+    const supplied = await createWarmedCodegraphMcpResources({
+      root,
+      session: createAgentSession({ root }),
+      warmup: "base",
+    });
+    try {
+      await findSymbol(disabled.handlers, "symbol0");
+      await findSymbol(supplied.handlers, "symbol0");
+
+      expect(watchSpy).not.toHaveBeenCalled();
+    } finally {
+      await disabled.closeWatcher();
+      await supplied.closeWatcher();
+      disabled.session.invalidate();
+      supplied.session.invalidate();
+    }
+  });
+
+  it("keeps a lazy startup lazy: no watch opens until the first tool call", async () => {
+    const root = await createProject("cg-mcp-watch-lazy-");
+    const { watchSpy } = spyOnWatches();
+    const resources = await createWarmedCodegraphMcpResources({ root, warmup: "off" });
+    try {
+      expect(watchSpy).not.toHaveBeenCalled();
+
+      await findSymbol(resources.handlers, "symbol0");
+
+      expect(watchSpy).toHaveBeenCalled();
+    } finally {
+      await resources.closeWatcher();
+      resources.session.invalidate();
+    }
+  });
+
+  it.each([
+    ["buildOptions.cacheDir", "option"],
+    ["CODEGRAPH_CACHE_DIR", "environment"],
+  ] as const)(
+    "does not wake the session for writes into a cache directory that %s moved into the project",
+    async (_label, source) => {
+      const root = await createProject("cg-mcp-watch-cache-dir-");
+      const anchor = path.join(root, ".moved-cache");
+      const deliver = captureWatchListener(root);
+      if (source === "environment") vi.stubEnv("CODEGRAPH_CACHE_DIR", anchor);
+      const resources = await createWarmedCodegraphMcpResources({
+        root,
+        ...(source === "option" ? { buildOptions: { cacheDir: anchor } } : {}),
+      });
+      try {
+        // Where the session really writes its cache, so that the test does not rely on what the server resolved.
+        const { index } = await resources.session.loadProject({ symbolGraph: "skip" });
+        const cacheDirectory = index.cacheRootDir ?? "";
+        expect(path.dirname(cacheDirectory)).toBe(anchor);
+        const markChanged = vi.spyOn(resources.session, "markChanged");
+
+        deliver(path.relative(root, path.join(cacheDirectory, "manifest.json")));
+        deliver(path.relative(root, path.join(cacheDirectory, "cache", "index-v1", "search-v1.sqlite")));
+        expect(markChanged).not.toHaveBeenCalled();
+
+        // The control: an edit to a project file reaches the session through the same watch.
+        deliver("f0.ts");
+        expect(markChanged).toHaveBeenCalledTimes(1);
+      } finally {
+        await resources.closeWatcher();
+        resources.session.invalidate();
+      }
+    },
+  );
+
+  it("does not wake the session for writes into a cache directory that names the project by its physical path, under a root that is a link", async () => {
+    const realRoot = await createProject("cg-mcp-watch-link-real-");
+    const parent = await tempRoots.create("cg-mcp-watch-link-parent-");
+    const linkedRoot = path.join(parent, "alias");
+    if (!(await tryCreateDirectorySymlink(realRoot, linkedRoot))) return;
+    const anchor = path.join(realRoot, ".moved-cache");
+    const deliver = captureWatchListener(linkedRoot);
+    const resources = await createWarmedCodegraphMcpResources({ root: linkedRoot, buildOptions: { cacheDir: anchor } });
+    try {
+      const { index } = await resources.session.loadProject({ symbolGraph: "skip" });
+      const cacheDirectory = index.cacheRootDir ?? "";
+      expect(path.dirname(cacheDirectory)).toBe(anchor);
+      const markChanged = vi.spyOn(resources.session, "markChanged");
+
+      // The watch is on the root as it was given, and names the entries below it from there.
+      deliver(path.relative(realRoot, path.join(cacheDirectory, "manifest.json")));
+      deliver(path.relative(realRoot, path.join(cacheDirectory, "cache", "index-v1", "search-v1.sqlite")));
+      expect(markChanged).not.toHaveBeenCalled();
+
+      // The control: an edit to a project file reaches the session through the same watch.
+      deliver("f0.ts");
+      expect(markChanged).toHaveBeenCalledTimes(1);
+    } finally {
+      await resources.closeWatcher();
+      resources.session.invalidate();
+    }
+  });
+
+  it("pauses after the idle time and resumes on the next tool call, whichever tool it is", async () => {
+    const root = await createProject("cg-mcp-watch-idle-");
+    const { watchSpy, openHandles } = spyOnWatches();
+    const resources = await createWarmedCodegraphMcpResources({ root, watchIdleMs: 750 });
+    const markChanged = vi.spyOn(resources.session, "markChanged");
+    try {
+      expect(openHandles()).toBeGreaterThan(0);
+      await vi.waitFor(() => expect(openHandles()).toBe(0), { timeout: 10_000, interval: 25 });
+      expect(markChanged).not.toHaveBeenCalled();
+      const opened = watchSpy.mock.calls.length;
+
+      // get_file never reaches the MCP freshness helper, so this also shows that every tool call counts.
+      await resources.handlers.get_file({ file: "f0.ts" });
+
+      expect(watchSpy.mock.calls.length).toBeGreaterThan(opened);
+      expect(openHandles()).toBeGreaterThan(0);
+      expect(markChanged).toHaveBeenCalledTimes(1);
+    } finally {
+      await resources.closeWatcher();
+      resources.session.invalidate();
+    }
+  });
+
+  it("closes its watches when the HTTP server closes", async () => {
+    const root = await createProject("cg-mcp-watch-http-");
+    const { openHandles } = spyOnWatches();
+    const httpServer = await startCodegraphMcpHttpServer({ root, port: 0 });
+    try {
+      expect(openHandles()).toBeGreaterThan(0);
+    } finally {
+      await httpServer.close();
+    }
+
+    expect(openHandles()).toBe(0);
+  });
+
+  it("closes its watches when the stdio server shuts down", async () => {
+    const root = await createProject("cg-mcp-watch-stdio-");
+    const { openHandles } = spyOnWatches();
+    await withStandInStdio(async (stdin) => {
+      const serving = serveCodegraphMcp({ root });
+      await vi.waitFor(() => expect(stdin.listenerCount("end")).toBeGreaterThan(0), { timeout: 20_000 });
+      expect(openHandles()).toBeGreaterThan(0);
+
+      stdin.end();
+      await serving;
+
+      expect(openHandles()).toBe(0);
+    });
+  });
+
+  it("runs refresh_index after a background rebuild that is running, so that the later build's file signatures stay", async () => {
+    const root = await createProject("cg-mcp-watch-refresh-index-");
+    const held = holdBackgroundRebuild();
+    const resources = await createWarmedCodegraphMcpResources({
+      root,
+      watchDebounceMs: 25,
+      watchMinRefreshIntervalMs: 0,
+    });
+    try {
+      held.armed = true;
+      await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
+      await held.started;
+      // The background build listed the project before it was held, so only a build that starts later knows this file.
+      await fs.writeFile(path.join(root, "late.ts"), "export function lateSymbol() { return 3; }\n", "utf8");
+
+      const refreshed = resources.handlers.refresh_index({ warmup: "base" });
+
+      // Run at once, the refresh would drop the session state under the background build and start a second build
+      // beside it. Whichever build ended last would then replace the file signatures of the snapshot that is served.
+      expect(held.events).toEqual(["loadProject:start"]);
+
+      held.release();
+      await refreshed;
+
+      expect(held.events).toEqual([
+        "loadProject:start",
+        "loadProject:end",
+        "invalidate",
+        "loadProject:start",
+        "loadProject:end",
+      ]);
+      held.armed = false;
+      // Ends the 5 s window as an event would, so that the query checks the project against the session's baseline.
+      resources.session.markChanged?.();
+      // The baseline is the second build's, so it knows `late.ts` as the snapshot that is served does.
+      expect(await findSymbol(resources.handlers, "lateSymbol")).toEqual({
+        found: true,
+        freshness: { state: "fresh" },
+      });
+    } finally {
+      held.release();
+      await resources.closeWatcher();
+      resources.session.invalidate();
+    }
+  });
+
+  // Only per-directory watching reads the file list, and Windows and macOS watch the root recursively instead.
+  it.runIf(process.platform === "linux")(
+    "runs refresh_index after the watcher's first read of the file list, so that the read cannot end later and replace the rebuild's file signatures",
+    async () => {
+      const root = await createProject("cg-mcp-watch-first-read-");
+      const held = holdFileSignatures(root);
+      const resources = await createWarmedCodegraphMcpResources({
+        root,
+        warmup: "off",
+        watchDebounceMs: 25,
+        watchMinRefreshIntervalMs: 0,
+      });
+      try {
+        // With `warmup: "off"` the first tool call opens the watches, and the watcher reads the file list for them.
+        const refreshed = resources.handlers.refresh_index({ warmup: "base" });
+        await held.started;
+        // The read that is held listed the project without this file, so only a build that starts later knows it.
+        await fs.writeFile(path.join(root, "late.ts"), "export function lateSymbol() { return 3; }\n", "utf8");
+
+        // Run at once, the refresh would drop the session state under the read and rebuild beside it. The read, ending
+        // last, would then replace the file signatures of the snapshot that is served.
+        expect(held.events).toEqual(["signatures:start"]);
+
+        held.release();
+        await refreshed;
+
+        expect(held.events).toEqual([
+          "signatures:start",
+          "signatures:end",
+          "invalidate",
+          "loadProject:start",
+          "loadProject:end",
+        ]);
+        // Ends the 5 s window as an event would, so that the query checks the project against the session's baseline.
+        resources.session.markChanged?.();
+        // The baseline is the rebuild's, so it knows `late.ts` as the snapshot that is served does.
+        expect(await findSymbol(resources.handlers, "lateSymbol")).toEqual({
+          found: true,
+          freshness: { state: "fresh" },
+        });
+      } finally {
+        held.release();
+        await resources.closeWatcher();
+        resources.session.invalidate();
+      }
+    },
+  );
+
+  it("waits for a background rebuild that is running when the HTTP server closes, and releases the session after it", async () => {
+    const root = await createProject("cg-mcp-watch-http-rebuild-");
+    const held = holdBackgroundRebuild();
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      watchDebounceMs: 25,
+      watchMinRefreshIntervalMs: 0,
+    });
+    try {
+      held.armed = true;
+      await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
+      await held.started;
+
+      let closed = false;
+      const closing = httpServer.close().then(() => {
+        closed = true;
+      });
+      await letShutdownRun();
+
+      // Nothing else holds the server open, so only the rebuild can.
+      expect(closed).toBe(false);
+      expect(held.events).toEqual(["loadProject:start"]);
+
+      held.release();
+      await closing;
+      // The rebuild writes the cache and restores the file signatures when it ends, so it must end before the release.
+      expect(held.events).toEqual(["loadProject:start", "loadProject:end", "invalidate"]);
+    } finally {
+      held.release();
+      await httpServer.close();
+    }
+  });
+
+  it("waits for a background rebuild that is running when the stdio server shuts down, and releases the session after it", async () => {
+    const root = await createProject("cg-mcp-watch-stdio-rebuild-");
+    const held = holdBackgroundRebuild();
+    await withStandInStdio(async (stdin) => {
+      let served = false;
+      const serving = serveCodegraphMcp({ root, watchDebounceMs: 25, watchMinRefreshIntervalMs: 0 }).then(() => {
+        served = true;
+      });
+      try {
+        await vi.waitFor(() => expect(stdin.listenerCount("end")).toBeGreaterThan(0), { timeout: 20_000 });
+        held.armed = true;
+        await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
+        await held.started;
+
+        stdin.end();
+        await letShutdownRun();
+
+        // Nothing else holds the server open, so only the rebuild can.
+        expect(served).toBe(false);
+        expect(held.events).toEqual(["loadProject:start"]);
+
+        held.release();
+        await serving;
+        // The rebuild writes the cache and restores the file signatures when it ends, so it must end before the release.
+        expect(held.events).toEqual(["loadProject:start", "loadProject:end", "invalidate"]);
+      } finally {
+        held.release();
+        stdin.end();
+        await serving;
+      }
+    });
+  });
+
+  // Only per-directory watching reads the file list, and Windows and macOS watch the root recursively instead.
+  it.runIf(process.platform === "linux")(
+    "waits for the watcher's first read of the file list when the HTTP server closes, and releases the session after it",
+    async () => {
+      const root = await createProject("cg-mcp-watch-http-first-read-");
+      await fs.writeFile(path.join(root, "notes.md"), "notes\n", "utf8");
+      const held = holdFileSignatures(root);
+      const httpServer = await startCodegraphMcpHttpServer({ root, port: 0, warmup: "off" });
+      try {
+        const initialize = await postMcpJson(httpServer.url, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-11-25",
+            capabilities: {},
+            clientInfo: { name: "codegraph-watch-first-read-test", version: "1.0.0" },
+          },
+        });
+        // With `warmup: "off"` the first tool call opens the watches, and the watcher reads the file list for them.
+        // `get_file` on a file that discovery does not list leaves the session alone, so that read is the first.
+        await postMcpJson(
+          httpServer.url,
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: { name: "get_file", arguments: { file: "notes.md" } },
+          },
+          initialize.response.headers.get("mcp-session-id") ?? undefined,
+        );
+        await held.started;
+
+        let closed = false;
+        const closing = httpServer.close().then(() => {
+          closed = true;
+        });
+        await letShutdownRun();
+
+        // Nothing else holds the server open, so only the read can.
+        expect(closed).toBe(false);
+        expect(held.events).toEqual(["signatures:start"]);
+
+        held.release();
+        await closing;
+        // The read records the file signatures when it ends, so it must end before the release.
+        expect(held.events).toEqual(["signatures:start", "signatures:end", "invalidate"]);
+      } finally {
+        held.release();
+        await httpServer.close();
+      }
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "waits for the watcher's first read of the file list when the stdio server shuts down, and releases the session after it",
+    async () => {
+      const root = await createProject("cg-mcp-watch-stdio-first-read-");
+      await fs.writeFile(path.join(root, "notes.md"), "notes\n", "utf8");
+      const held = holdFileSignatures(root);
+      await withStandInStdio(async (stdin) => {
+        let served = false;
+        const serving = serveCodegraphMcp({ root, warmup: "off" }).then(() => {
+          served = true;
+        });
+        try {
+          await vi.waitFor(() => expect(stdin.listenerCount("end")).toBeGreaterThan(0), { timeout: 20_000 });
+          // With `warmup: "off"` the first tool call opens the watches, and the watcher reads the file list for them.
+          // `get_file` on a file that discovery does not list leaves the session alone, so that read is the first.
+          const frames = [
+            {
+              jsonrpc: "2.0",
+              id: 1,
+              method: "initialize",
+              params: {
+                protocolVersion: "2025-11-25",
+                capabilities: {},
+                clientInfo: { name: "codegraph-watch-first-read-test", version: "1.0.0" },
+              },
+            },
+            { jsonrpc: "2.0", method: "notifications/initialized" },
+            {
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/call",
+              params: { name: "get_file", arguments: { file: "notes.md" } },
+            },
+          ];
+          stdin.write(frames.map((frame) => JSON.stringify(frame)).join("\n") + "\n");
+          await held.started;
+
+          stdin.end();
+          await letShutdownRun();
+
+          // Nothing else holds the server open, so only the read can.
+          expect(served).toBe(false);
+          expect(held.events).toEqual(["signatures:start"]);
+
+          held.release();
+          await serving;
+          // The read records the file signatures when it ends, so it must end before the release.
+          expect(held.events).toEqual(["signatures:start", "signatures:end", "invalidate"]);
+        } finally {
+          held.release();
+          stdin.end();
+          await serving;
+        }
+      });
+    },
+  );
+
+  it.each<[string, Partial<CodegraphMcpServerOptions>]>([
+    ["watchDebounceMs", { watchDebounceMs: -1 }],
+    ["watchMinRefreshIntervalMs", { watchMinRefreshIntervalMs: 1.5 }],
+    ["watchIdleMs", { watchIdleMs: 2 ** 31 }],
+  ])("rejects an invalid %s at startup, before any warmup work", async (option, invalid) => {
+    const root = await createProject("cg-mcp-watch-invalid-");
+    const onProgress = vi.fn();
+
+    await expect(createWarmedCodegraphMcpResources({ root, buildOptions: { onProgress }, ...invalid })).rejects.toThrow(
+      new RegExp(`${option} must be a whole number of milliseconds`),
+    );
+
+    expect(onProgress).not.toHaveBeenCalled();
   });
 });

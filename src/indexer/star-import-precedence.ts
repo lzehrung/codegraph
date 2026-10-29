@@ -1,9 +1,10 @@
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ImportBinding } from "./import-types.js";
-import { resolveImported } from "./navigation-resolve.js";
+import { csharpShadowedStarsMayHold, resolveImported } from "./navigation-resolve.js";
 import { sameDef } from "./reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
+import { createUnionFind } from "../util/collections.js";
 
 /**
  * What a language does when more than one star import can see the same simple name.
@@ -311,21 +312,7 @@ function compareSymbolDefs(left: SymbolDef, right: SymbolDef): number {
 }
 
 function groupStarDefinitions(index: ProjectIndex, languageId: string, defs: readonly SymbolDef[]): SymbolDef[][] {
-  const parent = defs.map((_, defIndex) => defIndex);
-  const find = (start: number): number => {
-    let current = start;
-    while (parent[current] !== current) {
-      const parentIndex = parent[current]!;
-      parent[current] = parent[parentIndex] ?? parentIndex;
-      current = parentIndex;
-    }
-    return current;
-  };
-  const unite = (left: number, right: number): void => {
-    const leftRoot = find(left);
-    const rightRoot = find(right);
-    if (leftRoot !== rightRoot) parent[rightRoot] = leftRoot;
-  };
+  const { find, unite } = createUnionFind(defs.length);
   for (let left = 0; left < defs.length; left += 1) {
     for (let right = left + 1; right < defs.length; right += 1) {
       if (sameStarIdentity(index, languageId, defs[left]!, defs[right]!)) unite(left, right);
@@ -366,13 +353,19 @@ function representativeDefinition(
   return [...group].sort(compareSymbolDefs)[0]!;
 }
 
+/**
+ * `blocked` marks a star import that may hold the name but resolved nothing, a C# `using N;` that an enclosing
+ * namespace shadows: it leaves any candidate the other star imports supply unproven.
+ */
 export function decideStarImportCandidates(
   index: ProjectIndex,
   languageId: string,
   candidates: readonly StarImportCandidate[],
   useFile?: string,
+  blocked = false,
 ): StarImportDecision {
   if (!candidates.length) return { status: "none" };
+  if (blocked) return { status: "ambiguous" };
   const groups = groupStarDefinitions(
     index,
     languageId,
@@ -413,7 +406,8 @@ export function resolveStarImportedName(
     const last = candidates.at(-1);
     return last ? { status: "resolved", imp: last.imp, definition: last.def } : { status: "none" };
   }
-  return decideStarImportCandidates(index, languageId, candidates, mod.file);
+  const blocked = languageId === "csharp" && csharpShadowedStarsMayHold(index, mod, name);
+  return decideStarImportCandidates(index, languageId, candidates, mod.file, blocked);
 }
 
 /**

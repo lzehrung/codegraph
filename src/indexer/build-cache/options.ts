@@ -50,10 +50,25 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 94 reads C# using directives and namespace declarations from native syntax nodes, and stores each C#
  * file's own namespace regions and declared types with its module (`csharpNamespaceFacts`) instead of
  * scanning source text for them.
- * Epoch 95 reads Java and Kotlin packages, top-level declared names, and imports from native syntax nodes, and
+ * Epoch 95 stores each module's native outcome (`nativeOutcome`) and whether part of it could not be indexed
+ * (`parserDegraded`: no syntax tree, a failed import extraction of its source or of an embedded block, or a processing
+ * failure) so the analysis summary counts files reused from the module cache or the project snapshot, not only the
+ * files a build parsed.
+ * Epoch 96 marks a C# module whose alias or static using type lookup could not read every C# file of its project
+ * (`parserDegraded` and `importLookupIncomplete`), and extracts such a module again on the next build instead of
+ * reusing it.
+ * Epoch 97 re-extracts files with the Tree-sitter 0.27 runtime. Its error recovery changes the ERROR/MISSING ranges
+ * and the symbols recovered from a file the grammar cannot parse cleanly, such as an SCSS `@include ns.mixin;`.
+ * Epoch 98 re-extracts Kotlin files with a pinned fork of `tree-sitter-kotlin-ng`. Its trees differ for one-line class
+ * bodies, annotated top-level declarations, files that end mid-annotation, and forms the published grammar rejects, so
+ * symbols and ERROR ranges change.
+ * Epoch 99 records the start of each C# `using` directive on its star binding (`csharpDirectiveStartIndex`), so a
+ * lookup can tell which namespace the directive is written in, and no longer binds a dotted C# type name to a
+ * path-like file when the project declares its namespace.
+ * Epoch 100 reads Java and Kotlin packages, top-level declared names, and imports from native syntax nodes, and
  * stores each file's own package and declared names with its module (`jvmFacts`) instead of scanning source text.
  */
-export const CORE_ALGORITHM_EPOCH = 95;
+export const CORE_ALGORITHM_EPOCH = 100;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

@@ -436,3 +436,79 @@ describe("SQL review context", () => {
     }
   });
 });
+
+describe("SQL review context across SQL file extensions", () => {
+  // `.ddl`, `.pgsql`, and `.mysql` are built-in SQL extensions and `.psql` is a `languages.extensions` mapping.
+  // `.sql` is the control.
+  const extensionCases: ReadonlyArray<{ ext: string; languageExtensions?: Record<string, string> }> = [
+    { ext: ".sql" },
+    { ext: ".ddl" },
+    { ext: ".pgsql" },
+    { ext: ".mysql" },
+    { ext: ".psql", languageExtensions: { ".psql": "sql" } },
+  ];
+
+  describe.each(extensionCases)("$ext", ({ ext, languageExtensions }) => {
+    const mapping = languageExtensions ? { languageExtensions } : {};
+
+    it("lists the statements of a changed SQL file", async () => {
+      const root = await mkTmpDir("cg-sql-review-ext-");
+      try {
+        const schema = await writeFile(path.join(root, "db", `schema${ext}`), "CREATE TABLE users (id integer);\n");
+        await writeFile(path.join(root, "src", "app.ts"), "export const ok = true;\n");
+
+        const report = await buildReviewReport(root, { files: [schema], ...mapping });
+
+        expect(report.sqlContext?.entries).toEqual([
+          expect.objectContaining({
+            reason: "changed_sql_file",
+            objectName: "users",
+            fact: expect.objectContaining({ filePath: schema.replace(/\\/g, "/"), kind: "defines_table" }),
+          }),
+        ]);
+      } finally {
+        await rmTmpDir(root);
+      }
+    });
+
+    it("bridges a changed SQL literal in code to the schema of that extension", async () => {
+      const root = await mkTmpDir("cg-sql-review-ext-");
+      try {
+        const schema = await writeFile(path.join(root, "db", `schema${ext}`), "CREATE TABLE users (id integer);\n");
+        const repo = await writeFile(
+          path.join(root, "src", "userRepo.ts"),
+          "export const query = `SELECT id FROM users WHERE id = ?`;\n",
+        );
+        const expected = [
+          expect.objectContaining({
+            reason: "changed_sql_literal",
+            objectName: "users",
+            fact: expect.objectContaining({ filePath: schema.replace(/\\/g, "/"), kind: "defines_table" }),
+          }),
+        ];
+
+        // The report reuses the indexed files, and the library call discovers the project itself.
+        const report = await buildReviewReport(root, { files: [repo], ...mapping });
+        const context = await collectSqlReviewContext(root, { changedFiles: [repo], ...mapping });
+
+        expect(report.sqlContext?.entries).toEqual(expected);
+        expect(context?.entries).toEqual(expected);
+      } finally {
+        await rmTmpDir(root);
+      }
+    });
+  });
+
+  it("does not read a changed file as SQL when its extension is not mapped", async () => {
+    const root = await mkTmpDir("cg-sql-review-ext-");
+    try {
+      const schema = await writeFile(path.join(root, "db", "schema.psql"), "CREATE TABLE users (id integer);\n");
+
+      const context = await collectSqlReviewContext(root, { changedFiles: [schema] });
+
+      expect(context).toBeUndefined();
+    } finally {
+      await rmTmpDir(root);
+    }
+  });
+});

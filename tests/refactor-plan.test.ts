@@ -201,6 +201,19 @@ describe("refactor evidence plan", () => {
     expect(result.rename?.safe).toBe(false);
   });
 
+  it("rejects a negative section limit by option name", async () => {
+    const { root, backing, handle } = await refactorFixture();
+    await expect(buildRefactorPlanWithSession(backing, { root, handle, maxReferences: -1 })).rejects.toThrow(
+      "maxReferences must be a non-negative integer.",
+    );
+    await expect(buildRefactorPlanWithSession(backing, { root, handle, maxCallers: 1.5 })).rejects.toThrow(
+      "maxCallers must be a non-negative integer.",
+    );
+    await expect(buildRefactorPlanWithSession(backing, { root, handle, maxHierarchy: -1 })).rejects.toThrow(
+      "maxHierarchy must be a non-negative integer.",
+    );
+  });
+
   it("keeps section limits and omissions independent", async () => {
     const { root, backing, handle } = await refactorFixture();
     const result = await buildRefactorPlanWithSession(backing, {

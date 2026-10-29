@@ -1,8 +1,9 @@
 import fsp from "node:fs/promises";
-import path from "node:path";
-import { listProjectFiles } from "../util/project-files.js";
+import { languageExtensionPatterns, type LanguageExtensionMap } from "../languages.js";
+import { DEFAULT_PROJECT_PATTERNS, listProjectFiles } from "../util/project-files.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
+import { isSqlFilePath } from "./classify-sql-file.js";
 import { extractSqlFactsFromSource } from "./extract-facts.js";
 import { normalizeSqlObjectName, sqlObjectLookupKey } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
@@ -21,6 +22,8 @@ export type SqlReviewContext = {
 export type SqlReviewContextOptions = {
   changedFiles: readonly string[];
   projectFiles?: readonly string[];
+  /** The `languages.extensions` mapping that decides which files are SQL, beyond the built-in SQL extensions. */
+  languageExtensions?: LanguageExtensionMap;
 };
 
 // Keep aligned with SQL_IDENTIFIER_PART_PATTERN in lex.ts (including T-SQL #/## temp names).
@@ -48,10 +51,6 @@ const SQL_LITERAL_HINT = new RegExp(
 );
 const SQL_OBJECT_MENTION_RE = new RegExp(SQL_OBJECT_NAME_HINT, "g");
 
-function isSqlFile(filePath: string): boolean {
-  return path.extname(filePath).toLowerCase() === ".sql";
-}
-
 function entryKey(entry: SqlReviewContextEntry): string {
   return `${entry.reason}:${entry.fact.id}:${entry.objectName ?? ""}`;
 }
@@ -75,17 +74,20 @@ async function collectSqlFacts(
   changedFiles: readonly string[],
   includeDiscoveredSqlFiles: boolean,
   projectFiles: readonly string[] | undefined,
+  languageExtensions: LanguageExtensionMap | undefined,
 ): Promise<SqlStatementFact[]> {
   const allSqlFiles = new Set<string>();
   if (includeDiscoveredSqlFiles) {
-    const discovered = projectFiles ?? (await listProjectFiles(projectRoot));
+    const customPatterns = languageExtensionPatterns(languageExtensions);
+    const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
+    const discovered = projectFiles ?? (await listProjectFiles(projectRoot, patterns));
     for (const file of discovered) {
-      if (isSqlFile(file)) allSqlFiles.add(normalizePath(file));
+      if (isSqlFilePath(file, languageExtensions)) allSqlFiles.add(normalizePath(file));
     }
   }
   for (const changedFile of changedFiles) {
     const normalized = normalizePath(changedFile);
-    if (isSqlFile(normalized)) allSqlFiles.add(normalized);
+    if (isSqlFilePath(normalized, languageExtensions)) allSqlFiles.add(normalized);
   }
 
   const factGroups = await mapLimit(Array.from(allSqlFiles), SQL_FACT_READ_CONCURRENCY, async (filePath) => {
@@ -150,10 +152,13 @@ function sqlLiteralsInSource(source: string): string[] {
   return literals;
 }
 
-async function collectChangedSqlLiteralSources(changedFiles: readonly string[]): Promise<string[]> {
+async function collectChangedSqlLiteralSources(
+  changedFiles: readonly string[],
+  languageExtensions: LanguageExtensionMap | undefined,
+): Promise<string[]> {
   const sources: string[] = [];
   for (const changedFile of changedFiles) {
-    if (isSqlFile(changedFile)) continue;
+    if (isSqlFilePath(changedFile, languageExtensions)) continue;
     const source = await readExistingFile(changedFile);
     if (!source) continue;
     sources.push(...sqlLiteralsInSource(source));
@@ -204,8 +209,9 @@ export async function collectSqlReviewContext(
   const changedFiles = options.changedFiles.map(normalizePath);
   if (!changedFiles.length) return undefined;
 
-  const changedSqlFiles = new Set(changedFiles.filter(isSqlFile));
-  const changedSqlLiteralSources = await collectChangedSqlLiteralSources(changedFiles);
+  const { languageExtensions } = options;
+  const changedSqlFiles = new Set(changedFiles.filter((file) => isSqlFilePath(file, languageExtensions)));
+  const changedSqlLiteralSources = await collectChangedSqlLiteralSources(changedFiles, languageExtensions);
   if (changedSqlFiles.size === 0 && !changedSqlLiteralSources.length) return undefined;
 
   const facts = await collectSqlFacts(
@@ -213,6 +219,7 @@ export async function collectSqlReviewContext(
     changedFiles,
     !!changedSqlLiteralSources.length,
     options.projectFiles,
+    languageExtensions,
   );
   if (!facts.length) return undefined;
 

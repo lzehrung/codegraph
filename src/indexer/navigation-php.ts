@@ -1,7 +1,7 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./import-types.js";
-import { sliceText } from "../util/ast.js";
+import { containsNode, sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import { SymbolKind } from "./types.js";
 
@@ -263,16 +263,6 @@ export function selectFirstExistingPhpCanonicalName(
   return null;
 }
 
-export function canonicalPhpReferenceName(
-  rawName: string,
-  source: string,
-  tree: SyntaxTreeLike,
-  node: SyntaxNodeLike | null,
-  options?: PhpCanonicalNameOptions,
-): string | null {
-  return canonicalPhpReferenceNames(rawName, source, tree, node, options)[0] ?? null;
-}
-
 /**
  * True when a reference node spells a namespace-qualified path (`App\Name`, `\App\Name`, or
  * `namespace\Name`). A bare `name` is not a qualified path, so PHP could resolve it as a
@@ -337,10 +327,6 @@ const PHP_SCOPED_CLASS_EXPRESSION_TYPES = new Set([
   "scoped_property_access_expression",
   "class_constant_access_expression",
 ]);
-
-function containsNode(container: SyntaxNodeLike, node: SyntaxNodeLike): boolean {
-  return container.startIndex <= node.startIndex && container.endIndex >= node.endIndex;
-}
 
 function phpArgumentsNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
   return (

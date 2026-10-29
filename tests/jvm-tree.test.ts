@@ -254,16 +254,17 @@ describe("JVM facts and Kotlin syntax errors", () => {
   });
 
   it("declares no member of a class the grammar fails inside, and none of the text after the failure", () => {
-    // `final` is a modifier to the pinned grammar, so a variable of that name ends the tree in an ERROR. The answer
-    // is a miss: neither the class nor its members (`read`, `update`) nor `After` become top-level names.
+    // The pinned grammar reads no identifier written with CJK ideographs, so a variable named with them ends the tree
+    // in an ERROR. The answer is a miss: neither the class nor its members (`read`, `update`) nor `After` become
+    // top-level names.
     const source = [
       "package p",
       "class Reader : Source {",
       "  fun read(): Long {",
-      "    var final = false",
-      "    while (!final) {",
+      "    var \u540d\u524d = false",
+      "    while (!\u540d\u524d) {",
       "      if (ready()) {",
-      "        final = true",
+      "        \u540d\u524d = true",
       "      }",
       "    }",
       "    return 0",

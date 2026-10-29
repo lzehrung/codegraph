@@ -1,8 +1,5 @@
-import { findReferences, findUsageReferences } from "../indexer/navigation.js";
+import { attachReferenceContext, findReferences, findUsageReferences } from "../indexer/navigation.js";
 import { REFERENCE_COVERAGE_REASON_ORDER } from "../indexer/navigation-references.js";
-import { ensureParsedContext } from "../indexer/parse-context.js";
-import { extractEnclosingBlock, extractLineContext } from "../indexer/reference-context.js";
-import { DEFAULT_REF_CONTEXT_LINES } from "../indexer/shared.js";
 import type {
   FindReferencesResult,
   ProjectIndex,
@@ -11,9 +8,6 @@ import type {
   ReferenceCoverageReason,
   SymbolDef,
 } from "../indexer/types.js";
-import type { LanguageSupport } from "../languages.js";
-import type { SyntaxTreeLike } from "../languages/types.js";
-import { fileIdentityKey } from "../util/paths.js";
 
 export type CachedReferenceOptions = {
   maxReferences?: number;
@@ -136,35 +130,6 @@ function cloneReference(reference: Reference): Reference {
     ...(reference.via !== undefined ? { via: { ...reference.via } } : {}),
     ...(reference.provenance !== undefined ? { provenance: { ...reference.provenance } } : {}),
   };
-}
-
-async function attachReferenceContext(
-  index: ProjectIndex,
-  references: Reference[],
-  options: CachedReferenceOptions,
-): Promise<void> {
-  const perFileCache = new Map<string, { source: string; tree: SyntaxTreeLike; sup: LanguageSupport }>();
-  for (const ref of references) {
-    const fileKey = fileIdentityKey(ref.file);
-    let cached = perFileCache.get(fileKey);
-    if (!cached) {
-      const parsedEntry = index.parsed?.get(fileKey);
-      const parsed = await ensureParsedContext(ref.file, parsedEntry, index.languageExtensions);
-      cached = { source: parsed.source, tree: parsed.tree, sup: parsed.sup };
-      perFileCache.set(fileKey, cached);
-    }
-    if (options.context === "line") {
-      ref.context = extractLineContext(cached.source, ref.range.start.line, options.lines ?? DEFAULT_REF_CONTEXT_LINES);
-    } else if (options.context === "block") {
-      ref.context = extractEnclosingBlock(
-        cached.source,
-        cached.tree,
-        ref.range,
-        options.blockMaxLines ?? 60,
-        cached.sup,
-      );
-    }
-  }
 }
 
 function referenceLookupKey(def: SymbolDef, mode: "all" | "usages"): string {

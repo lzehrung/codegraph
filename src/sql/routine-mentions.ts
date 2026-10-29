@@ -7,9 +7,11 @@ import {
   SQL_OBJECT_NAME_PATTERN,
   splitTopLevelCommaSeparated,
   sqlParenDepthAt,
+  sqlMatchingParen as matchingParen,
   sqlSourceClauses,
   type SqlMaskOptions,
 } from "./lex.js";
+import { skipWhitespace } from "../util/text-scanning.js";
 
 /**
  * SQL keeps routines in name spaces of their own. A call names a function or a procedure
@@ -196,12 +198,6 @@ const SOURCE_MODIFIERS: WordTable = { lateral: true, only: true };
 
 function hasWord(table: WordTable, word: string): boolean {
   return Object.hasOwn(table, word);
-}
-
-function skipWhitespace(text: string, index: number): number {
-  let cursor = index;
-  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) cursor += 1;
-  return cursor;
 }
 
 function previousWord(text: string, index: number): string | undefined {
@@ -426,19 +422,6 @@ function callKeywordMatchAllowsComments(statement: string, maskedMatch: string, 
     index += 1;
   }
   return true;
-}
-
-function matchingParen(text: string, openIndex: number): number {
-  let depth = 0;
-  for (let index = openIndex; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "(") depth += 1;
-    if (char === ")") {
-      depth -= 1;
-      if (depth === 0) return index;
-    }
-  }
-  return -1;
 }
 
 function wordAt(text: string, index: number): string {

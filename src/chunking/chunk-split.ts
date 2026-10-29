@@ -214,7 +214,7 @@ function pushRangedChunk(
   });
 }
 
-function lineRanges(
+export function lineRanges(
   source: string,
   start: number,
   end: number,
@@ -238,7 +238,7 @@ function lineRanges(
   return ranges;
 }
 
-function countLineBreaks(text: string): number {
+export function countLineBreaks(text: string): number {
   let count = 0;
   for (let index = 0; index < text.length; index++) {
     if (text[index] === "\n") count++;
@@ -246,7 +246,7 @@ function countLineBreaks(text: string): number {
   return count;
 }
 
-function endLineForText(startLine: number, text: string): number {
+export function endLineForText(startLine: number, text: string): number {
   const lineBreaks = countLineBreaks(text);
   return startLine + lineBreaks - (text.endsWith("\n") ? 1 : 0);
 }

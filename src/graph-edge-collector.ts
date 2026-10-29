@@ -1,5 +1,5 @@
 import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "./languages/file-prep.js";
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "./languages.js";
+import type { LanguageExtensionMap, LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
 import { loadNearestTsconfigFor } from "./util/resolution.js";
 import type { WorkspaceConfig } from "./util/workspace.js";
@@ -23,6 +23,7 @@ import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
+import { isSqlFilePath } from "./sql/classify-sql-file.js";
 import { collectSqlEdgesForFile } from "./sql/source-graph.js";
 import type { SqlFactCache } from "./sql/source-graph.js";
 
@@ -116,7 +117,7 @@ export async function collectEdgesForFile(
   const sigEntry = opts.fileSignature;
   const sig = sigEntry?.sig;
   const gitSig = sigEntry?.gitSig;
-  const sqlFile = supportForFileWithoutHeaderSample(normalizedFile, opts.languageExtensions)?.id === "sql";
+  const sqlFile = isSqlFilePath(normalizedFile, opts.languageExtensions);
   const emitCacheEntry = (edges: Edge[]) => {
     if (!sig || !opts.onFileEdges) return;
     opts.onFileEdges(normalizedFile, {

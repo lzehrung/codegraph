@@ -2,14 +2,17 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
+import { normalizeLanguageExtensions } from "../languages.js";
 import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
 import {
+  getNativeRuntimeFingerprint,
   getNativeTreeSitterSupportedLanguageIds,
   isNativeDuplicateTokenizationAvailable,
 } from "../native/tree-sitter-native.js";
 import { SqliteDatabase, isNodeSqliteUsable, nodeSqliteUnavailableError } from "../sqlite-driver.js";
 import { logWithLevel } from "../logging.js";
 import { cacheDatabasePath, reportMissingNodeSqlite } from "../indexer/build-cache/module-cache.js";
+import { CORE_ALGORITHM_EPOCH, LANGUAGE_BEHAVIOR_EPOCH } from "../indexer/build-cache/options.js";
 import {
   createSqliteTableIfMissing,
   ensureSqliteVersionedTableSchema,
@@ -32,7 +35,9 @@ import { cacheAbsolutePath, cacheRelativePath } from "../indexer/build-cache/mod
 // v6: Rust import masking matches only semicolon-terminated `mod` items, so inline modules stay in the unit.
 // v7: Ruby load/autoload and Zig @cImport are masked; Kotlin uses its native import node.
 // v8: Ruby load/autoload masking requires a complete literal argument, so concatenations stay in the unit.
-export const DUPLICATE_UNIT_CACHE_VERSION = 8;
+// v9: SQL objects in `.ddl`, `.pgsql`, `.mysql`, and `languages.extensions`-mapped files carry `sql:` handles
+// instead of `symbol:` ones, so units cached by an earlier version for those unchanged files must miss.
+export const DUPLICATE_UNIT_CACHE_VERSION = 9;
 export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION = 2;
 export const DUPLICATE_UNIT_CACHE_TABLE = "duplicate_unit_cache";
 export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY = "duplicate_unit_cache.schema_version";
@@ -130,6 +135,16 @@ function writeDuplicateUnitMemoryCache(key: string, entry: DuplicateUnitCacheEnt
   duplicateUnitMemoryCacheBytes += entryBytes;
 }
 
+/**
+ * Identity of one unit-collection configuration, stored as the `variant` half of the cache key.
+ *
+ * A cached unit holds parser- and index-derived facts (chunk boundaries, symbol units built from
+ * module locals, AST-shape hashes), while the file signature only names the file's content. The
+ * two epochs and the native runtime therefore key the variant, as they key every other derived
+ * cache: any future epoch bump or runtime change misses and recomputes the units, with no
+ * separate DUPLICATE_UNIT_CACHE_VERSION bump. The runtime fingerprint is hashed to keep the key
+ * short, since it embeds the addon's paths.
+ */
 export function duplicateUnitCacheVariant(
   index: ProjectIndex,
   minTokens: number,
@@ -142,9 +157,13 @@ export function duplicateUnitCacheVariant(
   return JSON.stringify({
     version: DUPLICATE_UNIT_CACHE_VERSION,
     tokenizerRevision: DUPLICATE_TOKENIZER_REVISION,
+    coreAlgorithmEpoch: CORE_ALGORITHM_EPOCH,
+    languageBehaviorEpoch: LANGUAGE_BEHAVIOR_EPOCH,
     projectRoot: normalizedProjectRoot,
+    languageExtensions: normalizeLanguageExtensions(index.languageExtensions),
     nativeDuplicateTokens: isNativeDuplicateTokenizationAvailable(),
     nativeSyntaxLanguages: getNativeTreeSitterSupportedLanguageIds(),
+    nativeRuntime: crypto.createHash("sha256").update(getNativeRuntimeFingerprint()).digest("hex"),
     minTokens,
     maxTokens,
     shingleSize,

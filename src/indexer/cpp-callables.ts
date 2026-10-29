@@ -2,6 +2,7 @@ import { declarationMemberArity, isVariadicParameterMarker } from "../graphs/sym
 import { callArgumentCount, cppQualifiedTextSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { CallableArity } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
+import { rootNodeOf } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import type { Binding } from "./scope-types.js";
@@ -403,11 +404,6 @@ export function cppCallableSignatureForNode(node: SyntaxNodeLike, arity: Callabl
   return `${parameterNodes.map(parameterFingerprint).join("|")}::${variadic ? "variadic" : "fixed"}::${JSON.stringify(suffixTokens)}`;
 }
 
-function syntaxRoot(node: SyntaxNodeLike): SyntaxNodeLike {
-  let current = node;
-  while (current.parent) current = current.parent;
-  return current;
-}
 /**
  * Only a binding from the query file can be its declaration site. Its scope index may
  * come from an earlier parse, so matching trees still requires source spans and text.
@@ -416,7 +412,7 @@ function isCppDeclarationSite(binding: Binding, node: SyntaxNodeLike): boolean {
   const candidate = binding.node;
   if (!candidate) return false;
   if (candidate.startIndex !== node.startIndex || candidate.endIndex !== node.endIndex) return false;
-  return candidate.text === node.text && syntaxRoot(candidate).endIndex === syntaxRoot(node).endIndex;
+  return candidate.text === node.text && rootNodeOf(candidate).endIndex === rootNodeOf(node).endIndex;
 }
 
 function cppCallArgumentCount(node: SyntaxNodeLike, source: string): number | null {

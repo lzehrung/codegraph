@@ -8,7 +8,7 @@ A marker goes in a line comment immediately above its code site or at the end of
 - `@ref <id>` requires a reference to that definition on this line.
 - `@not-ref <id>` requires no reference to that definition on this line. The checked source text must contain the definition spelling outside the marker comment.
 - `@not-ref-block <id>` checks the full range of the outermost named syntax node (not the root) that starts on the site line. Put the marker in a comment above the opener of a multi-line string, heredoc, or nowdoc. The checked text must contain the definition spelling outside the marker comment.
-- `@goto <id>` requires go-to-definition from the one identifier on this line spelled like the definition. Use `@goto <id>=<identifier>` when the site token has a different spelling, such as an import alias. Zero or multiple matching identifiers fail.
+- `@goto <id>` requires go-to-definition from the one identifier on this line spelled like the definition. Use `@goto <id>=<identifier>` when the site token has a different spelling, such as an import alias. When the line has no such identifier because the grammar left the name in an `ERROR` node, such as the member of an SCSS `@include ns.member;`, it binds to the one named leaf node spelled that way, as `@def` does. Zero or multiple matches fail.
 - `@coverage <id> complete|partial` checks `findReferences` coverage for the marked definition.
 - `@known-gap <reason> observed=<value>` pairs with an assertion whose expected result is currently missed. Pin `not_found` for a missing result, `none` for an `@ref` with no reference, or the off-target definition ID for a wrong goto. For `@coverage`, pin the observed coverage state or status. A fixed or changed result fails until the fixture is updated.
 

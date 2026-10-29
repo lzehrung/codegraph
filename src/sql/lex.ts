@@ -67,6 +67,19 @@ export function sqlParenDepthAt(text: string, index: number): number {
   return depth;
 }
 
+export function sqlMatchingParen(text: string, openIndex: number): number {
+  let depth = 0;
+  for (let index = openIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "(") depth += 1;
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
 export function splitTopLevelCommaSeparated(text: string): string[] {
   const parts: string[] = [];
   let start = 0;
@@ -601,7 +614,7 @@ function atBackward(trivia: SqlTriviaBoundaries, index: number): number {
   return table[index] ?? index;
 }
 
-function atForward(trivia: SqlTriviaBoundaries, index: number): number {
+export function atForward(trivia: SqlTriviaBoundaries, index: number): number {
   const table = trivia.forward;
   if (index < 0) return table[0] ?? 0;
   if (index >= table.length) return table[table.length - 1] ?? index;

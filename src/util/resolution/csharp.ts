@@ -253,6 +253,16 @@ export async function resolveCsharpNamespaceTypePath(
   return selected.status === "found" ? { ...selected, parts: confined.length } : selected;
 }
 
+/** The namespace and type of a dotted C# type name (`N.Solo`); `null` for a generic or single-segment name. */
+function splitCsharpTypeName(spec: string): { namespaceName: string; typeName: string } | null {
+  const normalized = normalizeCsharpQualifiedName(spec);
+  if (normalized.includes("<") || normalized.includes(">")) return null;
+  const body = normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
+  const parts = body.split(".").filter(Boolean);
+  if (parts.length < 2) return null;
+  return { namespaceName: parts.slice(0, -1).join("."), typeName: parts[parts.length - 1]! };
+}
+
 /** Resolves a C# namespace-qualified type from its source name. */
 export async function resolveCsharpDottedTypeImportPath(
   projectRoot: string,
@@ -262,22 +272,43 @@ export async function resolveCsharpDottedTypeImportPath(
   report?: BuildReport,
   parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
 ): Promise<CsharpNamespaceTypeResolution> {
-  const normalized = normalizeCsharpQualifiedName(spec);
-  if (normalized.includes("<") || normalized.includes(">")) return { status: "not_found" };
-  const body = normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
-  const parts = body.split(".").filter(Boolean);
-  if (parts.length < 2) return { status: "not_found" };
-  const typeName = parts[parts.length - 1]!;
-  const namespaceName = parts.slice(0, -1).join(".");
+  const split = splitCsharpTypeName(spec);
+  if (!split) return { status: "not_found" };
   return await resolveCsharpNamespaceTypePath(
     projectRoot,
-    namespaceName,
-    typeName,
+    split.namespaceName,
+    split.typeName,
     fromFile,
     languageExtensions,
     report,
     parsedFiles,
   );
+}
+
+/**
+ * Whether a project file declares the namespace a dotted C# type name qualifies (`N` for `N.Solo`). The type lookup
+ * over a declared namespace is authoritative: `N.Solo` never names the generic `Solo<T>`, so a path-like guess
+ * (`N/Solo.cs`) must not answer when that lookup finds no type.
+ */
+export async function csharpTypeNameQualifierDeclared(
+  projectRoot: string,
+  spec: string,
+  fromFile: string,
+  languageExtensions?: LanguageExtensionMap,
+  report?: BuildReport,
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
+): Promise<boolean> {
+  const split = splitCsharpTypeName(spec);
+  if (!split) return false;
+  const declaring = await resolveCsharpNamespaceImportPaths(
+    projectRoot,
+    split.namespaceName,
+    fromFile,
+    languageExtensions,
+    report,
+    parsedFiles,
+  );
+  return declaring.length > 0;
 }
 
 export function clearCsharpResolutionCaches(): void {

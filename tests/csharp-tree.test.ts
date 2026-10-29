@@ -23,10 +23,10 @@ import {
 } from "../src/native/tree-sitter-native.js";
 import { loadBinding } from "../src/native/runtime.js";
 import { getCsharpNamespaceRegions } from "../src/indexer/compilation-units.js";
-import type { BuildReport, ProjectIndex } from "../src/indexer/types.js";
+import type { BuildReport, ImportBinding, ProjectIndex } from "../src/indexer/types.js";
 import type { ParsedFileContext } from "../src/indexer/parse-context.js";
 import { clearMemoryCache } from "../src/indexer/build-cache.js";
-import { fileIdentityKey } from "../src/util/paths.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { captureCli } from "./helpers/cli.js";
 import { collectCsharpImportDirectives, collectCsharpNamespaceFacts } from "../src/util/csharp-tree.js";
@@ -725,6 +725,125 @@ describe("C# namespace resolution failures and parser reporting", () => {
     }
   });
 
+  it.each([
+    ["an alias of a type", "using B = N.Box;\nclass Main { B value; }\n"],
+    ["a static using of a type", "using static N.Box;\nclass Main {}\n"],
+  ])(
+    "marks the imports incomplete when a candidate file cannot be read while resolving %s, and resolves it once the file reads",
+    async (_form, source) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-lookup-degraded-"));
+      const main = path.join(root, "Main.cs");
+      const targets = (bindings: ImportBinding[]): Array<string | { external: string } | undefined> =>
+        bindings.map((binding) =>
+          typeof binding.resolved === "string" ? path.basename(binding.resolved) : binding.resolved,
+        );
+      try {
+        await writeFile(main, source, "utf8");
+        await writeFile(path.join(root, "Box.cs"), "namespace N; public class Box {}\n", "utf8");
+        await writeFile(
+          path.join(root, "Unparsed.cs"),
+          "// CSHARP_LOOKUP_DEGRADED\nnamespace N; class Other {}\n",
+          "utf8",
+        );
+        setNativeTreeParseFailureFor("CSHARP_LOOKUP_DEGRADED", "forced C# lookup parse failure");
+
+        // Unparsed.cs could declare `N.Box` too, so the type is unproven and the directive stays external.
+        const onDegraded = vi.fn();
+        const unproven = await collectImportsForFile(main, root, { source, sup: CSHARP_SUPPORT, onDegraded });
+        expect(targets(unproven)).toEqual([{ external: "N.Box" }]);
+        expect(onDegraded).toHaveBeenCalledTimes(1);
+        expect(onDegraded).toHaveBeenCalledWith("lookup");
+
+        __resetNativeTreeSitterBindingForTests();
+        clearCsharpResolutionCaches();
+        const recoveredDegraded = vi.fn();
+        const proven = await collectImportsForFile(main, root, {
+          source,
+          sup: CSHARP_SUPPORT,
+          onDegraded: recoveredDegraded,
+        });
+        expect(targets(proven)).toEqual(["Box.cs"]);
+        expect(recoveredDegraded).not.toHaveBeenCalled();
+      } finally {
+        clearCsharpResolutionCaches();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps the imports complete for directives that need no unique type while a candidate file cannot be read", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-lookup-not-degraded-"));
+    const main = path.join(root, "Main.cs");
+    try {
+      await writeFile(main, "class Main {}\n", "utf8");
+      await writeFile(path.join(root, "Box.cs"), "namespace N; public class Box {}\n", "utf8");
+      await writeFile(
+        path.join(root, "Unparsed.cs"),
+        "// CSHARP_LOOKUP_DEGRADED\nnamespace N; class Other {}\n",
+        "utf8",
+      );
+      setNativeTreeParseFailureFor("CSHARP_LOOKUP_DEGRADED", "forced C# lookup parse failure");
+
+      // A plain using binds to any file that declares the namespace, so one unreadable file leaves it as proven as before.
+      // An alias of a type outside the project, and a global static using, need no unique project type either.
+      for (const directive of [
+        "using N;",
+        "using System.Text;",
+        "using Json = System.Text.Json.JsonSerializer;",
+        "global using static N.Box;",
+      ]) {
+        const onDegraded = vi.fn();
+        await collectImportsForFile(main, root, {
+          source: `${directive}\nclass Main {}\n`,
+          sup: CSHARP_SUPPORT,
+          onDegraded,
+        });
+        expect(onDegraded, directive).not.toHaveBeenCalled();
+      }
+    } finally {
+      clearCsharpResolutionCaches();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("extracts an alias importer again once a file that discovery ignores reads again (memory cache)", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-ignored-recovery-"));
+    try {
+      await writeFixtureFiles(root, {
+        "Main.cs": "using B = N.Box;\nclass Main { B value; }\n",
+        "Box.cs": "namespace N; public class Box {}\n",
+        "Unparsed.cs": "// CSHARP_IGNORED_SCAN_FAILURE\nnamespace N; class Other {}\n",
+      });
+      // Discovery ignores Unparsed.cs, so no module covers it, but the namespace scan still reads it.
+      const options = {
+        cache: "memory" as const,
+        threads: 1,
+        useNativeWorkers: false,
+        discovery: { ignoreGlobs: ["Unparsed.cs"], globRoot: root },
+      };
+      const mainKey = fileIdentityKey(normalizePath(path.join(root, "Main.cs")));
+      const aliasTarget = (index: ProjectIndex): string | { external: string } | undefined => {
+        const alias = index.byFile.get(mainKey)?.imports.find((binding) => binding.kind === "named");
+        return typeof alias?.resolved === "string" ? path.basename(alias.resolved) : alias?.resolved;
+      };
+
+      setNativeIndexingFailureFor("CSHARP_IGNORED_SCAN_FAILURE", "forced C# ignored-file scan failure");
+      const failed = await buildProjectIndex(root, options);
+      expect(failed.byFile.get(mainKey)).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      expect(aliasTarget(failed)).toEqual({ external: "N.Box" });
+
+      // Main.cs, Box.cs, and the cache are unchanged, but Unparsed.cs reads now.
+      __resetNativeTreeSitterBindingForTests();
+      const recovered = await buildProjectIndex(root, options);
+      expect(recovered.byFile.get(mainKey)?.parserDegraded).toBeUndefined();
+      expect(recovered.byFile.get(mainKey)?.importLookupIncomplete).toBeUndefined();
+      expect(aliasTarget(recovered)).toBe("Box.cs");
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("leaves a dotted alias use unresolved while an indexed C# file's declarations are unknown", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-unknown-declarations-"));
     const real = path.join(root, "Real.cs");
@@ -971,6 +1090,184 @@ describe("C# alias project boundary", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+describe("C# using directive inside a namespace while a project file has no syntax tree", () => {
+  const unparsed = "// CSHARP_DIRECTIVE_SCAN_FAILURE\nnamespace Elsewhere; public class Hidden {}\n";
+  const global = "namespace N;\npublic class Thing {}\n";
+  const scoped = "namespace A.N;\npublic class Thing {}\n";
+
+  /** Where `token` on the line of Use.cs that declares `class Use` goes, and which Use.cs lines reference `N.Thing`. */
+  async function bindingOutcome(root: string, lines: string[], token: string) {
+    const index = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+    const useFile = path.join(root, "Use.cs");
+    const line = lines.findIndex((text) => text.includes("class Use")) + 1;
+    const result = await goToDefinition(index, { file: useFile, line, column: columnOf(lines, line, token) });
+    const references = await findReferences(index, {
+      file: path.join(root, "Global.cs"),
+      line: 2,
+      column: global.split("\n")[1]!.indexOf("Thing") + 1,
+    });
+    return {
+      goto: result.status === "ok" ? path.basename(result.definition.file) : result.status,
+      references:
+        references.status === "ok"
+          ? references.references
+              .filter((reference) => fileIdentityKey(reference.file) === fileIdentityKey(useFile))
+              .map((reference) => reference.range.start.line)
+          : references.status,
+    };
+  }
+
+  const forms = [
+    { name: "a using", lines: ["namespace A {", "  using N;", "  class Use { Thing value; }", "}"], token: "Thing" },
+    { name: "an alias", lines: ["namespace A {", "  using T = N.Thing;", "  class Use { T value; }", "}"], token: "T" },
+  ];
+  const unprovenStates = [
+    // Unparsed.cs could declare `A.N`, which would come before the global `N`.
+    { name: "an unread file", files: { "Unparsed.cs": unparsed } },
+    // A declaration that was read is still known beside the unread file.
+    { name: "an unread file and A.N", files: { "Unparsed.cs": unparsed, "Scoped.cs": scoped } },
+    { name: "A.N", files: { "Scoped.cs": scoped } },
+  ];
+
+  describe.each(forms)("$name inside a namespace", ({ lines, token }) => {
+    const useLine = lines.findIndex((text) => text.includes("class Use")) + 1;
+
+    it.each(unprovenStates)("stays unresolved beside $name", async ({ files }) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-incomplete-"));
+      try {
+        setNativeIndexingFailureFor("CSHARP_DIRECTIVE_SCAN_FAILURE", "forced C# directive scan failure");
+        await writeFixtureFiles(root, { "Global.cs": global, "Use.cs": lines.join("\n") + "\n", ...files });
+
+        expect(await bindingOutcome(root, lines, token)).toEqual({ goto: "not_found", references: [] });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("binds the global N when every file is read and none declares A.N", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-complete-"));
+      try {
+        await writeFixtureFiles(root, { "Global.cs": global, "Use.cs": lines.join("\n") + "\n" });
+
+        const bound = await bindingOutcome(root, lines, token);
+        expect(bound.goto).toBe("Global.cs");
+        expect(bound.references).toContain(useLine);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("keeps a directive outside every namespace on the global declaration beside an unread file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-incomplete-global-"));
+    try {
+      setNativeIndexingFailureFor("CSHARP_DIRECTIVE_SCAN_FAILURE", "forced C# directive scan failure");
+      const lines = ["using N;", "namespace A {", "  class Use { Thing value; }", "}"];
+      await writeFixtureFiles(root, {
+        "Global.cs": global,
+        "Scoped.cs": scoped,
+        "Unparsed.cs": unparsed,
+        "Use.cs": lines.join("\n") + "\n",
+      });
+
+      // A directive before every namespace resolves its target from the global namespace, whatever `A` declares.
+      expect((await bindingOutcome(root, lines, "Thing")).goto).toBe("Global.cs");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  describe("a shadowed using beside another using", () => {
+    const lines = ["using Other;", "namespace A {", "  using N;", "  class Use { Thing value; }", "}"];
+    const files = {
+      "Global.cs": "namespace N;\npublic class Different {}\n",
+      "Other.cs": "namespace Other;\npublic class Thing {}\n",
+      "Use.cs": lines.join("\n") + "\n",
+    };
+
+    async function thingTarget(root: string): Promise<string> {
+      const index = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+      const result = await goToDefinition(index, {
+        file: path.join(root, "Use.cs"),
+        line: 4,
+        column: columnOf(lines, 4, "Thing"),
+      });
+      return result.status === "ok" ? path.basename(result.definition.file) : result.status;
+    }
+
+    it("leaves a name unresolved that an unread file's A.N could bring in", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-incomplete-star-"));
+      try {
+        setNativeIndexingFailureFor("CSHARP_DIRECTIVE_SCAN_FAILURE", "forced C# directive scan failure");
+        await writeFixtureFiles(root, { ...files, "Unparsed.cs": unparsed });
+
+        // `using N;` means `A.N` when Unparsed.cs declares it, and `A.N.Thing` would compete with the `Other.Thing` of the
+        // directive before every namespace, which no unread file can shadow.
+        expect(await thingTarget(root)).toBe("not_found");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("binds the other using when every file is read and none declares A.N", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-complete-star-"));
+      try {
+        await writeFixtureFiles(root, files);
+
+        expect(await thingTarget(root)).toBe("Other.cs");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("a dotted name led by a name that a shadowed using may bring in", () => {
+    const lines = ["namespace A {", "  using N;", "  class Use { B.Thing value; void Make() { B.Thing.Run(); } }", "}"];
+    const files = {
+      "Global.cs": "namespace N;\npublic class Other {}\n",
+      "Decoy.cs": "namespace B;\npublic class Thing { public static void Run() {} }\n",
+      "Use.cs": lines.join("\n") + "\n",
+    };
+
+    async function thingTargets(root: string): Promise<string[]> {
+      const index = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+      const targets: string[] = [];
+      for (const token of ["Thing value", "Run"]) {
+        const result = await goToDefinition(index, {
+          file: path.join(root, "Use.cs"),
+          line: 3,
+          column: columnOf(lines, 3, token),
+        });
+        targets.push(result.status === "ok" ? path.basename(result.definition.file) : result.status);
+      }
+      return targets;
+    }
+
+    it("stays unresolved while an unread file may declare A.N.B", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-incomplete-dotted-"));
+      try {
+        setNativeIndexingFailureFor("CSHARP_DIRECTIVE_SCAN_FAILURE", "forced C# directive scan failure");
+        await writeFixtureFiles(root, { ...files, "Unparsed.cs": unparsed });
+
+        // `using N;` means `A.N` when Unparsed.cs declares it, and an `A.N.B` there comes before the namespace `B`.
+        expect(await thingTargets(root)).toEqual(["not_found", "not_found"]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("reaches the namespace B when every file is read and none declares A.N", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-complete-dotted-"));
+      try {
+        await writeFixtureFiles(root, files);
+
+        expect(await thingTargets(root)).toEqual(["Decoy.cs", "Decoy.cs"]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
   });
 });
 describe("C# using-directive discovery", () => {

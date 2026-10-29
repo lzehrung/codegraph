@@ -472,6 +472,32 @@ describe("persistent query index", () => {
     expect((await fs.stat(recentTemporary)).isFile()).toBe(true);
   });
 
+  it("removes the sqlite companions of an expired abandoned rebuild file only", async () => {
+    const root = await createRepo();
+    const initialSession = createSession(root);
+    await search(initialSession, root, "validate user");
+    const initialSnapshot = await initialSession.loadProject();
+    const cacheRoot = resolveQueryIndexPaths(initialSnapshot.index.cacheRootDir!).cacheRoot;
+    disposeSessionQueryIndex(initialSession);
+    const oldTemporary = path.join(cacheRoot, "search-v1.v1.tmp-1-00000000-0000-0000-0000-000000000001.sqlite");
+    const recentTemporary = path.join(cacheRoot, "search-v1.v1.tmp-1-00000000-0000-0000-0000-000000000002.sqlite");
+    for (const temporary of [oldTemporary, recentTemporary]) {
+      await fs.writeFile(temporary, "temporary");
+      await fs.writeFile(`${temporary}-wal`, "wal");
+      await fs.writeFile(`${temporary}-shm`, "shm");
+    }
+    const oldTime = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    await fs.utimes(oldTemporary, oldTime, oldTime);
+
+    const warmSession = createSession(root);
+    await search(warmSession, root, "validate user");
+
+    for (const suffix of ["", "-wal", "-shm"]) {
+      await expect(fs.stat(`${oldTemporary}${suffix}`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.stat(`${recentTemporary}${suffix}`)).isFile()).toBe(true);
+    }
+  });
+
   it("keeps concurrent first-search writers correct", async () => {
     const root = await createRepo();
     const leftSession = createSession(root);

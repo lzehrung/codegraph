@@ -6,11 +6,13 @@ import { defNodeId } from "../graphs/symbol-graph.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { Edge } from "../types.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
+import type { SqliteArtifactFileSignature } from "../sqlite/types.js";
 import { isPlainRecord } from "../util/guards.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
+import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { createAgentFileLookup, normalizeAgentFilePath } from "./normalize.js";
-import { createAgentSession } from "./session.js";
+import { createRequestSession } from "./session.js";
 import type { AgentProjectSnapshot, AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
 
@@ -92,13 +94,10 @@ export async function buildCodegraphArtifact(
 ): Promise<CodegraphArtifactBuildResult> {
   const root = path.resolve(request.root);
   const outDir = path.resolve(root, request.outDir ?? DEFAULT_OUT_DIR);
-  const session = createAgentSession({
-    root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-    discovery: {
-      ignoreGlobs: outputIgnoreGlobs(root, outDir),
-    },
-  });
+  const session = createRequestSession(
+    { ...request, root },
+    { discovery: { ignoreGlobs: outputIgnoreGlobs(root, outDir) } },
+  );
   return await buildCodegraphArtifactWithSession(session, request);
 }
 
@@ -113,7 +112,7 @@ export async function buildCodegraphArtifactWithSession(
   const selected = normalizeArtifactSelection(request);
   const filterOutDir = path.resolve(root, request.filterOutDir ?? request.outDir ?? DEFAULT_OUT_DIR);
   const snapshot = await filterSnapshotForOutputDirectory(await session.loadProject(), filterOutDir);
-  const sqliteSignatures: Array<{ path: string; size: number; mtimeMs: number }> = [];
+  const sqliteSignatures: SqliteArtifactFileSignature[] = [];
   let sqliteFileSignatures = { signed: 0, skipped: 0 };
   if (selected.sqlite) {
     const snapshotFileSignatures = snapshot.fileSignatures;
@@ -564,7 +563,7 @@ function buildPortableSymbolIdMap(snapshot: AgentProjectSnapshot): Map<string, s
     for (const local of moduleIndex.locals) {
       const relFile = normalizeAgentFilePath(snapshot.root, local.file);
       const id = defNodeId(local);
-      const isSqlObject = local.file.toLowerCase().endsWith(".sql");
+      const isSqlObject = isSqlFilePath(local.file, snapshot.index.languageExtensions);
       byId.set(
         id,
         isSqlObject

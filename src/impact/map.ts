@@ -13,6 +13,7 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "..
 import type { LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
 import { collectChangedLines } from "./hunks.js";
@@ -24,6 +25,16 @@ import {
 } from "./signature-node-utils.js";
 
 export { collectChangedLines } from "./hunks.js";
+
+/** The `SymbolDef` that stands for a changed symbol in reference and call lookups. */
+export function changedSymbolToDef(symbol: ChangedSymbol): SymbolDef {
+  return {
+    file: symbol.file,
+    localName: symbol.name,
+    kind: symbol.kind,
+    range: symbol.range,
+  };
+}
 
 export async function locateChangedSymbols(
   index: ProjectIndex,
@@ -43,7 +54,7 @@ export async function locateChangedSymbolsWithLines(
   parseFailed: boolean;
 }> {
   const changedLines = collectChangedLines(hunks);
-  if (isSqlLanguageFile(file, index.languageExtensions)) {
+  if (isSqlFilePath(file, index.languageExtensions)) {
     return {
       changedSymbols: changedSymbolsFromSqlLocals(index, file, changedLines),
       changedLines,
@@ -288,7 +299,7 @@ export async function mapChangedLinesToSymbols(
   changedLinesOverride?: Set<number>,
 ): Promise<Map<SymbolHandle, Set<number>>> {
   const changedLines = changedLinesOverride ?? collectChangedLines(hunks);
-  if (isSqlLanguageFile(file, index.languageExtensions)) {
+  if (isSqlFilePath(file, index.languageExtensions)) {
     const linesByHandle = new Map<SymbolHandle, Set<number>>();
     for (const entry of sqlLocalsOverlappingChangedLines(index, file, changedLines)) {
       linesByHandle.set(entry.handle, new Set(entry.lines));
@@ -337,10 +348,6 @@ export async function mapChangedLinesToSymbols(
 function isGraphOnlyFile(file: FileId, languageExtensions?: LanguageExtensionMap): boolean {
   const support = supportForFileWithoutHeaderSample(file, languageExtensions);
   return support ? isGraphOnlyLanguage(support.id) : false;
-}
-
-function isSqlLanguageFile(file: FileId, languageExtensions?: LanguageExtensionMap): boolean {
-  return supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "sql";
 }
 
 function sqlLocalsOverlappingChangedLines(

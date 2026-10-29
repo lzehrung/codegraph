@@ -4,6 +4,7 @@ import { SymbolKind, type ProjectIndex } from "../indexer/types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { buildDependencyStats } from "./severity.js";
 import type { ChangedSymbol, ImpactDiagnostics, ImpactOptions } from "./types.js";
+import { compareCodeUnits } from "../util/collections.js";
 
 const CALLABLE_KINDS = new Set<SymbolKind>([
   SymbolKind.Function,
@@ -100,12 +101,6 @@ function kindPriority(kind: ChangedSymbol["kind"]): number {
   return 1;
 }
 
-function comparePathsStable(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-}
-
 /**
  * Deterministic ranking for request-wide symbol budgets.
  * Higher priority symbols are analyzed first when limits truncate work.
@@ -144,7 +139,7 @@ export function rankChangedSymbolsForBudget(
     if (kindDelta) return kindDelta;
     const fanInDelta = (fanIn.get(fileIdentityKey(b.file)) ?? 0) - (fanIn.get(fileIdentityKey(a.file)) ?? 0);
     if (fanInDelta) return fanInDelta;
-    const fileDelta = comparePathsStable(a.file, b.file);
+    const fileDelta = compareCodeUnits(a.file, b.file);
     if (fileDelta) return fileDelta;
     const lineDelta = a.range.start.line - b.range.start.line;
     if (lineDelta) return lineDelta;
@@ -154,7 +149,7 @@ export function rankChangedSymbolsForBudget(
     if (endLineDelta) return endLineDelta;
     const endColDelta = a.range.end.column - b.range.end.column;
     if (endColDelta) return endColDelta;
-    return comparePathsStable(a.id, b.id);
+    return compareCodeUnits(a.id, b.id);
   });
 }
 

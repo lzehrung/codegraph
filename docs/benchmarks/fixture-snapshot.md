@@ -6,9 +6,9 @@ Scope: this counts only the dedicated per-language smoke files, not a language's
 
 Regenerate with `npm run bench:fixtures`. Verify it is current with `npm run bench:fixtures:check`.
 
-Generated: 2026-10-27T11:17:10.376Z (Node v22.16.0)
+Generated: 2026-10-29T03:35:28.470Z (Node v24.22.1)
 
-Total across the 29 language suites: 905 tests, 0 failed.
+Total across the 29 language suites: 1010 tests, 0 failed.
 The tests/languages run also executed 95 tests in cross-language files that are not attributed to a language: `tests/languages/callable-consumer-matrix.test.ts`, `tests/languages/chunk-sfc.test.ts`, `tests/languages/cpp-module-incremental.test.ts`, `tests/languages/graph-captures.test.ts`, `tests/languages/import-from-captures.test.ts`, `tests/languages/query-hygiene.test.ts`.
 
 | Language         | Status  | Tests | Test file(s)                         |
@@ -16,7 +16,7 @@ The tests/languages run also executed 95 tests in cross-language files that are 
 | AsciiDoc         | passing | 9     | `tests/languages/adoc.test.ts`       |
 | Astro            | passing | 6     | `tests/languages/astro.test.ts`      |
 | C                | passing | 40    | `tests/languages/c.test.ts`          |
-| C#               | passing | 92    | `tests/languages/csharp.test.ts`     |
+| C#               | passing | 147   | `tests/languages/csharp.test.ts`     |
 | C++              | passing | 50    | `tests/languages/cpp.test.ts`        |
 | CSS              | passing | 7     | `tests/languages/css.test.ts`        |
 | Go               | passing | 17    | `tests/languages/go.test.ts`         |
@@ -24,17 +24,17 @@ The tests/languages run also executed 95 tests in cross-language files that are 
 | HTML             | passing | 8     | `tests/languages/html.test.ts`       |
 | Java             | passing | 47    | `tests/languages/java.test.ts`       |
 | JavaScript       | passing | 16    | `tests/languages/javascript.test.ts` |
-| Kotlin           | passing | 28    | `tests/languages/kotlin.test.ts`     |
+| Kotlin           | passing | 31    | `tests/languages/kotlin.test.ts`     |
 | Less             | passing | 7     | `tests/languages/less.test.ts`       |
 | Markdown         | passing | 16    | `tests/languages/markdown.test.ts`   |
 | MDX              | passing | 5     | `tests/languages/mdx.test.ts`        |
 | PHP              | passing | 60    | `tests/languages/php.test.ts`        |
-| Python           | passing | 44    | `tests/languages/python.test.ts`     |
+| Python           | passing | 74    | `tests/languages/python.test.ts`     |
 | reStructuredText | passing | 4     | `tests/languages/rst.test.ts`        |
 | Ruby             | passing | 18    | `tests/languages/ruby.test.ts`       |
 | Rust             | passing | 71    | `tests/languages/rust.test.ts`       |
-| SCSS             | passing | 144   | `tests/languages/scss.test.ts`       |
-| SQL              | passing | 73    | `tests/languages/sql.test.ts`        |
+| SCSS             | passing | 146   | `tests/languages/scss.test.ts`       |
+| SQL              | passing | 88    | `tests/languages/sql.test.ts`        |
 | Svelte           | passing | 11    | `tests/languages/svelte.test.ts`     |
 | Swift            | passing | 19    | `tests/languages/swift.test.ts`      |
 | Terraform        | passing | 53    | `tests/languages/terraform.test.ts`  |

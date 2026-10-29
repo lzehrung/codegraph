@@ -2,6 +2,7 @@ import { collectLineStartOffsets } from "../util/lines.js";
 import { normalizePath } from "../util/paths.js";
 import { classifySqlFile } from "./classify-sql-file.js";
 import {
+  atForward,
   createSqlObjectNameRegExp,
   isBareSqlKeyword,
   maskSqlQuotedIdentifiers,
@@ -11,6 +12,7 @@ import {
   SQL_OBJECT_NAME_PATTERN,
   splitTopLevelCommaSeparated,
   sqlParenDepthAt,
+  sqlMatchingParen as findMatchingParen,
   sqlQueryScopes,
   sqlSourceClauses,
   sqlTriviaBoundaries,
@@ -19,6 +21,7 @@ import {
 import { sqlObjectLookupKeys } from "./lookup.js";
 import { SQL_ROUTINE_DEFINITION_RE } from "./routine-mentions.js";
 import type { SqlFactKind, SqlFileRole, SqlStatementFact } from "./types.js";
+import { skipWhitespace } from "../util/text-scanning.js";
 
 export { maskSqlStringsAndComments, normalizeSqlObjectName, sqlObjectBaseName } from "./lex.js";
 
@@ -133,13 +136,6 @@ function readBareWord(text: string, index: number): { word: string; end: number 
   return { word: text.slice(index, end).toLowerCase(), end };
 }
 
-function nextSignificant(trivia: SqlTriviaBoundaries, index: number): number {
-  const table = trivia.forward;
-  if (index < 0) return table[0] ?? 0;
-  if (index >= table.length) return table[table.length - 1] ?? index;
-  return table[index] ?? index;
-}
-
 /** A bare or quoted identifier: the optional label in `END LOOP label` or `END CASE label`. */
 function identifierEnd(text: string, index: number): number | null {
   const open = text[index] ?? "";
@@ -167,7 +163,7 @@ function identifierEnd(text: string, index: number): number | null {
 
 /** `;`, or no further significant token, completes `END LOOP [label]` and `END CASE [label]`. */
 function finishesCompound(text: string, index: number, trivia: SqlTriviaBoundaries): boolean {
-  const next = nextSignificant(trivia, index);
+  const next = atForward(trivia, index);
   return next >= text.length || (text[next] ?? "") === ";";
 }
 
@@ -204,7 +200,7 @@ function classifyEnd(
   innermost: SqlBlockFrame | undefined,
 ): { action: "noop" | "case" | "close"; resume: number } {
   const close = { action: "close" as const, resume: endWordEnd };
-  const keywordAt = nextSignificant(trivia, endWordEnd);
+  const keywordAt = atForward(trivia, endWordEnd);
   if (isOwnLineGo(text, keywordAt)) return close;
   const keyword = readBareWord(text, keywordAt);
   if (!keyword || !SQL_END_FOLLOWER.has(keyword.word)) return close;
@@ -213,7 +209,7 @@ function classifyEnd(
   if (finishesCompound(text, keyword.end, trivia)) {
     return { action, resume: keyword.end };
   }
-  const labelAt = nextSignificant(trivia, keyword.end);
+  const labelAt = atForward(trivia, keyword.end);
   if (isOwnLineGo(text, labelAt)) return close;
   const labelEnd = identifierEnd(text, labelAt);
   if (labelEnd === null || !finishesCompound(text, labelEnd, trivia)) return close;
@@ -395,7 +391,7 @@ function scanRoutineCompound(
     }
     if (phase === "body") {
       if (word === "end") {
-        const followerAt = nextSignificant(trivia, index);
+        const followerAt = atForward(trivia, index);
         const follower = followerAt < end ? readBareWord(code, followerAt) : null;
         if (
           follower &&
@@ -655,14 +651,6 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
 
 const SQL_OBJECT_MODIFIERS = new Set(["lateral", "only"]);
 
-function skipWhitespace(text: string, index: number): number {
-  let nextIndex = index;
-  while (nextIndex < text.length && /\s/.test(text[nextIndex] ?? "")) {
-    nextIndex += 1;
-  }
-  return nextIndex;
-}
-
 function objectAt(text: string, index: number, skipModifiers = SQL_OBJECT_MODIFIERS): string | null {
   let cursor = skipWhitespace(text, index);
   while (cursor < text.length) {
@@ -729,19 +717,6 @@ function collectReadSources(text: string): {
     names: Array.from(new Set(names)),
     joins: joins.map((join) => ({ name: join.name, scopeFromNames: fromNamesByScope.get(join.scope) ?? [] })),
   };
-}
-
-function findMatchingParen(text: string, openIndex: number): number {
-  let depth = 0;
-  for (let index = openIndex; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "(") depth += 1;
-    if (char === ")") {
-      depth -= 1;
-      if (depth === 0) return index;
-    }
-  }
-  return -1;
 }
 
 function collectCteReads(text: string): { names: Set<string>; facts: SqlFactDraft[] } {

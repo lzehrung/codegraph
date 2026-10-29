@@ -2,13 +2,14 @@ import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 
 import { uniqueByKey } from "../util/collections.js";
-import { edgeKey } from "../util/graph-edges.js";
+import { uniqueEdgePusher } from "../util/graph-edges.js";
 import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
 import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
+import type { LanguageExtensionMap } from "../languages.js";
+import { isSqlFilePath } from "./classify-sql-file.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extract-facts.js";
 import {
   addSqlDefinition,
@@ -70,10 +71,6 @@ type SqlDefinitionCandidateMatch = {
   resolved: "heuristic" | "precise";
   confidence: number;
 };
-
-function isSqlFile(filePath: string, languageExtensions?: LanguageExtensionMap): boolean {
-  return supportForFileWithoutHeaderSample(filePath, languageExtensions)?.id === "sql";
-}
 
 export function sqlCorpusSignature(
   sqlFiles: readonly string[],
@@ -266,10 +263,6 @@ export function sqlEdgeTargetFromRaw(raw: string | undefined): { namespace: SqlT
   return { namespace: "relation", name: rest };
 }
 
-export function sqlObjectNameFromEdgeRaw(raw: string | undefined): string | null {
-  return sqlEdgeTargetFromRaw(raw)?.name ?? null;
-}
-
 export function sqlEdgeMatchesChangedObjects(raw: string | undefined, objects: readonly SqlChangedObject[]): boolean {
   const target = sqlEdgeTargetFromRaw(raw);
   if (!target || !objects.length) return false;
@@ -320,7 +313,7 @@ export async function buildSqlFactCache(
   languageExtensions?: LanguageExtensionMap,
 ): Promise<SqlFactCache> {
   const sqlFiles = Array.from(
-    new Set(allFiles.map(normalizePath).filter((file) => isSqlFile(file, languageExtensions))),
+    new Set(allFiles.map(normalizePath).filter((file) => isSqlFilePath(file, languageExtensions))),
   ).sort((left, right) => left.localeCompare(right));
   const factGroups = await mapLimit(
     sqlFiles,
@@ -355,17 +348,11 @@ export async function collectSqlEdgesForFile(
   languageExtensions?: LanguageExtensionMap,
 ): Promise<Edge[]> {
   const normalizedFile = normalizePath(filePath);
-  if (!isSqlFile(normalizedFile, languageExtensions)) return [];
+  if (!isSqlFilePath(normalizedFile, languageExtensions)) return [];
   const cache = factCache ?? (await buildSqlFactCache(allFiles, languageExtensions));
   const currentFacts = cache.factsByFile.get(normalizedFile) ?? [];
   const edges: Edge[] = [];
-  const seen = new Set<string>();
-  const addEdge = (edge: Edge): void => {
-    const key = edgeKey(edge);
-    if (seen.has(key)) return;
-    seen.add(key);
-    edges.push(edge);
-  };
+  const addEdge = uniqueEdgePusher(edges);
   // A call in a `FROM` list reads a routine, not a table of that name. Only a name that an indexed
   // routine carries is one: `FROM users (NOLOCK)` reads a table, and so does a call to a function
   // that the indexed files do not define. Navigation applies the same rule.

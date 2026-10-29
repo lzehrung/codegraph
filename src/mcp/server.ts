@@ -60,7 +60,7 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     return;
   }
 
-  const { handlers, session } = await createWarmedCodegraphMcpResources(options);
+  const { handlers, session, closeWatcher } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const protocolFactory = createCodegraphMcpProtocolFactory(
     handlers,
@@ -86,7 +86,11 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     });
   } finally {
     protocolFactory.stop();
+    const watcherClosed = closeWatcher();
     await protocolFactory.drain();
+    // A background rebuild or a read of the file list writes to the session until it ends, so the session is released
+    // after them.
+    await watcherClosed;
     session.invalidate();
   }
   process.exitCode = 0;

@@ -211,7 +211,7 @@ codegraph server stop --root .
 
 The v2 registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`, and a non-secret `credentialId`; its credential remains in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. A v1 registry with a live process is never signaled; stop that old process manually, then start it again.
 
-`server start` forwards `--warmup`, `--warmup-symbols`, `--no-warmup`, cache, native, worker, and discovery options to `mcp serve`; each start truncates `.codegraph/server.log` for server stderr and startup diagnostics. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
+`server start` forwards `--warmup`, `--warmup-symbols`, `--no-warmup`, `--no-watch`, cache, native, worker, and discovery options to `mcp serve`; each start truncates `.codegraph/server.log` for server stderr and startup diagnostics. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
 
 ### Affected tests
 
@@ -235,7 +235,7 @@ codegraph index
 # Print full JSON index including locals, imports, and exports
 codegraph index --json
 
-# Force a full rebuild instead of incremental reuse
+# Print per-module locals, exports, and imports counts as text; the cache is still reused (use --json for details)
 codegraph index --full
 
 # Emit verbose index build diagnostics on stderr
@@ -333,6 +333,7 @@ codegraph mcp --root . --stdio --allow-build
 codegraph mcp --root . --stdio --idle-timeout-ms 1800000
 codegraph mcp --root . --port 7331
 codegraph mcp --root . --stdio --no-warmup
+codegraph mcp --root . --stdio --no-watch
 codegraph mcp --root . --port 7331 --warmup-symbols
 
 # Install or preview agent client integration
@@ -436,6 +437,7 @@ Without `--graph`, each UI load or reload builds the current project graph throu
 
 - It combines indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
 - It removes import declarations and directives before duplicate matching, including Astro/MDX module imports and embedded HTML, Vue, and Svelte script and style blocks.
+- A file is compared as the language the registry assigns it, including a suffix that `languages.extensions` maps to a language. JSON, JSONC, TOML, YAML, and text files are compared as text.
 - Pretty output is the default.
 - `--profile cleanup` and `--profile refactor-roi` are aliases for cleanup triage defaults. In pretty mode they default to `--sort reduced-lines`; in JSON mode they keep similarity order unless `--sort` is explicit. Both profiles also default `--min-confidence medium` and `--min-tokens 80`, and they suppress groups labeled `import-list-noise` or `barrel-export-noise`.
 - Pretty output includes reduced lines, estimated reducible lines, cleanup labels, cluster counts, and a compact summary footer. Use `--no-summary` to suppress the footer.
@@ -554,6 +556,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - MCP uses stdio by default or Streamable HTTP with `--port <number>`. HTTP protocol sessions are activity-tracked, count-bounded, and idle-evicted; tool schemas reject unknown fields.
 - `mcp` and `viewer` reject `--json`/`--pretty` because they do not emit structured command output.
 - Startup warms the base session cache by default; `--no-warmup` starts lazily instead, and `--warmup-symbols` also builds the detailed symbol graph before serving.
+- The server watches project files and refreshes the index in the background; `--no-watch` turns that off and leaves freshness to the check each tool call runs. See [docs/mcp.md](./mcp.md#file-watcher).
 - Index-backed responses include `freshness`; small file changes auto-refresh, while stale responses include a reason, total changed-file count, and a bounded changed-file sample.
 - Use `refresh_index` to force a rebuild, reset SQLite artifact state, or recover after stale change bursts.
 - HTTP serves `/mcp`, validates Host headers, and binds to `127.0.0.1` unless `--host <host>` is passed.
@@ -982,7 +985,7 @@ Human-readable output is optimized for compact reading by people or models and m
 
 Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json` returns the structured file graph shown below; add `--output <path>` to write any selected format to a file.
 
-`graph` JSON output is always compact: `files` lists each path once, and every edge references source and target files by their integer offset into `files` instead of repeating the path string. This keeps output size proportional to the number of distinct files rather than the number of edges. Every JSON graph payload (with or without `--symbols`) ends with an `analysis` object describing the parse backend (`mode: "semantic"`, `backend`, `label`, and skipped-file counts), mirroring what `index --json` reports.
+`graph` JSON output is always compact: `files` lists each path once, and every edge references source and target files by their integer offset into `files` instead of repeating the path string. This keeps output size proportional to the number of distinct files rather than the number of edges. Every JSON graph payload (with or without `--symbols`) ends with an `analysis` object describing the parse backend (`mode: "semantic"`, `backend`, `label`, and skipped-file counts), mirroring what `index --json` reports. The native file counts cover every indexed file, including modules reused from the cache, so a warm or incremental run reports the same `backend` and skipped files as a cold one.
 
 ```json
 {
@@ -1010,7 +1013,7 @@ Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json
 }
 ```
 
-SQL files are part of normal graph output: `.sql` files are discovered by default, SQL-to-SQL object references appear as file edges, and SQL object symbols work with `goto` and `refs` inside SQL files. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. SQL `goto` and `refs` resolve schema-qualified names plus object-level alias/table-qualified references such as `t.id` or `schema.table.id` to table/view definitions, not to column declarations. With `--sql-artifacts`, JSON graph output also includes detailed SQL statement facts and object-candidate metadata. SQL artifact nodes use `sql_statement_fact` and `sql_schema_candidate` truth tiers; they do not assert a current schema and do not globally link application-code strings to SQL objects.
+SQL files are part of normal graph output: `.sql`, `.ddl`, `.pgsql`, and `.mysql` files are discovered by default, a suffix that `languages.extensions` maps to `sql` is treated the same way, SQL-to-SQL object references appear as file edges, and SQL object symbols work with `goto` and `refs` inside SQL files. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. SQL `goto` and `refs` resolve schema-qualified names plus object-level alias/table-qualified references such as `t.id` or `schema.table.id` to table/view definitions, not to column declarations. With `--sql-artifacts`, JSON graph output also includes detailed SQL statement facts and object-candidate metadata. SQL artifact nodes use `sql_statement_fact` and `sql_schema_candidate` truth tiers; they do not assert a current schema and do not globally link application-code strings to SQL objects.
 
 Format notes:
 

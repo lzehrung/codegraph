@@ -1,5 +1,7 @@
 import type { SymbolGraph, SymbolNode } from "../graphs/symbol-graph.js";
 import type { FileId, Range } from "../types.js";
+import { boundedNonNegativeIntegerOption } from "../presentation/bounds.js";
+import { compareCodeUnits } from "../util/collections.js";
 
 export type CallHierarchyDirection = "incoming" | "outgoing";
 
@@ -225,32 +227,25 @@ function compareCallsites(left: CallHierarchySite, right: CallHierarchySite): nu
   );
 }
 
-function compareCodeUnits(left: string, right: string): number {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
-}
-
 function callsiteKey(site: CallHierarchySite): string {
   return `${site.file}:${site.range.start.index ?? ""}:${site.range.end.index ?? ""}:${site.range.start.line}:${site.range.start.column}`;
 }
 
-function hierarchyOption(value: number | undefined, defaultValue: number, maximum: number, name: string): number {
-  if (value === undefined) return defaultValue;
-  if (!Number.isInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer.`);
-  return Math.min(value, maximum);
-}
-
 function normalizeDepth(depth: number | undefined): number {
-  const normalized = hierarchyOption(depth, 1, MAX_CALL_HIERARCHY_DEPTH, "Call hierarchy depth");
+  const normalized = boundedNonNegativeIntegerOption(depth, 1, MAX_CALL_HIERARCHY_DEPTH, "Call hierarchy depth");
   if (!normalized) throw new Error("Call hierarchy depth must be a positive integer.");
   return normalized;
 }
 
 function normalizeLimit(limit: number | undefined): number {
-  return hierarchyOption(limit, DEFAULT_CALL_HIERARCHY_LIMIT, MAX_CALL_HIERARCHY_LIMIT, "Call hierarchy limit");
+  return boundedNonNegativeIntegerOption(
+    limit,
+    DEFAULT_CALL_HIERARCHY_LIMIT,
+    MAX_CALL_HIERARCHY_LIMIT,
+    "Call hierarchy limit",
+  );
 }
 
 function normalizeCallsiteLimit(limit: number | undefined): number {
-  return hierarchyOption(limit, DEFAULT_CALLSITE_LIMIT, MAX_CALL_HIERARCHY_LIMIT, "Callsite limit");
+  return boundedNonNegativeIntegerOption(limit, DEFAULT_CALLSITE_LIMIT, MAX_CALL_HIERARCHY_LIMIT, "Callsite limit");
 }

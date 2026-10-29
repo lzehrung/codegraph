@@ -3,7 +3,7 @@ import { boundReviewReportForTransport } from "../review/types.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { explainCodegraphTargetWithSession, type AgentExplainTarget, type AgentExplanation } from "./explain.js";
 import { type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
-import { createAgentSession, type AgentSession } from "./session.js";
+import { createRequestSession, type AgentSession } from "./session.js";
 
 export type AgentPacketKind = "file" | "symbol" | "chunk" | "sql_object" | "graph" | "review";
 
@@ -35,10 +35,7 @@ export async function getCodegraphPacket(request: AgentPacketRequest): Promise<A
     return await buildReviewPacket(request);
   }
 
-  const session = createAgentSession({
-    root: request.root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-  });
+  const session = createRequestSession(request);
   return await buildExplainPacket(session, request, kind);
 }
 

@@ -8,6 +8,17 @@ interface NodeLike {
   endPosition: { row: number; column: number };
 }
 
+export function containsNode(container: NodeLike, node: NodeLike): boolean {
+  return container.startIndex <= node.startIndex && container.endIndex >= node.endIndex;
+}
+
+/** The topmost ancestor of a node, or the node itself when it has no parent. */
+export function rootNodeOf<T extends { parent: T | null }>(node: T): T {
+  let current = node;
+  while (current.parent) current = current.parent;
+  return current;
+}
+
 export function sliceText(node: NodeLike | null | undefined, src: string): string {
   if (!node || !src) return "";
   return src.slice(node.startIndex, node.endIndex);

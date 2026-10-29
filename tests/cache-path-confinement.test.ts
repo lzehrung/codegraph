@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,7 +15,7 @@ import {
   tryLoadFromCache,
   writeToCache,
 } from "../src/indexer/build-cache/module-cache.js";
-import { loadManifest } from "../src/indexer/build-cache/manifest.js";
+import { loadManifest, normalizeIndexedFileInputsWithinRoot } from "../src/indexer/build-cache/manifest.js";
 import {
   BLOOM_FILTER_SNAPSHOT_FILENAME,
   tryLoadPersistedBloomFilters,
@@ -467,6 +467,45 @@ describe("cache anchor discovery walks ancestor .codegraph manifests", () => {
       expect(path.basename(resolved.path)).toMatch(/^project-[0-9a-f]{64}$/);
     } finally {
       await fsp.rm(ancestor, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("indexed file inputs below a regular file", () => {
+  it("tolerates a path under a regular file like any other missing path", async () => {
+    const root = await mkTmpDir("cg-notdir-inputs-");
+    const file = path.join(root, "README.md");
+    await fsp.writeFile(file, "readme\n", "utf8");
+    const nested = path.join(file, "gone.ts");
+    await expect(normalizeIndexedFileInputsWithinRoot(root, [nested], "files")).resolves.toHaveLength(1);
+  });
+
+  it("tolerates ENOTDIR from stat and realpath on every platform", async () => {
+    const root = await mkTmpDir("cg-notdir-inputs-mocked-");
+    const file = path.join(root, "README.md");
+    await fsp.writeFile(file, "readme\n", "utf8");
+    const nested = path.join(file, "gone.ts");
+    const notADirectory = (target: string) =>
+      Object.assign(new Error(`ENOTDIR: not a directory '${target}'`), { code: "ENOTDIR" });
+    const originalStat = fsp.stat.bind(fsp);
+    const originalRealpath = fsp.realpath.bind(fsp);
+    const under = (target: unknown): target is string =>
+      typeof target === "string" && target.replaceAll("\\", "/").startsWith(file.replaceAll("\\", "/") + "/");
+    const statSpy = vi
+      .spyOn(fsp, "stat")
+      .mockImplementation(((target: Parameters<typeof fsp.stat>[0], ...rest: []) =>
+        under(target) ? Promise.reject(notADirectory(target)) : originalStat(target, ...rest)) as typeof fsp.stat);
+    const realpathSpy = vi
+      .spyOn(fsp, "realpath")
+      .mockImplementation(((target: Parameters<typeof fsp.realpath>[0], ...rest: []) =>
+        under(target)
+          ? Promise.reject(notADirectory(target))
+          : originalRealpath(target, ...rest)) as typeof fsp.realpath);
+    try {
+      await expect(normalizeIndexedFileInputsWithinRoot(root, [nested], "files")).resolves.toHaveLength(1);
+    } finally {
+      statSpy.mockRestore();
+      realpathSpy.mockRestore();
     }
   });
 });

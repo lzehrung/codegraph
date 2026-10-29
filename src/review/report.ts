@@ -1,8 +1,8 @@
 import type { MarkdownLinkCheckResult } from "../document-links/check.js";
-import path from "node:path";
 import type { AnalysisSummary } from "../analysis-summary.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import { type ProjectIndex } from "../indexer/types.js";
+import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { collectSqlReviewContext, type SqlReviewContext } from "../sql/review.js";
 import type { Edge, FileId } from "../types.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "../util/graph-edges.js";
@@ -48,18 +48,20 @@ export async function collectReviewSqlContext(input: {
   index: ProjectIndex;
   changedFileList: string[];
 }): Promise<SqlReviewContext | undefined> {
+  const { languageExtensions } = input.index;
   const indexedFiles = Array.from(input.index.byFile.values(), (module) => normalizePath(module.file));
   const normalizedChangedFiles = new Set(input.changedFileList.map(normalizePath));
   const indexedFilesCoverMoreThanReviewSet = indexedFiles.some(
     (file) => !normalizedChangedFiles.has(normalizePath(file)),
   );
   const sqlContextProjectFiles =
-    indexedFilesCoverMoreThanReviewSet && indexedFiles.some((file) => path.extname(file).toLowerCase() === ".sql")
+    indexedFilesCoverMoreThanReviewSet && indexedFiles.some((file) => isSqlFilePath(file, languageExtensions))
       ? indexedFiles
       : undefined;
   return await collectSqlReviewContext(input.projectRoot, {
     changedFiles: input.changedFileList,
     ...(sqlContextProjectFiles ? { projectFiles: sqlContextProjectFiles } : {}),
+    ...(languageExtensions ? { languageExtensions } : {}),
   });
 }
 

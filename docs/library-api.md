@@ -522,9 +522,10 @@ console.log(artifact.manifestPath, artifact.artifacts);
 
 The `graph.json` artifact is self-describing (`schemaVersion: 2`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. Version 1 graph artifacts are rejected by drift baseline loading and must be regenerated. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
 
-`createAgentSession()` (from `@lzehrung/codegraph-core/agent`) keeps one in-process project snapshot warm for repeated explore, orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report.
+`createAgentSession()` (from `@lzehrung/codegraph-core/agent`) keeps one in-process project snapshot warm for repeated explore, orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and derives top-level analysis metadata from the indexed files, so cached and incremental builds report the same backend and skipped files as a cold build.
 Session callers can use `freshness: { policy: "check" | "auto" | "manual" }` plus `checkFreshness()` to detect file edits before reusing a warm snapshot. `check` reports stale state without invalidating, `auto` invalidates for bounded changes, and stale results include `changedFileCount`, `omittedChangedFileCount`, `reason`, and a bounded changed-file sample. Freshness checks also validate cached discovery file lists and path-only sessions before full project indexing, reflecting added, deleted, and renamed files under `auto` without forcing semantic graph construction.
 Files that disappear between discovery and signature capture remain detectable as deletions on the next freshness check.
+A host that learns of an edit sooner than the 5-second check interval, for example from its own file watcher, can call `session.markChanged()`. It drops the cached freshness result and any check that is still running, so the next `checkFreshness()` scans again; the call itself does not invalidate the snapshot. A check that started before the call does not cache its result. A check that finishes after `invalidate()` and a rebuild reports `fresh` and leaves the newer snapshot alone.
 `manual` skips freshness bookkeeping entirely: `checkFreshness()` returns `{ state: "unchecked", reason }` without comparing anything, the snapshot is reused until the caller calls `invalidate()`, and consumers that handle every freshness state must handle `unchecked`. Rename previews and refactor plans report `safe: false` for an unchecked session. Because it records no file signatures, a manual session cannot build a SQLite artifact, and `query_sqlite` rejects a stale artifact instead of rebuilding it; rebuild it from a `check` or `auto` session.
 Set `buildOptions.useNativeWorkers` to `false` to opt out. Automatic native workers use at most
 eight threads and reserve at least one quarter of available CPU capacity when more than one CPU
@@ -560,7 +561,16 @@ Handler sets created without `session` own their session; call `handlers.dispose
 
 `CodegraphMcpServerOptions.mcpToolConcurrency` caps concurrent calls per protocol session (default `4`); saturation returns a retryable busy error. `httpBodyTimeoutMs` bounds HTTP request-body receipt (default `30_000` ms), returning HTTP 408 on expiry; `mcpToolTimeoutMs` bounds each tool execution on stdio and HTTP (default `1_800_000` ms, `0` disables), aborting the handler with a deadline error that names the tool and limit. Supplied values must be whole milliseconds from `0` through `2_147_483_647` for `mcpToolTimeoutMs`, or `1` through `2_147_483_647` for `httpBodyTimeoutMs`; startup throws for other values.
 
-Concurrent `refresh_index` calls serialize and each applies its requested `warmup` after the preceding refresh completes. Client cancellation returns promptly but retains its concurrency slot until shared work settles, so cancellation cannot create unbounded background work. The MCP SDK aborts only the individual HTTP request when its response socket closes; the shared protocol session remains usable.
+`serveCodegraphMcp()` watches the project root and refreshes the index in the background when Codegraph creates the session, on stdio and on HTTP alike; see [File watcher](./mcp.md#file-watcher). It ignores the cache directory that `buildOptions.cacheDir`, `buildOptions.cacheLocation`, or `CODEGRAPH_CACHE_DIR` selects when that directory lies inside the project. The CLI exposes only `--no-watch`; the other options are library-only:
+
+- `watch: false` turns the watcher off. A supplied `session` is never watched.
+- `watchDebounceMs` (default `500`): quiet time after the last file event before a background refresh starts.
+- `watchMinRefreshIntervalMs` (default `5_000`): minimum time from the end of one background refresh to the start of the next.
+- `watchIdleMs` (default `1_800_000`; `0` never pauses): pauses the watcher after this long without a tool call. The next tool call resumes it.
+
+The three millisecond options must be whole numbers from `0` through `2_147_483_647`; startup throws for other values.
+
+Concurrent `refresh_index` calls serialize and each applies its requested `warmup` after the preceding refresh completes; a background refresh of the file watcher, and on Linux each read of the file list for its per-directory watches, takes its turn in the same order. Client cancellation returns promptly but retains its concurrency slot until shared work settles, so cancellation cannot create unbounded background work. The MCP SDK aborts only the individual HTTP request when its response socket closes; the shared protocol session remains usable.
 
 `query_sqlite` is read-only and row- and byte-bounded. It returns freshness metadata for fresh artifact reads, refreshes codegraph-owned SQLite artifacts after small edits when write access is enabled, and rejects stale artifact queries it cannot refresh safely.
 `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`; it refuses to write outputs from a stale MCP index until `refresh_index` succeeds. MCP `orient` and `packet_get` calls use the server-configured root; they do not accept per-request root overrides.
@@ -657,6 +667,7 @@ The integration examples demonstrate semantic chunking with type-based filtering
 
 - It uses indexed symbols, semantic chunks, and text chunks.
 - It uses AST shape hashes when parser context is available, while keeping normal token and hash fallback behavior.
+- It classifies each file with the index's `languageExtensions`, so a suffix that `languages.extensions` maps to a language is compared as that language.
 - Grouped duplicate output uses `schemaVersion: 3`.
 - Results include grouped findings, confidence, score, clone type, metrics, omission counts, and pair stats.
 - Group `variants` are bounded by default and expose hidden evidence through `rawPairCount` and `omittedVariantCount`.
@@ -941,7 +952,7 @@ const sqlContext = await collectSqlReviewContext(process.cwd(), {
 });
 ```
 
-`SqlStatementFact` records the source file, statement line/column/index range, file role, fact kind, object name, related object name, statement text, and truth tier. Review context uses explicit bridge reasons such as `changed_sql_file` and `changed_sql_literal`.
+`SqlStatementFact` records the source file, statement line/column/index range, file role, fact kind, object name, related object name, statement text, and truth tier. Review context uses explicit bridge reasons such as `changed_sql_file` and `changed_sql_literal`. `collectSqlReviewContext` reads a file as SQL when it has a built-in SQL suffix (`.sql`, `.ddl`, `.pgsql`, `.mysql`); pass `languageExtensions` (the `languages.extensions` mapping) to include files that the mapping assigns to `sql`.
 
 ## Stable symbol handles
 

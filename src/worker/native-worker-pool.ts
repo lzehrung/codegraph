@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { Piscina } from "piscina";
-import { resolveWorkerThreadCount } from "../util/worker-threads.js";
+import { piscinaWorkerExecArgv, resolveWorkerThreadCount } from "../util/worker-threads.js";
 import { markWindowsProcessDrainRequired } from "../util/windows-process-drain.js";
 
 import type { NativeExtractTask, NativeExtractResult } from "./native-extract-worker.js";
@@ -67,6 +67,7 @@ export function createNativeWorkerPool(opts?: NativeWorkerPoolOptions): Piscina 
   markWindowsProcessDrainRequired();
   return new Piscina({
     filename: workerPath,
+    execArgv: piscinaWorkerExecArgv(),
     minThreads: 1,
     maxThreads: threads,
     maxQueue: opts?.maxQueue ?? threads * 4,

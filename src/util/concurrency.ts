@@ -135,3 +135,8 @@ export function getIOSemaphore(limit = 100): Semaphore {
 export function resetIOSemaphore(): void {
   globalIOSemaphore = null;
 }
+export function delay(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+}

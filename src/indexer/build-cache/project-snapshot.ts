@@ -1,5 +1,5 @@
 import fsp from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { isRubyLoadForm } from "../../util/specifiers.js";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import path from "node:path";
@@ -11,6 +11,7 @@ import { BloomFilter, BloomFilterCache } from "../../util/bloom-filter.js";
 import { summarizeAnalysis } from "../../analysis-summary.js";
 import type { AnalysisSummary } from "../../analysis-summary.js";
 import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
+import { removeStaleTempFiles, writeFileAtomically } from "../../util/atomic-file.js";
 import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import { logWithLevel } from "../../logging.js";
 import { SymbolKind } from "../types.js";
@@ -27,7 +28,6 @@ import type {
   ProjectIndex,
   SymbolDef,
   BuildReport,
-  ParseErrorRange,
 } from "../types.js";
 import {
   buildSymbolGraph,
@@ -46,9 +46,15 @@ import {
   loadAllCachedModules,
   transformPersistedExportFromModule,
   type FileSignature,
+  isOptionalNativeOutcome,
+  isOptionalRange,
+  isParseErrorRange,
+  isRange,
 } from "./module-cache.js";
 import { cacheRoot } from "./location.js";
+import { recordCacheCorruption } from "./reports.js";
 import type { ManifestFileEntry } from "./manifest.js";
+import { compareCodeUnits } from "../../util/collections.js";
 import { expandStarImports } from "../expand-star-imports.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
@@ -97,7 +103,6 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 // v28: JVM type-on-demand imports only bind direct nested classifiers.
 export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 28;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
-const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
 const MAX_SNAPSHOT_CACHE_ENTRIES = 32;
 
@@ -215,7 +220,7 @@ export function projectSnapshotFilesSignature(
   projectRoot?: string,
 ): string {
   const hash = createHash("sha256");
-  for (const [file, entry] of [...entries.entries()].sort(([left], [right]) => compareSnapshotPath(left, right))) {
+  for (const [file, entry] of [...entries.entries()].sort(([left], [right]) => compareCodeUnits(left, right))) {
     hash.update(projectRoot ? cacheRelativePath(projectRoot, file) : file);
     hash.update("\0");
     hash.update(entry.sig);
@@ -424,12 +429,6 @@ function transformDetailedGraph(
   };
 }
 
-function compareSnapshotPath(left: string, right: string): number {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
-}
-
 function sameSnapshotFileIdentity(left: SnapshotFileIdentity, right: SnapshotFileIdentity): boolean {
   return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
@@ -442,14 +441,7 @@ async function snapshotFileIdentity(snapshotPath: string): Promise<SnapshotFileI
     ctimeMs: stat.ctimeMs,
   };
 }
-async function fsyncSnapshotFile(snapshotPath: string): Promise<void> {
-  const handle = await fsp.open(snapshotPath, "r+");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
+
 function isSnapshotTempName(name: string, snapshotName: string): boolean {
   const prefix = `.${snapshotName}.`;
   if (!name.startsWith(prefix) || !name.endsWith(SNAPSHOT_TEMP_SUFFIX)) return false;
@@ -457,45 +449,15 @@ function isSnapshotTempName(name: string, snapshotName: string): boolean {
   return /^\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(marker);
 }
 
-async function cleanupStaleSnapshotTemps(snapshotPath: string): Promise<void> {
-  let entries: Array<{ name: string; isFile(): boolean }>;
-  try {
-    entries = await fsp.readdir(path.dirname(snapshotPath), { withFileTypes: true });
-  } catch {
-    return;
-  }
-  const cutoff = Date.now() - SNAPSHOT_TEMP_RETENTION_MS;
-  const snapshotName = path.basename(snapshotPath);
-  for (const entry of entries) {
-    if (!entry.isFile() || !isSnapshotTempName(entry.name, snapshotName)) continue;
-    const candidate = path.join(path.dirname(snapshotPath), entry.name);
-    try {
-      const stat = await fsp.lstat(candidate);
-      if (stat.mtimeMs > cutoff) continue;
-      await fsp.rm(candidate, { force: true });
-    } catch {
-      // Abandoned snapshot cleanup must not block a cache write.
-    }
-  }
-}
-
 async function writeSnapshotAtomically(snapshotPath: string, data: Buffer): Promise<void> {
-  await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
-  await cleanupStaleSnapshotTemps(snapshotPath);
-  let tempPath: string | undefined = path.join(
-    path.dirname(snapshotPath),
-    `.${path.basename(snapshotPath)}.${process.pid}.${randomUUID()}${SNAPSHOT_TEMP_SUFFIX}`,
+  const snapshotDirectory = path.dirname(snapshotPath);
+  await fsp.mkdir(snapshotDirectory, { recursive: true });
+  const snapshotName = path.basename(snapshotPath);
+  await removeStaleTempFiles(
+    snapshotDirectory,
+    (entry) => entry.isFile() && isSnapshotTempName(entry.name, snapshotName),
   );
-  try {
-    await fsp.writeFile(tempPath, data, { flag: "wx" });
-    await fsyncSnapshotFile(tempPath);
-    await fsp.rename(tempPath, snapshotPath);
-    tempPath = undefined;
-  } finally {
-    if (tempPath) {
-      await fsp.rm(tempPath, { force: true }).catch(() => undefined);
-    }
-  }
+  await writeFileAtomically(snapshotPath, data);
 }
 
 function setBoundedSnapshotCache<K, V>(cache: Map<K, V>, key: K, value: V): void {
@@ -539,22 +501,6 @@ function materializeDetailedSymbolGraph(
 
 function decodeSnapshotPayload(compressed: Buffer): unknown {
   return JSON.parse(brotliDecompressSync(compressed).toString("utf8")) as unknown;
-}
-
-function recordSnapshotCorruption(
-  report: BuildReport | undefined,
-  artifact: string,
-  reason: string,
-  logLevel: BuildOptions["logLevel"],
-): void {
-  if (report) {
-    report.manifest ??= { used: true, reused: false };
-    report.manifest.corruptions ??= [];
-    if (!report.manifest.corruptions.some((entry) => entry.artifact === artifact)) {
-      report.manifest.corruptions.push({ artifact, reason });
-    }
-  }
-  logWithLevel(logLevel, "warn", `Warning: Corrupt cache artifact ${artifact}: ${reason}`);
 }
 
 function recordSnapshotInvalidation(artifact: string, reason: string, logLevel: BuildOptions["logLevel"]): void {
@@ -684,7 +630,7 @@ export async function tryLoadProjectIndexSnapshot(
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint();
     const implementationFingerprint = getImplementationFingerprint();
     if (!isProjectIndexSnapshotPayload(payload)) {
-      recordSnapshotCorruption(
+      recordCacheCorruption(
         report,
         projectSnapshotPath(projectRoot, opts),
         "invalid project snapshot payload",
@@ -741,7 +687,7 @@ export async function tryLoadProjectIndexSnapshot(
     };
   } catch (error) {
     if (!isMissingArtifactError(error)) {
-      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+      recordCacheCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     }
     return null;
   }
@@ -775,7 +721,7 @@ export async function tryLoadProjectSnapshotModules(
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint();
     const implementationFingerprint = getImplementationFingerprint();
     if (!isProjectSnapshotModulesPayload(payload)) {
-      recordSnapshotCorruption(
+      recordCacheCorruption(
         report,
         projectSnapshotPath(projectRoot, opts),
         "invalid project snapshot payload",
@@ -813,7 +759,7 @@ export async function tryLoadProjectSnapshotModules(
     return modules;
   } catch (error) {
     if (!isMissingArtifactError(error)) {
-      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+      recordCacheCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     }
     return null;
   }
@@ -841,12 +787,12 @@ export async function tryLoadPersistedBloomFilters(
     if (identityMismatch) {
       recordSnapshotInvalidation(sidecarPath, "bloom filter identity mismatch", opts?.logLevel);
     } else {
-      recordSnapshotCorruption(report, sidecarPath, "invalid bloom filter payload", opts?.logLevel);
+      recordCacheCorruption(report, sidecarPath, "invalid bloom filter payload", opts?.logLevel);
     }
   } catch (error) {
     const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
     if (!isMissing) {
-      recordSnapshotCorruption(report, bloomFilterSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+      recordCacheCorruption(report, bloomFilterSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     }
   }
   try {
@@ -857,7 +803,7 @@ export async function tryLoadPersistedBloomFilters(
   } catch (error) {
     const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
     if (!isMissing) {
-      recordSnapshotCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
+      recordCacheCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     }
     return null;
   }
@@ -959,10 +905,19 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
     ...(mod.csharpNamespaceFacts ? { csharpNamespaceFacts: mod.csharpNamespaceFacts } : {}),
     ...(mod.jvmFacts ? { jvmFacts: mod.jvmFacts } : {}),
+    ...(mod.nativeOutcome ? { nativeOutcome: mod.nativeOutcome } : {}),
+    ...(mod.parserDegraded ? { parserDegraded: true } : {}),
+    ...(mod.importLookupIncomplete ? { importLookupIncomplete: true } : {}),
     ...(mod.parseErrorRanges ? { parseErrorRanges: mod.parseErrorRanges } : {}),
   };
 }
 
+/**
+ * The modules the snapshot embeds. A module with a disk-cache row is left out, and a load restores it from that row.
+ * A module native skipped, or whose parser degraded, may not be written to the cache: its row is then the stale one
+ * from before the file changed, such as before it grew past the native size limit or began to fail processing. Embed
+ * it: at load the snapshot's copy wins over the row.
+ */
 function modulesForThinSnapshot(
   index: ProjectIndex,
   projectRoot: string,
@@ -971,7 +926,12 @@ function modulesForThinSnapshot(
   const modules = [...index.byFile.values()];
   const cachedFiles = listDiskCachedModuleFiles(projectRoot, opts);
   if (!cachedFiles) return modules;
-  return modules.filter((module) => !cachedFiles.has(cacheRelativePath(projectRoot, module.file)));
+  return modules.filter(
+    (module) =>
+      module.nativeOutcome === "skipped" ||
+      module.parserDegraded ||
+      !cachedFiles.has(cacheRelativePath(projectRoot, module.file)),
+  );
 }
 
 function collectSnapshotModules(
@@ -1243,7 +1203,7 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
           }
         : migratedPayload;
     if (!isDetailedSymbolGraphSnapshotPayload(payload)) {
-      recordSnapshotCorruption(report, snapshotPath, "invalid detailed symbol graph payload", opts?.logLevel);
+      recordCacheCorruption(report, snapshotPath, "invalid detailed symbol graph payload", opts?.logLevel);
       return null;
     }
     if (payload.implementationFingerprint !== getImplementationFingerprint()) {
@@ -1256,12 +1216,12 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
     }
     const graph = materializeDetailedSymbolGraph(payload.graph);
     if (!(await isDetailedSymbolGraphCompatibleWithProject(projectRoot, index, graph))) {
-      recordSnapshotCorruption(report, snapshotPath, "detailed symbol graph does not match project", opts?.logLevel);
+      recordCacheCorruption(report, snapshotPath, "detailed symbol graph does not match project", opts?.logLevel);
       return null;
     }
     const identity = await snapshotFileIdentity(snapshotPath);
     if (!sameSnapshotFileIdentity(parsed.identity, identity)) {
-      recordSnapshotCorruption(report, snapshotPath, "detailed symbol graph changed while reading", opts?.logLevel);
+      recordCacheCorruption(report, snapshotPath, "detailed symbol graph changed while reading", opts?.logLevel);
       return null;
     }
     setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
@@ -1272,7 +1232,7 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
     return graph;
   } catch (error) {
     if (!isMissingArtifactError(error)) {
-      recordSnapshotCorruption(report, snapshotPath, String(error), opts?.logLevel);
+      recordCacheCorruption(report, snapshotPath, String(error), opts?.logLevel);
     }
     return null;
   }
@@ -1835,6 +1795,9 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   return (
     typeof moduleIndex.file === "string" &&
     isOptionalBoolean(moduleIndex.docstringsChecked) &&
+    isOptionalNativeOutcome(moduleIndex.nativeOutcome) &&
+    isOptionalBoolean(moduleIndex.parserDegraded) &&
+    isOptionalBoolean(moduleIndex.importLookupIncomplete) &&
     Array.isArray(moduleIndex.locals) &&
     moduleIndex.locals.every(isSymbolDef) &&
     Array.isArray(moduleIndex.imports) &&
@@ -1845,17 +1808,6 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     (moduleIndex.jvmFacts === undefined || isJvmFileFacts(moduleIndex.jvmFacts)) &&
     (moduleIndex.parseErrorRanges === undefined ||
       (Array.isArray(moduleIndex.parseErrorRanges) && moduleIndex.parseErrorRanges.every(isParseErrorRange)))
-  );
-}
-
-function isParseErrorRange(value: unknown): value is ParseErrorRange {
-  if (!value || typeof value !== "object") return false;
-  const range = value as { startIndex?: unknown; endIndex?: unknown };
-  const startIndex = range.startIndex;
-  const endIndex = range.endIndex;
-  if (typeof startIndex !== "number" || typeof endIndex !== "number") return false;
-  return (
-    Number.isSafeInteger(startIndex) && Number.isSafeInteger(endIndex) && startIndex >= 0 && endIndex >= startIndex
   );
 }
 
@@ -1923,6 +1875,7 @@ function isImportBinding(value: unknown): value is ImportBinding {
   return (
     binding.kind === "star" &&
     (binding.staticMembersOf === undefined || typeof binding.staticMembersOf === "string") &&
+    (binding.csharpDirectiveStartIndex === undefined || typeof binding.csharpDirectiveStartIndex === "number") &&
     (binding.jvmTypeWildcardName === undefined || typeof binding.jvmTypeWildcardName === "string") &&
     (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&
     (binding.jvmPackageFiles === undefined ||
@@ -1988,28 +1941,8 @@ function isOptionalNumber(value: unknown): boolean {
   return value === undefined || typeof value === "number";
 }
 
-function isOptionalRange(value: unknown): boolean {
-  return value === undefined || isRange(value);
-}
-
 function isSymbolKind(value: unknown): value is SymbolKind {
   return SNAPSHOT_SYMBOL_KINDS.has(value as SymbolKind);
-}
-
-function isRange(value: unknown): value is Range {
-  if (!value || typeof value !== "object") return false;
-  const range = value as Partial<Range>;
-  return isPos(range.start) && isPos(range.end);
-}
-
-function isPos(value: unknown): value is Pos {
-  if (!value || typeof value !== "object") return false;
-  const pos = value as Partial<Pos>;
-  return (
-    typeof pos.line === "number" &&
-    typeof pos.column === "number" &&
-    (pos.index === undefined || typeof pos.index === "number")
-  );
 }
 
 function isGraphEdge(value: unknown): value is Edge {

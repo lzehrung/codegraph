@@ -211,7 +211,7 @@ pub(crate) fn project_columns(
         node: tree_sitter::Node<'tree>,
         node_id: u32,
         depth: u32,
-        child_index: usize,
+        child_index: u32,
     }
 
     let mut builder = Builder::new();
@@ -255,7 +255,7 @@ pub(crate) fn project_columns(
         }
 
         let field_name = parent_node
-            .field_name_for_child(child_index as u32)
+            .field_name_for_child(child_index)
             .unwrap_or("");
         let field_name_id = builder.field_names.intern(field_name);
 

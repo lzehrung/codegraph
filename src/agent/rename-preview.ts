@@ -29,7 +29,8 @@ import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
 import { requireSemanticSymbol, semanticSymbolFromDef } from "./semantic-symbols.js";
 import {
-  createAgentSession,
+  checkSessionFreshness,
+  createRequestSession,
   type AgentFreshnessResult,
   type AgentProjectSnapshot,
   type AgentSession,
@@ -175,10 +176,7 @@ function incompleteReferenceCoverageReason(coverage: ReferenceCoverage): string 
 }
 
 export async function previewRename(request: RenamePreviewRequest): Promise<RenamePreviewResponse> {
-  const session = createAgentSession({
-    root: request.root,
-    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-  });
+  const session = createRequestSession(request);
   return await previewRenameWithSession(session, request);
 }
 
@@ -186,7 +184,7 @@ export async function previewRenameWithSession(
   session: AgentSession,
   request: RenamePreviewRequest,
 ): Promise<RenamePreviewResponse> {
-  const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
+  const freshness = await checkSessionFreshness(session);
   const snapshot = await session.loadProject();
   return await previewRenameInSnapshot(snapshot, request, freshness);
 }

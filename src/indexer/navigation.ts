@@ -69,6 +69,7 @@ import {
 import {
   directModuleValueEntry,
   csharpNamespaceImportDirectories,
+  csharpShadowedImports,
   javaStaticNamedImportIncludes,
   resolveExport,
   resolveImported,
@@ -135,6 +136,8 @@ import {
   type BareNameUse,
 } from "./name-resolution.js";
 import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";
+import { createUnionFind } from "../util/collections.js";
+import { toTreeSitterPosition } from "./shared.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
 const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
@@ -165,10 +168,7 @@ export async function goToDefinition(
   const tree = context.tree;
   if (sup.id === "php") await ensurePhpNamespaceSymbolIndex(index);
 
-  const pos = {
-    row: Math.max(0, line - 1),
-    column: Math.max(0, column - 1),
-  };
+  const pos = toTreeSitterPosition({ line, column });
   let node: SyntaxNodeLike | null = tree.rootNode.descendantForPosition(pos, pos);
   // A position at the start of `b` in `a?.b` also touches the end of the `?.` token, which the
   // parser reports first. The use is the name that starts at the position.
@@ -534,21 +534,7 @@ export async function recoverIncludedCallableStar(
     familyOf.set(key, defs);
     return defs;
   };
-  const parent = functions.map((_, candidateIndex) => candidateIndex);
-  const find = (start: number): number => {
-    let current = start;
-    while (parent[current] !== current) {
-      const next = parent[current]!;
-      parent[current] = parent[next] ?? next;
-      current = next;
-    }
-    return current;
-  };
-  const unite = (left: number, right: number): void => {
-    const leftRoot = find(left);
-    const rightRoot = find(right);
-    if (leftRoot !== rightRoot) parent[rightRoot] = leftRoot;
-  };
+  const { find, unite } = createUnionFind(functions.length);
   for (let left = 0; left < functions.length; left += 1) {
     const defs = await family(functions[left]!.def);
     for (let right = left + 1; right < functions.length; right += 1) {
@@ -606,7 +592,7 @@ export async function getCppEquivalentCallableDefinitions(
 }
 
 /** Adds the requested `line` or `block` context to each reference, parsing each file once. */
-async function attachReferenceContext(
+export async function attachReferenceContext(
   index: ProjectIndex,
   refs: readonly Reference[],
   opts: FindReferencesOptions | undefined,
@@ -883,12 +869,18 @@ async function findReferencesInternal(
       if (explicitNamespaceMemberAliasFiles.has(fileKey)) return true;
       const targetModule = index.byFile.get(fileKey);
       for (const entry of targetModule?.exports ?? []) {
-        if (entry.type === "namespaceReexport" && modulePathHasAlias(entry.fromModule)) return true;
-        if (entry.type !== "reexport") continue;
-        const hit = resolveExport(index, file, entry.exportedAs, exportOptions);
-        if (hit?.kind === "resolved" && matchesReferenceDefinition(hit.def) && modulePathHasAlias(entry.fromModule)) {
+        // A star or namespace forward keeps an aliased export reachable under the forwarding module's own names.
+        if (
+          (entry.type === "namespaceReexport" || entry.type === "exportStar") &&
+          modulePathHasAlias(entry.fromModule)
+        ) {
           return true;
         }
+        if (entry.type !== "reexport") continue;
+        const hit = resolveExport(index, file, entry.exportedAs, exportOptions);
+        // A named re-export forwards the definition itself or a namespace that can reach it.
+        const forwardsDefinition = hit?.kind === "resolved" && matchesReferenceDefinition(hit.def);
+        if ((forwardsDefinition || hit?.kind === "namespace") && modulePathHasAlias(entry.fromModule)) return true;
       }
       return false;
     };
@@ -1235,7 +1227,9 @@ async function findReferencesInternal(
     for (const imp of module.imports) {
       if (hasReachedCollectionLimit()) break;
       if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) continue;
-      const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
+      // A C# directive that an enclosing namespace shadows resolves nothing, so it is verified like an unresolved import.
+      const targetFile =
+        typeof imp.resolved === "string" && !csharpShadowedImports(index).has(imp) ? imp.resolved : undefined;
       if (!targetFile && parsedContext.sup.id === "csharp" && imp.kind === "namespace") {
         const namespaceTargets = csharpNamespaceImportDirectories(index).get(imp) ?? [];
         const targetDirectories = new Set(
@@ -1926,19 +1920,12 @@ function pythonPropertyAccessorNeedsPartialCoverage(parsedContext: ParsedFileCon
   return decoratedDefinition.namedChildren.some((child) => {
     const decorator = pythonPropertyDecorator(child);
     if (decorator?.kind === "property") return true;
-    return (
-      decorator?.kind === "accessor" &&
-      decorator.propertyName === definition.localName &&
-      (decorator.accessor === "setter" || decorator.accessor === "deleter")
-    );
+    return decorator?.kind === "accessor" && decorator.propertyName === definition.localName;
   });
 }
 
 function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDef): SyntaxNodeLike {
-  const position = {
-    row: def.range.start.line - 1,
-    column: def.range.start.column - 1,
-  };
+  const position = toTreeSitterPosition(def.range.start);
   return parsedContext.tree.rootNode.descendantForPosition(position, position);
 }
 

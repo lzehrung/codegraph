@@ -10,6 +10,8 @@ import { fileIdentityKey } from "../util/paths.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "./types.js";
 
+import { definitionIdentityKey } from "./reference-context.js";
+import { toTreeSitterPosition } from "./shared.js";
 /**
  * Owner identity shared by C# `partial` type parts and Swift types/extensions.
  * C# includes declaration kind, own generic arity, and enclosing generic arities.
@@ -339,10 +341,7 @@ function csharpContainerAtRange(tree: SyntaxTreeLike, range: Range): SyntaxNodeL
   const node =
     typeof startIndex === "number"
       ? root.descendantForIndex(startIndex, range.end.index ?? startIndex)
-      : root.descendantForPosition(
-          { row: Math.max(0, range.start.line - 1), column: Math.max(0, range.start.column - 1) },
-          { row: Math.max(0, range.start.line - 1), column: Math.max(0, range.start.column - 1) },
-        );
+      : root.descendantForPosition(toTreeSitterPosition(range.start), toTreeSitterPosition(range.start));
   let current: SyntaxNodeLike | null = node;
   while (current) {
     if (CSHARP_PARTIAL_CONTAINER_TYPES.has(current.type)) return current;
@@ -353,13 +352,8 @@ function csharpContainerAtRange(tree: SyntaxTreeLike, range: Range): SyntaxNodeL
 
 const partialExportIdentities = new WeakMap<ProjectIndex, Map<string, SharedOwnerIdentity | null>>();
 
-function definitionIdentityCacheKey(def: SymbolDef): string {
-  const start = def.range.start;
-  return `${fileIdentityKey(def.file)}:${start.index ?? `${start.line}:${start.column}`}`;
-}
-
 function csharpPartialExportIdentity(index: ProjectIndex, def: SymbolDef): SharedOwnerIdentity | null {
-  const cacheKey = definitionIdentityCacheKey(def);
+  const cacheKey = definitionIdentityKey(def);
   let cache = partialExportIdentities.get(index);
   if (!cache) {
     cache = new Map();
