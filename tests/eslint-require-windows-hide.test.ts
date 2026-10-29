@@ -1,4 +1,5 @@
 import { RuleTester } from "eslint";
+import tseslint from "typescript-eslint";
 import { requireWindowsHide } from "../scripts/eslint-rules/require-windows-hide.mjs";
 
 RuleTester.describe = describe;
@@ -6,6 +7,7 @@ RuleTester.it = it;
 RuleTester.itOnly = it.only;
 
 const tester = new RuleTester();
+const tsTester = new RuleTester({ languageOptions: { parser: tseslint.parser } });
 
 const missingOptions = (name: string) => ({ messageId: "missingOptions", data: { name } });
 const missingWindowsHide = (name: string) => ({ messageId: "missingWindowsHide", data: { name } });
@@ -256,6 +258,117 @@ describe("require-windows-hide ESLint rule", () => {
         // A local promisify shadows the import, so only the direct launch is checked.
         code: 'import { execFile } from "node:child_process"; import { promisify } from "node:util"; function f(promisify) { const run = promisify(execFile); run("git"); } execFile("x");',
         errors: [missingOptions("execFile")],
+      },
+    ],
+  });
+
+  // Accessors, conditional aliases, and TypeScript type-only wrappers.
+  tester.run("require-windows-hide accessors and conditionals", requireWindowsHide, {
+    valid: [
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const run = sync ? spawnSync : spawn; run("git", [], { windowsHide: true });',
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { get windowsHide() { return false; }, windowsHide: true });',
+      },
+    ],
+    invalid: [
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { windowsHide: true, get windowsHide() { return false; } });',
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { windowsHide: true, set windowsHide(value) {} });',
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { windowsHide: true, windowsHide() { return false; } });',
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { get windowsHide() { return true; } });',
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const run = sync ? spawnSync : spawn; run("git", []);',
+        errors: [missingOptions("spawnSync")],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const run = sync ? spawnSync : spawn; run("git", [], { cwd: "." });',
+        errors: [missingWindowsHide("spawnSync")],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const run = a ? other : b ? spawn : other; run("git", []);',
+        errors: [missingOptions("spawn")],
+      },
+    ],
+  });
+
+  tsTester.run("require-windows-hide TypeScript", requireWindowsHide, {
+    valid: [
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { windowsHide: true } satisfies SpawnOptions);',
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { windowsHide: true } as const);',
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { windowsHide: true } as SpawnOptions);',
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], <SpawnOptions>{ windowsHide: true });',
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], ({ windowsHide: true }) as SpawnOptions);',
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { windowsHide: true as const });',
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const run = spawn as SpawnFn; run("git", [], { windowsHide: true } as const);',
+      },
+      { code: 'import { exec } from "node:child_process"; function query(exec: Query) { return exec("x"); }' },
+    ],
+    invalid: [
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { cwd: "." } satisfies SpawnOptions);',
+        errors: [missingWindowsHide("spawn")],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { cwd: "." } as const);',
+        errors: [missingWindowsHide("spawn")],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { windowsHide: false } as const);',
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { windowsHide: debug as boolean });',
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], { windowsHide: true, ...extra } satisfies SpawnOptions);',
+        errors: [{ messageId: "windowsHideOverridable", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const run = spawn as SpawnFn; run("git", []);',
+        errors: [missingOptions("spawn")],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const run = (spawn satisfies SpawnFn)!; run("git", []);',
+        errors: [missingOptions("spawn")],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const run = (sync ? spawnSync : spawn) as SpawnFn; run("git", []);',
+        errors: [missingOptions("spawnSync")],
+      },
+      {
+        code: 'import * as cp from "node:child_process"; (cp as Cp).spawn("git", []);',
+        errors: [missingOptions("spawn")],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; spawn("git", [], options as SpawnOptions);',
+        errors: [missingOptions("spawn")],
       },
     ],
   });

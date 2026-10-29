@@ -42,9 +42,29 @@ function moduleNamespace(node) {
   return module ? NAMESPACES[module] : null;
 }
 
-/** @param {import("estree").Property | import("estree").SpreadElement} property */
+const TYPE_ONLY_WRAPPERS = new Set([
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSNonNullExpression",
+  "TSTypeAssertion",
+  "TSInstantiationExpression",
+]);
+
+/**
+ * Strips TypeScript type-only wrappers (`x as T`, `x satisfies T`, `x!`, `<T>x`); parentheses are not in the AST.
+ * @template {import("estree").Node | null | undefined} T
+ * @param {T} node
+ * @returns {T}
+ */
+function unwrapTypeOnly(node) {
+  let current = node;
+  while (current && TYPE_ONLY_WRAPPERS.has(current.type)) current = current.expression;
+  return current;
+}
+
+/** Any non-computed property named windowsHide, whatever its kind: accessors and methods count. */
 function isWindowsHideProperty(property) {
-  if (property.type !== "Property" || property.computed || property.kind !== "init" || property.method) return false;
+  if (property.type !== "Property" || property.computed) return false;
   const { key } = property;
   const name = key.type === "Identifier" ? key.name : stringLiteral(key);
   return name === "windowsHide";
@@ -85,7 +105,8 @@ export const requireWindowsHide = {
      * @param {import("estree").Node | null | undefined} node
      * @returns {{ kind: "namespace"; module: "child_process" | "util" } | { kind: "launcher"; name: string } | { kind: "promisify" } | null}
      */
-    function classifyExpression(node) {
+    function classifyExpression(rawNode) {
+      const node = unwrapTypeOnly(rawNode);
       if (!node) return null;
       switch (node.type) {
         case "Identifier": {
@@ -98,6 +119,8 @@ export const requireWindowsHide = {
           return moduleNamespace(node.source);
         case "LogicalExpression":
           return classifyExpression(node.left) ?? classifyExpression(node.right);
+        case "ConditionalExpression":
+          return classifyExpression(node.consequent) ?? classifyExpression(node.alternate);
         case "MemberExpression": {
           const namespace = classifyExpression(node.object);
           if (namespace?.kind !== "namespace") return null;
@@ -169,7 +192,10 @@ export const requireWindowsHide = {
         if (launcher?.kind !== "launcher") return;
         const data = { name: launcher.name };
         // The first argument is the command or module; options follow the optional argv.
-        const options = node.arguments.slice(1).find((argument) => argument.type === "ObjectExpression");
+        const options = node.arguments
+          .slice(1)
+          .map(unwrapTypeOnly)
+          .find((argument) => argument.type === "ObjectExpression");
         if (!options) {
           context.report({ node, messageId: "missingOptions", data });
           return;
@@ -180,11 +206,14 @@ export const requireWindowsHide = {
           return;
         }
         const property = options.properties[index];
-        if (property.value.type !== "Literal" || property.value.value !== true) {
+        const value = unwrapTypeOnly(property.value);
+        const isPlainProperty = property.kind === "init" && !property.method;
+        if (!isPlainProperty || value.type !== "Literal" || value.value !== true) {
           context.report({ node: property, messageId: "windowsHideNotTrue", data });
           return;
         }
-        // A later spread or computed key may carry its own windowsHide and override the literal.
+        // A later spread or computed key may carry its own windowsHide and override the literal;
+        // a later same-named accessor or method is already the last windowsHide property above.
         const later = options.properties
           .slice(index + 1)
           .find((entry) => entry.type === "SpreadElement" || entry.computed);
