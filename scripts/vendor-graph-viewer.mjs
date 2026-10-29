@@ -26,6 +26,7 @@ function resolveEsbuildEntry() {
 function run(args) {
   const { command, prefixArgs } = resolveEsbuildEntry();
   const result = spawnSync(command, [...prefixArgs, ...args], {
+    windowsHide: true,
     cwd: root,
     stdio: "inherit",
     shell: false,

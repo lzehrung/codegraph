@@ -29,9 +29,9 @@ import type { PathLike } from "node:fs";
 const execFileAsync = promisify(execFile);
 
 async function initializeGitRepository(root: string): Promise<void> {
-  await execFileAsync("git", ["init", "--quiet"], { cwd: root });
-  await execFileAsync("git", ["config", "user.email", "codegraph-tests@example.com"], { cwd: root });
-  await execFileAsync("git", ["config", "user.name", "Codegraph Tests"], { cwd: root });
+  await execFileAsync("git", ["init", "--quiet"], { windowsHide: true, cwd: root });
+  await execFileAsync("git", ["config", "user.email", "codegraph-tests@example.com"], { windowsHide: true, cwd: root });
+  await execFileAsync("git", ["config", "user.name", "Codegraph Tests"], { windowsHide: true, cwd: root });
 }
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
@@ -343,12 +343,15 @@ describe("project lifecycle commands", () => {
     await initializeGitRepository(root);
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
     await initCodegraphLifecycle(root, { updateGitignore: false });
-    await execFileAsync("git", ["add", "--", ".codegraph/manifest.json"], { cwd: root });
+    await execFileAsync("git", ["add", "--", ".codegraph/manifest.json"], { windowsHide: true, cwd: root });
     const result = await initCodegraphLifecycle(root);
 
     expect(result.gitignore).toEqual({ status: "tracked", path: ".gitignore" });
     await expect(fsp.stat(path.join(root, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
-    const { stdout } = await execFileAsync("git", ["ls-files", "--", ".codegraph/manifest.json"], { cwd: root });
+    const { stdout } = await execFileAsync("git", ["ls-files", "--", ".codegraph/manifest.json"], {
+      windowsHide: true,
+      cwd: root,
+    });
     expect(stdout.trim()).toBe(".codegraph/manifest.json");
   });
 
@@ -425,6 +428,7 @@ describe("project lifecycle commands", () => {
     const status = await getCodegraphLifecycleStatus(root);
     const repeated = await initCodegraphLifecycle(root);
     const { stdout: gitStatus } = await execFileAsync("git", ["status", "--short", "--untracked-files=all"], {
+      windowsHide: true,
       cwd: root,
     });
     const rules = (await fsp.readFile(path.join(root, ".gitignore"), "utf8"))
@@ -733,8 +737,8 @@ describe("project lifecycle commands", () => {
     await initializeGitRepository(root);
     await writeFile(root, ".gitignore", ".codegraph/\n");
     await writeFile(root, relativePath, "export const main = 1;\n");
-    await execFileAsync("git", ["add", ".gitignore", relativePath], { cwd: root });
-    await execFileAsync("git", ["commit", "--quiet", "-m", "initial source"], { cwd: root });
+    await execFileAsync("git", ["add", ".gitignore", relativePath], { windowsHide: true, cwd: root });
+    await execFileAsync("git", ["commit", "--quiet", "-m", "initial source"], { windowsHide: true, cwd: root });
     await initCodegraphLifecycle(root);
 
     const before = await fsp.stat(file);
@@ -754,8 +758,8 @@ describe("project lifecycle commands", () => {
     await writeFile(root, ".gitignore", ".codegraph/\n");
     await writeFile(root, retainedPath, "export const retained = 1;\n");
     await writeFile(root, updatedPath, "export const updated = 1;\n");
-    await execFileAsync("git", ["add", ".gitignore", retainedPath, updatedPath], { cwd: root });
-    await execFileAsync("git", ["commit", "--quiet", "-m", "initial source"], { cwd: root });
+    await execFileAsync("git", ["add", ".gitignore", retainedPath, updatedPath], { windowsHide: true, cwd: root });
+    await execFileAsync("git", ["commit", "--quiet", "-m", "initial source"], { windowsHide: true, cwd: root });
     await initCodegraphLifecycle(root);
 
     const before = await fsp.stat(retainedFile);
@@ -1035,7 +1039,7 @@ describe("project lifecycle commands", () => {
     await initializeGitRepository(trackedRoot);
     await writeFile(trackedRoot, "src/main.ts", "export const main = 1;\n");
     await initCodegraphLifecycle(trackedRoot, { updateGitignore: false });
-    await execFileAsync("git", ["add", "--", ".codegraph/manifest.json"], { cwd: trackedRoot });
+    await execFileAsync("git", ["add", "--", ".codegraph/manifest.json"], { windowsHide: true, cwd: trackedRoot });
     const trackedResult = await captureCli(["init", trackedRoot]);
     expect(trackedResult.stderr).toBe("");
     expect(trackedResult.stdout).toContain("Warning: .codegraph/manifest.json is tracked by Git");

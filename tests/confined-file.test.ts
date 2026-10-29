@@ -13,7 +13,7 @@ const execFileAsync = promisify(execFile);
 async function windowsShortPath(filePath: string): Promise<string | null> {
   if (filePath.includes(" ")) return null;
   const command = `for %I in (${filePath}) do @echo %~sI`;
-  const { stdout } = await execFileAsync("cmd.exe", ["/d", "/c", command]);
+  const { stdout } = await execFileAsync("cmd.exe", ["/d", "/c", command], { windowsHide: true });
   const shortPath = stdout.trim();
   return shortPath === filePath ? null : shortPath;
 }

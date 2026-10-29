@@ -18,6 +18,7 @@ function usesShell(command) {
 
 function run(command, args, options = {}) {
   const result = spawnSync(executable(command), args, {
+    windowsHide: true,
     cwd: rootDir,
     stdio: options.stdio ?? "inherit",
     encoding: "utf8",
@@ -36,6 +37,7 @@ function run(command, args, options = {}) {
 
 function commandSucceeds(command, args) {
   const result = spawnSync(executable(command), args, {
+    windowsHide: true,
     cwd: rootDir,
     stdio: "pipe",
     encoding: "utf8",
@@ -46,6 +48,7 @@ function commandSucceeds(command, args) {
 
 function commandOutput(command, args) {
   const result = spawnSync(executable(command), args, {
+    windowsHide: true,
     cwd: rootDir,
     stdio: "pipe",
     encoding: "utf8",

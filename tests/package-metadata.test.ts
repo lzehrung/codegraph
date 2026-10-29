@@ -207,6 +207,7 @@ function readPackedPaths(): Set<string> {
   }
 
   const result = spawnSync(command, args, {
+    windowsHide: true,
     cwd: process.cwd(),
     encoding: "utf8",
     env: { ...process.env, npm_config_ignore_scripts: "true" },
@@ -287,7 +288,7 @@ function expectTypeScriptSurfaceCheck(source: string): void {
         "--skipLibCheck",
         fixturePath,
       ],
-      { cwd: process.cwd(), encoding: "utf8" },
+      { windowsHide: true, cwd: process.cwd(), encoding: "utf8" },
     );
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -499,8 +500,8 @@ describe("package metadata", () => {
     const scripts = readStringRecord(rootPackage.scripts);
     const eslintConfig = readText("eslint.config.js");
 
-    expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.ts"');
-    expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.ts" --fix');
+    expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.ts" "scripts/**/*.mjs"');
+    expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.ts" "scripts/**/*.mjs" --fix');
     expect(eslintConfig).toContain('"tests/languages/samples/**"');
     expect(eslintConfig).toContain('"prefer-const": "error"');
   });
@@ -1418,6 +1419,7 @@ describe("package metadata", () => {
       const future = new Date(Math.max(Date.now() + 60_000, sourceStat.mtimeMs + 60_000));
       fs.utimesSync(sourcePath, future, future);
       const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+        windowsHide: true,
         cwd: packageRoot,
         encoding: "utf8",
         env: {
@@ -1434,6 +1436,7 @@ describe("package metadata", () => {
     withIsolatedPackageRoot((packageRoot) => {
       withMissingDistArtifact(packageRoot, "dist/bin/cli.js", () => {
         const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+          windowsHide: true,
           cwd: packageRoot,
           encoding: "utf8",
           env: {
@@ -1461,6 +1464,7 @@ describe("package metadata", () => {
           env.npm_command = "pack";
           env.npm_config_dry_run = "true";
           const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+            windowsHide: true,
             cwd: packageRoot,
             encoding: "utf8",
             env,
@@ -1491,6 +1495,7 @@ describe("package metadata", () => {
       env.npm_command = "pack";
       env.npm_config_dry_run = "true";
       const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+        windowsHide: true,
         cwd: packageRoot,
         encoding: "utf8",
         env,
@@ -1503,6 +1508,7 @@ describe("package metadata", () => {
 
   it("prints slow-test reporter help when help is the leading argument", () => {
     const result = spawnSync(process.execPath, ["./scripts/report-slow-tests.mjs", "--help"], {
+      windowsHide: true,
       cwd: process.cwd(),
       encoding: "utf8",
     });

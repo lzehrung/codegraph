@@ -89,10 +89,7 @@ describe("source module structure", () => {
     const result = spawnSync(
       process.execPath,
       ["./dist/cli.js", "cycles", "--root", ".", "./src", "--sort", "priority", "--json"],
-      {
-        cwd: repoRoot,
-        encoding: "utf8",
-      },
+      { windowsHide: true, cwd: repoRoot, encoding: "utf8" },
     );
 
     expect(result.status).toBe(0);

@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { captureCli, runCliOrThrow } from "./helpers/cli.js";
 
 function git(root: string, args: string[]): void {
-  execFileSync("git", args, { cwd: root, stdio: "ignore" });
+  execFileSync("git", args, { windowsHide: true, cwd: root, stdio: "ignore" });
 }
 
 function jsonRecord(stdout: string): Record<string, unknown> {

@@ -14,6 +14,7 @@ const WINDOWS_ABORT_EXIT = 3221226505;
 
 function runExplore(root: string) {
   return spawnSync(process.execPath, [bundledCli, "explore", FUNNEL_EXPLORE_QUERY, "--root", root, "--json"], {
+    windowsHide: true,
     cwd: rootDir,
     encoding: "utf8",
     env: process.env,

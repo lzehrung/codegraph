@@ -377,7 +377,7 @@ describe("native binding loader", () => {
       execFile(
         process.execPath,
         ["--import", "tsx", "--input-type=module", "--eval", childSource, fixture.binaryPath, fixture.cacheRoot],
-        { cwd: process.cwd() },
+        { windowsHide: true, cwd: process.cwd() },
       ),
     );
     const results = await Promise.all(children);

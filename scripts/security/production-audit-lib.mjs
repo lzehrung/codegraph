@@ -591,7 +591,7 @@ export function runProductionAudit({
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     let result;
     try {
-      result = spawnSyncImpl(command, commandArguments, spawnOptions);
+      result = spawnSyncImpl(command, commandArguments, { ...spawnOptions, windowsHide: true });
     } catch (error) {
       lastReport = failureReport("NPM_AUDIT_EXECUTION_FAILED", `Could not execute npm audit: ${stringifyError(error)}`);
     }

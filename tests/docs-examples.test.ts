@@ -84,6 +84,7 @@ describe("documented TypeScript examples", () => {
       );
 
       const result = spawnSync(process.execPath, [typescriptPath, "--project", "tsconfig.json"], {
+        windowsHide: true,
         cwd: temporaryDirectory,
         encoding: "utf8",
         timeout: 30_000,
