@@ -869,6 +869,43 @@ describe("Kotlin package files without a usable syntax tree", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  // Kotlin sees a package-private Java class of its own package, and an import of `Service` names it as well as a factory
+  // `fun Service()`. An incomplete Java file may declare it whatever its name; another package sees only public types.
+  it("keeps an incomplete Java file as a possible declarer for an importer in its package", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-java-peer-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        "p/Factory.kt": ["package com.acme.p", "", "fun Service() = 1", ""].join("\n"),
+        // Definitions.java is over the limit past `Other`, so it may declare a package-private `Service` after it.
+        "p/Definitions.java": `package com.acme.p;\n\nclass Other {}\n${padding}`,
+        "p/SamePackage.kt": ["package com.acme.p", "", "import com.acme.p.Service", ""].join("\n"),
+        "app/OtherPackage.kt": ["package com.acme.app", "", "import com.acme.p.Service", ""].join("\n"),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      const resolved = (relative: string): unknown => moduleOf(relative)?.imports[0]?.resolved;
+      // Factory.kt declares `Service`, but Definitions.java may too, so the importer in package p cannot rely on one file.
+      expect(resolved("p/SamePackage.kt")).toEqual({ external: "com.acme.p.Service" });
+      expect(moduleOf("p/SamePackage.kt")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      // A package-private class is invisible from package app, so Factory.kt is the one declaration there.
+      expect(normalizePath(String(resolved("app/OtherPackage.kt")))).toBe(paths["p/Factory.kt"]);
+      expect(moduleOf("app/OtherPackage.kt")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/OtherPackage.kt")?.importLookupIncomplete).toBeUndefined();
+
+      const fileEdgesOf = (relative: string): string[] =>
+        index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths[relative]!) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(fileEdgesOf("p/SamePackage.kt")).toEqual([]);
+      expect(fileEdgesOf("app/OtherPackage.kt")).toEqual([paths["p/Factory.kt"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Kotlin package files with a syntax error", () => {

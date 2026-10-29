@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildProjectIndex, buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/index.js";
+import { collectModuleSpecifiersFromSource } from "../src/graphs/specifiers.js";
 import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import type { BuildReport, ProjectIndex } from "../src/indexer/types.js";
 import { supportById } from "../src/languages.js";
@@ -386,18 +387,20 @@ describe("JVM import directives", () => {
 
     const directives = collectJvmImportDirectives(treeFor("java", source), "java").map((directive) => ({
       name: directive.name,
+      from: directive.from,
       leaf: directive.leaf.text,
       isStatic: directive.isStatic,
       wildcard: directive.wildcard,
     }));
 
+    // A static member import is looked up through the type that owns the member; every other form by its own name.
     expect(directives).toEqual([
-      { name: "a.b.C", leaf: "C", isStatic: false, wildcard: false },
-      { name: "a.b.C.d", leaf: "d", isStatic: true, wildcard: false },
-      { name: "a.b.C", leaf: "C", isStatic: true, wildcard: true },
-      { name: "a.b", leaf: "b", isStatic: false, wildcard: true },
-      { name: "a.b.D", leaf: "D", isStatic: false, wildcard: false },
-      { name: "X", leaf: "X", isStatic: false, wildcard: false },
+      { name: "a.b.C", from: "a.b.C", leaf: "C", isStatic: false, wildcard: false },
+      { name: "a.b.C.d", from: "a.b.C", leaf: "d", isStatic: true, wildcard: false },
+      { name: "a.b.C", from: "a.b.C", leaf: "C", isStatic: true, wildcard: true },
+      { name: "a.b", from: "a.b", leaf: "b", isStatic: false, wildcard: true },
+      { name: "a.b.D", from: "a.b.D", leaf: "D", isStatic: false, wildcard: false },
+      { name: "X", from: "X", leaf: "X", isStatic: false, wildcard: false },
     ]);
   });
 
@@ -427,6 +430,32 @@ describe("JVM import directives", () => {
       { name: "a.b.C", leaf: "C", alias: "D", wildcard: false },
       { name: "a.b", leaf: "b", alias: undefined, wildcard: true },
       { name: "a.b.E", leaf: "E", alias: undefined, wildcard: false },
+    ]);
+  });
+
+  it("names the graph specifier of a static member import by its owner type and keeps the import as written", () => {
+    const source = [
+      "package p;",
+      "import static a.B.c;",
+      "import static a.B.*;",
+      "import a.*;",
+      "import a.D;",
+      "class X {}",
+      "",
+    ].join("\n");
+
+    const specifiers = collectModuleSpecifiersFromSource(supportById("java")!, source, {
+      file: "p/X.java",
+      tree: treeFor("java", source),
+    });
+
+    // The member import resolves its owner `a.B`, as its binding does, and keeps `a.B.c` in `raw` to name its edge. The
+    // other forms already name what they resolve.
+    expect(specifiers).toEqual([
+      { spec: "a.B", raw: "a.B.c" },
+      { spec: "a.B" },
+      { spec: "a", jvmPackageWildcard: true },
+      { spec: "a.D" },
     ]);
   });
 });
@@ -544,6 +573,111 @@ describe("JVM importers while a package file has no readable syntax tree", () =>
       expect(recoveredUse?.parserDegraded).toBeUndefined();
       expect(recoveredUse?.importLookupIncomplete).toBeUndefined();
       expect(path.basename(String(recoveredUse?.imports[0]?.resolved))).toBe("Small.kt");
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A file that no parse can read, not even its head, has no known package: it may declare a name in any package, so a
+  // file that declares the name elsewhere is not the only one. It must not drop out of the lookup.
+  it("leaves a name unresolved while a file whose package cannot be read may declare it, until that file reads (memory cache)", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-unplaced-recovery-"));
+    try {
+      const marker = "// JVM_PACKAGE_UNKNOWN";
+      // The marker is inside the 64 KiB head, so neither the whole file nor its head parses. It is in package q, which
+      // the scan cannot know, so it may overload `select` of package p as well.
+      const sources: Record<string, string> = {
+        "p/Small.kt": "package p\n\nfun select(x: Int) = x\n",
+        "p/Shape.java": "package p;\n\npublic class Shape {}\n",
+        "q/Broken.kt": `package q\n\n${marker}\nclass Unrelated\n`,
+        "app/UseSelect.kt": "package app\n\nimport p.select\n\nclass UseSelect\n",
+        "app/UseShape.java": "package app;\n\nimport p.Shape;\n\nclass UseShape {}\n",
+      };
+      for (const [name, contents] of Object.entries(sources)) {
+        await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+        await writeFile(path.join(root, name), contents, "utf8");
+      }
+      const options = { cache: "memory" as const, threads: 1, useNativeWorkers: false };
+      const moduleOf = (index: ProjectIndex, relative: string) =>
+        index.byFile.get(fileIdentityKey(normalizePath(path.join(root, relative))));
+
+      setNativeIndexingFailureFor(marker);
+      const failed = await buildProjectIndex(root, options);
+      expect(
+        moduleOf(failed, "q/Broken.kt")?.jvmFacts,
+        "the forced failure no longer reaches Broken.kt",
+      ).toBeUndefined();
+      // Broken.kt may declare `select`, so the import is unproven and the importer is marked to retry.
+      expect(moduleOf(failed, "app/UseSelect.kt")).toMatchObject({
+        parserDegraded: true,
+        importLookupIncomplete: true,
+      });
+      expect(moduleOf(failed, "app/UseSelect.kt")?.imports[0]?.resolved).toEqual({ external: "p.select" });
+      // A Java import names a type, and Shape.java proves the one type of that name in package p.
+      expect(path.basename(String(moduleOf(failed, "app/UseShape.java")?.imports[0]?.resolved))).toBe("Shape.java");
+      expect(moduleOf(failed, "app/UseShape.java")?.importLookupIncomplete).toBeUndefined();
+
+      // Nothing changed but Broken.kt, which reads now and declares nothing of package p.
+      __resetNativeTreeSitterBindingForTests();
+      const recovered = await buildProjectIndex(root, options);
+      expect(moduleOf(recovered, "app/UseSelect.kt")?.parserDegraded).toBeUndefined();
+      expect(moduleOf(recovered, "app/UseSelect.kt")?.importLookupIncomplete).toBeUndefined();
+      expect(path.basename(String(moduleOf(recovered, "app/UseSelect.kt")?.imports[0]?.resolved))).toBe("Small.kt");
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // An owner that was not read leaves each form of import of it unresolved and marked. Once the owner reads, with no
+  // change to any importer, each resolves again, for its binding and for its dependency edge.
+  it("resolves a static or wildcard import again once its owner reads (memory cache)", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-owner-recovery-"));
+    try {
+      const marker = "// JVM_OWNER_UNREADABLE";
+      // The marker is past the 64 KiB head, so Hidden.kt keeps its package while its declarations are unknown.
+      const sources: Record<string, string> = {
+        "p/Hidden.kt": `package p\n\nobject Hidden { fun run() {} }\n${"// padding\n".repeat(7000)}${marker}\n`,
+        "app/UseStatic.java": "package app;\n\nimport static p.Hidden.run;\n\nclass UseStatic {}\n",
+        "app/UseStaticStar.java": "package app;\n\nimport static p.Hidden.*;\n\nclass UseStaticStar {}\n",
+        "app/UseTypeStar.java": "package app;\n\nimport p.Hidden.*;\n\nclass UseTypeStar {}\n",
+      };
+      for (const [name, contents] of Object.entries(sources)) {
+        await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+        await writeFile(path.join(root, name), contents, "utf8");
+      }
+      const options = { cache: "memory" as const, threads: 1, useNativeWorkers: false };
+      const importers = ["app/UseStatic.java", "app/UseStaticStar.java", "app/UseTypeStar.java"];
+      /** What an importer's binding and edges resolve to, and whether its module is marked to be extracted again. */
+      const outcome = (index: ProjectIndex, relative: string) => {
+        const key = fileIdentityKey(normalizePath(path.join(root, relative)));
+        const resolved = index.byFile.get(key)?.imports[0]?.resolved;
+        return {
+          binding: typeof resolved === "string" ? path.basename(resolved) : "external",
+          edges: index.graph.edges
+            .filter((edge) => fileIdentityKey(edge.from) === key)
+            .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : "external")),
+          marked: !!index.byFile.get(key)?.importLookupIncomplete,
+        };
+      };
+
+      setNativeIndexingFailureFor(marker);
+      const failed = await buildProjectIndex(root, options);
+      for (const relative of importers) {
+        expect(outcome(failed, relative), relative).toEqual({ binding: "external", edges: ["external"], marked: true });
+      }
+
+      // Hidden.kt reads now and declares the object `Hidden`; nothing else changed.
+      __resetNativeTreeSitterBindingForTests();
+      const recovered = await buildProjectIndex(root, options);
+      for (const relative of importers) {
+        expect(outcome(recovered, relative), relative).toEqual({
+          binding: "Hidden.kt",
+          edges: ["Hidden.kt"],
+          marked: false,
+        });
+      }
     } finally {
       clearMemoryCache();
       await rm(root, { recursive: true, force: true });

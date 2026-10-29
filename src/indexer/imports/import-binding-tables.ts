@@ -342,43 +342,47 @@ export async function applyCsharpImportDirective(
 
 /**
  * Binds one Java or Kotlin `import`. The directive comes from `collectJvmImportDirectives`, so its ranges are its
- * nodes' own and it is never found again by its text or offset. Neither language has type-only imports.
+ * nodes' own and it is never found again by its text or offset. Neither language has type-only imports. Every form
+ * resolves `directive.from`, the name its dependency edge resolves too: the type, the owner of a static member, or the
+ * package or type of a wildcard.
  */
 export async function applyJvmImportDirective(
   context: LanguageSpecificImportContext,
-  { name, leaf, isStatic, wildcard, alias }: JvmImportDirective,
+  { from, leaf, isStatic, wildcard, alias }: JvmImportDirective,
 ): Promise<void> {
-  if (wildcard) {
-    const resolved = await context.resolveFrom(name, undefined, isStatic ? undefined : { jvmPackageWildcard: true });
-    const owner = name.slice(name.lastIndexOf(".") + 1);
-    context.pushBinding({
-      kind: "star",
-      from: name,
-      resolved,
-      ...(isStatic ? { jvmStaticWildcardName: owner } : { jvmTypeWildcardName: owner }),
-      typeOnly: false,
-    });
-    return;
-  }
-  // A static import names a member of its owner, and the owner is what the binding comes from.
-  const from = isStatic ? name.slice(0, Math.max(name.lastIndexOf("."), 0)) : name;
-  const importedRange = toRange(leaf);
-  const resolved = await context.resolveFrom(from);
-  // A package file that was not read in full may declare the imported name. The import then stays unresolved, and the
-  // module records that so a later build resolves it again once every file of the package reads.
-  if (isJvmLanguage(context.languageId)) {
+  const resolved = await context.resolveFrom(
+    from,
+    undefined,
+    wildcard && !isStatic ? { jvmPackageWildcard: true } : undefined,
+  );
+  // A package file that was not read in full may declare what an unresolved import names. The module records that, so a
+  // later build resolves the import again once every file of the package reads. A resolved import names a file that
+  // proves it.
+  if (typeof resolved !== "string" && isJvmLanguage(context.languageId)) {
     const lookup = await lookupJvmImport(context.projectRoot, from, {
       languageId: context.languageId,
       fromFile: context.file,
     });
     if (lookup.incomplete) context.onDegraded?.("lookup");
   }
+  const owner = from.slice(from.lastIndexOf(".") + 1);
+  if (wildcard) {
+    context.pushBinding({
+      kind: "star",
+      from,
+      resolved,
+      ...(isStatic ? { jvmStaticWildcardName: owner } : { jvmTypeWildcardName: owner }),
+      typeOnly: false,
+    });
+    return;
+  }
+  const importedRange = toRange(leaf);
   context.pushBinding({
     kind: "named",
     local: alias?.text ?? leaf.text,
     imported: leaf.text,
     from,
-    ...(isStatic ? { jvmStaticWildcardName: from.slice(from.lastIndexOf(".") + 1) } : {}),
+    ...(isStatic ? { jvmStaticWildcardName: owner } : {}),
     ...(alias ? { explicitAlias: true } : {}),
     importedRange,
     localRange: alias ? toRange(alias) : importedRange,

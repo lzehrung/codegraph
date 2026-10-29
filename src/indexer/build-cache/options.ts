@@ -68,8 +68,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 100 reads Java and Kotlin packages, top-level declared names, and imports from native syntax nodes, and
  * stores each file's own package and declared names with its module (`jvmFacts`) instead of scanning source text. A
  * file with no usable syntax tree, or whose tree has a syntax error at the top, is `incomplete`: it may declare names
- * it did not list. A named import from its package stays unresolved while that file may declare the name, and marks
- * its importer (`parserDegraded` and `importLookupIncomplete`) like an unreadable C# lookup.
+ * it did not list, and a file that cannot be parsed at all may declare names in any package. An import of a name such a
+ * file may declare stays unresolved, and marks its importer (`parserDegraded` and `importLookupIncomplete`) like an
+ * unreadable C# lookup. A Java static member import resolves through the type that owns the member, for its dependency
+ * edge as for its binding.
  */
 export const CORE_ALGORITHM_EPOCH = 100;
 /**

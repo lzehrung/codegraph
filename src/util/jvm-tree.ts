@@ -36,6 +36,11 @@ export type JvmImportDirective = {
   statement: SyntaxNodeLike;
   /** The dotted name as written, without a trailing `.*`. */
   name: string;
+  /**
+   * The name the import is looked up by: its own name, or for a static import of one member the type that owns it. The
+   * binding and the dependency edge of an import both resolve this name, so they ask the same question.
+   */
+  from: string;
   /** The last identifier of the name. */
   leaf: SyntaxNodeLike;
   /** A Java `import static`. */
@@ -86,8 +91,9 @@ export function jvmPackageName(tree: SyntaxTreeLike, languageId: JvmLanguageId):
 }
 
 /**
- * The package and top-level declared names of one file. An ERROR node declares nothing; the nodes around it still count,
- * and the facts are marked `incomplete` because the error may have swallowed declarations the tree does not show.
+ * The package and top-level declared names of one file. An ERROR node declares nothing; the nodes around it still
+ * count, and the facts are marked `incomplete` because the error may have swallowed declarations the tree does not
+ * show.
  */
 export function collectJvmFileFacts(tree: SyntaxTreeLike, languageId: JvmLanguageId): JvmFileFacts {
   const symbols = new Set<string>();
@@ -152,9 +158,11 @@ export function collectJvmImportDirectives(tree: SyntaxTreeLike, languageId: Jvm
     const identifiers = nameNode ? nameIdentifiers(nameNode) : [];
     const leaf = identifiers[identifiers.length - 1];
     if (!leaf) continue;
+    const name = identifiers.map((identifier) => identifier.text).join(".");
     directives.push({
       statement,
-      name: identifiers.map((identifier) => identifier.text).join("."),
+      name,
+      from: isStatic && !wildcard ? name.slice(0, Math.max(name.lastIndexOf("."), 0)) : name,
       leaf,
       isStatic,
       wildcard,

@@ -62,11 +62,11 @@ export async function collectImportsForFile(
     /**
      * Called each time extraction fails and leaves this source's imports incomplete: native fell back for the source, a
      * C# syntax tree could not be built, reading the native captures threw, or (`"lookup"`) a C# alias or static using,
-     * or a Java or Kotlin named import, could not prove its target because the lookup over other project files could not
-     * read one of them. `report` records the failure for this build only, so a caller that keeps the imports, such as a
-     * module that a later build reuses from a cache, keeps the failure with them. A `"lookup"` failure belongs to files
-     * outside this source, which can read again without this source changing, so that caller should retry the source
-     * instead of reusing it.
+     * or a Java or Kotlin import (named, static, or wildcard), could not prove its target because the lookup over other
+     * project files could not read one of them. `report` records the failure for this build only, so a caller that
+     * keeps the imports, such as a module that a later build reuses from a cache, keeps the failure with them. A
+     * `"lookup"` failure belongs to files outside this source, which can read again without this source changing, so
+     * that caller should retry the source instead of reusing it.
      */
     onDegraded?: ImportDegradedHook;
   },

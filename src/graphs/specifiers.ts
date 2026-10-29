@@ -277,8 +277,16 @@ export function collectModuleSpecifiersFromSource(
     }
     if (jvmLanguageId) {
       for (const directive of collectJvmImportDirectives(tree, jvmLanguageId)) {
+        // The edge resolves what the binding resolves, so a static member import names the file of its owner type. The
+        // import as written stays in `raw`, which names the edge when no file is proven.
+        const spec = directive.from || directive.name;
         const jvmPackageWildcard = directive.wildcard && !directive.isStatic;
-        out.push({ spec: directive.name, typeOnly: false, ...(jvmPackageWildcard ? { jvmPackageWildcard } : {}) });
+        out.push({
+          spec,
+          ...(spec !== directive.name ? { raw: directive.name } : {}),
+          typeOnly: false,
+          ...(jvmPackageWildcard ? { jvmPackageWildcard } : {}),
+        });
       }
     } else {
       for (const directive of collectCsharpImportDirectives(tree)) {

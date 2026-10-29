@@ -1210,6 +1210,134 @@ describe("Java package files without a usable syntax tree", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  // A static member import and a wildcard import look up their owner type, as a named import looks up its type. Its
+  // dependency edge asks the same question as its binding, so neither can bind a file by a path-shaped guess.
+  // Directories shaped like the package let that guess find Hidden.kt by its name; a Maven layout hides Util.java.
+  async function indexOwnerProject(root: string) {
+    const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+    const importer = (importLines: string[]): string =>
+      ["package com.acme.app;", "", ...importLines, "", "class Use {}", ""].join("\n");
+    const paths = await writeFixtureFiles(root, {
+      "com/acme/p7/Hidden.kt": `package com.acme.p7\n\nobject Hidden { fun run() {} }\n${padding}`,
+      "com/acme/app/UseStatic.java": importer(["import static com.acme.p7.Hidden.run;"]),
+      "com/acme/app/UseStaticStar.java": importer(["import static com.acme.p7.Hidden.*;"]),
+      "com/acme/app/UseTypeStar.java": importer(["import com.acme.p7.Hidden.*;"]),
+      "src/main/java/com/acme/p8/Util.java":
+        "package com.acme.p8;\n\npublic class Util { public static int helper() { return 1; } }\n",
+      "src/main/java/com/acme/app/UseUtil.java": importer([
+        "import static com.acme.p8.Util.helper;",
+        "import static java.lang.Math.max;",
+      ]),
+    });
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+    const bindingsOf = (relative: string): Record<string, string> =>
+      Object.fromEntries(
+        (moduleOf(relative)?.imports ?? []).map((binding) => [
+          binding.from,
+          typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+        ]),
+      );
+    // The edges of a file by the import as written, each to the file it names or `external`.
+    const edgesOf = (relative: string): Record<string, string> =>
+      Object.fromEntries(
+        index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths[relative]!))
+          .map((edge) => [edge.raw, edge.to.type === "file" ? normalizePath(edge.to.path) : "external"]),
+      );
+    return { index, paths, moduleOf, bindingsOf, edgesOf };
+  }
+
+  it("resolves the edge of a static member import through its owner, as its binding does", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-static-owner-"));
+    try {
+      const { index, paths, moduleOf, bindingsOf, edgesOf } = await indexOwnerProject(root);
+
+      // Hidden.kt may declare `Hidden`, so nothing proves the owner: the binding is external and so is the edge, named as
+      // the import is written, instead of a file found by the path `com/acme/p7/Hidden`.
+      expect(bindingsOf("com/acme/app/UseStatic.java")).toEqual({ "com.acme.p7.Hidden": "external" });
+      expect(edgesOf("com/acme/app/UseStatic.java")).toEqual({ "com.acme.p7.Hidden.run": "external" });
+      expect(moduleOf("com/acme/app/UseStatic.java")).toMatchObject({
+        parserDegraded: true,
+        importLookupIncomplete: true,
+      });
+      // The wildcard importers of the same project name `com.acme.p7.Hidden`, and the static import names its member.
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root })
+        .map((entry) => entry.name)
+        .filter((name) => name.startsWith("com.acme."))
+        .sort();
+      expect(unresolved).toEqual(["com.acme.p7.Hidden", "com.acme.p7.Hidden.run"]);
+
+      // A complete owner is bound, and its edge names its file though no path-shaped guess reaches a Maven layout. The
+      // import as written still names the edge, and a member of the JDK stays external.
+      const util = paths["src/main/java/com/acme/p8/Util.java"]!;
+      const useUtil = "src/main/java/com/acme/app/UseUtil.java";
+      expect(bindingsOf(useUtil)).toEqual({ "com.acme.p8.Util": util, "java.lang.Math": "external" });
+      expect(edgesOf(useUtil)).toEqual({ "com.acme.p8.Util.helper": util, "java.lang.Math.max": "external" });
+      expect(moduleOf(useUtil)?.parserDegraded).toBeUndefined();
+      expect(moduleOf(useUtil)?.importLookupIncomplete).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks the importer of a static or type wildcard whose owner an incomplete file may declare", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-wildcard-owner-"));
+    try {
+      const { moduleOf, bindingsOf, edgesOf } = await indexOwnerProject(root);
+
+      // Neither wildcard proves its owner, so each binding stays external and its module records that, so a later build
+      // resolves it again once Hidden.kt reads.
+      for (const relative of ["com/acme/app/UseStaticStar.java", "com/acme/app/UseTypeStar.java"]) {
+        expect(bindingsOf(relative), relative).toEqual({ "com.acme.p7.Hidden": "external" });
+        expect(edgesOf(relative), relative).toEqual({ "com.acme.p7.Hidden": "external" });
+        expect(moduleOf(relative), relative).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A package-private class can sit in any file of its package, so an importer of that package cannot rule an incomplete
+  // Java file out by its name. Another package can import only a public type, which lives in the file its name spells.
+  it("keeps a Java file with another name as a possible declarer for an importer in its own package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-same-package-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        // Definitions.java is over the limit past `Other`, so it may declare a package-private `Service` after it.
+        "p9/Definitions.java": `package com.acme.p9;\n\nclass Other {}\n${padding}`,
+        "p9/SamePackage.java": "package com.acme.p9;\n\nimport com.acme.p9.Service;\n\nclass SamePackage {}\n",
+        "app/OtherPackage.java":
+          "package com.acme.app;\n\nimport com.acme.p9.Service;\nimport com.acme.p9.Definitions;\n\nclass OtherPackage {}\n",
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      const resolved = (relative: string): Record<string, string> =>
+        Object.fromEntries(
+          (moduleOf(relative)?.imports ?? []).map((binding) => [
+            binding.from,
+            typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+          ]),
+        );
+      // The importer of package p9 may name a package-private type of Definitions.java, which nothing rules out.
+      expect(resolved("p9/SamePackage.java")).toEqual({ "com.acme.p9.Service": "external" });
+      expect(moduleOf("p9/SamePackage.java")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      // An importer of another package can name only a public type: `Service` would live in Service.java, which does not
+      // exist, and `Definitions` is the file that Definitions.java spells.
+      expect(resolved("app/OtherPackage.java")).toEqual({
+        "com.acme.p9.Service": "external",
+        "com.acme.p9.Definitions": paths["p9/Definitions.java"],
+      });
+      expect(moduleOf("app/OtherPackage.java")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/OtherPackage.java")?.importLookupIncomplete).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Java same-package sibling classes", () => {
