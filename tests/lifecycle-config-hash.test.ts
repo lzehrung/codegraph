@@ -19,9 +19,9 @@ import { mkTmpDir } from "./helpers/filesystem.js";
 const execFileAsync = promisify(execFile);
 
 async function initializeGitRepository(root: string): Promise<void> {
-  await execFileAsync("git", ["init", "--quiet"], { cwd: root });
-  await execFileAsync("git", ["config", "user.email", "codegraph-tests@example.com"], { cwd: root });
-  await execFileAsync("git", ["config", "user.name", "Codegraph Tests"], { cwd: root });
+  await execFileAsync("git", ["init", "--quiet"], { windowsHide: true, cwd: root });
+  await execFileAsync("git", ["config", "user.email", "codegraph-tests@example.com"], { windowsHide: true, cwd: root });
+  await execFileAsync("git", ["config", "user.name", "Codegraph Tests"], { windowsHide: true, cwd: root });
 }
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {

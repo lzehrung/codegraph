@@ -278,7 +278,7 @@ async function readGitFilesAtRevision(
   if (!requests.length) return new Map();
   const maxOutputBytes = Math.min(MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE * requests.length, MAX_GIT_BATCH_OUTPUT_BYTES);
   try {
-    const child = spawn("git", ["cat-file", "--batch"], { cwd: projectRoot });
+    const child = spawn("git", ["cat-file", "--batch"], { windowsHide: true, cwd: projectRoot });
     const stdoutChunks: Buffer[] = [];
     let stdoutBytes = 0;
     let stderr = "";

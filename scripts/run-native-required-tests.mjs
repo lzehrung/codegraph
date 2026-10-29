@@ -26,6 +26,7 @@ function run(command, args, extraEnv) {
     shell: process.platform === "win32",
     stdio: "inherit",
     ...(extraEnv ? { env: { ...process.env, ...extraEnv } } : {}),
+    windowsHide: true,
   });
   if (result.error) {
     throw result.error;

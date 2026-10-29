@@ -340,7 +340,7 @@ export function openViewerUrl(url: string): void {
     command = "xdg-open";
     args = [url];
   }
-  const child = spawn(command, args, { detached: true, stdio: "ignore" });
+  const child = spawn(command, args, { windowsHide: true, detached: true, stdio: "ignore" });
   child.once("error", () => {});
   child.unref();
 }

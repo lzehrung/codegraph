@@ -69,6 +69,7 @@ function writeJson(filePath, value) {
 
 function readGitFile(relativePath) {
   const result = spawnSync("git", ["show", `HEAD:${relativePath}`], {
+    windowsHide: true,
     cwd: rootDir,
     encoding: "utf8",
     shell: false,
@@ -85,6 +86,7 @@ function run(command, args, options = {}) {
     stdio: "inherit",
     shell: process.platform === "win32",
     ...options,
+    windowsHide: true,
   });
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? 1}`);
@@ -97,6 +99,7 @@ function runGit(args, options = {}) {
     stdio: "inherit",
     shell: false,
     ...options,
+    windowsHide: true,
   });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed with status ${result.status ?? 1}`);
@@ -109,6 +112,7 @@ function runOutput(command, args, options = {}) {
     encoding: "utf8",
     shell: process.platform === "win32",
     ...options,
+    windowsHide: true,
   });
   return {
     status: result.status ?? 1,
@@ -156,11 +160,7 @@ function verifyLockfileInstallable() {
 }
 
 function gitOutput(args) {
-  const result = spawnSync("git", args, {
-    cwd: rootDir,
-    encoding: "utf8",
-    shell: false,
-  });
+  const result = spawnSync("git", args, { windowsHide: true, cwd: rootDir, encoding: "utf8", shell: false });
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
@@ -169,6 +169,7 @@ function gitOutput(args) {
 
 function getDirtyPaths() {
   const result = spawnSync("git", ["status", "--short", "-z"], {
+    windowsHide: true,
     cwd: rootDir,
     encoding: "utf8",
     shell: false,
@@ -413,10 +414,7 @@ function commitAndTag(selectedPackages, versionPlan) {
     "packages/codegraph-native/package.json",
   ]);
   const commitNeeded =
-    spawnSync("git", ["diff", "--cached", "--quiet"], {
-      cwd: rootDir,
-      shell: false,
-    }).status !== 0;
+    spawnSync("git", ["diff", "--cached", "--quiet"], { windowsHide: true, cwd: rootDir, shell: false }).status !== 0;
   if (commitNeeded) {
     const releaseLabels = selectedPackages.map((pkg) => `${pkg.name}@${versionPlan.get(pkg.id)}`);
     runGit(["commit", "-m", `release: ${releaseLabels.join(", ")}`]);

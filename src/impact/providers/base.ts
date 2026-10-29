@@ -65,7 +65,7 @@ class GitDiffProvider implements DiffProvider {
     const args = gitDiffArgs(opts.base, opts.head, ["--no-ext-diff", "--unified=0"]);
 
     try {
-      const child = spawn("git", args, { cwd });
+      const child = spawn("git", args, { windowsHide: true, cwd });
       let stderr = "";
       child.stderr.on("data", (data) => {
         stderr += String(data);

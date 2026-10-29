@@ -666,6 +666,7 @@ describe("Cache invalidation and strict hashing", () => {
       ).toBeGreaterThanOrEqual(newestSourceMs);
     }
     const bundled = spawnSync(process.execPath, [bundledCli, "index", "--root", root, "--cache", "disk"], {
+      windowsHide: true,
       encoding: "utf8",
     });
     expect(bundled.status, bundled.stderr).toBe(0);
@@ -678,7 +679,7 @@ describe("Cache invalidation and strict hashing", () => {
         "--eval",
         `const { buildProjectIndex } = await import(${JSON.stringify(unbundledIndex)}); await buildProjectIndex(${JSON.stringify(root)}, { cache: "disk", threads: 1 });`,
       ],
-      { encoding: "utf8" },
+      { windowsHide: true, encoding: "utf8" },
     );
     expect(unbundled.status, unbundled.stderr).toBe(0);
     const unbundledManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as IndexManifest;

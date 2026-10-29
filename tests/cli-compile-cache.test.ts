@@ -85,6 +85,7 @@ console.log(JSON.stringify({ result, dirAfter: dirAfter ?? null }));
     );
     try {
       const result = spawnSync(process.execPath, [probe], {
+        windowsHide: true,
         encoding: "utf8",
         env: { ...process.env, NODE_COMPILE_CACHE: dir, NODE_DISABLE_COMPILE_CACHE: "1" },
       });
@@ -114,6 +115,7 @@ console.log(JSON.stringify({ status: result.status, directory: result.directory 
     );
     try {
       const result = spawnSync(process.execPath, [probe], {
+        windowsHide: true,
         encoding: "utf8",
         env: envWithoutDisableCompileCache({ NODE_COMPILE_CACHE: dir }),
       });
@@ -138,6 +140,7 @@ console.log(JSON.stringify({ status: result.status, directory: result.directory 
     const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-compile-cache-run-"));
     try {
       const withCache = spawnSync(process.execPath, [bundledCli, "--version"], {
+        windowsHide: true,
         encoding: "utf8",
         env: envWithoutDisableCompileCache({ NODE_COMPILE_CACHE: cacheDir }),
       });
@@ -148,6 +151,7 @@ console.log(JSON.stringify({ status: result.status, directory: result.directory 
       fs.mkdirSync(cacheDir, { recursive: true });
 
       const afterDelete = spawnSync(process.execPath, [bundledCli, "--version"], {
+        windowsHide: true,
         encoding: "utf8",
         env: envWithoutDisableCompileCache({ NODE_COMPILE_CACHE: cacheDir }),
       });

@@ -106,6 +106,7 @@ function cleanWindowsNativeArtifacts({ logger, cwd, suffix, readdirSyncImpl, rmS
 
 export function hasCargo({ spawnSyncImpl = spawnSync, platform = process.platform } = {}) {
   const result = spawnSyncImpl("cargo", ["--version"], {
+    windowsHide: true,
     encoding: "utf8",
     shell: platform === "win32",
     stdio: "ignore",
@@ -184,6 +185,7 @@ export function runBuildNativeIfAvailable({
   }
 
   const result = spawnSyncImpl("npm", ["run", "build:native"], {
+    windowsHide: true,
     shell: platform === "win32",
     stdio: "inherit",
     cwd,

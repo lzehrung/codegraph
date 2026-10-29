@@ -11,6 +11,7 @@ const longBenchTimeoutMs = 70_000;
 
 function runBenchResult(args: string[], timeout = 60_000) {
   return spawnSync(process.execPath, [benchScript, ...args], {
+    windowsHide: true,
     cwd: rootDir,
     encoding: "utf8",
     timeout,

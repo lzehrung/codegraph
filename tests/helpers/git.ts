@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 
 export function runGit(root: string, args: string[]): string {
   const result = spawnSync("git", args, {
+    windowsHide: true,
     cwd: root,
     env: {
       ...process.env,

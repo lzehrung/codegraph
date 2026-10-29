@@ -16,6 +16,7 @@ export function nativeTargetPackageIdentity(targetPackage) {
 }
 function runPublish(packageDir) {
   const result = spawnSync("npm", ["publish", ".", "--registry=https://registry.npmjs.org", "--access=public"], {
+    windowsHide: true,
     cwd: packageDir,
     encoding: "utf8",
     shell: process.platform === "win32",
@@ -42,11 +43,7 @@ function packageVersionExists(packageName, version) {
   const result = spawnSync(
     "npm",
     ["view", `${packageName}@${version}`, "version", "--registry=https://registry.npmjs.org"],
-    {
-      cwd: rootDir,
-      encoding: "utf8",
-      shell: process.platform === "win32",
-    },
+    { windowsHide: true, cwd: rootDir, encoding: "utf8", shell: process.platform === "win32" },
   );
   return result.status === 0 && result.stdout.trim() === version;
 }
