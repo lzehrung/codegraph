@@ -1,5 +1,5 @@
 import { appendToArrayMap } from "../util/collections.js";
-import { compareUnitRefs } from "./scoring.js";
+import { compareUnitRefs, isScorablePair } from "./scoring.js";
 import { normalizeDetectionFile } from "./units.js";
 import type {
   DuplicateInternalUnit,
@@ -23,8 +23,13 @@ export type CandidateFilter = {
 
 export type CandidatePairOptions = {
   maxBucketSize: number;
-  /** Upper bound on pairs kept. A pair that has the evidence to be a candidate but does not fit is skipped and counted. */
+  /**
+   * Upper bound on pairs kept. A pair the scorers can score that has the evidence to be a candidate but does not fit is
+   * skipped and counted.
+   */
   maxCandidatePairs: number;
+  /** Whether the scorers skip two units of one file, which decides which pairs they can score. */
+  crossFileOnly: boolean;
   similarityHints?: readonly DuplicateSimilarityHint[] | undefined;
   projectRoot?: string | undefined;
   filter?: CandidateFilter | undefined;
@@ -35,14 +40,25 @@ export type CandidatePairOptions = {
 };
 
 export type CandidatePairResult = {
-  /** Kept pairs keyed by a number derived from the unit ids, in the order evidence was admitted. */
+  /** Kept pairs the scorers can score, keyed by a number derived from the unit ids, in the order evidence was admitted. */
   pairs: Map<number, PairEvidence>;
   oversizedBuckets: number;
   /**
-   * Candidate pairs dropped because `maxCandidatePairs` was reached. Only pairs with the evidence to be candidates
-   * count, and a pair that several kinds of evidence propose counts once per kind.
+   * Candidate pairs the scorers can score that were dropped because `maxCandidatePairs` was reached. Only pairs with the
+   * evidence to be candidates count, and a pair that several kinds of evidence propose counts once per kind.
    */
   skippedPairs: number;
+  /**
+   * Pairs with the evidence to be candidates that the scorers can never score: two units of one file in a cross-file run,
+   * and two units that overlap. They take no slot and are never skipped. Each counts once, but only up to
+   * `maxCandidatePairs`, so a run with more of them reports a lower bound.
+   */
+  unscorablePairs: number;
+  /**
+   * How many of those the scorers report as overlapping. A cross-file run skips two units of one file before it compares
+   * their lines, so it reports none.
+   */
+  overlappingPairs: number;
 };
 
 type StrongEvidenceKind = "rawHash" | "normalizedHash" | "astShape";
@@ -151,7 +167,11 @@ function pairNumber(index: UnitIndex, left: number, right: number): number {
 
 type PairState = {
   index: UnitIndex;
+  crossFileOnly: boolean;
+  /** The kept pairs, every one of them a pair the scorers can score. */
   pairs: Map<number, PairEvidence>;
+  /** The pairs the scorers can never score that had the evidence to be candidates, tallied up to the limit. */
+  unscorable: Set<number>;
   limit: number;
   skipped: number;
 };
@@ -166,39 +186,52 @@ export function orderedPair(
   return [right, left];
 }
 
-function newEvidence(
-  left: DuplicateInternalUnit,
-  right: DuplicateInternalUnit,
-  kind: StrongEvidenceKind,
-): PairEvidence {
-  return {
-    left,
-    right,
-    rawHash: kind === "rawHash",
-    normalizedHash: kind === "normalizedHash",
-    astShape: kind === "astShape",
-    signature: false,
-    signatureMatches: 0,
-  };
+function blankEvidence(left: DuplicateInternalUnit, right: DuplicateInternalUnit): PairEvidence {
+  return { left, right, rawHash: false, normalizedHash: false, astShape: false, signature: false, signatureMatches: 0 };
+}
+
+/** Tallies a pair the scorers can never score, once, while the tally has room. */
+function tallyUnscorable(state: PairState, key: number): void {
+  if (state.unscorable.size < state.limit) state.unscorable.add(key);
+}
+
+/**
+ * Where a pair that has the evidence to be a candidate goes. A pair already kept is returned to gain the evidence. A pair
+ * the scorers can never score is only tallied, so it never takes a slot from one they can. Any other pair takes a slot
+ * while one is free and counts as skipped when none is. Returns the evidence to complete, or nothing when the pair is
+ * not kept.
+ */
+function takePair(
+  state: PairState,
+  key: number,
+  first: DuplicateInternalUnit,
+  second: DuplicateInternalUnit,
+): PairEvidence | undefined {
+  const existing = state.pairs.get(key);
+  if (existing) return existing;
+  if (!isScorablePair(first, second, state.crossFileOnly)) {
+    tallyUnscorable(state, key);
+    return undefined;
+  }
+  if (state.pairs.size >= state.limit) {
+    state.skipped++;
+    return undefined;
+  }
+  const [left, right] = orderedPair(first, second);
+  const evidence = blankEvidence(left, right);
+  state.pairs.set(key, evidence);
+  return evidence;
 }
 
 function addStrongEvidence(
   state: PairState,
   kind: StrongEvidenceKind,
-  left: DuplicateInternalUnit,
-  right: DuplicateInternalUnit,
+  first: DuplicateInternalUnit,
+  second: DuplicateInternalUnit,
   key: number,
 ): void {
-  const existing = state.pairs.get(key);
-  if (existing) {
-    existing[kind] = true;
-    return;
-  }
-  if (state.pairs.size >= state.limit) {
-    state.skipped++;
-    return;
-  }
-  state.pairs.set(key, newEvidence(left, right, kind));
+  const evidence = takePair(state, key, first, second);
+  if (evidence) evidence[kind] = true;
 }
 
 /** Visits each pair that touches a target unit once per bucket, target first. */
@@ -274,7 +307,7 @@ function addBucketPairs(
   kind: StrongEvidenceKind,
   filter: CandidateFilter | undefined,
 ): void {
-  const { index, pairs } = state;
+  const { index } = state;
   if (filter) {
     forEachFilteredBucketPair(index, bucket, filter, (left, right, key) => {
       addStrongEvidence(state, kind, left, right, key);
@@ -285,18 +318,7 @@ function addBucketPairs(
   for (let i = 0; i < bucket.length; i++) canons[i] = canonOf(index, bucket[i]!);
   for (let i = 0; i < bucket.length; i++) {
     for (let j = i + 1; j < bucket.length; j++) {
-      const key = pairNumber(index, canons[i]!, canons[j]!);
-      const existing = pairs.get(key);
-      if (existing) {
-        existing[kind] = true;
-        continue;
-      }
-      if (pairs.size >= state.limit) {
-        state.skipped++;
-        continue;
-      }
-      const [left, right] = orderedPair(bucket[i]!, bucket[j]!);
-      pairs.set(key, newEvidence(left, right, kind));
+      addStrongEvidence(state, kind, bucket[i]!, bucket[j]!, pairNumber(index, canons[i]!, canons[j]!));
     }
   }
 }
@@ -543,9 +565,9 @@ type PairVisit = { rank: number; left: DuplicateInternalUnit; right: DuplicateIn
 /**
  * Decides which pairs that share fingerprint buckets become candidates, for the whole project and for a targeted run
  * alike. A pair qualifies when it shares at least two eligible buckets and a quarter of the smaller unit's. One that
- * already has stronger evidence only gains the fingerprint evidence. The rest compete for the room the limit leaves,
- * the pairs that share the largest fraction of their buckets first, and only a qualifying pair that does not fit
- * counts as skipped.
+ * already has stronger evidence only gains the fingerprint evidence, and one the scorers can never score is only
+ * tallied. The rest compete for the room the limit leaves, the pairs that share the largest fraction of their buckets
+ * first, and only a qualifying pair that does not fit counts as skipped.
  */
 class FingerprintSelection {
   private readonly best: BestPairs;
@@ -565,14 +587,21 @@ class FingerprintSelection {
     const { index, pairs } = this.state;
     const smaller = Math.min(this.layout.consideredCount[first]!, this.layout.consideredCount[second]!);
     if (!hasEnoughFingerprints(count, smaller)) return;
+    const firstUnit = index.units[first]!;
+    const secondUnit = index.units[second]!;
     if (this.pairFilter) {
-      const [left, right] = orderedPair(index.units[first]!, index.units[second]!);
+      const [left, right] = orderedPair(firstUnit, secondUnit);
       if (!this.pairFilter(left, right)) return;
     }
-    const existing = pairs.get(pairNumber(index, first, second));
+    const key = pairNumber(index, first, second);
+    const existing = pairs.get(key);
     if (existing) {
       existing.signatureMatches = count;
       existing.signature = true;
+      return;
+    }
+    if (!isScorablePair(firstUnit, secondUnit, this.state.crossFileOnly)) {
+      tallyUnscorable(this.state, key);
       return;
     }
     this.qualifying++;
@@ -858,25 +887,8 @@ function addSimilarityHintPair(
   similarityIndex: number,
 ): void {
   const key = pairNumber(state.index, canonOf(state.index, left), canonOf(state.index, right));
-  const existing = state.pairs.get(key);
-  if (existing) {
-    existing.gitSimilarity = Math.max(existing.gitSimilarity ?? 0, similarityIndex);
-    return;
-  }
-  if (state.pairs.size >= state.limit) {
-    state.skipped++;
-    return;
-  }
-  state.pairs.set(key, {
-    left,
-    right,
-    rawHash: false,
-    normalizedHash: false,
-    astShape: false,
-    gitSimilarity: similarityIndex,
-    signature: false,
-    signatureMatches: 0,
-  });
+  const evidence = takePair(state, key, left, right);
+  if (evidence) evidence.gitSimilarity = Math.max(evidence.gitSimilarity ?? 0, similarityIndex);
 }
 
 function similarityHintPairCountExceeds(
@@ -1002,9 +1014,10 @@ function addSimilarityHintPairs(
 /**
  * Finds the unit pairs worth scoring from the prepared fingerprint buckets.
  *
- * Evidence is admitted from strongest to weakest: identical text, identical normalized tokens,
- * identical AST shape, Git similarity hints, then shared fingerprints. At most `maxCandidatePairs`
- * pairs are kept; the rest are counted in `skippedPairs`, never dropped silently.
+ * Evidence is admitted from strongest to weakest: identical text, identical normalized tokens, identical AST shape,
+ * Git similarity hints, then shared fingerprints. A pair the scorers can never score takes no part in the limit and is
+ * only tallied. At most `maxCandidatePairs` of the others are kept; the rest are counted in `skippedPairs`, never
+ * dropped silently.
  */
 export async function buildCandidatePairs(
   preparedBuckets: PreparedDuplicateBuckets,
@@ -1012,7 +1025,9 @@ export async function buildCandidatePairs(
 ): Promise<CandidatePairResult> {
   const state: PairState = {
     index: createUnitIndex(preparedBuckets.units),
+    crossFileOnly: options.crossFileOnly,
     pairs: new Map(),
+    unscorable: new Set(),
     limit: options.maxCandidatePairs,
     skipped: 0,
   };
@@ -1035,5 +1050,11 @@ export async function buildCandidatePairs(
   } else {
     await addProjectFingerprintPairs(state, layout, options);
   }
-  return { pairs: state.pairs, oversizedBuckets, skippedPairs: state.skipped };
+  return {
+    pairs: state.pairs,
+    oversizedBuckets,
+    skippedPairs: state.skipped,
+    unscorablePairs: state.unscorable.size,
+    overlappingPairs: state.crossFileOnly ? 0 : state.unscorable.size,
+  };
 }

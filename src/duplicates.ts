@@ -47,7 +47,6 @@ const {
   compareSuggestions,
   confidenceRank,
   groupSuggestions,
-  hasLineOverlap,
   lineOverlap,
   normalizeConfidence,
   normalizeMaxCandidatePairsOption,
@@ -81,6 +80,8 @@ type CandidateCollection = {
   pairs: Map<number, PairEvidence>;
   oversizedBuckets: number;
   skippedPairs: number;
+  unscorablePairs: number;
+  overlappingPairs: number;
 };
 
 type CandidatePairBudget = NonNullable<DuplicateDetectionStats["candidatePairBudget"]>;
@@ -95,6 +96,14 @@ function omittedCandidatePairs(uncomparedPairs: number, budget: CandidatePairBud
 }
 
 /**
+ * The candidate pairs a result reports as found: those kept for scoring plus those that can never be scored. The count
+ * is capped at the bound, so it never exceeds `maxCandidatePairs`.
+ */
+function foundCandidatePairs(keptPairs: number, unscorablePairs: number, maxCandidatePairs: number): number {
+  return Math.min(maxCandidatePairs, keptPairs + unscorablePairs);
+}
+
+/**
  * Collects the duplicate units and pairs them. The units and their fingerprint buckets stay local to
  * this call, so a full run can release them before the pairs are scored and grouped.
  */
@@ -103,7 +112,7 @@ async function collectCandidatePairs(
   options: DuplicateDetectionOptions,
   collectionOptions: DuplicateUnitCollectionOptions,
   preparedData: DuplicatePreparedAnalysisData | undefined,
-  limits: { maxBucketSize: number; maxCandidatePairs: number },
+  limits: { maxBucketSize: number; maxCandidatePairs: number; crossFileOnly: boolean },
   progress: DuplicateProgress | undefined,
 ): Promise<CandidateCollection> {
   const collectedUnits =
@@ -124,7 +133,7 @@ async function collectCandidatePairs(
     }
   }
   progress?.stage(DUPLICATE_STAGE_PAIRS);
-  const { pairs, oversizedBuckets, skippedPairs } = await buildCandidatePairs(
+  const { pairs, oversizedBuckets, skippedPairs, unscorablePairs, overlappingPairs } = await buildCandidatePairs(
     candidateBuckets ?? prepareDuplicateCandidateBuckets(units),
     {
       ...limits,
@@ -136,7 +145,15 @@ async function collectCandidatePairs(
       yieldPoint: progress?.yieldPoint,
     },
   );
-  return { unitCount: units.length, belowThresholdUnits, pairs, oversizedBuckets, skippedPairs };
+  return {
+    unitCount: units.length,
+    belowThresholdUnits,
+    pairs,
+    oversizedBuckets,
+    skippedPairs,
+    unscorablePairs,
+    overlappingPairs,
+  };
 }
 
 /** Finds scored duplicate candidates from an already-built project index. */
@@ -157,18 +174,21 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
   const limit = normalizeNonNegativeIntegerOption(options.limit, "limit", DEFAULT_LIMIT);
   const progress = createDuplicateProgress(options.onProgress, options.progressStartedAt);
   progress?.stage(preparedData ? DUPLICATE_STAGE_PAIRS : DUPLICATE_STAGE_UNITS);
-  const { unitCount, belowThresholdUnits, pairs, oversizedBuckets, skippedPairs } = await collectCandidatePairs(
-    index,
-    options,
-    collectionOptions,
-    preparedData,
-    { maxBucketSize, maxCandidatePairs },
-    progress,
-  );
-  const candidatePairCount = pairs.size;
+  const { unitCount, belowThresholdUnits, pairs, oversizedBuckets, skippedPairs, unscorablePairs, overlappingPairs } =
+    await collectCandidatePairs(
+      index,
+      options,
+      collectionOptions,
+      preparedData,
+      { maxBucketSize, maxCandidatePairs, crossFileOnly },
+      progress,
+    );
+  // The builder keeps only pairs the scorers can score. Pairs they can never score still count as candidates found.
+  const scorablePairCount = pairs.size;
+  const candidatePairCount = foundCandidatePairs(scorablePairCount, unscorablePairs, maxCandidatePairs);
   const candidatePairBudget = skippedPairs ? { limit: maxCandidatePairs, skipped: skippedPairs } : undefined;
   if (options.countOnly) {
-    const groupCount = countCandidateDuplicateGroups(pairs, crossFileOnly);
+    const groupCount = countCandidateDuplicateGroups(pairs);
     progress?.complete(unitCount);
     return {
       schemaVersion: 3,
@@ -180,7 +200,7 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
         oversizedBuckets,
         belowThresholdUnits,
         overlappingPairs: 0,
-        candidatePairs: omittedCandidatePairs(countComparableCandidatePairs(pairs, crossFileOnly), candidatePairBudget),
+        candidatePairs: omittedCandidatePairs(pairs.size, candidatePairBudget),
       },
       stats: {
         comparedPairs: 0,
@@ -190,24 +210,18 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
     };
   }
   const suggestions: DuplicateSuggestion[] = [];
-  let overlappingPairs = 0;
   let comparedPairs = 0;
   let skippedCandidatePairs = 0;
 
-  progress?.stage(DUPLICATE_STAGE_SCORING, 0, candidatePairCount, "pair");
-  const reportEvery = Math.max(1, Math.floor(candidatePairCount / 100));
+  progress?.stage(DUPLICATE_STAGE_SCORING, 0, scorablePairCount, "pair");
+  const reportEvery = Math.max(1, Math.floor(scorablePairCount / 100));
   let visitedPairs = 0;
   for (const evidence of pairs.values()) {
     visitedPairs++;
     if (progress && visitedPairs % reportEvery === 0) {
-      progress.stage(DUPLICATE_STAGE_SCORING, visitedPairs, candidatePairCount, "pair");
+      progress.stage(DUPLICATE_STAGE_SCORING, visitedPairs, scorablePairCount, "pair");
       const pending = progress.yieldPoint();
       if (pending) await pending;
-    }
-    if (crossFileOnly && evidence.left.absoluteFile === evidence.right.absoluteFile) continue;
-    if (hasLineOverlap(evidence.left, evidence.right)) {
-      overlappingPairs++;
-      continue;
     }
     if (comparedPairs >= maxPairs) {
       skippedCandidatePairs++;
@@ -257,17 +271,7 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
   return result;
 }
 
-function countComparableCandidatePairs(pairs: ReadonlyMap<number, PairEvidence>, crossFileOnly: boolean): number {
-  let count = 0;
-  for (const evidence of pairs.values()) {
-    if (crossFileOnly && evidence.left.absoluteFile === evidence.right.absoluteFile) continue;
-    if (hasLineOverlap(evidence.left, evidence.right)) continue;
-    count += 1;
-  }
-  return count;
-}
-
-function countCandidateDuplicateGroups(pairs: ReadonlyMap<number, PairEvidence>, crossFileOnly: boolean): number {
+function countCandidateDuplicateGroups(pairs: ReadonlyMap<number, PairEvidence>): number {
   const parents = new Map<string, string>();
   const find = (id: string): string => {
     let root = id;
@@ -292,8 +296,6 @@ function countCandidateDuplicateGroups(pairs: ReadonlyMap<number, PairEvidence>,
   };
 
   for (const evidence of pairs.values()) {
-    if (crossFileOnly && evidence.left.absoluteFile === evidence.right.absoluteFile) continue;
-    if (hasLineOverlap(evidence.left, evidence.right)) continue;
     parents.set(evidence.left.id, parents.get(evidence.left.id) ?? evidence.left.id);
     parents.set(evidence.right.id, parents.get(evidence.right.id) ?? evidence.right.id);
     join(evidence.left.id, evidence.right.id);
@@ -533,11 +535,12 @@ async function findDuplicatesTouchingTargets(
       (target) => unitTouchesDuplicateTarget(left, target) || unitTouchesDuplicateTarget(right, target),
     );
   const touchesAnyTarget: PairFilter = (left, right) => targetsTouchedByPair(left, right).length > 0;
-  const { pairs, oversizedBuckets, skippedPairs } = await buildCandidatePairs(
+  const { pairs, oversizedBuckets, skippedPairs, unscorablePairs, overlappingPairs } = await buildCandidatePairs(
     preparedBuckets ?? prepareDuplicateCandidateBuckets(units),
     {
       maxBucketSize,
       maxCandidatePairs,
+      crossFileOnly,
       similarityHints: options.similarityHints,
       projectRoot,
       filter: { unit: touchesTarget, pair: touchesAnyTarget },
@@ -545,16 +548,10 @@ async function findDuplicatesTouchingTargets(
   );
   const candidatePairBudget = skippedPairs ? { limit: maxCandidatePairs, skipped: skippedPairs } : undefined;
   const suggestions: DuplicateSuggestion[] = [];
-  let overlappingPairs = 0;
   let comparedPairs = 0;
   let skippedCandidatePairs = 0;
 
   for (const evidence of pairs.values()) {
-    if (crossFileOnly && evidence.left.absoluteFile === evidence.right.absoluteFile) continue;
-    if (hasLineOverlap(evidence.left, evidence.right)) {
-      overlappingPairs++;
-      continue;
-    }
     const touchedTargets = targetsTouchedByPair(evidence.left, evidence.right);
     if (!touchedTargets.length) continue;
     for (const target of touchedTargets) {
@@ -609,7 +606,7 @@ async function findDuplicatesTouchingTargets(
     },
     stats: {
       comparedPairs,
-      candidatePairs: pairs.size,
+      candidatePairs: foundCandidatePairs(pairs.size, unscorablePairs, maxCandidatePairs),
       ...(candidatePairBudget ? { candidatePairBudget } : {}),
     },
     perTargetCandidateCounts: targetCandidateCounts,

@@ -60,6 +60,35 @@ function makeUnit(spec: UnitSpec): DuplicateInternalUnit {
   );
 }
 
+type SharedEvidence = "rawHash" | "normalizedHash" | "astShape" | "fingerprint";
+
+/**
+ * A unit that shares exactly one kind of evidence with every other unit made for the same kind, so each kind can be
+ * exercised alone. The ranges are ten lines long.
+ */
+function evidenceUnit(file: string, startLine: number, shared: SharedEvidence): DuplicateInternalUnit {
+  const endLine = startLine + 9;
+  const own = `${file}:${startLine}`;
+  return {
+    file,
+    startLine,
+    endLine,
+    languageId: "typescript",
+    kind: "chunk",
+    tokenCount: 50,
+    handle: `chunk:${own}`,
+    fileHandle: `file:${file}`,
+    chunkHandle: `chunk:${own}`,
+    id: `/repo/${file}:${startLine}:${endLine}:chunk:`,
+    absoluteFile: `/repo/${file}`,
+    rawHash: shared === "rawHash" ? "shared" : `raw:${own}`,
+    normalizedHash: shared === "normalizedHash" ? "shared" : `normalized:${own}`,
+    ...(shared === "astShape" ? { astShapeHash: "shared" } : {}),
+    tokenSet: new Set(),
+    signatures: new Set(shared === "fingerprint" ? ["shared-1", "shared-2"] : []),
+  };
+}
+
 type Expected = {
   rawHash: boolean;
   normalizedHash: boolean;
@@ -155,13 +184,21 @@ function describePairs(pairs: ReadonlyMap<number, PairEvidence>): Map<string, Ex
 }
 
 type SharedIds = "none" | "adjacent" | "late";
+/** One file per unit, or four units to a file whose line ranges overlap their neighbours' and nothing further on. */
+type FileLayout = "own" | "shared";
+const SHARED_LAYOUT_FILES = 11;
 
 /**
  * Units made of reused base texts: exact copies, identifier renames, and a token or two changed. With shared ids, every
  * sixth unit gets a sibling of the same id and a longer text, as a long line split into chunks does, placed next to it
- * or after all the other units.
+ * or after all the other units. In the shared layout the units fall in a few files, so some pairs sit in one file and
+ * some of those overlap.
  */
-function makeVariedUnits(seed: number, sharedIds: SharedIds = "none"): DuplicateInternalUnit[] {
+function makeVariedUnits(
+  seed: number,
+  sharedIds: SharedIds = "none",
+  files: FileLayout = "own",
+): DuplicateInternalUnit[] {
   const random = seededRandom(seed);
   const bases = Array.from({ length: 10 }, () => randomWords(random, 26));
   const specs: UnitSpec[] = [];
@@ -181,7 +218,8 @@ function makeVariedUnits(seed: number, sharedIds: SharedIds = "none"): Duplicate
     }
     const group = bases.indexOf(base) % 4;
     const spec: UnitSpec = {
-      file: `src/unit${index}.ts`,
+      file: files === "own" ? `src/unit${index}.ts` : `src/file${index % SHARED_LAYOUT_FILES}.ts`,
+      ...(files === "shared" ? { startLine: 1 + Math.floor(index / SHARED_LAYOUT_FILES) * 6 } : {}),
       text: words.join(" "),
       ...(group < 2 ? { astShapeHash: `shape-${group}` } : {}),
     };
@@ -366,6 +404,16 @@ function pairSummary(units: readonly DuplicateInternalUnit[], pair: PairEvidence
   };
 }
 
+/**
+ * Whether the scorers can ever score a reference pair: they skip two units of one file in a cross-file run, and they
+ * never score two units that overlap. Written out here, not shared with the code under test.
+ */
+function canBeScored(left: DuplicateInternalUnit, right: DuplicateInternalUnit, crossFileOnly: boolean): boolean {
+  if (left.absoluteFile !== right.absoluteFile) return true;
+  if (crossFileOnly) return false;
+  return left.endLine < right.startLine || right.endLine < left.startLine;
+}
+
 describe("duplicate candidate pairs", () => {
   test.each([
     { seed: 3, maxBucketSize: 200 },
@@ -381,6 +429,7 @@ describe("duplicate candidate pairs", () => {
     const result = await buildCandidatePairs(prepareDuplicateCandidateBuckets(units), {
       maxBucketSize: scenario.maxBucketSize,
       maxCandidatePairs: 1_000_000,
+      crossFileOnly: true,
     });
     const actual = describePairs(result.pairs);
 
@@ -418,6 +467,7 @@ describe("duplicate candidate pairs", () => {
     const result = await buildCandidatePairs(prepareDuplicateCandidateBuckets(units), {
       maxBucketSize: 200,
       maxCandidatePairs: 1_000_000,
+      crossFileOnly: true,
     });
 
     const described = describePairs(result.pairs);
@@ -428,33 +478,55 @@ describe("duplicate candidate pairs", () => {
   });
 
   describe("against the original pair-by-pair walk", () => {
-    const scenarios: Array<{ seed: number; maxBucketSize: number; targets: number; sharedIds: SharedIds }> = [
-      { seed: 5, maxBucketSize: 200, targets: 0, sharedIds: "adjacent" },
-      { seed: 6, maxBucketSize: 200, targets: 0, sharedIds: "late" },
-      { seed: 16, maxBucketSize: 200, targets: 1, sharedIds: "none" },
-      { seed: 8, maxBucketSize: 200, targets: 6, sharedIds: "none" },
-      { seed: 9, maxBucketSize: 200, targets: 6, sharedIds: "adjacent" },
-      { seed: 10, maxBucketSize: 200, targets: 6, sharedIds: "late" },
-      { seed: 11, maxBucketSize: 200, targets: 30, sharedIds: "adjacent" },
-      { seed: 12, maxBucketSize: 8, targets: 6, sharedIds: "adjacent" },
-      { seed: 13, maxBucketSize: 4, targets: 12, sharedIds: "late" },
+    const scenarios: Array<{
+      seed: number;
+      maxBucketSize: number;
+      targets: number;
+      sharedIds: SharedIds;
+      files: FileLayout;
+      crossFileOnly: boolean;
+    }> = [
+      { seed: 5, maxBucketSize: 200, targets: 0, sharedIds: "adjacent", files: "own", crossFileOnly: true },
+      { seed: 6, maxBucketSize: 200, targets: 0, sharedIds: "late", files: "own", crossFileOnly: true },
+      { seed: 16, maxBucketSize: 200, targets: 1, sharedIds: "none", files: "own", crossFileOnly: true },
+      { seed: 8, maxBucketSize: 200, targets: 6, sharedIds: "none", files: "own", crossFileOnly: true },
+      { seed: 9, maxBucketSize: 200, targets: 6, sharedIds: "adjacent", files: "own", crossFileOnly: true },
+      { seed: 10, maxBucketSize: 200, targets: 6, sharedIds: "late", files: "own", crossFileOnly: true },
+      { seed: 11, maxBucketSize: 200, targets: 30, sharedIds: "adjacent", files: "own", crossFileOnly: true },
+      { seed: 12, maxBucketSize: 8, targets: 6, sharedIds: "adjacent", files: "own", crossFileOnly: true },
+      { seed: 13, maxBucketSize: 4, targets: 12, sharedIds: "late", files: "own", crossFileOnly: true },
+      // Units that share files, so some pairs sit in one file and some of those overlap.
+      { seed: 21, maxBucketSize: 200, targets: 0, sharedIds: "none", files: "shared", crossFileOnly: true },
+      { seed: 22, maxBucketSize: 200, targets: 0, sharedIds: "none", files: "shared", crossFileOnly: false },
+      { seed: 23, maxBucketSize: 200, targets: 4, sharedIds: "none", files: "shared", crossFileOnly: true },
+      { seed: 24, maxBucketSize: 200, targets: 4, sharedIds: "adjacent", files: "shared", crossFileOnly: false },
+      { seed: 25, maxBucketSize: 200, targets: 0, sharedIds: "late", files: "shared", crossFileOnly: false },
     ];
 
     test.each(scenarios)(
-      "admits the same pairs in the same order, in full and over the limit (seed $seed, bucket limit $maxBucketSize, $targets target files, $sharedIds shared ids)",
+      "admits the same pairs in the same order, in full and over the limit (seed $seed, bucket limit $maxBucketSize, $targets target files, $sharedIds shared ids, $files files, cross-file only: $crossFileOnly)",
       async (scenario) => {
-        const units = makeVariedUnits(scenario.seed, scenario.sharedIds);
+        const units = makeVariedUnits(scenario.seed, scenario.sharedIds, scenario.files);
         const filter = scenario.targets ? targetFilter(units, scenario.seed, scenario.targets) : undefined;
-        const expected = walkedCandidates(units, {
+        const walked = walkedCandidates(units, {
           maxBucketSize: scenario.maxBucketSize,
           ...(filter ? { isTarget: filter.unit } : {}),
         });
+        // The walk keeps every pair that shares evidence. The builder keeps the pairs the scorers can score and only
+        // tallies the rest.
+        const scorable = (pair: OracleEntry) => canBeScored(pair.left, pair.right, scenario.crossFileOnly);
+        const expected = {
+          pairs: walked.pairs.filter(scorable),
+          unscorable: walked.pairs.filter((pair) => !scorable(pair)).length,
+          oversizedBuckets: walked.oversizedBuckets,
+        };
 
         const prepared = prepareDuplicateCandidateBuckets(units);
         const candidates = async (maxCandidatePairs: number) =>
           await buildCandidatePairs(prepared, {
             maxBucketSize: scenario.maxBucketSize,
             maxCandidatePairs,
+            crossFileOnly: scenario.crossFileOnly,
             ...(filter ? { filter } : {}),
           });
         const result = await candidates(1_000_000);
@@ -465,7 +537,15 @@ describe("duplicate candidate pairs", () => {
         expect(units.some((unit, at) => units.findIndex((other) => other.id === unit.id) !== at)).toBe(
           scenario.sharedIds !== "none",
         );
+        // Where files are shared, some pairs are ones the scorers cannot score. (Whole-project runs also meet a unit
+        // with the unit of its own id, which they never score either.) Without cross-file only, a pair inside one file
+        // is still scored unless the two overlap.
+        if (scenario.files === "shared") expect(expected.unscorable).toBeGreaterThan(0);
+        expect(expected.pairs.some((pair) => pair.left.absoluteFile === pair.right.absoluteFile)).toBe(
+          scenario.files === "shared" && !scenario.crossFileOnly,
+        );
         expect(result.skippedPairs).toBe(0);
+        expect(result.unscorablePairs).toBe(expected.unscorable);
         expect(result.oversizedBuckets).toBe(expected.oversizedBuckets);
         const summaries = (pairs: Iterable<PairEvidence | OracleEntry>) =>
           [...pairs].map((pair) => pairSummary(units, pair));
@@ -492,8 +572,10 @@ describe("duplicate candidate pairs", () => {
             )
             .slice(0, room),
         );
-        const limited = await candidates(expected.pairs.length - fingerprintOnly.length + room);
+        const limit = expected.pairs.length - fingerprintOnly.length + room;
+        const limited = await candidates(limit);
         expect(limited.skippedPairs).toBe(fingerprintOnly.length - room);
+        expect(limited.unscorablePairs).toBeLessThanOrEqual(limit);
         expect(summaries(limited.pairs.values())).toEqual(
           summaries(expected.pairs.filter((pair) => !fingerprintOnly.includes(pair) || kept.has(pair))),
         );
@@ -517,7 +599,7 @@ describe("duplicate candidate pairs", () => {
       ...["a", "b", "c", "d"].map((name) => makeUnit({ file: `src/exact-${name}.ts`, text: exact })),
       ...[0, 1, 2, 3, 4].map((edits) => makeUnit({ file: `src/near-${edits}.ts`, text: near(edits) })),
     ];
-    const options = { maxBucketSize: 200 };
+    const options = { maxBucketSize: 200, crossFileOnly: true };
 
     async function candidates(maxCandidatePairs: number) {
       return await buildCandidatePairs(prepareDuplicateCandidateBuckets(units), { ...options, maxCandidatePairs });
@@ -624,6 +706,103 @@ describe("duplicate candidate pairs", () => {
     });
   });
 
+  describe("pairs the scorers cannot score", () => {
+    // Two units of src/a.ts, which a cross-file run never scores together, and one of src/b.ts. Every unit shares one
+    // kind of evidence with every other, so each kind is exercised alone.
+    const kinds: SharedEvidence[] = ["rawHash", "normalizedHash", "astShape", "fingerprint"];
+    const inA: CandidateFilter = {
+      unit: (unit) => unit.file === "src/a.ts",
+      pair: (left, right) => left.file === "src/a.ts" || right.file === "src/a.ts",
+    };
+    const run = async (
+      units: readonly DuplicateInternalUnit[],
+      maxCandidatePairs: number,
+      crossFileOnly: boolean,
+      filter?: CandidateFilter,
+    ) =>
+      await buildCandidatePairs(prepareDuplicateCandidateBuckets(units), {
+        maxBucketSize: 200,
+        maxCandidatePairs,
+        crossFileOnly,
+        ...(filter ? { filter } : {}),
+      });
+    const filesOf = (result: CandidatePairResult) =>
+      [...result.pairs.values()].map((pair) => `${pair.left.file} + ${pair.right.file}`);
+
+    describe.each(kinds)("%s evidence", (kind) => {
+      const inSrcA = [evidenceUnit("src/a.ts", 1, kind), evidenceUnit("src/a.ts", 20, kind)];
+      const inSrcB = evidenceUnit("src/b.ts", 1, kind);
+      const runs = [
+        { label: "a whole-project run", filter: undefined },
+        { label: "a targeted run", filter: inA },
+      ];
+
+      test.each(runs)("$label spends its only slot on a pair it can score", async ({ filter }) => {
+        const result = await run([...inSrcA, inSrcB], 1, true, filter);
+
+        expect(filesOf(result)).toEqual(["src/a.ts + src/b.ts"]);
+        // The other pair it can score does not fit. The pair it can never score is tallied, not skipped.
+        expect(result.skippedPairs).toBe(1);
+        expect(result.unscorablePairs).toBe(1);
+      });
+
+      test.each(runs)("$label does not skip a pair it can never score once the slot is taken", async ({ filter }) => {
+        // The pair across files comes first and takes the slot; the pair inside src/a.ts comes after it.
+        const result = await run([inSrcA[0]!, inSrcB, inSrcA[1]!], 1, true, filter);
+
+        expect(filesOf(result)).toEqual(["src/a.ts + src/b.ts"]);
+        expect(result.skippedPairs).toBe(1);
+        expect(result.unscorablePairs).toBe(1);
+      });
+    });
+
+    test("tallies a pair once, however many kinds of evidence propose it", async () => {
+      const everything = (startLine: number): DuplicateInternalUnit => ({
+        ...evidenceUnit("src/a.ts", startLine, "rawHash"),
+        normalizedHash: "shared",
+        astShapeHash: "shared",
+        signatures: new Set(["shared-1", "shared-2"]),
+      });
+
+      const result = await run([everything(1), everything(20)], 1, true);
+
+      expect(result.pairs.size).toBe(0);
+      expect(result.skippedPairs).toBe(0);
+      expect(result.unscorablePairs).toBe(1);
+    });
+
+    test("units that overlap never take a slot, even when units of one file are scored", async () => {
+      // Lines 1-10 and 6-15 of src/a.ts overlap; lines 30-39 overlap neither.
+      const units = [1, 6, 30].map((startLine) => evidenceUnit("src/a.ts", startLine, "rawHash"));
+      units.push(evidenceUnit("src/b.ts", 1, "rawHash"));
+
+      // Only the first two units overlap, so the next pair in src/a.ts is the first that can be kept.
+      const sameFileScored = await run(units, 1, false);
+      expect([...sameFileScored.pairs.values()].map((pair) => [pair.left.startLine, pair.right.startLine])).toEqual([
+        [1, 30],
+      ]);
+      expect(sameFileScored.skippedPairs).toBe(4);
+      // Cross-file only takes every pair inside src/a.ts out, and keeps the first pair across files.
+      const crossFileOnly = await run(units, 1, true);
+      expect(filesOf(crossFileOnly)).toEqual(["src/a.ts + src/b.ts"]);
+      expect(crossFileOnly.skippedPairs).toBe(2);
+      // With room to tally them all: the overlapping pair, or the three pairs inside src/a.ts.
+      expect((await run(units, 100, false)).unscorablePairs).toBe(1);
+      expect((await run(units, 100, true)).unscorablePairs).toBe(3);
+    });
+
+    test("tallies the pairs it cannot score only up to the limit", async () => {
+      // Fifteen pairs inside one file, none of which can be scored.
+      const units = [1, 11, 21, 31, 41, 51].map((startLine) => evidenceUnit("src/a.ts", startLine, "rawHash"));
+
+      const result = await run(units, 3, true);
+
+      expect(result.pairs.size).toBe(0);
+      expect(result.skippedPairs).toBe(0);
+      expect(result.unscorablePairs).toBe(3);
+    });
+  });
+
   describe("a targeted run where many pairs share only one fingerprint", () => {
     // 1,300 target units and 1,301 other units share one fingerprint bucket: more pairs than the default limit, each
     // sharing a single bucket, so none can ever qualify. They are met before everything below, so a count table that
@@ -668,6 +847,7 @@ describe("duplicate candidate pairs", () => {
         run = buildCandidatePairs(prepareDuplicateCandidateBuckets(units), {
           maxBucketSize: 5_000,
           maxCandidatePairs,
+          crossFileOnly: true,
           filter,
         });
         runs.set(maxCandidatePairs, run);
@@ -739,6 +919,33 @@ async function makeClonedProject(copies: number): Promise<string> {
   for (let copy = 0; copy < copies; copy++) {
     await fsp.writeFile(path.join(root, `src/copy${copy}.ts`), CLONED_FUNCTION);
   }
+  return root;
+}
+
+const CLONED_METHOD = `  run(rows: Array<{ amount: number; tax: number }>) {
+    const totals = [];
+    const labels = [];
+    for (const row of rows) {
+      const subtotal = row.amount + row.tax;
+      const rounded = Math.round(subtotal * 100) / 100;
+      const label = rounded > 100 ? "large" : "small";
+      labels.push(label);
+      totals.push(rounded);
+    }
+    return totals.map((value, index) => labels[index] + ":" + value.toFixed(2)).join(",");
+  }
+`;
+
+/** The same method in two classes of src/a.ts and one of src/b.ts: the copies inside src/a.ts are met first. */
+async function makeSameFileProject(): Promise<string> {
+  const root = (await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-candidates-"))).replace(/\\/g, "/");
+  tempRoots.push(root);
+  await fsp.mkdir(path.join(root, "src"), { recursive: true });
+  await fsp.writeFile(
+    path.join(root, "src/a.ts"),
+    `export class First {\n${CLONED_METHOD}}\n\nexport class Second {\n${CLONED_METHOD}}\n`,
+  );
+  await fsp.writeFile(path.join(root, "src/b.ts"), `export class Third {\n${CLONED_METHOD}}\n`);
   return root;
 }
 
@@ -844,6 +1051,55 @@ describe("duplicate detection at scale", () => {
     expect(viaPrepared).toEqual(direct);
     expect(wholeProject.omittedCounts.candidatePairs).toBeGreaterThan(0);
     expect(wholeProjectViaPrepared).toEqual(wholeProject);
+  });
+
+  test("a small candidate pair limit is spent on pairs a cross-file run can score", async () => {
+    const root = await makeSameFileProject();
+    const index = await buildProjectIndex(root);
+
+    const complete = await findDuplicates(index, { minConfidence: "high" });
+    const limited = await findDuplicates(index, { minConfidence: "high", maxCandidatePairs: 1 });
+    const counted = await findDuplicates(index, { countOnly: true, maxCandidatePairs: 1 });
+
+    // The two identical methods of src/a.ts come first, but a cross-file run never scores them together.
+    expect(complete.groups.length).toBeGreaterThan(0);
+    expect(limited.stats.candidatePairBudget?.limit).toBe(1);
+    expect(limited.stats.comparedPairs).toBe(1);
+    expect(limited.groups.length).toBeGreaterThan(0);
+    // The pair it keeps crosses files, as a cross-file run requires.
+    expect(limited.groups.every((group) => group.primaryLeft.file !== group.primaryRight.file)).toBe(true);
+    expect(counted.omittedCounts.groups).toBeGreaterThan(0);
+  });
+
+  test("a duplicate context spends a small candidate pair limit on pairs a cross-file run can score", async () => {
+    const root = await makeSameFileProject();
+    const index = await buildProjectIndex(root);
+
+    const context = await findDuplicateContext(
+      index,
+      { file: "src/a.ts" },
+      { minConfidence: "high", maxCandidatePairs: 1 },
+    );
+
+    expect(context.stats.candidatePairBudget?.limit).toBe(1);
+    expect(context.stats.comparedPairs).toBe(1);
+    expect(context.groups.length).toBeGreaterThan(0);
+    expect(context.groups.every((group) => group.primaryLeft.file !== group.primaryRight.file)).toBe(true);
+  });
+
+  test("counts pairs a cross-file run never scores with the candidate pairs, as a run that scores them does", async () => {
+    const root = await makeSameFileProject();
+    const index = await buildProjectIndex(root);
+
+    const crossFile = await findDuplicates(index, { minConfidence: "low" });
+    const sameFile = await findDuplicates(index, { minConfidence: "low", includeSameFile: true });
+
+    expect(crossFile.stats.candidatePairs).toBe(sameFile.stats.candidatePairs);
+    expect(crossFile.stats.comparedPairs).toBeLessThan(sameFile.stats.comparedPairs);
+    expect(crossFile.omittedCounts.overlappingPairs).toBe(0);
+    // With nothing left out, every candidate pair is scored or overlaps.
+    expect(sameFile.omittedCounts.overlappingPairs).toBeGreaterThan(0);
+    expect(sameFile.stats.comparedPairs + sameFile.omittedCounts.overlappingPairs).toBe(sameFile.stats.candidatePairs);
   });
 
   test("rejects a candidate pair limit outside the supported range", async () => {

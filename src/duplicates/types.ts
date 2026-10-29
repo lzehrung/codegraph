@@ -101,7 +101,9 @@ export type DuplicateDetectionOptions = {
    * Upper bound on candidate pairs kept for scoring. Evidence kinds are admitted in order of strength
    * (exact text, normalized tokens, AST shape, Git similarity, shared fingerprints); pairs past the bound are
    * skipped and counted in `omittedCounts.candidatePairs`, and `stats.candidatePairBudget` reports the bound.
-   * Duplicate contexts for several targets share one bound, and each reports the whole call's skips.
+   * Pairs that can never be scored (two units of one file in a cross-file run, or two that overlap) take no slot and
+   * are never counted as skipped. Duplicate contexts for several targets share one bound, and each reports the whole
+   * call's skips.
    */
   maxCandidatePairs?: number;
   /** Count candidate duplicate groups without scoring every pair. */
@@ -126,6 +128,10 @@ export type DuplicateDetectionOmittedCounts = {
   rawSuggestions: number;
   oversizedBuckets: number;
   belowThresholdUnits: number;
+  /**
+   * Candidate pairs left out because their units overlap, counted up to `maxCandidatePairs`. A cross-file run reports
+   * none.
+   */
   overlappingPairs: number;
   /** Candidate pairs left out of scoring: those past `maxPairs` plus those `maxCandidatePairs` never admitted. */
   candidatePairs: number;
@@ -133,6 +139,10 @@ export type DuplicateDetectionOmittedCounts = {
 
 export type DuplicateDetectionStats = {
   comparedPairs: number;
+  /**
+   * Candidate pairs found, never more than `maxCandidatePairs`: those kept for scoring plus those that can never be
+   * scored (two units of one file in a cross-file run, or two that overlap).
+   */
   candidatePairs: number;
   /** Present only when the candidate pair bound dropped pairs: the bound and the pair occurrences it skipped. */
   candidatePairBudget?: { limit: number; skipped: number };

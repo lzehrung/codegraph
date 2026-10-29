@@ -166,9 +166,23 @@ export function shouldScoreSignatureEvidence(evidence: PairEvidence, metrics: Du
   return metrics.shingleOverlap >= 0.55;
 }
 
-export function hasLineOverlap(left: DuplicateInternalUnit, right: DuplicateInternalUnit): boolean {
+function hasLineOverlap(left: DuplicateInternalUnit, right: DuplicateInternalUnit): boolean {
   if (left.absoluteFile !== right.absoluteFile) return false;
   return left.startLine <= right.endLine && right.startLine <= left.endLine;
+}
+
+/**
+ * Whether the scorers can ever score a pair of units. A cross-file run skips two units of one file, and no run scores two
+ * units that overlap. The candidate builder admits only pairs that pass, so the pair limit is never spent on a pair that
+ * cannot reach a result, and the scorers need not check again.
+ */
+export function isScorablePair(
+  left: DuplicateInternalUnit,
+  right: DuplicateInternalUnit,
+  crossFileOnly: boolean,
+): boolean {
+  if (crossFileOnly && left.absoluteFile === right.absoluteFile) return false;
+  return !hasLineOverlap(left, right);
 }
 
 /** Combines exact, normalized, fingerprint, size, and complexity signals. */
