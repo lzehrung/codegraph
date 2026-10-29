@@ -64,20 +64,20 @@ Use codegraph alongside text search and compilers: text search finds exact strin
 
 ## What you can do
 
-| Job      | Question                                 | Start here                                               | What comes back                                        |
-| -------- | ---------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------ |
-| Review   | What could this change break?            | `codegraph review`                                       | Changed symbols, risks, and candidate tests            |
-| Review   | Which tests should I run?                | `codegraph affected --base HEAD --head WORKTREE --quiet` | Test paths from changed files and reverse dependencies |
-| Review   | How does this feature work?              | `codegraph explore "<question>" --root .`                | Ranked anchors, source evidence, and dependency paths  |
-| Refactor | Where is this symbol used?               | `codegraph refs src/file.ts:10:5`                        | Semantic references and coverage                       |
-| Refactor | What depends on this file?               | `codegraph rdeps src/file.ts --json`                     | Reverse dependencies                                   |
-| Refactor | What evidence supports a change?         | `codegraph refactor-plan <symbol-target>`                | Read-only evidence; no code changes                    |
-| Refactor | Where would a rename apply?              | `codegraph rename-preview <symbol-target> <new-name>`    | Read-only edits and conflicts; no code changes         |
-| Quality  | Which files have the most connections?   | `codegraph hotspots ./src --limit 20`                    | Fan-in and fan-out ranking                             |
-| Quality  | Where is code duplicated?                | `codegraph duplicates ./src --min-confidence medium`     | Ranked duplicate groups                                |
-| Docs     | Which public symbols exist?              | `codegraph apisurface`                                   | Exported API symbols                                   |
-| Docs     | Which exports have no indexed docstring? | `codegraph apisurface --undocumented`                    | Locations; partial coverage names unchecked files      |
-| Docs     | Are Markdown links broken?               | `codegraph links --root .`                               | Broken local links with ranges; external URLs skipped  |
+| Job      | Question                                  | Start here                                               | What comes back                                                    |
+| -------- | ----------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------ |
+| Review   | What could this change break?             | `codegraph review`                                       | Changed symbols, risks, and candidate tests                        |
+| Review   | Which tests should I run?                 | `codegraph affected --base HEAD --head WORKTREE --quiet` | Test paths from changed files and reverse dependencies             |
+| Review   | Where should I start reading for a topic? | `codegraph explore "<terms>" --root .`                   | Top search hits with their source, dependents, and candidate tests |
+| Refactor | Where is this symbol used?                | `codegraph refs src/file.ts:10:5`                        | Semantic references and coverage                                   |
+| Refactor | What depends on this file?                | `codegraph rdeps src/file.ts --json`                     | Reverse dependencies                                               |
+| Refactor | What evidence supports a change?          | `codegraph refactor-plan <symbol-target>`                | Read-only evidence; no code changes                                |
+| Refactor | Where would a rename apply?               | `codegraph rename-preview <symbol-target> <new-name>`    | Read-only edits and conflicts; no code changes                     |
+| Quality  | Which files have the most connections?    | `codegraph hotspots ./src --limit 20`                    | Fan-in and fan-out ranking                                         |
+| Quality  | Where is code duplicated?                 | `codegraph duplicates ./src --min-confidence medium`     | Ranked duplicate groups                                            |
+| Docs     | Which public symbols exist?               | `codegraph apisurface`                                   | Exported API symbols                                               |
+| Docs     | Which exports have no indexed docstring?  | `codegraph apisurface --undocumented`                    | Locations; partial coverage names unchecked files                  |
+| Docs     | Are Markdown links broken?                | `codegraph links --root .`                               | Broken local links with ranges; external URLs skipped              |
 
 CLI output is readable by default. Use `--json` for structured fields and omission counts.
 
@@ -98,7 +98,7 @@ codegraph orient --root . --budget small
 # Search a concrete term (the query is lexical: use the words that appear in code)
 codegraph search "build review report" --json
 
-# Use explore only when those results need packets and dependency paths
+# explore: search, then bundle the top hits with source, dependents, and candidate tests
 codegraph explore "build review report" --root .
 
 # Follow a returned target
@@ -214,7 +214,7 @@ Structured output carries the underlying changed files, symbols, graph edges, re
 
 ### Spend context on the problem, not repository discovery
 
-One bounded CLI `explore` response can combine ranked anchors, relevant source, dependency paths, blast radius, candidate tests, and next commands. CLI `explore` includes source by default for a human reader, while MCP `explore` defaults `includeSource` to `false` so source-bearing packets do not dominate agent responses; its anchors and follow-ups identify the focused source request to make next. The agent gets an evidence-backed starting point without first dumping the tree or repeatedly guessing which files to open.
+`explore` runs one ranked search and packages context around the top hits: source for the first few, dependency paths between them, files that depend on them (two levels), candidate tests, and follow-up commands. Every list is bounded and reports what it omitted. It is a starting point for reading, not an answer: results are only as good as the search terms. The CLI includes source by default; MCP `explore` leaves it out (`includeSource` defaults to `false`) and names the follow-up request to make instead.
 
 ### Ground the next action
 
