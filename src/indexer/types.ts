@@ -140,9 +140,10 @@ export type ModuleIndex = {
   /**
    * Set, together with `parserDegraded`, when a lookup over other project files could not read one of them, so an
    * import of this file may have stayed unresolved only because of it (a C# alias or static using whose type lookup
-   * found a C# file of the project unreadable). That file can read again without this file changing, and no signature
-   * or manifest edge tracks it when no module covers it, such as a file that discovery ignores. A build therefore
-   * extracts this module again instead of reusing it.
+   * found a C# file of the project unreadable, or a Java or Kotlin named import that a package file with no usable
+   * syntax tree may declare). That file can read again without this file changing, and no signature or manifest edge
+   * tracks it when no module covers it, such as a file that discovery ignores. A build therefore extracts this module
+   * again instead of reusing it.
    */
   importLookupIncomplete?: boolean;
 };

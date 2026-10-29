@@ -88,6 +88,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Maven/Gradle source sets, `.csproj` items, and SwiftPM targets are not read: same-package JVM files outside the directory, and C# or Swift files elsewhere, give `partial` (`strategy_unavailable`).
 - A package-less JVM file is complete only if no other indexed JVM file can join it and all were readable.
 - C# partial-type and Swift extension members follow the same rule.
+- A Java or Kotlin file with no usable syntax tree (over the native source limit) keeps its package but declares no names. A Java import still binds the file named after the type. Another named import from that package stays unresolved while the file may declare the name (any Kotlin file, or the Java file named after it) and no other file proves a class of that name; the importer is marked `parserDegraded`. A wildcard import still includes the file.
 
 #### Collisions and coverage
 
@@ -223,7 +224,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 
 - The native grammar is a pinned fork of `tree-sitter-kotlin-ng` with upstream parser fixes, including multi-dollar strings (`$$"..."`, whose `$${name}` and `$$name` templates are references and whose shorter runs of dollars are text) and collection literals (`[]`). No Kotlin form that the corpus checks leave unparsed is known; a file that still ends in an `ERROR` declares only the names read before it, and its references stay `partial`.
 - The pinned grammar reads no identifier written with CJK ideographs or Hangul syllables, or with letters above U+10915: the generator that wrote it keeps only the end points of those ranges. A file that has one ends in an `ERROR` and its references stay `partial`. Backtick names, kana, and Latin, Greek, and Cyrillic letters are read, in templates too.
-- Package and import lookups read each file's top-level names from its syntax tree. A declaration the grammar misreads (one after `context(...)` receivers) and every name after an `ERROR` or after a tree that ends early (a `when` guard condition, a combining mark inside an identifier) is not a package name, so an import of it does not resolve to its file.
+- Package and import lookups read each file's top-level names from its syntax tree. A function is declared under its own name, an extension or generic one included, never under its receiver type, and a name that two files declare stays unresolved. A declaration the grammar misreads (one after `context(...)` receivers) and every name after an `ERROR` or after a tree that ends early (a `when` guard condition, a combining mark inside an identifier) is not a package name, so an import of it does not resolve to its file.
 - Custom `codegraph grep --query` patterns must use `tree-sitter-kotlin-ng` node names: `identifier`, not `simple_identifier` or `type_identifier`.
 - `import pkg.*` considers top-level callables from every file in the package and picks an overload by argument count; a call two candidates accept stays unresolved.
 - Wildcards import top-level package declarations, never class or companion members; same-named declarations in another package are not imported.

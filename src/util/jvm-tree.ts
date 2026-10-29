@@ -80,32 +80,6 @@ export function jvmPackageName(tree: SyntaxTreeLike, languageId: JvmLanguageId):
   return identifiers.length ? identifiers.map((identifier) => identifier.text).join(".") : null;
 }
 
-function firstIdentifier(node: SyntaxNodeLike): SyntaxNodeLike | undefined {
-  if (node.type === "identifier") return node;
-  for (const child of node.namedChildren) {
-    const found = firstIdentifier(child);
-    if (found) return found;
-  }
-  return undefined;
-}
-
-/**
- * The name a Kotlin top-level function contributes to its package: the identifier that directly follows `fun`. An
- * extension function therefore names its receiver type, while a function with type parameters or a parenthesized
- * receiver type names nothing.
- */
-function kotlinFunctionSymbol(node: SyntaxNodeLike): string | undefined {
-  for (let index = 0; ; index += 1) {
-    const child = node.child(index);
-    if (!child) return undefined;
-    if (child.type !== "fun") continue;
-    const following = node.child(index + 1);
-    if (!following || following.type === "type_parameters") return undefined;
-    const identifier = firstIdentifier(following);
-    return identifier?.startIndex === following.startIndex ? identifier.text : undefined;
-  }
-}
-
 /** The package and top-level declared names of one file. An ERROR node declares nothing; the nodes around it still count. */
 export function collectJvmFileFacts(tree: SyntaxTreeLike, languageId: JvmLanguageId): JvmFileFacts {
   const symbols = new Set<string>();
@@ -120,7 +94,7 @@ export function collectJvmFileFacts(tree: SyntaxTreeLike, languageId: JvmLanguag
     } else if (member.type === "type_alias") {
       name = member.childForFieldName("type")?.text;
     } else if (member.type === "function_declaration") {
-      name = kotlinFunctionSymbol(member);
+      name = member.childForFieldName("name")?.text;
     }
     if (name) symbols.add(name);
   }

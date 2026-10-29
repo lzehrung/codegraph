@@ -18,6 +18,7 @@ import {
   isJvmFileFacts,
   jvmPackageName,
 } from "../src/util/jvm-tree.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { parseSyntaxTree, type JvmLanguageId } from "../src/util/syntax-tree.js";
 
 function treeFor(languageId: JvmLanguageId, source: string): SyntaxTreeLike {
@@ -133,7 +134,7 @@ describe("JVM top-level declarations", () => {
     expect(facts.javaTypes).toEqual(["Top", "Obj", "Iface", "En"]);
   });
 
-  it("names a Kotlin extension function after its receiver type, but not a function type or type parameters", () => {
+  it("names a Kotlin function by its own name, whatever its receiver or type parameters, and never by a receiver type", () => {
     const source = [
       "package p",
       "fun String.shout() {}",
@@ -143,13 +144,33 @@ describe("JVM top-level declarations", () => {
       "fun (() -> Unit).runTwice() {}",
       "fun ((Int) -> Int).twice(): Int = 0",
       "fun <T> Set<T>.second(): T = first()",
+      "fun <T> gen(x: T) {}",
+      "inline fun <reified T> typed() {}",
+      "operator fun String.plus(x: Int) = this",
+      "fun `back tick`() {}",
       "fun plain() {}",
       "",
     ].join("\n");
 
-    // The receiver type names the function, as it always has; a parenthesized receiver and a function with type
-    // parameters name nothing, so `Unit`, `Int`, `Set`, and `T` stay undeclared.
-    expect(collectJvmFileFacts(treeFor("kotlin", source), "kotlin").symbols).toEqual(["String", "List", "a", "plain"]);
+    const facts = collectJvmFileFacts(treeFor("kotlin", source), "kotlin");
+
+    // Receiver types (`String`, `List`, `a`, `Set`, `Unit`, `Int`) and type parameters (`T`) are not declared here.
+    expect(facts.symbols).toEqual([
+      "shout",
+      "orEmpty2",
+      "firstOrNone",
+      "bar",
+      "runTwice",
+      "twice",
+      "second",
+      "gen",
+      "typed",
+      "plus",
+      "`back tick`",
+      "plain",
+    ]);
+    // A Java import names classes, objects, and interfaces, never a function.
+    expect(facts.javaTypes).toEqual([]);
   });
 
   it("accepts the facts it produces and rejects a malformed persisted row", () => {
@@ -434,4 +455,65 @@ describe("JVM package scan after a touched-file build", () => {
       }
     });
   }
+});
+
+describe("JVM importers while a package file has no readable syntax tree", () => {
+  /** Fails native parsing and extraction for sources containing `marker`, so that file indexes without a tree. */
+  function setNativeIndexingFailureFor(marker: string): void {
+    const state = loadBinding();
+    if (!state.loaded || !state.binding.parseSyntaxTree) throw new Error("Native addon required for JVM tree tests");
+    const { parseSyntaxTree, extractLanguage } = state.binding;
+    __setNativeTreeSitterBindingForTests({
+      ...state,
+      binding: {
+        ...state.binding,
+        parseSyntaxTree: (source, languageId) => {
+          if (source.includes(marker)) throw new Error("forced JVM parse failure");
+          return parseSyntaxTree(source, languageId);
+        },
+        extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+          if (source.includes(marker)) throw new Error("forced JVM extraction failure");
+          return extractLanguage(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+        },
+      },
+    });
+  }
+
+  it("extracts an importer again once a package file whose tree failed reads again (memory cache)", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-lookup-recovery-"));
+    try {
+      const marker = "// JVM_PACKAGE_FILE_UNREADABLE";
+      // The marker is past the 64 KiB head that is parsed for the package clause, so Big.kt keeps its package while
+      // its declarations are unknown.
+      const sources: Record<string, string> = {
+        "p/Small.kt": "package p\n\nfun select(x: Int) = x\n",
+        "p/Big.kt": `package p\n\nclass Unrelated\n${"// padding\n".repeat(7000)}${marker}\n`,
+        "app/Use.kt": "package app\n\nimport p.select\n\nclass Use\n",
+      };
+      for (const [name, contents] of Object.entries(sources)) {
+        await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+        await writeFile(path.join(root, name), contents, "utf8");
+      }
+      const options = { cache: "memory" as const, threads: 1, useNativeWorkers: false };
+      const useKey = fileIdentityKey(normalizePath(path.join(root, "app/Use.kt")));
+
+      setNativeIndexingFailureFor(marker);
+      const failed = await buildProjectIndex(root, options);
+      const failedUse = failed.byFile.get(useKey);
+      // Big.kt may overload `select`, so the import is unproven and the importer is marked.
+      expect(failedUse).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      expect(failedUse?.imports[0]?.resolved).toEqual({ external: "p.select" });
+
+      // Use.kt, Small.kt, and the cache are unchanged, but Big.kt reads now and declares no `select`.
+      __resetNativeTreeSitterBindingForTests();
+      const recovered = await buildProjectIndex(root, options);
+      const recoveredUse = recovered.byFile.get(useKey);
+      expect(recoveredUse?.parserDegraded).toBeUndefined();
+      expect(recoveredUse?.importLookupIncomplete).toBeUndefined();
+      expect(path.basename(String(recoveredUse?.imports[0]?.resolved))).toBe("Small.kt");
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

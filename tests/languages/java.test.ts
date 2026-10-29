@@ -1102,6 +1102,62 @@ describe("Java package files without a usable syntax tree", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  // A public Java type lives in the file its name spells, so an unchecked Java file can declare only that one type. A
+  // Kotlin file can declare any class, but a class name is unique in its package, so a type that a file proves stays.
+  it("binds what a file proves beside an unchecked file, and leaves a name only an unchecked Kotlin file may declare", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-siblings-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const imports = ["com.acme.p4.Wrapped", "com.acme.p4.Generated", "com.acme.p5.Solid"];
+      const useLines = (extra: string[]): string =>
+        [
+          "package com.acme.app;",
+          "",
+          ...[...imports, ...extra].map((name) => `import ${name};`),
+          "",
+          "class Use {}",
+          "",
+        ].join("\n");
+      const paths = await writeFixtureFiles(root, {
+        "p4/Generated.java": `package com.acme.p4;\n\npublic class Generated {}\n${padding}`,
+        "p4/Wrapped.java": "package com.acme.p4;\n\npublic class Wrapped {}\n",
+        "p5/Gen.kt": `package com.acme.p5\n\nclass Hidden\n${padding}`,
+        "p5/Solid.java": "package com.acme.p5;\n\npublic class Solid {}\n",
+        "app/Plain.java": useLines([]),
+        "app/Use.java": useLines(["com.acme.p5.Hidden", "com.acme.p5.Missing"]),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      const resolvedImports = (relative: string): Record<string, string> =>
+        Object.fromEntries(
+          (moduleOf(relative)?.imports ?? []).map((binding) => [
+            binding.from,
+            typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+          ]),
+        );
+      const proven = {
+        "com.acme.p4.Wrapped": paths["p4/Wrapped.java"],
+        "com.acme.p4.Generated": paths["p4/Generated.java"],
+        "com.acme.p5.Solid": paths["p5/Solid.java"],
+      };
+      // Generated.java is the only file that can declare `Generated`; Wrapped.java and Solid.java prove their types.
+      expect(resolvedImports("app/Plain.java")).toEqual(proven);
+      expect(moduleOf("app/Plain.java")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/Plain.java")?.importLookupIncomplete).toBeUndefined();
+      // Gen.kt may declare `Hidden` or `Missing`, and nothing proves it does not.
+      expect(resolvedImports("app/Use.java")).toEqual({
+        ...proven,
+        "com.acme.p5.Hidden": "external",
+        "com.acme.p5.Missing": "external",
+      });
+      expect(moduleOf("app/Use.java")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Java same-package sibling classes", () => {

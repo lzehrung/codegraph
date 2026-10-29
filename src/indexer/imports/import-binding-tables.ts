@@ -8,10 +8,12 @@ import type { LanguageExtensionMap } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { csharpExternAlias, csharpUsingDirective, type CsharpUsingDirective } from "../../util/csharp-tree.js";
 import type { JvmImportDirective } from "../../util/jvm-tree.js";
+import { isJvmLanguage } from "../../util/syntax-tree.js";
 import { toRange } from "../../util/ast.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
+import { jvmImportLookupIsIncomplete } from "../../util/resolution/jvm.js";
 import { extractRustModPathAttribute } from "../../util/resolution/rust.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
@@ -361,6 +363,18 @@ export async function applyJvmImportDirective(
   // A static import names a member of its owner, and the owner is what the binding comes from.
   const from = isStatic ? name.slice(0, Math.max(name.lastIndexOf("."), 0)) : name;
   const importedRange = toRange(leaf);
+  const resolved = await context.resolveFrom(from);
+  // A package file with no usable syntax tree may declare the imported name. The import then stays unproven, and the
+  // module records that so a later build resolves it again once every file of the package reads.
+  if (
+    isJvmLanguage(context.languageId) &&
+    (await jvmImportLookupIsIncomplete(context.projectRoot, from, {
+      languageId: context.languageId,
+      fromFile: context.file,
+    }))
+  ) {
+    context.onDegraded?.("lookup");
+  }
   context.pushBinding({
     kind: "named",
     local: alias?.text ?? leaf.text,
@@ -370,7 +384,7 @@ export async function applyJvmImportDirective(
     ...(alias ? { explicitAlias: true } : {}),
     importedRange,
     localRange: alias ? toRange(alias) : importedRange,
-    resolved: await context.resolveFrom(from),
+    resolved,
     typeOnly: false,
   });
 }
