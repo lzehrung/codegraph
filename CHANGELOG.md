@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-29
+
 ### Added
 
 - SCSS Sass module navigation. `@use` (default namespace, `as`, and `as *`), `@forward` (`as prefix-*`, `show`, and `hide`), and legacy `@import` resolve `$variables`, mixins, functions, and `@extend` placeholders across files. `show` and `hide` list the exposed (prefixed) names, `@import` has no privacy. Variable, mixin, and function names treat `-` and `_` as one character; placeholder names and namespaces compare as written. A partial that an `@import` loads reads the scope of its importer, so its uses of the importer's variables, mixins, functions, and namespaces resolve. Parameters, loop variables, `using` parameters, and keyword-argument names are local (a parameter hides a member only after its own default value), and a variable that one file assigns again stays one variable. A custom property value is literal CSS, and the media query and `url(...)` interpolation of a CSS `@import` are read. `sass:` modules stay external. Reference coverage is `partial` for unreadable files, unresolved module URLs, Vue and Svelte style blocks that may load the module (also through a module that forwards it), ambiguous members (including a partial whose importers define the name differently, and a file of the same `@import` scope that declares the name again, and a file that assigns a variable that its `@use ... as *` module also declares), `@import`s nested in a rule (Sass declares their members in that block only), and `meta.load-css` / `meta.get-function` / `meta.get-mixin` / `meta.module-variables` / `meta.module-functions` / `meta.module-mixins` (also with `_` in the name). A placeholder resolves wherever its rule sits (a media query, another rule, a mixin body), and a file that declares one name more than once has one placeholder. Rename preview edits only the member name. It reports `name_collision` when a scope that sees the member already uses the new name (under every forward prefix, for a placeholder in every file that can extend it, for a block variable with `-` and `_` as one character, and for a private name that takes a public name, in the scopes that then see it), `shadowing` when a local variable would capture a bare use, and `invalid_identifier` when a new name that starts with `-` or `_` would hide the member from a use through `@use` or `@forward`, or when a `@forward` `hide` list names the new name.
@@ -761,7 +763,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.0
 [3.0.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.0.1
 [3.0.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.0.0
 [2.4.0]: https://github.com/lzehrung/codegraph/releases/tag/v2.4.0
