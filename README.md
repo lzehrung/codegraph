@@ -214,7 +214,7 @@ Structured output carries the underlying changed files, symbols, graph edges, re
 
 ### Spend context on the problem, not repository discovery
 
-`explore` runs one ranked search and packages context around the top hits: source for the first few, dependency paths between them, files that depend on them (two levels), candidate tests, and follow-up commands. Every list is bounded; `--json` reports how many anchors, packets, paths, dependents, and candidate tests were left out (follow-ups are capped without a count). It is a starting point for reading, not an answer: results are only as good as the search terms. The CLI includes source by default; MCP `explore` leaves it out (`includeSource` defaults to `false`) and names the follow-up request to make instead.
+`explore` runs one search and bundles bounded context around the top hits: source, dependency paths, dependents, candidate tests, and next commands. It is a reading starting point, only as good as the search terms. MCP omits source by default.
 
 ### Ground the next action
 
