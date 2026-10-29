@@ -796,26 +796,30 @@ describe("Kotlin extension and generic top-level functions", () => {
 
 describe("Kotlin package files without a usable syntax tree", () => {
   // A file over the native source limit is never parsed whole, so it keeps its package but its declarations are
-  // unknown, not empty: it may overload a function of its package, or declare a class a named import asks for.
-  it("leaves a name an unchecked package file may declare unresolved and marks the importer, but keeps proven classes", async () => {
+  // unknown, not empty. A Kotlin import names every declaration of its name: a class, a function, a typealias.
+  it("leaves every name an incomplete package file may declare unresolved and marks the importer", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-no-tree-package-"));
     try {
       const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
       const useSelect = ["package com.acme.app", "", "import com.acme.p.select", "", "fun use() = select(1)", ""];
       const paths = await writeFixtureFiles(root, {
         "p/Small.kt": ["package com.acme.p", "", "class Known", "fun select(x: Int) = x", ""].join("\n"),
+        "p/Iface.kt": ["package com.acme.p", "", "interface Service", ""].join("\n"),
+        // Big.kt may overload `select`, and may declare a factory function named like the interface `Service`.
         "p/Big.kt": `package com.acme.p\n\nfun select(x: String) = x\n${padding}`,
         "q/Other.kt": ["package com.acme.q", "", "class Quiet", "fun helper() = 1", ""].join("\n"),
         "app/UseSelect.kt": useSelect.join("\n"),
         "app/UseMissing.kt": ["package com.acme.app", "", "import com.acme.p.Missing", ""].join("\n"),
-        "app/Clean.kt": [
+        "app/UseClasses.kt": [
           "package com.acme.app",
           "",
           "import com.acme.p.Known",
-          "import com.acme.q.Quiet",
-          "import com.acme.q.helper",
+          "import com.acme.p.Service",
           "",
         ].join("\n"),
+        "app/Clean.kt": ["package com.acme.app", "", "import com.acme.q.Quiet", "import com.acme.q.helper", ""].join(
+          "\n",
+        ),
       });
 
       const index = await buildProjectIndex(root, { cache: "off" });
@@ -831,11 +835,17 @@ describe("Kotlin package files without a usable syntax tree", () => {
       // `select` may be overloaded in Big.kt, and Big.kt may declare `Missing`; neither is proven for the importer.
       expect(resolvedImports("app/UseSelect.kt")).toEqual({ "com.acme.p.select": "external" });
       expect(resolvedImports("app/UseMissing.kt")).toEqual({ "com.acme.p.Missing": "external" });
-      expect(moduleOf("app/UseSelect.kt")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
-      expect(moduleOf("app/UseMissing.kt")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
-      // A class name is unique in its package, so Small.kt proves `Known`; another package has no unchecked file.
+      // A class and a function can share a name, so a class that another file proves rules out nothing: Big.kt may
+      // declare `fun Known()` or the factory `fun Service()`, and an import names both.
+      expect(resolvedImports("app/UseClasses.kt")).toEqual({
+        "com.acme.p.Known": "external",
+        "com.acme.p.Service": "external",
+      });
+      for (const importer of ["app/UseSelect.kt", "app/UseMissing.kt", "app/UseClasses.kt"]) {
+        expect(moduleOf(importer), importer).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      }
+      // Another package has no incomplete file.
       expect(resolvedImports("app/Clean.kt")).toEqual({
-        "com.acme.p.Known": paths["p/Small.kt"],
         "com.acme.q.Quiet": paths["q/Other.kt"],
         "com.acme.q.helper": paths["q/Other.kt"],
       });
@@ -843,16 +853,57 @@ describe("Kotlin package files without a usable syntax tree", () => {
       expect(moduleOf("app/Clean.kt")?.importLookupIncomplete).toBeUndefined();
 
       // The consumers agree: no file edge, and the call does not go to the one overload that could be read.
-      const selectEdges = index.graph.edges.filter(
-        (edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths["app/UseSelect.kt"]!) && edge.to.type === "file",
-      );
-      expect(selectEdges).toEqual([]);
+      const fileEdgesOf = (relative: string) =>
+        index.graph.edges.filter(
+          (edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths[relative]!) && edge.to.type === "file",
+        );
+      expect(fileEdgesOf("app/UseSelect.kt")).toEqual([]);
+      expect(fileEdgesOf("app/UseClasses.kt")).toEqual([]);
       const call = await goToDefinition(index, {
         file: paths["app/UseSelect.kt"]!,
         line: 5,
         column: columnInLines(useSelect, 5, "select"),
       });
       expect(call.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin package files with a syntax error", () => {
+  // The error leaves `select(String)` unread, so Gap.kt may overload what Peer.kt declares. `Before` was read first.
+  it("keeps the names read before the error and leaves a name it may declare unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-error-file-package-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "p/Gap.kt": ["package com.acme.p", "", "class Before", ")", "fun select(x: String) = x", ""].join("\n"),
+        "p/Peer.kt": ["package com.acme.p", "", "fun select(x: Int) = x", ""].join("\n"),
+        "app/UseSelect.kt": ["package com.acme.app", "", "import com.acme.p.select", ""].join("\n"),
+        "app/UseBefore.kt": ["package com.acme.app", "", "import com.acme.p.Before", ""].join("\n"),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      expect(
+        moduleOf("p/Gap.kt")?.parseErrorRanges?.length,
+        "the pinned grammar no longer fails on Gap.kt",
+      ).toBeTruthy();
+      const resolved = (relative: string): unknown => moduleOf(relative)?.imports[0]?.resolved;
+      // `select` is declared in Peer.kt and may be in Gap.kt too, so no file is proven.
+      expect(resolved("app/UseSelect.kt")).toEqual({ external: "com.acme.p.select" });
+      expect(moduleOf("app/UseSelect.kt")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      // `Before` was read, so Gap.kt declares it whatever follows the error.
+      expect(normalizePath(String(resolved("app/UseBefore.kt")))).toBe(paths["p/Gap.kt"]);
+      expect(moduleOf("app/UseBefore.kt")?.importLookupIncomplete).toBeUndefined();
+
+      const fileEdgesOf = (relative: string): string[] =>
+        index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths[relative]!) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(fileEdgesOf("app/UseSelect.kt")).toEqual([]);
+      expect(fileEdgesOf("app/UseBefore.kt")).toEqual([paths["p/Gap.kt"]]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

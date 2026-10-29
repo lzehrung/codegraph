@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
@@ -1103,13 +1104,14 @@ describe("Java package files without a usable syntax tree", () => {
     }
   });
 
-  // A public Java type lives in the file its name spells, so an unchecked Java file can declare only that one type. A
-  // Kotlin file can declare any class, but a class name is unique in its package, so a type that a file proves stays.
-  it("binds what a file proves beside an unchecked file, and leaves a name only an unchecked Kotlin file may declare", async () => {
+  // A Java import names a type only. A public Java type lives in the file its name spells, so an incomplete Java file can
+  // declare only that one type; an incomplete Kotlin file can declare any class, but a type that a file proves rules
+  // out another type of that name, and a Kotlin function (such as a factory named like its interface) is not imported.
+  it("binds a type a file proves beside an incomplete file, and leaves a name only an incomplete Kotlin file may declare", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-siblings-"));
     try {
       const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
-      const imports = ["com.acme.p4.Wrapped", "com.acme.p4.Generated", "com.acme.p5.Solid"];
+      const imports = ["com.acme.p4.Wrapped", "com.acme.p4.Generated", "com.acme.p5.Solid", "com.acme.p5.Service"];
       const useLines = (extra: string[]): string =>
         [
           "package com.acme.app;",
@@ -1122,7 +1124,9 @@ describe("Java package files without a usable syntax tree", () => {
       const paths = await writeFixtureFiles(root, {
         "p4/Generated.java": `package com.acme.p4;\n\npublic class Generated {}\n${padding}`,
         "p4/Wrapped.java": "package com.acme.p4;\n\npublic class Wrapped {}\n",
+        // Gen.kt may declare `Hidden`, `Missing`, and a factory `fun Service()` next to the interface in Iface.kt.
         "p5/Gen.kt": `package com.acme.p5\n\nclass Hidden\n${padding}`,
+        "p5/Iface.kt": "package com.acme.p5\n\ninterface Service\n",
         "p5/Solid.java": "package com.acme.p5;\n\npublic class Solid {}\n",
         "app/Plain.java": useLines([]),
         "app/Use.java": useLines(["com.acme.p5.Hidden", "com.acme.p5.Missing"]),
@@ -1142,8 +1146,9 @@ describe("Java package files without a usable syntax tree", () => {
         "com.acme.p4.Wrapped": paths["p4/Wrapped.java"],
         "com.acme.p4.Generated": paths["p4/Generated.java"],
         "com.acme.p5.Solid": paths["p5/Solid.java"],
+        "com.acme.p5.Service": paths["p5/Iface.kt"],
       };
-      // Generated.java is the only file that can declare `Generated`; Wrapped.java and Solid.java prove their types.
+      // Generated.java is the only file that can declare `Generated`; Wrapped.java, Solid.java, and Iface.kt prove theirs.
       expect(resolvedImports("app/Plain.java")).toEqual(proven);
       expect(moduleOf("app/Plain.java")?.parserDegraded).toBeUndefined();
       expect(moduleOf("app/Plain.java")?.importLookupIncomplete).toBeUndefined();
@@ -1154,6 +1159,53 @@ describe("Java package files without a usable syntax tree", () => {
         "com.acme.p5.Missing": "external",
       });
       expect(moduleOf("app/Use.java")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Directories shaped like the package let the generic fallback find a file by its name (`com/acme/p6/Hidden`), which
+  // is how `Outer.Inner` reaches `Outer.java`. That fallback must not answer for a name the lookup left unproven.
+  it("does not bind a file by its path while an incomplete file may declare the imported type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-path-fallback-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        "com/acme/p6/Hidden.kt": `package com.acme.p6\n\nclass Hidden\n${padding}`,
+        "com/acme/p6/Outer.java": "package com.acme.p6;\n\npublic class Outer { public static class Inner {} }\n",
+        "com/acme/app/Use.java": [
+          "package com.acme.app;",
+          "",
+          "import com.acme.p6.Hidden;",
+          "import com.acme.p6.Outer.Inner;",
+          "",
+          "class Use {}",
+          "",
+        ].join("\n"),
+      });
+      const use = paths["com/acme/app/Use.java"]!;
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const useModule = index.byFile.get(fileIdentityKey(use));
+      const resolved = Object.fromEntries(
+        (useModule?.imports ?? []).map((binding) => [
+          binding.from,
+          typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+        ]),
+      );
+      // Hidden.kt may declare `Hidden`, but its name is no proof; the lookup for a nested type is complete.
+      expect(resolved).toEqual({
+        "com.acme.p6.Hidden": "external",
+        "com.acme.p6.Outer.Inner": paths["com/acme/p6/Outer.java"],
+      });
+      expect(useModule).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      const fileEdges = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(fileEdges).toEqual([paths["com/acme/p6/Outer.java"]]);
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root }).map((entry) => entry.name);
+      expect(unresolved).toEqual(["com.acme.p6.Hidden"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

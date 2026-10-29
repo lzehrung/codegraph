@@ -176,6 +176,7 @@ describe("JVM top-level declarations", () => {
   it("accepts the facts it produces and rejects a malformed persisted row", () => {
     expect(isJvmFileFacts(collectJvmFileFacts(treeFor("kotlin", "package p\nclass A\n"), "kotlin"))).toBe(true);
     expect(isJvmFileFacts({ packageName: null, symbols: [] })).toBe(true);
+    expect(isJvmFileFacts({ packageName: "p", symbols: ["A"], incomplete: true })).toBe(true);
     const malformed: unknown[] = [
       null,
       "p",
@@ -183,6 +184,9 @@ describe("JVM top-level declarations", () => {
       { packageName: 1, symbols: [] },
       { packageName: null, symbols: [1] },
       { packageName: null, symbols: [], javaTypes: "A" },
+      // The flag only ever says "unread declarations"; a persisted row cannot claim anything else.
+      { packageName: null, symbols: [], incomplete: false },
+      { packageName: null, symbols: [], incomplete: "yes" },
     ];
     for (const value of malformed) expect(isJvmFileFacts(value), JSON.stringify(value)).toBe(false);
   });
@@ -333,6 +337,35 @@ describe("JVM facts and Kotlin syntax errors", () => {
 
     expect(facts.symbols).toEqual(["Before"]);
     expect(facts.javaTypes).toEqual(["Before"]);
+  });
+
+  it("records that a syntax error at the top of a file left declarations unread, and only then", () => {
+    // Declarations the error swallowed are not in `symbols`, so the facts must say the list may be short.
+    const kotlin = treeFor("kotlin", "package p\nclass Before\n)\nfun select(x: String) = x\n");
+    expect(hasTopLevelError(kotlin), "the pinned Kotlin grammar no longer fails on this source").toBe(true);
+    expect(collectJvmFileFacts(kotlin, "kotlin")).toEqual({
+      packageName: "p",
+      symbols: ["Before"],
+      javaTypes: ["Before"],
+      incomplete: true,
+    });
+
+    // The Java grammar reads `After` here, but a stray token can as well swallow a class (`@@@ !!` leaves `After` as
+    // a block), so a file with an error is unproven either way.
+    const java = treeFor("java", "package p;\nclass Before {}\n@@@ !!\nclass After {}\n");
+    expect(hasTopLevelError(java), "the pinned Java grammar no longer fails on this source").toBe(true);
+    expect(collectJvmFileFacts(java, "java")).toEqual({ packageName: "p", symbols: ["Before"], incomplete: true });
+
+    // A file the grammar reads in full is complete, and so is one whose error sits inside a body.
+    const clean = collectJvmFileFacts(treeFor("kotlin", "package p\nclass A\nfun f() {}\n"), "kotlin");
+    expect(clean.incomplete).toBeUndefined();
+    const nested = treeFor("kotlin", "package p\nclass A { fun f() { val x = ) } }\nclass B\n");
+    expect(hasTopLevelError(nested), "the error must stay inside the class body").toBe(false);
+    expect(collectJvmFileFacts(nested, "kotlin")).toEqual({
+      packageName: "p",
+      symbols: ["A", "B"],
+      javaTypes: ["A", "B"],
+    });
   });
 });
 
@@ -511,6 +544,87 @@ describe("JVM importers while a package file has no readable syntax tree", () =>
       expect(recoveredUse?.parserDegraded).toBeUndefined();
       expect(recoveredUse?.importLookupIncomplete).toBeUndefined();
       expect(path.basename(String(recoveredUse?.imports[0]?.resolved))).toBe("Small.kt");
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("JVM importers beside a package file with a syntax error", () => {
+  // The error leaves `select(String)` unread, so Gap.kt may overload what Peer.kt declares. `Before` was read first.
+  const sources: Record<string, string> = {
+    "p/Gap.kt": "package com.acme.p\n\nclass Before\n)\nfun select(x: String) = x\n",
+    "p/Peer.kt": "package com.acme.p\n\nfun select(x: Int) = x\n",
+    "app/UseSelect.kt": "package com.acme.app\n\nimport com.acme.p.select\n",
+    "app/UseBefore.kt": "package com.acme.app\n\nimport com.acme.p.Before\n",
+  };
+  const expected = { UseSelect: "external (incomplete)", UseBefore: "Gap.kt" };
+
+  async function writeProject(root: string): Promise<void> {
+    for (const [name, contents] of Object.entries(sources)) {
+      await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+      await writeFile(path.join(root, name), contents, "utf8");
+    }
+  }
+
+  /** What each importer binds, and whether its module is marked incomplete. */
+  function outcomes(index: ProjectIndex, root: string): Record<string, string> {
+    const result: Record<string, string> = {};
+    for (const name of ["UseSelect", "UseBefore"]) {
+      const module = index.byFile.get(fileIdentityKey(normalizePath(path.join(root, `app/${name}.kt`))));
+      const resolved = module?.imports[0]?.resolved;
+      const target = typeof resolved === "string" ? path.basename(resolved) : "external";
+      result[name] = `${target}${module?.importLookupIncomplete ? " (incomplete)" : ""}`;
+    }
+    return result;
+  }
+
+  it("gives the same answer from a cold build, a warm disk build, and a build from the project snapshot", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-error-file-cache-"));
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-error-file-cache-dir-"));
+    try {
+      await writeProject(root);
+      const options = { cache: "disk" as const, cacheDir, threads: 1, useNativeWorkers: false };
+
+      const cold = await buildProjectIndex(root, options);
+      expect(cold.byFile.get(fileIdentityKey(normalizePath(path.join(root, "p/Gap.kt"))))?.jvmFacts).toEqual({
+        packageName: "com.acme.p",
+        symbols: ["Before"],
+        javaTypes: ["Before"],
+        incomplete: true,
+      });
+      expect(outcomes(cold, root)).toEqual(expected);
+
+      // Every module comes from the disk cache; Gap.kt's facts, with their flag, are what the package scan reads.
+      clearMemoryCache();
+      const report: BuildReport = { timings: {} };
+      const warm = await buildProjectIndex(root, { ...options, report });
+      expect(report.files?.cached ?? 0).toBeGreaterThan(0);
+      expect(outcomes(warm, root)).toEqual(expected);
+
+      clearMemoryCache();
+      expect(outcomes(await buildProjectIndexIncremental(root, options), root)).toEqual(expected);
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+      await rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the file's own tree for the package scan when no module holds its facts", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-error-file-fresh-"));
+    try {
+      await writeProject(root);
+      // Discovery ignores Gap.kt, so no module covers it, but the package scan still parses it.
+      const index = await buildProjectIndex(root, {
+        cache: "memory",
+        threads: 1,
+        useNativeWorkers: false,
+        discovery: { ignoreGlobs: ["p/Gap.kt"], globRoot: root },
+      });
+      expect(index.byFile.has(fileIdentityKey(normalizePath(path.join(root, "p/Gap.kt"))))).toBe(false);
+      expect(outcomes(index, root).UseSelect).toBe(expected.UseSelect);
     } finally {
       clearMemoryCache();
       await rm(root, { recursive: true, force: true });

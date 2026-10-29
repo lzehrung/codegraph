@@ -19,38 +19,36 @@ type JvmImportResolutionOptions = {
 };
 
 /**
- * The files of a project by package and declared name, and the files whose declarations are unknown. A file with no
- * usable syntax tree is known by its package alone, so it may declare any name its language allows in that package.
+ * The files of a project by package and declared name, and the files whose declarations are not all in it. A file is
+ * `incomplete` when it has no usable syntax tree or a syntax error left declarations unread: it is in its package with
+ * the names that were read, and may declare any other name its language allows there.
  */
-type JvmProjectSymbolIndex = LanguageProjectSymbolIndex & { uncheckedFilesByPackage: Map<string, string[]> };
+type JvmProjectSymbolIndex = LanguageProjectSymbolIndex & { incompleteFilesByPackage: Map<string, string[]> };
 
-/** What a lookup knows of one file: its facts, and whether they hold its declarations or only its package. */
-type JvmFileKnowledge = { facts: JvmFileFacts; declarationsKnown: boolean };
-
-/** A named import's target file, and whether a file with unknown declarations kept the lookup from proving it. */
+/** A named import's target file, and whether an incomplete file kept the lookup from proving it. */
 type JvmImportLookup = { file: string | null; incomplete: boolean };
 
 const kotlinImportResolutionCache = new Map<string, JvmImportLookup>();
 const kotlinProjectSymbolIndexCache = new Map<string, Promise<JvmProjectSymbolIndex>>();
 const javaImportResolutionCache = new Map<string, JvmImportLookup>();
 const javaProjectSymbolIndexCache = new Map<string, Promise<JvmProjectSymbolIndex>>();
-/** What is known per file during one build: a reused module's facts, a built module's, or those of a fresh parse. */
-const jvmFileFactsCache = new Map<string, JvmFileKnowledge | null>();
+/** The facts known per file during one build: a reused module's, a built module's, or those of a fresh parse. */
+const jvmFileFactsCache = new Map<string, JvmFileFacts | null>();
 
 /** Gives the project scan the facts a build already holds for `file`, so the scan parses nothing for it. */
 export function primeJvmFileFacts(file: string, facts: JvmFileFacts): void {
-  jvmFileFactsCache.set(fileIdentityKey(file), { facts, declarationsKnown: true });
+  jvmFileFactsCache.set(fileIdentityKey(file), facts);
 }
 
 /** How much of a file's start is parsed for its package clause when the whole file has no usable tree. */
 const PACKAGE_HEAD_CHARS = 64 * 1024;
 
 /**
- * What is known of one file. A file without a usable tree (too large, too many nodes, a parse failure) is known by its
- * package clause alone, read from a bounded parse of its head: it stays in the package index, but its declarations are
- * unknown, not empty. `null` when even that parse fails.
+ * The facts of one file. A file without a usable tree (too large, too many nodes, a parse failure) is known by its
+ * package clause alone, read from a bounded parse of its head: it stays in the package index with no names, marked
+ * `incomplete`. `null` when even that parse fails.
  */
-async function readJvmFileFacts(filePath: string, languageId: JvmLanguageId): Promise<JvmFileKnowledge | null> {
+async function readJvmFileFacts(filePath: string, languageId: JvmLanguageId): Promise<JvmFileFacts | null> {
   const key = fileIdentityKey(filePath);
   const cached = jvmFileFactsCache.get(key);
   if (cached !== undefined) return cached;
@@ -60,13 +58,11 @@ async function readJvmFileFacts(filePath: string, languageId: JvmLanguageId): Pr
   const tooLarge = Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES;
   const tree = support && !tooLarge ? parseSyntaxTree(source, support).tree : null;
   const head = support && !tree ? parseSyntaxTree(source.slice(0, PACKAGE_HEAD_CHARS), support).tree : null;
-  let known: JvmFileKnowledge | null = null;
-  if (tree) known = { facts: collectJvmFileFacts(tree, languageId), declarationsKnown: true };
-  else if (head) {
-    known = { facts: { packageName: jvmPackageName(head, languageId), symbols: [] }, declarationsKnown: false };
-  }
-  jvmFileFactsCache.set(key, known);
-  return known;
+  let facts: JvmFileFacts | null = null;
+  if (tree) facts = collectJvmFileFacts(tree, languageId);
+  else if (head) facts = { packageName: jvmPackageName(head, languageId), symbols: [], incomplete: true };
+  jvmFileFactsCache.set(key, facts);
+  return facts;
 }
 
 /** The names a file's declarations can be imported by; Java also matches a name without its ignorable characters. */
@@ -85,21 +81,21 @@ async function getJvmLanguageProjectSymbolIndex(
   languageId: JvmLanguageId,
 ): Promise<JvmProjectSymbolIndex> {
   return await getOrCreateProjectSymbolIndex(cache, indexRoot, async () => {
-    const uncheckedFilesByPackage = new Map<string, string[]>();
+    const incompleteFilesByPackage = new Map<string, string[]>();
     const index = await buildDeclaredContainerIndex(
       indexRoot,
       getImportableLanguageGlobs(languageId),
       async (filePath) => {
-        const known = await readJvmFileFacts(filePath, languageId);
-        const packageName = known?.facts.packageName;
-        if (!known || !packageName) return [];
-        if (!known.declarationsKnown) {
-          uncheckedFilesByPackage.set(packageName, [...(uncheckedFilesByPackage.get(packageName) ?? []), filePath]);
+        const facts = await readJvmFileFacts(filePath, languageId);
+        const packageName = facts?.packageName;
+        if (!facts || !packageName) return [];
+        if (facts.incomplete) {
+          incompleteFilesByPackage.set(packageName, [...(incompleteFilesByPackage.get(packageName) ?? []), filePath]);
         }
-        return [{ name: packageName, symbols: importableNames(known.facts, languageId) }];
+        return [{ name: packageName, symbols: importableNames(facts, languageId) }];
       },
     );
-    return { ...index, uncheckedFilesByPackage };
+    return { ...index, incompleteFilesByPackage };
   });
 }
 
@@ -156,16 +152,16 @@ export async function resolveJvmPackageImportPaths(
 }
 
 /**
- * The files of `packageName` whose declarations are unknown and that may declare `name`. A Kotlin file may declare any
- * class or function of that name; a Java file can declare an importable type only in the file that its name spells.
+ * The incomplete files of `packageName` that may declare `name`. A Kotlin file may declare any class, function, or
+ * typealias of that name; a Java file declares an importable type only in the file that its name spells.
  */
-function uncheckedDeclarers(
+function incompleteDeclarers(
   index: JvmProjectSymbolIndex,
   languageId: JvmLanguageId,
   packageName: string,
   name: string,
 ): string[] {
-  const files = index.uncheckedFilesByPackage.get(packageName) ?? [];
+  const files = index.incompleteFilesByPackage.get(packageName) ?? [];
   return languageId === "kotlin" ? files : files.filter((file) => path.parse(file).name === name);
 }
 
@@ -208,7 +204,7 @@ async function findJvmImport(
     options.languageId === "java"
       ? await Promise.all(
           otherFiles.map(async (file) =>
-            (await readJvmFileFacts(file, "kotlin"))?.facts.javaTypes?.includes(importedName) ? file : null,
+            (await readJvmFileFacts(file, "kotlin"))?.javaTypes?.includes(importedName) ? file : null,
           ),
         )
       : otherFiles;
@@ -218,30 +214,23 @@ async function findJvmImport(
   if (options.languageId === "java" && !symbolFiles.length) {
     for (const candidate of packageCandidates) {
       if (path.parse(candidate).name !== importedName) continue;
-      const known = await readJvmFileFacts(candidate, "java");
-      if (!known?.facts.symbols.length || importableNames(known.facts, "java").has(importedName)) {
-        filenameMatched.push(candidate);
-      }
+      const facts = await readJvmFileFacts(candidate, "java");
+      if (!facts?.symbols.length || importableNames(facts, "java").has(importedName)) filenameMatched.push(candidate);
     }
   }
   const candidates = symbolFiles.length ? symbolFiles : filenameMatched;
 
-  // A file whose declarations are unknown may declare the name too. A class name is unique in its package, so the one
-  // file that proves a class rules out the rest; a Kotlin function can be overloaded in any other file of its package.
-  const undecided = [
-    ...uncheckedDeclarers(projectIndex, options.languageId, packageName, importedName),
-    ...uncheckedDeclarers(otherIndex, otherLanguageId, packageName, importedName),
-  ].filter((file) => !candidates.includes(file));
-  let incomplete = false;
-  if (undecided.length) {
-    const declarer = symbolFiles.length === 1 ? symbolFiles[0] : undefined;
-    const provenClass =
-      !!declarer &&
-      (options.languageId === "java" ||
-        otherFiles.includes(declarer) ||
-        !!(await readJvmFileFacts(declarer, "kotlin"))?.facts.javaTypes?.includes(importedName));
-    incomplete = !provenClass;
-  }
+  // An incomplete file may declare the name too. A Java import names a type, and a type that a file proves rules out
+  // another type of that name. A Kotlin import names every declaration of its name, and a function or typealias can
+  // share the name of a class, so nothing a file proves rules out an incomplete Kotlin file. Two known declarers
+  // already leave the import unresolved, so a further one cannot change the answer.
+  const incompleteFiles = [
+    ...incompleteDeclarers(projectIndex, options.languageId, packageName, importedName),
+    ...incompleteDeclarers(otherIndex, otherLanguageId, packageName, importedName),
+  ];
+  const provenType = options.languageId === "java" && symbolFiles.length > 0;
+  const incomplete =
+    candidates.length <= 1 && !provenType && incompleteFiles.some((file) => !candidates.includes(file));
   const file =
     !incomplete && candidates.length === 1
       ? await confineJvmResolvedPath(projectRoot, path.resolve(candidates[0]!))
@@ -249,7 +238,12 @@ async function findJvmImport(
   return { file, incomplete };
 }
 
-async function lookupJvmImport(
+/**
+ * The file a named import (`com.acme.Type`) names, and whether an incomplete file kept the lookup from proving it. An
+ * incomplete lookup has no file: callers must not guess one from the name, and its importer is incomplete until that
+ * file reads.
+ */
+export async function lookupJvmImport(
   projectRoot: string,
   spec: string,
   options: JvmImportResolutionOptions,
@@ -270,18 +264,6 @@ export async function resolveJvmImportPath(
   options: JvmImportResolutionOptions,
 ): Promise<string | null> {
   return (await lookupJvmImport(projectRoot, spec, options)).file;
-}
-
-/**
- * Whether a file whose declarations are unknown may declare what the named import `spec` asks for. Such an import stays
- * unresolved instead of binding a file whose uniqueness is unproven, so its importer is incomplete until that file reads.
- */
-export async function jvmImportLookupIsIncomplete(
-  projectRoot: string,
-  spec: string,
-  options: JvmImportResolutionOptions,
-): Promise<boolean> {
-  return (await lookupJvmImport(projectRoot, spec, options)).incomplete;
 }
 
 export function clearJvmResolutionCaches(): void {

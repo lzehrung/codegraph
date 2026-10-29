@@ -67,8 +67,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * path-like file when the project declares its namespace.
  * Epoch 100 reads Java and Kotlin packages, top-level declared names, and imports from native syntax nodes, and
  * stores each file's own package and declared names with its module (`jvmFacts`) instead of scanning source text. A
- * named import from a package with a file that has no usable syntax tree stays unresolved when that file may declare
- * the name, and marks its importer (`parserDegraded` and `importLookupIncomplete`) like an unreadable C# lookup.
+ * file with no usable syntax tree, or whose tree has a syntax error at the top, is `incomplete`: it may declare names
+ * it did not list. A named import from its package stays unresolved while that file may declare the name, and marks
+ * its importer (`parserDegraded` and `importLookupIncomplete`) like an unreadable C# lookup.
  */
 export const CORE_ALGORITHM_EPOCH = 100;
 /**

@@ -116,7 +116,8 @@ export type ModuleIndex = {
    * Java and Kotlin only: the package and top-level declared names of this file alone, read from its own syntax
    * tree when it is indexed. Package lookups read them here instead of parsing the file, and project-wide
    * lookups combine them across files when they run, so a cached module never holds another file's
-   * declarations. Absent when the file's tree was unavailable.
+   * declarations. `incomplete` marks a file whose tree held a syntax error that left declarations unread. Absent
+   * when the file's tree was unavailable.
    */
   jvmFacts?: JvmFileFacts;
   /** Outermost Tree-sitter ERROR/MISSING ranges. */

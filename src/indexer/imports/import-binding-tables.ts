@@ -13,7 +13,7 @@ import { toRange } from "../../util/ast.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { isRustCfgTestStatement } from "../../util/rust-test-modules.js";
 import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "../../util/resolution/csharp.js";
-import { jvmImportLookupIsIncomplete } from "../../util/resolution/jvm.js";
+import { lookupJvmImport } from "../../util/resolution/jvm.js";
 import { extractRustModPathAttribute } from "../../util/resolution/rust.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
@@ -364,16 +364,14 @@ export async function applyJvmImportDirective(
   const from = isStatic ? name.slice(0, Math.max(name.lastIndexOf("."), 0)) : name;
   const importedRange = toRange(leaf);
   const resolved = await context.resolveFrom(from);
-  // A package file with no usable syntax tree may declare the imported name. The import then stays unproven, and the
+  // A package file that was not read in full may declare the imported name. The import then stays unresolved, and the
   // module records that so a later build resolves it again once every file of the package reads.
-  if (
-    isJvmLanguage(context.languageId) &&
-    (await jvmImportLookupIsIncomplete(context.projectRoot, from, {
+  if (isJvmLanguage(context.languageId)) {
+    const lookup = await lookupJvmImport(context.projectRoot, from, {
       languageId: context.languageId,
       fromFile: context.file,
-    }))
-  ) {
-    context.onDegraded?.("lookup");
+    });
+    if (lookup.incomplete) context.onDegraded?.("lookup");
   }
   context.pushBinding({
     kind: "named",

@@ -24,6 +24,11 @@ export type JvmFileFacts = {
   symbols: string[];
   /** Kotlin top-level classes, objects, and interfaces: the only Kotlin declarations a Java import can name. */
   javaTypes?: string[];
+  /**
+   * Set when the file may declare more than `symbols` lists: it has no usable syntax tree, or a syntax error at the top
+   * of the file left declarations unread. Every name in `symbols` is still declared; no other name is ruled out.
+   */
+  incomplete?: true;
 };
 
 /** One `import`, read from its syntax node, so its ranges come from the node and nothing is searched in text. */
@@ -80,11 +85,15 @@ export function jvmPackageName(tree: SyntaxTreeLike, languageId: JvmLanguageId):
   return identifiers.length ? identifiers.map((identifier) => identifier.text).join(".") : null;
 }
 
-/** The package and top-level declared names of one file. An ERROR node declares nothing; the nodes around it still count. */
+/**
+ * The package and top-level declared names of one file. An ERROR node declares nothing; the nodes around it still count,
+ * and the facts are marked `incomplete` because the error may have swallowed declarations the tree does not show.
+ */
 export function collectJvmFileFacts(tree: SyntaxTreeLike, languageId: JvmLanguageId): JvmFileFacts {
   const symbols = new Set<string>();
   const javaTypes = new Set<string>();
-  for (const member of topLevelNodes(tree.rootNode)) {
+  const members = topLevelNodes(tree.rootNode);
+  for (const member of members) {
     let name: string | undefined;
     if (languageId === "java") {
       if (JAVA_TYPE_DECLARATION_TYPES[member.type]) name = member.childForFieldName("name")?.text;
@@ -99,20 +108,25 @@ export function collectJvmFileFacts(tree: SyntaxTreeLike, languageId: JvmLanguag
     if (name) symbols.add(name);
   }
   const packageName = jvmPackageName(tree, languageId);
-  return languageId === "java"
-    ? { packageName, symbols: [...symbols] }
-    : { packageName, symbols: [...symbols], javaTypes: [...javaTypes] };
+  const incomplete = members.some((member) => member.type === "ERROR");
+  return {
+    packageName,
+    symbols: [...symbols],
+    ...(languageId === "kotlin" ? { javaTypes: [...javaTypes] } : {}),
+    ...(incomplete ? { incomplete: true as const } : {}),
+  };
 }
 
 /** Whether a persisted value has the shape of {@link JvmFileFacts}. Both cache layers validate rows with it. */
 export function isJvmFileFacts(value: unknown): value is JvmFileFacts {
   if (!value || typeof value !== "object") return false;
-  const facts = value as { packageName?: unknown; symbols?: unknown; javaTypes?: unknown };
+  const facts = value as { packageName?: unknown; symbols?: unknown; javaTypes?: unknown; incomplete?: unknown };
   const isNames = (names: unknown): boolean => Array.isArray(names) && names.every((name) => typeof name === "string");
   return (
     (facts.packageName === null || typeof facts.packageName === "string") &&
     isNames(facts.symbols) &&
-    (facts.javaTypes === undefined || isNames(facts.javaTypes))
+    (facts.javaTypes === undefined || isNames(facts.javaTypes)) &&
+    (facts.incomplete === undefined || facts.incomplete === true)
   );
 }
 
