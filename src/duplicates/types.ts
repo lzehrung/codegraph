@@ -1,5 +1,6 @@
 import type { SyntaxTreeLike } from "../languages/types.js";
 import type { ProjectIndex, SymbolKind } from "../indexer/types.js";
+import type { ProgressUpdate } from "../types.js";
 import type { SqliteDatabase, SqliteStatement } from "../sqlite-driver.js";
 
 export type DuplicateConfidence = "high" | "medium" | "low";
@@ -96,11 +97,24 @@ export type DuplicateDetectionOptions = {
   maxTokens?: number;
   maxBucketSize?: number;
   maxPairs?: number;
+  /**
+   * Upper bound on candidate pairs kept for scoring. Evidence kinds are admitted in order of strength
+   * (exact text, normalized tokens, AST shape, Git similarity, shared fingerprints); pairs past the bound are
+   * skipped and counted in `omittedCounts.candidatePairs`, and `stats.candidatePairBudget` reports the bound.
+   * Pairs that can never be scored (two units of one file in a cross-file run, or two that overlap) take no slot and
+   * are never counted as skipped. Duplicate contexts for several targets share one bound, and each reports the whole
+   * call's skips.
+   */
+  maxCandidatePairs?: number;
   /** Count candidate duplicate groups without scoring every pair. */
   countOnly?: boolean;
   shingleSize?: number;
   windowSize?: number;
   includeRawPairs?: boolean;
+  /** Receives stage progress while units are collected, paired, scored, and grouped. */
+  onProgress?: ((update: ProgressUpdate) => void) | undefined;
+  /** `performance.now()` origin for the completion `elapsedMs`, so a caller can count work that preceded detection. */
+  progressStartedAt?: number;
 };
 
 export type DuplicateSimilarityHint = {
@@ -114,13 +128,24 @@ export type DuplicateDetectionOmittedCounts = {
   rawSuggestions: number;
   oversizedBuckets: number;
   belowThresholdUnits: number;
+  /**
+   * Candidate pairs left out because their units overlap, counted up to `maxCandidatePairs`. A cross-file run reports
+   * none.
+   */
   overlappingPairs: number;
+  /** Candidate pairs left out of scoring: those past `maxPairs` plus those `maxCandidatePairs` never admitted. */
   candidatePairs: number;
 };
 
 export type DuplicateDetectionStats = {
   comparedPairs: number;
+  /**
+   * Candidate pairs found, never more than `maxCandidatePairs`: those kept for scoring plus those that can never be
+   * scored (two units of one file in a cross-file run, or two that overlap).
+   */
   candidatePairs: number;
+  /** Present only when the candidate pair bound dropped pairs: the bound and the pair occurrences it skipped. */
+  candidatePairBudget?: { limit: number; skipped: number };
 };
 
 export type DuplicateDetectionFilteredCounts = {
@@ -177,7 +202,9 @@ export type PairEvidence = {
   normalizedHash: boolean;
   astShape: boolean;
   gitSimilarity?: number;
+  /** The units share enough eligible fingerprint buckets to count as fingerprint evidence. */
   signature: boolean;
+  /** How many eligible fingerprint buckets the units share; recorded only when `signature` is set. */
   signatureMatches: number;
 };
 
@@ -185,8 +212,6 @@ export type LanguageForFileResult = {
   id: string;
   textOnly: boolean;
 };
-
-export type ConsideredSignaturesByUnit = Map<string, Set<string>>;
 
 export type DuplicateAstContext = {
   source: string;

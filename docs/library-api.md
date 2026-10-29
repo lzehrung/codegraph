@@ -704,12 +704,16 @@ Useful options:
 - `includeSmall`: include units below the default token floor.
 - `includeRawPairs`: include low-level symbol/chunk pair evidence as `suggestions`.
 - `minTokens` and `maxTokens`: tune unit and fallback chunk bounds.
+- `maxCandidatePairs`: upper bound on candidate pairs kept for scoring; default `2000000`, maximum `16000000`. `findDuplicates()`, `findDuplicateContext()`, and `findDuplicateContexts()` accept it. Evidence is kept strongest first (identical text, identical normalized tokens, identical AST shape, Git similarity hints, then shared fingerprints, the pairs that share the largest fraction of their fingerprints first), and pairs that can never be scored (two units of one file in a cross-file run, or two that overlap) take no slot and are never skipped. A pair counts as skipped only once it qualifies on its evidence, in `omittedCounts.candidatePairs` together with the pairs `maxPairs` left uncompared, and `stats.candidatePairBudget` (`limit`, `skipped`) is present only when pairs were skipped.
+- `onProgress` and `progressStartedAt`: `onProgress` receives `ProgressUpdate` events for `Collecting duplicate units`, `Finding candidate pairs`, `Scoring candidate pairs`, and `Grouping duplicate findings`, then a `Detected duplicates` completion whose `elapsedMs` counts from `progressStartedAt` (a `performance.now()` value) when it is given. `findDuplicates()` supports both; the CLI sets them.
 - `similarityHints`: optional file-pair hints, usually from git copy or rename metadata, that boost matching unit pairs with `gitSimilarity` metrics when the finite similarity index is at least 80.
 - `findDuplicateContext`: filters duplicate groups to a target file or line range before applying the result limit.
+- `findDuplicateContexts`: answers several targets in one pass and returns one context per target. The targets share one `maxCandidatePairs` bound, so each context reports the whole call's skipped pairs in `omittedCounts.candidatePairs` and `stats.candidatePairBudget`.
 
 Tests:
 
 - `tests/duplicates.test.ts`
+- `tests/duplicates-candidates.test.ts`
 
 ## Basic index building
 

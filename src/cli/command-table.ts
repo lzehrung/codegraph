@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import type { BuildReport } from "../indexer/types.js";
 import {
   exitCli,
@@ -466,6 +467,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
   duplicates: {
     stage: "project",
     run: async (ctx) => {
+      const startedAt = performance.now();
       const files = await ctx.resolveFiles();
       const { handleDuplicatesCommand } = await import("./duplicates.js");
       await handleDuplicatesCommand({
@@ -474,6 +476,8 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,
         loadCurrentIndex: ctx.createDuplicateIndexLoader(),
+        progressHandler: ctx.progressHandler,
+        progressStartedAt: startedAt,
         writeJSONLine,
         writeStdoutLine,
         writeStderrLine,
