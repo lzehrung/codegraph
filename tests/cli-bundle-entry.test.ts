@@ -14,6 +14,7 @@ const unbundledCli = path.join(rootDir, "dist", "cli.js");
 
 function run(entry: string, args: string[], cwd: string = rootDir, env: NodeJS.ProcessEnv = process.env) {
   return spawnSync(process.execPath, [entry, ...args], {
+    windowsHide: true,
     cwd,
     encoding: "utf8",
     env,

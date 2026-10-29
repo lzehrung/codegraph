@@ -335,6 +335,7 @@ describe("release script helpers", () => {
     const outputPath = path.join(tempDir, "temp", "release-changelog", "CHANGELOG.md");
     try {
       const artifactResult = spawnSync(process.execPath, [scriptPath, "patch", "--output", outputPath], {
+        windowsHide: true,
         cwd: tempDir,
         encoding: "utf8",
       });
@@ -346,6 +347,7 @@ describe("release script helpers", () => {
       expect(fs.readFileSync(path.join(tempDir, "package.json"), "utf8")).toBe('{"version":"2.3.20"}\n');
 
       const result = spawnSync(process.execPath, [scriptPath, "patch"], {
+        windowsHide: true,
         cwd: tempDir,
         encoding: "utf8",
       });
@@ -373,6 +375,7 @@ describe("release script helpers", () => {
 
     try {
       const result = spawnSync(process.execPath, [scriptPath, "1.8.50"], {
+        windowsHide: true,
         cwd: tempDir,
         encoding: "utf8",
       });
@@ -401,6 +404,7 @@ describe("release script helpers", () => {
 
     try {
       const result = spawnSync(process.execPath, [scriptPath, "--if-missing"], {
+        windowsHide: true,
         cwd: tempDir,
         encoding: "utf8",
       });
@@ -429,6 +433,7 @@ describe("release script helpers", () => {
 
     try {
       const result = spawnSync(process.execPath, [scriptPath, "--if-missing"], {
+        windowsHide: true,
         cwd: tempDir,
         encoding: "utf8",
       });
@@ -457,6 +462,7 @@ describe("release script helpers", () => {
 
     try {
       const result = spawnSync(process.execPath, [scriptPath, "--if-missing"], {
+        windowsHide: true,
         cwd: tempDir,
         encoding: "utf8",
       });

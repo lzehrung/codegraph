@@ -11,6 +11,7 @@ const cleanlinessScript = path.resolve(process.cwd(), "scripts", "check-fixture-
 
 function runCleanlinessScript(repoRoot: string, extraArgs: readonly string[] = []) {
   return spawnSync(process.execPath, [cleanlinessScript, "--root", repoRoot, ...extraArgs], {
+    windowsHide: true,
     encoding: "utf8",
   });
 }

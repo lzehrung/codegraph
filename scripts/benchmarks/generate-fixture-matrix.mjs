@@ -121,6 +121,7 @@ function runVitest(reportPath) {
   const absoluteReportPath = path.join(rootDir, reportPath);
   fs.mkdirSync(path.dirname(absoluteReportPath), { recursive: true });
   const result = spawnSync("npx", ["vitest", "run", LANGUAGES_DIR, "--reporter=json", `--outputFile=${reportPath}`], {
+    windowsHide: true,
     cwd: rootDir,
     stdio: "inherit",
     encoding: "utf8",

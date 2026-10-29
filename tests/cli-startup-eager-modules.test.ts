@@ -37,6 +37,7 @@ process.on("exit", () => {
 
   try {
     const result = spawnSync(process.execPath, ["--import", pathToFileURL(preloadPath).href, cliPath, ...args], {
+      windowsHide: true,
       encoding: "utf8",
       env: { ...process.env, NODE_OPTIONS: "" },
     });

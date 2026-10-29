@@ -1556,11 +1556,7 @@ describe("public documentation benchmark summarizer contracts", () => {
     const formatted = spawnSync(
       process.execPath,
       [path.join(rootDir, "node_modules", "prettier", "bin", "prettier.cjs"), "--parser", "markdown"],
-      {
-        cwd: rootDir,
-        input: checkedTable,
-        encoding: "utf8",
-      },
+      { windowsHide: true, cwd: rootDir, input: checkedTable, encoding: "utf8" },
     );
     expect(formatted.status, formatted.stderr).toBe(0);
     expect(formatted.stdout).toBe(checkedTable);
@@ -1592,11 +1588,7 @@ describe("public documentation benchmark subprocess", () => {
     const result = spawnSync(
       process.execPath,
       [runnerPath, "--runs", "1", "--scenario", "repo-orientation-small-ts", "--require-complete", "--json"],
-      {
-        cwd: rootDir,
-        encoding: "utf8",
-        timeout: 60_000,
-      },
+      { windowsHide: true, cwd: rootDir, encoding: "utf8", timeout: 60_000 },
     );
 
     expect(result.error).toBeUndefined();

@@ -69,7 +69,12 @@ describe.runIf(windowsX64)("Windows native runtime cache integration", () => {
     const child = fork(
       path.resolve("tests/fixtures/native-cache-live-child.mjs"),
       [JSON.stringify({ packageRoot, platformPackageRoot, cacheRoot })],
-      { cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe", "ipc"] },
+      {
+        // @ts-expect-error ForkOptions omits windowsHide, but fork forwards its options to spawn.
+        windowsHide: true,
+        cwd: process.cwd(),
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
+      },
     );
 
     try {

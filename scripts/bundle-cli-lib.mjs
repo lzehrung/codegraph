@@ -100,6 +100,7 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
 
 function runNode(entry, args, { cwd = defaultRootDir, env = process.env } = {}) {
   return spawnSync(process.execPath, [entry, ...args], {
+    windowsHide: true,
     cwd,
     encoding: "utf8",
     env,

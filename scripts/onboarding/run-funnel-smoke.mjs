@@ -178,6 +178,7 @@ export async function runFunnelSmoke(options = {}) {
 export function runFunnelCommand(command, args, options = {}) {
   const invocation = resolveCommandInvocation(command, args);
   const spawned = spawnSync(invocation.command, invocation.args, {
+    windowsHide: true,
     cwd: options.cwd,
     env: options.env,
     input: options.input,
@@ -1008,11 +1009,11 @@ async function runConfiguredMcpExchange({
 
 function spawnConfiguredMcpProcess(command, args, options) {
   const spawnOptions = { cwd: options.cwd, env: options.env, shell: false, stdio: ["pipe", "pipe", "pipe"] };
-  if (process.platform !== "win32") return spawn(command, args, spawnOptions);
+  if (process.platform !== "win32") return spawn(command, args, { ...spawnOptions, windowsHide: true });
   const commandProcessor =
     options.env.ComSpec ?? options.env.COMSPEC ?? process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe";
   const commandLine = [command, ...args].join(" ");
-  return spawn(commandProcessor, ["/d", "/s", "/c", commandLine], spawnOptions);
+  return spawn(commandProcessor, ["/d", "/s", "/c", commandLine], { ...spawnOptions, windowsHide: true });
 }
 
 function quoteWindowsCommandArgument(value) {

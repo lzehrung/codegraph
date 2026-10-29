@@ -255,6 +255,7 @@ async function smokeStandaloneRoot(root, target, manifest) {
 
 function runStandaloneSmokeCommand(node, cli, args, root) {
   const result = spawnSync(node, [cli, ...args], {
+    windowsHide: true,
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, PATH: "" },

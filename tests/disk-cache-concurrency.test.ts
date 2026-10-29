@@ -58,6 +58,7 @@ function spawnWorker(
 }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [workerPath, JSON.stringify(job)], {
+      windowsHide: true,
       cwd: repoRoot,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],

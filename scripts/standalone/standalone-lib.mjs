@@ -208,10 +208,7 @@ async function copyPublishedPackageFiles(packageRoot, destinationRoot, npmCli) {
   const output = execFileSync(
     process.execPath,
     [npmCli, "pack", "--dry-run", "--json", "--ignore-scripts", packageRoot],
-    {
-      cwd: packageRoot,
-      encoding: "utf8",
-    },
+    { windowsHide: true, cwd: packageRoot, encoding: "utf8" },
   );
   const report = JSON.parse(output);
   const files = report[0]?.files;
@@ -334,12 +331,13 @@ function createArchive(parentDir, bundleName, archivePath, archiveType) {
     if (process.platform !== "win32") throw new Error("Windows standalone ZIP archives must be assembled on Windows.");
     const windowsDirectory = process.env.WINDIR ?? "C:\\Windows";
     execFileSync(path.join(windowsDirectory, "System32", "tar.exe"), ["-a", "-cf", archivePath, bundleName], {
+      windowsHide: true,
       cwd: parentDir,
       stdio: "inherit",
     });
     return;
   }
-  execFileSync("tar", ["-czf", archivePath, bundleName], { cwd: parentDir, stdio: "inherit" });
+  execFileSync("tar", ["-czf", archivePath, bundleName], { windowsHide: true, cwd: parentDir, stdio: "inherit" });
 }
 
 async function sha256File(filePath) {
