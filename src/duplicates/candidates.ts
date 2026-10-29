@@ -13,13 +13,9 @@ import type {
 const MIN_SIMILARITY_HINT_INDEX = 80;
 
 /**
- * Fewest distinct pairs a targeted run counts shared fingerprint buckets for. The count table only bounds
- * memory, so a small pair limit must not shrink it: a pair the table cannot hold is indistinguishable from
- * one that qualifies, and every later sighting of it would be counted as skipped.
+ * Targeted analysis: only pairs that touch a target unit are candidates. Both predicates depend on a unit's id alone,
+ * so all the units of one id are targets, or none is.
  */
-const MIN_FILTERED_FINGERPRINT_TABLE = 1_000_000;
-
-/** Targeted analysis: only pairs that touch a target unit are candidates. */
 export type CandidateFilter = {
   unit: UnitFilter;
   pair: PairFilter;
@@ -27,7 +23,7 @@ export type CandidateFilter = {
 
 export type CandidatePairOptions = {
   maxBucketSize: number;
-  /** Upper bound on pairs kept. Pairs past it are skipped and counted. */
+  /** Upper bound on pairs kept. A pair that has the evidence to be a candidate but does not fit is skipped and counted. */
   maxCandidatePairs: number;
   similarityHints?: readonly DuplicateSimilarityHint[] | undefined;
   projectRoot?: string | undefined;
@@ -42,7 +38,10 @@ export type CandidatePairResult = {
   /** Kept pairs keyed by a number derived from the unit ids, in the order evidence was admitted. */
   pairs: Map<number, PairEvidence>;
   oversizedBuckets: number;
-  /** Pair occurrences dropped because `maxCandidatePairs` was reached. A pair several kinds of evidence propose counts once per kind. */
+  /**
+   * Candidate pairs dropped because `maxCandidatePairs` was reached. Only pairs with the evidence to be candidates
+   * count, and a pair that several kinds of evidence propose counts once per kind.
+   */
   skippedPairs: number;
 };
 
@@ -460,88 +459,33 @@ function eligibleFingerprintBuckets(
 }
 
 /**
- * Fingerprint evidence for a targeted run: count the shared buckets of each pair that touches a target.
- * The count table holds at most `max(pair limit, MIN_FILTERED_FINGERPRINT_TABLE)` pairs, so a pathological
- * target set cannot grow it without bound; each sighting of a pair past that counts as skipped.
+ * The eligible fingerprint buckets flattened into typed arrays, so counting the buckets two units share needs no object
+ * per pair.
  */
-function addFilteredFingerprintPairs(
-  state: PairState,
+type FingerprintLayout = {
+  /** The members of bucket `b` are the slots `bucketStart[b]` up to `bucketStart[b + 1]`, in unit order. */
+  bucketStart: Int32Array;
+  /** Where the visits of a bucket begin in a walk of all buckets: the squared sizes of the buckets before it. */
+  rankBase: Float64Array;
+  /** The unit position and the canonical unit of each member slot. */
+  memberUnit: Int32Array;
+  memberCanon: Int32Array;
+  /**
+   * The member slots of canonical unit `u`, in bucket order, are `entryMember` from `entryStart[u]` up to
+   * `entryStart[u + 1]`; `entryBucket` holds the bucket of each.
+   */
+  entryStart: Int32Array;
+  entryMember: Int32Array;
+  entryBucket: Int32Array;
+  /** How many eligible buckets each canonical unit is in. */
+  consideredCount: Int32Array;
+};
+
+function layoutFingerprintBuckets(
+  index: UnitIndex,
   eligible: ReadonlyArray<readonly DuplicateInternalUnit[]>,
-  filter: CandidateFilter,
-): void {
-  const { index, pairs } = state;
-  const tableLimit = Math.max(state.limit, MIN_FILTERED_FINGERPRINT_TABLE);
-  const sharedBuckets = new Map<number, number>();
-  const secondSighting = new Map<number, [DuplicateInternalUnit, DuplicateInternalUnit]>();
-  const consideredBuckets = new Map<number, Set<number>>();
-  const consideredCount = (unit: DuplicateInternalUnit): number =>
-    consideredBuckets.get(canonOf(index, unit))?.size ?? 0;
-
-  eligible.forEach((bucket, ordinal) => {
-    for (const unit of bucket) {
-      const canon = canonOf(index, unit);
-      const considered = consideredBuckets.get(canon);
-      if (considered) considered.add(ordinal);
-      else consideredBuckets.set(canon, new Set([ordinal]));
-    }
-    forEachFilteredBucketPair(index, bucket, filter, (left, right, key) => {
-      const next = (sharedBuckets.get(key) ?? 0) + 1;
-      if (next === 1 && sharedBuckets.size >= tableLimit) {
-        state.skipped++;
-        return;
-      }
-      sharedBuckets.set(key, next);
-      if (next === 2 && !pairs.has(key) && !secondSighting.has(key)) secondSighting.set(key, [left, right]);
-    });
-  });
-
-  for (const [key, count] of sharedBuckets) {
-    const existing = pairs.get(key);
-    if (existing) {
-      existing.signatureMatches = count;
-      if (hasEnoughFingerprints(count, Math.min(consideredCount(existing.left), consideredCount(existing.right)))) {
-        existing.signature = true;
-      }
-      continue;
-    }
-    if (count < 2) continue;
-    const units = secondSighting.get(key);
-    if (!units) continue;
-    const [left, right] = units;
-    if (!hasEnoughFingerprints(count, Math.min(consideredCount(left), consideredCount(right)))) continue;
-    if (pairs.size >= state.limit) {
-      state.skipped++;
-      continue;
-    }
-    pairs.set(key, {
-      left,
-      right,
-      rawHash: false,
-      normalizedHash: false,
-      astShape: false,
-      signature: true,
-      signatureMatches: count,
-    });
-  }
-}
-
-/**
- * Fingerprint evidence for the whole project.
- *
- * Every unit counts, per other unit, the eligible buckets they share, using one counter per unit
- * instead of a table of all pairs that share a fingerprint. Only pairs that already have stronger
- * evidence, or share enough fingerprints, become candidates. When more qualify than the pair limit
- * allows, the pairs sharing the largest fraction of their fingerprints are kept. The kept pairs are
- * then admitted in the order a pair-by-pair walk of the buckets would have first met them.
- */
-async function addFingerprintPairs(
-  state: PairState,
-  eligible: ReadonlyArray<readonly DuplicateInternalUnit[]>,
-  options: CandidatePairOptions,
-): Promise<void> {
-  const { index, pairs } = state;
+): FingerprintLayout {
   const unitCount = index.units.length;
-  const canon = index.canon;
   const bucketCount = eligible.length;
 
   const bucketStart = new Int32Array(bucketCount + 1);
@@ -557,7 +501,6 @@ async function addFingerprintPairs(
   }
   bucketStart[bucketCount] = total;
 
-  // Members of every eligible bucket, flattened in bucket order: the unit position and its canonical unit.
   const memberUnit = new Int32Array(total);
   const memberCanon = new Int32Array(total);
   const entryStart = new Int32Array(unitCount + 1);
@@ -566,7 +509,7 @@ async function addFingerprintPairs(
   for (let bucket = 0, member = 0; bucket < bucketCount; bucket++) {
     for (const unit of eligible[bucket]!) {
       const position = positionOf(index, unit);
-      const unitCanon = canon[position]!;
+      const unitCanon = index.canon[position]!;
       memberUnit[member] = position;
       memberCanon[member] = unitCanon;
       member++;
@@ -579,7 +522,6 @@ async function addFingerprintPairs(
   }
   for (let unit = 0; unit < unitCount; unit++) entryStart[unit + 1] = entryStart[unit + 1]! + entryStart[unit]!;
 
-  // Each canonical unit's member slots, in bucket order.
   const entryMember = new Int32Array(total);
   const entryBucket = new Int32Array(total);
   const nextEntry = entryStart.slice(0, unitCount);
@@ -592,13 +534,146 @@ async function addFingerprintPairs(
       entryBucket[slot] = bucket;
     }
   }
+  return { bucketStart, rankBase, memberUnit, memberCanon, entryStart, entryMember, entryBucket, consideredCount };
+}
 
+/** Where a pair is admitted, and the units it is admitted with: the walk that first meets the pair fixes both. */
+type PairVisit = { rank: number; left: DuplicateInternalUnit; right: DuplicateInternalUnit };
+
+/**
+ * Decides which pairs that share fingerprint buckets become candidates, for the whole project and for a targeted run
+ * alike. A pair qualifies when it shares at least two eligible buckets and a quarter of the smaller unit's. One that
+ * already has stronger evidence only gains the fingerprint evidence. The rest compete for the room the limit leaves,
+ * the pairs that share the largest fraction of their buckets first, and only a qualifying pair that does not fit
+ * counts as skipped.
+ */
+class FingerprintSelection {
+  private readonly best: BestPairs;
+  private qualifying = 0;
+
+  constructor(
+    private readonly state: PairState,
+    private readonly layout: FingerprintLayout,
+    private readonly pairFilter: PairFilter | undefined,
+  ) {
+    this.best = new BestPairs(Math.max(0, state.limit - state.pairs.size));
+  }
+
+  /** Takes two canonical units that share `count` eligible buckets; fewer than two cannot qualify. */
+  consider(first: number, second: number, count: number): void {
+    if (count < 2) return;
+    const { index, pairs } = this.state;
+    const smaller = Math.min(this.layout.consideredCount[first]!, this.layout.consideredCount[second]!);
+    if (!hasEnoughFingerprints(count, smaller)) return;
+    if (this.pairFilter) {
+      const [left, right] = orderedPair(index.units[first]!, index.units[second]!);
+      if (!this.pairFilter(left, right)) return;
+    }
+    const existing = pairs.get(pairNumber(index, first, second));
+    if (existing) {
+      existing.signatureMatches = count;
+      existing.signature = true;
+      return;
+    }
+    this.qualifying++;
+    this.best.offer(count / smaller, Math.min(first, second), Math.max(first, second), count);
+  }
+
+  /** Adds the kept pairs in the order a walk of the buckets would first have met them, and counts the rest skipped. */
+  admit(visitOf: (first: number, second: number) => PairVisit): void {
+    const { index, pairs } = this.state;
+    const admissions = this.best.entries().map(({ first, second, matches }) => ({
+      ...visitOf(first, second),
+      key: pairNumber(index, first, second),
+      count: matches,
+    }));
+    admissions.sort((left, right) => left.rank - right.rank);
+    for (const admission of admissions) {
+      pairs.set(admission.key, {
+        left: admission.left,
+        right: admission.right,
+        rawHash: false,
+        normalizedHash: false,
+        astShape: false,
+        signature: true,
+        signatureMatches: admission.count,
+      });
+    }
+    this.state.skipped += this.qualifying - admissions.length;
+  }
+}
+
+/**
+ * Where a pair-by-pair walk of every bucket first meets two canonical units, and the units of its second visit. The walk
+ * visits each pair of a bucket in unit order, and units that share an id can meet more than once in one bucket.
+ */
+function wholeProjectVisit(
+  layout: FingerprintLayout,
+  units: readonly DuplicateInternalUnit[],
+  first: number,
+  second: number,
+): PairVisit {
+  const { bucketStart, rankBase, memberUnit, entryStart, entryMember, entryBucket } = layout;
+  const visits: Array<{ rank: number; low: number; high: number }> = [];
+  let a = entryStart[first]!;
+  const aEnd = entryStart[first + 1]!;
+  let b = entryStart[second]!;
+  const bEnd = entryStart[second + 1]!;
+  while (a < aEnd && b < bEnd && visits.length < 2) {
+    const bucketA = entryBucket[a]!;
+    const bucketB = entryBucket[b]!;
+    if (bucketA < bucketB) {
+      a++;
+      continue;
+    }
+    if (bucketB < bucketA) {
+      b++;
+      continue;
+    }
+    let aNext = a;
+    while (aNext < aEnd && entryBucket[aNext] === bucketA) aNext++;
+    let bNext = b;
+    while (bNext < bEnd && entryBucket[bNext] === bucketA) bNext++;
+    const start = bucketStart[bucketA]!;
+    const size = bucketStart[bucketA + 1]! - start;
+    for (let x = a; x < aNext; x++) {
+      for (let y = b; y < bNext; y++) {
+        if (first === second && y <= x) continue;
+        const low = Math.min(entryMember[x]!, entryMember[y]!);
+        const high = Math.max(entryMember[x]!, entryMember[y]!);
+        visits.push({ rank: rankBase[bucketA]! + (low - start) * size + (high - start), low, high });
+      }
+    }
+    a = aNext;
+    b = bNext;
+  }
+  visits.sort((left, right) => left.rank - right.rank);
+  const firstVisit = visits[0]!;
+  const secondVisit = visits[1]!;
+  const [left, right] = orderedPair(units[memberUnit[secondVisit.low]!]!, units[memberUnit[secondVisit.high]!]!);
+  return { rank: firstVisit.rank, left, right };
+}
+
+/**
+ * Fingerprint evidence for the whole project.
+ *
+ * Every unit counts, per other unit, the eligible buckets they share, using one counter per unit instead of a table
+ * of all pairs that share a fingerprint. The kept pairs are then admitted in the order a pair-by-pair walk of the
+ * buckets would have first met them.
+ */
+async function addProjectFingerprintPairs(
+  state: PairState,
+  layout: FingerprintLayout,
+  options: CandidatePairOptions,
+): Promise<void> {
+  const { index } = state;
+  const unitCount = index.units.length;
+  const { bucketStart, memberUnit, memberCanon, entryStart, entryMember, entryBucket } = layout;
+  const selection = new FingerprintSelection(state, layout, undefined);
   const sharedBuckets = new Int32Array(unitCount);
   const touched = new Int32Array(unitCount);
-  const best = new BestPairs(Math.max(0, state.limit - pairs.size));
   const sharesIds = index.hasSharedIds;
   const reportEvery = Math.max(1, Math.floor(unitCount / 100));
-  let qualifying = 0;
 
   for (let unit = 0; unit < unitCount; unit++) {
     const firstEntry = entryStart[unit]!;
@@ -632,17 +707,7 @@ async function addFingerprintPairs(
       const partner = touched[at]!;
       const count = sharedBuckets[partner]!;
       sharedBuckets[partner] = 0;
-      if (count < 2) continue;
-      const smaller = Math.min(consideredCount[unit]!, consideredCount[partner]!);
-      if (!hasEnoughFingerprints(count, smaller)) continue;
-      const existing = pairs.get(unit * unitCount + partner);
-      if (existing) {
-        existing.signatureMatches = count;
-        existing.signature = true;
-        continue;
-      }
-      qualifying++;
-      best.offer(count / smaller, unit, partner, count);
+      selection.consider(unit, partner, count);
     }
     if (unit % reportEvery === 0) options.onFingerprintProgress?.(unit + 1, unitCount);
     const pending = options.yieldPoint?.();
@@ -650,72 +715,125 @@ async function addFingerprintPairs(
   }
   options.onFingerprintProgress?.(unitCount, unitCount);
 
-  // Admit the kept pairs where the pair-by-pair walk would have met them: by their first shared
-  // bucket, and from the second sighting come the units the evidence names.
-  type Admission = {
-    rank: number;
-    left: DuplicateInternalUnit;
-    right: DuplicateInternalUnit;
-    key: number;
-    count: number;
-  };
-  const admissions: Admission[] = [];
-  for (const { first, second, matches } of best.entries()) {
-    const visits: Array<{ rank: number; low: number; high: number }> = [];
-    let a = entryStart[first]!;
-    const aEnd = entryStart[first + 1]!;
-    let b = entryStart[second]!;
-    const bEnd = entryStart[second + 1]!;
-    while (a < aEnd && b < bEnd && visits.length < 2) {
-      const bucketA = entryBucket[a]!;
-      const bucketB = entryBucket[b]!;
-      if (bucketA < bucketB) {
-        a++;
-        continue;
-      }
-      if (bucketB < bucketA) {
-        b++;
-        continue;
-      }
-      let aNext = a;
-      while (aNext < aEnd && entryBucket[aNext] === bucketA) aNext++;
-      let bNext = b;
-      while (bNext < bEnd && entryBucket[bNext] === bucketA) bNext++;
-      const start = bucketStart[bucketA]!;
-      const size = bucketStart[bucketA + 1]! - start;
-      for (let x = a; x < aNext; x++) {
-        for (let y = b; y < bNext; y++) {
-          if (first === second && y <= x) continue;
-          const low = Math.min(entryMember[x]!, entryMember[y]!);
-          const high = Math.max(entryMember[x]!, entryMember[y]!);
-          visits.push({ rank: rankBase[bucketA]! + (low - start) * size + (high - start), low, high });
-        }
-      }
-      a = aNext;
-      b = bNext;
+  selection.admit((first, second) => wholeProjectVisit(layout, index.units, first, second));
+}
+
+/**
+ * Where a walk that starts from the targets first meets two canonical units, and the units of its second visit. That
+ * walk of a bucket takes each target in turn and pairs it with every other member, so it meets a pair from the target
+ * that comes first in the bucket, or from the pair's only target, and pairs it with the other unit's first member.
+ */
+function targetedVisit(
+  layout: FingerprintLayout,
+  units: readonly DuplicateInternalUnit[],
+  targets: { isTarget: Uint8Array; before: Int32Array },
+  first: number,
+  second: number,
+): PairVisit {
+  const { bucketStart, rankBase, memberUnit, entryStart, entryMember, entryBucket } = layout;
+  let a = entryStart[first]!;
+  const aEnd = entryStart[first + 1]!;
+  let b = entryStart[second]!;
+  const bEnd = entryStart[second + 1]!;
+  const firstIsTarget = targets.isTarget[first] === 1;
+  const secondIsTarget = targets.isTarget[second] === 1;
+  let firstRank = -1;
+  while (a < aEnd && b < bEnd) {
+    const bucket = entryBucket[a]!;
+    if (bucket < entryBucket[b]!) {
+      a++;
+      continue;
     }
-    visits.sort((left, right) => left.rank - right.rank);
-    const firstVisit = visits[0]!;
-    const secondVisit = visits[1]!;
-    const [left, right] = orderedPair(
-      index.units[memberUnit[secondVisit.low]!]!,
-      index.units[memberUnit[secondVisit.high]!]!,
-    );
-    admissions.push({ rank: firstVisit.rank, left, right, key: first * unitCount + second, count: matches });
+    if (entryBucket[b]! < bucket) {
+      b++;
+      continue;
+    }
+    // Both units are in this bucket, and `a` and `b` are their first members in it. The walk reaches the pair from its
+    // only target, or from whichever of the two targets comes first.
+    const slotA = entryMember[a]!;
+    const slotB = entryMember[b]!;
+    const walkedFromA = firstIsTarget && (!secondIsTarget || slotA < slotB);
+    const targetSlot = walkedFromA ? slotA : slotB;
+    const otherSlot = walkedFromA ? slotB : slotA;
+    if (firstRank < 0) {
+      const start = bucketStart[bucket]!;
+      const size = bucketStart[bucket + 1]! - start;
+      firstRank = rankBase[bucket]! + targets.before[targetSlot]! * size + (otherSlot - start);
+    } else {
+      const [left, right] = orderedPair(units[memberUnit[targetSlot]!]!, units[memberUnit[otherSlot]!]!);
+      return { rank: firstRank, left, right };
+    }
+    while (a < aEnd && entryBucket[a] === bucket) a++;
+    while (b < bEnd && entryBucket[b] === bucket) b++;
   }
-  admissions.sort((left, right) => left.rank - right.rank);
-  for (const admission of admissions) {
-    pairs.set(admission.key, {
-      left: admission.left,
-      right: admission.right,
-      rawHash: false,
-      normalizedHash: false,
-      astShape: false,
-      signature: true,
-      signatureMatches: admission.count,
-    });
+  throw new Error("A candidate pair from shared fingerprints shares fewer than two buckets.");
+}
+
+/**
+ * Fingerprint evidence for a targeted run.
+ *
+ * Every target counts, per other unit, the eligible buckets they share, with one counter per unit as in the
+ * whole-project pass, and a pair of two targets is counted from the lower one. Pairs qualify, compete for the limit,
+ * and are admitted exactly as they are there, in the order a walk that starts from the targets would first have met
+ * them.
+ */
+function addTargetedFingerprintPairs(state: PairState, layout: FingerprintLayout, filter: CandidateFilter): void {
+  const { index } = state;
+  const unitCount = index.units.length;
+  const { bucketStart, memberCanon, entryStart, entryBucket } = layout;
+  const bucketCount = bucketStart.length - 1;
+
+  const isTarget = new Uint8Array(unitCount);
+  for (let unit = 0; unit < unitCount; unit++) {
+    if (entryStart[unit + 1]! > entryStart[unit]! && filter.unit(index.units[unit]!)) isTarget[unit] = 1;
   }
-  state.skipped += qualifying - admissions.length;
+  // How many targets come before each member of its bucket: where the walk of the bucket reaches it.
+  const before = new Int32Array(memberCanon.length);
+  for (let bucket = 0; bucket < bucketCount; bucket++) {
+    let targetsSoFar = 0;
+    for (let member = bucketStart[bucket]!; member < bucketStart[bucket + 1]!; member++) {
+      before[member] = targetsSoFar;
+      targetsSoFar += isTarget[memberCanon[member]!]!;
+    }
+  }
+
+  const selection = new FingerprintSelection(state, layout, filter.pair);
+  const sharedBuckets = new Int32Array(unitCount);
+  const touched = new Int32Array(unitCount);
+  // Units that share an id can be in one bucket twice, and a pair counts once per bucket.
+  const countedIn = index.hasSharedIds ? new Int32Array(unitCount) : undefined;
+  let walk = 0;
+  for (let target = 0; target < unitCount; target++) {
+    if (!isTarget[target]) continue;
+    let touchedCount = 0;
+    let previousBucket = -1;
+    for (let slot = entryStart[target]!; slot < entryStart[target + 1]!; slot++) {
+      const bucket = entryBucket[slot]!;
+      if (bucket === previousBucket) continue;
+      previousBucket = bucket;
+      walk++;
+      for (let member = bucketStart[bucket]!; member < bucketStart[bucket + 1]!; member++) {
+        const partner = memberCanon[member]!;
+        // A unit is not paired with its own id, and a pair of two targets is counted from the lower one.
+        if (partner === target || (partner < target && isTarget[partner])) continue;
+        if (countedIn) {
+          if (countedIn[partner] === walk) continue;
+          countedIn[partner] = walk;
+        }
+        const shared = sharedBuckets[partner]!;
+        if (!shared) touched[touchedCount++] = partner;
+        sharedBuckets[partner] = shared + 1;
+      }
+    }
+    for (let at = 0; at < touchedCount; at++) {
+      const partner = touched[at]!;
+      const count = sharedBuckets[partner]!;
+      sharedBuckets[partner] = 0;
+      selection.consider(target, partner, count);
+    }
+  }
+
+  selection.admit((first, second) => targetedVisit(layout, index.units, { isTarget, before }, first, second));
 }
 
 function normalizeSimilarityIndex(value: number): number | undefined {
@@ -911,10 +1029,11 @@ export async function buildCandidatePairs(
   );
   const fingerprints = eligibleFingerprintBuckets(state, preparedBuckets.signatureBuckets, options);
   oversizedBuckets += fingerprints.oversizedBuckets;
+  const layout = layoutFingerprintBuckets(state.index, fingerprints.eligible);
   if (options.filter) {
-    addFilteredFingerprintPairs(state, fingerprints.eligible, options.filter);
+    addTargetedFingerprintPairs(state, layout, options.filter);
   } else {
-    await addFingerprintPairs(state, fingerprints.eligible, options);
+    await addProjectFingerprintPairs(state, layout, options);
   }
   return { pairs: state.pairs, oversizedBuckets, skippedPairs: state.skipped };
 }

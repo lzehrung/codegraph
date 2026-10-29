@@ -137,8 +137,12 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
       mode = update.mode ?? mode;
       if (update.activity !== undefined) unit = update.unit ?? DEFAULT_COUNT_UNIT;
       else if (update.unit !== undefined) unit = update.unit;
-      if (update.activity !== undefined && update.activity !== activity) phaseStartedAt = performance.now();
+      const activityChanged = update.activity !== undefined && update.activity !== activity;
+      if (activityChanged) phaseStartedAt = performance.now();
       if (update.activity !== undefined) activity = update.activity;
+      // A stage can run without yielding to the event loop, so the refresh timer would not fire until it ends and the
+      // previous stage would stay on screen. Paint a new stage at once, but only after the delayed display began.
+      if (activityChanged && interval !== undefined) render();
     },
     clear,
     dispose: () => {

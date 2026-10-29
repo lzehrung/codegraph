@@ -192,7 +192,9 @@ export type PairEvidence = {
   normalizedHash: boolean;
   astShape: boolean;
   gitSimilarity?: number;
+  /** The units share enough eligible fingerprint buckets to count as fingerprint evidence. */
   signature: boolean;
+  /** How many eligible fingerprint buckets the units share; recorded only when `signature` is set. */
   signatureMatches: number;
 };
 

@@ -259,6 +259,106 @@ describe("CLI index progress", () => {
     }
   });
 
+  it("repaints an interactive display when the activity changes, without waiting for the refresh timer", () => {
+    const chunks: string[] = [];
+    vi.useFakeTimers();
+
+    try {
+      const display = createCliProgressDisplay({ presentation: "interactive", write: (chunk) => chunks.push(chunk) });
+      display.update({
+        type: "progress",
+        phase: "start",
+        mode: "check",
+        message: "Scoring candidate pairs",
+        activity: "Scoring candidate pairs",
+        current: 0,
+        total: 100,
+        unit: "pair",
+      });
+      chunks.length = 0;
+
+      // The next stage runs without yielding, so no timer fires until it ends: the change has to paint now.
+      display.update({
+        type: "progress",
+        phase: "update",
+        mode: "check",
+        message: "Grouping duplicate findings",
+        activity: "Grouping duplicate findings",
+        current: 0,
+        total: 0,
+      });
+      const painted = chunks.join("");
+      expect(painted.startsWith("\r\u001b[2KGrouping duplicate findings... ")).toBe(true);
+      expect(painted).toMatch(/Grouping duplicate findings\.\.\. [-\\|/] \(\d+ms\)$/);
+
+      // A new count for the same activity waits for the timer, so a busy stage does not flood the terminal.
+      chunks.length = 0;
+      display.update({
+        type: "progress",
+        phase: "update",
+        mode: "check",
+        message: "Grouping duplicate findings",
+        activity: "Grouping duplicate findings",
+        current: 5,
+        total: 10,
+      });
+      expect(chunks).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the display delay when the activity changes before anything was shown", async () => {
+    const chunks: string[] = [];
+    vi.useFakeTimers();
+
+    try {
+      const display = createCliProgressDisplay({
+        presentation: "interactive",
+        write: (chunk) => chunks.push(chunk),
+        delayMs: 1_000,
+      });
+      display.update({
+        type: "progress",
+        phase: "start",
+        mode: "check",
+        message: "Finding candidate pairs",
+        activity: "Finding candidate pairs",
+        current: 0,
+        total: 0,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      display.update({
+        type: "progress",
+        phase: "update",
+        mode: "check",
+        message: "Scoring candidate pairs",
+        activity: "Scoring candidate pairs",
+        current: 0,
+        total: 0,
+      });
+      expect(chunks).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(chunks.join("")).toContain("Scoring candidate pairs... ");
+      expect(chunks.join("")).not.toContain("Finding candidate pairs");
+
+      chunks.length = 0;
+      display.update({
+        type: "progress",
+        phase: "update",
+        mode: "check",
+        message: "Grouping duplicate findings",
+        activity: "Grouping duplicate findings",
+        current: 0,
+        total: 0,
+      });
+      expect(chunks.join("")).toContain("Grouping duplicate findings... ");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not write file paths in interactive mode", () => {
     const chunks: string[] = [];
     const display = createCliProgressDisplay({ presentation: "interactive", write: (chunk) => chunks.push(chunk) });

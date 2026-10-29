@@ -2,7 +2,13 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { buildCandidatePairs, prepareDuplicateCandidateBuckets } from "../src/duplicates/candidates.js";
+import { DEFAULT_MAX_CANDIDATE_PAIRS } from "../src/duplicates/scoring.js";
+import {
+  buildCandidatePairs,
+  prepareDuplicateCandidateBuckets,
+  type CandidateFilter,
+  type CandidatePairResult,
+} from "../src/duplicates/candidates.js";
 import type { DuplicateInternalUnit, PairEvidence } from "../src/duplicates/types.js";
 import { buildInternalUnit } from "../src/duplicates/units.js";
 import {
@@ -148,11 +154,18 @@ function describePairs(pairs: ReadonlyMap<number, PairEvidence>): Map<string, Ex
   return described;
 }
 
-/** Units made of reused base texts: exact copies, identifier renames, and a token or two changed. */
-function makeVariedUnits(seed: number): DuplicateInternalUnit[] {
+type SharedIds = "none" | "adjacent" | "late";
+
+/**
+ * Units made of reused base texts: exact copies, identifier renames, and a token or two changed. With shared ids, every
+ * sixth unit gets a sibling of the same id and a longer text, as a long line split into chunks does, placed next to it
+ * or after all the other units.
+ */
+function makeVariedUnits(seed: number, sharedIds: SharedIds = "none"): DuplicateInternalUnit[] {
   const random = seededRandom(seed);
   const bases = Array.from({ length: 10 }, () => randomWords(random, 26));
   const specs: UnitSpec[] = [];
+  const lateSiblings: UnitSpec[] = [];
   for (let index = 0; index < 44; index++) {
     const base = bases[Math.floor(random() * bases.length)]!;
     const words = [...base];
@@ -167,13 +180,190 @@ function makeVariedUnits(seed: number): DuplicateInternalUnit[] {
       }
     }
     const group = bases.indexOf(base) % 4;
-    specs.push({
+    const spec: UnitSpec = {
       file: `src/unit${index}.ts`,
       text: words.join(" "),
       ...(group < 2 ? { astShapeHash: `shape-${group}` } : {}),
+    };
+    specs.push(spec);
+    if (sharedIds !== "none" && index % 6 === 0) {
+      const sibling = { ...spec, text: `${spec.text} ${randomWords(random, 4).join(" ")}` };
+      if (sharedIds === "adjacent") specs.push(sibling);
+      else lateSiblings.push(sibling);
+    }
+  }
+  return [...specs, ...lateSiblings].map(makeUnit);
+}
+
+/** A targeted run over the units of `count` randomly chosen files. */
+function targetFilter(units: readonly DuplicateInternalUnit[], seed: number, count: number): CandidateFilter {
+  const random = seededRandom(seed * 31 + 7);
+  const files = [...new Set(units.map((unit) => unit.file))];
+  const chosen = new Set<string>();
+  while (chosen.size < Math.min(count, files.length)) chosen.add(files[Math.floor(random() * files.length)]!);
+  const unit = (candidate: DuplicateInternalUnit) => chosen.has(candidate.file);
+  return { unit, pair: (left, right) => unit(left) || unit(right) };
+}
+
+type OracleEntry = {
+  left: DuplicateInternalUnit;
+  right: DuplicateInternalUnit;
+  rawHash: boolean;
+  normalizedHash: boolean;
+  astShape: boolean;
+  signature: boolean;
+  signatureMatches: number;
+  /** The share of the smaller unit's eligible fingerprint buckets that the pair has in common. */
+  priority: number;
+};
+
+/**
+ * The candidate pairs the original algorithm produced, kept as a reference. Every bucket is walked pair by pair, a pair
+ * is admitted where the walk first meets it, and every count lives in a map. A targeted walk starts from the target
+ * units, visits each pair once per bucket, and never pairs a unit with another unit of its own id.
+ */
+function walkedCandidates(
+  units: readonly DuplicateInternalUnit[],
+  options: { maxBucketSize: number; isTarget?: (unit: DuplicateInternalUnit) => boolean },
+): { pairs: OracleEntry[]; oversizedBuckets: number } {
+  const { maxBucketSize, isTarget } = options;
+  const identity = (left: DuplicateInternalUnit, right: DuplicateInternalUnit): string =>
+    [left.id, right.id].sort().join("\u0000");
+  const inWalkOrder = (
+    left: DuplicateInternalUnit,
+    right: DuplicateInternalUnit,
+  ): [DuplicateInternalUnit, DuplicateInternalUnit] => {
+    if (left.absoluteFile !== right.absoluteFile) {
+      return left.absoluteFile < right.absoluteFile ? [left, right] : [right, left];
+    }
+    return left.startLine <= right.startLine ? [left, right] : [right, left];
+  };
+  const walk = (
+    bucket: readonly DuplicateInternalUnit[],
+    visit: (left: DuplicateInternalUnit, right: DuplicateInternalUnit, key: string) => void,
+  ): void => {
+    if (!isTarget) {
+      for (let i = 0; i < bucket.length; i++) {
+        for (let j = i + 1; j < bucket.length; j++) {
+          const [left, right] = inWalkOrder(bucket[i]!, bucket[j]!);
+          visit(left, right, identity(left, right));
+        }
+      }
+      return;
+    }
+    const seen = new Set<string>();
+    for (const target of bucket.filter(isTarget)) {
+      for (const other of bucket) {
+        if (target.id === other.id) continue;
+        const key = identity(target, other);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const [left, right] = inWalkOrder(target, other);
+        visit(left, right, key);
+      }
+    }
+  };
+
+  let oversizedBuckets = 0;
+  const walkable = (bucket: readonly DuplicateInternalUnit[]): boolean => {
+    if (bucket.length < 2) return false;
+    if (isTarget && !bucket.some(isTarget)) return false;
+    if (bucket.length > maxBucketSize) {
+      let visited = 0;
+      if (isTarget) walk(bucket, () => visited++);
+      if (!isTarget || visited > maxBucketSize) {
+        oversizedBuckets++;
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const pairs = new Map<string, OracleEntry>();
+  const strongEvidence = [
+    ["rawHash", bucketsOf(units, (unit) => [unit.rawHash])],
+    ["normalizedHash", bucketsOf(units, (unit) => [unit.normalizedHash])],
+    ["astShape", bucketsOf(units, (unit) => (unit.astShapeHash === undefined ? [] : [unit.astShapeHash]))],
+  ] as const;
+  for (const [kind, buckets] of strongEvidence) {
+    for (const bucket of buckets.values()) {
+      if (!walkable(bucket)) continue;
+      walk(bucket, (left, right, key) => {
+        const entry = pairs.get(key);
+        if (entry) {
+          entry[kind] = true;
+          return;
+        }
+        pairs.set(key, {
+          left,
+          right,
+          rawHash: kind === "rawHash",
+          normalizedHash: kind === "normalizedHash",
+          astShape: kind === "astShape",
+          signature: false,
+          signatureMatches: 0,
+          priority: 0,
+        });
+      });
+    }
+  }
+
+  const considered = new Map<string, Set<string>>();
+  const sightings = new Map<string, number>();
+  const secondSighting = new Map<string, [DuplicateInternalUnit, DuplicateInternalUnit]>();
+  for (const [fingerprint, bucket] of bucketsOf(units, (unit) => [...unit.signatures])) {
+    if (!walkable(bucket)) continue;
+    for (const unit of bucket) considered.set(unit.id, (considered.get(unit.id) ?? new Set()).add(fingerprint));
+    walk(bucket, (left, right, key) => {
+      const count = (sightings.get(key) ?? 0) + 1;
+      sightings.set(key, count);
+      if (count === 2 && !pairs.has(key) && !secondSighting.has(key)) secondSighting.set(key, [left, right]);
     });
   }
-  return specs.map(makeUnit);
+  const smallerConsidered = (left: DuplicateInternalUnit, right: DuplicateInternalUnit): number =>
+    Math.min(considered.get(left.id)?.size ?? 0, considered.get(right.id)?.size ?? 0);
+  const sharesEnough = (shared: number, left: DuplicateInternalUnit, right: DuplicateInternalUnit): boolean => {
+    const smaller = smallerConsidered(left, right);
+    return shared > 0 && smaller > 0 && shared >= Math.max(2, Math.ceil(smaller * 0.25));
+  };
+  for (const [key, shared] of sightings) {
+    const entry = pairs.get(key);
+    if (entry) {
+      entry.signatureMatches = shared;
+      continue;
+    }
+    const units = secondSighting.get(key);
+    if (shared < 2 || !units || !sharesEnough(shared, units[0], units[1])) continue;
+    pairs.set(key, {
+      left: units[0],
+      right: units[1],
+      rawHash: false,
+      normalizedHash: false,
+      astShape: false,
+      signature: false,
+      signatureMatches: shared,
+      priority: 0,
+    });
+  }
+  for (const entry of pairs.values()) {
+    entry.signature = sharesEnough(entry.signatureMatches, entry.left, entry.right);
+    const smaller = smallerConsidered(entry.left, entry.right);
+    entry.priority = smaller ? entry.signatureMatches / smaller : 0;
+  }
+  return { pairs: [...pairs.values()], oversizedBuckets };
+}
+
+/** A pair as a test compares it: which units, in which order, and the evidence that brought it in. */
+function pairSummary(units: readonly DuplicateInternalUnit[], pair: PairEvidence | OracleEntry) {
+  return {
+    left: units.indexOf(pair.left),
+    right: units.indexOf(pair.right),
+    rawHash: pair.rawHash,
+    normalizedHash: pair.normalizedHash,
+    astShape: pair.astShape,
+    signature: pair.signature,
+    shared: pair.signature ? pair.signatureMatches : 0,
+  };
 }
 
 describe("duplicate candidate pairs", () => {
@@ -235,6 +425,80 @@ describe("duplicate candidate pairs", () => {
     expect(described.has(idPair(units[0]!, units[1]!))).toBe(true);
     expect(described.has(idPair(units[0]!, units[3]!))).toBe(true);
     expect(described.has(idPair(units[1]!, units[3]!))).toBe(true);
+  });
+
+  describe("against the original pair-by-pair walk", () => {
+    const scenarios: Array<{ seed: number; maxBucketSize: number; targets: number; sharedIds: SharedIds }> = [
+      { seed: 5, maxBucketSize: 200, targets: 0, sharedIds: "adjacent" },
+      { seed: 6, maxBucketSize: 200, targets: 0, sharedIds: "late" },
+      { seed: 16, maxBucketSize: 200, targets: 1, sharedIds: "none" },
+      { seed: 8, maxBucketSize: 200, targets: 6, sharedIds: "none" },
+      { seed: 9, maxBucketSize: 200, targets: 6, sharedIds: "adjacent" },
+      { seed: 10, maxBucketSize: 200, targets: 6, sharedIds: "late" },
+      { seed: 11, maxBucketSize: 200, targets: 30, sharedIds: "adjacent" },
+      { seed: 12, maxBucketSize: 8, targets: 6, sharedIds: "adjacent" },
+      { seed: 13, maxBucketSize: 4, targets: 12, sharedIds: "late" },
+    ];
+
+    test.each(scenarios)(
+      "admits the same pairs in the same order, in full and over the limit (seed $seed, bucket limit $maxBucketSize, $targets target files, $sharedIds shared ids)",
+      async (scenario) => {
+        const units = makeVariedUnits(scenario.seed, scenario.sharedIds);
+        const filter = scenario.targets ? targetFilter(units, scenario.seed, scenario.targets) : undefined;
+        const expected = walkedCandidates(units, {
+          maxBucketSize: scenario.maxBucketSize,
+          ...(filter ? { isTarget: filter.unit } : {}),
+        });
+
+        const prepared = prepareDuplicateCandidateBuckets(units);
+        const candidates = async (maxCandidatePairs: number) =>
+          await buildCandidatePairs(prepared, {
+            maxBucketSize: scenario.maxBucketSize,
+            maxCandidatePairs,
+            ...(filter ? { filter } : {}),
+          });
+        const result = await candidates(1_000_000);
+
+        // Guard the scenario: it has to compare real pairs of every kind, not an empty or one-sided result.
+        expect(expected.pairs.some((pair) => pair.rawHash)).toBe(true);
+        expect(expected.pairs.some((pair) => !pair.rawHash && !pair.normalizedHash && !pair.astShape)).toBe(true);
+        expect(units.some((unit, at) => units.findIndex((other) => other.id === unit.id) !== at)).toBe(
+          scenario.sharedIds !== "none",
+        );
+        expect(result.skippedPairs).toBe(0);
+        expect(result.oversizedBuckets).toBe(expected.oversizedBuckets);
+        const summaries = (pairs: Iterable<PairEvidence | OracleEntry>) =>
+          [...pairs].map((pair) => pairSummary(units, pair));
+        expect(summaries(result.pairs.values())).toEqual(summaries(expected.pairs));
+
+        // Over the limit, every pair with stronger evidence stays and the fingerprint pairs that share the largest
+        // share of their buckets fill the room. Only the qualifying pairs left out count as skipped, and the pairs
+        // kept stay in the order the walk meets them.
+        const fingerprintOnly = expected.pairs.filter(
+          (pair) => !pair.rawHash && !pair.normalizedHash && !pair.astShape,
+        );
+        const room = Math.ceil(fingerprintOnly.length / 2);
+        expect(fingerprintOnly.length - room).toBeGreaterThan(0);
+        const firstOfId = (unit: DuplicateInternalUnit) => units.findIndex((other) => other.id === unit.id);
+        const kept = new Set(
+          [...fingerprintOnly]
+            .sort(
+              (left, right) =>
+                right.priority - left.priority ||
+                Math.min(firstOfId(left.left), firstOfId(left.right)) -
+                  Math.min(firstOfId(right.left), firstOfId(right.right)) ||
+                Math.max(firstOfId(left.left), firstOfId(left.right)) -
+                  Math.max(firstOfId(right.left), firstOfId(right.right)),
+            )
+            .slice(0, room),
+        );
+        const limited = await candidates(expected.pairs.length - fingerprintOnly.length + room);
+        expect(limited.skippedPairs).toBe(fingerprintOnly.length - room);
+        expect(summaries(limited.pairs.values())).toEqual(
+          summaries(expected.pairs.filter((pair) => !fingerprintOnly.includes(pair) || kept.has(pair))),
+        );
+      },
+    );
   });
 
   describe("pair limit", () => {
@@ -328,6 +592,121 @@ describe("duplicate candidate pairs", () => {
       expect(dropped).toBeGreaterThan(0);
       expect(limited.skippedPairs).toBeGreaterThanOrEqual(dropped);
       expect(limited.skippedPairs).toBeLessThanOrEqual(dropped * evidenceKinds);
+    });
+
+    test("a targeted run keeps the fingerprint pairs that share the largest fraction too", async () => {
+      const isTarget = (unit: DuplicateInternalUnit) => unit.file === "src/near-2.ts" || unit.file === "src/near-4.ts";
+      const filter: CandidateFilter = { unit: isTarget, pair: (left, right) => isTarget(left) || isTarget(right) };
+      const reference = walkedCandidates(units, { maxBucketSize: options.maxBucketSize, isTarget }).pairs;
+      const strong = reference.filter((pair) => pair.rawHash || pair.normalizedHash || pair.astShape);
+      const fingerprintOnly = reference.filter((pair) => !pair.rawHash && !pair.normalizedHash && !pair.astShape);
+      expect(fingerprintOnly.length).toBeGreaterThan(3);
+
+      const limited = await buildCandidatePairs(prepareDuplicateCandidateBuckets(units), {
+        ...options,
+        maxCandidatePairs: strong.length + 2,
+        filter,
+      });
+
+      const keptKeys = new Set(
+        [...limited.pairs.values()]
+          .filter((pair) => !pair.rawHash && !pair.normalizedHash && !pair.astShape)
+          .map((pair) => idPair(pair.left, pair.right)),
+      );
+      expect(keptKeys.size).toBe(2);
+      // Each pair skipped after it qualified counts once; pairs that never qualified count for nothing.
+      expect(limited.skippedPairs).toBe(fingerprintOnly.length - 2);
+      const kept = fingerprintOnly.filter((pair) => keptKeys.has(idPair(pair.left, pair.right)));
+      const skipped = fingerprintOnly.filter((pair) => !keptKeys.has(idPair(pair.left, pair.right)));
+      expect(Math.min(...kept.map((pair) => pair.priority))).toBeGreaterThanOrEqual(
+        Math.max(...skipped.map((pair) => pair.priority)),
+      );
+    });
+  });
+
+  describe("a targeted run where many pairs share only one fingerprint", () => {
+    // 1,300 target units and 1,301 other units share one fingerprint bucket: more pairs than the default limit, each
+    // sharing a single bucket, so none can ever qualify. They are met before everything below, so a count table that
+    // filled up with them would drop the pairs that follow although the limit is still free.
+    const TARGETS = 1_300;
+    const OTHERS = 1_301;
+    const bareUnit = (file: string, signatures: readonly string[], rawHash = `raw:${file}`): DuplicateInternalUnit => ({
+      file,
+      startLine: 1,
+      endLine: 10,
+      languageId: "typescript",
+      kind: "chunk",
+      tokenCount: 50,
+      handle: `chunk:${file}:1`,
+      fileHandle: `file:${file}`,
+      chunkHandle: `chunk:${file}:1`,
+      id: `/repo/${file}:1:10:chunk:`,
+      absoluteFile: `/repo/${file}`,
+      rawHash,
+      normalizedHash: `normalized:${file}`,
+      tokenSet: new Set(),
+      signatures: new Set(signatures),
+    });
+    const isTarget = (unit: DuplicateInternalUnit) => unit.file.includes("-target");
+    const filter: CandidateFilter = { unit: isTarget, pair: (left, right) => isTarget(left) || isTarget(right) };
+    const crowd = (name: string, count: number) =>
+      Array.from({ length: count }, (_, at) => bareUnit(`src/${name}-${at}.ts`, ["crowd"]));
+    const units = [
+      ...crowd("crowd-target", TARGETS),
+      ...crowd("crowd-other", OTHERS),
+      // Two buckets in common: the pair qualifies, and it first shows up after the crowd.
+      bareUnit("src/late-target.ts", ["late-1", "late-2"]),
+      bareUnit("src/late-other.ts", ["late-1", "late-2"]),
+      // Identical text brings this pair in; two buckets in common add fingerprint evidence, again after the crowd.
+      bareUnit("src/kept-target.ts", ["kept-1", "kept-2"], "same text"),
+      bareUnit("src/kept-other.ts", ["kept-1", "kept-2"], "same text"),
+    ];
+    const runs = new Map<number, Promise<CandidatePairResult>>();
+    const crowded = (maxCandidatePairs: number): Promise<CandidatePairResult> => {
+      let run = runs.get(maxCandidatePairs);
+      if (!run) {
+        run = buildCandidatePairs(prepareDuplicateCandidateBuckets(units), {
+          maxBucketSize: 5_000,
+          maxCandidatePairs,
+          filter,
+        });
+        runs.set(maxCandidatePairs, run);
+      }
+      return run;
+    };
+    const pairOf = (result: CandidatePairResult, name: string): PairEvidence | undefined =>
+      [...result.pairs.values()].find((pair) => pair.left.file.includes(name));
+
+    test("the crowd has more pairs than the default candidate pair limit", () => {
+      expect(TARGETS * OTHERS + (TARGETS * (TARGETS - 1)) / 2).toBeGreaterThan(DEFAULT_MAX_CANDIDATE_PAIRS);
+    });
+
+    test(
+      "still finds a pair that qualifies after them, and counts nothing as skipped",
+      { timeout: 60_000 },
+      async () => {
+        const result = await crowded(DEFAULT_MAX_CANDIDATE_PAIRS);
+
+        const late = pairOf(result, "late");
+        expect(result.pairs.size).toBe(2);
+        expect(late).toMatchObject({ signature: true, signatureMatches: 2, rawHash: false });
+        expect(result.skippedPairs).toBe(0);
+      },
+    );
+
+    test("keeps the fingerprint evidence of a pair that identical text brought in", { timeout: 60_000 }, async () => {
+      const result = await crowded(DEFAULT_MAX_CANDIDATE_PAIRS);
+
+      expect(pairOf(result, "kept")).toMatchObject({ rawHash: true, signature: true, signatureMatches: 2 });
+    });
+
+    test("counts a pair against the limit only once it qualifies", { timeout: 60_000 }, async () => {
+      const result = await crowded(1);
+
+      // The identical-text pair fills the limit, so the pair that qualifies afterwards is the only one skipped.
+      expect(result.pairs.size).toBe(1);
+      expect(pairOf(result, "kept")).toMatchObject({ rawHash: true, signature: true, signatureMatches: 2 });
+      expect(result.skippedPairs).toBe(1);
     });
   });
 });
@@ -576,5 +955,27 @@ describe("duplicate detection at scale", () => {
     expect(result.stderr).toMatch(/\[Progress\] Detected duplicates: \d+ units? in \d+(\.\d+)?(ms|s)\.\n/);
     expect(() => JSON.parse(result.stdout)).not.toThrow();
     expect(quiet.stderr).toBe("");
+  });
+
+  test("duplicates CLI paints every duplicate stage on an interactive terminal, even when each ends at once", async () => {
+    const root = await makeClonedProject(3);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "src", "--json", "--min-confidence", "high", "--progress"],
+      { cwd: root, stderrIsTTY: true, terminalSupportsControlSequences: true },
+    );
+
+    // A stage that finishes before the refresh timer fires can only be shown by painting when the stage changes.
+    const stages = [
+      "Collecting duplicate units... ",
+      "Finding candidate pairs... ",
+      "Scoring candidate pairs... ",
+      "Grouping duplicate findings... ",
+      "Detected duplicates: ",
+    ].map((stage) => result.stderr.indexOf(stage));
+    expect(stages.every((at) => at >= 0)).toBe(true);
+    expect([...stages].sort((left, right) => left - right)).toEqual(stages);
+    expect(result.stderr).not.toContain("[Progress]");
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
   });
 });
