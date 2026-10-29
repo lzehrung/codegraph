@@ -32,6 +32,7 @@ import { getNativeDuplicateTokens, getNativeSingleQueryExecution } from "../nati
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
+import { EVENT_LOOP_SLICE_MS, yieldToEventLoop } from "../util/concurrency.js";
 import {
   assertFilePathWithinRoot,
   fileIdentityKey,
@@ -683,6 +684,9 @@ export function shouldKeepUnit(unit: DuplicateInternalUnit, includeSmall: boolea
   return unit.tokenCount >= minTokens;
 }
 
+// Files per call of the unit cache writer. A call compresses and stores its files in one synchronous step.
+const DUPLICATE_CACHE_WRITE_SLICE_FILES = 25;
+
 /** Reads files and creates comparable symbol and chunk units. */
 export async function collectDuplicateUnits(
   index: ProjectIndex,
@@ -709,6 +713,7 @@ export async function collectDuplicateUnits(
   const belowThresholdUnitsByFile = new Map<string, number>();
 
   const pendingWrites: PendingDuplicateUnitCacheWrite[] = [];
+  let sliceStartedAt = performance.now();
   for (const file of normalizedFiles) {
     const fileKey = fileIdentityKey(file);
     const cacheSignature = duplicateUnitCacheSignature(index, file, options.projectRoot);
@@ -750,9 +755,17 @@ export async function collectDuplicateUnits(
       }
       units.push(unit);
     }
+    // The loop awaits promises that are mostly settled already, so it would keep every timer waiting until it ends.
+    if (performance.now() - sliceStartedAt >= EVENT_LOOP_SLICE_MS) {
+      await yieldToEventLoop();
+      sliceStartedAt = performance.now();
+    }
   }
-  if (pendingWrites.length) {
-    writeDuplicateUnitsBatchToCache(index, pendingWrites, options.projectRoot);
+  // Each write compresses and stores its files on its own, so a slice at a time keeps one call short.
+  for (let start = 0; start < pendingWrites.length; start += DUPLICATE_CACHE_WRITE_SLICE_FILES) {
+    const slice = pendingWrites.slice(start, start + DUPLICATE_CACHE_WRITE_SLICE_FILES);
+    writeDuplicateUnitsBatchToCache(index, slice, options.projectRoot);
+    await yieldToEventLoop();
   }
 
   units.sort((left, right) => {

@@ -25,7 +25,7 @@ import {
 import { getCurrentNativeBindingOrigin } from "../native/runtime.js";
 import { captureCodegraphRuntimeIdentity, createInstalledVersionChecker } from "../runtime-identity.js";
 import {
-  createWarmedCodegraphMcpResources,
+  createCodegraphMcpResources,
   type CodegraphMcpHttpServerInfo,
   type CodegraphMcpServerOptions,
 } from "./handlers.js";
@@ -75,7 +75,7 @@ export async function startCodegraphMcpHttpServer(
   const mcpToolTimeoutMs = assertMcpToolTimeout(configuredMcpToolTimeout);
   const host = options.host ?? "127.0.0.1",
     lifecycleHealth = await import("./lifecycle-health.js");
-  const { handlers, session, closeWatcher } = await createWarmedCodegraphMcpResources(options);
+  const { handlers, session, closeWatcher, startWarmup, warmupSettled } = createCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const installedVersionChecker = createInstalledVersionChecker(runtimeIdentity, { warn: () => {} });
   const protocolFactory = createCodegraphMcpProtocolFactory(
@@ -112,9 +112,10 @@ export async function startCodegraphMcpHttpServer(
         await closeMcpResources(sessionStore.sessions, modernHandler.close);
       } finally {
         await protocolFactory.drain();
-        // A background rebuild or a read of the file list writes to the session until it ends, so the session is
-        // released after them.
+        // The startup warmup, a background rebuild, or a read of the file list writes to the session until it ends, so
+        // the session is released after them.
         await watcherClosed;
+        await warmupSettled();
         session.invalidate();
       }
     })();
@@ -169,6 +170,8 @@ export async function startCodegraphMcpHttpServer(
   const urlHost = formatHostForUrl(host);
   const url = `http://${urlHost}:${actualPort}${MCP_HTTP_PATH}`;
   allowedHostHeaders = buildAllowedHostHeaders(host, actualPort);
+  // The server answers requests now, so `initialize` and `tools/list` never wait for the build that starts here.
+  startWarmup();
 
   return {
     server,

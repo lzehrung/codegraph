@@ -20,7 +20,7 @@ codegraph server status --root /path/to/repo --json
 codegraph server stop --root /path/to/repo
 ```
 
-`server start` serializes lifecycle changes, launches `mcp serve`, waits for a same-root process and startup identity proved by a challenged `/health` response, then records the process at `.codegraph/server.json`. It defaults to `127.0.0.1:7331`; use `--host` explicitly for a non-loopback bind, `--replace` only to restart a live server for the same root, and `--startup-timeout-ms <1-86400000>` when a warmup needs more than the 15-second default.
+`server start` serializes lifecycle changes, launches `mcp serve`, waits for a same-root process and startup identity proved by a challenged `/health` response, then records the process at `.codegraph/server.json`. It defaults to `127.0.0.1:7331`; use `--host` explicitly for a non-loopback bind, `--replace` only to restart a live server for the same root, and `--startup-timeout-ms <1-86400000>` when the process needs more than the 15-second default to start answering `/health`. The index warmup runs in the background after that and does not count against the timeout.
 
 `server start --json` emits `status: "started"`, the registry fields, and `update`. `server status` retries challenged HTTP health checks and reports a verification remedy instead of removing metadata for an unreachable or identity-mismatched server. `server stop` removes only confirmed stale metadata or signals a Codegraph process whose proven health identity matches the registry.
 
@@ -32,14 +32,14 @@ Use `mcp serve` directly when another process manager owns the server:
 codegraph mcp serve --root /path/to/repo --port 7331
 ```
 
-Startup warms the base session cache by default now, matching the commands above. Pass `--no-warmup` for the old lazy startup, or `--warmup-symbols` to also build the detailed symbol graph before serving:
+The server answers `initialize` and `tools/list` as soon as it is serving, then builds the base session cache and the search index in the background (the default, `--warmup`). Pass `--warmup-symbols` to also build the detailed symbol graph in the background, or `--no-warmup` to build nothing up front:
 
 ```bash
 codegraph mcp serve --root . --stdio --no-warmup
 codegraph mcp serve --root . --port 7331 --warmup-symbols
 ```
 
-`--warmup` builds the base session cache before serving requests (the default). `--warmup-symbols` also builds the detailed symbol graph before serving requests. `--no-warmup` skips both and starts lazily.
+With `--no-warmup`, the first tool call that needs the index starts the build. In every mode, a tool call waits for the build it needs for at most `--index-wait-ms` (default 20000) and then answers `index_building`; see [Cold start and `index_building`](#cold-start-and-index_building).
 
 The server also watches the project for file changes and refreshes the index in the background. Pass `--no-watch` to turn that off; see [File watcher](#file-watcher).
 
@@ -50,6 +50,8 @@ Stdio servers exit when the client closes stdin, when an IPC parent disconnects,
 HTTP protocol sessions track last activity, cap concurrent legacy sessions (default 32), and evict idle sessions on a timer (default 30 minutes). Capacity and idle eviction skip sessions with in-flight requests or open SSE streams; when every slot is active, a new `initialize` receives an actionable JSON-RPC capacity error instead of evicting a working client. Request validation errors return a 4xx response while leaving the session usable; explicit `DELETE`, idle eviction, and an actual transport close remove the session.
 
 Each MCP server permits four concurrent tool calls by default across every HTTP request and protocol session; a saturated server returns a retryable busy error rather than queueing unbounded work. The programmatic server options `mcpToolConcurrency`, `httpBodyTimeoutMs`, and `mcpToolTimeoutMs` tune concurrency, the 30-second HTTP request-body deadline, and the 5-minute per-tool execution deadline; an HTTP body that misses its deadline receives `408 Request Timeout`, while an expired tool call is aborted and names its configured limit. Completed legacy requests refresh session activity before idle eviction is considered.
+
+`mcpIndexWaitMs` (CLI `--index-wait-ms`) bounds only the wait for an index build, not the tool call itself; see [Cold start and `index_building`](#cold-start-and-index_building).
 
 Client cancellation returns promptly, but does not discard shared index or artifact work. A cancelled call continues to occupy its concurrency slot until its underlying operation settles, preventing a burst of abandoned requests from exceeding the configured resource bound; the MCP SDK aborts the individual in-flight HTTP request when its response socket closes without closing the shared protocol session. Shutdown rejects new calls and waits for active work before invalidating shared session resources.
 
@@ -68,6 +70,8 @@ The MCP initialize response advertises the codegraph package version captured wh
 On Windows, installed-package servers map the verified native addon from `%LOCALAPPDATA%\codegraph\native-cache\v1`, not from npm's package directory. An old server may therefore remain healthy after npm installs a new release, but it must be restarted to use the new JavaScript runtime and cache identity.
 
 The published CLI and MCP runtime is a self-contained bundle rather than a set of lazy content-hashed chunks. This prevents an in-place package upgrade from deleting code that an already running server has not loaded yet; restart the client after an upgrade to select the new runtime.
+
+A server that keeps running through an upgrade can still need a module that the upgrade removed. The tool call then returns `isError: true` with a message that the codegraph package changed on disk and the MCP server must be restarted, in place of Node's `Cannot find module` text.
 
 Run `codegraph doctor` in the installed release to inspect `native.origin`, `native.update`, and any stale npm retirement siblings. `updateSafeForCurrentProcess` describes only the process running doctor; it does not prove that no other process or filesystem service holds a package file.
 
@@ -115,10 +119,10 @@ For MCP `explore`, `includeSource` defaults to `false`: source-bearing packets d
 
 ## Session lifecycle
 
-MCP keeps one codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. `mcp serve` warms the base session cache during startup by default (matching the old `--warmup` flag), so a cold discovery-and-build cost lands on process startup rather than the first `tools/call`. Pass `--no-warmup` to start lazily instead, or `--warmup-symbols` to also build the detailed symbol graph before serving.
+MCP keeps one codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. `mcp serve` builds the base session cache and the search index in the background once it is serving, so a cold discovery-and-build cost no longer delays `initialize` or `tools/list`. Pass `--no-warmup` to build only when a tool call needs the index, or `--warmup-symbols` to also build the detailed symbol graph.
 On the first `tools/call`, codegraph can emit `notifications/message` and, when the request includes `_meta.progressToken`, `notifications/progress` before the final result. Stdio carries them inline, and modern Streamable HTTP clients that accept `text/event-stream` receive them as a stream.
 
-Because startup now warms by default, a client's startup/readiness timeout - not just its per-request timeout - needs to cover a cold build on a large repository; the `startup_timeout_ms = 20000` Codex example below can be too short for a first run against a large tree. Raise `startup_timeout_ms` for large repositories, or pass `--no-warmup` to keep process startup instant and shift that cost back to the first `tools/call` (clients that enforce per-request timeouts should then send `_meta.progressToken` so they can keep a slow first request alive instead of timing it out).
+The `startup_timeout_ms = 20000` Codex example below is enough for a large repository: the server answers `initialize` at once and no longer builds before it serves. A client's per-request timeout is what a cold build can exceed, and [Cold start and `index_building`](#cold-start-and-index_building) keeps each request inside it.
 
 Text and hybrid searches reuse a prepared handle for `.codegraph/cache/index-v1/search-v1.sqlite` and cache identical responses by snapshot identity and request options. A detected refresh or explicit `refresh_index` closes the handle and clears cached responses before the next snapshot.
 
@@ -128,6 +132,33 @@ Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or rec
 A session created with `freshness: { policy: "manual" }` (only possible when a library caller passes its own session to `createCodegraphMcpHandlers`) reports `freshness.state: "unchecked"`. It records no file signatures, so it cannot check a SQLite artifact or build a new one: `query_sqlite` rejects a stale artifact with that explanation, and `artifact_build` fails. Rebuild the artifact from a session whose policy is `check` or `auto`, for example with `codegraph artifact --sqlite`.
 `get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server. Legacy paired names (`callers`, `callees`, `supertypes`, `subtypes`, `deps`, and `rdeps`) remain accepted by `tools/call` as aliases, but only the unified tools appear in `tools/list`.
+
+### Cold start and `index_building`
+
+The first run on a large project builds the index from scratch, which can take longer than the 30 seconds that MCP clients commonly allow for one request. The server keeps every request inside that window:
+
+- `initialize` and `tools/list` answer at once on stdio and HTTP. The warmup starts after the server is serving and runs in the background, in its turn of the queue that `refresh_index`, `artifact_build`, and the file watcher share; the HTTP server listens before it ends.
+- A tool call waits only for the builds it needs, and concurrent calls share them. Most tools need the project index; hybrid and text `search` and `explore` also need the search index; `get_symbol`, `packet_get`, `calls`, `type_hierarchy`, `implementations`, `rename_preview`, `refactor_plan`, `artifact_build`, and `refs` with a symbol handle need the detailed symbol graph; `review` of a range with changes needs the duplicate analysis, while a range without a changed file is answered from git alone; `refresh_index` waits for the startup warmup.
+- `get_file` without `includeGraphContext` never waits: it reads the file from disk under the same root confinement as always.
+- A call that has waited `--index-wait-ms` (default 20000) without its build ending returns a normal result, not an error, and the build continues:
+
+```json
+{
+  "status": "index_building",
+  "tool": "search",
+  "message": "Codegraph is still building the index for this project (Building search index, 24s so far). The build continues in the background; call 'search' again to wait for it.",
+  "retryAfterMs": 1000,
+  "waitedMs": 20003,
+  "progress": { "activity": "Building search index", "elapsedMs": 24100 }
+}
+```
+
+- Call the same tool again. The retry waits for what is left of the build, up to the same budget, and then returns the normal result.
+- `progress.activity` names what is running, such as `Indexing files` or `Preparing duplicate analysis`. `current` and `total` appear only while the work has a measurable total, such as files parsed.
+- A cancelled request stops waiting at once; the build is not cancelled.
+- The budget is a timer on the server's event loop. The builds hand the loop back every few milliseconds, between files, so the answer arrives within about a second of the budget; one very large file can hold the loop a little longer.
+
+Choose a request timeout longer than `--index-wait-ms`: the default of 20 seconds fits clients that allow 30. For a client that allows less, lower the budget (`--index-wait-ms 8000`); for one that allows more, raise it, or pass `--index-wait-ms 0` to wait for as long as the build takes (the per-tool deadline still applies). Library callers set `mcpIndexWaitMs`. The setting belongs to the server: `codegraph.config.json` has no key for it.
 
 ### File watcher
 
@@ -211,6 +242,8 @@ Only resolved, indexed `extends` and `implements` relationships are returned. Im
 ### `get_file`
 
 Call `get_file` with a project-relative `file`. `offset` is the 1-based first line, `limit` is the maximum returned lines, and `maxBytes` bounds unnumbered raw page text including its line separators; defaults are `1`, `2000`, and `80000`, with output-page caps of `10000` lines and `500000` bytes. A separate 16 MiB hard input-size limit rejects larger raw reads and structural text-config summaries before unbounded I/O, bounding complete-stream binary/UTF-8 validation and total-line counting rather than returned page size.
+
+`file` is required and must be a project-relative path string. A missing, `null`, or non-string value is rejected with JSON-RPC `-32602` and `Invalid parameters for get_file: file: expected a project-relative file path string, received null`.
 
 ```json
 {

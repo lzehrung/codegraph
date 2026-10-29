@@ -33,6 +33,7 @@ const SERVER_COMMAND_VALUE_OPTIONS: Record<ServerCommand, readonly string[]> = {
     "--host",
     "--ignore-glob",
     "--include-glob",
+    "--index-wait-ms",
     "--port",
     "--resolution-hint",
     "--startup-timeout-ms",
@@ -63,6 +64,7 @@ const FORWARDED_VALUE_OPTIONS = [
   "--cache-dir",
   "--include-glob",
   "--ignore-glob",
+  "--index-wait-ms",
   "--resolution-hint",
   "--threads",
 ] as const;

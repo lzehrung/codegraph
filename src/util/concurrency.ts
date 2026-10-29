@@ -140,3 +140,16 @@ export function delay(ms: number): Promise<void> {
   setTimeout(resolve, ms);
   return promise;
 }
+
+/** How long a loop on the main thread may run before it lets timers and I/O callbacks that are due have a turn. */
+export const EVENT_LOOP_SLICE_MS = 10;
+
+/**
+ * Lets the timers and I/O callbacks that are due run. Awaiting a promise that is already settled does not: a loop that
+ * awaits only such promises keeps the event loop from every timer until it ends.
+ */
+export function yieldToEventLoop(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setImmediate(resolve);
+  return promise;
+}

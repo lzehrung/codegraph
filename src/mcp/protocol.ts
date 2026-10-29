@@ -24,7 +24,10 @@ import {
   type InstalledVersionChecker,
 } from "../runtime-identity.js";
 import type { CodegraphMcpHandlers, McpTruncationMeta } from "./handlers.js";
+import { mcpCancellationError } from "./cancellation.js";
+import { McpIndexBuildingError } from "./index-readiness.js";
 import { getLegacyRequestAbortSignal } from "./legacy-sessions.js";
+import { describeMcpRuntimeError } from "./stale-install.js";
 
 export const DEFAULT_MCP_TOOL_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MCP_TOOL_TIMEOUT_MS = 2_147_483_647;
@@ -197,6 +200,11 @@ export function createCodegraphMcpProtocolServerWithTracker(
           return toToolResult(result);
         } catch (error) {
           if (error instanceof ProtocolError || toolCallAbort.signal.aborted) throw error;
+          if (error instanceof McpIndexBuildingError) {
+            // Not a failure: the build continues, and the call answers normally once it ends.
+            await emitFirstToolCallVisibility("info", 1, error.result.message);
+            return toToolResult(error.result);
+          }
           return toToolErrorResult(error);
         }
       } finally {
@@ -349,14 +357,9 @@ export function awaitMcpToolOperation<T>(
 
 function withAbortSignal<T>(signal: AbortSignal | undefined, operation: Promise<T>): Promise<T> {
   if (!signal) return operation;
-  const cancellationError = (): Error => {
-    const reason = signal.reason;
-    if (reason instanceof Error && reason.name !== "AbortError") return reason;
-    return new Error("MCP tool call was cancelled.");
-  };
-  if (signal.aborted) return Promise.reject(cancellationError());
+  if (signal.aborted) return Promise.reject(mcpCancellationError(signal));
   const cancellation = Promise.withResolvers<never>();
-  const onAbort = (): void => cancellation.reject(cancellationError());
+  const onAbort = (): void => cancellation.reject(mcpCancellationError(signal));
   signal.addEventListener("abort", onAbort, { once: true });
   return Promise.race([operation, cancellation.promise]).finally(() => signal.removeEventListener("abort", onAbort));
 }
@@ -562,7 +565,10 @@ function firstDuplicateFile(arguments_: Record<string, unknown>): string {
 }
 
 function toToolErrorResult(error: unknown): CallToolResult {
-  const message = errorMessage(error).replace(/(?:[A-Za-z]:)?[/\\][^'"\n]*?(?=(?:[/\\][^'"\n]*)?['"]|$)/g, "<path>");
+  const message = describeMcpRuntimeError(error).replace(
+    /(?:[A-Za-z]:)?[/\\][^'"\n]*?(?=(?:[/\\][^'"\n]*)?['"]|$)/g,
+    "<path>",
+  );
   return { isError: true, content: [{ type: "text", text: message }] };
 }
 const mcpProgressTokenSchema = z.union([z.string(), z.number()]);
@@ -698,9 +704,20 @@ const packetGetSchema = z
   })
   .strict();
 
+function describeReceivedValue(value: unknown): string {
+  if (value === null) return "null";
+  if (value === undefined) return "nothing (the field is missing)";
+  return typeof value;
+}
+
+// `file: null` is what a client sends when it has no path yet; say what the field is, not just that the type is wrong.
+const getFilePathSchema = z.string({
+  error: (issue) => `expected a project-relative file path string, received ${describeReceivedValue(issue.input)}`,
+});
+
 const getFileSchema = z
   .object({
-    file: z.string(),
+    file: getFilePathSchema,
     offset: z.number().int().positive().optional(),
     limit: z.number().int().positive().max(MAX_FILE_VIEW_LINES).optional(),
     maxBytes: z.number().int().positive().max(MAX_FILE_VIEW_BYTES).optional(),

@@ -205,13 +205,13 @@ codegraph server status --root . --json
 codegraph server stop --root .
 ```
 
-`server start` serializes lifecycle changes per project, launches `mcp serve` in a separate process, then writes `.codegraph/server.json` only after a challenged `/health` response proves the requested root, process, and startup time. It defaults to `127.0.0.1:7331`; pass `--host` explicitly for any non-loopback bind, pass `--replace` only to restart a live server for the same root, and use `--startup-timeout-ms <1-86400000>` when a warmup needs more than the 15-second default.
+`server start` serializes lifecycle changes per project, launches `mcp serve` in a separate process, then writes `.codegraph/server.json` only after a challenged `/health` response proves the requested root, process, and startup time. It defaults to `127.0.0.1:7331`; pass `--host` explicitly for any non-loopback bind, pass `--replace` only to restart a live server for the same root, and use `--startup-timeout-ms <1-86400000>` when the process needs more than the 15-second default to start answering `/health`. The index warmup builds in the background after that and does not count against the timeout.
 
 `server start --json` emits `status: "started"`, the registry fields, and `update`. `server status` retries challenged HTTP health checks instead of trusting a PID and asks users to verify an unreachable or identity-mismatched server. `server stop` removes only confirmed stale metadata or signals a Codegraph server whose proven health identity matches the registry.
 
 The v2 registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`, and a non-secret `credentialId`; its credential remains in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. A v1 registry with a live process is never signaled; stop that old process manually, then start it again.
 
-`server start` forwards `--warmup`, `--warmup-symbols`, `--no-warmup`, `--no-watch`, cache, native, worker, and discovery options to `mcp serve`; each start truncates `.codegraph/server.log` for server stderr and startup diagnostics. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
+`server start` forwards `--warmup`, `--warmup-symbols`, `--no-warmup`, `--no-watch`, `--index-wait-ms`, cache, native, worker, and discovery options to `mcp serve`; each start truncates `.codegraph/server.log` for server stderr and startup diagnostics. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
 
 ### Affected tests
 
@@ -331,6 +331,7 @@ codegraph mcp --root . --stdio
 codegraph mcp --root . --artifact codegraph-out --stdio
 codegraph mcp --root . --stdio --allow-build
 codegraph mcp --root . --stdio --idle-timeout-ms 1800000
+codegraph mcp --root . --stdio --index-wait-ms 10000
 codegraph mcp --root . --port 7331
 codegraph mcp --root . --stdio --no-warmup
 codegraph mcp --root . --stdio --no-watch
@@ -555,7 +556,8 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - `mcp serve` exposes explore, navigation, search, read-only rename preview, impact, review, SQLite query, session refresh, and artifact-build tools.
 - MCP uses stdio by default or Streamable HTTP with `--port <number>`. HTTP protocol sessions are activity-tracked, count-bounded, and idle-evicted; tool schemas reject unknown fields.
 - `mcp` and `viewer` reject `--json`/`--pretty` because they do not emit structured command output.
-- Startup warms the base session cache by default; `--no-warmup` starts lazily instead, and `--warmup-symbols` also builds the detailed symbol graph before serving.
+- The server answers `initialize` and `tools/list` at once, then builds the base session cache and the search index in the background by default; `--no-warmup` builds only when a tool call needs the index, and `--warmup-symbols` also builds the detailed symbol graph.
+- A tool call waits for the build it needs for at most `--index-wait-ms <ms>` (default 20000; `0` waits without limit). Past that it answers `{ "status": "index_building" }` with the build's progress while the build continues, and the same call succeeds once it ends; `get_file` without `includeGraphContext` never waits. See [docs/mcp.md](./mcp.md#cold-start-and-index_building).
 - The server watches project files and refreshes the index in the background; `--no-watch` turns that off and leaves freshness to the check each tool call runs. See [docs/mcp.md](./mcp.md#file-watcher).
 - Index-backed responses include `freshness`; small file changes auto-refresh, while stale responses include a reason, total changed-file count, and a bounded changed-file sample.
 - Use `refresh_index` to force a rebuild, reset SQLite artifact state, or recover after stale change bursts.

@@ -94,6 +94,7 @@ Filename results are suggestions only.
 - Current-state CLI queries reuse and validate the disk index. `init`, `index`, and `sync` are not prerequisites.
 - Check MCP `freshness`; on `stale`, run `refresh_index` and repeat the query. `artifact_build` requires fresh state and write access. `unchecked` comes only from an embedded manual-policy session: it cannot check or build a SQLite artifact, so rebuild the artifact with `codegraph artifact --sqlite`.
 - The MCP server watches project files and refreshes the index in the background by default (`--no-watch` turns that off), so a `stale` answer after a large change burst, such as a branch switch, usually clears on its own.
+- On a cold start, an MCP tool that outwaits its index build (20 s by default, `--index-wait-ms`) returns `{ "status": "index_building" }` with `progress`, not an error. The build continues, so call the same tool again; do not restart the server or switch tools.
 - Plain `get_file` / `codegraph file` reads live bytes; optional indexed context can be stale.
 - Recognized sensitive files return summaries or metadata. Enable `--allow-sensitive` / `allowSensitive: true` only for deliberate raw access.
 
@@ -108,7 +109,7 @@ Filename results are suggestions only.
 - SQL tools (navigation, review context, explain, duplicates, `graph --sql-artifacts`) treat every SQL suffix the language registry knows (`.sql`, `.ddl`, `.pgsql`, `.mysql`) plus `languages.extensions` mappings from `codegraph.config.json` as SQL. CLI `goto`, `refs`, `dumpmod`, `graph`, and `review` honor those mappings too.
 - If MCP startup or transport fails, do not keep retrying that server. Run `codegraph doctor` to check the required native addon, then use the CLI if it is available. Doctor separates loaded grammars from graph-only languages.
 - First CLI queries may build an index; progress goes to stderr. Use `codegraph orient --report` to diagnose index costs.
-- After a Codegraph update, restart or reload the owning MCP client. `refresh_index` refreshes project state, not running tool code.
+- After a Codegraph update, restart or reload the owning MCP client. `refresh_index` refreshes project state, not running tool code; a tool error that says the codegraph package changed on disk means the same restart is due.
 - CLI exit `1` can mean findings, no target, or a runtime failure: read the output. Exit `2` means invalid usage or input.
 - Preview setup with `codegraph install --dry-run`. Do not overwrite user config, delete reported cache paths, or stop unrelated processes automatically.
 

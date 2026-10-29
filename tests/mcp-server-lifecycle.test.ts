@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isPlainRecord } from "../src/util/guards.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -276,6 +276,26 @@ describe("shared MCP server lifecycle", () => {
     expect((await readRegistry(root)).url).toBe(`http://127.0.0.1:${port}/mcp`);
   });
 
+  it("starts a server that accepts --index-wait-ms", async () => {
+    const root = await createTestRoot();
+    const port = await reservePort();
+
+    const start = await runCli(["server", "start", "--root", root, "--port", String(port), "--index-wait-ms", "5000"]);
+
+    expect(start.exitCode).toBe(0);
+    expect((await readRegistry(root)).url).toBe(`http://127.0.0.1:${port}/mcp`);
+  });
+
+  it("forwards --index-wait-ms to the server it starts, which rejects an invalid value", async () => {
+    const root = await createTestRoot();
+    const port = await reservePort();
+
+    const start = await runCli(["server", "start", "--root", root, "--port", String(port), "--index-wait-ms", "soon"]);
+
+    expect(start.exitCode).toBe(1);
+    expect(start.stderr).toContain("--index-wait-ms");
+  });
+
   it("preserves caller-relative cache paths when starting a server", async () => {
     const root = await createTestRoot();
     const callerCwd = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-mcp-server-caller-"));
@@ -300,12 +320,24 @@ describe("shared MCP server lifecycle", () => {
         callerCwd,
       );
       expect(start.exitCode).toBe(0);
-      await expect(fs.access(path.join(callerCwd, cacheDirectory))).resolves.toBeUndefined();
+      // The warmup runs in the background, so wait until it has written the search index, its last step, in the cache
+      // directory that the caller named. Stopped sooner, the server would still hold files there.
+      await vi.waitFor(
+        async () => {
+          const written = await fs.readdir(path.join(callerCwd, cacheDirectory), { recursive: true });
+          expect(written.some((entry) => path.basename(entry) === "search-v1.sqlite")).toBe(true);
+        },
+        { timeout: 30_000 },
+      );
       await expect(fs.access(path.join(root, cacheDirectory))).rejects.toThrow();
+      const { pid } = await readRegistry(root);
       const stop = await runCli(["server", "stop", "--root", root], callerCwd);
       expect(stop.exitCode).toBe(0);
+      // The server's working directory is `callerCwd`, so the directory stays busy while the process lives.
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 20_000 });
     } finally {
-      await fs.rm(callerCwd, { recursive: true, force: true });
+      // Best effort, as `createTempRootRegistry` does: a stopped server's files can stay busy a moment on Windows.
+      await fs.rm(callerCwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => undefined);
     }
   });
 

@@ -1,4 +1,5 @@
 import { serveCodegraphMcp, type CodegraphMcpWarmupMode } from "../mcp/server.js";
+import { MAX_MCP_INDEX_WAIT_MS } from "../mcp/index-readiness.js";
 import { MCP_HELP_TEXT } from "./help.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
 import type { BuildOptions } from "../indexer/types.js";
@@ -27,6 +28,7 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
   const artifactPath = context.getOpt("--artifact");
   let port: number | undefined;
   let idleTimeoutMs: number | undefined;
+  let indexWaitMs: number | undefined;
   try {
     port = parseOptionalBoundedIntegerOption(context.getOpt("--port"), "--port", 0, 65535);
     idleTimeoutMs = parseOptionalBoundedIntegerOption(
@@ -34,6 +36,12 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
       "--idle-timeout-ms",
       0,
       24 * 60 * 60 * 1000,
+    );
+    indexWaitMs = parseOptionalBoundedIntegerOption(
+      context.getOpt("--index-wait-ms"),
+      "--index-wait-ms",
+      0,
+      MAX_MCP_INDEX_WAIT_MS,
     );
   } catch (error) {
     exitWithError(context, error, 2);
@@ -63,6 +71,7 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
     warmup,
     ...(context.hasFlag("--no-watch") ? { watch: false } : {}),
     ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
+    ...(indexWaitMs !== undefined ? { mcpIndexWaitMs: indexWaitMs } : {}),
     onHttpListen: (info) => {
       context.writeStderrLine(`Codegraph MCP HTTP server listening at ${info.url}`);
     },
