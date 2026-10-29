@@ -925,6 +925,13 @@ describe("JVM files whose package clause was not read", () => {
       contents: `${"// padding\n".repeat(5957)}package pq\n\nfun select(x: String) = x\n${padding}`,
       hidden: true,
     },
+    {
+      // The first 64 KiB hold no line break: one block comment ends 9 characters before the end of the head, so the
+      // head would hold `package p` of `package pq` if the cut line were kept.
+      name: "a clause on a first line that the end of the parsed head cuts short",
+      contents: `/*${"x".repeat(65_522)}*/ package pq\n\nfun select(x: String) = x\n${padding}`,
+      hidden: true,
+    },
     // A file read to its end that has no clause is in the unnamed package, which no import of `p` can name.
     { name: "a file with no clause, read to its end", contents: "fun select(x: String) = x\n", hidden: false },
   ];

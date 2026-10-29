@@ -50,11 +50,12 @@ export function primeJvmFileFacts(file: string, facts: JvmFileFacts): void {
 /** How much of a file's start is parsed for its package clause when the whole file has no usable tree. */
 const PACKAGE_HEAD_CHARS = 64 * 1024;
 
-/** The start of a file that is parsed for its package clause, ended at a line break so no clause is cut short. */
+/** The start of a file that is parsed for its package clause, ended at a line break so no clause is cut short. Empty
+ * when no whole line fits, so the package stays unknown. */
 function packageHead(source: string): string {
   if (source.length <= PACKAGE_HEAD_CHARS) return source;
   const head = source.slice(0, PACKAGE_HEAD_CHARS);
-  return head.slice(0, head.lastIndexOf("\n") + 1) || head;
+  return head.slice(0, head.lastIndexOf("\n") + 1);
 }
 
 /**
