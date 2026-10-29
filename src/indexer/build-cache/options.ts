@@ -59,8 +59,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * reusing it.
  * Epoch 97 re-extracts files with the Tree-sitter 0.27 runtime. Its error recovery changes the ERROR/MISSING ranges
  * and the symbols recovered from a file the grammar cannot parse cleanly, such as an SCSS `@include ns.mixin;`.
+ * Epoch 98 re-extracts Kotlin files with a pinned fork of `tree-sitter-kotlin-ng`. Its trees differ for one-line class
+ * bodies, annotated top-level declarations, files that end mid-annotation, and forms the published grammar rejects, so
+ * symbols and ERROR ranges change.
  */
-export const CORE_ALGORITHM_EPOCH = 97;
+export const CORE_ALGORITHM_EPOCH = 98;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
