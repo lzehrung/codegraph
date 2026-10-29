@@ -72,30 +72,12 @@ export function normalizeCsharpQualifiedName(text: string): string {
 }
 
 /**
- * Java identifiers (`Character.isJavaIdentifierStart`/`isJavaIdentifierPart`) permit a
- * Unicode letter (Lu/Ll/Lt/Lm/Lo), a letter-number (Nl, e.g. Roman numerals), a currency
- * symbol (Sc, e.g. `$`), or a connecting-punctuation character (Pc, e.g. `_`) at every
- * position; continuation additionally allows decimal digits (Nd), combining marks (Mn/Mc),
- * and identifier-ignorable characters. Non-decimal number categories (No) are not part of
- * the Java grammar.
- */
-export const JAVA_IDENTIFIER_SOURCE = String.raw`[\p{L}\p{Nl}\p{Sc}\p{Pc}][\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mn}\p{Mc}${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]*`;
-
-/**
  * Go identifiers (`unicode_letter`/`unicode_digit` in the Go spec's `identifier` production)
  * permit a Unicode letter (Lu/Ll/Lt/Lm/Lo) or underscore at every position; continuation
  * additionally allows decimal digits (Nd). Letter-numbers (Nl), other number categories
  * (No), and combining marks are not part of the Go grammar.
  */
 export const GO_IDENTIFIER_SOURCE = String.raw`[\p{L}_][\p{L}\p{Nd}_]*`;
-
-/**
- * Kotlin identifiers (the `Letter`/`UnicodeDigit` lexer fragments in the Kotlin grammar)
- * permit a Unicode letter (Lu/Ll/Lt/Lm/Lo) or underscore at every position; continuation
- * additionally allows decimal digits (Nd). Letter-numbers (Nl), other number categories
- * (No), and combining marks are not part of the Kotlin grammar.
- */
-export const KOTLIN_IDENTIFIER_SOURCE = String.raw`[\p{L}_][\p{L}\p{Nd}_]*`;
 
 /**
  * ASCII-only case fold for a PHP identifier. PHP resolves class, interface, trait, and

@@ -5,8 +5,10 @@ import { getCompilationUnitPeers } from "../src/indexer/compilation-units.js";
 import type { ParsedFileContext } from "../src/indexer/parse-context.js";
 import type { ModuleIndex } from "../src/indexer/types.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-import { CSHARP_SUPPORT } from "../src/languages.js";
-import { collectCsharpNamespaceFacts, parseCsharpSyntaxTree } from "../src/util/csharp-tree.js";
+import { CSHARP_SUPPORT, supportById } from "../src/languages.js";
+import { collectCsharpNamespaceFacts } from "../src/util/csharp-tree.js";
+import { collectJvmFileFacts } from "../src/util/jvm-tree.js";
+import { parseSyntaxTree, type JvmLanguageId } from "../src/util/syntax-tree.js";
 import { makeTestProjectIndex } from "./helpers/narrow.js";
 
 type ScanStats = { visits: number };
@@ -46,15 +48,24 @@ function parsedSource(source: string): ParsedFileContext {
   return { source } as ParsedFileContext;
 }
 
-/** A stub module with the namespace facts the build stores for a C# file; other languages carry none. */
+function jvmLanguageOf(file: string): JvmLanguageId | undefined {
+  if (file.endsWith(".java")) return "java";
+  if (/\.(kt|jvm)$/.test(file)) return "kotlin";
+  return undefined;
+}
+
+/** A stub module with the facts the build stores for a C#, Java, or Kotlin file; other languages carry none. */
 function moduleFor(entry: IndexedFile): ModuleIndex {
-  const tree = /\.(cs|csharpx)$/.test(entry.file) ? parseCsharpSyntaxTree(entry.source, CSHARP_SUPPORT).tree : null;
+  const csharpTree = /\.(cs|csharpx)$/.test(entry.file) ? parseSyntaxTree(entry.source, CSHARP_SUPPORT).tree : null;
+  const jvmLanguage = jvmLanguageOf(entry.file);
+  const jvmTree = jvmLanguage ? parseSyntaxTree(entry.source, supportById(jvmLanguage)!).tree : null;
   return {
     file: entry.file,
     exports: [],
     imports: [],
     locals: [],
-    ...(tree ? { csharpNamespaceFacts: collectCsharpNamespaceFacts(tree) } : {}),
+    ...(csharpTree ? { csharpNamespaceFacts: collectCsharpNamespaceFacts(csharpTree) } : {}),
+    ...(jvmTree && jvmLanguage ? { jvmFacts: collectJvmFileFacts(jvmTree, jvmLanguage) } : {}),
   };
 }
 
@@ -212,12 +223,18 @@ describe("compilation-unit peer cache", () => {
     const java: IndexedFile = { file: root + "/pkg/A.java", source: "package p;\nclass A {}\n" };
     const unknownJava: IndexedFile = { file: root + "/other/B.java", source: "" };
     const jvm = stubIndex([java, unknownJava]);
-    jvm.index.parsed?.delete(fileIdentityKey(unknownJava.file));
+    delete jvm.index.byFile.get(fileIdentityKey(unknownJava.file))?.jvmFacts;
     const javaPeers = getCompilationUnitPeers(jvm.index, java.file);
     expect(peerKeys(javaPeers)).toEqual(new Set([fileIdentityKey(java.file)]));
     expect(javaPeers.complete).toBe(false);
     const unnamed = stubIndex([java, { file: root + "/other/C.java", source: "class C {}\n" }]);
     expect(getCompilationUnitPeers(unnamed.index, java.file).complete).toBe(true);
+    // A syntax error that hides the package clause leaves the package unknown, as a file without facts does; one after
+    // the clause leaves the package read.
+    const hiddenClause = stubIndex([java, { file: root + "/other/D.kt", source: ")\npackage p\nclass D\n" }]);
+    expect(getCompilationUnitPeers(hiddenClause.index, java.file).complete).toBe(false);
+    const lateError = stubIndex([java, { file: root + "/other/E.kt", source: "package q\n)\nclass E\n" }]);
+    expect(getCompilationUnitPeers(lateError.index, java.file).complete).toBe(true);
 
     const csharp: IndexedFile = { file: root + "/cs/A.cs", source: "namespace P; class A {}\n" };
     const unknownCsharp: IndexedFile = { file: root + "/cs-other/B.cs", source: "" };

@@ -2,10 +2,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/worker/native-extract-worker.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
 
@@ -17,9 +19,8 @@ function findFirstNodeByType(root: SyntaxNodeLike, type: string): SyntaxNodeLike
   }
   return null;
 }
-import { appendImplicitImportBinding } from "../../src/indexer/imports/language-specific.js";
 import type { ImportBinding } from "../../src/indexer/types.js";
-import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
@@ -1041,52 +1042,340 @@ describe("Java inherited package access", () => {
 });
 
 describe("Java lowercase class import bindings", () => {
-  it("creates a named implicit binding for a lowercase class segment and keeps star imports", () => {
-    const bindings: ImportBinding[] = [];
-    const context = {
-      file: "Consumer.java",
-      projectRoot: process.cwd(),
-      source: "import com.example.myClass;",
-      languageId: "java",
-      resolveFrom: async (from: string) => ({ external: from }),
-      pushBinding: (binding: ImportBinding) => {
-        bindings.push(binding);
-      },
-      getBindings: () => bindings,
-      replaceBindings: (next: ImportBinding[]) => {
-        bindings.splice(0, bindings.length, ...next);
-      },
-    };
+  it("binds a lowercase class segment as a named import and keeps star imports", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-lowercase-import-"));
+    try {
+      const bindings: ImportBinding[] = await collectImportsForFile(path.join(root, "Consumer.java"), root, {
+        source: "import com.example.myClass;\nimport com.example.*;\n",
+      });
+      expect(bindings).toEqual([
+        expect.objectContaining({
+          kind: "named",
+          local: "myClass",
+          imported: "myClass",
+          from: "com.example.myClass",
+          resolved: { external: "com.example.myClass" },
+          typeOnly: false,
+        }),
+        expect.objectContaining({ kind: "star", from: "com.example", jvmTypeWildcardName: "example", typeOnly: false }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
-    appendImplicitImportBinding(context, {
-      from: "com.example.myClass",
-      resolved: { external: "com.example.myClass" },
-      typeOnly: false,
-      stmtText: "import com.example.myClass;",
-    });
-    appendImplicitImportBinding(context, {
-      from: "com.example.*",
-      resolved: { external: "com.example.*" },
-      typeOnly: false,
-      stmtText: "import com.example.*;",
-    });
+describe("Java package files without a usable syntax tree", () => {
+  // A file over the native source limit is never parsed whole, so its package comes from a bounded parse of its head. It
+  // stays in the package index and declares no names, as it did when packages were read from source text.
+  it("keeps a file over the native source limit in its package for wildcard and same-named imports", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-package-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        "p3/Big.java": `package com.acme.p3;\n\npublic class Big {}\n${padding}`,
+        "p3/Small.java": "package com.acme.p3;\n\npublic class Small {}\n",
+        "app/Use.java": [
+          "package com.acme.app;",
+          "import com.acme.p3.*;",
+          "import com.acme.p3.Big;",
+          "class Use {}",
+          "",
+        ].join("\n"),
+      });
+      const use = paths["app/Use.java"]!;
+      const big = paths["p3/Big.java"]!;
+      const small = paths["p3/Small.java"]!;
 
-    expect(bindings).toEqual([
-      {
-        kind: "named",
-        local: "myClass",
-        imported: "myClass",
-        from: "com.example.myClass",
-        resolved: { external: "com.example.myClass" },
-        typeOnly: false,
-      },
-      {
-        kind: "star",
-        from: "com.example.*",
-        resolved: { external: "com.example.*" },
-        typeOnly: false,
-      },
-    ]);
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      expect(index.byFile.get(fileIdentityKey(big))?.jvmFacts).toBeUndefined();
+      const importsFrom = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""))
+        .sort();
+      expect(importsFrom).toEqual([big, small].sort());
+      const named = index.byFile
+        .get(fileIdentityKey(use))
+        ?.imports.find((binding) => binding.from === "com.acme.p3.Big");
+      expect(named?.resolved).toBe(big);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A Java import names a type only. A public Java type lives in the file its name spells, so an incomplete Java file can
+  // declare only that one type; an incomplete Kotlin file can declare any class, but a type that a file proves rules
+  // out another type of that name, and a Kotlin function (such as a factory named like its interface) is not imported.
+  it("binds a type a file proves beside an incomplete file, and leaves a name only an incomplete Kotlin file may declare", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-siblings-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const imports = ["com.acme.p4.Wrapped", "com.acme.p4.Generated", "com.acme.p5.Solid", "com.acme.p5.Service"];
+      const useLines = (extra: string[]): string =>
+        [
+          "package com.acme.app;",
+          "",
+          ...[...imports, ...extra].map((name) => `import ${name};`),
+          "",
+          "class Use {}",
+          "",
+        ].join("\n");
+      const paths = await writeFixtureFiles(root, {
+        "p4/Generated.java": `package com.acme.p4;\n\npublic class Generated {}\n${padding}`,
+        "p4/Wrapped.java": "package com.acme.p4;\n\npublic class Wrapped {}\n",
+        // Gen.kt may declare `Hidden`, `Missing`, and a factory `fun Service()` next to the interface in Iface.kt.
+        "p5/Gen.kt": `package com.acme.p5\n\nclass Hidden\n${padding}`,
+        "p5/Iface.kt": "package com.acme.p5\n\ninterface Service\n",
+        "p5/Solid.java": "package com.acme.p5;\n\npublic class Solid {}\n",
+        "app/Plain.java": useLines([]),
+        "app/Use.java": useLines(["com.acme.p5.Hidden", "com.acme.p5.Missing"]),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      const resolvedImports = (relative: string): Record<string, string> =>
+        Object.fromEntries(
+          (moduleOf(relative)?.imports ?? []).map((binding) => [
+            binding.from,
+            typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+          ]),
+        );
+      const proven = {
+        "com.acme.p4.Wrapped": paths["p4/Wrapped.java"],
+        "com.acme.p4.Generated": paths["p4/Generated.java"],
+        "com.acme.p5.Solid": paths["p5/Solid.java"],
+        "com.acme.p5.Service": paths["p5/Iface.kt"],
+      };
+      // Generated.java is the only file that can declare `Generated`; Wrapped.java, Solid.java, and Iface.kt prove theirs.
+      expect(resolvedImports("app/Plain.java")).toEqual(proven);
+      expect(moduleOf("app/Plain.java")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/Plain.java")?.importLookupIncomplete).toBeUndefined();
+      // Gen.kt may declare `Hidden` or `Missing`, and nothing proves it does not.
+      expect(resolvedImports("app/Use.java")).toEqual({
+        ...proven,
+        "com.acme.p5.Hidden": "external",
+        "com.acme.p5.Missing": "external",
+      });
+      expect(moduleOf("app/Use.java")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Directories shaped like the package let the generic fallback find a file by its name (`com/acme/p6/Hidden`), which
+  // is how `Outer.Inner` reaches `Outer.java`. That fallback must not answer for a name the lookup left unproven.
+  it("does not bind a file by its path while an incomplete file may declare the imported type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-path-fallback-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        "com/acme/p6/Hidden.kt": `package com.acme.p6\n\nclass Hidden\n${padding}`,
+        "com/acme/p6/Outer.java": "package com.acme.p6;\n\npublic class Outer { public static class Inner {} }\n",
+        "com/acme/app/Use.java": [
+          "package com.acme.app;",
+          "",
+          "import com.acme.p6.Hidden;",
+          "import com.acme.p6.Outer.Inner;",
+          "",
+          "class Use {}",
+          "",
+        ].join("\n"),
+      });
+      const use = paths["com/acme/app/Use.java"]!;
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const useModule = index.byFile.get(fileIdentityKey(use));
+      const resolved = Object.fromEntries(
+        (useModule?.imports ?? []).map((binding) => [
+          binding.from,
+          typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+        ]),
+      );
+      // Hidden.kt may declare `Hidden`, but its name is no proof; the lookup for a nested type is complete.
+      expect(resolved).toEqual({
+        "com.acme.p6.Hidden": "external",
+        "com.acme.p6.Outer.Inner": paths["com/acme/p6/Outer.java"],
+      });
+      expect(useModule).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      const fileEdges = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(fileEdges).toEqual([paths["com/acme/p6/Outer.java"]]);
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root }).map((entry) => entry.name);
+      expect(unresolved).toEqual(["com.acme.p6.Hidden"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A static member import and a wildcard import look up their owner type, as a named import looks up its type. Its
+  // dependency edge asks the same question as its binding, so neither can bind a file by a path-shaped guess.
+  // Directories shaped like the package let that guess find Hidden.kt by its name; a Maven layout hides Util.java.
+  async function indexOwnerProject(root: string) {
+    const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+    const importer = (importLines: string[]): string =>
+      ["package com.acme.app;", "", ...importLines, "", "class Use {}", ""].join("\n");
+    const paths = await writeFixtureFiles(root, {
+      "com/acme/p7/Hidden.kt": `package com.acme.p7\n\nobject Hidden { fun run() {} }\n${padding}`,
+      "com/acme/app/UseStatic.java": importer(["import static com.acme.p7.Hidden.run;"]),
+      "com/acme/app/UseStaticStar.java": importer(["import static com.acme.p7.Hidden.*;"]),
+      "com/acme/app/UseTypeStar.java": importer(["import com.acme.p7.Hidden.*;"]),
+      "src/main/java/com/acme/p8/Util.java":
+        "package com.acme.p8;\n\npublic class Util { public static int helper() { return 1; } }\n",
+      "src/main/java/com/acme/app/UseUtil.java": importer([
+        "import static com.acme.p8.Util.helper;",
+        "import static java.lang.Math.max;",
+      ]),
+    });
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+    const bindingsOf = (relative: string): Record<string, string> =>
+      Object.fromEntries(
+        (moduleOf(relative)?.imports ?? []).map((binding) => [
+          binding.from,
+          typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+        ]),
+      );
+    // The edges of a file by the import as written, each to the file it names or `external`.
+    const edgesOf = (relative: string): Record<string, string> =>
+      Object.fromEntries(
+        index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths[relative]!))
+          .map((edge) => [edge.raw, edge.to.type === "file" ? normalizePath(edge.to.path) : "external"]),
+      );
+    return { index, paths, moduleOf, bindingsOf, edgesOf };
+  }
+
+  it("resolves the edge of a static member import through its owner, as its binding does", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-static-owner-"));
+    try {
+      const { index, paths, moduleOf, bindingsOf, edgesOf } = await indexOwnerProject(root);
+
+      // Hidden.kt may declare `Hidden`, so nothing proves the owner: the binding is external and so is the edge, named as
+      // the import is written, instead of a file found by the path `com/acme/p7/Hidden`.
+      expect(bindingsOf("com/acme/app/UseStatic.java")).toEqual({ "com.acme.p7.Hidden": "external" });
+      expect(edgesOf("com/acme/app/UseStatic.java")).toEqual({ "com.acme.p7.Hidden.run": "external" });
+      expect(moduleOf("com/acme/app/UseStatic.java")).toMatchObject({
+        parserDegraded: true,
+        importLookupIncomplete: true,
+      });
+      // The wildcard importers of the same project name `com.acme.p7.Hidden`, and the static import names its member.
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root })
+        .map((entry) => entry.name)
+        .filter((name) => name.startsWith("com.acme."))
+        .sort();
+      expect(unresolved).toEqual(["com.acme.p7.Hidden", "com.acme.p7.Hidden.run"]);
+
+      // A complete owner is bound, and its edge names its file though no path-shaped guess reaches a Maven layout. The
+      // import as written still names the edge, and a member of the JDK stays external.
+      const util = paths["src/main/java/com/acme/p8/Util.java"]!;
+      const useUtil = "src/main/java/com/acme/app/UseUtil.java";
+      expect(bindingsOf(useUtil)).toEqual({ "com.acme.p8.Util": util, "java.lang.Math": "external" });
+      expect(edgesOf(useUtil)).toEqual({ "com.acme.p8.Util.helper": util, "java.lang.Math.max": "external" });
+      expect(moduleOf(useUtil)?.parserDegraded).toBeUndefined();
+      expect(moduleOf(useUtil)?.importLookupIncomplete).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks the importer of a static or type wildcard whose owner an incomplete file may declare", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-wildcard-owner-"));
+    try {
+      const { moduleOf, bindingsOf, edgesOf } = await indexOwnerProject(root);
+
+      // Neither wildcard proves its owner, so each binding stays external and its module records that, so a later build
+      // resolves it again once Hidden.kt reads.
+      for (const relative of ["com/acme/app/UseStaticStar.java", "com/acme/app/UseTypeStar.java"]) {
+        expect(bindingsOf(relative), relative).toEqual({ "com.acme.p7.Hidden": "external" });
+        expect(edgesOf(relative), relative).toEqual({ "com.acme.p7.Hidden": "external" });
+        expect(moduleOf(relative), relative).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // A package-private class can sit in any file of its package, so an importer of that package cannot rule an incomplete
+  // Java file out by its name. Another package can import only a public type, which lives in the file its name spells.
+  it("keeps a Java file with another name as a possible declarer for an importer in its own package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-no-tree-same-package-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        // Definitions.java is over the limit past `Other`, so it may declare a package-private `Service` after it.
+        "p9/Definitions.java": `package com.acme.p9;\n\nclass Other {}\n${padding}`,
+        "p9/SamePackage.java": "package com.acme.p9;\n\nimport com.acme.p9.Service;\n\nclass SamePackage {}\n",
+        "app/OtherPackage.java":
+          "package com.acme.app;\n\nimport com.acme.p9.Service;\nimport com.acme.p9.Definitions;\n\nclass OtherPackage {}\n",
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      const resolved = (relative: string): Record<string, string> =>
+        Object.fromEntries(
+          (moduleOf(relative)?.imports ?? []).map((binding) => [
+            binding.from,
+            typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+          ]),
+        );
+      // The importer of package p9 may name a package-private type of Definitions.java, which nothing rules out.
+      expect(resolved("p9/SamePackage.java")).toEqual({ "com.acme.p9.Service": "external" });
+      expect(moduleOf("p9/SamePackage.java")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      // An importer of another package can name only a public type: `Service` would live in Service.java, which does not
+      // exist, and `Definitions` is the file that Definitions.java spells.
+      expect(resolved("app/OtherPackage.java")).toEqual({
+        "com.acme.p9.Service": "external",
+        "com.acme.p9.Definitions": paths["p9/Definitions.java"],
+      });
+      expect(moduleOf("app/OtherPackage.java")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/OtherPackage.java")?.importLookupIncomplete).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // `import p.*;` names every public type of package `p`, whichever language declares it, so a file of `p` that was not
+  // read in full may declare types the wildcard binds. The wildcard still lists the file; its importer is marked.
+  it("marks the importer of a package wildcard while a package file was not read in full, and still lists the file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-wildcard-incomplete-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        "bigj/Small.java": "package com.acme.bigj;\n\npublic class Small {}\n",
+        "bigj/Big.java": `package com.acme.bigj;\n\npublic class Big {}\n${padding}`,
+        "bigk/Peer.java": "package com.acme.bigk;\n\npublic class Peer {}\n",
+        "bigk/Hidden.kt": `package com.acme.bigk\n\nclass Hidden\n${padding}`,
+        "q/Other.java": "package com.acme.q;\n\npublic class Other {}\n",
+        "app/UseBigJ.java": "package com.acme.app;\n\nimport com.acme.bigj.*;\n\nclass UseBigJ {}\n",
+        "app/UseBigK.java": "package com.acme.app;\n\nimport com.acme.bigk.*;\n\nclass UseBigK {}\n",
+        "app/UseQuiet.java": "package com.acme.app;\n\nimport com.acme.q.*;\n\nclass UseQuiet {}\n",
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      const starFiles = (relative: string): string[] | undefined =>
+        moduleOf(relative)
+          ?.imports.find((binding) => binding.kind === "star")
+          ?.jvmPackageFiles?.map((file) => path.basename(file));
+      // The file stays in its package either way: the wildcard lists it, and the importer is marked.
+      expect(starFiles("app/UseBigJ.java")).toEqual(["Big.java", "Small.java"]);
+      expect(starFiles("app/UseBigK.java")).toEqual(["Hidden.kt", "Peer.java"]);
+      for (const importer of ["app/UseBigJ.java", "app/UseBigK.java"]) {
+        expect(moduleOf(importer), importer).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      }
+      // A package whose files all read has nothing to mark.
+      expect(starFiles("app/UseQuiet.java")).toEqual(["Other.java"]);
+      expect(moduleOf("app/UseQuiet.java")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/UseQuiet.java")?.importLookupIncomplete).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

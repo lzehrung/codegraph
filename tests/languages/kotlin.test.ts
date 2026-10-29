@@ -6,11 +6,10 @@ import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
-import { finalizeLanguageSpecificImports } from "../../src/indexer/imports/language-specific.js";
-import { parseKotlinImportStatement } from "../../src/languages/import-statement-parsers.js";
 import type { ImportBinding, ProjectIndex } from "../../src/indexer/types.js";
-import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/worker/native-extract-worker.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { KOTLIN_UNICODE_NAMES } from "../helpers/kotlin-unicode-fixture.js";
@@ -411,6 +410,15 @@ describe("Kotlin multi-dollar strings", () => {
   });
 });
 
+async function kotlinImports(source: string): Promise<ImportBinding[]> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-imports-"));
+  try {
+    return await collectImportsForFile(path.join(root, "Consumer.kt"), root, { source });
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
 describe("Kotlin names written with CJK, Hangul, and supplementary-plane letters", () => {
   // The names of the shared fixture (tests/helpers/kotlin-unicode-fixture.ts): two CJK ideographs, two Hangul
   // syllables, and a name that starts with U+20BB7, a CJK ideograph above the basic plane that takes two UTF-16 code
@@ -498,31 +506,10 @@ describe("Kotlin names written with CJK, Hangul, and supplementary-plane letters
   });
 });
 
-describe("Kotlin text fallback imports", () => {
-  it("extracts semicolon-terminated imports when native bindings are empty", async () => {
-    expect(parseKotlinImportStatement("import a.b.C;")).toEqual({
-      kind: "named",
-      from: "a.b.C",
-      imported: "C",
-      local: "C",
-    });
-
-    const bindings: ImportBinding[] = [];
+describe("Kotlin import bindings from syntax nodes", () => {
+  it("binds semicolon-terminated imports and aliases with node ranges", async () => {
     const source = "import a.b.C;\nimport a.b.D as Alias;\n";
-    await finalizeLanguageSpecificImports({
-      file: "Consumer.kt",
-      projectRoot: process.cwd(),
-      source,
-      languageId: "kotlin",
-      resolveFrom: async (from) => ({ external: from }),
-      pushBinding: (binding) => {
-        bindings.push(binding);
-      },
-      getBindings: () => bindings,
-      replaceBindings: (next) => {
-        bindings.splice(0, bindings.length, ...next);
-      },
-    });
+    const bindings = await kotlinImports(source);
 
     const importedC = rangeForToken(source, "C");
     const importedD = rangeForToken(source, "D");
@@ -556,25 +543,9 @@ describe("Kotlin text fallback imports", () => {
     expect(localAlias.start.column).not.toBe(importedD.start.column);
   });
 
-  it("extracts imports with nested comments around qualified-name separators", async () => {
-    const bindings: ImportBinding[] = [];
+  it("binds imports with nested comments around qualified-name separators", async () => {
     const source = "import pkg./* outer /* inner */ comment */Target as LocalTarget;\n";
-    await finalizeLanguageSpecificImports({
-      file: "Consumer.kt",
-      projectRoot: process.cwd(),
-      source,
-      languageId: "kotlin",
-      resolveFrom: async (from) => ({ external: from }),
-      pushBinding: (binding) => {
-        bindings.push(binding);
-      },
-      getBindings: () => bindings,
-      replaceBindings: (next) => {
-        bindings.splice(0, bindings.length, ...next);
-      },
-    });
-
-    expect(bindings).toEqual([
+    expect(await kotlinImports(source)).toEqual([
       expect.objectContaining({
         kind: "named",
         imported: "Target",
@@ -588,7 +559,6 @@ describe("Kotlin text fallback imports", () => {
   });
 
   it("ignores import text in raw multiline strings before real imports", async () => {
-    const bindings: ImportBinding[] = [];
     const source = [
       '@file:Suppress("""',
       '"',
@@ -597,22 +567,7 @@ describe("Kotlin text fallback imports", () => {
       "import real.Target as RealTarget",
       "",
     ].join("\n");
-    await finalizeLanguageSpecificImports({
-      file: "Consumer.kt",
-      projectRoot: process.cwd(),
-      source,
-      languageId: "kotlin",
-      resolveFrom: async (from) => ({ external: from }),
-      pushBinding: (binding) => {
-        bindings.push(binding);
-      },
-      getBindings: () => bindings,
-      replaceBindings: (next) => {
-        bindings.splice(0, bindings.length, ...next);
-      },
-    });
-
-    expect(bindings).toEqual([
+    expect(await kotlinImports(source)).toEqual([
       expect.objectContaining({
         kind: "named",
         imported: "Target",
@@ -705,6 +660,419 @@ describe("Kotlin imports with a same-named package", () => {
       if (goto.status !== "ok") throw new Error("Expected imported class C");
       expect(normalizePath(goto.definition.file)).toBe(declaration);
       expect(normalizePath(goto.definition.file)).not.toBe(decoy);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin declarations in one-line class bodies", () => {
+  // The published grammar ended the tree in an ERROR node after two one-line class bodies in a row; the pinned fork reads
+  // them, so every declaration after `Early` is a top-level name an import can reach.
+  const handlers = [
+    "package com.acme.handlers",
+    "",
+    "class Early",
+    "",
+    "fun interface Handler { fun handle(x: Int): Int }",
+    "",
+    "class DefaultHandler : Handler { override fun handle(x: Int) = x }",
+    "object Registry { fun all(): List<Handler> = listOf() }",
+    "fun createHandler(): Handler = Handler { it }",
+    "typealias HandlerAlias = Handler",
+    "",
+  ].join("\n");
+  const importedNames = ["Early", "DefaultHandler", "Registry", "createHandler", "Handler", "HandlerAlias"];
+
+  it("resolves named imports of those declarations from Kotlin and Java, and leaves a member unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-error-declarations-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "handlers/Handlers.kt": handlers,
+        "handlers/Plain.kt": "package com.acme.handlers\n\nclass PlainHandler\nfun plainHandler() = PlainHandler()\n",
+        "app/Consumer.kt": [
+          "package com.acme.app",
+          "",
+          ...[...importedNames, "PlainHandler", "plainHandler", "handle", "all"].map(
+            (name) => `import com.acme.handlers.${name}`,
+          ),
+          "",
+        ].join("\n"),
+        "app/UseFromJava.java": [
+          "package com.acme.app;",
+          "",
+          "import com.acme.handlers.DefaultHandler;",
+          "import com.acme.handlers.Registry;",
+          "import com.acme.handlers.PlainHandler;",
+          "",
+          "class UseFromJava {",
+          "  DefaultHandler d;",
+          "  Registry r;",
+          "  PlainHandler p;",
+          "}",
+          "",
+        ].join("\n"),
+      });
+      const handlersFile = paths["handlers/Handlers.kt"]!;
+      const plainFile = paths["handlers/Plain.kt"]!;
+      const javaFile = paths["app/UseFromJava.java"]!;
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const resolvedImports = (file: string): Record<string, string> =>
+        Object.fromEntries(
+          (index.byFile.get(fileIdentityKey(file))?.imports ?? []).map((binding) => [
+            binding.from.split(".").pop()!,
+            typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+          ]),
+        );
+      expect(resolvedImports(paths["app/Consumer.kt"]!)).toEqual({
+        ...Object.fromEntries(importedNames.map((name) => [name, handlersFile])),
+        PlainHandler: plainFile,
+        plainHandler: plainFile,
+        // Members of the one-line bodies are not top-level declarations.
+        handle: "external",
+        all: "external",
+      });
+      expect(resolvedImports(javaFile)).toEqual({
+        DefaultHandler: handlersFile,
+        Registry: handlersFile,
+        PlainHandler: plainFile,
+      });
+      const javaEdges = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(javaFile) && edge.to.type === "file")
+        .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""))
+        .sort();
+      expect(javaEdges).toEqual([handlersFile, plainFile].sort());
+      const unresolved = getUnresolvedImports(index.graph, { projectRoot: root }).map((entry) => entry.name);
+      expect(unresolved.sort()).toEqual(["com.acme.handlers.all", "com.acme.handlers.handle"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin backtick-quoted top-level names", () => {
+  // A declaration is read from the syntax tree with its backticks, as an import spells it.
+  it("resolves named imports of backtick-quoted declarations and leaves a missing name external", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-backtick-imports-"));
+    try {
+      const library = ["package com.acme.lib", "", "class `Quoted Type`", "fun `quoted function`() {}", ""];
+      const paths = await writeFixtureFiles(root, {
+        "lib/Quoted.kt": library.join("\n"),
+        "other/Decoy.kt": ["package com.acme.other", "", "class `Quoted Type`", ""].join("\n"),
+        "app/Consumer.kt": [
+          "package com.acme.app",
+          "",
+          "import com.acme.lib.`Quoted Type`",
+          "import com.acme.lib.`quoted function`",
+          "import com.acme.lib.`Missing Type`",
+          "",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const resolved = Object.fromEntries(
+        (index.byFile.get(fileIdentityKey(paths["app/Consumer.kt"]!))?.imports ?? []).map((binding) => [
+          binding.from,
+          typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+        ]),
+      );
+      // The same-named declaration of the other package is not a target.
+      expect(resolved).toEqual({
+        "com.acme.lib.`Quoted Type`": paths["lib/Quoted.kt"],
+        "com.acme.lib.`quoted function`": paths["lib/Quoted.kt"],
+        "com.acme.lib.`Missing Type`": "external",
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin extension and generic top-level functions", () => {
+  // The package index names a function by its own name: an extension function is never declared under its receiver
+  // type, and a generic function is declared like any other.
+  it("resolves an import of each function and leaves a receiver type's name unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-function-imports-"));
+    try {
+      const consumer = [
+        "package com.acme.app",
+        "",
+        "import com.acme.lib.shout",
+        "import com.acme.lib.gen",
+        "import com.acme.lib.ext",
+        "import com.acme.lib.firstName",
+        "import com.acme.lib.plain",
+        "import com.acme.lib.String",
+        "import com.acme.lib.List",
+        "import com.acme.other.String as OtherString",
+        "",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "lib/Funs.kt": [
+          "package com.acme.lib",
+          "",
+          "fun String.shout() {}",
+          "fun <T> gen(x: T) {}",
+          "fun <T> List<T>.ext() {}",
+          "fun List<String>.firstName() = firstOrNull()",
+          "fun plain() {}",
+          "class Real",
+          "",
+        ].join("\n"),
+        // A real declaration of a receiver's name in another package stays reachable.
+        "other/Decoy.kt": ["package com.acme.other", "", "class String", ""].join("\n"),
+        "app/Consumer.kt": consumer.join("\n"),
+        // Java cannot import a Kotlin top-level function, but it can import a class.
+        "app/UseFromJava.java": [
+          "package com.acme.app;",
+          "",
+          "import com.acme.lib.shout;",
+          "import com.acme.lib.Real;",
+          "",
+          "class UseFromJava {}",
+          "",
+        ].join("\n"),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const resolvedImports = (relative: string): Record<string, string> =>
+        Object.fromEntries(
+          (index.byFile.get(fileIdentityKey(paths[relative]!))?.imports ?? []).map((binding) => [
+            binding.from,
+            typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+          ]),
+        );
+      const functions = paths["lib/Funs.kt"];
+      expect(resolvedImports("app/Consumer.kt")).toEqual({
+        "com.acme.lib.shout": functions,
+        "com.acme.lib.gen": functions,
+        "com.acme.lib.ext": functions,
+        "com.acme.lib.firstName": functions,
+        "com.acme.lib.plain": functions,
+        "com.acme.lib.String": "external",
+        "com.acme.lib.List": "external",
+        "com.acme.other.String": paths["other/Decoy.kt"],
+      });
+      expect(resolvedImports("app/UseFromJava.java")).toEqual({
+        "com.acme.lib.shout": "external",
+        "com.acme.lib.Real": functions,
+      });
+
+      // Navigation agrees: the imported function opens its declaration, and the receiver type opens nothing.
+      const consumerFile = paths["app/Consumer.kt"]!;
+      const shout = await goToDefinition(index, {
+        file: consumerFile,
+        line: 3,
+        column: columnInLines(consumer, 3, "shout"),
+      });
+      expect(shout.status).toBe("ok");
+      if (shout.status === "ok") expect(shout.definition.localName).toBe("shout");
+      const receiver = await goToDefinition(index, {
+        file: consumerFile,
+        line: 8,
+        column: columnInLines(consumer, 8, "String"),
+      });
+      expect(receiver.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin package files without a usable syntax tree", () => {
+  // A file over the native source limit is never parsed whole, so it keeps its package but its declarations are
+  // unknown, not empty. A Kotlin import names every declaration of its name: a class, a function, a typealias.
+  it("leaves every name an incomplete package file may declare unresolved and marks the importer", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-no-tree-package-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const useSelect = ["package com.acme.app", "", "import com.acme.p.select", "", "fun use() = select(1)", ""];
+      const paths = await writeFixtureFiles(root, {
+        "p/Small.kt": ["package com.acme.p", "", "class Known", "fun select(x: Int) = x", ""].join("\n"),
+        "p/Iface.kt": ["package com.acme.p", "", "interface Service", ""].join("\n"),
+        // Big.kt may overload `select`, and may declare a factory function named like the interface `Service`.
+        "p/Big.kt": `package com.acme.p\n\nfun select(x: String) = x\n${padding}`,
+        "q/Other.kt": ["package com.acme.q", "", "class Quiet", "fun helper() = 1", ""].join("\n"),
+        "app/UseSelect.kt": useSelect.join("\n"),
+        "app/UseMissing.kt": ["package com.acme.app", "", "import com.acme.p.Missing", ""].join("\n"),
+        "app/UseClasses.kt": [
+          "package com.acme.app",
+          "",
+          "import com.acme.p.Known",
+          "import com.acme.p.Service",
+          "",
+        ].join("\n"),
+        "app/Clean.kt": ["package com.acme.app", "", "import com.acme.q.Quiet", "import com.acme.q.helper", ""].join(
+          "\n",
+        ),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      const resolvedImports = (relative: string): Record<string, string> =>
+        Object.fromEntries(
+          (moduleOf(relative)?.imports ?? []).map((binding) => [
+            binding.from,
+            typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external",
+          ]),
+        );
+      // `select` may be overloaded in Big.kt, and Big.kt may declare `Missing`; neither is proven for the importer.
+      expect(resolvedImports("app/UseSelect.kt")).toEqual({ "com.acme.p.select": "external" });
+      expect(resolvedImports("app/UseMissing.kt")).toEqual({ "com.acme.p.Missing": "external" });
+      // A class and a function can share a name, so a class that another file proves rules out nothing: Big.kt may
+      // declare `fun Known()` or the factory `fun Service()`, and an import names both.
+      expect(resolvedImports("app/UseClasses.kt")).toEqual({
+        "com.acme.p.Known": "external",
+        "com.acme.p.Service": "external",
+      });
+      for (const importer of ["app/UseSelect.kt", "app/UseMissing.kt", "app/UseClasses.kt"]) {
+        expect(moduleOf(importer), importer).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      }
+      // Another package has no incomplete file.
+      expect(resolvedImports("app/Clean.kt")).toEqual({
+        "com.acme.q.Quiet": paths["q/Other.kt"],
+        "com.acme.q.helper": paths["q/Other.kt"],
+      });
+      expect(moduleOf("app/Clean.kt")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/Clean.kt")?.importLookupIncomplete).toBeUndefined();
+
+      // The consumers agree: no file edge, and the call does not go to the one overload that could be read.
+      const fileEdgesOf = (relative: string) =>
+        index.graph.edges.filter(
+          (edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths[relative]!) && edge.to.type === "file",
+        );
+      expect(fileEdgesOf("app/UseSelect.kt")).toEqual([]);
+      expect(fileEdgesOf("app/UseClasses.kt")).toEqual([]);
+      const call = await goToDefinition(index, {
+        file: paths["app/UseSelect.kt"]!,
+        line: 5,
+        column: columnInLines(useSelect, 5, "select"),
+      });
+      expect(call.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Kotlin sees a package-private Java class of its own package, and an import of `Service` names it as well as a factory
+  // `fun Service()`. An incomplete Java file may declare it whatever its name; another package sees only public types.
+  it("keeps an incomplete Java file as a possible declarer for an importer in its package", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-java-peer-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        "p/Factory.kt": ["package com.acme.p", "", "fun Service() = 1", ""].join("\n"),
+        // Definitions.java is over the limit past `Other`, so it may declare a package-private `Service` after it.
+        "p/Definitions.java": `package com.acme.p;\n\nclass Other {}\n${padding}`,
+        "p/SamePackage.kt": ["package com.acme.p", "", "import com.acme.p.Service", ""].join("\n"),
+        "app/OtherPackage.kt": ["package com.acme.app", "", "import com.acme.p.Service", ""].join("\n"),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      const resolved = (relative: string): unknown => moduleOf(relative)?.imports[0]?.resolved;
+      // Factory.kt declares `Service`, but Definitions.java may too, so the importer in package p cannot rely on one file.
+      expect(resolved("p/SamePackage.kt")).toEqual({ external: "com.acme.p.Service" });
+      expect(moduleOf("p/SamePackage.kt")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      // A package-private class is invisible from package app, so Factory.kt is the one declaration there.
+      expect(normalizePath(String(resolved("app/OtherPackage.kt")))).toBe(paths["p/Factory.kt"]);
+      expect(moduleOf("app/OtherPackage.kt")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/OtherPackage.kt")?.importLookupIncomplete).toBeUndefined();
+
+      const fileEdgesOf = (relative: string): string[] =>
+        index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths[relative]!) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(fileEdgesOf("p/SamePackage.kt")).toEqual([]);
+      expect(fileEdgesOf("app/OtherPackage.kt")).toEqual([paths["p/Factory.kt"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // `import p.*` names every declaration of package `p`, so a file of `p` that was not read in full may declare names the
+  // wildcard binds. The wildcard still lists the file; its importer is marked, as a named import is.
+  it("marks the importer of a package wildcard while a package file was not read in full, and still lists the file", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-wildcard-incomplete-"));
+    try {
+      const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
+      const paths = await writeFixtureFiles(root, {
+        // Big.kt is over the native limit past `Unread`, and Gap.kt has a syntax error at the top after `Before`.
+        "big/Small.kt": ["package com.acme.big", "", "class Known", ""].join("\n"),
+        "big/Big.kt": `package com.acme.big\n\nclass Unread\n${padding}`,
+        "gap/Peer.kt": ["package com.acme.gap", "", "class Peer", ""].join("\n"),
+        "gap/Gap.kt": ["package com.acme.gap", "", "class Before", ")", "fun after() = 1", ""].join("\n"),
+        "q/Other.kt": ["package com.acme.q", "", "class Quiet", ""].join("\n"),
+        "app/UseBig.kt": ["package com.acme.app", "", "import com.acme.big.*", ""].join("\n"),
+        "app/UseGap.kt": ["package com.acme.app", "", "import com.acme.gap.*", ""].join("\n"),
+        "app/UseQuiet.kt": ["package com.acme.app", "", "import com.acme.q.*", ""].join("\n"),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      expect(
+        moduleOf("gap/Gap.kt")?.parseErrorRanges?.length,
+        "the pinned grammar no longer fails on Gap.kt",
+      ).toBeTruthy();
+      const starFiles = (relative: string): string[] | undefined =>
+        moduleOf(relative)
+          ?.imports.find((binding) => binding.kind === "star")
+          ?.jvmPackageFiles?.map((file) => path.basename(file));
+      // The file stays in its package either way: the wildcard lists it, and the importer is marked.
+      expect(starFiles("app/UseBig.kt")).toEqual(["Big.kt", "Small.kt"]);
+      expect(starFiles("app/UseGap.kt")).toEqual(["Gap.kt", "Peer.kt"]);
+      for (const importer of ["app/UseBig.kt", "app/UseGap.kt"]) {
+        expect(moduleOf(importer), importer).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      }
+      // A package whose files all read has nothing to mark.
+      expect(starFiles("app/UseQuiet.kt")).toEqual(["Other.kt"]);
+      expect(moduleOf("app/UseQuiet.kt")?.parserDegraded).toBeUndefined();
+      expect(moduleOf("app/UseQuiet.kt")?.importLookupIncomplete).toBeUndefined();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin package files with a syntax error", () => {
+  // The error leaves `select(String)` unread, so Gap.kt may overload what Peer.kt declares. `Before` was read first.
+  it("keeps the names read before the error and leaves a name it may declare unresolved", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-error-file-package-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "p/Gap.kt": ["package com.acme.p", "", "class Before", ")", "fun select(x: String) = x", ""].join("\n"),
+        "p/Peer.kt": ["package com.acme.p", "", "fun select(x: Int) = x", ""].join("\n"),
+        "app/UseSelect.kt": ["package com.acme.app", "", "import com.acme.p.select", ""].join("\n"),
+        "app/UseBefore.kt": ["package com.acme.app", "", "import com.acme.p.Before", ""].join("\n"),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      expect(
+        moduleOf("p/Gap.kt")?.parseErrorRanges?.length,
+        "the pinned grammar no longer fails on Gap.kt",
+      ).toBeTruthy();
+      const resolved = (relative: string): unknown => moduleOf(relative)?.imports[0]?.resolved;
+      // `select` is declared in Peer.kt and may be in Gap.kt too, so no file is proven.
+      expect(resolved("app/UseSelect.kt")).toEqual({ external: "com.acme.p.select" });
+      expect(moduleOf("app/UseSelect.kt")).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      // `Before` was read, so Gap.kt declares it whatever follows the error.
+      expect(normalizePath(String(resolved("app/UseBefore.kt")))).toBe(paths["p/Gap.kt"]);
+      expect(moduleOf("app/UseBefore.kt")?.importLookupIncomplete).toBeUndefined();
+
+      const fileEdgesOf = (relative: string): string[] =>
+        index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths[relative]!) && edge.to.type === "file")
+          .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
+      expect(fileEdgesOf("app/UseSelect.kt")).toEqual([]);
+      expect(fileEdgesOf("app/UseBefore.kt")).toEqual([paths["p/Gap.kt"]]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

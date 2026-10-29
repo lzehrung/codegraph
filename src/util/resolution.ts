@@ -15,7 +15,7 @@ import {
   resolveWorkspacePackage,
   type WorkspaceConfig,
 } from "./workspace.js";
-import { clearJvmResolutionCaches, resolveJvmImportPath } from "./resolution/jvm.js";
+import { clearJvmResolutionCaches, lookupJvmImport } from "./resolution/jvm.js";
 import { clearCsharpResolutionCaches } from "./resolution/csharp.js";
 import { clearCppResolutionCaches, isCppNamedModuleSpecifier, resolveCppImportPath } from "./resolution/cpp.js";
 import { findFirstExistingResolutionCandidate } from "./resolution/find-first-existing.js";
@@ -255,12 +255,12 @@ export async function resolveImportSpecifier(
     if (goHit) return goHit;
   }
   if (languageId === "kotlin" || languageId === "java") {
-    const jvmHit = await confineLanguageHit(
-      projectRoot,
-      await resolveJvmImportPath(projectRoot, spec, { languageId, fromFile }),
-      spec,
-    );
+    const lookup = await lookupJvmImport(projectRoot, spec, { languageId, fromFile });
+    const jvmHit = await confineLanguageHit(projectRoot, lookup.file, spec);
     if (jvmHit) return jvmHit;
+    // A file that may declare the name was not read, so no file is proven. The path-shaped fallbacks below would name
+    // one by its filename, which proves nothing about what it declares.
+    if (lookup.incomplete) return { external: spec };
   }
   if (languageId === "php") {
     const phpHit = await confineLanguageHit(

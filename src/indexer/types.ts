@@ -10,6 +10,7 @@ import type { ProjectDiscoveryContext, ProjectFileDiscoveryOptions, ProjectFileI
 import type { ImportBinding } from "./import-types.js";
 import type { CallableIdentity } from "../languages/callable-arity.js";
 import type { CsharpNamespaceFacts } from "../util/csharp-tree.js";
+import type { JvmFileFacts } from "../util/jvm-tree.js";
 
 export type { ImportBinding } from "./import-types.js";
 
@@ -111,6 +112,14 @@ export type ModuleIndex = {
    * cached module never holds another file's declarations. Absent when the file's tree was unavailable.
    */
   csharpNamespaceFacts?: CsharpNamespaceFacts;
+  /**
+   * Java and Kotlin only: the package and top-level declared names of this file alone, read from its own syntax
+   * tree when it is indexed. Package lookups read them here instead of parsing the file, and project-wide
+   * lookups combine them across files when they run, so a cached module never holds another file's
+   * declarations. `incomplete` marks a file whose tree held a syntax error that left declarations unread. Absent
+   * when the file's tree was unavailable.
+   */
+  jvmFacts?: JvmFileFacts;
   /** Outermost Tree-sitter ERROR/MISSING ranges. */
   parseErrorRanges?: ParseErrorRange[];
   /**
@@ -132,9 +141,10 @@ export type ModuleIndex = {
   /**
    * Set, together with `parserDegraded`, when a lookup over other project files could not read one of them, so an
    * import of this file may have stayed unresolved only because of it (a C# alias or static using whose type lookup
-   * found a C# file of the project unreadable). That file can read again without this file changing, and no signature
-   * or manifest edge tracks it when no module covers it, such as a file that discovery ignores. A build therefore
-   * extracts this module again instead of reusing it.
+   * found a C# file of the project unreadable, or a Java or Kotlin named import that a package file with no usable
+   * syntax tree may declare). That file can read again without this file changing, and no signature or manifest edge
+   * tracks it when no module covers it, such as a file that discovery ignores. A build therefore extracts this module
+   * again instead of reusing it.
    */
   importLookupIncomplete?: boolean;
 };

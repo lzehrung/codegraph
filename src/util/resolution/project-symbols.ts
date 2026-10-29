@@ -97,11 +97,11 @@ export async function buildDeclaredContainerIndex(
   return index;
 }
 
-export function getOrCreateProjectSymbolIndex(
-  cache: Map<string, Promise<LanguageProjectSymbolIndex>>,
+export function getOrCreateProjectSymbolIndex<Index extends LanguageProjectSymbolIndex>(
+  cache: Map<string, Promise<Index>>,
   projectRoot: string,
-  buildIndex: () => Promise<LanguageProjectSymbolIndex>,
-): Promise<LanguageProjectSymbolIndex> {
+  buildIndex: () => Promise<Index>,
+): Promise<Index> {
   const cached = cache.get(projectRoot);
   if (cached) return cached;
   const pending = buildIndex().catch((error) => {

@@ -168,16 +168,6 @@ const SWIFT_ROW: TriviaRow = {
   ],
 };
 
-const KOTLIN_ROW: TriviaRow = {
-  lineComments: ["//"],
-  blockComments: [NESTED_SLASH_STAR_COMMENT],
-  strings: [
-    { open: '"""', close: '"""', interpolation: { start: "${", end: "}" } },
-    { open: '"', close: '"', escape: "\\", interpolation: { start: "${", end: "}" } },
-    { open: "'", close: "'", escape: "\\" },
-  ],
-};
-
 // SCSS: `//` comments end at the line break and are read before any quote, so an apostrophe in
 // `// don't` cannot open a string. `#{...}` is code even inside a string. An unquoted `url(...)`
 // is one token, including inside that interpolation, so `url(http://x/y.png)` and `url(//cdn/y.png)`
@@ -203,16 +193,6 @@ const C_FAMILY_ROW: TriviaRow = {
   ],
 };
 
-const JAVA_ROW: TriviaRow = {
-  lineComments: ["//"],
-  blockComments: [SLASH_STAR_COMMENT],
-  strings: [
-    { open: '"""', close: '"""', escape: "\\" },
-    { open: '"', close: '"', escape: "\\" },
-    { open: "'", close: "'", escape: "\\" },
-  ],
-};
-
 const TRIVIA_ROWS: Record<string, TriviaRow> = {
   js: JS_LIKE_ROW,
   ts: JS_LIKE_ROW,
@@ -226,10 +206,8 @@ const TRIVIA_ROWS: Record<string, TriviaRow> = {
   php: PHP_ROW,
   ruby: RUBY_ROW,
   swift: SWIFT_ROW,
-  kotlin: KOTLIN_ROW,
   scss: SCSS_ROW,
   cpp: C_FAMILY_ROW,
-  java: JAVA_ROW,
 };
 
 /** The trivia row for `languageId`; unknown ids fall back to the JS-family row, which is what

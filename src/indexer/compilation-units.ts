@@ -2,15 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Range } from "../types.js";
-import {
-  GO_IDENTIFIER_SOURCE,
-  JAVA_IDENTIFIER_SOURCE,
-  KOTLIN_IDENTIFIER_SOURCE,
-  normalizeCsharpQualifiedName,
-} from "../util/identifiers.js";
+import { GO_IDENTIFIER_SOURCE, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
 import { CSHARP_FILE_LOCAL_PREFIX, csharpNamespaceAtIndex, type CsharpNamespaceRegion } from "../util/csharp-tree.js";
+import { isJvmPackageKnown } from "../util/jvm-tree.js";
 import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRootSync } from "../util/resolution/files.js";
 import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
 import type { ModuleIndex, ProjectIndex } from "./types.js";
@@ -52,9 +48,9 @@ import type { ModuleIndex, ProjectIndex } from "./types.js";
  *   can see it; it must not select a declaration visible in just one region.
  *
  * The aggregated facts are cached per `ProjectIndex` in memory only (like the existing package-directory
- * lookups). Go and JVM package clauses derive from indexed file sources, which the index already
- * fingerprints per file. A C# file's namespace regions are the one fact stored with its module: they come
- * from that file's own syntax tree and depend on no other file, so no lookup parses a C# file. The only
+ * lookups). Go package clauses derive from indexed file sources, which the index already fingerprints per
+ * file. A C# file's namespace regions and a Java or Kotlin file's package are stored with its module: they
+ * come from that file's own syntax tree and depend on no other file, so no lookup parses one. The only
  * untracked input is the nearest `*.csproj` directory that bounds a C# alias lookup's project.
  */
 export type CompilationUnitPeers = {
@@ -99,36 +95,13 @@ function unitLanguageGroup(languageId: string): string {
 }
 
 const GO_PACKAGE_PATTERN = new RegExp(String.raw`^\s*package\s+(${GO_IDENTIFIER_SOURCE})`, "mu");
-const JAVA_PACKAGE_NAME_PATTERN = new RegExp(
-  String.raw`^\s*package\s+(${JAVA_IDENTIFIER_SOURCE}(?:\.${JAVA_IDENTIFIER_SOURCE})*)\s*;`,
-  "mu",
-);
-const KOTLIN_PACKAGE_NAME_PATTERN = new RegExp(
-  String.raw`^\s*package\s+(${KOTLIN_IDENTIFIER_SOURCE}(?:\.${KOTLIN_IDENTIFIER_SOURCE})*)`,
-  "mu",
-);
-
-/** Read a JVM package clause from the same trivia-masked source used for unit peers. */
-export function jvmPackageNameFromSource(source: string, languageId: "java" | "kotlin"): string | null {
-  const pattern = languageId === "kotlin" ? KOTLIN_PACKAGE_NAME_PATTERN : JAVA_PACKAGE_NAME_PATTERN;
-  return pattern.exec(maskTrivia(source, languageId))?.[1] ?? null;
-}
 
 type PackageDeclaration = { name: string | null; readable: boolean };
-type PackageNameCaches = Record<"go" | "jvm", Map<string, PackageDeclaration>>;
-const packageNameCaches = new WeakMap<ProjectIndex, PackageNameCaches>();
-
-function packageNameCacheFor(index: ProjectIndex): PackageNameCaches {
-  let caches = packageNameCaches.get(index);
-  if (!caches) {
-    caches = { go: new Map<string, PackageDeclaration>(), jvm: new Map<string, PackageDeclaration>() };
-    packageNameCaches.set(index, caches);
-  }
-  return caches;
-}
+/** Go package clauses read from source, once per file and index snapshot. */
+const packageNameCaches = new WeakMap<ProjectIndex, Map<string, PackageDeclaration>>();
 
 /**
- * Source to read a unit declaration from: the text the index already parsed when it retained
+ * Source to read a Go package clause from: the text the index already parsed when it retained
  * one, and otherwise the file itself. Reusing the retained text keeps the package consistent
  * with the symbols resolved from that same snapshot.
  */
@@ -143,8 +116,9 @@ function unitDeclarationSource(index: ProjectIndex, filePath: string, fileKey: s
 }
 
 /**
- * The declared package name of a Go or JVM file, or `null` when the file declares none (or its
- * source cannot be read). Cached per index so unit facts are read at most once per snapshot.
+ * The declared package name of a Go or JVM file, or `null` when the file declares none. A JVM file is unreadable when
+ * its module stored no facts, because its tree was unavailable when it was indexed, or when a syntax error left its
+ * package clause unread; a Go file is unreadable when its source cannot be read.
  */
 function packageDeclarationFor(
   index: ProjectIndex,
@@ -152,21 +126,21 @@ function packageDeclarationFor(
   languageId: "go" | "java" | "kotlin",
 ): PackageDeclaration {
   const fileKey = fileIdentityKey(filePath);
-  const cache = languageId === "go" ? packageNameCacheFor(index).go : packageNameCacheFor(index).jvm;
-  const cacheKey = languageId === "go" ? fileKey : `${languageId}::${fileKey}`;
-  const cached = cache.get(cacheKey);
+  if (languageId !== "go") {
+    const facts = index.byFile.get(fileKey)?.jvmFacts;
+    return { name: facts?.packageName ?? null, readable: !!facts && isJvmPackageKnown(facts) };
+  }
+  let cache = packageNameCaches.get(index);
+  if (!cache) {
+    cache = new Map<string, PackageDeclaration>();
+    packageNameCaches.set(index, cache);
+  }
+  const cached = cache.get(fileKey);
   if (cached) return cached;
   const source = unitDeclarationSource(index, filePath, fileKey);
-  let packageName: string | null = null;
-  if (source !== null) {
-    if (languageId === "go") {
-      packageName = GO_PACKAGE_PATTERN.exec(maskTrivia(source, "go"))?.[1] ?? null;
-    } else {
-      packageName = jvmPackageNameFromSource(source, languageId);
-    }
-  }
+  const packageName = source === null ? null : (GO_PACKAGE_PATTERN.exec(maskTrivia(source, "go"))?.[1] ?? null);
   const declaration = { name: packageName, readable: source !== null };
-  cache.set(cacheKey, declaration);
+  cache.set(fileKey, declaration);
   return declaration;
 }
 

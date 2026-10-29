@@ -17,12 +17,8 @@ import {
 import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
 import type { BuildReport } from "../../indexer/types.js";
 import type { ParsedFileContext } from "../../indexer/parse-context.js";
-import {
-  CSHARP_FILE_LOCAL_PREFIX,
-  collectCsharpNamespaceFacts,
-  parseCsharpSyntaxTree,
-  type CsharpNamespaceFacts,
-} from "../csharp-tree.js";
+import { CSHARP_FILE_LOCAL_PREFIX, collectCsharpNamespaceFacts, type CsharpNamespaceFacts } from "../csharp-tree.js";
+import { parseSyntaxTree } from "../syntax-tree.js";
 
 type CsharpProjectNamespaceIndexResult = {
   index: LanguageProjectSymbolIndex;
@@ -109,7 +105,7 @@ async function readCsharpNamespaceFacts(
   const retained = parsedFiles?.get(fileKey);
   let tree = retained?.sup?.id === "csharp" ? retained.tree : undefined;
   if (!tree) {
-    const parsed = parseCsharpSyntaxTree(await readUtf8WithoutBom(filePath), support);
+    const parsed = parseSyntaxTree(await readUtf8WithoutBom(filePath), support);
     if (!parsed.tree) {
       recordParserBackendDegradation(report, {
         file: slashPath(filePath),

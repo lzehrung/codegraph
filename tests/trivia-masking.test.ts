@@ -107,14 +107,6 @@ describe("trivia masking keeps following code visible per language", () => {
     expectMaskedWithFollowingCode(source, masked, "body", "let t = 2");
   });
 
-  it("does not let a Kotlin interpolation with a nested literal close the outer string", () => {
-    const source = 'val s = "outer ${if (x) "inner" else "y"} tail"\nimport a.b\n';
-    const masked = maskImportBindingTrivia(source, "kotlin");
-    expectOffsetsPreserved(source, masked);
-    expect(masked).not.toContain("outer ");
-    expect(masked).toContain("import a.b");
-  });
-
   it("does not let a Swift interpolation with a nested literal close the outer string", () => {
     const source = 'let s = "a \\(cond ? "x" : "y") b"\nlet t = 3\n';
     const masked = maskTrivia(source, "swift");

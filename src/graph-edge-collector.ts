@@ -6,7 +6,7 @@ import type { WorkspaceConfig } from "./util/workspace.js";
 import { extractDynamicImportSpecifiers, type ModuleSpecifier } from "./util/specifiers.js";
 import { fileIdentityKey } from "./util/paths.js";
 import { edgeKey } from "./util/graph-edges.js";
-import { parseCsharpSyntaxTree } from "./util/csharp-tree.js";
+import { parseSyntaxTree, readsSyntaxTree } from "./util/syntax-tree.js";
 import type { LogLevel } from "./logging.js";
 import {
   graphOnlyLanguageSupportsImportAliases,
@@ -169,8 +169,10 @@ export async function collectEdgesForFile(
     emitCacheEntry([]);
     return [];
   }
-  // C# reads its directives from one syntax tree, so the imports query would parse the file a second time.
-  const queriesImports = !parsed && !graphOnlyLanguage && sup.id !== "csharp";
+  // C# and the JVM languages read their directives from one syntax tree, so the imports query would parse the file a
+  // second time.
+  const readsTree = readsSyntaxTree(sup.id);
+  const queriesImports = !parsed && !graphOnlyLanguage && !readsTree;
   if (queriesImports) {
     const compactExecution = getCompactImportsExecution(src, sup);
     compactNativeImports = compactExecution.results;
@@ -182,9 +184,10 @@ export async function collectEdgesForFile(
       ...(compactExecution.error ? { error: compactExecution.error } : {}),
     });
   }
-  // A C# file collected without a parsed context has not been accounted for, so its one tree parse is recorded here.
-  if (!parsed && sup.id === "csharp") {
-    const outcome = parseCsharpSyntaxTree(src, sup);
+  // A tree-bound file collected without a parsed context has not been accounted for, so its one tree parse is
+  // recorded here.
+  if (!parsed && readsTree) {
+    const outcome = parseSyntaxTree(src, sup);
     recordNativeExecutionOutcome(opts.report, {
       file: normalizedFile,
       support: sup,

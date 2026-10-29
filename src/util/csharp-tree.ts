@@ -1,12 +1,4 @@
-import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { ProjectedSyntaxTree } from "../native/projected-tree.js";
-import {
-  getNativeSyntaxTreeExecution,
-  type NativeFallbackReason,
-  type NativeSyntaxTreeExecution,
-} from "../native/tree-sitter-native.js";
-import { errorMessage } from "./errors.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "./identifiers.js";
 
 const CSHARP_NAME_NODE_TYPES: Record<string, true> = {
@@ -90,38 +82,6 @@ export type CsharpNamespaceFacts = {
    */
   types: string[];
 };
-export type CsharpSyntaxTreeResult = {
-  tree: SyntaxTreeLike | null;
-  fallbackReason?: NativeFallbackReason;
-  error?: string;
-};
-
-export function csharpSyntaxTreeFromNativeExecution(
-  source: string,
-  execution: Pick<NativeSyntaxTreeExecution, "tree" | "fallbackReason" | "error">,
-): CsharpSyntaxTreeResult {
-  if (!execution.tree) {
-    return {
-      tree: null,
-      ...(execution.fallbackReason ? { fallbackReason: execution.fallbackReason } : {}),
-      ...(execution.error ? { error: execution.error } : {}),
-    };
-  }
-  try {
-    return { tree: new ProjectedSyntaxTree(source, execution.tree) };
-  } catch (error) {
-    return {
-      tree: null,
-      fallbackReason: execution.fallbackReason ?? "queryFailure",
-      error: errorMessage(error),
-    };
-  }
-}
-
-export function parseCsharpSyntaxTree(source: string, support: LanguageSupport): CsharpSyntaxTreeResult {
-  if (support.id !== "csharp") return { tree: null };
-  return csharpSyntaxTreeFromNativeExecution(source, getNativeSyntaxTreeExecution(source, support));
-}
 
 /** Builds a supported C# name path from native syntax nodes. */
 export function csharpNamePath(node: SyntaxNodeLike | null): CsharpNamePath | null {
