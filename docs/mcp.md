@@ -156,7 +156,7 @@ The first run on a large project builds the index from scratch, which can take l
 - Call the same tool again. The retry waits for what is left of the build, up to the same budget, and then returns the normal result.
 - `progress.activity` names what is running, such as `Indexing files` or `Preparing duplicate analysis`. `current` and `total` appear only while the work has a measurable total, such as files parsed.
 - A cancelled request stops waiting at once; the build is not cancelled.
-- The budget is a timer on the server's event loop. The builds hand the loop back every few milliseconds, between files, so the answer normally arrives within a second of the budget; the longest hold measured on a 1,200-file project is about 1.4 seconds, so leave that much room below the client's timeout.
+- The budget is a timer on the server's event loop. The builds hand the loop back every few milliseconds, between files, so the answer normally arrives within a second or two of the budget. A single large file can hold the loop longer, so keep the budget a few seconds below the client's timeout.
 
 Choose a request timeout longer than `--index-wait-ms`: the default of 20 seconds fits clients that allow 30. For a client that allows less, lower the budget (`--index-wait-ms 8000`); for one that allows more, raise it, or pass `--index-wait-ms 0` to wait for as long as the build takes (the per-tool deadline still applies). Library callers set `mcpIndexWaitMs`. The setting belongs to the server: `codegraph.config.json` has no key for it.
 
