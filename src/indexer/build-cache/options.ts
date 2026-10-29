@@ -65,8 +65,12 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 99 records the start of each C# `using` directive on its star binding (`csharpDirectiveStartIndex`), so a
  * lookup can tell which namespace the directive is written in, and no longer binds a dotted C# type name to a
  * path-like file when the project declares its namespace.
+ * Epoch 101 re-extracts Kotlin files with a regenerated fork grammar that reads identifiers, labels, and template
+ * names written with any Unicode letter (CJK ideographs, Hangul syllables, letters above U+10915), so a file that
+ * ended in an ERROR at such a name now has its real symbols, references, and ERROR ranges. Epoch 100 belongs to the
+ * change in #433, which is not on this branch.
  */
-export const CORE_ALGORITHM_EPOCH = 99;
+export const CORE_ALGORITHM_EPOCH = 101;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
