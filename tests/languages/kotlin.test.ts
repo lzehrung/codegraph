@@ -446,23 +446,16 @@ describe("Kotlin names written with CJK, Hangul, and supplementary-plane letters
         "}",
         "",
       ];
+      const decoyLines = ["package other", "", `class ${cls}(val y: Int)`, "", `fun ${fn}(v: Int): Int = v`, ""];
       const paths = await writeFixtureFiles(root, {
         "app/Defs.kt": defLines.join("\n"),
         "client/Use.kt": useLines.join("\n"),
-        "other/Decoy.kt": `package other\n\nclass ${cls}(val y: Int)\n\nfun ${fn}(v: Int): Int = v\n`,
+        "other/Decoy.kt": decoyLines.join("\n"),
       });
       const defs = paths["app/Defs.kt"]!;
       const use = paths["client/Use.kt"]!;
       const decoy = paths["other/Decoy.kt"]!;
       const index = await buildProjectIndex(root, { cache: "off" });
-      // Columns are UTF-16 code units, 1-based: the position of `name` in a line, after `before`.
-      const columnIn = (lines: string[], line: number, before: string, name: string): number => {
-        const text = lines[line - 1];
-        if (text === undefined) throw new Error(`missing line ${line}`);
-        const at = text.indexOf(before + name);
-        if (at < 0) throw new Error(`text not found on line ${line}: ${before}${name}`);
-        return at + before.length + 1;
-      };
       const sitesOf = async (file: string, line: number, column: number): Promise<string[]> => {
         const references = await findReferences(index, { file, line, column });
         if (references.status !== "ok") throw new Error(`Expected references at ${line}:${column}`);
@@ -473,29 +466,22 @@ describe("Kotlin names written with CJK, Hangul, and supplementary-plane letters
       };
 
       // Every site that names the class and the function in both files, and none of the decoy's. The property is
-      // used in its own file, in an expression and in a raw string template.
-      expect(await sitesOf(defs, 3, columnIn(defLines, 3, "class ", cls))).toEqual([
-        "Defs.kt:3",
-        "Use.kt:3",
-        "Use.kt:7",
-      ]);
-      expect(await sitesOf(defs, 5, columnIn(defLines, 5, "fun ", fn))).toEqual([
+      // used in its own file, in an expression and in a raw string template. Columns are 1-based UTF-16 code units,
+      // which is what `columnInLines` returns and what the index publishes for the supplementary-plane name.
+      expect(await sitesOf(defs, 3, columnInLines(defLines, 3, cls))).toEqual(["Defs.kt:3", "Use.kt:3", "Use.kt:7"]);
+      expect(await sitesOf(defs, 5, columnInLines(defLines, 5, fn))).toEqual([
         "Defs.kt:5",
         "Defs.kt:7",
         "Use.kt:4",
         "Use.kt:8",
       ]);
-      expect(await sitesOf(defs, 7, columnIn(defLines, 7, "val ", rare))).toEqual([
-        "Defs.kt:7",
-        "Defs.kt:8",
-        "Defs.kt:9",
-      ]);
+      expect(await sitesOf(defs, 7, columnInLines(defLines, 7, rare))).toEqual(["Defs.kt:7", "Defs.kt:8", "Defs.kt:9"]);
 
       const targets: Array<[string, number, number, string, number]> = [
-        [use, 7, columnIn(useLines, 7, "val made = ", cls), defs, 3],
-        [use, 8, columnIn(useLines, 8, "return ", fn), defs, 5],
-        [defs, 8, columnIn(defLines, 8, "val again = ", rare), defs, 7],
-        [defs, 9, columnIn(defLines, 9, "$", rare), defs, 7],
+        [use, 7, columnInLines(useLines, 7, cls), defs, 3],
+        [use, 8, columnInLines(useLines, 8, fn), defs, 5],
+        [defs, 8, columnInLines(defLines, 8, rare), defs, 7],
+        [defs, 9, columnInLines(defLines, 9, rare), defs, 7],
       ];
       for (const [file, line, column, expectedFile, expectedLine] of targets) {
         const definition = await goToDefinition(index, { file, line, column });
@@ -505,8 +491,7 @@ describe("Kotlin names written with CJK, Hangul, and supplementary-plane letters
         expect(definition.definition.range.start.line).toBe(expectedLine);
       }
       // The decoy is a different symbol: its own references are its declaration only.
-      const decoySites = await sitesOf(decoy, 3, columnIn(["", "", `class ${cls}(val y: Int)`], 3, "class ", cls));
-      expect(decoySites).toEqual(["Decoy.kt:3"]);
+      expect(await sitesOf(decoy, 3, columnInLines(decoyLines, 3, cls))).toEqual(["Decoy.kt:3"]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

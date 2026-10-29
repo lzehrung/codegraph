@@ -917,6 +917,65 @@ fn kotlin_parse_reads_names_written_with_cjk_hangul_and_supplementary_letters() 
     assert_eq!(multi.root_node().to_sexp().matches("(interpolation").count(), 2);
 }
 
+/// The statements of the first `block` in `tree` as (kind, text). The text of a call is its callee, so the shape of a
+/// body shows which names were read as calls and where each statement ends, without the arguments.
+fn kotlin_block_statements(tree: &tree_sitter::Tree, source: &str) -> Vec<(String, String)> {
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "block" {
+            let mut cursor = node.walk();
+            let statements: Vec<(String, String)> = node
+                .named_children(&mut cursor)
+                .map(|statement| {
+                    let shown = match statement.kind() {
+                        "call_expression" => statement.child(0).unwrap_or(statement),
+                        _ => statement,
+                    };
+                    (statement.kind().to_string(), source[shown.byte_range()].to_string())
+                })
+                .collect();
+            return statements;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    Vec::new()
+}
+
+#[test]
+fn kotlin_parse_reads_a_name_that_starts_with_a_keyword_and_goes_on_with_a_letter_above_ascii() {
+    // The grammar's scanner compares the word at the start of a line with `else`, `in`, `as`, `by`, `where` and the
+    // like to decide whether the line continues the statement above. A longer name that starts with one of them is a
+    // call on a new statement. The scanner once found the end of the word with `iswalpha` and `iswalnum`, which the C
+    // library and its locale decide: on Linux a letter above ASCII ended the word, the keyword was read, and the call
+    // became an infix call on the statement above without a parse error, while Windows read a call. The tree has to be
+    // the same on every platform.
+    let keywords = ["else", "in", "instanceof", "get", "set", "constructor", "by", "as", "where"];
+    // U+C5 is a Latin letter that every version of the grammar reads, so for it the platform is the only difference.
+    // The others are CJK ideographs, Hangul syllables and a CJK ideograph above the basic plane.
+    let letters = ["\u{c5}", "\u{540d}\u{524d}", "\u{d55c}\u{ae00}", "\u{20bb7}"];
+    for keyword in keywords {
+        for letter in letters {
+            let name = format!("{keyword}{letter}");
+            let source = format!("fun f(x: Int) {{\n  val a = x\n  {name}(a)\n  g(a)\n}}\n");
+            let tree = parse_kotlin_within_deadline(&source);
+            let root = tree.root_node();
+            assert!(!root.has_error(), "unexpected error for {source:?}: {}", root.to_sexp());
+            // `val a = x` ends before the call, and the callee is the whole name.
+            assert_eq!(
+                kotlin_block_statements(&tree, &source),
+                [
+                    ("property_declaration".to_string(), "val a = x".to_string()),
+                    ("call_expression".to_string(), name.clone()),
+                    ("call_expression".to_string(), "g".to_string()),
+                ],
+                "statements of {source:?}: {}",
+                root.to_sexp()
+            );
+        }
+    }
+}
+
 #[test]
 fn kotlin_parse_reads_long_dollar_and_quote_runs_in_linear_time() {
     // Only the last two dollars of a run start a template in a `$$` string, and only the last three quotes of a run
