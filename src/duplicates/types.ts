@@ -1,5 +1,6 @@
 import type { SyntaxTreeLike } from "../languages/types.js";
 import type { ProjectIndex, SymbolKind } from "../indexer/types.js";
+import type { ProgressUpdate } from "../types.js";
 import type { SqliteDatabase, SqliteStatement } from "../sqlite-driver.js";
 
 export type DuplicateConfidence = "high" | "medium" | "low";
@@ -96,11 +97,21 @@ export type DuplicateDetectionOptions = {
   maxTokens?: number;
   maxBucketSize?: number;
   maxPairs?: number;
+  /**
+   * Upper bound on candidate pairs kept for scoring. Evidence kinds are admitted in order of strength
+   * (exact text, normalized tokens, AST shape, Git similarity, shared fingerprints); pairs past the bound are
+   * skipped and counted in `omittedCounts.candidatePairs`, and `stats.candidatePairBudget` reports the bound.
+   */
+  maxCandidatePairs?: number;
   /** Count candidate duplicate groups without scoring every pair. */
   countOnly?: boolean;
   shingleSize?: number;
   windowSize?: number;
   includeRawPairs?: boolean;
+  /** Receives stage progress while units are collected, paired, scored, and grouped. */
+  onProgress?: ((update: ProgressUpdate) => void) | undefined;
+  /** `performance.now()` origin for the completion `elapsedMs`, so a caller can count work that preceded detection. */
+  progressStartedAt?: number;
 };
 
 export type DuplicateSimilarityHint = {
@@ -121,6 +132,8 @@ export type DuplicateDetectionOmittedCounts = {
 export type DuplicateDetectionStats = {
   comparedPairs: number;
   candidatePairs: number;
+  /** Present only when the candidate pair bound dropped pairs: the bound and the pair occurrences it skipped. */
+  candidatePairBudget?: { limit: number; skipped: number };
 };
 
 export type DuplicateDetectionFilteredCounts = {
@@ -185,8 +198,6 @@ export type LanguageForFileResult = {
   id: string;
   textOnly: boolean;
 };
-
-export type ConsideredSignaturesByUnit = Map<string, Set<string>>;
 
 export type DuplicateAstContext = {
   source: string;

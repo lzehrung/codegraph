@@ -19,6 +19,8 @@ type CreateCliProgressDisplayOptions = {
 const REFRESH_INTERVAL_MS = 100;
 const CLEAR_LINE = "\r\u001b[2K";
 const SPINNER_FRAMES = ["-", "\\", "|", "/"] as const;
+/** The noun a count measures unless an update names another one. */
+const DEFAULT_COUNT_UNIT = "file";
 
 export function resolveCliProgressPresentation(input: {
   policy: CliProgressPolicy;
@@ -44,6 +46,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
   let current = 0;
   let total = 0;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
+  let unit = DEFAULT_COUNT_UNIT;
   let activity = progressAction(mode);
   let interval: NodeJS.Timeout | undefined;
   let delay: NodeJS.Timeout | undefined;
@@ -58,7 +61,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
     if (!active) return;
     const frame = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length]!;
     frameIndex += 1;
-    const count = hasProgressCount(mode, current, total) ? formatProgressCount(current, total) : "";
+    const count = hasProgressCount(mode, current, total) ? formatProgressCount(current, total, unit) : "";
     const elapsed = ` (${formatDuration(performance.now() - phaseStartedAt)})`;
     write(`${CLEAR_LINE}${activity}... ${frame}${count}${elapsed}`);
     rendered = true;
@@ -82,6 +85,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
     current = update.current;
     total = update.total;
     mode = update.mode ?? "build";
+    unit = update.unit ?? DEFAULT_COUNT_UNIT;
     activity = update.activity ?? `${progressAction(mode)} project index`;
     phaseStartedAt = performance.now();
     const beginRendering = (): void => {
@@ -103,10 +107,15 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
     stopInterval();
     if (!rendered) return;
     clear();
-    const verb = progressCompleteVerb(update.mode ?? mode);
-    const fileCount = formatFileCount(update.total, "words");
     const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
-    write(`${verb} project index: ${fileCount}${elapsed}.\n`);
+    if (update.activity !== undefined) {
+      write(
+        `${update.activity}: ${formatCount(update.total, update.unit ?? DEFAULT_COUNT_UNIT, "words")}${elapsed}.\n`,
+      );
+      return;
+    }
+    const verb = progressCompleteVerb(update.mode ?? mode);
+    write(`${verb} project index: ${formatCount(update.total, DEFAULT_COUNT_UNIT, "words")}${elapsed}.\n`);
   };
 
   return {
@@ -126,6 +135,8 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
       current = update.current;
       total = update.total;
       mode = update.mode ?? mode;
+      if (update.activity !== undefined) unit = update.unit ?? DEFAULT_COUNT_UNIT;
+      else if (update.unit !== undefined) unit = update.unit;
       if (update.activity !== undefined && update.activity !== activity) phaseStartedAt = performance.now();
       if (update.activity !== undefined) activity = update.activity;
     },
@@ -138,14 +149,14 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void, delayM
   };
 }
 
-function formatFileCount(count: number, zeroFormat: "numeric" | "words" = "numeric"): string {
-  if (!count && zeroFormat === "words") return "no files";
-  return `${count} file${count === 1 ? "" : "s"}`;
+function formatCount(count: number, unit: string, zeroFormat: "numeric" | "words" = "numeric"): string {
+  if (!count && zeroFormat === "words") return `no ${unit}s`;
+  return `${count} ${unit}${count === 1 ? "" : "s"}`;
 }
 
-function formatProgressCount(current: number, total: number): string {
-  if (total > 0) return ` ${current}/${formatFileCount(total)}`;
-  return ` ${formatFileCount(current)} processed`;
+function formatProgressCount(current: number, total: number, unit: string): string {
+  if (total > 0) return ` ${current}/${formatCount(total, unit)}`;
+  return ` ${formatCount(current, unit)} processed`;
 }
 
 function hasProgressCount(mode: NonNullable<ProgressUpdate["mode"]>, current: number, total: number): boolean {
@@ -158,6 +169,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
   let current = 0;
   let total = 0;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
+  let unit = DEFAULT_COUNT_UNIT;
   let activity = progressAction(mode);
   let delay: NodeJS.Timeout | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
@@ -179,7 +191,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
     write(`[Progress] ${activity}.\n`);
     heartbeat = setInterval(() => {
       if (!active) return;
-      const count = hasProgressCount(mode, current, total) ? `:${formatProgressCount(current, total)}` : "";
+      const count = hasProgressCount(mode, current, total) ? `:${formatProgressCount(current, total, unit)}` : "";
       const elapsed = formatDuration(performance.now() - phaseStartedAt);
       write(`[Progress] ${activity}${count}. (${elapsed})\n`);
     }, 1_000);
@@ -192,6 +204,7 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
     current = update.current;
     total = update.total;
     mode = update.mode ?? "build";
+    unit = update.unit ?? DEFAULT_COUNT_UNIT;
     activity = update.activity ?? `${progressAction(mode)} project index`;
     phaseStartedAt = performance.now();
     if (delayMs) {
@@ -213,9 +226,17 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
         active = false;
         stopTimers();
         if (!rendered) return;
-        const verb = progressCompleteVerb(update.mode ?? mode);
         const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
-        write(`[Progress] ${verb} project index: ${formatFileCount(update.total, "words")}${elapsed}.\n`);
+        if (update.activity !== undefined) {
+          write(
+            `[Progress] ${update.activity}: ${formatCount(update.total, update.unit ?? DEFAULT_COUNT_UNIT, "words")}${elapsed}.\n`,
+          );
+          return;
+        }
+        const verb = progressCompleteVerb(update.mode ?? mode);
+        write(
+          `[Progress] ${verb} project index: ${formatCount(update.total, DEFAULT_COUNT_UNIT, "words")}${elapsed}.\n`,
+        );
         return;
       }
       if (!active) {
@@ -226,6 +247,8 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
       current = update.current;
       total = update.total;
       mode = update.mode ?? mode;
+      if (update.activity !== undefined) unit = update.unit ?? DEFAULT_COUNT_UNIT;
+      else if (update.unit !== undefined) unit = update.unit;
       if (update.activity !== undefined) activity = update.activity;
       const activityChanged = activity !== previousActivity;
       if (activityChanged) phaseStartedAt = performance.now();
@@ -238,9 +261,9 @@ function createLogProgressDisplay(write: (chunk: string) => void, delayMs: numbe
       if (shouldPrintCount) {
         const elapsed = formatDuration(performance.now() - phaseStartedAt);
         if (update.activity !== undefined) {
-          write(`[Progress] ${activity}:${formatProgressCount(update.current, update.total)}. (${elapsed})\n`);
+          write(`[Progress] ${activity}:${formatProgressCount(update.current, update.total, unit)}. (${elapsed})\n`);
         } else {
-          write(`[Progress] ${formatFileCount(update.current)} processed. (${elapsed})\n`);
+          write(`[Progress] ${formatCount(update.current, unit)} processed. (${elapsed})\n`);
         }
       }
     },

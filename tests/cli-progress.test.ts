@@ -794,4 +794,49 @@ describe("CLI index progress", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(["log", "interactive"] as const)(
+    "names the counted unit and the finished activity instead of the project index in %s mode",
+    (presentation) => {
+      const chunks: string[] = [];
+      const display = createCliProgressDisplay({ presentation, write: (chunk) => chunks.push(chunk) });
+      display.update({
+        type: "progress",
+        phase: "start",
+        mode: "check",
+        message: "Scoring candidate pairs",
+        activity: "Scoring candidate pairs",
+        current: 0,
+        total: 1_000,
+        unit: "pair",
+      });
+      display.update({
+        type: "progress",
+        phase: "update",
+        mode: "check",
+        message: "Scoring candidate pairs",
+        activity: "Scoring candidate pairs",
+        current: 1_000,
+        total: 1_000,
+        unit: "pair",
+      });
+      display.update({
+        type: "progress",
+        phase: "complete",
+        mode: "check",
+        message: "Detected duplicates",
+        activity: "Detected duplicates",
+        current: 1,
+        total: 1,
+        unit: "unit",
+        elapsedMs: 74_100,
+      });
+
+      const output = chunks.join("");
+      expect(output).toMatch(/\d+\/1000 pairs/);
+      expect(output).toContain("Detected duplicates: 1 unit in 74.1s.");
+      expect(output).not.toContain("project index");
+      expect(output).not.toContain("files");
+    },
+  );
 });

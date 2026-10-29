@@ -46,6 +46,7 @@ import {
   writeDuplicateUnitsBatchToCache,
   type PendingDuplicateUnitCacheWrite,
 } from "./unit-cache.js";
+import { DUPLICATE_STAGE_UNITS, type DuplicateProgress } from "./progress.js";
 import type {
   CollectedDuplicateUnits,
   DuplicateAstContext,
@@ -687,6 +688,7 @@ export function shouldKeepUnit(unit: DuplicateInternalUnit, includeSmall: boolea
 export async function collectDuplicateUnits(
   index: ProjectIndex,
   options: DuplicateUnitCollectionOptions,
+  progress?: DuplicateProgress,
 ): Promise<CollectedDuplicateUnits> {
   const files = options.files ?? Array.from(index.byFile.values(), (module) => module.file);
   const filesByIdentity = new Map<string, string>();
@@ -709,6 +711,7 @@ export async function collectDuplicateUnits(
   const belowThresholdUnitsByFile = new Map<string, number>();
 
   const pendingWrites: PendingDuplicateUnitCacheWrite[] = [];
+  let processedFiles = 0;
   for (const file of normalizedFiles) {
     const fileKey = fileIdentityKey(file);
     const cacheSignature = duplicateUnitCacheSignature(index, file, options.projectRoot);
@@ -749,6 +752,12 @@ export async function collectDuplicateUnits(
         continue;
       }
       units.push(unit);
+    }
+    if (progress) {
+      processedFiles++;
+      progress.stage(DUPLICATE_STAGE_UNITS, processedFiles, normalizedFiles.length, "file");
+      const pending = progress.yieldPoint();
+      if (pending) await pending;
     }
   }
   if (pendingWrites.length) {
