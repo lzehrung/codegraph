@@ -94,6 +94,7 @@ export async function captureTsxScript(
   options: TsxScriptCaptureOptions = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   const child = spawn(process.execPath, [tsxCliPath, entryPath, ...args], {
+    windowsHide: true,
     cwd: options.cwd ?? process.cwd(),
     env: { ...process.env, ...(options.env ?? {}) },
     stdio: ["pipe", "pipe", "pipe"],

@@ -71,6 +71,7 @@ function main() {
   fs.rmSync(VITEST_REPORT_PATH, { force: true });
 
   const result = spawnSync("npm", ["run", "test:all"], {
+    windowsHide: true,
     cwd: rootDir,
     stdio: "inherit",
     encoding: "utf8",

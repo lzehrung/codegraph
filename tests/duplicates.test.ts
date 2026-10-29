@@ -806,6 +806,7 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
   test("generated TypeScript and Rust keyword lists stay in sync with the canonical source", async () => {
     await expect(
       execFileAsync(process.execPath, ["./scripts/generate-duplicate-keywords.mjs", "--check"], {
+        windowsHide: true,
         cwd: process.cwd(),
       }),
     ).resolves.toBeDefined();

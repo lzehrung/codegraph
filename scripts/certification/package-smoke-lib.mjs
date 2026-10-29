@@ -64,6 +64,7 @@ export function runPackageCommand(command, args, options = {}) {
   const startedAt = performance.now();
   const invocation = resolveCommandInvocation(command, args);
   const result = spawnSync(invocation.command, invocation.args, {
+    windowsHide: true,
     cwd: options.cwd,
     env: options.env,
     input: options.input,
@@ -650,6 +651,7 @@ export async function runPackedMcpExchange({
 }) {
   const startedAt = performance.now();
   const child = spawn(nodePath, [cliPath, "mcp", "serve", "--root", fixtureDirectory, "--stdio", "--cache", "off"], {
+    windowsHide: true,
     cwd: fixtureDirectory,
     env,
     stdio: ["pipe", "pipe", "pipe"],

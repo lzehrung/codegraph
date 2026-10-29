@@ -37,7 +37,7 @@ function runCli(cliPath, root, query, mode, cache, disableQuerySidecar = false) 
   const result = spawnSync(
     process.execPath,
     [cliPath, "search", query, "--root", root, "--mode", mode, "--cache", cache, "--json"],
-    { cwd: root, encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024 },
+    { windowsHide: true, cwd: root, encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024 },
   );
   const elapsedMs = performance.now() - started;
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || `CLI exited ${result.status}.`);

@@ -1,6 +1,7 @@
 import js from "@eslint/js";
 import stylistic from "@stylistic/eslint-plugin";
 import tseslint from "typescript-eslint";
+import windowsHidePlugin from "./scripts/eslint-rules/require-windows-hide.mjs";
 
 export default tseslint.config(
   {
@@ -88,6 +89,24 @@ export default tseslint.config(
     rules: {
       "no-restricted-imports": "off",
     },
+  },
+  {
+    // Scripts are plain ESM outside the TypeScript projects: only the local rule below applies.
+    files: ["scripts/**/*.mjs"],
+    ...tseslint.configs.disableTypeChecked,
+    rules: {
+      ...tseslint.configs.disableTypeChecked.rules,
+      "no-undef": "off",
+      "no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": "off",
+    },
+  },
+  {
+    // Windows opens a visible console window for any child process launched without
+    // windowsHide, so every launch in shipped code, tests, and scripts must set it inline.
+    files: ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.mjs"],
+    plugins: { "windows-hide": windowsHidePlugin },
+    rules: { "windows-hide/require-windows-hide": "error" },
   },
   {
     files: ["tests/**/*.test.ts"],

@@ -44,6 +44,7 @@ describe("worker pool teardown", () => {
     expect(fs.existsSync(builtPool), "run `npm run build` first").toBe(true);
 
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      windowsHide: true,
       cwd: rootDir,
       encoding: "utf8",
       timeout: 120_000,

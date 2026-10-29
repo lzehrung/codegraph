@@ -285,7 +285,7 @@ describe("agent file view", () => {
     await fs.writeFile(victimPath, "inside-safe-content\n", "utf8");
 
     try {
-      execFileSync("mkfifo", [fifoPath]);
+      execFileSync("mkfifo", [fifoPath], { windowsHide: true });
     } catch (error) {
       if (isMkfifoUnavailable(error)) return;
       throw error;

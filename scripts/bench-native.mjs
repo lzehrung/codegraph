@@ -235,6 +235,7 @@ async function runChildBenchmark(fixture, workload, temperature, mode) {
         `--mode=${mode}`,
       ],
       {
+        windowsHide: true,
         cwd: rootDir,
         env: {
           ...process.env,

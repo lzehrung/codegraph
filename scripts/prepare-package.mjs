@@ -50,6 +50,7 @@ if (isGlobalInstall) {
 }
 
 const result = spawnSync("npm", ["run", "build"], {
+  windowsHide: true,
   stdio: "inherit",
   shell: process.platform === "win32",
 });

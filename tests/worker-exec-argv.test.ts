@@ -51,6 +51,7 @@ function runHost(hostArgs: string[], nodeOptions?: string): { marker: string | n
   expect(fs.existsSync(builtHelper), "run `npm run build` first").toBe(true);
   const { NODE_OPTIONS: _inherited, ...env } = process.env;
   const result = spawnSync(process.execPath, [...hostArgs, "--input-type=module", "-e", hostScript], {
+    windowsHide: true,
     cwd: rootDir,
     encoding: "utf8",
     timeout: 60_000,

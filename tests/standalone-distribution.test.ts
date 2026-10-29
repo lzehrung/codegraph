@@ -24,7 +24,7 @@ import { mkTmpDir } from "./helpers/filesystem.js";
 function resolvePowerShell(): string {
   const candidates = process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : ["pwsh"];
   for (const candidate of candidates) {
-    const probe = spawnSync(candidate, ["-NoProfile", "-Command", "exit 0"], { encoding: "utf8" });
+    const probe = spawnSync(candidate, ["-NoProfile", "-Command", "exit 0"], { windowsHide: true, encoding: "utf8" });
     if (!probe.error && probe.status === 0) return candidate;
   }
   return "";
@@ -288,7 +288,7 @@ describe("standalone distribution", () => {
     const entries = execFileSync(
       process.platform === "win32" ? "unzip" : "tar",
       process.platform === "win32" ? ["-Z1", result.archivePath] : ["-tf", result.archivePath],
-      { encoding: "utf8" },
+      { windowsHide: true, encoding: "utf8" },
     ).replaceAll("\\", "/");
     expect(entries).toContain(`codegraph-${target}/manifest.json`);
     expect(entries).toContain(`codegraph-${target}/dist/cli.js`);
@@ -613,6 +613,7 @@ describe("standalone distribution", () => {
         smoke: async () => {},
       });
       const result = spawnSync(installed.launchers[0], ["argument with spaces"], {
+        windowsHide: true,
         encoding: "utf8",
         env: { ...process.env, CODEGRAPH_LAUNCHER_ARGS: output },
       });
@@ -637,6 +638,7 @@ describe("standalone distribution", () => {
     if (!launcher) throw new Error("Expected the installed Windows launcher.");
 
     const result = spawnSync("cmd.exe", ["/d", "/s", "/c", "codegraph version --json"], {
+      windowsHide: true,
       encoding: "utf8",
       env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
     });
@@ -744,6 +746,7 @@ describe("standalone distribution", () => {
       };
     }
     const result = spawnSync(invocation.command, invocation.args, {
+      windowsHide: true,
       cwd: root,
       encoding: "utf8",
       env: {
@@ -886,7 +889,7 @@ describe("standalone bootstrap scripts", () => {
     );
     if (options.tamperCli) await fsp.appendFile(cli, "\n// tampered\n", "utf8");
     const archivePath = path.join(releaseDir, archive);
-    execFileSync("tar", ["-czf", archivePath, "-C", releaseDir, bundleName]);
+    execFileSync("tar", ["-czf", archivePath, "-C", releaseDir, bundleName], { windowsHide: true });
     await fsp.writeFile(path.join(releaseDir, "SHA256SUMS"), `${await sha256(archivePath)}  ${archive}\n`, "utf8");
     return { archive, releaseDir, target, version };
   }
@@ -932,6 +935,7 @@ describe("standalone bootstrap scripts", () => {
 
   function runPosixBootstrap(args: readonly string[], env: NodeJS.ProcessEnv) {
     return spawnSync("sh", [path.join(bootstrapRoot, "install.sh"), ...args], {
+      windowsHide: true,
       cwd: bootstrapRoot,
       encoding: "utf8",
       env,
@@ -948,6 +952,7 @@ describe("standalone bootstrap scripts", () => {
       stdout: string;
     }>();
     const child = spawn("sh", [path.join(bootstrapRoot, "install.sh"), ...args], {
+      windowsHide: true,
       cwd: bootstrapRoot,
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -978,7 +983,7 @@ describe("standalone bootstrap scripts", () => {
         "-File",
         path.join(bootstrapRoot, "tests", "helpers", "standalone-move-retry.ps1"),
       ],
-      { cwd: bootstrapRoot, encoding: "utf8" },
+      { windowsHide: true, cwd: bootstrapRoot, encoding: "utf8" },
     );
 
     expect(`${result.stdout}${result.stderr}`).toContain("recovered after 5 refusals");
@@ -1226,7 +1231,7 @@ describe("standalone bootstrap scripts", () => {
       const launcher = path.join(binDir, "codegraph");
       const launcherText = await fsp.readFile(launcher, "utf8");
       expect(launcherText).toContain(`'"'"'`);
-      const launch = spawnSync(launcher, ["version"], { encoding: "utf8" });
+      const launch = spawnSync(launcher, ["version"], { windowsHide: true, encoding: "utf8" });
       expect(launch.status).toBe(0);
       expect(launch.stdout.trim()).toBe(release.version);
     },

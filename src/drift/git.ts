@@ -38,6 +38,7 @@ async function cleanupTempDir(dir: string | undefined): Promise<void> {
 async function resolveGitCommit(root: string, ref: string): Promise<string> {
   const rev = `${ref}^{commit}`;
   const { stdout } = await execFileAsync("git", ["rev-parse", "--verify", "--quiet", "--end-of-options", rev], {
+    windowsHide: true,
     cwd: root,
     env: process.env,
   });
@@ -56,9 +57,16 @@ async function materializeGitRef(
   if (checkoutRef === undefined || checkoutRef === "." || isGitWorktreeSentinel(checkoutRef)) return { root };
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
   try {
-    await execFileAsync("git", ["clone", "--quiet", "--no-checkout", root, tempRoot], { env: process.env });
+    await execFileAsync("git", ["clone", "--quiet", "--no-checkout", root, tempRoot], {
+      windowsHide: true,
+      env: process.env,
+    });
     const checkoutCommit = await resolveGitCommit(root, checkoutRef);
-    await execFileAsync("git", ["checkout", "--quiet", checkoutCommit], { cwd: tempRoot, env: process.env });
+    await execFileAsync("git", ["checkout", "--quiet", checkoutCommit], {
+      windowsHide: true,
+      cwd: tempRoot,
+      env: process.env,
+    });
     return { root: tempRoot, cleanup: tempRoot };
   } catch (error) {
     await cleanupTempDir(tempRoot);
