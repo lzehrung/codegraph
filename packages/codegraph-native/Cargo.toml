@@ -19,7 +19,7 @@ tree-sitter-hcl = "1.1.0"
 tree-sitter-html = "0.23.2"
 tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25.0"
-tree-sitter-kotlin-ng = { git = "https://github.com/lzehrung/tree-sitter-kotlin", rev = "61274c29c6e76e3b7176174a440a1b3f11c32a72" }
+tree-sitter-kotlin-ng = { git = "https://github.com/lzehrung/tree-sitter-kotlin", rev = "0edffee5daa85b0881e621e021d4618657649165" }
 tree-sitter-php = "0.24.2"
 tree-sitter-python = "0.25.0"
 tree-sitter-ruby = "0.23.1"

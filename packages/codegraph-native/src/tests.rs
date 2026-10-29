@@ -942,21 +942,53 @@ fn kotlin_block_statements(tree: &tree_sitter::Tree, source: &str) -> Vec<(Strin
     Vec::new()
 }
 
+/// The text of every `identifier` in `tree`, in order.
+fn kotlin_identifiers(tree: &tree_sitter::Tree, source: &str) -> Vec<String> {
+    let mut identifiers = Vec::new();
+    let mut cursor = tree.walk();
+    'walk: loop {
+        let node = cursor.node();
+        if node.kind() == "identifier" {
+            identifiers.push(source[node.byte_range()].to_string());
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                break 'walk;
+            }
+        }
+    }
+    identifiers
+}
+
 #[test]
-fn kotlin_parse_reads_a_name_that_starts_with_a_keyword_and_goes_on_with_a_letter_above_ascii() {
+fn kotlin_parse_reads_a_name_that_starts_with_a_keyword_and_goes_on_with_a_letter_or_digit_above_ascii() {
     // The grammar's scanner compares the word at the start of a line with `else`, `in`, `as`, `by`, `where` and the
     // like to decide whether the line continues the statement above. A longer name that starts with one of them is a
     // call on a new statement. The scanner once found the end of the word with `iswalpha` and `iswalnum`, which the C
     // library and its locale decide: on Linux a letter above ASCII ended the word, the keyword was read, and the call
-    // became an infix call on the statement above without a parse error, while Windows read a call. The tree has to be
-    // the same on every platform.
+    // became an infix call on the statement above without a parse error, while Windows read a call. A decimal digit
+    // above ASCII, which the lexer reads in a name after its first character, ended the word on every platform. The
+    // tree has to be the same on every platform.
     let keywords = ["else", "in", "instanceof", "get", "set", "constructor", "by", "as", "where"];
     // U+C5 is a Latin letter that every version of the grammar reads, so for it the platform is the only difference.
-    // The others are CJK ideographs, Hangul syllables and a CJK ideograph above the basic plane.
-    let letters = ["\u{c5}", "\u{540d}\u{524d}", "\u{d55c}\u{ae00}", "\u{20bb7}"];
+    // Then come CJK ideographs, Hangul syllables and a CJK ideograph above the basic plane. The last four are decimal
+    // digits: Arabic-Indic U+661, Devanagari U+967, fullwidth U+FF11 and, above the basic plane, U+1D7CE.
+    let suffixes = [
+        "\u{c5}",
+        "\u{540d}\u{524d}",
+        "\u{d55c}\u{ae00}",
+        "\u{20bb7}",
+        "\u{661}",
+        "\u{967}",
+        "\u{ff11}",
+        "\u{1d7ce}",
+    ];
     for keyword in keywords {
-        for letter in letters {
-            let name = format!("{keyword}{letter}");
+        for suffix in suffixes {
+            let name = format!("{keyword}{suffix}");
             let source = format!("fun f(x: Int) {{\n  val a = x\n  {name}(a)\n  g(a)\n}}\n");
             let tree = parse_kotlin_within_deadline(&source);
             let root = tree.root_node();
@@ -972,6 +1004,33 @@ fn kotlin_parse_reads_a_name_that_starts_with_a_keyword_and_goes_on_with_a_lette
                 "statements of {source:?}: {}",
                 root.to_sexp()
             );
+        }
+    }
+
+    // The same boundary decides whether `in`, `!is` and `val` are keywords where a name can also follow on the same
+    // line: the condition of a `when` entry and a member after an expression in a class body. The name is one
+    // identifier, not the keyword and an error.
+    for digit in ["\u{661}", "\u{967}", "\u{ff11}"] {
+        let (name_in, name_is, name_val) = (format!("in{digit}"), format!("is{digit}"), format!("val{digit}"));
+        let cases = [
+            (
+                format!("fun g(x: Int) = when (x) {{\n  {name_in} -> 1\n  else -> 2\n}}\n"),
+                vec!["g", "x", "Int", "x", name_in.as_str()],
+            ),
+            (
+                format!("fun h() = when {{\n  !{name_is} -> 1\n  else -> 2\n}}\n"),
+                vec!["h", name_is.as_str()],
+            ),
+            (
+                format!("class C {{\n  val p = a {name_val} b\n}}\n"),
+                vec!["C", "p", "a", name_val.as_str(), "b"],
+            ),
+        ];
+        for (source, identifiers) in cases {
+            let tree = parse_kotlin_within_deadline(&source);
+            let root = tree.root_node();
+            assert!(!root.has_error(), "unexpected error for {source:?}: {}", root.to_sexp());
+            assert_eq!(kotlin_identifiers(&tree, &source), identifiers, "identifiers of {source:?}");
         }
     }
 }
