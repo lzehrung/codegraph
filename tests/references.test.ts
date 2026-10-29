@@ -20,7 +20,15 @@ import {
   createTestIndexFromFiles,
   testFindReferences,
   createTestIndexFromPath,
+  type ReferenceLocation,
 } from "./test-utils.js";
+import {
+  KOTLIN_UNICODE_FILES,
+  KOTLIN_UNICODE_LINES,
+  KOTLIN_UNICODE_NAMES,
+  KOTLIN_UNICODE_SOURCES,
+} from "./helpers/kotlin-unicode-fixture.js";
+import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
@@ -3435,6 +3443,58 @@ describe("Find References", () => {
           expect(pingLines).not.toContain(11);
           expect(pingLines).not.toContain(17);
         }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds references to CJK, Hangul, and supplementary-plane names across packages without the same-named decoy", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-unicode-refs-"));
+      try {
+        const { cls, fn, astral } = KOTLIN_UNICODE_NAMES;
+        const paths = await writeFixtureFiles(root, KOTLIN_UNICODE_SOURCES);
+        const defs = paths[KOTLIN_UNICODE_FILES.defs]!;
+        const use = paths[KOTLIN_UNICODE_FILES.use]!;
+        const decoy = paths[KOTLIN_UNICODE_FILES.decoy]!;
+        const defsLines = KOTLIN_UNICODE_LINES[KOTLIN_UNICODE_FILES.defs]!;
+        const useLines = KOTLIN_UNICODE_LINES[KOTLIN_UNICODE_FILES.use]!;
+        const decoyLines = KOTLIN_UNICODE_LINES[KOTLIN_UNICODE_FILES.decoy]!;
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        // A site is where `token` starts on a line of a fixture file, `offset` columns further on. Columns are 1-based
+        // UTF-16 code units, which is what `columnInLines` counts, and U+20BB7 is two of them.
+        const site = (
+          file: string,
+          lines: readonly string[],
+          line: number,
+          token: string,
+          offset = 0,
+        ): ReferenceLocation => ({ file, line, column: columnInLines(lines, line, token) + offset });
+        // The references of a name are its declaration and exactly the given uses, and the coverage is complete.
+        const expectExactly = async (declaration: ReferenceLocation, uses: readonly ReferenceLocation[]) => {
+          const result = await testFindReferences(index, declaration.file, declaration.line, declaration.column, [
+            declaration,
+            ...uses,
+          ]);
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+          }
+        };
+
+        // The class is imported and constructed in the client, the functions are imported and called, and `fn`
+        // follows `astral` on line 9. A member of the constructed value is a use of the class's property.
+        await expectExactly(site(defs, defsLines, 3, cls), [site(use, useLines, 3, cls), site(use, useLines, 8, cls)]);
+        await expectExactly(site(defs, defsLines, 5, fn), [site(use, useLines, 4, fn), site(use, useLines, 9, fn)]);
+        await expectExactly(site(defs, defsLines, 7, astral), [
+          site(use, useLines, 5, astral),
+          site(use, useLines, 9, astral),
+        ]);
+        await expectExactly(site(defs, defsLines, 3, "x"), [site(use, useLines, 9, "made.x", "made.".length)]);
+
+        // The decoy package has only its own declarations and its own uses, none from the client.
+        await expectExactly(site(decoy, decoyLines, 3, cls), [site(decoy, decoyLines, 9, cls)]);
+        await expectExactly(site(decoy, decoyLines, 5, fn), [site(decoy, decoyLines, 9, fn)]);
+        await expectExactly(site(decoy, decoyLines, 7, astral), [site(decoy, decoyLines, 9, astral)]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

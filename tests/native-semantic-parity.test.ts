@@ -18,6 +18,7 @@ import {
 } from "../src/index.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
+import { KOTLIN_UNICODE_FILES, KOTLIN_UNICODE_LINES, KOTLIN_UNICODE_NAMES } from "./helpers/kotlin-unicode-fixture.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -2068,8 +2069,17 @@ nativeDescribe("native semantic coverage", () => {
       files: Record<string, string[]>;
       goto: { file: string; line: number; token: string; expectedFile: string; expectedLine: number };
       references: { file: string; line: number; token: string; expectedSites: string[]; decoyFile: string };
-      edge: { caller: string; callerFile: string; expectedTarget: string; label?: "calls" | "instantiates" };
+      edge: {
+        caller: string;
+        callerFile: string;
+        expectedTarget: string;
+        label?: "calls" | "instantiates";
+        /** Targets with the same label that the caller must not reach, such as a same-named decoy. */
+        absentTargets?: string[];
+      };
     };
+    const { cls, fn, astral } = KOTLIN_UNICODE_NAMES;
+    const { defs, use, decoy } = KOTLIN_UNICODE_FILES;
     const peerCases: PeerCase[] = [
       {
         name: "Go same-package sibling function",
@@ -2218,6 +2228,62 @@ nativeDescribe("native semantic coverage", () => {
           decoyFile: "kinherit/p/Peer.kt",
         },
         edge: { caller: "viaBase", callerFile: "kinherit/p/Use.kt", expectedTarget: "kinherit/p/Base.kt::hit" },
+      },
+      // Names written with CJK ideographs, Hangul syllables, and a supplementary-plane ideograph: one fixture, three
+      // names, each declared again in a package the client does not import.
+      {
+        name: "Kotlin CJK class imported from another package",
+        files: KOTLIN_UNICODE_LINES,
+        goto: { file: use, line: 8, token: cls, expectedFile: defs, expectedLine: 3 },
+        references: {
+          file: defs,
+          line: 3,
+          token: cls,
+          expectedSites: [`${defs}:3`, `${use}:3`, `${use}:8`],
+          decoyFile: decoy,
+        },
+        edge: {
+          caller: "useNames",
+          callerFile: use,
+          expectedTarget: `${defs}::${cls}`,
+          absentTargets: [`${decoy}::${cls}`],
+        },
+      },
+      {
+        name: "Kotlin Hangul function imported from another package",
+        files: KOTLIN_UNICODE_LINES,
+        goto: { file: use, line: 9, token: fn, expectedFile: defs, expectedLine: 5 },
+        references: {
+          file: defs,
+          line: 5,
+          token: fn,
+          expectedSites: [`${defs}:5`, `${use}:4`, `${use}:9`],
+          decoyFile: decoy,
+        },
+        edge: {
+          caller: "useNames",
+          callerFile: use,
+          expectedTarget: `${defs}::${fn}`,
+          absentTargets: [`${decoy}::${fn}`],
+        },
+      },
+      {
+        name: "Kotlin supplementary-plane function imported from another package",
+        files: KOTLIN_UNICODE_LINES,
+        goto: { file: use, line: 9, token: astral, expectedFile: defs, expectedLine: 7 },
+        references: {
+          file: defs,
+          line: 7,
+          token: astral,
+          expectedSites: [`${defs}:7`, `${use}:5`, `${use}:9`],
+          decoyFile: decoy,
+        },
+        edge: {
+          caller: "useNames",
+          callerFile: use,
+          expectedTarget: `${defs}::${astral}`,
+          absentTargets: [`${decoy}::${astral}`],
+        },
       },
       {
         name: "C# inherited method over a using static import",
@@ -2434,6 +2500,9 @@ nativeDescribe("native semantic coverage", () => {
         peerCase.edge.label,
       );
       expect(coldTargets, `${peerCase.name}: cold call edge`).toContain(peerCase.edge.expectedTarget);
+      for (const absent of peerCase.edge.absentTargets ?? []) {
+        expect(coldTargets, `${peerCase.name}: cold call edge to ${absent}`).not.toContain(absent);
+      }
       const warmTargets = await callTargetsOf(
         warm,
         peerCase.edge.caller,

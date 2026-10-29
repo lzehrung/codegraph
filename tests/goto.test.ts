@@ -13,6 +13,13 @@ import {
   createTestIndexFromPath,
   testGoToDefinition,
 } from "./test-utils.js";
+import {
+  KOTLIN_UNICODE_FILES,
+  KOTLIN_UNICODE_LINES,
+  KOTLIN_UNICODE_NAMES,
+  KOTLIN_UNICODE_SOURCES,
+} from "./helpers/kotlin-unicode-fixture.js";
+import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 
 describe("Go to Definition", () => {
   describe("SQL", () => {
@@ -2292,6 +2299,59 @@ describe("Go to Definition", () => {
         await testGoToDefinition(index, file, 13, columnOf(13, "ping"), file, 3);
         await testGoToDefinition(index, file, 16, columnOf(16, "payload"), file, 6);
         await testGoToDefinition(index, file, 10, columnOf(10, "payload"), file, 10);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves CJK, Hangul, and supplementary-plane names across packages and keeps a same-named decoy out", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-unicode-goto-"));
+      try {
+        const { cls, fn, astral } = KOTLIN_UNICODE_NAMES;
+        const paths = await writeFixtureFiles(root, KOTLIN_UNICODE_SOURCES);
+        const defs = paths[KOTLIN_UNICODE_FILES.defs]!;
+        const use = paths[KOTLIN_UNICODE_FILES.use]!;
+        const decoy = paths[KOTLIN_UNICODE_FILES.decoy]!;
+        const useLines = KOTLIN_UNICODE_LINES[KOTLIN_UNICODE_FILES.use]!;
+        const decoyLines = KOTLIN_UNICODE_LINES[KOTLIN_UNICODE_FILES.decoy]!;
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+
+        // The client's imports, its construction of the class, and its calls reach the declarations in `app`. `fn`
+        // follows `astral` on line 9, so its column counts the two UTF-16 code units of U+20BB7.
+        await testGoToDefinition(index, use, 3, columnInLines(useLines, 3, cls), defs, 3);
+        await testGoToDefinition(index, use, 4, columnInLines(useLines, 4, fn), defs, 5);
+        await testGoToDefinition(index, use, 5, columnInLines(useLines, 5, astral), defs, 7);
+        await testGoToDefinition(index, use, 8, columnInLines(useLines, 8, cls), defs, 3);
+        await testGoToDefinition(index, use, 9, columnInLines(useLines, 9, astral), defs, 7);
+        await testGoToDefinition(index, use, 9, columnInLines(useLines, 9, fn), defs, 5);
+        // A member of the constructed value is found through the class name.
+        await testGoToDefinition(index, use, 9, columnInLines(useLines, 9, "made.x") + "made.".length, defs, 3);
+
+        // The decoy package reaches its own declarations, never those of `app`.
+        await testGoToDefinition(index, decoy, 9, columnInLines(decoyLines, 9, astral), decoy, 7);
+        await testGoToDefinition(index, decoy, 9, columnInLines(decoyLines, 9, fn), decoy, 5);
+        await testGoToDefinition(index, decoy, 9, columnInLines(decoyLines, 9, cls), decoy, 3);
+
+        // The detailed graph agrees: every name in `app` is called from `useNames` alone and every name in the decoy
+        // package from `useDecoys` alone. Kotlin writes the construction of a class as a call, so it is a `calls` edge.
+        const graph = await buildSymbolGraphDetailed(index);
+        const callersOf = (targetFile: string, targetName: string): string[] =>
+          graph.edges
+            .filter((edge) => {
+              const node = graph.nodes.get(edge.to);
+              return (
+                edge.label === "calls" &&
+                node?.name === targetName &&
+                fileIdentityKey(node.file) === fileIdentityKey(targetFile)
+              );
+            })
+            .map((edge) => graph.nodes.get(edge.from)?.name)
+            .filter((name): name is string => !!name)
+            .sort();
+        for (const name of [cls, fn, astral]) {
+          expect(callersOf(defs, name), `callers of ${name} in app`).toEqual(["useNames"]);
+          expect(callersOf(decoy, name), `callers of ${name} in the decoy package`).toEqual(["useDecoys"]);
+        }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
