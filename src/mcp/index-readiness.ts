@@ -23,6 +23,11 @@ export const DEFAULT_MCP_INDEX_WAIT_MS = 20_000;
  * up to the same budget, so an immediate retry is fine.
  */
 export const MCP_INDEX_RETRY_AFTER_MS = 1_000;
+/**
+ * How long after it ended the outcome of a `refresh_index` whose call stopped waiting stays for the retry. A
+ * `refresh_index` call that comes later is a refresh of its own.
+ */
+export const MCP_REFRESH_RETRY_WINDOW_MS = 60_000;
 /** The largest delay a timer accepts. */
 export const MAX_MCP_INDEX_WAIT_MS = 2_147_483_647;
 
@@ -44,8 +49,8 @@ export function assertMcpIndexWait(value: number): number {
  * - `symbols`: the detailed symbol graph that handle-based tools such as `calls` and `get_symbol` read.
  * - `duplicates`: the duplicate analysis that `review` and `packet_get` read, for duplicate-sibling tasks and context.
  * - `freshness`: the check alone, for a handler that runs it without needing a build. It waits for a running build.
- * - `idle`: every build that runs, whichever call started it. A turn of the lock that `refresh_index` and
- *   `artifact_build` take starts after them.
+ * - `idle`: every build that runs, whichever call started it. The turn of the lock that `artifact_build` takes starts
+ *   after them.
  */
 export type McpIndexStage = McpBuildStage | "idle";
 type McpBuildStage = "index" | "graph" | "query" | "symbols" | "duplicates" | "freshness";
@@ -143,7 +148,31 @@ export type McpIndexReadiness = {
    * the budget it throws {@link McpIndexBuildingError}; the build continues, and the next call waits for what is left.
    */
   waitFor: (tool: string, stages: readonly McpIndexStage[], signal?: AbortSignal) => Promise<void>;
+  /**
+   * Waits for `work`, which the caller started, as `waitFor` waits for builds: past the budget it throws
+   * {@link McpIndexBuildingError} and leaves `work` running, and a cancelled call stops waiting.
+   */
+  waitUntil: (tool: string, work: Promise<unknown>, signal?: AbortSignal) => Promise<void>;
+  /**
+   * Rebuilds what a `refresh_index` with `warmup` builds: `"base"` the project index, `"symbols"` also the detailed
+   * symbol graph. Call it in the step that replaces the session. The builds are shared and tracked like those of any
+   * stage, and until they end every wait for builds starts after them.
+   */
+  rebuild: (warmup: CodegraphMcpWarmupMode) => Promise<void>;
+  /**
+   * Marks the refresh that runs as handed off: the call that started it stopped waiting for it. Its outcome then waits
+   * for the retry, while the rebuild runs and for {@link MCP_REFRESH_RETRY_WINDOW_MS} after it ended, unless it failed.
+   */
+  handOffRefresh: () => void;
+  /**
+   * The retry of a call that handed its refresh off. It waits for that refresh as `waitUntil` does and takes its
+   * outcome, so that no second refresh replaces the session. `undefined` when no handed-off refresh builds at least
+   * what `warmup` says.
+   */
+  joinRefresh: (tool: string, warmup: CodegraphMcpWarmupMode, signal?: AbortSignal) => Promise<void> | undefined;
 };
+
+const WARMUP_RANK: Record<CodegraphMcpWarmupMode, number> = { off: 0, base: 1, symbols: 2 };
 
 const STAGE_ACTIVITY: Record<McpBuildStage, string> = {
   index: "Building project index",
@@ -206,6 +235,9 @@ function settleWithinBudget(
   return promise;
 }
 
+/** A refresh that rebuilds the session: what it builds, and whether the call that started it stopped waiting for it. */
+type Refresh = { warmup: CodegraphMcpWarmupMode; rebuilt: Promise<void>; handedOff: boolean; endedAt?: number };
+
 export function createMcpIndexReadiness(session: AgentSession, options: McpIndexReadinessOptions): McpIndexReadiness {
   const now = options.now ?? ((): number => performance.now());
   const log = options.log ?? ((message: string): void => console.error(message));
@@ -220,6 +252,9 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
   // Counts the replacements of the session, so that a call can tell that its builds served a session that is gone.
   let generation = 0;
   let warmupStarted = false;
+  // The refresh that rebuilds the session now, or that its call handed off and no retry has taken the outcome of. Every
+  // wait for builds starts after the one that runs.
+  let refreshing: Refresh | undefined;
 
   // A rebuilt session shares nothing with the builds of the one it replaced. They go on, and `builds` keeps them.
   // `registerSessionInvalidationHook` runs a hook once, so it registers itself again.
@@ -336,10 +371,35 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
     return { activity: stage ? STAGE_ACTIVITY[stage] : "Waiting for the index build", elapsedMs };
   };
 
+  const rebuild = (warmup: CodegraphMcpWarmupMode): Promise<void> => {
+    let rebuilt = Promise.resolve();
+    if (warmup === "symbols") rebuilt = buildSymbols();
+    else if (warmup === "base") rebuilt = buildIndex();
+    const refresh: Refresh = { warmup, rebuilt, handedOff: false };
+    refreshing = refresh;
+    const forget = (): void => {
+      if (refreshing === refresh) refreshing = undefined;
+    };
+    rebuilt.then(() => {
+      refresh.endedAt = now();
+      // Only a refresh that was handed off keeps its outcome, and only a success: a failed one is for the retry to run
+      // again, and to report.
+      if (!refresh.handedOff) forget();
+    }, forget);
+    return rebuilt;
+  };
+
+  const handOffRefresh = (): void => {
+    if (refreshing) refreshing.handedOff = true;
+  };
+
   // The builds of `stages`, then the freshness check that the handler runs next. When files changed, the check replaces
-  // the session and the builds above served the old one, so they run again inside the same wait.
+  // the session and the builds above served the old one, so they run again inside the same wait. A refresh that runs
+  // replaces the session and rebuilds it, which the handler would wait for as well, so the wait starts after it.
   const ensure = async (stages: readonly McpIndexStage[]): Promise<void> => {
     for (let attempt = 0; attempt < MAX_READINESS_ATTEMPTS; attempt += 1) {
+      // A refresh that failed is not this call's to report: the builds below run again, and report their own failure.
+      if (refreshing && refreshing.endedAt === undefined) await refreshing.rebuilt.catch(() => undefined);
       const built = generation;
       await Promise.all(stages.map(startStage));
       await buildFreshness();
@@ -347,15 +407,9 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
     }
   };
 
-  const waitFor = async (tool: string, stages: readonly McpIndexStage[], signal?: AbortSignal): Promise<void> => {
-    if (!stages.length) return;
+  const waitUntil = async (tool: string, work: Promise<unknown>, signal?: AbortSignal): Promise<void> => {
     const startedAt = now();
-    const ready = (async (): Promise<void> => {
-      if (stages.some((stage) => stage !== "idle")) await track(ensure(stages));
-      // After the builds of this call, which are over: `idle` waits for the ones of the other calls.
-      if (stages.includes("idle")) await settled();
-    })();
-    const outcome = await settleWithinBudget(ready, options.waitMs, signal);
+    const outcome = await settleWithinBudget(work, options.waitMs, signal);
     if (outcome === "ready") return;
     const waitedMs = Math.round(now() - startedAt);
     const progress = describeProgress(waitedMs);
@@ -373,7 +427,31 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
     });
   };
 
-  return { startWarmup, buildsSettled: settled, whenIdle, waitFor };
+  const waitFor = async (tool: string, stages: readonly McpIndexStage[], signal?: AbortSignal): Promise<void> => {
+    if (!stages.length) return;
+    const ready = (async (): Promise<void> => {
+      if (stages.some((stage) => stage !== "idle")) await track(ensure(stages));
+      // After the builds of this call, which are over: `idle` waits for the ones of the other calls.
+      if (stages.includes("idle")) await settled();
+    })();
+    await waitUntil(tool, ready, signal);
+  };
+
+  const joinRefresh = (
+    tool: string,
+    warmup: CodegraphMcpWarmupMode,
+    signal?: AbortSignal,
+  ): Promise<void> | undefined => {
+    const refresh = refreshing;
+    if (!refresh?.handedOff || WARMUP_RANK[refresh.warmup] < WARMUP_RANK[warmup]) return undefined;
+    // A retry comes soon after the answer that asked for it. A call that comes much later is a refresh of its own.
+    if (refresh.endedAt !== undefined && now() - refresh.endedAt > MCP_REFRESH_RETRY_WINDOW_MS) return undefined;
+    return waitUntil(tool, refresh.rebuilt, signal).then(() => {
+      if (refreshing === refresh) refreshing = undefined;
+    });
+  };
+
+  return { startWarmup, buildsSettled: settled, whenIdle, waitFor, waitUntil, rebuild, handOffRefresh, joinRefresh };
 }
 
 /** What a resolver may ask beyond the request itself. */
@@ -419,7 +497,13 @@ export type McpStageTable<Handlers> = { readonly [Name in Exclude<keyof Handlers
  */
 export const MCP_STAGES_BY_HANDLER = {
   search: (request) => searchStages(request.mode),
-  explore: () => ["graph", "query"],
+  // Mirrors `exploreCodegraphWithSession`: a search, which reads the symbol graph and the query index, and with
+  // `includeSource` (off by default over MCP) one packet for each anchor, which reads the detailed symbol graph and the
+  // duplicate analysis. A `maxPackets` of 0 builds no packet.
+  explore: (request) => {
+    if (request.includeSource && request.maxPackets !== 0) return ["graph", "query", "symbols", "duplicates"];
+    return ["graph", "query"];
+  },
   orient: () => INDEX_STAGES,
   workspace_symbols: () => INDEX_STAGES,
   goto: () => INDEX_STAGES,
@@ -469,7 +553,9 @@ export const MCP_STAGES_BY_HANDLER = {
   // Answers from the SQLite artifact, so a fresh one never waits. The handler waits for the session itself, within the
   // same budget, when the artifact is stale.
   query_sqlite: () => NO_STAGES,
-  refresh_index: () => ["idle"],
+  // Takes its own turn, inside one wait: it takes the outcome of a refresh that its call handed off, or waits for the
+  // builds that run, replaces the session, and rebuilds it. See `refresh_index` in the handlers.
+  refresh_index: () => NO_STAGES,
 } satisfies Record<string, McpStageResolver>;
 
 /**

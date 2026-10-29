@@ -16,6 +16,7 @@ import { createCodegraphMcpResources } from "../src/mcp/handlers.js";
 import {
   createMcpBuildProgress,
   createMcpIndexReadiness,
+  MCP_REFRESH_RETRY_WINDOW_MS,
   MCP_STAGES_BY_HANDLER,
   withIndexReadiness,
   type McpIndexReadiness,
@@ -131,6 +132,27 @@ async function symbolHandle(root: string, session: AgentSession, name: string): 
   const handle = found.results.find((result) => result.label === name)?.handle;
   if (!handle) throw new Error(`No symbol ${name}.`);
   return handle;
+}
+
+/** What `call` answers, once it has answered: a call that must answer within its budget leaves it empty when it blocks. */
+function recordOutcome(call: Promise<unknown>): { readonly value: unknown } {
+  const outcome: { value: unknown } = { value: undefined };
+  call.then(
+    (value) => {
+      outcome.value = value;
+    },
+    (error: unknown) => {
+      outcome.value = error;
+    },
+  );
+  return outcome;
+}
+
+/** Waits for the `index_building` answer of `tool`; a call that blocks fails here on the clock, not by hanging. */
+async function expectIndexBuilding(outcome: { readonly value: unknown }, tool: string): Promise<void> {
+  await vi.waitFor(() => expect(outcome.value).toMatchObject({ result: { status: "index_building", tool } }), {
+    timeout: 2_000,
+  });
 }
 
 async function connect(handlers: CodegraphMcpHandlers, maxConcurrentToolCalls?: number) {
@@ -537,6 +559,8 @@ describe("MCP cold start", () => {
       await resources.buildsSettled();
       await expect(resources.handlers.refresh_index({})).resolves.toEqual({ refreshed: true, warmup: "off" });
       expect(held.events.at(-1)).toBe("invalidate");
+      // The first call stopped waiting for its turn, so it replaced nothing: only the retry did.
+      expect(held.events.filter((event) => event === "invalidate")).toHaveLength(1);
     } finally {
       held.release();
       await resources.buildsSettled();
@@ -711,6 +735,286 @@ describe("MCP build registry", () => {
       await resources.buildsSettled();
       await resources.handlers.refresh_index({});
       expect(held.events.at(-1)).toBe("invalidate");
+    } finally {
+      held.release();
+      await resources.buildsSettled();
+    }
+  });
+
+  it("answers index_building when the rebuild of refresh_index outlasts the budget, and a retry joins that refresh", async () => {
+    const root = await createProject("cg-mcp-registry-refresh-budget-");
+    const held = holdSession(root);
+    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
+    let drained = false;
+    try {
+      // The rebuild is held, so a refresh that waited for it past the budget would not answer.
+      const first = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }));
+      await expectIndexBuilding(first, "refresh_index");
+
+      const retry = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }));
+      await expectIndexBuilding(retry, "refresh_index");
+      // One replacement and one rebuild served both calls.
+      expect(held.events).toEqual(["invalidate", "loadProject:start"]);
+
+      // Neither call waits for the rebuild any more, and a shutdown still does.
+      void resources.buildsSettled().then(() => {
+        drained = true;
+      });
+      await letShutdownRun();
+      expect(drained).toBe(false);
+
+      held.release();
+      await resources.buildsSettled();
+      expect(held.events).toEqual(["invalidate", "loadProject:start", "loadProject:end"]);
+    } finally {
+      held.release();
+      await resources.buildsSettled();
+    }
+  });
+
+  it("answers the retry of a cancelled refresh_index with the refresh that still runs", async () => {
+    const root = await createProject("cg-mcp-registry-refresh-retry-");
+    const held = holdSession(root);
+    const resources = createCodegraphMcpResources({
+      root,
+      session: held.session,
+      warmup: "off",
+      mcpIndexWaitMs: 600_000,
+    });
+    try {
+      const cancel = new AbortController();
+      const cancelled = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }, cancel.signal));
+      await held.started;
+      cancel.abort();
+      await vi.waitFor(() => expect(cancelled.value).toMatchObject({ message: "MCP tool call was cancelled." }), {
+        timeout: 2_000,
+      });
+
+      // The retry arrives while the rebuild of the cancelled call still runs.
+      const retry = resources.handlers.refresh_index({ warmup: "base" });
+      held.release();
+
+      await expect(retry).resolves.toEqual({ refreshed: true, warmup: "base" });
+      // The retry waited for that refresh instead of replacing the session and rebuilding it again.
+      expect(held.events).toEqual(["invalidate", "loadProject:start", "loadProject:end"]);
+    } finally {
+      held.release();
+      await resources.buildsSettled();
+    }
+  });
+
+  it("answers the retry that comes after the refresh ended with its outcome, and replaces the session once", async () => {
+    const root = await createProject("cg-mcp-registry-refresh-ended-");
+    const held = holdSession(root);
+    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
+    try {
+      const first = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }));
+      await expectIndexBuilding(first, "refresh_index");
+
+      // The refresh ends while no call waits for it. A retry that started another refresh would find the rebuild
+      // unfinished at its own budget, and so would every retry after it.
+      held.release();
+      await resources.buildsSettled();
+      await expect(resources.handlers.refresh_index({ warmup: "base" })).resolves.toEqual({
+        refreshed: true,
+        warmup: "base",
+      });
+      expect(held.events).toEqual(["invalidate", "loadProject:start", "loadProject:end"]);
+
+      // The outcome goes to one retry. The next call is a refresh of its own.
+      await expect(resources.handlers.refresh_index({})).resolves.toEqual({ refreshed: true, warmup: "off" });
+      expect(held.events.filter((event) => event === "invalidate")).toHaveLength(2);
+    } finally {
+      held.release();
+      await resources.buildsSettled();
+    }
+  });
+
+  it("keeps the outcome of a refresh that was handed off for one retry, within the window", async () => {
+    const root = await createProject("cg-mcp-registry-refresh-window-");
+    const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
+    let clock = 0;
+    const readiness = createMcpIndexReadiness(session, {
+      waitMs: 0,
+      warmup: "off",
+      progress: createMcpBuildProgress(),
+      now: () => clock,
+    });
+    // What `refresh_index` does: replaces the session, rebuilds it, and its call either waits for it or hands it off.
+    const refresh = async (handOff: boolean): Promise<void> => {
+      session.invalidate();
+      const rebuilt = readiness.rebuild("base");
+      if (handOff) readiness.handOffRefresh();
+      await rebuilt;
+    };
+    try {
+      // The call that waited for its refresh has its answer: nothing is left for a retry.
+      await refresh(false);
+      expect(readiness.joinRefresh("refresh_index", "base")).toBeUndefined();
+
+      // A retry takes the outcome of a refresh that builds at least what it asks for, and one retry takes it.
+      await refresh(true);
+      expect(readiness.joinRefresh("refresh_index", "symbols")).toBeUndefined();
+      clock = MCP_REFRESH_RETRY_WINDOW_MS;
+      const retry = readiness.joinRefresh("refresh_index", "base");
+      expect(retry).toBeDefined();
+      await retry;
+      expect(readiness.joinRefresh("refresh_index", "base")).toBeUndefined();
+
+      // A call after the window is a refresh of its own.
+      await refresh(true);
+      clock += MCP_REFRESH_RETRY_WINDOW_MS + 1;
+      expect(readiness.joinRefresh("refresh_index", "base")).toBeUndefined();
+    } finally {
+      await readiness.buildsSettled();
+      session.invalidate();
+    }
+  });
+
+  it("keeps no outcome of a refresh that failed, so that the retry runs it again", async () => {
+    const root = await createProject("cg-mcp-registry-refresh-failure-");
+    const inner = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
+    const session: AgentSession = {
+      ...inner,
+      loadProject: () => Promise.reject(new Error("disk full")),
+    };
+    const readiness = createMcpIndexReadiness(session, {
+      waitMs: 0,
+      warmup: "off",
+      progress: createMcpBuildProgress(),
+    });
+    const rebuilt = readiness.rebuild("base");
+    readiness.handOffRefresh();
+
+    await expect(rebuilt).rejects.toThrow("disk full");
+    expect(readiness.joinRefresh("refresh_index", "base")).toBeUndefined();
+    await readiness.buildsSettled();
+  });
+
+  it("consumes the failure of a refresh whose call stopped waiting, and replaces the session again at the retry", async () => {
+    const root = await createProject("cg-mcp-registry-refresh-failed-");
+    const inner = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
+    const failure = Promise.withResolvers<void>();
+    let failures = 1;
+    const session: AgentSession = {
+      ...inner,
+      loadProject: async (options) => {
+        if (failures-- > 0) {
+          await failure.promise;
+          throw new Error("disk full");
+        }
+        return await inner.loadProject(options);
+      },
+    };
+    const resources = createCodegraphMcpResources({ root, session, warmup: "off", mcpIndexWaitMs: 25 });
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", record);
+    try {
+      const first = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }));
+      await expectIndexBuilding(first, "refresh_index");
+
+      failure.resolve();
+      await resources.buildsSettled();
+      // Node reports an unhandled rejection once the microtask queue drains, which this real delay outlasts.
+      await letShutdownRun();
+      expect(unhandled).toEqual([]);
+
+      // The rebuild is real now and can outlast the budget; a client retries, and each retry joins the refresh that runs.
+      const refreshed = await vi.waitFor(() => resources.handlers.refresh_index({ warmup: "base" }), {
+        timeout: 10_000,
+      });
+      expect(refreshed).toEqual({ refreshed: true, warmup: "base" });
+    } finally {
+      process.off("unhandledRejection", record);
+      failure.resolve();
+      await resources.buildsSettled();
+    }
+  });
+
+  it("runs a refresh that asks for more than the one that runs after it, and the call that gave up its turn runs none", async () => {
+    const root = await createProject("cg-mcp-registry-refresh-more-");
+    // Only the rebuild of the project index is held; the detailed symbol graph loads at once.
+    const held = holdSession(root, (options) => options?.symbolGraph === "skip");
+    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
+    try {
+      const base = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }));
+      await expectIndexBuilding(base, "refresh_index");
+      // The refresh that runs does not build the detailed symbol graph, so this call waits for its turn behind it.
+      const more = recordOutcome(resources.handlers.refresh_index({ warmup: "symbols" }));
+      await expectIndexBuilding(more, "refresh_index");
+      expect(held.events).toEqual(["invalidate", "loadProject:start"]);
+
+      held.release();
+      await resources.buildsSettled();
+      // The refresh that ended built the project index only, so a call that asks for the detailed symbol graph as well
+      // is a refresh of its own. It starts at its first attempt, and its retries take it over.
+      const refreshed = await vi.waitFor(() => resources.handlers.refresh_index({ warmup: "symbols" }), {
+        timeout: 10_000,
+      });
+      expect(refreshed).toEqual({ refreshed: true, warmup: "symbols" });
+      // The first call replaced the session once, and the call after it once. The call that gave up its turn replaced
+      // it never.
+      expect(held.events.filter((event) => event === "invalidate")).toHaveLength(2);
+    } finally {
+      held.release();
+      await resources.buildsSettled();
+    }
+  });
+
+  it("makes a tool call that arrives while a refresh rebuilds wait for it, inside its budget", async () => {
+    const root = await createProject("cg-mcp-registry-refresh-queries-");
+    // The refresh rebuilds the project index at once and holds on the detailed symbol graph, which `orient` does not read.
+    const held = holdSession(root, (options) => !options?.symbolGraph || options.symbolGraph === "eager");
+    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
+    try {
+      const refreshing = recordOutcome(resources.handlers.refresh_index({ warmup: "symbols" }));
+      await expectIndexBuilding(refreshing, "refresh_index");
+
+      // The index is rebuilt, but the session is still being replaced, and the handler of a call that read it now would
+      // wait for the rest of the refresh without the budget.
+      const orient = recordOutcome(resources.handlers.orient({}));
+      await expectIndexBuilding(orient, "orient");
+
+      held.release();
+      await resources.buildsSettled();
+      const ready = await vi.waitFor(() => resources.handlers.orient({}), { timeout: 10_000 });
+      expect(ready.freshness.state).toBe("fresh");
+    } finally {
+      held.release();
+      await resources.buildsSettled();
+    }
+  });
+
+  it("makes explore with source packets wait for the detailed symbol graph and the duplicate analysis, inside the budget", async () => {
+    const root = await createProject("cg-mcp-registry-explore-");
+    const held = holdDuplicates(root);
+    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "base", mcpIndexWaitMs: 25 });
+    resources.startWarmup();
+    try {
+      await resources.buildsSettled();
+      // The first freshness check scans the project and can outlast the budget; the calls below reuse its answer.
+      await held.inner.checkFreshness?.();
+
+      // Source packets are off by default, and `maxPackets: 0` turns them off: the held analysis delays neither.
+      const plain = await resources.handlers.explore({ query: "alpha" });
+      const none = await resources.handlers.explore({ query: "alpha", includeSource: true, maxPackets: 0 });
+      expect(plain.packets).toEqual([]);
+      expect(none.packets).toEqual([]);
+      expect(held.requests()).toBe(0);
+
+      // Every packet explains its anchor, which reads the duplicate analysis, so a call that built them would block.
+      const withSource = recordOutcome(resources.handlers.explore({ query: "alpha", includeSource: true }));
+      await expectIndexBuilding(withSource, "explore");
+
+      held.release();
+      await resources.buildsSettled();
+      const ready = await vi.waitFor(() => resources.handlers.explore({ query: "alpha", includeSource: true }), {
+        timeout: 10_000,
+      });
+      expect(ready.packets.length).toBeGreaterThan(0);
     } finally {
       held.release();
       await resources.buildsSettled();
@@ -1228,6 +1532,7 @@ describe("MCP index readiness stages", () => {
 
   it("declares for every handler what it loads from the session", async () => {
     const root = await createProject("cg-mcp-stages-");
+    await fs.writeFile(path.join(root, "schema.sql"), "create table users (id int);\n", "utf8");
     runGit(root, ["init"]);
     runGit(root, ["add", "-A"]);
     runGit(root, ["commit", "-m", "one"]);
@@ -1263,6 +1568,10 @@ describe("MCP index readiness stages", () => {
       waitFor: async (_tool, stages) => {
         declared.push(...stages);
       },
+      waitUntil: async () => undefined,
+      rebuild: async () => undefined,
+      handOffRefresh: () => undefined,
+      joinRefresh: () => undefined,
     };
     const plain = createCodegraphMcpHandlers({ root, session: inner });
     const context: McpStageContext = {
@@ -1287,6 +1596,16 @@ describe("MCP index readiness stages", () => {
       await handleOf("Shape"),
       await handleOf("Square"),
     ];
+    const users = (await plain.search({ query: "users", mode: "sql" })).results.find(
+      (result) => result.kind === "sql_object",
+    )?.handle;
+    if (!users) throw new Error("No SQL object users.");
+    const chunk = (await plain.search({ query: "beta", mode: "text" })).results.find(
+      (result) => result.kind === "chunk",
+    )?.handle;
+    if (!chunk) throw new Error("No text chunk for beta.");
+    // `refresh_index` is no scenario: it declares no stage, because it takes its own turn and waits for its rebuild
+    // itself. Its tests are in "MCP build registry".
     const scenarios: Array<[string, () => Promise<unknown>]> = [
       ["search hybrid", () => handlers.search({ query: "alpha beta" })],
       ["search text", () => handlers.search({ query: "beta", mode: "text" })],
@@ -1294,6 +1613,13 @@ describe("MCP index readiness stages", () => {
       ["search graph", () => handlers.search({ query: "alpha", mode: "graph" })],
       ["search path", () => handlers.search({ query: "alpha", mode: "path" })],
       ["explore", () => handlers.explore({ query: "alpha" })],
+      ["explore with source packets", () => handlers.explore({ query: "alpha", includeSource: true })],
+      // Another query than the scenario before: a repeated search is answered from the session's cache, which would
+      // hide its query index from this scenario.
+      [
+        "explore with source packets turned off by maxPackets",
+        () => handlers.explore({ query: "beta", includeSource: true, maxPackets: 0 }),
+      ],
       ["orient", () => handlers.orient({})],
       ["workspace_symbols", () => handlers.workspace_symbols({ query: "alpha" })],
       ["goto", () => handlers.goto({ file: "alpha.ts", line: 2, column: 16 })],
@@ -1303,6 +1629,9 @@ describe("MCP index readiness stages", () => {
       ["get_file with graph context", () => handlers.get_file({ file: "alpha.ts", includeGraphContext: true })],
       ["get_symbol", () => handlers.get_symbol({ handle: alpha })],
       ["packet_get", () => handlers.packet_get({ target: "alpha.ts" })],
+      ["packet_get of a symbol handle", () => handlers.packet_get({ target: alpha })],
+      ["packet_get of a SQL handle", () => handlers.packet_get({ target: users })],
+      ["packet_get of a chunk handle", () => handlers.packet_get({ target: chunk })],
       [
         "packet_get of a review range with changes",
         () => handlers.packet_get({ target: "review:base=HEAD~1;head=HEAD" }),

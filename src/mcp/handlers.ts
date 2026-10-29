@@ -70,12 +70,14 @@ import {
 import { type CodegraphRuntimeIdentity } from "../runtime-identity.js";
 import { assertWritableDirectoryRealPathWithinRoot, resolveArtifactSqlitePathCandidate } from "./security.js";
 import { assertMcpWatchMs, createWatchController } from "./project-watcher.js";
+import { mcpCancellationError } from "./cancellation.js";
 import {
   assertMcpIndexWait,
   createMcpBuildProgress,
   createMcpIndexReadiness,
   DEFAULT_MCP_INDEX_WAIT_MS,
   MCP_STAGES_BY_HANDLER,
+  McpIndexBuildingError,
   withIndexReadiness,
   type CodegraphMcpWarmupMode,
   type McpBuildProgress,
@@ -551,7 +553,10 @@ function createCodegraphMcpHandlersForSession(
   options: CodegraphMcpHandlerOptions,
   session: AgentSession,
   // The session's builds. Without it the handlers build what they need themselves, with no budget.
-  readiness?: Pick<McpIndexReadiness, "waitFor" | "whenIdle">,
+  readiness?: Pick<
+    McpIndexReadiness,
+    "waitFor" | "whenIdle" | "waitUntil" | "rebuild" | "handOffRefresh" | "joinRefresh"
+  >,
 ): CodegraphMcpHandlerSet {
   const root = path.resolve(options.root);
   const readOnly = options.readOnly ?? true;
@@ -1224,9 +1229,22 @@ function createCodegraphMcpHandlersForSession(
       return { ...result, truncated: Boolean(result.truncated), freshness: artifactFreshness };
     },
 
-    refresh_index: async (request) =>
-      await withArtifactWriteLock(async () => {
-        const warmup = request.warmup ?? "off";
+    refresh_index: async (request, signal) => {
+      if (signal?.aborted) throw mcpCancellationError(signal);
+      const warmup = request.warmup ?? "off";
+      // The retry of a call that stopped waiting for its refresh takes that refresh's outcome: replacing the session
+      // again would start the rebuild over, for a client that never sees it end.
+      const joined = readiness?.joinRefresh("refresh_index", warmup, signal);
+      if (joined) {
+        await joined;
+        return { refreshed: true, warmup };
+      }
+      let abandoned = false;
+      let started = false;
+      const turn = withArtifactWriteLock(async () => {
+        // The call stopped waiting for its turn, so it replaces nothing: its retry asks again.
+        if (abandoned) return;
+        started = true;
         const previousRefresh = refreshPromise;
         const refresh = (async () => {
           if (previousRefresh) await previousRefresh.catch(() => undefined);
@@ -1235,7 +1253,8 @@ function createCodegraphMcpHandlersForSession(
           sqlitePath = configuredSqlitePath;
           sqliteOutDir = configuredSqliteOutDir;
           sqliteCanRefresh = configuredSqliteCanRefresh;
-          await rebuildSession(session, warmup);
+          // The registry shares and tracks the rebuild, so that it outlives a call that stops waiting for it.
+          await (readiness?.rebuild(warmup) ?? rebuildSession(session, warmup));
         })();
         refreshPromise = refresh;
         try {
@@ -1243,8 +1262,19 @@ function createCodegraphMcpHandlersForSession(
         } finally {
           if (refreshPromise === refresh) refreshPromise = undefined;
         }
-        return { refreshed: true, warmup };
-      }),
+      });
+      try {
+        await (readiness ? readiness.waitUntil("refresh_index", turn, signal) : turn);
+      } catch (error) {
+        abandoned = true;
+        // The refresh that runs goes on without this call, and its retry takes it over.
+        if (readiness && started && (error instanceof McpIndexBuildingError || signal?.aborted)) {
+          readiness.handOffRefresh();
+        }
+        throw error;
+      }
+      return { refreshed: true, warmup };
+    },
 
     artifact_build: async (request) =>
       await withArtifactWriteLock(async () => {
