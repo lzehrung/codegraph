@@ -20,7 +20,6 @@ describe("require-windows-hide ESLint rule", () => {
       {
         code: 'import { execSync } from "node:child_process"; execSync("git status", { ...base, windowsHide: true });',
       },
-      { code: 'import { spawn } from "node:child_process"; spawn("git", [], { "windowsHide": !debug });' },
       {
         code: 'import { execFile as run } from "node:child_process"; run("git", ["status"], { windowsHide: true }, cb);',
       },
@@ -51,6 +50,29 @@ describe("require-windows-hide ESLint rule", () => {
       { code: 'import { Worker } from "node:worker_threads"; new Worker("worker.js", { workerData: 1 });' },
       { code: 'import { fork, spawn } from "node:worker_threads"; fork("a"); spawn("b");' },
       { code: 'import { spawn } from "other-process"; spawn("git", ["status"]);' },
+      // A spread before windowsHide cannot override it.
+      { code: 'import { spawn } from "node:child_process"; spawn("git", [], { ...base, windowsHide: true });' },
+      { code: 'import { spawn } from "node:child_process"; spawn("git", [], { "windowsHide": true, cwd: "." });' },
+      // Direct, defaulted, and destructured aliases are launchers.
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const run = spawn; run("git", [], { windowsHide: true });',
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; function f({ spawnSyncImpl = spawnSync } = {}) { spawnSyncImpl("git", [], { windowsHide: true }); }',
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const impl = options.impl ?? spawnSync; impl("git", [], { windowsHide: true });',
+      },
+      {
+        code: 'const { spawn: run } = require("node:child_process"); run("git", [], { windowsHide: true });',
+        languageOptions: { sourceType: "commonjs" },
+      },
+      // Shadowed names are not child_process launchers.
+      { code: 'import { exec } from "node:child_process"; function query(exec) { return exec("x"); }' },
+      { code: 'import { spawn } from "node:child_process"; function f() { const spawn = make(); return spawn("x"); }' },
+      { code: 'import * as cp from "node:child_process"; function f(cp) { return cp.spawn("x"); }' },
+      { code: 'import { spawn } from "node:child_process"; const run = (spawn) => spawn("x"); run(fn);' },
+      { code: 'import { exec } from "node:child_process"; { const exec = db.exec; exec("select 1"); }' },
     ],
     invalid: [
       {
@@ -75,7 +97,7 @@ describe("require-windows-hide ESLint rule", () => {
       },
       {
         code: 'import { spawn } from "node:child_process"; spawn("git", [], { windowsHide: false });',
-        errors: [{ messageId: "windowsHideFalse", data: { name: "spawn" } }],
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
       },
       {
         code: 'import { spawn } from "node:child_process"; spawn("git", [], { [key]: true });',
@@ -135,6 +157,56 @@ describe("require-windows-hide ESLint rule", () => {
           'spawn("git", [], { stdio: "ignore" });',
         ].join("\n"),
         errors: [missingWindowsHide("spawn")],
+      },
+      {
+        code: 'import { spawn } from "node:child_process"; spawn("git", [], { windowsHide: !debug });',
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn } from "node:child_process"; spawn("git", [], { windowsHide: !true });',
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn } from "node:child_process"; spawn("git", [], { windowsHide: hide });',
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn } from "node:child_process"; spawn("git", [], { windowsHide: true, ...overrides });',
+        errors: [{ messageId: "windowsHideOverridable", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn } from "node:child_process"; spawn("git", [], { windowsHide: true, [key]: 1 });',
+        errors: [{ messageId: "windowsHideOverridable", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn } from "node:child_process"; spawn("git", [], { windowsHide: true, windowsHide: false });',
+        errors: [{ messageId: "windowsHideNotTrue", data: { name: "spawn" } }],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const run = spawn; run("git", []);',
+        errors: [missingOptions("spawn")],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; function f({ spawnSyncImpl = spawnSync } = {}) { spawnSyncImpl("git", [], { cwd: "." }); }',
+        errors: [missingWindowsHide("spawnSync")],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; function f(run = spawn) { run("git", []); }',
+        errors: [missingOptions("spawn")],
+      },
+      {
+        code: 'import { spawn, spawnSync } from "node:child_process"; const impl = options.impl ?? spawnSync; impl("git", []);',
+        errors: [missingOptions("spawnSync")],
+      },
+      {
+        code: 'const { spawn: run } = require("node:child_process"); run("git", []);',
+        languageOptions: { sourceType: "commonjs" },
+        errors: [missingOptions("spawn")],
+      },
+      {
+        // Only the shadowing binding is exempt; the import is still checked outside it.
+        code: 'import { exec } from "node:child_process"; function f(exec) { exec("x"); } exec("y");',
+        errors: [missingOptions("exec")],
       },
     ],
   });

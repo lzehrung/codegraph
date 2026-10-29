@@ -82,11 +82,11 @@ function readGitFile(relativePath) {
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
-    windowsHide: true,
     cwd: rootDir,
     stdio: "inherit",
     shell: process.platform === "win32",
     ...options,
+    windowsHide: true,
   });
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? 1}`);
@@ -95,11 +95,11 @@ function run(command, args, options = {}) {
 
 function runGit(args, options = {}) {
   const result = spawnSync("git", args, {
-    windowsHide: true,
     cwd: rootDir,
     stdio: "inherit",
     shell: false,
     ...options,
+    windowsHide: true,
   });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed with status ${result.status ?? 1}`);
@@ -108,11 +108,11 @@ function runGit(args, options = {}) {
 
 function runOutput(command, args, options = {}) {
   const result = spawnSync(command, args, {
-    windowsHide: true,
     cwd: rootDir,
     encoding: "utf8",
     shell: process.platform === "win32",
     ...options,
+    windowsHide: true,
   });
   return {
     status: result.status ?? 1,

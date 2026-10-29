@@ -90,6 +90,7 @@ export function runEnsureDistForTests(rootDir, options = {}) {
   const buildReason = distState.reason === "stale" ? "stale" : "missing";
   logger.warn(`[codegraph] dist artifacts ${buildReason}; running npm run build before tests.`);
   const result = spawnSyncImpl("npm", ["run", "build"], {
+    windowsHide: true,
     cwd: rootDir,
     shell: platform === "win32",
     stdio: "inherit",

@@ -22,11 +22,11 @@ const nativeRequiredSuites = [
 
 function run(command, args, extraEnv) {
   const result = spawnSync(command, args, {
-    windowsHide: true,
     cwd: rootDir,
     shell: process.platform === "win32",
     stdio: "inherit",
     ...(extraEnv ? { env: { ...process.env, ...extraEnv } } : {}),
+    windowsHide: true,
   });
   if (result.error) {
     throw result.error;
