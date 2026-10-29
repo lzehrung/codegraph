@@ -73,6 +73,28 @@ describe("require-windows-hide ESLint rule", () => {
       { code: 'import * as cp from "node:child_process"; function f(cp) { return cp.spawn("x"); }' },
       { code: 'import { spawn } from "node:child_process"; const run = (spawn) => spawn("x"); run(fn);' },
       { code: 'import { exec } from "node:child_process"; { const exec = db.exec; exec("select 1"); }' },
+      // promisify is resolved through node:util, whatever it is called.
+      {
+        code: 'import { execFile } from "node:child_process"; import { promisify as toPromise } from "node:util"; const run = toPromise(execFile); run("git", [], { windowsHide: true });',
+      },
+      {
+        code: 'import { execFile } from "node:child_process"; import * as util from "node:util"; const run = util.promisify(execFile); run("git", [], { windowsHide: true });',
+      },
+      {
+        code: 'import { execFile } from "node:child_process"; import util from "util"; const run = util.promisify(execFile); run("git", [], { windowsHide: true });',
+      },
+      {
+        code: 'const { execFile } = require("node:child_process"); const { promisify: p } = require("node:util"); const run = p(execFile); run("git", [], { windowsHide: true });',
+        languageOptions: { sourceType: "commonjs" },
+      },
+      // A promisify that is not Node's is not a wrapper, so its result is not a launcher.
+      {
+        code: 'import { execFile } from "node:child_process"; const promisify = (fn) => fn; const run = promisify(execFile); run("git");',
+      },
+      {
+        code: 'import { execFile } from "node:child_process"; import { promisify } from "./local.js"; const run = promisify(execFile); run("git");',
+      },
+      { code: 'import { execFile } from "node:child_process"; const run = helpers.promisify(execFile); run("git");' },
     ],
     invalid: [
       {
@@ -207,6 +229,33 @@ describe("require-windows-hide ESLint rule", () => {
         // Only the shadowing binding is exempt; the import is still checked outside it.
         code: 'import { exec } from "node:child_process"; function f(exec) { exec("x"); } exec("y");',
         errors: [missingOptions("exec")],
+      },
+      {
+        code: 'import { execFile } from "node:child_process"; import { promisify as toPromise } from "node:util"; const run = toPromise(execFile); run("git", ["status"]);',
+        errors: [missingOptions("execFile")],
+      },
+      {
+        code: 'import { execFile } from "node:child_process"; import * as util from "node:util"; const run = util.promisify(execFile); run("git", [], { cwd: "." });',
+        errors: [missingWindowsHide("execFile")],
+      },
+      {
+        code: 'import { execFile } from "node:child_process"; import util from "util"; const run = util.promisify(execFile); run("git");',
+        errors: [missingOptions("execFile")],
+      },
+      {
+        code: 'const { execFile } = require("node:child_process"); const util = require("node:util"); const run = util.promisify(execFile); run("git");',
+        languageOptions: { sourceType: "commonjs" },
+        errors: [missingOptions("execFile")],
+      },
+      {
+        code: 'const { execFile } = require("node:child_process"); const { promisify: p } = require("node:util"); const run = p(execFile); run("git");',
+        languageOptions: { sourceType: "commonjs" },
+        errors: [missingOptions("execFile")],
+      },
+      {
+        // A local promisify shadows the import, so only the direct launch is checked.
+        code: 'import { execFile } from "node:child_process"; import { promisify } from "node:util"; function f(promisify) { const run = promisify(execFile); run("git"); } execFile("x");',
+        errors: [missingOptions("execFile")],
       },
     ],
   });

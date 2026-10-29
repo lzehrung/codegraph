@@ -4,10 +4,31 @@
 // Launchers are found through ESLint scope analysis, so a parameter or local that shadows an
 // imported name is not a launch, while aliases (`const run = spawn`), defaulted parameters
 // (`{ spawnSyncImpl = spawnSync }`), `promisify(...)` wrappers, and namespace members are.
+// `promisify` is resolved the same way, through its node:util binding, not by spelling.
 
-const CHILD_PROCESS_MODULES = new Set(["child_process", "node:child_process"]);
+const MODULES = new Map([
+  ["child_process", "child_process"],
+  ["node:child_process", "child_process"],
+  ["util", "util"],
+  ["node:util", "util"],
+]);
 const LAUNCHERS = new Set(["spawn", "spawnSync", "execFile", "execFileSync", "exec", "execSync", "fork"]);
-const NAMESPACE = Object.freeze({ kind: "namespace" });
+const NAMESPACES = {
+  child_process: Object.freeze({ kind: "namespace", module: "child_process" }),
+  util: Object.freeze({ kind: "namespace", module: "util" }),
+};
+const PROMISIFY = Object.freeze({ kind: "promisify" });
+
+/**
+ * What `name` exported by `module` is: a child_process launcher, util.promisify, or neither.
+ * @param {"child_process" | "util"} module
+ * @param {string | null | undefined} name
+ */
+function exportOf(module, name) {
+  if (!name) return null;
+  if (module === "util") return name === "promisify" ? PROMISIFY : null;
+  return LAUNCHERS.has(name) ? { kind: "launcher", name } : null;
+}
 
 /** @param {import("estree").Node | null | undefined} node */
 function stringLiteral(node) {
@@ -16,8 +37,9 @@ function stringLiteral(node) {
 }
 
 /** @param {import("estree").Node | null | undefined} node */
-function isChildProcessSpecifier(node) {
-  return CHILD_PROCESS_MODULES.has(stringLiteral(node) ?? "");
+function moduleNamespace(node) {
+  const module = MODULES.get(stringLiteral(node) ?? "");
+  return module ? NAMESPACES[module] : null;
 }
 
 /** @param {import("estree").Property | import("estree").SpreadElement} property */
@@ -61,7 +83,7 @@ export const requireWindowsHide = {
 
     /**
      * @param {import("estree").Node | null | undefined} node
-     * @returns {{ kind: "namespace" } | { kind: "launcher"; name: string } | null}
+     * @returns {{ kind: "namespace"; module: "child_process" | "util" } | { kind: "launcher"; name: string } | { kind: "promisify" } | null}
      */
     function classifyExpression(node) {
       if (!node) return null;
@@ -73,24 +95,20 @@ export const requireWindowsHide = {
         case "AwaitExpression":
           return classifyExpression(node.argument);
         case "ImportExpression":
-          return isChildProcessSpecifier(node.source) ? NAMESPACE : null;
+          return moduleNamespace(node.source);
         case "LogicalExpression":
           return classifyExpression(node.left) ?? classifyExpression(node.right);
         case "MemberExpression": {
-          if (classifyExpression(node.object)?.kind !== "namespace") return null;
-          const name = node.computed ? stringLiteral(node.property) : node.property.name;
-          return name && LAUNCHERS.has(name) ? { kind: "launcher", name } : null;
+          const namespace = classifyExpression(node.object);
+          if (namespace?.kind !== "namespace") return null;
+          return exportOf(namespace.module, node.computed ? stringLiteral(node.property) : node.property.name);
         }
         case "CallExpression": {
           const { callee } = node;
           if (callee.type === "Identifier" && callee.name === "require") {
-            return isChildProcessSpecifier(node.arguments[0]) ? NAMESPACE : null;
+            return moduleNamespace(node.arguments[0]);
           }
-          const promisified =
-            callee.type === "Identifier"
-              ? callee.name === "promisify"
-              : callee.type === "MemberExpression" && !callee.computed && callee.property.name === "promisify";
-          if (!promisified) return null;
+          if (classifyExpression(callee)?.kind !== "promisify") return null;
           const wrapped = classifyExpression(node.arguments[0]);
           return wrapped?.kind === "launcher" ? wrapped : null;
         }
@@ -116,11 +134,12 @@ export const requireWindowsHide = {
     function classifyDefinition(definition) {
       if (definition.type === "ImportBinding") {
         const declaration = definition.parent;
-        if (!declaration || !isChildProcessSpecifier(declaration.source)) return null;
+        const namespace = declaration && moduleNamespace(declaration.source);
+        if (!namespace) return null;
         const specifier = definition.node;
-        if (specifier.type !== "ImportSpecifier") return NAMESPACE;
+        if (specifier.type !== "ImportSpecifier") return namespace;
         const imported = specifier.imported.type === "Identifier" ? specifier.imported.name : specifier.imported.value;
-        return LAUNCHERS.has(imported) ? { kind: "launcher", name: imported } : null;
+        return exportOf(namespace.module, imported);
       }
       if (definition.type !== "Variable" && definition.type !== "Parameter") return null;
       let binding = definition.name;
@@ -139,9 +158,9 @@ export const requireWindowsHide = {
       if (pattern.type !== "ObjectPattern" || declarator.type !== "VariableDeclarator" || declarator.id !== pattern) {
         return null;
       }
-      if (classifyExpression(declarator.init)?.kind !== "namespace") return null;
-      const name = owner.key.type === "Identifier" ? owner.key.name : stringLiteral(owner.key);
-      return name && LAUNCHERS.has(name) ? { kind: "launcher", name } : null;
+      const namespace = classifyExpression(declarator.init);
+      if (namespace?.kind !== "namespace") return null;
+      return exportOf(namespace.module, owner.key.type === "Identifier" ? owner.key.name : stringLiteral(owner.key));
     }
 
     return {
