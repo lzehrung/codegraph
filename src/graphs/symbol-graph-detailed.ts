@@ -33,6 +33,7 @@ import { getPackageDeclarationName } from "../indexer/compilation-units.js";
 
 import {
   createPythonReceiverResolutionCache,
+  csharpAliasTableAnswers,
   innermostNamespaceImport,
   resolveMemberAccessDefinition,
   sameParameterTypes,
@@ -513,6 +514,9 @@ export async function buildSymbolGraphDetailed(
         });
         return indexedOrNull(settled?.status === "ok" ? settled.definition : null);
       };
+      // C# aliases bind only inside the block of their directive, so the tables above answer only where that holds.
+      const aliasTableAnswers = (name: string, node: SyntaxNodeLike): boolean =>
+        sup.id !== "csharp" || csharpAliasTableAnswers(moduleEntry, name, node);
 
       const edgePassContext = {
         index,
@@ -527,6 +531,7 @@ export async function buildSymbolGraphDetailed(
         optionalMemberTypes,
         aliasToTargetDef,
         aliasToTargetModule,
+        aliasTableAnswers,
         resolveIdentifier,
         resolveName,
         settleName,
@@ -555,6 +560,8 @@ export async function buildSymbolGraphDetailed(
             sup,
             resolveLexicalBinding: (expression: SyntaxNodeLike): SymbolDef | null => {
               const name = src.slice(expression.startIndex, expression.endIndex);
+              // The receiver lookup selects the alias in scope itself.
+              if (!aliasTableAnswers(name, expression)) return null;
               const imported = aliasToTargetDef.get(name);
               if (imported) return imported;
               return resolveIdentifier(name, expression);

@@ -124,6 +124,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Edges need both declarations indexed; external bases, structural typing, metaprogrammed mixins, protocol extensions, and name-only member matches are not inferred.
 - `implementations` covers interface or trait members and declared abstract or virtual overrides with proven implementers; ambiguous overloads are rejected.
 - Rename preview and refactor plans are not compiler-grade: `rename.safe` stays false for unsupported dispatch, unresolved external symbols, ambiguous scopes, stale evidence, conflicts, and omissions.
+- TypeScript and JavaScript rename is unsafe when an explicit export alias (`export { x as x }`) is reachable from a namespace member use, including through `export *`, `export * as ns`, and named re-exports of a namespace.
 - Duplicate detection compares same-language units and masks import declarations first.
 - Dynamic Ruby load paths, other Zig builtins, HTML dependencies, SQL object references, and Rust inline module bodies are not masked.
 
@@ -150,6 +151,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Conditional and function-suite imports are not module re-exports; an unresolved relative import keeps its written specifier (`.missing`).
 - Qualified value patterns in `match` are not captures.
 - `self`/`cls` members resolve, including `__init__` attributes and `svc = Service()` locals; factory-assigned and unannotated receivers stay unproven.
+- A `self.x` or instance receiver reaches a property (`@property`, `property(...)`, or a replacing `@x.getter`/`@x.setter`) of its class or a base class before an instance attribute set by `self.x = value`. The last class-level binding of the name decides: `property(...)`, `@property`, and `@x.getter` each make a new property and are its target, `@x.setter` and `@x.deleter` keep the earlier one as the target, and any other binding, such as a later `x = 0`, replaces it. An annotation without a value (`x: int`) binds nothing, so it hides no base property; a plain class attribute found first does. With several bases the method resolution order is not rebuilt: the property is the one of the class that every other class binding `x` derives from, at whatever level it sits, and `self.x` stays unresolved when the nearest bindings disagree (a plain attribute in one base, a property in an unrelated one) or when unrelated bases each bind a property. References to a property accessor are `partial`.
 
 ## PHP
 
@@ -201,6 +203,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - `using N;` imports types of `N` from every file of the importer's project, not nested namespaces.
 - `N.Type` resolves from the use file's directory plus directories declaring `N`.
 - `using N.T` binds the one file declaring `T`; ambiguous or unreadable sets stay unresolved.
+- A dotted type name (`N.T`) never binds a path-like file (`N/T.cs`) once a project file declares namespace `N`: a type the lookup does not find, such as the generic `T<U>`, stays external.
 - A bare `using Foo` binds a same-named project file before an npm workspace package.
 - A `using` never binds another language's file (`using System;` beside `system.ts`).
 - `using X = Y;` adds an edge to `Y`; `extern alias` adds none.
@@ -208,10 +211,13 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - `X::Target` and `global::Ns.Target` resolve against same-directory declarations; `X.Type.Member` needs a single-file alias binding.
 - `X::Type` and `X.Type` stay unresolved while a project C# file has no readable syntax tree.
 - A `using static N.T;`, or a `using X = N.T;` whose namespace `N` a readable file declares, stays external while a project C# file cannot be read, even one that discovery ignores. The importer counts as degraded in `analysis`, and the next build that changes a file extracts it again. A plain `using N;` is not counted: it binds any readable file that declares `N`.
-- An alias use `X.Type` is unresolved when an enclosing namespace chain declares a namespace or non-generic type `X` (aliases inside block namespaces or after a file-scoped header are not checked).
+- An alias use `X.Type` is unresolved when a namespace nearer than the alias's own declares a namespace or non-generic type `X`: any enclosing namespace for an alias before every namespace, only namespaces below the alias's own for one inside a block namespace or after a file-scoped header.
+- A `using N;`, `using T = N.Type;`, or `using X = N;` inside a namespace resolves nothing when a namespace enclosing the directive declares a namespace or non-generic type named like the first segment of its target (`A.N` for `namespace A { using N; }`). While a project C# file has no syntax tree the directive stays unresolved too, because that file could declare the nearer name. Its dependency edge and import node still follow the directive text, and a `using static` is not checked. A name that another `using` supplies stays unresolved when such a shadowed `using N;` may bring it in too, because the nearer namespace declares it or an unread file could, and a dotted name led by it (`B.Nested.Run()`, `B.Nested value;`) never falls back to a namespace `B`.
+- An alias whose target is unresolved (external or generic) still hides a same-named type that `using N;` imports where the alias is in scope: its namespace block, or the file for an alias before every namespace. An alias in a sibling or reopened namespace block does not, and a `using N;` in a nested block that C# reaches first still leaves the use unresolved. Of several aliases of one name in scope, the one in the nearest namespace block binds, whether it names a type or a namespace, and an unresolved alias in scope never falls back to a namespace of its name (`B.Nested.Run()` beside a namespace `B`). Go-to-definition, references, and member-call graph edges follow this; the detailed graph reads its type-use edges from a table of the file's aliases, so it records none for a name that two aliases share or whose alias sits in another block.
 - A name qualified through a generic type (`N.Outer<int>.Inner`) is unresolved.
 - `using static N.T;` binds one file and imports accessible static members, constants, and nested types, not instance or extension members; a name two directives provide stays unresolved.
 - `using static` does not bind a type split across files (`partial`), `global using static`, or nested types.
+- A namespace alias declared under `#if`, `#elif`, or `#else` is not visible after `#endif`; preprocessor expansion is out of scope, so those uses stay `not_found` or `partial`.
 
 ## Kotlin
 

@@ -1872,6 +1872,7 @@ function isImportBinding(value: unknown): value is ImportBinding {
   return (
     binding.kind === "star" &&
     (binding.staticMembersOf === undefined || typeof binding.staticMembersOf === "string") &&
+    (binding.csharpDirectiveStartIndex === undefined || typeof binding.csharpDirectiveStartIndex === "number") &&
     (binding.jvmTypeWildcardName === undefined || typeof binding.jvmTypeWildcardName === "string") &&
     (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&
     (binding.jvmPackageFiles === undefined ||

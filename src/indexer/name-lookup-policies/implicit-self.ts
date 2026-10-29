@@ -14,6 +14,7 @@ import {
   csharpAliasQualifiedLookupName,
   csharpAliasUnprovenReason,
   csharpChainQualifier,
+  csharpShadowedUsingReason,
   implicitSelfCallee,
   isDirectKeywordMemberDeclaration,
 } from "../navigation-goto.js";
@@ -115,7 +116,8 @@ export const csharpLookupPolicy: NameLookupPolicy = {
     csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports),
   // A dotted name led by a compilation-unit alias that an enclosing namespace shadows, or that reaches a project
   // with a file of unknown declarations, is unproven, and so is one qualified through a generic type, whose
-  // namespace-qualified spelling drops its type arguments.
+  // namespace-qualified spelling drops its type arguments, and one led by a name that a `using N;` shadowed by an
+  // enclosing namespace may bring in.
   beforeCrossModule({ use }) {
     const chainNode = csharpQualifiedNameNode(use.node);
     if (!chainNode) return undefined;
@@ -123,7 +125,11 @@ export const csharpLookupPolicy: NameLookupPolicy = {
       return { status: "not_found", reason: CSHARP_GENERIC_OWNER_REASON };
     }
     const lead = csharpChainQualifier(chainNode, use.parsed.source);
-    const reason = lead ? csharpAliasUnprovenReason(use.index, use.mod, lead.qualifier, use.parsed.source) : null;
+    if (!lead) return undefined;
+    const { index, mod, parsed } = use;
+    const reason =
+      csharpAliasUnprovenReason(index, mod, lead.qualifier, parsed.source) ??
+      csharpShadowedUsingReason(index, mod, lead.qualifier, parsed.source);
     return reason ? { status: "not_found", reason } : undefined;
   },
   shadowsModuleAlias: (use) => !!csharpAliasUnprovenReason(use.index, use.mod, use.node, use.parsed.source),

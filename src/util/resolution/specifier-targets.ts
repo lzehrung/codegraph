@@ -2,7 +2,11 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "..
 import type { WorkspaceConfig } from "../workspace.js";
 import { resolveImportSpecifier, resolvePathLikeModule, resolvePythonModule, resolveSpecifier } from "../resolution.js";
 import { getImportableLanguageExtensions, STYLESHEET_RESOLUTION_EXTENSIONS } from "../resolution-candidates.js";
-import { resolveCsharpDottedTypeImportPath, resolveCsharpNamespaceImportPaths } from "./csharp.js";
+import {
+  csharpTypeNameQualifierDeclared,
+  resolveCsharpDottedTypeImportPath,
+  resolveCsharpNamespaceImportPaths,
+} from "./csharp.js";
 import { resolveJvmPackageImportPaths } from "./jvm.js";
 import { resolveTerraformModuleSourcePaths } from "./terraform.js";
 import type { BuildReport } from "../../indexer/types.js";
@@ -210,6 +214,17 @@ async function resolveCsharpOrRubyTargets(
         retainExternalEdge: true,
       };
     }
+    // A declared namespace makes the type lookup authoritative: `N.Solo` never names the generic `Solo<T>`, so the
+    // path `N/Solo.cs` must not stand in for a type the lookup did not find.
+    const qualifierDeclared = await csharpTypeNameQualifierDeclared(
+      metadata.projectRoot,
+      specifier,
+      file,
+      metadata.languageExtensions,
+      metadata.report,
+      metadata.parsedFiles,
+    );
+    if (qualifierDeclared) return { files: [], externalName: metadata.rawSpecifier ?? specifier };
   }
   const pathLike = await resolvePathLikeModule(metadata.projectRoot, specifier, stylesheetExtensions(metadata));
   const resolved = pathLike ? pathLike : await resolveGenericSpecifier(file, specifier, languageId, metadata);

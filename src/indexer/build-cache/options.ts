@@ -62,8 +62,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 98 re-extracts Kotlin files with a pinned fork of `tree-sitter-kotlin-ng`. Its trees differ for one-line class
  * bodies, annotated top-level declarations, files that end mid-annotation, and forms the published grammar rejects, so
  * symbols and ERROR ranges change.
+ * Epoch 99 records the start of each C# `using` directive on its star binding (`csharpDirectiveStartIndex`), so a
+ * lookup can tell which namespace the directive is written in, and no longer binds a dotted C# type name to a
+ * path-like file when the project declares its namespace.
  */
-export const CORE_ALGORITHM_EPOCH = 98;
+export const CORE_ALGORITHM_EPOCH = 99;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

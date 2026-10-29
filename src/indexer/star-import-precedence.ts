@@ -1,7 +1,7 @@
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ImportBinding } from "./import-types.js";
-import { resolveImported } from "./navigation-resolve.js";
+import { csharpShadowedStarsMayHold, resolveImported } from "./navigation-resolve.js";
 import { sameDef } from "./reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 import { createUnionFind } from "../util/collections.js";
@@ -353,13 +353,19 @@ function representativeDefinition(
   return [...group].sort(compareSymbolDefs)[0]!;
 }
 
+/**
+ * `blocked` marks a star import that may hold the name but resolved nothing, a C# `using N;` that an enclosing
+ * namespace shadows: it leaves any candidate the other star imports supply unproven.
+ */
 export function decideStarImportCandidates(
   index: ProjectIndex,
   languageId: string,
   candidates: readonly StarImportCandidate[],
   useFile?: string,
+  blocked = false,
 ): StarImportDecision {
   if (!candidates.length) return { status: "none" };
+  if (blocked) return { status: "ambiguous" };
   const groups = groupStarDefinitions(
     index,
     languageId,
@@ -400,7 +406,8 @@ export function resolveStarImportedName(
     const last = candidates.at(-1);
     return last ? { status: "resolved", imp: last.imp, definition: last.def } : { status: "none" };
   }
-  return decideStarImportCandidates(index, languageId, candidates, mod.file);
+  const blocked = languageId === "csharp" && csharpShadowedStarsMayHold(index, mod, name);
+  return decideStarImportCandidates(index, languageId, candidates, mod.file, blocked);
 }
 
 /**

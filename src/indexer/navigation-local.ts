@@ -18,7 +18,12 @@ import {
   closestContainingScope,
 } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
-import { cjsRequireValueBinding, resolveExport, resolveImported } from "./navigation-resolve.js";
+import {
+  cjsRequireValueBinding,
+  csharpShadowedStarsMayHold,
+  resolveExport,
+  resolveImported,
+} from "./navigation-resolve.js";
 import { phpNamedImportRole } from "./import-types.js";
 import { resolvePhpExplicitImport } from "./php-namespace-symbols.js";
 import { AMBIGUOUS_STAR_IMPORT_REASON } from "./ambiguous-resolution.js";
@@ -745,7 +750,8 @@ export function resolveNamedDefinition(
       }
     }
     if (!starCandidates.length) return null;
-    const decision = decideStarImportCandidates(index, support.id, starCandidates, file);
+    const blocked = support.id === "csharp" && csharpShadowedStarsMayHold(index, mod, name);
+    const decision = decideStarImportCandidates(index, support.id, starCandidates, file, blocked);
     if (decision.status === "ambiguous") {
       return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
     }
