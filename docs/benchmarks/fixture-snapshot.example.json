@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-29T08:44:46.759Z",
+  "generatedAt": "2026-10-29T08:55:11.377Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v24.22.1",
-  "numTotalTests": 1021,
+  "numTotalTests": 1022,
   "numFailedTests": 0,
   "languages": [
     {
@@ -132,8 +132,8 @@
       "files": [
         "tests/languages/kotlin.test.ts"
       ],
-      "tests": 36,
-      "passed": 36,
+      "tests": 37,
+      "passed": 37,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

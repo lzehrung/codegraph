@@ -65,7 +65,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 99 records the start of each C# `using` directive on its star binding (`csharpDirectiveStartIndex`), so a
  * lookup can tell which namespace the directive is written in, and no longer binds a dotted C# type name to a
  * path-like file when the project declares its namespace.
- * Epoch 100 reads Java and Kotlin packages, top-level declared names, and imports from native syntax nodes, and
+ * Epoch 101 re-extracts Kotlin files with a regenerated fork grammar that reads identifiers, labels, and template
+ * names written with any Unicode letter (CJK ideographs, Hangul syllables, letters above U+10915), so a file that
+ * ended in an ERROR at such a name now has its real symbols, references, and ERROR ranges. Epoch 100 is unused: it was
+ * reserved for the change in #433, which takes epoch 102.
+ * Epoch 102 reads Java and Kotlin packages, top-level declared names, and imports from native syntax nodes, and
  * stores each file's own package and declared names with its module (`jvmFacts`) instead of scanning source text. A
  * file with no usable syntax tree, or whose tree has a syntax error at the top, is `incomplete`: it may declare names
  * it did not list, and a file that cannot be parsed at all may declare names in any package. An import of a name such a
@@ -74,7 +78,7 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * unreadable may belong to it. A Java static member import resolves through the type that owns the member, for its
  * dependency edge as for its binding.
  */
-export const CORE_ALGORITHM_EPOCH = 100;
+export const CORE_ALGORITHM_EPOCH = 102;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
