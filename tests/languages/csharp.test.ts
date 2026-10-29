@@ -3063,6 +3063,65 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  describe("a dotted name led by a name that a shadowed using N; may bring in", () => {
+    const nestedTarget = (namespace: string): string =>
+      `namespace ${namespace}; public class B { public class Target { public static void Run() {} } }\n`;
+    const useLines = [
+      "namespace A {",
+      "  using N;",
+      "  class Use { B.Target value; void Make() { var made = new B.Target(); B.Target.Run(); } }",
+      "}",
+    ];
+    const unresolved: AliasOutcome["goto"] = { 3: ["not_found", "not_found", "not_found", "not_found"] };
+
+    it.each([
+      {
+        name: "a nearer namespace that declares a type of that name",
+        files: { "Global.cs": nestedTarget("N"), "Nearer.cs": nestedTarget("A.N") },
+        // `using N;` names `A.N`, so `B` may be `A.N.B`; the namespace `B` that the project declares is not what it means.
+        expected: { goto: unresolved, references: { "Global.cs": [], "Nearer.cs": [], "Decoy.cs": [] }, edges: [] },
+      },
+      {
+        name: "a nearer namespace that declares only that name",
+        files: { "Global.cs": "namespace N; public class Other {}\n", "Nearer.cs": nestedTarget("A.N") },
+        expected: { goto: unresolved, references: { "Nearer.cs": [], "Decoy.cs": [] }, edges: [] },
+      },
+      {
+        name: "a nearer namespace that declares another name",
+        files: { "Global.cs": nestedTarget("N"), "Nearer.cs": "namespace A.N; public class Other {}\n" },
+        // `A.N` has no `B`, so the lookup continues to the global namespace, where `B` is the namespace.
+        expected: {
+          goto: { 3: ["Decoy.cs", "Decoy.cs", "Decoy.cs", "Decoy.cs"] },
+          references: { "Global.cs": [], "Decoy.cs": [3, 3, 3] },
+          edges: ["Make calls Decoy.cs", "Make instantiates Decoy.cs"],
+        },
+      },
+      {
+        name: "no nearer namespace, so the using names the global one",
+        files: { "Global.cs": nestedTarget("N") },
+        expected: {
+          goto: { 3: ["Global.cs", "Global.cs", "Global.cs", "Global.cs"] },
+          references: { "Global.cs": [3, 3, 3], "Decoy.cs": [] },
+          edges: ["Make calls Global.cs", "Make instantiates Global.cs", "Make uses Global.cs"],
+        },
+      },
+    ])("resolves B.Target only as the type the using may name: $name", async ({ files, expected }) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-shadowed-using-dotted-"));
+      try {
+        const outcome = await aliasUseOutcome(
+          root,
+          { ...files, "Decoy.cs": "namespace B; public class Target { public static void Run() {} }\n" },
+          useLines,
+          [3],
+        );
+
+        expect(outcome).toEqual(expected);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("keeps a using directive outside every namespace on the global declaration", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-global-"));
     try {

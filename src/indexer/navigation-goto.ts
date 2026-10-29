@@ -83,6 +83,7 @@ import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.j
 import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./php-namespace-symbols.js";
 import {
   cjsRequireValueBinding,
+  csharpShadowedStarsMayHold,
   memberContainerForDefinition,
   resolveCsharpQualifiedName,
   resolveExport,
@@ -442,6 +443,8 @@ function importScopeAt(root: SyntaxNodeLike, start: number): SyntaxNodeLike | nu
 const CSHARP_SHADOWED_ALIAS_REASON = "C# alias is shadowed by an enclosing namespace member";
 const CSHARP_SHADOWED_TARGET_REASON = "C# alias target is shadowed by a member of an enclosing namespace";
 const CSHARP_INCOMPLETE_ALIAS_REASON = "C# namespace alias may name a type in a project file that could not be read";
+const CSHARP_SHADOWED_USING_REASON =
+  "C# using directive is shadowed by an enclosing namespace that may declare the name";
 
 /** The leading name `X` of a C# dotted or alias-qualified name (`X.Y.Z`, `X::Y`) and the names it qualifies. */
 export function csharpChainQualifier(
@@ -512,6 +515,24 @@ export function csharpAliasUnprovenReason(
   return csharpUsingTargetShadowed(index, mod, alias.localRange?.start.index, alias.from)
     ? CSHARP_SHADOWED_TARGET_REASON
     : null;
+}
+
+/**
+ * Why a dotted name led by `qualifier` (`B` of `B.Type`) is unproven because a `using N;` may bring `B` in, or `null`.
+ * An enclosing namespace shadows such a directive, so no lookup resolves it, and a namespace named `B` that the project
+ * declares must not stand in for what `B` may name there. An alias in scope binds the name first, and `B::Type` reaches
+ * aliases only, so neither is this reason.
+ */
+export function csharpShadowedUsingReason(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  qualifier: SyntaxNodeLike,
+  source: string,
+): string | null {
+  if (qualifier.parent?.type === "alias_qualified_name") return null;
+  const name = sliceText(qualifier, source);
+  if (!csharpShadowedStarsMayHold(index, mod, name) || csharpAliasAt(mod, name, qualifier)) return null;
+  return CSHARP_SHADOWED_USING_REASON;
 }
 
 /**
@@ -1003,13 +1024,14 @@ export async function resolveMemberAccessDefinition(params: {
         const memberName = sliceText(subProp, source);
         // `P.Mix` in `P.Mix.M()`: when the leftmost name binds nothing, a C# dotted name is a
         // namespace-qualified type, which qualified export lookup resolves across every file that
-        // declares the namespace. An alias in scope binds the name, resolved or not, so it never
-        // falls back to a namespace of that name.
+        // declares the namespace. An alias in scope binds the name, resolved or not, and so may a
+        // `using N;` that an enclosing namespace shadows, so neither falls back to a namespace of that name.
         const dottedRoot = !base && sup.id === "csharp" ? csharpDottedNameRoot(expr) : null;
         if (
           dottedRoot &&
           !resolveLexicalBinding?.(dottedRoot) &&
-          !csharpAliasAt(mod, sliceText(dottedRoot, source), dottedRoot)
+          !csharpAliasAt(mod, sliceText(dottedRoot, source), dottedRoot) &&
+          !csharpShadowedUsingReason(index, mod, dottedRoot, source)
         ) {
           return resolveCsharpQualifiedName(index, mod, sliceText(expr, source).replace(/\s+/gu, ""), expr.startIndex);
         }

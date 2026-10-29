@@ -1225,6 +1225,53 @@ describe("C# using directive inside a namespace while a project file has no synt
       }
     });
   });
+
+  describe("a dotted name led by a name that a shadowed using may bring in", () => {
+    const lines = ["namespace A {", "  using N;", "  class Use { B.Thing value; void Make() { B.Thing.Run(); } }", "}"];
+    const files = {
+      "Global.cs": "namespace N;\npublic class Other {}\n",
+      "Decoy.cs": "namespace B;\npublic class Thing { public static void Run() {} }\n",
+      "Use.cs": lines.join("\n") + "\n",
+    };
+
+    async function thingTargets(root: string): Promise<string[]> {
+      const index = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+      const targets: string[] = [];
+      for (const token of ["Thing value", "Run"]) {
+        const result = await goToDefinition(index, {
+          file: path.join(root, "Use.cs"),
+          line: 3,
+          column: columnOf(lines, 3, token),
+        });
+        targets.push(result.status === "ok" ? path.basename(result.definition.file) : result.status);
+      }
+      return targets;
+    }
+
+    it("stays unresolved while an unread file may declare A.N.B", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-incomplete-dotted-"));
+      try {
+        setNativeIndexingFailureFor("CSHARP_DIRECTIVE_SCAN_FAILURE", "forced C# directive scan failure");
+        await writeFixtureFiles(root, { ...files, "Unparsed.cs": unparsed });
+
+        // `using N;` means `A.N` when Unparsed.cs declares it, and an `A.N.B` there comes before the namespace `B`.
+        expect(await thingTargets(root)).toEqual(["not_found", "not_found"]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("reaches the namespace B when every file is read and none declares A.N", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-directive-complete-dotted-"));
+      try {
+        await writeFixtureFiles(root, files);
+
+        expect(await thingTargets(root)).toEqual(["Decoy.cs", "Decoy.cs"]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
 });
 describe("C# using-directive discovery", () => {
   const directiveTexts = (source: string): string[] =>

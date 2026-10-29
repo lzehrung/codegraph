@@ -811,24 +811,22 @@ export function csharpShadowedImports(index: ProjectIndex): WeakSet<ImportBindin
 }
 
 /**
- * Whether `imp` is a C# `using N;` that an enclosing namespace shadows and that may still bring `name` in. The directive
- * then names the nearer namespace, which no lookup here resolves, so a name that other star imports supply is not the
- * only candidate and stays unproven. A nearer namespace that declares no such name, and a directive nothing shadows,
- * never block.
+ * Whether a C# `using N;` of `mod` that an enclosing namespace shadows may still bring `name` in. The directive then
+ * names the nearer namespace, which no lookup here resolves, so `name` may be a type of that namespace: a name that
+ * other star imports supply is not the only candidate, and a namespace of that name must not stand in for it. A nearer
+ * namespace that declares no such name, and a directive nothing shadows, never block.
  */
-export function csharpShadowedStarMayHold(
-  index: ProjectIndex,
-  mod: ModuleIndex,
-  imp: ImportBinding,
-  name: string,
-): boolean {
-  if (imp.kind !== "star" || imp.staticMembersOf || imp.csharpDirectiveStartIndex === undefined) return false;
-  if (!csharpShadowedImports(index).has(imp)) return false;
-  const enclosing = csharpNamespaceAt(index, mod.file, imp.csharpDirectiveStartIndex);
-  return (
-    !!enclosing &&
-    csharpNamespaceChainDeclares(index, mod, enclosing, `${normalizeCsharpQualifiedName(imp.from)}.${name}`)
-  );
+export function csharpShadowedStarsMayHold(index: ProjectIndex, mod: ModuleIndex, name: string): boolean {
+  const declared = normalizeCsharpQualifiedName(name);
+  return mod.imports.some((imp) => {
+    if (imp.kind !== "star" || imp.staticMembersOf || imp.csharpDirectiveStartIndex === undefined) return false;
+    if (!csharpShadowedImports(index).has(imp)) return false;
+    const enclosing = csharpNamespaceAt(index, mod.file, imp.csharpDirectiveStartIndex);
+    return (
+      !!enclosing &&
+      csharpNamespaceChainDeclares(index, mod, enclosing, `${normalizeCsharpQualifiedName(imp.from)}.${declared}`)
+    );
+  });
 }
 
 /**
