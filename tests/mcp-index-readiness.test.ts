@@ -13,6 +13,7 @@ import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { createCodegraphMcpResources } from "../src/mcp/handlers.js";
 import {
+  MCP_STAGES_BY_HANDLER,
   withIndexReadiness,
   type McpIndexReadiness,
   type McpIndexStage,
@@ -27,6 +28,7 @@ import {
   type CodegraphMcpHandlers,
 } from "../src/mcp/server.js";
 import { describeMcpRuntimeError, isStaleInstallError, STALE_INSTALL_MESSAGE } from "../src/mcp/stale-install.js";
+import * as gitUtil from "../src/util/git.js";
 import { isPlainRecord } from "../src/util/guards.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
@@ -415,6 +417,65 @@ describe("MCP cold start", () => {
     expect(held.events).toEqual([]);
   });
 
+  it("asks git for the diff once per review call, and builds the report from that answer", async () => {
+    const root = await createProject("cg-mcp-ready-review-once-");
+    runGit(root, ["init"]);
+    runGit(root, ["add", "-A"]);
+    runGit(root, ["commit", "-m", "one"]);
+    await fs.appendFile(path.join(root, "alpha.ts"), "export const gamma = 3;\n", "utf8");
+    runGit(root, ["commit", "-am", "two"]);
+    const resources = createCodegraphMcpResources({
+      root,
+      watch: false,
+      warmup: "base",
+      mcpIndexWaitMs: 0,
+      buildOptions: { cache: "off" },
+    });
+    const diffs = vi.spyOn(gitUtil, "getUnifiedDiff");
+    try {
+      resources.startWarmup();
+      await resources.warmupSettled();
+
+      const report = await resources.handlers.review({ base: "HEAD~1", head: "HEAD" });
+      const empty = await resources.handlers.review({ base: "HEAD", head: "HEAD" });
+
+      expect(report).toMatchObject({ status: "ok", changedFiles: [expect.objectContaining({ file: "alpha.ts" })] });
+      expect(empty).toMatchObject({ status: "no_changes" });
+      // One diff per call: the answer that the gate used to choose its builds is the one the report is built from.
+      expect(diffs).toHaveBeenCalledTimes(2);
+    } finally {
+      await resources.warmupSettled();
+      resources.session.invalidate();
+    }
+  });
+
+  it("gives a review request that is used again the diff of its own call", async () => {
+    const root = await createProject("cg-mcp-ready-review-reuse-");
+    runGit(root, ["init"]);
+    runGit(root, ["add", "-A"]);
+    runGit(root, ["commit", "-m", "one"]);
+    const gated = createCodegraphMcpResources({ root, watch: false, warmup: "off", buildOptions: { cache: "off" } });
+    const plain = createCodegraphMcpHandlers({ root, buildOptions: { cache: "off" } });
+    // A host may keep one request object and call again after the working tree changed.
+    const request = { base: "HEAD", head: "WORKTREE" };
+    try {
+      await expect(gated.handlers.review(request)).resolves.toMatchObject({ status: "no_changes" });
+      await expect(plain.review(request)).resolves.toMatchObject({ status: "no_changes" });
+
+      await fs.appendFile(path.join(root, "alpha.ts"), "export const gamma = 3;\n", "utf8");
+
+      for (const handlers of [gated.handlers, plain]) {
+        await expect(handlers.review(request)).resolves.toMatchObject({
+          status: "ok",
+          changedFiles: [expect.objectContaining({ file: "alpha.ts" })],
+        });
+      }
+    } finally {
+      plain.dispose();
+      gated.session.invalidate();
+    }
+  });
+
   it("makes refresh_index wait for the startup warmup instead of replacing the session under it", async () => {
     const root = await createProject("cg-mcp-ready-refresh-");
     const held = holdSession(root);
@@ -596,6 +657,18 @@ describe("MCP tool arguments and package upgrades", () => {
 });
 
 describe("MCP index readiness stages", () => {
+  it("gates exactly the handlers that exist", async () => {
+    const root = await createProject("cg-mcp-stages-names-");
+    const handlers = createCodegraphMcpHandlers({ root });
+    try {
+      const handlerNames = Object.keys(handlers).filter((name) => name !== "dispose");
+
+      expect(Object.keys(MCP_STAGES_BY_HANDLER).sort()).toEqual(handlerNames.sort());
+    } finally {
+      handlers.dispose();
+    }
+  });
+
   it("declares for every handler what it loads from the session", async () => {
     const root = await createProject("cg-mcp-stages-");
     runGit(root, ["init"]);
@@ -640,6 +713,7 @@ describe("MCP index readiness stages", () => {
     };
     const handlers = withIndexReadiness(
       createCodegraphMcpHandlers({ root, session, readOnly: false }),
+      MCP_STAGES_BY_HANDLER,
       readiness,
       context,
     );

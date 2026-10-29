@@ -34,8 +34,8 @@ import { resolveCacheLocation } from "../indexer/build-cache/location.js";
 import { analyzeImpactFromDiff, type CompactImpactReport } from "../impact/index.js";
 import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 import { buildReviewReport, type ReviewDepth } from "../review.js";
-import { collectReviewChanges } from "../review/changes.js";
-import { boundReviewReportForTransport, type ReviewReportForTransport } from "../review/types.js";
+import { collectReviewChanges, type ReviewChangeCollection } from "../review/changes.js";
+import { boundReviewReportForTransport, type ReviewOptions, type ReviewReportForTransport } from "../review/types.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import type { SqliteArtifactFileSignature } from "../sqlite/types.js";
 import { boundList, countOmitted } from "../presentation/bounds.js";
@@ -75,15 +75,13 @@ import {
   createMcpBuildProgress,
   createMcpIndexReadiness,
   DEFAULT_MCP_INDEX_WAIT_MS,
+  MCP_STAGES_BY_HANDLER,
   withIndexReadiness,
+  type CodegraphMcpWarmupMode,
   type McpBuildProgress,
 } from "./index-readiness.js";
 
-/**
- * What the server builds in the background once it is serving. `"off"` builds nothing up front: the first tool call
- * that needs the index starts the build.
- */
-export type CodegraphMcpWarmupMode = "off" | "base" | "symbols";
+export type { CodegraphMcpWarmupMode };
 
 export type CodegraphMcpHandlerOptions = {
   root: string;
@@ -529,7 +527,7 @@ export function createCodegraphMcpResources(options: CodegraphMcpServerOptions):
           idleMs: watchIdleMs,
           startPaused: warmup === "off",
         });
-  const indexedHandlers = withIndexReadiness(handlers, readiness, { reviewRangeHasChanges });
+  const indexedHandlers = withIndexReadiness(handlers, MCP_STAGES_BY_HANDLER, readiness, { reviewRangeHasChanges });
   return {
     handlers: watcher ? withToolActivity(indexedHandlers, watcher.noteActivity) : indexedHandlers,
     session,
@@ -1114,19 +1112,24 @@ function createCodegraphMcpHandlersForSession(
       }),
   };
 
-  // The readiness gate and the handler both ask whether a review range has a changed file; git answers once per request.
-  const reviewChangeChecks = new WeakMap<object, Promise<boolean>>();
-  const reviewRangeHasChanges = (request: { base: string; head: string }): Promise<boolean> => {
-    let check = reviewChangeChecks.get(request);
-    if (!check) {
-      check = collectReviewChanges(root, {
-        ...options.buildOptions,
-        gitBase: request.base,
-        gitHead: request.head,
-      }).then((changes) => changes.changedFiles.size > 0);
-      reviewChangeChecks.set(request, check);
-    }
-    return check;
+  // The readiness gate asks git whether a review range has a changed file, to choose what the call waits for, and the
+  // handler of that call takes that answer instead of asking again. It is taken once, so that a request object used
+  // for a later call, after the working tree changed, gets a diff of its own.
+  const reviewChangesFromGate = new WeakMap<object, Promise<ReviewChangeCollection>>();
+  const reviewRangeOptions = (request: { base: string; head: string }): ReviewOptions => ({
+    ...options.buildOptions,
+    gitBase: request.base,
+    gitHead: request.head,
+  });
+  const reviewRangeHasChanges = async (request: { base: string; head: string }): Promise<boolean> => {
+    const changes = collectReviewChanges(root, reviewRangeOptions(request));
+    reviewChangesFromGate.set(request, changes);
+    return (await changes).changedFiles.size > 0;
+  };
+  const takeReviewChanges = (request: { base: string; head: string }): Promise<ReviewChangeCollection> => {
+    const fromGate = reviewChangesFromGate.get(request);
+    reviewChangesFromGate.delete(request);
+    return fromGate ?? collectReviewChanges(root, reviewRangeOptions(request));
   };
 
   const reviewHandlers: McpHandlerFamily<"impact" | "review"> = {
@@ -1147,20 +1150,20 @@ function createCodegraphMcpHandlersForSession(
       }),
 
     review: async (request) => {
-      const reviewOptions = {
-        ...options.buildOptions,
-        gitBase: request.base,
-        gitHead: request.head,
+      const changes = await takeReviewChanges(request);
+      const reviewOptions: ReviewOptions = {
+        ...reviewRangeOptions(request),
         ...(request.reviewDepth !== undefined ? { reviewDepth: request.reviewDepth } : {}),
       };
       // A range without a changed file reads no index, so git alone answers it. The freshness check below waits for a
       // build that is running, which a review of nothing has no reason to do.
-      if (!(await reviewRangeHasChanges(request))) {
-        const report = await buildReviewReport(root, reviewOptions);
+      if (!changes.changedFiles.size) {
+        const report = await buildReviewReport(root, reviewOptions, { changes });
         return { ...boundReviewReportForTransport(report), freshness: { state: "fresh" } };
       }
       return await withFreshness(async () => {
         const report = await buildReviewReport(root, reviewOptions, {
+          changes,
           ...(session.loadProject
             ? {
                 loadIndex: async () => (await session.loadProject({ symbolGraph: "skip" })).index,

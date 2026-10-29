@@ -4,8 +4,13 @@ import { parseQualifiedSymbolPath } from "../indexer/symbols.js";
 import type { ProgressUpdate } from "../types.js";
 import { isPlainRecord } from "../util/guards.js";
 import { mcpCancellationError } from "./cancellation.js";
-import type { CodegraphMcpHandlers, CodegraphMcpWarmupMode } from "./handlers.js";
 import { describeMcpRuntimeError } from "./stale-install.js";
+
+/**
+ * What the server builds in the background once it is serving. `"off"` builds nothing up front: the first tool call
+ * that needs the index starts the build.
+ */
+export type CodegraphMcpWarmupMode = "off" | "base" | "symbols";
 
 /**
  * The longest one tool call waits for an index build before it answers `index_building`. It stays below the 30 seconds
@@ -308,13 +313,12 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
   return { startWarmup, warmupSettled: () => warmup, waitFor };
 }
 
-type McpIndexedHandlerName = Exclude<keyof CodegraphMcpHandlers, "dispose">;
 /** What a resolver may ask beyond the request itself. */
 export type McpStageContext = {
   /** Whether the range of a `review` request has a changed file. */
   reviewRangeHasChanges: (request: { base: string; head: string }) => Promise<boolean>;
 };
-type McpStageResolver = (
+export type McpStageResolver = (
   request: Record<string, unknown>,
   context: McpStageContext,
 ) => readonly McpIndexStage[] | Promise<readonly McpIndexStage[]>;
@@ -339,10 +343,17 @@ function searchStages(mode: unknown): readonly McpIndexStage[] {
 }
 
 /**
- * The builds each handler waits for, by what its implementation loads from the session. A handler that this table
+ * The builds that each handler of a set waits for. Every handler but `dispose`, which releases the session and is no
+ * tool, needs an entry: a tool without one would skip the wait budget, so the compiler checks the table where it meets
+ * the handler set (see `withIndexReadiness`).
+ */
+export type McpStageTable<Handlers> = { readonly [Name in Exclude<keyof Handlers, "dispose">]: McpStageResolver };
+
+/**
+ * The builds each MCP handler waits for, by what its implementation loads from the session. A handler that this table
  * understates still works: it builds what is missing itself, but then its call waits without the budget.
  */
-const STAGES_BY_HANDLER: Record<McpIndexedHandlerName, McpStageResolver> = {
+export const MCP_STAGES_BY_HANDLER = {
   search: (request) => searchStages(request.mode),
   explore: () => ["graph", "query"],
   orient: () => INDEX_STAGES,
@@ -381,26 +392,26 @@ const STAGES_BY_HANDLER: Record<McpIndexedHandlerName, McpStageResolver> = {
   // Answers from the SQLite artifact. Its freshness check asks the session only when the artifact is stale.
   query_sqlite: () => NO_STAGES,
   refresh_index: () => ["warmup"],
-};
-
-function isIndexedHandlerName(property: string): property is McpIndexedHandlerName {
-  return Object.hasOwn(STAGES_BY_HANDLER, property);
-}
+} satisfies Record<string, McpStageResolver>;
 
 /**
  * Makes every tool call wait for the builds it needs, within the budget, before its handler runs. A call that is not
- * ready in time never starts its handler: it ends with {@link McpIndexBuildingError} and holds nothing.
+ * ready in time never starts its handler: it ends with {@link McpIndexBuildingError} and holds nothing. `stages` must
+ * name every handler of the set but `dispose`, which the compiler enforces at the call.
  */
-export function withIndexReadiness(
-  handlers: CodegraphMcpHandlers,
+export function withIndexReadiness<Handlers extends object>(
+  handlers: Handlers,
+  stages: NoInfer<McpStageTable<Handlers>>,
   readiness: McpIndexReadiness,
   context: McpStageContext,
-): CodegraphMcpHandlers {
+): Handlers {
+  const resolvers: Readonly<Record<string, McpStageResolver>> = stages;
   return new Proxy(handlers, {
     get(target, property, receiver) {
       const value: unknown = Reflect.get(target, property, receiver);
-      if (typeof value !== "function" || typeof property !== "string" || !isIndexedHandlerName(property)) return value;
-      const stagesFor = STAGES_BY_HANDLER[property];
+      if (typeof value !== "function" || typeof property !== "string") return value;
+      const stagesFor = Object.hasOwn(resolvers, property) ? resolvers[property] : undefined;
+      if (!stagesFor) return value;
       return async (...args: unknown[]): Promise<unknown> => {
         const request = isPlainRecord(args[0]) ? args[0] : {};
         const signal = args[1] instanceof AbortSignal ? args[1] : undefined;
