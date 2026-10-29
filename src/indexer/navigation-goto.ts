@@ -3789,7 +3789,7 @@ async function pythonClassRefFromDef(
 }
 
 /** How a receiver lookup treats attributes assigned through `self.x = value`; see `pythonMembersOnClass`. */
-type PythonInstanceAttributes = "prefer" | "fallback" | "none";
+type PythonInstanceAttributes = "prefer" | "fallback";
 
 /** Whether `nameNode` names a class-level annotation without a value (`count: int`), which declares a type and binds nothing. */
 function isPythonValuelessAnnotation(nameNode: SyntaxNodeLike): boolean {
@@ -3812,8 +3812,7 @@ function pythonBindingLocals(classRef: PythonClassRef, locals: readonly SymbolDe
 /**
  * The members of one class named `member`. `prefer` (`self` and constructed receivers) lets a property decide first and
  * then an instance attribute beat a class attribute of the same class; `fallback` reaches instance attributes only
- * when the class has no class-level member; `none` (a property of the hierarchy decides the name) reaches the class-level
- * bindings only, and an annotation without a value is none of them.
+ * when the class has no class-level member.
  */
 function pythonMembersOnClass(
   classRef: PythonClassRef,
@@ -3822,7 +3821,7 @@ function pythonMembersOnClass(
 ): SymbolDef[] {
   const normalizeIdentifier = classRef.context.sup.normalizeIdentifier;
   let direct: SymbolDef[] | undefined;
-  if (instanceAttributes !== "fallback") {
+  if (instanceAttributes === "prefer") {
     direct = findDirectLocalsWithinNode(
       classRef.module.locals,
       member,
@@ -3832,9 +3831,6 @@ function pythonMembersOnClass(
     );
     const propertyMembers = pythonPropertyDescriptorMembers(classRef, member, direct);
     if (propertyMembers) return propertyMembers;
-    if (instanceAttributes === "none") return pythonBindingLocals(classRef, direct);
-  }
-  if (instanceAttributes === "prefer") {
     const instanceAttributeMembers = findPythonInstanceAttributesWithinClass(
       classRef.module.locals,
       member,
@@ -4096,8 +4092,11 @@ async function pythonBaseClassRefs(
   return refs;
 }
 
-/** What decides `self.<name>` in a class hierarchy; see `pythonPropertyPrecedence`. */
-type PythonPropertyPrecedence = "property" | "attribute" | "unproven";
+/**
+ * What decides `self.<name>` in a class hierarchy; see `pythonPropertyPrecedence`. A property comes with the
+ * definition that is its target.
+ */
+type PythonPropertyPrecedence = { kind: "property"; getter: SymbolDef } | { kind: "attribute" } | { kind: "unproven" };
 
 /**
  * What decides `self.member` in `start`'s hierarchy: `property` when the first class that binds `member` at class level
@@ -4106,8 +4105,9 @@ type PythonPropertyPrecedence = "property" | "attribute" | "unproven";
  * property (a data descriptor) precedence over the instance dictionary, so `self.member = value` writes through it
  * instead of declaring an attribute, while a plain class-level binding found first leaves the instance attribute in
  * charge. Along one chain of single bases the nearest binding is first. With several bases the order is not rebuilt: a
- * subclass always comes before its bases, so the answer holds when every binding class that has no binding subclass
- * agrees.
+ * subclass always comes before its bases, so a binding class that no other binding class derives from comes first when
+ * it is the only one, and with several of them it is not proven which does. A property is first only as that one class,
+ * wherever it sits in the hierarchy, and it is the one whose getter answers.
  */
 async function pythonPropertyPrecedence(
   index: ProjectIndex,
@@ -4116,7 +4116,8 @@ async function pythonPropertyPrecedence(
   loadParsedFile: PythonParsedFileLoader | undefined,
   cache: PythonReceiverResolutionCache | undefined,
 ): Promise<PythonPropertyPrecedence> {
-  const declaresProperty = new Map<string, boolean>();
+  // The classes that bind `member`, each with the property its bindings make, or `null` when they make none.
+  const declarations = new Map<string, SymbolDef | null>();
   const baseKeys = new Map<string, string[]>();
   const visited = new Set<string>([definitionIdentityKey(start.def)]);
   let level = [start];
@@ -4136,7 +4137,7 @@ async function pythonPropertyPrecedence(
           ref.context.sup.normalizeIdentifier,
         ),
       );
-      if (bindings.length) declaresProperty.set(key, !!pythonPropertyDescriptorMembers(ref, member, bindings));
+      if (bindings.length) declarations.set(key, pythonPropertyDescriptorMembers(ref, member, bindings)?.[0] ?? null);
       const bases = await pythonBaseClassRefs(index, ref, loadParsedFile, cache);
       baseKeys.set(
         key,
@@ -4150,27 +4151,28 @@ async function pythonPropertyPrecedence(
       }
     }
     // On one chain of single bases the nearest declaration is first, so the walk ends at it.
-    if (singleChain && declaresProperty.size) break;
+    if (singleChain && declarations.size) break;
     level = next;
   }
-  if (!declaresProperty.size) return "attribute";
+  if (!declarations.size) return { kind: "attribute" };
   // A declaring class that another declaring class extends comes later in every order, so only the others can be first.
   const dominated = new Set<string>();
-  for (const declaring of declaresProperty.keys()) {
+  for (const declaring of declarations.keys()) {
     const seen = new Set<string>();
     const pending = [...(baseKeys.get(declaring) ?? [])];
     while (pending.length) {
       const ancestor = pending.pop()!;
       if (seen.has(ancestor)) continue;
       seen.add(ancestor);
-      if (declaresProperty.has(ancestor)) dominated.add(ancestor);
+      if (declarations.has(ancestor)) dominated.add(ancestor);
       pending.push(...(baseKeys.get(ancestor) ?? []));
     }
   }
-  const nearest = [...declaresProperty].filter(([key]) => !dominated.has(key)).map(([, isProperty]) => isProperty);
-  if (!nearest.length) return "unproven";
-  if (nearest.every(Boolean)) return "property";
-  return nearest.some(Boolean) ? "unproven" : "attribute";
+  const nearest = [...declarations].filter(([key]) => !dominated.has(key)).map(([, getter]) => getter);
+  if (!nearest.length) return { kind: "unproven" };
+  if (nearest.every((getter) => !getter)) return { kind: "attribute" };
+  const [getter] = nearest;
+  return nearest.length === 1 && getter ? { kind: "property", getter } : { kind: "unproven" };
 }
 
 async function lookupPythonClassMember(
@@ -4207,12 +4209,13 @@ async function lookupPythonClassMemberUncached(
   loadParsedFile: PythonParsedFileLoader | undefined,
   cache: PythonReceiverResolutionCache | undefined,
 ): Promise<SymbolDef | undefined> {
-  let instanceAttributes: PythonInstanceAttributes = preferInstanceAttributes ? "prefer" : "fallback";
+  const instanceAttributes: PythonInstanceAttributes = preferInstanceAttributes ? "prefer" : "fallback";
   if (preferInstanceAttributes) {
-    // An inherited property takes the write `self.x = value` and the read after it, so no instance attribute shadows it.
+    // An inherited property takes the write `self.x = value` and the read after it, so no instance attribute shadows it,
+    // and the class that binds it first answers, whichever level of the hierarchy it sits on.
     const precedence = await pythonPropertyPrecedence(index, start, member, loadParsedFile, cache);
-    if (precedence === "unproven") return undefined;
-    if (precedence === "property") instanceAttributes = "none";
+    if (precedence.kind === "unproven") return undefined;
+    if (precedence.kind === "property") return precedence.getter;
   }
   const membersByOwner = new Map<string, SymbolDef[]>();
   const parentsByOwner = new Map<string, PythonClassRef[]>();
