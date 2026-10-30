@@ -15,11 +15,16 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
-- Duplicates: `codegraph duplicates` no longer ends with `Map maximum size exceeded` or runs out of memory on a large monorepo whose files share many fingerprints. Fingerprint matching now counts the buckets each pair of units shares with one counter per unit, where it kept a table of every pair that shared a fingerprint, and candidate pairs are bounded by `--max-candidate-pairs` (default 2000000; `maxCandidatePairs` in `findDuplicates()`, `findDuplicateContext()`, and `findDuplicateContexts()`). Pairs are kept strongest evidence first, pairs that can never be scored (two units of one file in a cross-file run, or two that overlap) take no slot, and skipped ones are counted in `omittedCounts.candidatePairs` and `stats.candidatePairBudget`, with a partial-results note in pretty output. Cluster summaries are built once per clone family instead of once per group, which took minutes on a family of near-identical files, and the command now reports unit, candidate pair, scoring, and grouping progress on stderr and ends with its total elapsed time, where it reported only the index refresh.
-- codegraph no longer opens console windows on Windows for its child processes: the git commands used by drift, impact, and review, and the browser launch of `codegraph viewer`, now run hidden.
 - Go-to-definition, find-references, and the symbol graphs no longer grow without bound on a large project. `resolveExport` stored one cache entry for every module and name it was asked about, 99% of them "not exported here", so a dense monorepo build held 12.5 million entries (5 GB), a larger one ended with `Map maximum size exceeded`, and a long `refs` session added about 13,000 entries per query. A module with nothing under a name and no `export *` now answers without an entry, cache keys carry a short module id instead of the path, and a cache that reaches 524,288 entries is emptied between lookups. `refs` also skips its namespace-link pass when no module has `export * as name from`. Results are unchanged.
 - `buildSymbolGraphDetailed` no longer ends with `Maximum call stack size exceeded` on a project with more than about 124,000 edges and a TypeScript overload group or a C or C++ prototype with its definition. The same call-argument spread is gone from the other lists that follow project or file size: syntax-node children, references, workspace-symbol candidates, document links, import and export lists, and `affected --stdin` file lists.
 - `callers`, `callees`, `artifact build`, and agent sessions no longer exit with `Invalid string length` when the detailed symbol graph is large. The content hash of the persisted detailed graph is fed to SHA-256 in pieces (the value is unchanged), and a persisted graph that cannot be written leaves no cache instead of failing the command.
+
+## [3.1.1] - 2026-10-30
+
+### Fixed
+
+- Duplicates: `codegraph duplicates` no longer ends with `Map maximum size exceeded` or runs out of memory on a large monorepo whose files share many fingerprints. Fingerprint matching now counts the buckets each pair of units shares with one counter per unit, where it kept a table of every pair that shared a fingerprint, and candidate pairs are bounded by `--max-candidate-pairs` (default 2000000; `maxCandidatePairs` in `findDuplicates()`, `findDuplicateContext()`, and `findDuplicateContexts()`). Pairs are kept strongest evidence first, pairs that can never be scored (two units of one file in a cross-file run, or two that overlap) take no slot, and skipped ones are counted in `omittedCounts.candidatePairs` and `stats.candidatePairBudget`, with a partial-results note in pretty output. Cluster summaries are built once per clone family instead of once per group, which took minutes on a family of near-identical files, and the command now reports unit, candidate pair, scoring, and grouping progress on stderr and ends with its total elapsed time, where it reported only the index refresh.
+- codegraph no longer opens console windows on Windows for its child processes: the git commands used by drift, impact, and review, and the browser launch of `codegraph viewer`, now run hidden.
 
 ## [3.1.0] - 2026-10-29
 
@@ -775,7 +780,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.1.1...HEAD
+[3.1.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.1
 [3.1.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.0
 [3.0.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.0.1
 [3.0.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.0.0
