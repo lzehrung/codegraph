@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import path from "node:path";
 import { runCli } from "../../src/cli.js";
+import { tsxCliPath } from "./tsx.js";
 
 export type CapturedCliResult = {
   stdout: string;
@@ -28,7 +28,6 @@ export type TsxScriptCaptureOptions = {
   env?: NodeJS.ProcessEnv | undefined;
 };
 const cliExitPrefix = "codegraph test CLI exit";
-const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
 
 async function readCliStdin(stdin: CliCaptureOptions["stdin"]): Promise<string> {
   if (typeof stdin === "function") return await stdin();

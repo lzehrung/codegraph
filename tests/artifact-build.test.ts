@@ -2,13 +2,18 @@ import { constants as bufferConstants } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "../src/agent/artifact.js";
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { quoteShellArg } from "../src/agent/shell.js";
 import { buildGraph } from "../src/viewer/graph-builder.js";
 import { countingSession } from "./helpers/agent.js";
-import { createArtifactOutputWithStaleFile, mkTmpDir, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
+import {
+  createArtifactOutputWithStaleFile,
+  createTempRootRegistry,
+  mkTmpDir,
+  tryCreateDirectorySymlink,
+} from "./helpers/filesystem.js";
 import { limitFileStringLength, limitJsonStringLength } from "./helpers/string-limit.js";
 
 describe("artifact build", () => {
@@ -414,11 +419,47 @@ describe("artifact build", () => {
   });
 
   describe("when a serialized value passes the string limit", () => {
+    const roots = createTempRootRegistry();
+
+    afterEach(async () => {
+      await roots.cleanup();
+    });
+
     async function writeModuleChain(root: string, count: number): Promise<void> {
       for (let index = 0; index < count; index += 1) {
         const imported = index ? `import { value${index - 1} } from './m${index - 1}';\n` : "";
         const body = index ? `export const value${index} = value${index - 1} + 1;\n` : "export const value0 = 1;\n";
         await fs.writeFile(path.join(root, `m${index}.ts`), imported + body);
+      }
+    }
+
+    async function failureMessage(run: () => Promise<unknown>): Promise<string> {
+      try {
+        await run();
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+      throw new Error("The build was expected to fail.");
+    }
+
+    /** Builds over a string limit that graph.json cannot pass, with `before` run first, and returns the error text. */
+    async function failedBuildMessage(
+      root: string,
+      outDir: string,
+      before: () => { mockRestore(): void }[],
+    ): Promise<string> {
+      await writeModuleChain(root, 5);
+      const session = createAgentSession({ root });
+      await session.loadProject();
+      const spies = before();
+      const limit = limitJsonStringLength(60, { prettyOnly: true });
+      try {
+        return await failureMessage(() =>
+          buildCodegraphArtifactWithSession(session, { root, outDir, sqlite: true, graphJson: true }),
+        );
+      } finally {
+        limit.mockRestore();
+        for (const spy of spies) spy.mockRestore();
       }
     }
 
@@ -493,6 +534,73 @@ describe("artifact build", () => {
       }
 
       await expect(fs.readdir(outDir)).resolves.toEqual(["keep.txt"]);
+    });
+
+    it("says it removed the partial output only when it did", async () => {
+      const root = await roots.create("cg-artifact-limit-clean-");
+      const outDir = path.join(root, "codegraph-out");
+
+      const message = await failedBuildMessage(root, outDir, () => []);
+
+      expect(message).toContain(`Partial output in ${outDir} was removed.`);
+      expect(message).not.toContain("Not removed");
+    });
+
+    it("lists a file it cannot remove instead of saying the output was removed", async () => {
+      const root = await roots.create("cg-artifact-limit-stuck-");
+      const outDir = path.join(root, "codegraph-out");
+      const realRm = fs.rm.bind(fs);
+
+      const message = await failedBuildMessage(root, outDir, () => [
+        vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+          if (path.basename(String(target)) === "codegraph.sqlite") {
+            throw Object.assign(new Error("simulated EPERM"), { code: "EPERM" });
+          }
+          await realRm(target, options);
+        }),
+      ]);
+
+      expect(message).toContain("Failed to write graph.json: Invalid string length");
+      expect(message).toContain(
+        `Partial output in ${outDir} could not be fully removed. Not removed: codegraph.sqlite (EPERM).`,
+      );
+      expect(message).not.toContain("was removed");
+      // The file is still there, in the directory that the build created.
+      await expect(fs.readdir(outDir)).resolves.toEqual(["codegraph.sqlite"]);
+    });
+
+    it("lists the output directory it created when that cannot be removed", async () => {
+      const root = await roots.create("cg-artifact-limit-dir-");
+      const outDir = path.join(root, "codegraph-out");
+
+      const message = await failedBuildMessage(root, outDir, () => [
+        vi.spyOn(fs, "rmdir").mockRejectedValue(Object.assign(new Error("simulated EBUSY"), { code: "EBUSY" })),
+      ]);
+
+      expect(message).toContain(
+        `Partial output in ${outDir} could not be fully removed. Not removed: the directory itself (EBUSY).`,
+      );
+      expect(message).not.toContain("was removed");
+      // Every file was removed; only the empty directory stays.
+      await expect(fs.readdir(outDir)).resolves.toEqual([]);
+    });
+
+    it("leaves a created directory alone that now holds files it did not write, and still reports its own output as removed", async () => {
+      const root = await roots.create("cg-artifact-limit-foreign-");
+      const outDir = path.join(root, "codegraph-out");
+      const realRm = fs.rm.bind(fs);
+
+      const message = await failedBuildMessage(root, outDir, () => [
+        vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+          if (path.basename(String(target)) === "codegraph.sqlite") {
+            await fs.writeFile(path.join(outDir, "operator.txt"), "added while the build ran\n");
+          }
+          await realRm(target, options);
+        }),
+      ]);
+
+      expect(message).toContain(`Partial output in ${outDir} was removed.`);
+      await expect(fs.readdir(outDir)).resolves.toEqual(["operator.txt"]);
     });
 
     it("rebuilds over a previous graph.json that no single string can hold", async () => {

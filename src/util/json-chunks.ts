@@ -116,8 +116,8 @@ export async function writeJsonInChunks(
 /**
  * Writes `JSON.stringify(value, null, 2)` and a final newline to `filePath` in pieces; see `writeJsonInChunks`. The
  * pieces go to a temporary file beside `filePath`, which replaces it only once the whole document is written, so a
- * failure leaves a previous `filePath` as it was. A `filePath` that is not a regular file (a device, a FIFO) gets the
- * pieces in place, as `writeFileAtomicallyFrom` does.
+ * failure leaves a previous `filePath` as it was. A `filePath` that a rename must not replace (a device, a FIFO, a
+ * descriptor path such as `/dev/stdout`) gets the pieces in place, as `writeFileAtomicallyFrom` does.
  */
 export async function writeJsonFileInChunks(filePath: string, value: unknown): Promise<void> {
   await writeFileAtomicallyFrom(filePath, async (handle) => {

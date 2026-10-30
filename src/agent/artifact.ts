@@ -213,45 +213,58 @@ export async function buildCodegraphArtifactWithSession(
     await writeJsonFileInChunks(manifestPath, manifest);
     return result;
   } catch (error) {
-    await removePartialArtifacts(outDir, written, !outDirExisted);
-    throw artifactWriteError(error, writing, outDir);
+    const notRemoved = await removePartialArtifacts(outDir, written, !outDirExisted);
+    throw artifactWriteError(error, writing, outDir, notRemoved);
   }
 }
 
-/** Removes what a failed build wrote, and the output directory when the build created it and nothing else is in it. */
+/**
+ * Removes what a failed build wrote, and the output directory when the build created it and nothing else is in it.
+ * Resolves to what could not be removed, each as `name (reason)`, so the error can say so instead of claiming a clean
+ * directory. A directory that still holds files this build did not write is left alone and is not a failure.
+ */
 async function removePartialArtifacts(
   outDir: string,
   written: readonly string[],
   removeDirectory: boolean,
-): Promise<void> {
+): Promise<string[]> {
+  const notRemoved: string[] = [];
   for (const fileName of written) {
     const sidecars = fileName === SQLITE_FILE ? SQLITE_SIDECAR_SUFFIXES.map((suffix) => `${fileName}${suffix}`) : [];
     for (const name of [fileName, ...sidecars]) {
       try {
         await fs.rm(path.join(outDir, name), { force: true });
-      } catch {
-        // Cleanup is best effort; the build error below is the one that matters.
+      } catch (error) {
+        notRemoved.push(`${name} (${removalFailureReason(error)})`);
       }
     }
   }
-  if (!removeDirectory) return;
+  if (!removeDirectory) return notRemoved;
   try {
     await fs.rmdir(outDir);
-  } catch {
-    // Not empty, or already gone.
+  } catch (error) {
+    const gone = isNodeError(error) && (error.code === "ENOENT" || error.code === "ENOTDIR");
+    const holdsOtherFiles = isNodeError(error) && (error.code === "ENOTEMPTY" || error.code === "EEXIST");
+    if (!gone && !holdsOtherFiles) notRemoved.push(`the directory itself (${removalFailureReason(error)})`);
   }
+  return notRemoved;
 }
 
-function artifactWriteError(error: unknown, artifact: string, outDir: string): Error {
+function removalFailureReason(error: unknown): string {
+  return isNodeError(error) && error.code ? error.code : errorMessage(error);
+}
+
+function artifactWriteError(error: unknown, artifact: string, outDir: string, notRemoved: readonly string[]): Error {
   const stringLimitHit =
     (error instanceof RangeError && /invalid string length/i.test(error.message)) ||
     (isNodeError(error) && error.code === "ERR_STRING_TOO_LONG");
   const reason = stringLimitHit
     ? `${errorMessage(error)} (a single string passed the ${bufferConstants.MAX_STRING_LENGTH}-character limit of this Node.js runtime)`
     : errorMessage(error);
-  return new Error(`Failed to write ${artifact}: ${reason}. Partial output in ${outDir} was removed.`, {
-    cause: error,
-  });
+  const cleanup = notRemoved.length
+    ? `Partial output in ${outDir} could not be fully removed. Not removed: ${notRemoved.join(", ")}.`
+    : `Partial output in ${outDir} was removed.`;
+  return new Error(`Failed to write ${artifact}: ${reason}. ${cleanup}`, { cause: error });
 }
 
 function normalizeArtifactSelection(request: CodegraphArtifactBuildRequest): {

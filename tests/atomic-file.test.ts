@@ -4,7 +4,14 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeFileAtomically, writeFileAtomicallyFrom } from "../src/util/atomic-file.js";
-import { createTempRootRegistry, openFifoForReading, tryCreateFifo, withUmask } from "./helpers/filesystem.js";
+import {
+  createTempRootRegistry,
+  isSymlinkUnavailable,
+  openFifoForReading,
+  tryCreateFifo,
+  withUmask,
+} from "./helpers/filesystem.js";
+import { runTsxScriptWithStdoutFile } from "./helpers/tsx.js";
 
 const roots = createTempRootRegistry();
 
@@ -172,7 +179,7 @@ describe.skipIf(process.platform === "win32")("permission bits of a replaced fil
       expect(await modeOf(target)).toBe(0o640);
     });
 
-    it("takes the mode from the file a symbolic link points to and replaces the link with a regular file", async () => {
+    it("keeps the permission bits of the file a symbolic link points to", async () => {
       const root = await roots.create("cg-atomic-mode-link-");
       const real = path.join(root, "real.json");
       const link = path.join(root, "link.json");
@@ -182,11 +189,8 @@ describe.skipIf(process.platform === "win32")("permission bits of a replaced fil
 
       await withUmask(0o022, () => write(link, "next"));
 
-      expect((await fsp.lstat(link)).isSymbolicLink()).toBe(false);
-      expect(await modeOf(link)).toBe(0o640);
+      expect(await modeOf(real)).toBe(0o640);
       await expect(fsp.readFile(link, "utf8")).resolves.toBe("next");
-      // The file the link used to point to is not touched.
-      await expect(fsp.readFile(real, "utf8")).resolves.toBe("previous");
     });
   });
 
@@ -223,6 +227,213 @@ describe("a destination that is not a regular file", () => {
     });
   });
 });
+
+describe("a symbolic link as the destination", () => {
+  /** Resolves to false where symbolic links cannot be made (Windows without the privilege). */
+  async function makeLink(target: string, linkPath: string): Promise<boolean> {
+    try {
+      await fsp.symlink(target, linkPath, "file");
+      return true;
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return false;
+      throw error;
+    }
+  }
+
+  describe.each(writers)("%s", (_name, write) => {
+    it("replaces the file the link points to, beside that file, and keeps the link", async () => {
+      const root = await roots.create("cg-atomic-link-");
+      const realDir = path.join(root, "real");
+      const linkDir = path.join(root, "links");
+      await fsp.mkdir(realDir);
+      await fsp.mkdir(linkDir);
+      const real = path.join(realDir, "state.json");
+      const link = path.join(linkDir, "state.json");
+      await fsp.writeFile(real, "previous", "utf8");
+      if (!(await makeLink(real, link))) return;
+      const renameSpy = vi.spyOn(fsp, "rename");
+
+      await write(link, "next");
+
+      expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
+      await expect(fsp.readFile(link, "utf8")).resolves.toBe("next");
+      await expect(fsp.readFile(real, "utf8")).resolves.toBe("next");
+      // One rename, of a temp file made where the replaced file lives, never in the directory of the link.
+      const realDirectory = await fsp.realpath(realDir);
+      expect(renameSpy).toHaveBeenCalledTimes(1);
+      const [from, to] = renameSpy.mock.calls[0]!;
+      expect(path.dirname(String(from))).toBe(realDirectory);
+      expect(String(to)).toBe(path.join(realDirectory, "state.json"));
+      expect(await fsp.readdir(linkDir)).toEqual(["state.json"]);
+      expect(await fsp.readdir(realDir)).toEqual(["state.json"]);
+    });
+
+    it("follows a chain of links, relative ones included, and keeps every link", async () => {
+      const root = await roots.create("cg-atomic-link-chain-");
+      await fsp.mkdir(path.join(root, "real"));
+      await fsp.mkdir(path.join(root, "links"));
+      const real = path.join(root, "real", "state.json");
+      const inner = path.join(root, "links", "inner.json");
+      const outer = path.join(root, "links", "outer.json");
+      await fsp.writeFile(real, "previous", "utf8");
+      if (!(await makeLink(path.join("..", "real", "state.json"), inner))) return;
+      await makeLink("inner.json", outer);
+
+      await write(outer, "next");
+
+      expect((await fsp.lstat(outer)).isSymbolicLink()).toBe(true);
+      expect((await fsp.lstat(inner)).isSymbolicLink()).toBe(true);
+      await expect(fsp.readFile(real, "utf8")).resolves.toBe("next");
+      expect(await fsp.readdir(path.join(root, "links"))).toEqual(["inner.json", "outer.json"]);
+      expect(await fsp.readdir(path.join(root, "real"))).toEqual(["state.json"]);
+    });
+
+    it("creates the file a link points to when there is none yet, and keeps the link", async () => {
+      const root = await roots.create("cg-atomic-link-dangling-");
+      await fsp.mkdir(path.join(root, "shared"));
+      const link = path.join(root, "state.json");
+      if (!(await makeLink(path.join("shared", "state.json"), link))) return;
+
+      await write(link, "next");
+
+      expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
+      await expect(fsp.readFile(path.join(root, "shared", "state.json"), "utf8")).resolves.toBe("next");
+      expect(await fsp.readdir(path.join(root, "shared"))).toEqual(["state.json"]);
+    });
+
+    it("fails on a loop of links and leaves them as they were", async () => {
+      const root = await roots.create("cg-atomic-link-loop-");
+      const first = path.join(root, "a");
+      const second = path.join(root, "b");
+      if (!(await makeLink("b", first))) return;
+      await makeLink("a", second);
+
+      await expect(write(first, "next")).rejects.toMatchObject({ code: "ELOOP" });
+
+      expect((await fsp.lstat(first)).isSymbolicLink()).toBe(true);
+      expect((await fsp.lstat(second)).isSymbolicLink()).toBe(true);
+      expect(await fsp.readdir(root)).toEqual(["a", "b"]);
+    });
+  });
+});
+
+// A descriptor path names an open descriptor of a process, which can hold a regular file that a shell opened with `>` or
+// `>>`. Windows has no such paths.
+describe.skipIf(process.platform === "win32")("a descriptor path", () => {
+  const prefixes = process.platform === "linux" ? ["/dev/fd", "/proc/self/fd"] : ["/dev/fd"];
+
+  describe.each(writers)("%s", (_name, write) => {
+    it.each(prefixes)(
+      "%s/<n> is written into the file behind the descriptor, which is not replaced",
+      async (prefix) => {
+        const root = await roots.create("cg-atomic-fd-");
+        const file = path.join(root, "held.json");
+        const held = await fsp.open(file, "w+");
+        try {
+          const before = await fsp.stat(file);
+
+          await write(`${prefix}/${held.fd}`, "next content");
+
+          await expect(fsp.readFile(file, "utf8")).resolves.toBe("next content");
+          expect((await fsp.stat(file)).ino).toBe(before.ino);
+          expect(await fsp.readdir(root)).toEqual(["held.json"]);
+        } finally {
+          await held.close();
+        }
+      },
+    );
+
+    it("appends after what a descriptor opened for appending holds, as `>>` does", async () => {
+      const root = await roots.create("cg-atomic-fd-append-");
+      const file = path.join(root, "held.json");
+      await fsp.writeFile(file, "head\n", "utf8");
+      const held = await fsp.open(file, "a");
+      try {
+        await write(`/dev/fd/${held.fd}`, "next content");
+
+        await expect(fsp.readFile(file, "utf8")).resolves.toBe("head\nnext content");
+      } finally {
+        await held.close();
+      }
+    });
+
+    it("follows a symbolic link to a descriptor path, writes into the file behind it, and keeps the link", async () => {
+      const root = await roots.create("cg-atomic-fd-link-");
+      const file = path.join(root, "held.json");
+      const link = path.join(root, "out.json");
+      const held = await fsp.open(file, "w+");
+      try {
+        await fsp.symlink(`/dev/fd/${held.fd}`, link);
+        const before = await fsp.stat(file);
+
+        await write(link, "next content");
+
+        expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
+        await expect(fsp.readFile(file, "utf8")).resolves.toBe("next content");
+        expect((await fsp.stat(file)).ino).toBe(before.ino);
+        expect(await fsp.readdir(root)).toEqual(["held.json", "out.json"]);
+      } finally {
+        await held.close();
+      }
+    });
+  });
+});
+
+// The shape of `codegraph graph --json --output /dev/stdout > graph.json`: a child process whose stdout is a regular file
+// writes its document to /dev/stdout. With a rename, a user could not create the temp file in /dev, and root would
+// replace the /dev/stdout link itself, so this runs for other users only, as the /dev/null test does.
+describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "/dev/stdout of a process whose stdout is a file",
+  () => {
+    const writeJsonTo = path.resolve(process.cwd(), "tests", "helpers", "write-json-to.ts");
+
+    async function runRedirected(flags: "w" | "a", head: string) {
+      const root = await roots.create("cg-atomic-stdout-");
+      // Over a million characters once pretty-printed, so the document goes out in more than one piece.
+      const document = { files: Array.from({ length: 60_000 }, (_, index) => `src/file-${index}.ts`) };
+      const documentPath = path.join(root, "document.json");
+      const captured = path.join(root, "captured.json");
+      await fsp.writeFile(documentPath, JSON.stringify(document), "utf8");
+      await fsp.writeFile(captured, head, "utf8");
+      const devStdoutBefore = await fsp.lstat("/dev/stdout");
+      // `>` empties the file when the shell opens it, `>>` keeps what is there and appends.
+      const redirect = await fsp.open(captured, flags);
+      try {
+        const result = await runTsxScriptWithStdoutFile(writeJsonTo, ["/dev/stdout", documentPath], redirect.fd);
+        const devStdoutAfter = await fsp.lstat("/dev/stdout");
+        return {
+          result,
+          text: await fsp.readFile(captured, "utf8"),
+          expected: `${JSON.stringify(document, null, 2)}\n`,
+          devStdoutUntouched:
+            devStdoutBefore.ino === devStdoutAfter.ino &&
+            devStdoutBefore.isSymbolicLink() === devStdoutAfter.isSymbolicLink() &&
+            devStdoutBefore.mode === devStdoutAfter.mode,
+          names: (await fsp.readdir(root)).sort(),
+        };
+      } finally {
+        await redirect.close();
+      }
+    }
+
+    it("receives the whole document when stdout is redirected with `>`, and /dev/stdout is left alone", async () => {
+      const run = await runRedirected("w", "stale content from an earlier run\n");
+
+      expect(run.result.exitCode, run.result.stderr).toBe(0);
+      expect(run.text).toBe(run.expected);
+      expect(run.devStdoutUntouched).toBe(true);
+      expect(run.names).toEqual(["captured.json", "document.json"]);
+    });
+
+    it("appends the document when stdout is redirected with `>>`", async () => {
+      const run = await runRedirected("a", "output of an earlier command\n");
+
+      expect(run.result.exitCode, run.result.stderr).toBe(0);
+      expect(run.text).toBe(`output of an earlier command\n${run.expected}`);
+      expect(run.devStdoutUntouched).toBe(true);
+    });
+  },
+);
 
 // A FIFO and /dev/null are on Linux and macOS. Windows has the NUL device and named pipes, which are covered below.
 describe.skipIf(process.platform === "win32")("a FIFO or a device on a POSIX platform", () => {
