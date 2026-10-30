@@ -531,11 +531,15 @@ Options:
   --min-tokens        Minimum unit tokens. Defaults to 40, or 80 under cleanup profile.
   --max-tokens        Maximum fallback chunk tokens. Defaults to 800.
   --max-bucket-size   Skip candidate buckets larger than this value. Defaults to 200.
+  --max-candidate-pairs
+                      Keep at most this many candidate pairs for scoring, strongest evidence first. Defaults to 2000000; maximum 16000000.
 
 Output:
   Pretty output is the default and emits one line per group with file spans, symbol or chunk labels, confidence, clone type, score, reduced lines, estimated reducible lines, token counts, heuristic family annotations, and cleanup labels.
   Pretty output also emits a compact summary footer unless --no-summary is passed.
   JSON output reports grouped duplicate findings, confidence, clone type, metrics, reduced-line fields, cleanup labels, clustered locations, omission counts including skipped candidate pairs, and pair stats.
+  When --max-candidate-pairs drops pairs, stats.candidatePairBudget names the limit and the skipped count, and pretty output says the results are partial.
+  Progress for unit collection, candidate pairs, scoring, and grouping, and the total elapsed time, goes to stderr; use --progress or --no-progress.
   Grouped duplicate JSON uses schemaVersion 3.
   --raw-pairs is only supported with similarity-ranked JSON output and cannot be combined with the cleanup profile.
 `;

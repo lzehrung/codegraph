@@ -25,6 +25,8 @@ export type ProgressUpdate = {
   activity?: string;
   current: number;
   total: number;
+  /** Singular noun the count measures (`unit`, `pair`). The display pluralizes it. Defaults to `file`. */
+  unit?: string;
   phase?: "start" | "update" | "complete";
   mode?: "build" | "update" | "check";
   elapsedMs?: number;

@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Duplicates: `codegraph duplicates` no longer ends with `Map maximum size exceeded` or runs out of memory on a large monorepo whose files share many fingerprints. Fingerprint matching now counts the buckets each pair of units shares with one counter per unit, where it kept a table of every pair that shared a fingerprint, and candidate pairs are bounded by `--max-candidate-pairs` (default 2000000; `maxCandidatePairs` in `findDuplicates()`, `findDuplicateContext()`, and `findDuplicateContexts()`). Pairs are kept strongest evidence first, pairs that can never be scored (two units of one file in a cross-file run, or two that overlap) take no slot, and skipped ones are counted in `omittedCounts.candidatePairs` and `stats.candidatePairBudget`, with a partial-results note in pretty output. Cluster summaries are built once per clone family instead of once per group, which took minutes on a family of near-identical files, and the command now reports unit, candidate pair, scoring, and grouping progress on stderr and ends with its total elapsed time, where it reported only the index refresh.
+
 ## [3.1.0] - 2026-10-29
 
 ### Added

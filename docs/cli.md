@@ -455,6 +455,9 @@ Without `--graph`, each UI load or reload builds the current project graph throu
 - Zero-match scan-root glob warnings explain the scan-root-relative interpretation and suggest likely replacements when a root-prefixed pattern misses under an include root.
 - Use `--include-small` for tiny helpers.
 - Use `--include-same-file` for non-overlapping clones inside one file.
+- Candidate pairs are bounded so a large repo with many near-identical files finishes instead of exhausting memory. `--max-candidate-pairs <n>` (default `2000000`, maximum `16000000`) keeps the strongest evidence first: identical text, identical normalized tokens, identical AST shape, Git similarity hints, then shared fingerprints, which keep the pairs that share the largest fraction of their fingerprints. Pairs that can never be scored, such as two units of one file in the default cross-file run or two units that overlap, take no slot and are never counted as skipped.
+- When the bound drops pairs, JSON adds `stats.candidatePairBudget` with the `limit` and the `skipped` count, and `omittedCounts.candidatePairs` includes them. Pretty output notes that the results are partial. A pair proposed by several kinds of evidence counts once per kind in `skipped`. Raise `--max-candidate-pairs` or lower `--max-bucket-size` to change what is kept.
+- Progress goes to stderr after the index feedback: `Collecting duplicate units`, `Finding candidate pairs`, `Scoring candidate pairs`, and `Grouping duplicate findings`, then `Detected duplicates` with the unit count and the total elapsed time of the command, including file discovery and the index refresh. Use `--progress` to force redirected progress logs or `--no-progress` to suppress them.
 - Use `--json` for stable machine consumption.
 - Use `--raw-pairs` when debugging low-level pair evidence. `--pretty --raw-pairs`, `--sort actionability --raw-pairs`, `--sort reduced-lines --raw-pairs`, and `--profile cleanup --raw-pairs` are rejected.
 

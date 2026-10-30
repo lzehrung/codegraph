@@ -1,5 +1,7 @@
 import type { CurrentProjectIndexLoader } from "../indexer/load-current-index.js";
 import {
+  DEFAULT_MAX_CANDIDATE_PAIRS,
+  MAX_CANDIDATE_PAIRS_LIMIT,
   findDuplicates,
   type DuplicateCleanupLabel,
   type DuplicateConfidence,
@@ -8,8 +10,9 @@ import {
   type DuplicateGroup,
   type DuplicateUnitRef,
 } from "../duplicates.js";
+import type { ProgressUpdate } from "../types.js";
 import { exitWithError } from "./context.js";
-import { parseNonNegativeIntegerOption, parsePositiveIntegerOption } from "./options.js";
+import { parseBoundedIntegerOption, parseNonNegativeIntegerOption, parsePositiveIntegerOption } from "./options.js";
 
 export type DuplicatesCommandContext = {
   projectRootFs: string;
@@ -18,6 +21,10 @@ export type DuplicatesCommandContext = {
   hasFlag: (name: string) => boolean;
   /** Loads the index for current repository state over the resolved duplicate scope. */
   loadCurrentIndex: CurrentProjectIndexLoader;
+  /** Receives duplicate-stage progress; absent when progress is off. */
+  progressHandler?: ((update: ProgressUpdate) => void) | undefined;
+  /** `performance.now()` when the command began, so the final elapsed time covers discovery and the index refresh. */
+  progressStartedAt?: number | undefined;
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
   writeStderrLine: (message: string) => void;
@@ -80,6 +87,17 @@ function parseDuplicateDetectionOptions(
     "--min-tokens",
     40,
   );
+  const maxCandidatePairsRaw = context.getOpt("--max-candidate-pairs");
+  const maxCandidatePairs =
+    maxCandidatePairsRaw === undefined
+      ? undefined
+      : parseBoundedIntegerOption(
+          maxCandidatePairsRaw,
+          "--max-candidate-pairs",
+          DEFAULT_MAX_CANDIDATE_PAIRS,
+          1,
+          MAX_CANDIDATE_PAIRS_LIMIT,
+        );
   const options: DuplicateDetectionOptions = {
     projectRoot: context.projectRootFs,
     files: context.files,
@@ -88,6 +106,7 @@ function parseDuplicateDetectionOptions(
     minTokens,
     maxTokens: parsePositiveIntegerOption(context.getOpt("--max-tokens"), "--max-tokens", 800),
     maxBucketSize: parsePositiveIntegerOption(context.getOpt("--max-bucket-size"), "--max-bucket-size", 200),
+    ...(maxCandidatePairs !== undefined ? { maxCandidatePairs } : {}),
     ...(context.hasFlag("--include-same-file") ? { includeSameFile: true } : {}),
     ...(context.hasFlag("--include-small") ? { includeSmall: true } : {}),
     ...(context.hasFlag("--raw-pairs") ? { includeRawPairs: true } : {}),
@@ -320,6 +339,12 @@ function formatPrettyDuplicates(
     `Candidate pairs compared: ${result.stats.comparedPairs}/${result.stats.candidatePairs}`,
     "Family annotations are heuristic and derived from the displayed duplicate pair.",
   ];
+  const budget = result.stats.candidatePairBudget;
+  if (budget) {
+    lines.push(
+      `Candidate pair limit reached: kept ${budget.limit}, skipped ${budget.skipped}. Results are partial; raise --max-candidate-pairs or lower --max-bucket-size.`,
+    );
+  }
   const omitted = formatOmittedCounts(result);
   if (result.filteredCounts?.cleanupProfileGroups) {
     lines.push(`Filtered by cleanup profile: ${result.filteredCounts.cleanupProfileGroups}`);
@@ -441,6 +466,8 @@ export async function handleDuplicatesCommand(context: DuplicatesCommandContext)
       options.limit = boundedLimit;
     }
 
+    if (context.progressHandler) options.onProgress = context.progressHandler;
+    if (context.progressStartedAt !== undefined) options.progressStartedAt = context.progressStartedAt;
     const index = await context.loadCurrentIndex();
     const result = await findDuplicates(index, options);
     const sorted = sortedResult(result, sortMode, requestedLimit, profile);

@@ -47,6 +47,7 @@ import {
   writeDuplicateUnitsBatchToCache,
   type PendingDuplicateUnitCacheWrite,
 } from "./unit-cache.js";
+import { DUPLICATE_STAGE_UNITS, type DuplicateProgress } from "./progress.js";
 import type {
   CollectedDuplicateUnits,
   DuplicateAstContext,
@@ -691,6 +692,7 @@ const DUPLICATE_CACHE_WRITE_SLICE_FILES = 25;
 export async function collectDuplicateUnits(
   index: ProjectIndex,
   options: DuplicateUnitCollectionOptions,
+  progress?: DuplicateProgress,
 ): Promise<CollectedDuplicateUnits> {
   const files = options.files ?? Array.from(index.byFile.values(), (module) => module.file);
   const filesByIdentity = new Map<string, string>();
@@ -714,6 +716,7 @@ export async function collectDuplicateUnits(
 
   let sliceStartedAt = performance.now();
   const pendingWrites: PendingDuplicateUnitCacheWrite[] = [];
+  let processedFiles = 0;
   for (const file of normalizedFiles) {
     // The loop awaits promises that are mostly settled already, so it would keep every timer waiting until it ends.
     if (performance.now() - sliceStartedAt >= EVENT_LOOP_SLICE_MS) {
@@ -759,6 +762,12 @@ export async function collectDuplicateUnits(
         continue;
       }
       units.push(unit);
+    }
+    if (progress) {
+      processedFiles++;
+      progress.stage(DUPLICATE_STAGE_UNITS, processedFiles, normalizedFiles.length, "file");
+      const pending = progress.yieldPoint();
+      if (pending) await pending;
     }
   }
   // Each write compresses and stores its files on its own, so a slice at a time keeps one call short.
