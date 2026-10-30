@@ -11,6 +11,7 @@ import type { SqliteArtifactFileSignature } from "../sqlite/types.js";
 import { errorMessage } from "../util/errors.js";
 import { isPlainRecord } from "../util/guards.js";
 import { writeJsonFileInChunks } from "../util/json-chunks.js";
+import { readJsonMembers } from "../util/json-members.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
@@ -395,8 +396,9 @@ async function isRecognizedCodegraphArtifact(filePath: string, fileName: string)
     return (await readCodegraphManifest(path.dirname(filePath))) !== undefined;
   }
   if (fileName === GRAPH_JSON_FILE) {
-    const value = await readJsonIfPresent(filePath);
-    return isPlainRecord(value) && value.format === "codegraph.graph-json";
+    // Only `format` is read: a previous graph.json can be larger than one string can hold.
+    const members = await readJsonMembersIfPresent(filePath, ["format"]);
+    return members?.get("format") === "codegraph.graph-json";
   }
   if (fileName === QUESTIONS_FILE) {
     const value = await readJsonIfPresent(filePath);
@@ -462,6 +464,19 @@ async function readSqliteHeader(filePath: string): Promise<Buffer> {
 async function readJsonIfPresent(filePath: string): Promise<unknown> {
   try {
     return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+}
+
+async function readJsonMembersIfPresent(
+  filePath: string,
+  names: readonly string[],
+): Promise<Map<string, unknown> | undefined> {
+  try {
+    return await readJsonMembers(filePath, names);
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") return undefined;
     if (error instanceof SyntaxError) return undefined;

@@ -6,6 +6,7 @@ import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "..
 import type { Edge, Graph } from "../types.js";
 import { edgeFromImportBinding } from "../util/graph-edges.js";
 import { isPlainRecord, readStringRecord } from "../util/guards.js";
+import { readJsonMembers } from "../util/json-members.js";
 import { normalizePath } from "../util/paths.js";
 import { isCFamilyIncludeForm } from "../util/specifiers.js";
 import { countFilesByLanguage } from "./languages.js";
@@ -28,7 +29,6 @@ interface PortableGraphJson {
   graph: {
     files: string[];
     fileEdges: Edge[];
-    symbols?: Array<{ file: string; name: string; kind: string }>;
   };
 }
 
@@ -40,18 +40,37 @@ function parseManifest(value: unknown): ArtifactManifest | null {
   return { artifacts: { graphJson: artifacts.graphJson } };
 }
 
+function artifactReadError(error: unknown, label: string): unknown {
+  if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+    return new Error(`Codegraph artifact ${label} is missing.`);
+  }
+  if (error instanceof SyntaxError) return new Error(`Codegraph artifact ${label} is invalid JSON.`);
+  return error;
+}
+
 async function readJson(filePath: string, label: string): Promise<unknown> {
   try {
     return JSON.parse(await fsp.readFile(filePath, "utf8"));
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      throw new Error(`Codegraph artifact ${label} is missing.`);
-    }
-    if (error instanceof SyntaxError) {
-      throw new Error(`Codegraph artifact ${label} is invalid JSON.`);
-    }
-    throw error;
+    throw artifactReadError(error, label);
   }
+}
+
+/**
+ * The `graph.json` value `parseGraphJson` reads. Version 3 lists `schemaVersion`, `format`, `files`, and `fileEdges`
+ * ahead of the symbols that make the file large, and drift needs nothing else, so only those members are read: a
+ * baseline that one string cannot hold, or that would not fit the heap once parsed, still loads. Version 2 repeated
+ * the graph under `graph`, was written as one string, and is read whole.
+ */
+async function readGraphJson(graphPath: string): Promise<unknown> {
+  let head: Map<string, unknown>;
+  try {
+    head = await readJsonMembers(graphPath, ["schemaVersion", "format", "files", "fileEdges"]);
+  } catch (error) {
+    throw artifactReadError(error, "graph.json");
+  }
+  if (head.get("schemaVersion") === NESTED_GRAPH_JSON_SCHEMA_VERSION) return await readJson(graphPath, "graph.json");
+  return Object.fromEntries(head);
 }
 
 function assertArtifactChild(outDir: string, artifactPath: string): string {
@@ -110,17 +129,7 @@ function parseGraphJson(value: unknown): PortableGraphJson {
     const rebuilt = edgeFromImportBinding(normalizePath(edge.from), to, source);
     fileEdges.push(source.typeOnly === false ? { ...rebuilt, typeOnly: false } : rebuilt);
   }
-  const symbols = Array.isArray(portable.symbols)
-    ? portable.symbols.filter((entry): entry is { file: string; name: string; kind: string } => {
-        return (
-          isPlainRecord(entry) &&
-          typeof entry.file === "string" &&
-          typeof entry.name === "string" &&
-          typeof entry.kind === "string"
-        );
-      })
-    : [];
-  return { graph: { files, fileEdges, symbols } };
+  return { graph: { files, fileEdges } };
 }
 
 function graphEdges(edges: readonly Edge[]): ArchitectureGraphEdge[] {
@@ -145,7 +154,7 @@ export async function loadArchitectureSnapshotFromArtifact(outDirInput: string):
     throw new Error("Codegraph artifact manifest is missing graph.json metadata.");
   }
   const graphPath = assertArtifactChild(outDir, manifest.artifacts.graphJson);
-  const graphJson = parseGraphJson(await readJson(graphPath, "graph.json"));
+  const graphJson = parseGraphJson(await readGraphJson(graphPath));
   const graph: Graph = { nodes: new Set(graphJson.graph.files), edges: graphJson.graph.fileEdges };
   return {
     schemaVersion: ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,

@@ -520,7 +520,7 @@ const artifact = await buildCodegraphArtifact({
 console.log(artifact.manifestPath, artifact.artifacts);
 ```
 
-The `graph.json` artifact is self-describing (`schemaVersion: 3`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. It holds `files`, `fileEdges`, `symbols`, and `symbolEdges` once, at the top level, where version 2 repeated them under `graph`. Drift baseline loading reads versions 2 and 3; version 1 graph artifacts are rejected and must be regenerated. `questions.json` uses the same stable handles for follow-up commands.
+The `graph.json` artifact is self-describing (`schemaVersion: 3`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. It holds `files`, `fileEdges`, `symbols`, and `symbolEdges` once, at the top level, where version 2 repeated them under `graph`. Drift baseline loading reads versions 2 and 3 (from version 3 only `files` and `fileEdges`, in pieces, so a file larger than one string can hold loads); version 1 graph artifacts are rejected and must be regenerated. `questions.json` uses the same stable handles for follow-up commands.
 
 With `force: true`, stale known codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved. A build that fails removes the files it wrote, and the output directory when the build created it, then throws `Failed to write <artifact>: ...`.
 

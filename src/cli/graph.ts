@@ -20,7 +20,7 @@ import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
 import type { Edge, Graph } from "../types.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
-import { writeJsonFileInChunks, writeJsonInChunks } from "../util/json-chunks.js";
+import { writeJsonAsLines, writeJsonFileInChunks } from "../util/json-chunks.js";
 import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import { type CommandReport } from "./context.js";
 import {
@@ -29,9 +29,6 @@ import {
   parseOptionalNonNegativeIntegerOption,
   parseSymbolGraphScopeOption,
 } from "./options.js";
-
-/** Characters of JSON held back before a stdout write, so the output of a small graph stays one write. */
-const STDOUT_JSON_FLUSH_CHARS = 1 << 20;
 
 // Graph JSON output is always index-based: repeated file paths and symbol ids are
 // replaced with integer offsets into `files[]`/`symbolIdIndex[]` so large graphs don't
@@ -82,6 +79,8 @@ export type GraphCommandContext = {
     deletedFiles: string[];
   } | null>;
   writeStdoutLine: (message: string) => void;
+  /** `writeStdoutLine`, resolved once stdout can take more output, for a command that streams a large document. */
+  writeStdoutLineAndWait: (message: string) => Promise<void>;
   setStderrFilePath: (filePath: string | undefined) => void;
   writeCommandReport: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
   maybeWriteNativeBackendStatus: (report: BuildReport | undefined, showProgress: boolean) => void;
@@ -287,28 +286,16 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       context.writeStdoutLine(text);
     }
   };
-  // Graph JSON can pass V8's string limit, so it goes out in pieces instead of one string. A piece that goes to
-  // stdout ends at a line break, which makes the bytes the same as one `writeStdoutLine` of the whole text.
+  // Graph JSON can pass V8's string limit, so it goes out in pieces instead of one string. A file is written to a
+  // temporary file that replaces it when complete, so a failed write leaves a previous file alone. On stdout, each
+  // piece ends at a line break (the bytes are those of one `writeStdoutLine` of the whole text) and is awaited, so a
+  // slow consumer holds the command back instead of the whole document piling up in memory.
   const writeJsonOut = async (value: unknown): Promise<void> => {
     if (outputFile) {
-      try {
-        await writeJsonFileInChunks(outputFile, value);
-      } catch (error) {
-        await fsp.rm(outputFile, { force: true }).catch(() => undefined);
-        throw error;
-      }
+      await writeJsonFileInChunks(outputFile, value);
       return;
     }
-    let pending = "";
-    await writeJsonInChunks(value, (chunk) => {
-      pending += chunk;
-      if (pending.length < STDOUT_JSON_FLUSH_CHARS) return;
-      const lineEnd = pending.lastIndexOf("\n");
-      if (lineEnd < 0) return;
-      context.writeStdoutLine(pending.slice(0, lineEnd));
-      pending = pending.slice(lineEnd + 1);
-    });
-    context.writeStdoutLine(pending);
+    await writeJsonAsLines(value, context.writeStdoutLineAndWait);
   };
   // Always populated (not gated behind --report/--progress) so a normal run can
   // detect and surface files native analysis skipped (for example

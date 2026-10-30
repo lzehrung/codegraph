@@ -164,7 +164,7 @@ function createInspectContext(overrides: Partial<InspectCommandContext>): Inspec
 
 function createGraphContext(overrides: Partial<GraphCommandContext>): GraphCommandContext {
   const projectRoot = path.join(os.tmpdir(), "codegraph-graph-context").replace(/\\/g, "/");
-  return {
+  const context = {
     projectRootFs: projectRoot,
     discoveryOptions: {},
     languageExtensions: undefined,
@@ -183,7 +183,7 @@ function createGraphContext(overrides: Partial<GraphCommandContext>): GraphComma
     reportFile: undefined,
     showProgress: false,
     getOpt: () => undefined,
-    hasFlag: (name) => name === "--json",
+    hasFlag: (name: string) => name === "--json",
     cwd: () => projectRoot,
     resolveFiles: async () => [],
     resolveChangedFilesWithDeletes: async () => null,
@@ -194,6 +194,12 @@ function createGraphContext(overrides: Partial<GraphCommandContext>): GraphComma
     writeCommandReport: async () => {},
     maybeWriteNativeBackendStatus: () => {},
     ...overrides,
+  };
+  // A document goes to stdout through the awaitable writer; unless a test supplies one, it records through
+  // `writeStdoutLine`, so a test that captures that still sees every line.
+  return {
+    ...context,
+    writeStdoutLineAndWait: overrides.writeStdoutLineAndWait ?? (async (message) => context.writeStdoutLine(message)),
   };
 }
 
@@ -1052,6 +1058,125 @@ describe("CLI command modules", () => {
     expect(fromFile.files).toHaveLength(30);
     expect(fromFile).toEqual(fromStdout);
     expect((await fsp.readFile(path.join(root, "graph.json"), "utf8")).length).toBeGreaterThan(3_000);
+  });
+
+  test("graph --json --output keeps a previous file when the document cannot be written", async () => {
+    const root = await mkTmpDir("codegraph-graph-json-keep-");
+    const entry = path.join(root, "entry.ts");
+    await fsp.writeFile(entry, "export const value = 1;\n", "utf8");
+    const output = path.join(root, "graph.json");
+    await fsp.writeFile(output, "previous\n", "utf8");
+    const run = async (): Promise<void> => {
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          resolveFiles: async () => [entry.replace(/\\/g, "/")],
+          getOpt: (name) => (name === "--output" ? "graph.json" : undefined),
+          hasFlag: (name) => name === "--json",
+        }),
+      );
+    };
+
+    // No member of the document fits the limit.
+    const limit = limitJsonStringLength(20, { prettyOnly: true });
+    try {
+      await expect(run()).rejects.toThrow(/Invalid string length/);
+    } finally {
+      limit.mockRestore();
+    }
+
+    // The output file cannot be opened, as when it is read-only.
+    const realOpen = fsp.open.bind(fsp);
+    const open = vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
+      if (path.basename(String(file)).includes("graph.json")) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      return await realOpen(file, flags, mode);
+    });
+    try {
+      await expect(run()).rejects.toThrow(/EACCES/);
+    } finally {
+      open.mockRestore();
+    }
+
+    await expect(fsp.readFile(output, "utf8")).resolves.toBe("previous\n");
+    expect((await fsp.readdir(root)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("graph --json waits for stdout to take the document before it finishes", async () => {
+    const root = await mkTmpDir("codegraph-graph-json-wait-");
+    const entry = path.join(root, "entry.ts");
+    await fsp.writeFile(entry, "export const value = 1;\n", "utf8");
+    const direct: string[] = [];
+    const held: Array<{ text: string; release: () => void }> = [];
+    let finished = false;
+
+    const running = handleGraphCommand(
+      createGraphContext({
+        projectRootFs: root,
+        cwd: () => root,
+        resolveFiles: async () => [entry.replace(/\\/g, "/")],
+        hasFlag: (name) => name === "--stdout" || name === "--json",
+        writeStdoutLine: (message) => direct.push(message),
+        writeStdoutLineAndWait: (text) => {
+          const { promise, resolve } = Promise.withResolvers<void>();
+          held.push({ text, release: resolve });
+          return promise;
+        },
+      }),
+    ).then(() => {
+      finished = true;
+    });
+
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 20_000 });
+    // Stdout has not taken the document, so the command has not finished.
+    expect(finished).toBe(false);
+    held[0]!.release();
+    await running;
+
+    expect(direct).toEqual([]);
+    expect(readJsonRecord(JSON.parse(held[0]!.text)).files).toHaveLength(1);
+  });
+
+  test("graph --json --sql-artifacts writes the lists of the sqlArtifacts section in pieces", async () => {
+    const root = await mkTmpDir("codegraph-graph-sql-artifacts-");
+    const entry = path.join(root, "entry.ts");
+    const schema = path.join(root, "schema.sql");
+    await fsp.writeFile(entry, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(
+      schema,
+      Array.from({ length: 60 }, (_, index) => `CREATE TABLE t${index} (id int primary key);`).join("\n"),
+      "utf8",
+    );
+    const files = [entry, schema].map((file) => file.replace(/\\/g, "/"));
+    const toStdout = async (): Promise<Record<string, unknown>> => {
+      const stdout: string[] = [];
+      await handleGraphCommand(
+        createGraphContext({
+          projectRootFs: root,
+          cwd: () => root,
+          resolveFiles: async () => files,
+          hasFlag: (name) => name === "--stdout" || name === "--json" || name === "--sql-artifacts",
+          writeStdoutLine: (message) => stdout.push(message),
+        }),
+      );
+      return readJsonRecord(JSON.parse(stdout.join("\n")));
+    };
+
+    const expected = await toStdout();
+    const sqlArtifacts = readJsonRecord(expected.sqlArtifacts);
+    // Each list is longer than the limit below and each record in it is shorter.
+    for (const list of ["nodes", "edges", "facts"]) {
+      expect(JSON.stringify(sqlArtifacts[list], null, 2).length).toBeGreaterThan(5_000);
+    }
+
+    const limit = limitJsonStringLength(5_000, { prettyOnly: true });
+    try {
+      await expect(toStdout()).resolves.toEqual(expected);
+    } finally {
+      limit.mockRestore();
+    }
   });
 
   test("graph --json --cache disk --cache-verify keeps the native backend when the module cache serves every file", async () => {

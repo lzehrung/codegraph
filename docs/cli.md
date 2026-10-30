@@ -541,8 +541,10 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - Use artifact flags to select a subset.
 - Use `--force` to replace recognizable stale codegraph artifacts while preserving unrelated files.
 - Artifact contents exclude their own output directory and linked outside-root files.
-- `graph.json` carries `files`, `fileEdges`, `symbols`, and `symbolEdges` once (`schemaVersion: 3`) and is written in pieces, so a large repository does not reach Node.js's string limit.
+- `graph.json` carries `files`, `fileEdges`, `symbols`, and `symbolEdges` once (`schemaVersion: 3`) and is written in pieces, so a large repository does not reach Node.js's string limit. Each artifact file goes to a temporary file that is renamed when complete.
+- `drift --base-artifact` reads only `files` and `fileEdges` from a version 3 `graph.json`, in pieces, so a baseline larger than one string can hold still loads.
 - A failed `artifact build` removes the files it wrote (and the output directory when it created it) and names the artifact that failed.
+- `graph --json --output <path>` writes through a temporary file and replaces `<path>` only when the whole document is written; on stdout it writes one piece at a time and waits for a slow consumer.
 
 #### Agent client installer
 

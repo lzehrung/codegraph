@@ -46,18 +46,18 @@ async function fsyncDirectory(directoryPath: string): Promise<void> {
 }
 
 /**
- * Replace `filePath` with `data` so a reader sees the old or the new content, never a partial write.
- * The data goes to a unique `.<name>.<pid>.<uuid>.tmp` file beside the target, is fsynced, renamed
- * over the target, and the directory is fsynced. A failure that looks like transient file contention
- * retries with a fresh temp file after a short backoff; any other failure throws. A failed attempt
- * removes its own temp file; one orphaned by a crash is left for `removeStaleTempFiles`.
+ * Runs `writeTemp` against a unique `.<name>.<pid>.<uuid>.tmp` file beside `filePath`, fsyncs that file, renames it
+ * over `filePath`, and fsyncs the directory, so a reader sees the old or the new content, never a partial write. A
+ * failure that looks like transient file contention retries with a fresh temp file after a short backoff; any other
+ * failure throws. A failed attempt removes its own temp file and leaves `filePath` as it was; a temp file orphaned
+ * by a crash is left for `removeStaleTempFiles`.
  */
-export async function writeFileAtomically(filePath: string, data: string | Uint8Array): Promise<void> {
+async function replaceFileAtomically(filePath: string, writeTemp: (tempPath: string) => Promise<void>): Promise<void> {
   const directory = path.dirname(filePath);
   for (let attempt = 0; attempt <= TRANSIENT_RETRY_DELAYS_MS.length; attempt += 1) {
     const tempPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
     try {
-      await fsp.writeFile(tempPath, data, { flag: "wx" });
+      await writeTemp(tempPath);
       await fsyncFile(tempPath);
       await fsp.rename(tempPath, filePath);
       await fsyncDirectory(directory);
@@ -73,6 +73,33 @@ export async function writeFileAtomically(filePath: string, data: string | Uint8
       await delay(TRANSIENT_RETRY_DELAYS_MS[attempt]!);
     }
   }
+}
+
+/** Replace `filePath` with `data` so a reader sees the old or the new content, never a partial write. */
+export async function writeFileAtomically(filePath: string, data: string | Uint8Array): Promise<void> {
+  await replaceFileAtomically(filePath, async (tempPath) => {
+    await fsp.writeFile(tempPath, data, { flag: "wx" });
+  });
+}
+
+/**
+ * `writeFileAtomically` for content produced piece by piece, such as a document too large to hold as one string:
+ * `fill` writes it through the handle of a new temp file, and that file replaces `filePath` only after `fill` has
+ * returned. A failure to open the temp file or in `fill` removes the temp file and leaves a previous `filePath`
+ * untouched. A retry after transient contention calls `fill` again with a fresh temp file.
+ */
+export async function writeFileAtomicallyFrom(
+  filePath: string,
+  fill: (handle: FileHandle) => Promise<void>,
+): Promise<void> {
+  await replaceFileAtomically(filePath, async (tempPath) => {
+    const handle = await fsp.open(tempPath, "wx");
+    try {
+      await fill(handle);
+    } finally {
+      await handle.close();
+    }
+  });
 }
 
 /**

@@ -1,10 +1,15 @@
-import fsp from "node:fs/promises";
+import { writeFileAtomicallyFrom } from "./atomic-file.js";
 
 /** Characters a piece may reach before it goes to the sink, which also bounds every string this module holds. */
 const JSON_CHUNK_CHARS = 1 << 20;
 
-/** Containers above this depth are walked piece by piece; a container at it or below is stringified in one call. */
-const WALK_DEPTH = 2;
+/**
+ * Lists are walked down to this depth (a list of the document, or a list inside one of its sections) and objects
+ * one level less (the document and its sections). Lists are what grow with a repository, and a record inside one is
+ * cheaper to stringify whole than to walk field by field. A container below these depths is stringified in one call.
+ */
+const WALK_ARRAY_DEPTH = 3;
+const WALK_OBJECT_DEPTH = 2;
 
 const INDENT = "  ";
 const PADS = ["", INDENT, INDENT.repeat(2), INDENT.repeat(3)];
@@ -17,9 +22,12 @@ function padFor(depth: number): string {
 
 /** An array or a plain object that is shallow enough to be written member by member. */
 function isWalkable(value: unknown, depth: number): value is unknown[] | Record<string, unknown> {
-  if (depth >= WALK_DEPTH || typeof value !== "object" || value === null) return false;
+  if (typeof value !== "object" || value === null) return false;
+  const isArray = Array.isArray(value);
+  // The depth test comes first: nearly every value in a large document is a record below it.
+  if (depth >= (isArray ? WALK_ARRAY_DEPTH : WALK_OBJECT_DEPTH)) return false;
   if ("toJSON" in value && typeof value.toJSON === "function") return false;
-  if (Array.isArray(value)) return true;
+  if (isArray) return true;
   const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
@@ -34,9 +42,10 @@ function leafText(value: unknown, depth: number): string | undefined {
 /**
  * Writes exactly the text `JSON.stringify(value, null, 2)` returns to `sink` in pieces of about a million
  * characters. V8 refuses a string past about 536 million characters, which the graph of a large repository
- * passes while the heap still has room, so a large document is never built as one string. The top two levels
- * of arrays and plain objects are walked member by member and each member below them is stringified whole,
- * which is how every graph document in this package is shaped.
+ * passes while the heap still has room, so a large document is never built as one string. The document, its
+ * sections, and the lists in them are walked member by member (see `WALK_ARRAY_DEPTH`) and every record below
+ * is stringified whole, which is how each graph document in this package is shaped. The sink is awaited before
+ * the next piece is built.
  */
 export async function writeJsonInChunks(
   value: unknown,
@@ -104,13 +113,42 @@ export async function writeJsonInChunks(
   await flush();
 }
 
-/** Writes `JSON.stringify(value, null, 2)` and a final newline to `filePath` in pieces; see `writeJsonInChunks`. */
+/**
+ * Writes `JSON.stringify(value, null, 2)` and a final newline to `filePath` in pieces; see `writeJsonInChunks`. The
+ * pieces go to a temporary file beside `filePath`, which replaces it only once the whole document is written, so a
+ * failure leaves a previous `filePath` as it was.
+ */
 export async function writeJsonFileInChunks(filePath: string, value: unknown): Promise<void> {
-  const handle = await fsp.open(filePath, "w");
-  try {
+  await writeFileAtomicallyFrom(filePath, async (handle) => {
     await writeJsonInChunks(value, (chunk) => handle.writeFile(chunk));
     await handle.writeFile("\n");
-  } finally {
-    await handle.close();
-  }
+  });
+}
+
+/**
+ * Hands `JSON.stringify(value, null, 2)` to `writeLine` in runs of whole lines, for a sink that ends every call with
+ * a line break (`writeStdoutLine`): the calls then write the bytes of one such call with the whole text. Each call
+ * is awaited before the next run is built, so a consumer that reads slowly holds the producer back and at most one
+ * run of about `chunkChars` characters is held.
+ */
+export async function writeJsonAsLines(
+  value: unknown,
+  writeLine: (text: string) => void | Promise<void>,
+  chunkChars: number = JSON_CHUNK_CHARS,
+): Promise<void> {
+  let pending = "";
+  await writeJsonInChunks(
+    value,
+    async (chunk) => {
+      pending += chunk;
+      if (pending.length < chunkChars) return;
+      const lineEnd = pending.lastIndexOf("\n");
+      if (lineEnd < 0) return;
+      const run = pending.slice(0, lineEnd);
+      pending = pending.slice(lineEnd + 1);
+      await writeLine(run);
+    },
+    chunkChars,
+  );
+  await writeLine(pending);
 }

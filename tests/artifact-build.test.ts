@@ -9,7 +9,7 @@ import { quoteShellArg } from "../src/agent/shell.js";
 import { buildGraph } from "../src/viewer/graph-builder.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, mkTmpDir, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
-import { limitJsonStringLength } from "./helpers/string-limit.js";
+import { limitFileStringLength, limitJsonStringLength } from "./helpers/string-limit.js";
 
 describe("artifact build", () => {
   it("writes sqlite, graph JSON, optional report, questions, and manifest from real project logic", async () => {
@@ -493,6 +493,28 @@ describe("artifact build", () => {
       }
 
       await expect(fs.readdir(outDir)).resolves.toEqual(["keep.txt"]);
+    });
+
+    it("rebuilds over a previous graph.json that no single string can hold", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-limit-force-"));
+      const outDir = path.join(root, "codegraph-out");
+      await writeModuleChain(root, 40);
+      await buildCodegraphArtifact({ root, outDir, graphJson: true });
+      const graphJsonPath = path.join(outDir, "graph.json");
+      const previousChars = (await fs.readFile(graphJsonPath, "utf8")).length;
+      // With a manifest the old files are removed by name; without one each is recognized by its content.
+      await fs.rm(path.join(outDir, "manifest.json"));
+
+      // Recognizing the old file as a codegraph artifact must not read all of it as one string.
+      const limit = limitFileStringLength("graph.json", Math.floor(previousChars / 2));
+      try {
+        await buildCodegraphArtifact({ root, outDir, force: true, graphJson: true });
+      } finally {
+        limit.mockRestore();
+      }
+
+      const rebuilt = JSON.parse(await fs.readFile(graphJsonPath, "utf8")) as { files: string[] };
+      expect(rebuilt.files).toHaveLength(40);
     });
   });
 });

@@ -12,6 +12,7 @@ import {
   writeJSONLine,
   writeStderrLine,
   writeStdoutLine,
+  writeStdoutLineAndWait,
   type CommandReport,
 } from "./context.js";
 import type { CliBaseContext, CliProjectContext } from "./invocation-context.js";
@@ -402,6 +403,7 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
         resolveFiles: ctx.resolveFiles,
         resolveChangedFilesWithDeletes: ctx.resolveChangedFilesWithDeletes,
         writeStdoutLine,
+        writeStdoutLineAndWait,
         setStderrFilePath: setCliStderrFilePath,
         writeCommandReport,
         maybeWriteNativeBackendStatus,

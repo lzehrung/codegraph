@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { buildCodegraphArtifact } from "../src/agent/artifact.js";
 import { analyzeArchitectureDrift, loadArchitectureSnapshotFromArtifact } from "../src/drift/index.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import { limitFileStringLength } from "./helpers/string-limit.js";
 
 async function writeFile(root: string, file: string, content: string): Promise<void> {
   const fullPath = path.join(root, file);
@@ -157,6 +158,33 @@ describe("architecture drift artifact baselines", () => {
     expect(report.base.ref).toBe(`artifact:${outDir.replace(/\\/g, "/")}`);
     expect(report.base.root.replace(/\\/g, "/")).toBe(outDir.replace(/\\/g, "/"));
     expect(report.head.root.replace(/\\/g, "/")).toBe(root.replace(/\\/g, "/"));
+  });
+
+  it("loads a baseline whose graph.json no single string can hold", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-large-");
+    for (let index = 0; index < 30; index += 1) {
+      const imported = index ? `import { v${index - 1} } from './m${index - 1}'; ` : "";
+      await writeFile(root, `src/m${index}.ts`, `${imported}export const v${index} = ${index};\n`);
+    }
+    const outDir = path.join(root, "baseline");
+    await buildCodegraphArtifact({ root, outDir, graphJson: true });
+    const graphJsonPath = path.join(outDir, "graph.json");
+    const expected = await loadArchitectureSnapshotFromArtifact(outDir);
+    const graphChars = (await fsp.readFile(graphJsonPath, "utf8")).length;
+
+    // A repository past V8's string limit makes this read fail; here the limit is half of this small file.
+    const limit = limitFileStringLength("graph.json", Math.floor(graphChars / 2));
+    try {
+      await expect(fsp.readFile(graphJsonPath, "utf8")).rejects.toMatchObject({ code: "ERR_STRING_TOO_LONG" });
+
+      await expect(loadArchitectureSnapshotFromArtifact(outDir)).resolves.toEqual(expected);
+
+      await writeFile(root, "src/m0.ts", "import { v29 } from './m29'; export const v0 = v29;\n");
+      const report = await analyzeArchitectureDrift(root, { baseArtifact: outDir, head: ".", includeRoots: ["src"] });
+      expect(report.findings).toContainEqual(expect.objectContaining({ kind: "new-cycle" }));
+    } finally {
+      limit.mockRestore();
+    }
   });
 
   it("reports a type-only artifact edge becoming runtime in the current checkout", async () => {
