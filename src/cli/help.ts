@@ -410,18 +410,18 @@ ${SHARED_INDEX_OPTIONS_HELP}
 export const SERVER_HELP_TEXT = `codegraph server - Manage a shared project-local MCP HTTP server
 
 Usage:
-  codegraph server start [--root <path>] [--host <host>] [--port <1-65535>] [--startup-timeout-ms <1-86400000>] [--json] [--replace] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
+  codegraph server start [--root <path>] [--host <host>] [--port <1-65535>] [--startup-timeout-ms <1-86400000>] [--index-wait-ms <ms>] [--json] [--replace] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
   codegraph server status [--root <path>] [--json | --pretty]
   codegraph server stop [--root <path>]
 
 Behavior:
   start runs codegraph mcp serve in a separate process, waits for a challenged /health proof, then writes .codegraph/server.json. --json emits the started registry with status and update fields; startup diagnostics go to .codegraph/server.log.
-  The default server listens on 127.0.0.1:7331. A public bind requires an explicit --host. --startup-timeout-ms defaults to 15000 and allows up to 86400000 for long warmups. Startup warms the base session cache by default; --no-warmup starts lazily instead, and --warmup-symbols also warms the detailed symbol graph.
+  The default server listens on 127.0.0.1:7331. A public bind requires an explicit --host. --startup-timeout-ms defaults to 15000 and covers starting the process; the warmup builds in the background and does not count against it. By default the server warms the base session cache and the search index; --no-warmup starts lazily instead, and --warmup-symbols also warms the detailed symbol graph.
   status retries proven health checks and reports a verification remedy for an unreachable or mismatched server. stop removes only confirmed stale registries or signals a Codegraph server whose root, process, and startup time match the registry.
 
 Forwarded startup options:
   --cache, --cache-dir, --cache-strict, --cache-verify, --threads, --workers,
-  --include-glob, --ignore-glob, --no-gitignore, --no-watch, and --resolution-hint pass to mcp serve.
+  --include-glob, --ignore-glob, --no-gitignore, --no-watch, --index-wait-ms, and --resolution-hint pass to mcp serve.
 
 Safety:
   The registry stores process metadata and a non-secret credential ID. Its credential remains in the per-user Codegraph state directory, outside the project and separate from compiler cache data. An installed-version change requires an explicit server restart; Codegraph does not replace mapped native files or terminate clients automatically.
@@ -429,15 +429,16 @@ Safety:
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation
 
-Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
+Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--index-wait-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
 
 Transports:
   --stdio          Serve MCP over stdio (default)
   --port <number> Serve Streamable HTTP at /mcp
-  --warmup        Build the base session cache at startup (default)
-  --warmup-symbols Build the base cache and detailed symbol graph at startup
-  --no-warmup     Skip startup warmup; the first tool call pays for discovery and building
+  --warmup        Build the base session cache and the search index in the background after startup (default)
+  --warmup-symbols Also build the detailed symbol graph in the background
+  --no-warmup     Skip the startup warmup; the first tool call that needs the index starts the build
   --no-watch      Do not watch project files; rely on the freshness check of each tool call
+  --index-wait-ms <ms> Longest wait of search, explore, orient, get_file with includeGraphContext, review, packet_get, workspace_symbols, and impact for a running index build before they answer index_building (default 15000; 0 waits without limit)
 
 Index Options:
   --cache <mode>     Session cache mode: disk, memory, off
@@ -456,7 +457,7 @@ Tools are read-only unless --allow-build is passed.
 
 export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent graph navigation
 
-Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
+Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--index-wait-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
 
 Tools:
   orient          Build a compact first-turn repo packet
@@ -490,7 +491,8 @@ Index Options:
 Defaults:
   Transport defaults to stdio.
   HTTP transport binds to 127.0.0.1 unless --host is passed and serves /mcp.
-  Startup warms the base session cache by default. --warmup-symbols also warms the detailed symbol graph. --no-warmup starts lazily instead, leaving the first tool call to pay for discovery and building.
+  The server answers initialize and tools/list at once. By default it then builds the base session cache and the search index in the background; --warmup-symbols also warms the detailed symbol graph, and --no-warmup builds only when a tool call needs the index.
+  search, explore, orient, get_file with includeGraphContext, review, packet_get, workspace_symbols, and impact wait for a running build for at most --index-wait-ms (default 15000, well below the 30 seconds that clients commonly allow). Past that they answer { "status": "index_building" } with progress and a retry hint; the build continues, and the same call succeeds once it ends. Every other tool waits for the index without a limit.
   Warmup uses the configured session cache and shared index flags.
   The server watches project files and refreshes the index in the background: 500 ms after the last change, at most once every 5 seconds, and paused after 30 minutes without a tool call. --no-watch relies on the freshness check of each tool call instead.
   Tools are read-only unless --allow-build is passed.

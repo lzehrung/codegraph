@@ -284,9 +284,8 @@ export async function searchCodegraphWithSession(
     if (freshResponse.query === request.query) return freshResponse;
     return { ...freshResponse, query: request.query };
   }
-  const mode = request.mode ?? "hybrid";
   let queryIndex: QueryIndexHandle | undefined;
-  if (mode === "hybrid" || mode === "text") {
+  if (searchUsesQueryIndex(request)) {
     const { ensureSessionQueryIndex } = await import("./query-index/session-store.js");
     queryIndex = await ensureSessionQueryIndex(session, snapshot);
   }
@@ -401,7 +400,11 @@ async function searchSnapshot(
   };
 }
 
-function canUsePathFastPath(request: AgentSearchRequest): boolean {
+/** A path search without `from` lists the session's files and reads no index. */
+export function canUsePathFastPath(request: {
+  mode?: AgentSearchMode | undefined;
+  from?: string | undefined;
+}): boolean {
   return (request.mode ?? "hybrid") === "path" && request.from === undefined;
 }
 
@@ -521,9 +524,16 @@ function normalizeDepth(depth: number | undefined): number {
   return Math.min(MAX_GRAPH_DEPTH, Math.max(0, Math.floor(depth)));
 }
 
-function searchNeedsSymbolGraph(request: AgentSearchRequest): boolean {
+/** Hybrid, symbol, and graph searches read the symbol graph; the other modes read the project index alone. */
+export function searchNeedsSymbolGraph(request: { mode?: AgentSearchMode | undefined }): boolean {
   const mode = request.mode ?? "hybrid";
   return mode !== "path" && mode !== "text" && mode !== "sql";
+}
+
+/** Hybrid and text searches read the session's query index. */
+export function searchUsesQueryIndex(request: { mode?: AgentSearchMode | undefined }): boolean {
+  const mode = request.mode ?? "hybrid";
+  return mode === "hybrid" || mode === "text";
 }
 
 function buildQueryTerms(input: string, snapshot: AgentFileSnapshot): SearchQueryTerms {

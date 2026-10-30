@@ -13,9 +13,11 @@ import {
 import * as indexerBuild from "../src/indexer/build-index.js";
 import * as indexerNavigation from "../src/indexer/navigation.js";
 import type { BuildReport, IncrementalBuildOptions } from "../src/indexer/types.js";
+import { collectReviewChanges } from "../src/review/changes.js";
 import { boundReviewReportForTransport } from "../src/review/types.js";
 import { summarizeChangedFiles } from "../src/review/summaries.js";
 import { listCandidateTestFiles } from "../src/impact/context.js";
+import * as gitUtil from "../src/util/git.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as impactMap from "../src/impact/map.js";
 import { collectDuplicateLeadSummary } from "../src/duplicates-leads.js";
@@ -690,6 +692,36 @@ describe("Review report", () => {
     expect(report.status).toBe("no_changes");
     expect(report.base).toBe("HEAD");
     expect(report.head).toBe("HEAD");
+  });
+
+  it("builds from a change set the caller already collected, without asking git for the diff again", async () => {
+    const root = await mkTmpDir("dg-review-shared-changes-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    await fsp.writeFile(path.join(root, "tracked.ts"), `export const value = 1;\n`, "utf8");
+    await fsp.writeFile(path.join(root, "untouched.ts"), `export const other = 1;\n`, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fsp.writeFile(path.join(root, "tracked.ts"), `export const value = 2;\n`, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "change"]);
+    const options = { gitBase: "HEAD~1", gitHead: "HEAD" };
+    const changes = await collectReviewChanges(root, options);
+    const diffs = vi.spyOn(gitUtil, "getUnifiedDiff");
+
+    try {
+      const shared = await buildReviewReport(root, options, { changes });
+      expect(diffs).not.toHaveBeenCalled();
+
+      const collecting = await buildReviewReport(root, options);
+      expect(diffs).toHaveBeenCalledTimes(1);
+
+      expect(shared.changedFiles.map((entry) => entry.file)).toEqual(["tracked.ts"]);
+      expect(shared).toEqual(collecting);
+    } finally {
+      diffs.mockRestore();
+    }
   });
 
   it("describes the index a reused report holds when a later review finds no changes", async () => {

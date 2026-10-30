@@ -1,5 +1,6 @@
 import { registerSessionInvalidationHook } from "../src/agent/session-lifecycle.js";
 import { ensureSessionQueryIndex } from "../src/agent/query-index/session-store.js";
+import * as queryIndexUpdate from "../src/agent/query-index/update.js";
 import fsSync, { type FSWatcher, type WatchListener } from "node:fs";
 import fs from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
@@ -36,7 +37,8 @@ import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
-import { createWarmedCodegraphMcpResources } from "../src/mcp/handlers.js";
+import * as handlersModule from "../src/mcp/handlers.js";
+import { createCodegraphMcpResources, type CodegraphMcpResources } from "../src/mcp/handlers.js";
 import {
   createArtifactOutputWithStaleFile,
   createLinkedTempRoot,
@@ -48,6 +50,16 @@ import type { CodegraphRuntimeIdentity, InstalledVersionChecker } from "../src/r
 import { getCodegraphVersion } from "../src/util/package-info.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { runGit } from "./helpers/git.js";
+
+// What `createWarmedCodegraphMcpResources` returned before the startup warmup moved to the background: resources
+// whose warmup has ended, so that the first tool call of a test finds the index built, as a server's calls do once
+// its warmup is over.
+async function createWarmedCodegraphMcpResources(options: CodegraphMcpServerOptions): Promise<CodegraphMcpResources> {
+  const resources = createCodegraphMcpResources(options);
+  resources.startWarmup();
+  await resources.buildsSettled();
+  return resources;
+}
 
 type JsonRpcObject = {
   jsonrpc?: unknown;
@@ -1027,7 +1039,6 @@ describe("codegraph MCP handlers", () => {
 
       release.resolve();
       const responses = await Promise.all(calls);
-      expect(entered).toBe(2);
       expect(responses).toHaveLength(5);
       expect(responses.filter(({ payload }) => payload.error === undefined)).toHaveLength(2);
     } finally {
@@ -3455,10 +3466,11 @@ describe("codegraph MCP handlers", () => {
     ).toThrow(/prebuilt session with buildOptions/);
   });
 
-  it("warms the base MCP session snapshot before HTTP serving", async () => {
+  it("starts the base MCP session warmup once HTTP is serving, and builds the search index after it", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-warmup-base-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
     const counted = countingSession(createAgentSession({ root }));
+    const queryIndexSpy = vi.spyOn(queryIndexUpdate, "ensureQueryIndex");
     const httpServer = await startCodegraphMcpHttpServer({
       root,
       port: 0,
@@ -3468,14 +3480,16 @@ describe("codegraph MCP handlers", () => {
 
     try {
       expect(counted.loads()).toBe(1);
+      await vi.waitFor(() => expect(queryIndexSpy).toHaveBeenCalledTimes(1));
       await counted.session.loadProject({ symbolGraph: "skip" });
       expect(counted.loads()).toBe(1);
     } finally {
       await httpServer.close();
+      queryIndexSpy.mockRestore();
     }
   });
 
-  it("warms the detailed symbol graph before HTTP serving", async () => {
+  it("starts the detailed symbol graph warmup once HTTP is serving", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-warmup-symbols-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser() { return true; }\n", "utf8");
     const counted = countingSession(createAgentSession({ root }));
@@ -3495,7 +3509,7 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
-  it("warms an auto-created MCP session by default", async () => {
+  it("starts warming an auto-created MCP session once it is serving, by default", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-warmup-default-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
     const onProgress = vi.fn();
@@ -3506,7 +3520,7 @@ describe("codegraph MCP handlers", () => {
     });
 
     try {
-      expect(onProgress).toHaveBeenCalled();
+      await vi.waitFor(() => expect(onProgress).toHaveBeenCalled());
     } finally {
       await httpServer.close();
     }
@@ -4302,6 +4316,23 @@ describe("MCP file watcher", () => {
     };
   }
 
+  // Records the resources that a server creates for itself, so that a test can wait for the startup warmup that the
+  // server starts to end before it holds the next build.
+  function captureServerResources() {
+    const created: CodegraphMcpResources[] = [];
+    const create = handlersModule.createCodegraphMcpResources;
+    vi.spyOn(handlersModule, "createCodegraphMcpResources").mockImplementation((options) => {
+      const resources = create(options);
+      created.push(resources);
+      return resources;
+    });
+    return {
+      buildsSettled: async (): Promise<void> => {
+        await Promise.all(created.map(async (resources) => await resources.buildsSettled()));
+      },
+    };
+  }
+
   // Holds every index build that starts after `held.armed` is set until `held.release()`, and records in order what
   // happens to the session around it.
   function holdBackgroundRebuild() {
@@ -4771,6 +4802,7 @@ describe("MCP file watcher", () => {
   it("waits for a background rebuild that is running when the HTTP server closes, and releases the session after it", async () => {
     const root = await createProject("cg-mcp-watch-http-rebuild-");
     const held = holdBackgroundRebuild();
+    const serverResources = captureServerResources();
     const httpServer = await startCodegraphMcpHttpServer({
       root,
       port: 0,
@@ -4778,6 +4810,8 @@ describe("MCP file watcher", () => {
       watchMinRefreshIntervalMs: 0,
     });
     try {
+      // The startup warmup ends first; the rebuild that the test holds is the watcher's.
+      await serverResources.buildsSettled();
       held.armed = true;
       await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
       await held.started;
@@ -4805,6 +4839,7 @@ describe("MCP file watcher", () => {
   it("waits for a background rebuild that is running when the stdio server shuts down, and releases the session after it", async () => {
     const root = await createProject("cg-mcp-watch-stdio-rebuild-");
     const held = holdBackgroundRebuild();
+    const serverResources = captureServerResources();
     await withStandInStdio(async (stdin) => {
       let served = false;
       const serving = serveCodegraphMcp({ root, watchDebounceMs: 25, watchMinRefreshIntervalMs: 0 }).then(() => {
@@ -4812,6 +4847,7 @@ describe("MCP file watcher", () => {
       });
       try {
         await vi.waitFor(() => expect(stdin.listenerCount("end")).toBeGreaterThan(0), { timeout: 20_000 });
+        await serverResources.buildsSettled();
         held.armed = true;
         await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
         await held.started;

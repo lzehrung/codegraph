@@ -93,6 +93,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--graph",
   "--port",
   "--idle-timeout-ms",
+  "--index-wait-ms",
   "--startup-timeout-ms",
   "--offset",
   "--max-bytes",
@@ -494,7 +495,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     "mcp",
     commandSchema(
       [...SHARED_BUILD_FLAGS, "--allow-build", "--stdio", "--warmup", "--warmup-symbols", "--no-warmup", "--no-watch"],
-      [...SHARED_BUILD_OPTIONS, "--artifact", "--host", "--port", "--idle-timeout-ms"],
+      [...SHARED_BUILD_OPTIONS, "--artifact", "--host", "--port", "--idle-timeout-ms", "--index-wait-ms"],
       {
         kind: "max",
         max: 1,
@@ -523,6 +524,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         "--host",
         "--ignore-glob",
         "--include-glob",
+        "--index-wait-ms",
         "--port",
         "--resolution-hint",
         "--root",

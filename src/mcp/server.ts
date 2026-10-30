@@ -1,7 +1,7 @@
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { getCurrentNativeBindingOrigin } from "../native/runtime.js";
 import { captureCodegraphRuntimeIdentity } from "../runtime-identity.js";
-import { createWarmedCodegraphMcpResources, type CodegraphMcpServerOptions } from "./handlers.js";
+import { createCodegraphMcpResources, type CodegraphMcpServerOptions } from "./handlers.js";
 import {
   assertMcpToolTimeout,
   createCodegraphMcpProtocolFactory,
@@ -42,6 +42,8 @@ export {
   DEFAULT_MCP_HTTP_SESSION_IDLE_MS,
   DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
 } from "./http-transport.js";
+export { DEFAULT_MCP_INDEX_WAIT_MS } from "./index-readiness.js";
+export type { McpIndexBuildingResult, McpIndexProgress } from "./index-readiness.js";
 export { runWithLegacyRequestAbortSignal } from "./legacy-sessions.js";
 
 export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void> {
@@ -60,7 +62,7 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     return;
   }
 
-  const { handlers, session, closeWatcher } = await createWarmedCodegraphMcpResources(options);
+  const { handlers, session, closeWatcher, startWarmup, buildsSettled } = createCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const protocolFactory = createCodegraphMcpProtocolFactory(
     handlers,
@@ -76,6 +78,9 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
       console.error(`[codegraph] MCP stdio error: ${error.message}`);
     },
   });
+  // Started once the transport is attached to stdin, so that a waiting `initialize` is not queued behind the setup of
+  // a cold build.
+  startWarmup();
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS;
   try {
     await awaitStdioMcpLifecycle(handle, {
@@ -88,9 +93,10 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     protocolFactory.stop();
     const watcherClosed = closeWatcher();
     await protocolFactory.drain();
-    // A background rebuild or a read of the file list writes to the session until it ends, so the session is released
-    // after them.
+    // The startup warmup, a build that a tool call started, a background rebuild, or a read of the file list writes to
+    // the session until it ends, so the session is released after them.
     await watcherClosed;
+    await buildsSettled();
     session.invalidate();
   }
   process.exitCode = 0;

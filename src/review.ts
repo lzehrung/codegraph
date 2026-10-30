@@ -18,7 +18,7 @@ import { fileExists } from "./util/workspace.js";
 import { discoverProjectFiles } from "./util/project-files.js";
 import { mapLimit } from "./util/concurrency.js";
 import { collectReviewCandidateTests } from "./review/candidates.js";
-import { collectReviewChanges, deletedPathsForChange } from "./review/changes.js";
+import { collectReviewChanges, deletedPathsForChange, type ReviewChangeCollection } from "./review/changes.js";
 import { buildDeletedFileSnapshots, type DeletedFileSnapshot } from "./review/deleted.js";
 import {
   assembleReviewReport,
@@ -226,6 +226,11 @@ export async function buildReviewReport(
     loadIndex?: () => Promise<ProjectIndex>;
     duplicateAnalysis?: DuplicatePreparedAnalysis;
     loadDuplicateAnalysis?: () => Promise<DuplicatePreparedAnalysis>;
+    /**
+     * @internal The changes that `collectReviewChanges` returned for these same options, from a caller that already
+     * asked git for them. The report uses them instead of collecting again, and records no timings for collecting.
+     */
+    changes?: ReviewChangeCollection;
   },
 ): Promise<ReviewReport> {
   const appliedOptions = applyReviewPresetOptions(opts);
@@ -237,7 +242,7 @@ export async function buildReviewReport(
   }
   const totalStart = performance.now();
   const { changedFiles, explicitFiles, diffHunksByFile, diffKindsByFile, diffChangesByFile } =
-    await collectReviewChanges(projectRoot, appliedOptions, reviewTimings);
+    cached?.changes ?? (await collectReviewChanges(projectRoot, appliedOptions, reviewTimings));
 
   if (changedFiles.size === 0) {
     const riskSummary = computeRiskSummary({
