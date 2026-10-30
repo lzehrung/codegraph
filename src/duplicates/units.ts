@@ -712,9 +712,14 @@ export async function collectDuplicateUnits(
   let belowThresholdUnits = 0;
   const belowThresholdUnitsByFile = new Map<string, number>();
 
-  const pendingWrites: PendingDuplicateUnitCacheWrite[] = [];
   let sliceStartedAt = performance.now();
+  const pendingWrites: PendingDuplicateUnitCacheWrite[] = [];
   for (const file of normalizedFiles) {
+    // The loop awaits promises that are mostly settled already, so it would keep every timer waiting until it ends.
+    if (performance.now() - sliceStartedAt >= EVENT_LOOP_SLICE_MS) {
+      await yieldToEventLoop();
+      sliceStartedAt = performance.now();
+    }
     const fileKey = fileIdentityKey(file);
     const cacheSignature = duplicateUnitCacheSignature(index, file, options.projectRoot);
     let source = index.parsed?.get(fileKey)?.source;
@@ -754,11 +759,6 @@ export async function collectDuplicateUnits(
         continue;
       }
       units.push(unit);
-    }
-    // The loop awaits promises that are mostly settled already, so it would keep every timer waiting until it ends.
-    if (performance.now() - sliceStartedAt >= EVENT_LOOP_SLICE_MS) {
-      await yieldToEventLoop();
-      sliceStartedAt = performance.now();
     }
   }
   // Each write compresses and stores its files on its own, so a slice at a time keeps one call short.

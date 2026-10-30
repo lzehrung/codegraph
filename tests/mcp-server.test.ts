@@ -51,6 +51,16 @@ import { getCodegraphVersion } from "../src/util/package-info.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { runGit } from "./helpers/git.js";
 
+// What `createWarmedCodegraphMcpResources` returned before the startup warmup moved to the background: resources
+// whose warmup has ended, so that the first tool call of a test finds the index built, as a server's calls do once
+// its warmup is over.
+async function createWarmedCodegraphMcpResources(options: CodegraphMcpServerOptions): Promise<CodegraphMcpResources> {
+  const resources = createCodegraphMcpResources(options);
+  resources.startWarmup();
+  await resources.buildsSettled();
+  return resources;
+}
+
 type JsonRpcObject = {
   jsonrpc?: unknown;
   id?: unknown;
@@ -1025,15 +1035,7 @@ describe("codegraph MCP handlers", () => {
           },
         ),
       );
-      const refused: JsonRpcObject[] = [];
-      for (const call of calls) {
-        void call.then(({ payload }) => {
-          if (payload.error !== undefined) refused.push(payload);
-        });
-      }
-      // Two calls take the slots and wait for the build, which they share; the other three are refused at once.
-      await vi.waitFor(() => expect(refused).toHaveLength(3));
-      expect(entered).toBe(1);
+      await vi.waitFor(() => expect(entered).toBe(2));
 
       release.resolve();
       const responses = await Promise.all(calls);
@@ -4439,7 +4441,7 @@ describe("MCP file watcher", () => {
 
   it("answers from an edit made on disk without refresh_index, inside the freshness window", async () => {
     const root = await createProject("cg-mcp-watch-edit-");
-    const resources = createCodegraphMcpResources({ root });
+    const resources = await createWarmedCodegraphMcpResources({ root });
     // A frozen clock keeps the 5 s pull-check window open for the whole test, so only the watcher can end it.
     vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
@@ -4459,7 +4461,7 @@ describe("MCP file watcher", () => {
 
   it("leaves an edit unseen inside the freshness window when nothing hints at it", async () => {
     const root = await createProject("cg-mcp-watch-off-");
-    const resources = createCodegraphMcpResources({ root, watch: false });
+    const resources = await createWarmedCodegraphMcpResources({ root, watch: false });
     vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
       expect((await findSymbol(resources.handlers, "symbol0")).found).toBe(true);
@@ -4475,7 +4477,7 @@ describe("MCP file watcher", () => {
 
   it("rebuilds in the background after a change burst above the auto-refresh limit", async () => {
     const root = await createProject("cg-mcp-watch-burst-", 60);
-    const resources = createCodegraphMcpResources({ root });
+    const resources = await createWarmedCodegraphMcpResources({ root });
     try {
       expect((await findSymbol(resources.handlers, "symbol59")).found).toBe(true);
 
@@ -4506,7 +4508,7 @@ describe("MCP file watcher", () => {
 
   it("reports a burst above the auto-refresh limit as stale when watch is false", async () => {
     const root = await createProject("cg-mcp-watch-burst-off-", 60);
-    const resources = createCodegraphMcpResources({ root, watch: false });
+    const resources = await createWarmedCodegraphMcpResources({ root, watch: false });
     try {
       await findSymbol(resources.handlers, "symbol59");
       await Promise.all(
@@ -4533,7 +4535,7 @@ describe("MCP file watcher", () => {
   it("opens watches for a session it creates, and closeWatcher closes every one of them", async () => {
     const root = await createProject("cg-mcp-watch-close-");
     const { watchSpy, openHandles } = spyOnWatches();
-    const resources = createCodegraphMcpResources({ root });
+    const resources = await createWarmedCodegraphMcpResources({ root });
     try {
       expect(openHandles()).toBeGreaterThan(0);
 
@@ -4554,8 +4556,8 @@ describe("MCP file watcher", () => {
   it("opens no watch when watch is false or when the caller supplies the session", async () => {
     const root = await createProject("cg-mcp-watch-none-");
     const { watchSpy } = spyOnWatches();
-    const disabled = createCodegraphMcpResources({ root, watch: false });
-    const supplied = createCodegraphMcpResources({
+    const disabled = await createWarmedCodegraphMcpResources({ root, watch: false });
+    const supplied = await createWarmedCodegraphMcpResources({
       root,
       session: createAgentSession({ root }),
       warmup: "base",
@@ -4576,7 +4578,7 @@ describe("MCP file watcher", () => {
   it("keeps a lazy startup lazy: no watch opens until the first tool call", async () => {
     const root = await createProject("cg-mcp-watch-lazy-");
     const { watchSpy } = spyOnWatches();
-    const resources = createCodegraphMcpResources({ root, warmup: "off" });
+    const resources = await createWarmedCodegraphMcpResources({ root, warmup: "off" });
     try {
       expect(watchSpy).not.toHaveBeenCalled();
 
@@ -4599,7 +4601,7 @@ describe("MCP file watcher", () => {
       const anchor = path.join(root, ".moved-cache");
       const deliver = captureWatchListener(root);
       if (source === "environment") vi.stubEnv("CODEGRAPH_CACHE_DIR", anchor);
-      const resources = createCodegraphMcpResources({
+      const resources = await createWarmedCodegraphMcpResources({
         root,
         ...(source === "option" ? { buildOptions: { cacheDir: anchor } } : {}),
       });
@@ -4631,7 +4633,7 @@ describe("MCP file watcher", () => {
     if (!(await tryCreateDirectorySymlink(realRoot, linkedRoot))) return;
     const anchor = path.join(realRoot, ".moved-cache");
     const deliver = captureWatchListener(linkedRoot);
-    const resources = createCodegraphMcpResources({ root: linkedRoot, buildOptions: { cacheDir: anchor } });
+    const resources = await createWarmedCodegraphMcpResources({ root: linkedRoot, buildOptions: { cacheDir: anchor } });
     try {
       const { index } = await resources.session.loadProject({ symbolGraph: "skip" });
       const cacheDirectory = index.cacheRootDir ?? "";
@@ -4655,7 +4657,7 @@ describe("MCP file watcher", () => {
   it("pauses after the idle time and resumes on the next tool call, whichever tool it is", async () => {
     const root = await createProject("cg-mcp-watch-idle-");
     const { watchSpy, openHandles } = spyOnWatches();
-    const resources = createCodegraphMcpResources({ root, watchIdleMs: 750 });
+    const resources = await createWarmedCodegraphMcpResources({ root, watchIdleMs: 750 });
     const markChanged = vi.spyOn(resources.session, "markChanged");
     try {
       expect(openHandles()).toBeGreaterThan(0);
@@ -4706,16 +4708,12 @@ describe("MCP file watcher", () => {
   it("runs refresh_index after a background rebuild that is running, so that the later build's file signatures stay", async () => {
     const root = await createProject("cg-mcp-watch-refresh-index-");
     const held = holdBackgroundRebuild();
-    const resources = createCodegraphMcpResources({
+    const resources = await createWarmedCodegraphMcpResources({
       root,
       watchDebounceMs: 25,
       watchMinRefreshIntervalMs: 0,
     });
     try {
-      // The first build belongs to the startup warmup that a server starts once it is serving; the rebuild that the
-      // test holds is the watcher's, after it.
-      resources.startWarmup();
-      await resources.buildsSettled();
       held.armed = true;
       await fs.writeFile(path.join(root, "added.ts"), "export function addedSymbol() { return 2; }\n", "utf8");
       await held.started;
@@ -4759,7 +4757,7 @@ describe("MCP file watcher", () => {
     async () => {
       const root = await createProject("cg-mcp-watch-first-read-");
       const held = holdFileSignatures(root);
-      const resources = createCodegraphMcpResources({
+      const resources = await createWarmedCodegraphMcpResources({
         root,
         warmup: "off",
         watchDebounceMs: 25,
@@ -4992,7 +4990,7 @@ describe("MCP file watcher", () => {
     const root = await createProject("cg-mcp-watch-invalid-");
     const onProgress = vi.fn();
 
-    expect(() => createCodegraphMcpResources({ root, buildOptions: { onProgress }, ...invalid })).toThrow(
+    await expect(createWarmedCodegraphMcpResources({ root, buildOptions: { onProgress }, ...invalid })).rejects.toThrow(
       new RegExp(`${option} must be a whole number of milliseconds`),
     );
 

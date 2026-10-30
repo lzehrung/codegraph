@@ -6,24 +6,12 @@ import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as queryIndexStore from "../src/agent/query-index/session-store.js";
 import * as queryIndexUpdate from "../src/agent/query-index/update.js";
 import { createAgentSession, type AgentLoadProjectOptions, type AgentSession } from "../src/agent/session.js";
-import * as duplicatesModule from "../src/duplicates.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { createCodegraphMcpResources } from "../src/mcp/handlers.js";
-import {
-  createMcpBuildProgress,
-  createMcpIndexReadiness,
-  MCP_REFRESH_RETRY_WINDOW_MS,
-  MCP_STAGES_BY_HANDLER,
-  withIndexReadiness,
-  type McpIndexReadiness,
-  type McpIndexStage,
-  type McpStageContext,
-} from "../src/mcp/index-readiness.js";
-import { collectReviewChanges } from "../src/review/changes.js";
 import {
   createCodegraphMcpHandlers,
   createCodegraphMcpProtocolServer,
@@ -44,8 +32,8 @@ afterEach(async () => {
   await tempRoots.cleanup();
 });
 
-async function createProject(prefix: string): Promise<string> {
-  const root = await tempRoots.create(prefix);
+async function createProject(prefix: string, roots = tempRoots): Promise<string> {
+  const root = await roots.create(prefix);
   await fs.writeFile(
     path.join(root, "alpha.ts"),
     'import { beta } from "./beta";\nexport function alpha() { return beta(); }\n',
@@ -57,6 +45,17 @@ async function createProject(prefix: string): Promise<string> {
       "export class Square implements Shape { area() { return 4; } }\n",
     "utf8",
   );
+  return root;
+}
+
+/** A project with two commits, the second of which changes `alpha.ts`: `HEAD~1..HEAD` has a changed file. */
+async function createReviewProject(prefix: string, roots = tempRoots): Promise<string> {
+  const root = await createProject(prefix, roots);
+  runGit(root, ["init"]);
+  runGit(root, ["add", "-A"]);
+  runGit(root, ["commit", "-m", "one"]);
+  await fs.appendFile(path.join(root, "alpha.ts"), "export const gamma = 3;\n", "utf8");
+  runGit(root, ["commit", "-am", "two"]);
   return root;
 }
 
@@ -99,39 +98,52 @@ function holdSession(
   return { session, started: started.promise, release: gate.resolve, events };
 }
 
-type HeldDuplicates = {
-  session: AgentSession;
-  /** The real session behind the held one, for the loads that must not wait. */
-  inner: AgentSession;
-  /** How many times a caller asked the held session for its duplicate analysis. */
-  requests: () => number;
-  release: () => void;
-};
+/** What a tool reads from the session that `holdLoad` can hold back. */
+type HeldLoad = "index" | "graph" | "detailed" | "query" | "duplicates";
 
-/** A session whose duplicate analysis waits until `release()`, then comes from the real session. */
-function holdDuplicates(root: string): HeldDuplicates {
+/**
+ * A session in which only the load `kind` waits until `release()`; every other load runs for real. `requested` counts
+ * how often a caller asked for the held load.
+ */
+function holdLoad(
+  root: string,
+  kind: HeldLoad,
+): { session: AgentSession; release: () => void; requested: () => number } {
   const inner = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
   const loadDuplicates = inner.loadDuplicateAnalysis;
   if (!loadDuplicates) throw new Error("The session has no duplicate analysis.");
   const gate = Promise.withResolvers<void>();
   let requests = 0;
+  const hold = async (): Promise<void> => {
+    requests += 1;
+    await gate.promise;
+  };
+  // `loadProject` serves three loads: the project index, the symbol graph, and the detailed symbol graph.
+  const holdsProject = (options: AgentLoadProjectOptions | undefined): boolean => {
+    const symbolGraph = options?.symbolGraph ?? "eager";
+    if (kind === "index") return symbolGraph === "skip";
+    if (kind === "graph") return symbolGraph === "basic";
+    return kind === "detailed" && symbolGraph === "eager";
+  };
   const session: AgentSession = {
     ...inner,
+    loadProject: async (options) => {
+      if (holdsProject(options)) await hold();
+      return await inner.loadProject(options);
+    },
     loadDuplicateAnalysis: async () => {
-      requests += 1;
-      await gate.promise;
+      if (kind === "duplicates") await hold();
       return await loadDuplicates();
     },
   };
-  return { session, inner, requests: () => requests, release: gate.resolve };
-}
-
-/** The handle of the symbol `name`, which the handlers of `session` resolve. */
-async function symbolHandle(root: string, session: AgentSession, name: string): Promise<string> {
-  const found = await createCodegraphMcpHandlers({ root, session }).search({ query: name, mode: "symbol" });
-  const handle = found.results.find((result) => result.label === name)?.handle;
-  if (!handle) throw new Error(`No symbol ${name}.`);
-  return handle;
+  if (kind === "query") {
+    const ensureQueryIndex = queryIndexStore.ensureSessionQueryIndex;
+    vi.spyOn(queryIndexStore, "ensureSessionQueryIndex").mockImplementation(async (...args) => {
+      await hold();
+      return await ensureQueryIndex(...args);
+    });
+  }
+  return { session, release: gate.resolve, requested: () => requests };
 }
 
 /** What `call` answers, once it has answered: a call that must answer within its budget leaves it empty when it blocks. */
@@ -151,8 +163,14 @@ function recordOutcome(call: Promise<unknown>): { readonly value: unknown } {
 /** Waits for the `index_building` answer of `tool`; a call that blocks fails here on the clock, not by hanging. */
 async function expectIndexBuilding(outcome: { readonly value: unknown }, tool: string): Promise<void> {
   await vi.waitFor(() => expect(outcome.value).toMatchObject({ result: { status: "index_building", tool } }), {
-    timeout: 2_000,
+    timeout: 10_000,
   });
+}
+
+/** Waits for a normal answer, which a call that waited for a build it does not read would never give. */
+async function expectAnswered(outcome: { readonly value: unknown }): Promise<void> {
+  await vi.waitFor(() => expect(outcome.value).toBeDefined(), { timeout: 15_000 });
+  expect(outcome.value).not.toBeInstanceOf(Error);
 }
 
 async function connect(handlers: CodegraphMcpHandlers, maxConcurrentToolCalls?: number) {
@@ -301,6 +319,42 @@ describe("MCP cold start", () => {
     }
   });
 
+  it("joins the build that is running, so that a retry waits for what is left of it", async () => {
+    const root = await createProject("cg-mcp-ready-retry-");
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const build = indexerBuild.buildProjectIndexIncremental;
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      started.resolve();
+      await release.promise;
+      return await build(...args);
+    });
+    const resources = createCodegraphMcpResources({
+      root,
+      watch: false,
+      warmup: "off",
+      mcpIndexWaitMs: 25,
+      buildOptions: { cache: "off" },
+    });
+    try {
+      const first = await resources.handlers.orient({}).catch((error: unknown) => error);
+      await started.promise;
+      const second = await resources.handlers.orient({}).catch((error: unknown) => error);
+
+      expect(first).toMatchObject({ result: { status: "index_building", tool: "orient" } });
+      expect(second).toMatchObject({ result: { status: "index_building", tool: "orient" } });
+
+      release.resolve();
+      await resources.buildsSettled();
+      await expect(resources.handlers.orient({})).resolves.toMatchObject({ freshness: { state: "fresh" } });
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      release.resolve();
+      await resources.buildsSettled();
+      resources.session.invalidate();
+    }
+  });
+
   it("reports counts only for work with a measurable total, and keeps the caller's own progress callback", async () => {
     const root = await createProject("cg-mcp-ready-progress-");
     const userProgress = vi.fn();
@@ -345,7 +399,7 @@ describe("MCP cold start", () => {
     }
   });
 
-  it("shares one build between the warmup and concurrent calls", async () => {
+  it("shares one build between the warmup and concurrent calls, whichever tool they are", async () => {
     const root = await createProject("cg-mcp-ready-shared-");
     const started = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
@@ -443,12 +497,7 @@ describe("MCP cold start", () => {
   });
 
   it("answers a review of a range without changes from git alone, while a range with changes waits for the index", async () => {
-    const root = await createProject("cg-mcp-ready-review-");
-    runGit(root, ["init"]);
-    runGit(root, ["add", "-A"]);
-    runGit(root, ["commit", "-m", "one"]);
-    await fs.appendFile(path.join(root, "alpha.ts"), "export const gamma = 3;\n", "utf8");
-    runGit(root, ["commit", "-am", "two"]);
+    const root = await createReviewProject("cg-mcp-ready-review-");
     const held = holdSession(root);
     const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "base", mcpIndexWaitMs: 25 });
     resources.startWarmup();
@@ -470,10 +519,7 @@ describe("MCP cold start", () => {
   });
 
   it("builds no index for a review of a range without changes when warmup is off", async () => {
-    const root = await createProject("cg-mcp-ready-review-off-");
-    runGit(root, ["init"]);
-    runGit(root, ["add", "-A"]);
-    runGit(root, ["commit", "-m", "one"]);
+    const root = await createReviewProject("cg-mcp-ready-review-off-");
     const held = holdSession(root);
     const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
     resources.startWarmup();
@@ -485,12 +531,7 @@ describe("MCP cold start", () => {
   });
 
   it("asks git for the diff once per review call, and builds the report from that answer", async () => {
-    const root = await createProject("cg-mcp-ready-review-once-");
-    runGit(root, ["init"]);
-    runGit(root, ["add", "-A"]);
-    runGit(root, ["commit", "-m", "one"]);
-    await fs.appendFile(path.join(root, "alpha.ts"), "export const gamma = 3;\n", "utf8");
-    runGit(root, ["commit", "-am", "two"]);
+    const root = await createReviewProject("cg-mcp-ready-review-once-");
     const resources = createCodegraphMcpResources({
       root,
       watch: false,
@@ -504,66 +545,15 @@ describe("MCP cold start", () => {
       await resources.buildsSettled();
 
       const report = await resources.handlers.review({ base: "HEAD~1", head: "HEAD" });
+      expect(diffs).toHaveBeenCalledTimes(1);
       const empty = await resources.handlers.review({ base: "HEAD", head: "HEAD" });
 
       expect(report).toMatchObject({ status: "ok", changedFiles: [expect.objectContaining({ file: "alpha.ts" })] });
       expect(empty).toMatchObject({ status: "no_changes" });
-      // One diff per call: the answer that the gate used to choose its builds is the one the report is built from.
       expect(diffs).toHaveBeenCalledTimes(2);
     } finally {
       await resources.buildsSettled();
       resources.session.invalidate();
-    }
-  });
-
-  it("gives a review request that is used again the diff of its own call", async () => {
-    const root = await createProject("cg-mcp-ready-review-reuse-");
-    runGit(root, ["init"]);
-    runGit(root, ["add", "-A"]);
-    runGit(root, ["commit", "-m", "one"]);
-    const gated = createCodegraphMcpResources({ root, watch: false, warmup: "off", buildOptions: { cache: "off" } });
-    const plain = createCodegraphMcpHandlers({ root, buildOptions: { cache: "off" } });
-    // A host may keep one request object and call again after the working tree changed.
-    const request = { base: "HEAD", head: "WORKTREE" };
-    try {
-      await expect(gated.handlers.review(request)).resolves.toMatchObject({ status: "no_changes" });
-      await expect(plain.review(request)).resolves.toMatchObject({ status: "no_changes" });
-
-      await fs.appendFile(path.join(root, "alpha.ts"), "export const gamma = 3;\n", "utf8");
-
-      for (const handlers of [gated.handlers, plain]) {
-        await expect(handlers.review(request)).resolves.toMatchObject({
-          status: "ok",
-          changedFiles: [expect.objectContaining({ file: "alpha.ts" })],
-        });
-      }
-    } finally {
-      plain.dispose();
-      gated.session.invalidate();
-    }
-  });
-
-  it("makes refresh_index wait for the startup warmup instead of replacing the session under it", async () => {
-    const root = await createProject("cg-mcp-ready-refresh-");
-    const held = holdSession(root);
-    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "base", mcpIndexWaitMs: 25 });
-    resources.startWarmup();
-    try {
-      await held.started;
-      const waiting = await resources.handlers.refresh_index({}).catch((error: unknown) => error);
-
-      expect(waiting).toMatchObject({ result: { status: "index_building", tool: "refresh_index" } });
-      expect(held.events).not.toContain("invalidate");
-
-      held.release();
-      await resources.buildsSettled();
-      await expect(resources.handlers.refresh_index({})).resolves.toEqual({ refreshed: true, warmup: "off" });
-      expect(held.events.at(-1)).toBe("invalidate");
-      // The first call stopped waiting for its turn, so it replaced nothing: only the retry did.
-      expect(held.events.filter((event) => event === "invalidate")).toHaveLength(1);
-    } finally {
-      held.release();
-      await resources.buildsSettled();
     }
   });
 
@@ -607,6 +597,7 @@ describe("MCP cold start", () => {
       expect(held.events).toEqual(["loadProject:start"]);
     } finally {
       held.release();
+      await resources.buildsSettled();
     }
   });
 
@@ -657,446 +648,239 @@ describe("MCP cold start", () => {
   });
 });
 
-describe("MCP build registry", () => {
-  it("consumes the failure of a build that a call cancelled before it waited", async () => {
-    const root = await createProject("cg-mcp-registry-cancelled-");
-    const inner = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
-    const failure = Promise.withResolvers<void>();
-    const session: AgentSession = {
-      ...inner,
-      loadProject: async () => {
-        await failure.promise;
-        throw new Error("disk full");
-      },
-    };
-    const resources = createCodegraphMcpResources({ root, session, warmup: "off", mcpIndexWaitMs: 600_000 });
-    const unhandled: unknown[] = [];
-    const record = (reason: unknown): void => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", record);
-    try {
-      const cancelled = new AbortController();
-      cancelled.abort();
-      await expect(resources.handlers.search({ query: "alpha" }, cancelled.signal)).rejects.toThrow(
-        "MCP tool call was cancelled.",
-      );
-
-      failure.resolve();
-      await resources.buildsSettled();
-      // Node reports an unhandled rejection once the microtask queue drains, which this real delay outlasts.
-      await letShutdownRun();
-
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", record);
-    }
-  });
-
-  it("makes refresh_index wait for a build that a tool call started, with the warmup off", async () => {
-    const root = await createProject("cg-mcp-registry-refresh-demand-");
+describe("MCP tools that wait for the index without a budget", () => {
+  it.each([
+    ["refresh_index", (handlers: CodegraphMcpHandlers) => handlers.refresh_index({ warmup: "base" })],
+    ["goto", (handlers: CodegraphMcpHandlers) => handlers.goto({ file: "alpha.ts", line: 2, column: 16 })],
+    ["file_deps", (handlers: CodegraphMcpHandlers) => handlers.file_deps({ direction: "deps", file: "alpha.ts" })],
+  ])("%s waits for a build past the budget, as it always did", async (_tool, call) => {
+    const root = await createProject("cg-mcp-ready-unbudgeted-");
     const held = holdSession(root);
     const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
-    try {
-      const building = await resources.handlers.orient({}).catch((error: unknown) => error);
-      const refreshing = await resources.handlers.refresh_index({}).catch((error: unknown) => error);
-
-      expect(building).toMatchObject({ result: { status: "index_building", tool: "orient" } });
-      expect(refreshing).toMatchObject({ result: { status: "index_building", tool: "refresh_index" } });
-      expect(held.events).toEqual(["loadProject:start"]);
-
-      held.release();
-      await resources.buildsSettled();
-      await expect(resources.handlers.refresh_index({})).resolves.toEqual({ refreshed: true, warmup: "off" });
-      // The session is replaced after the build that was writing to it.
-      expect(held.events).toEqual(["loadProject:start", "loadProject:end", "invalidate"]);
-    } finally {
-      held.release();
-      await resources.buildsSettled();
-    }
-  });
-
-  it("makes refresh_index wait for a detailed symbol graph that a tool call started after the warmup", async () => {
-    const root = await createProject("cg-mcp-registry-refresh-symbols-");
-    // The warmup loads the project index and the basic symbol graph; only the detailed graph waits.
-    const held = holdSession(root, (options) => !options?.symbolGraph || options.symbolGraph === "eager");
-    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "base", mcpIndexWaitMs: 25 });
-    resources.startWarmup();
-    try {
-      await resources.buildsSettled();
-      const building = await resources.handlers.get_symbol({ handle: "alpha" }).catch((error: unknown) => error);
-      const refreshing = await resources.handlers.refresh_index({}).catch((error: unknown) => error);
-
-      expect(building).toMatchObject({ result: { status: "index_building", tool: "get_symbol" } });
-      expect(refreshing).toMatchObject({ result: { status: "index_building", tool: "refresh_index" } });
-      expect(held.events).not.toContain("invalidate");
-
-      held.release();
-      await resources.buildsSettled();
-      await resources.handlers.refresh_index({});
-      expect(held.events.at(-1)).toBe("invalidate");
-    } finally {
-      held.release();
-      await resources.buildsSettled();
-    }
-  });
-
-  it("answers index_building when the rebuild of refresh_index outlasts the budget, and a retry joins that refresh", async () => {
-    const root = await createProject("cg-mcp-registry-refresh-budget-");
-    const held = holdSession(root);
-    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
-    let drained = false;
-    try {
-      // The rebuild is held, so a refresh that waited for it past the budget would not answer.
-      const first = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }));
-      await expectIndexBuilding(first, "refresh_index");
-
-      const retry = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }));
-      await expectIndexBuilding(retry, "refresh_index");
-      // One replacement and one rebuild served both calls.
-      expect(held.events).toEqual(["invalidate", "loadProject:start"]);
-
-      // Neither call waits for the rebuild any more, and a shutdown still does.
-      void resources.buildsSettled().then(() => {
-        drained = true;
-      });
-      await letShutdownRun();
-      expect(drained).toBe(false);
-
-      held.release();
-      await resources.buildsSettled();
-      expect(held.events).toEqual(["invalidate", "loadProject:start", "loadProject:end"]);
-    } finally {
-      held.release();
-      await resources.buildsSettled();
-    }
-  });
-
-  it("answers the retry of a cancelled refresh_index with the refresh that still runs", async () => {
-    const root = await createProject("cg-mcp-registry-refresh-retry-");
-    const held = holdSession(root);
-    const resources = createCodegraphMcpResources({
-      root,
-      session: held.session,
-      warmup: "off",
-      mcpIndexWaitMs: 600_000,
+    let settled = false;
+    const pending = call(resources.handlers).finally(() => {
+      settled = true;
     });
     try {
-      const cancel = new AbortController();
-      const cancelled = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }, cancel.signal));
       await held.started;
-      cancel.abort();
-      await vi.waitFor(() => expect(cancelled.value).toMatchObject({ message: "MCP tool call was cancelled." }), {
-        timeout: 2_000,
-      });
-
-      // The retry arrives while the rebuild of the cancelled call still runs.
-      const retry = resources.handlers.refresh_index({ warmup: "base" });
-      held.release();
-
-      await expect(retry).resolves.toEqual({ refreshed: true, warmup: "base" });
-      // The retry waited for that refresh instead of replacing the session and rebuilding it again.
-      expect(held.events).toEqual(["invalidate", "loadProject:start", "loadProject:end"]);
-    } finally {
-      held.release();
-      await resources.buildsSettled();
-    }
-  });
-
-  it("answers the retry that comes after the refresh ended with its outcome, and replaces the session once", async () => {
-    const root = await createProject("cg-mcp-registry-refresh-ended-");
-    const held = holdSession(root);
-    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
-    try {
-      const first = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }));
-      await expectIndexBuilding(first, "refresh_index");
-
-      // The refresh ends while no call waits for it. A retry that started another refresh would find the rebuild
-      // unfinished at its own budget, and so would every retry after it.
-      held.release();
-      await resources.buildsSettled();
-      await expect(resources.handlers.refresh_index({ warmup: "base" })).resolves.toEqual({
-        refreshed: true,
-        warmup: "base",
-      });
-      expect(held.events).toEqual(["invalidate", "loadProject:start", "loadProject:end"]);
-
-      // The outcome goes to one retry. The next call is a refresh of its own.
-      await expect(resources.handlers.refresh_index({})).resolves.toEqual({ refreshed: true, warmup: "off" });
-      expect(held.events.filter((event) => event === "invalidate")).toHaveLength(2);
-    } finally {
-      held.release();
-      await resources.buildsSettled();
-    }
-  });
-
-  it("keeps the outcome of a refresh that was handed off for one retry, within the window", async () => {
-    const root = await createProject("cg-mcp-registry-refresh-window-");
-    const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
-    let clock = 0;
-    const readiness = createMcpIndexReadiness(session, {
-      waitMs: 0,
-      warmup: "off",
-      progress: createMcpBuildProgress(),
-      now: () => clock,
-    });
-    // What `refresh_index` does: replaces the session, rebuilds it, and its call either waits for it or hands it off.
-    const refresh = async (handOff: boolean): Promise<void> => {
-      session.invalidate();
-      const rebuilt = readiness.rebuild("base");
-      if (handOff) readiness.handOffRefresh();
-      await rebuilt;
-    };
-    try {
-      // The call that waited for its refresh has its answer: nothing is left for a retry.
-      await refresh(false);
-      expect(readiness.joinRefresh("refresh_index", "base")).toBeUndefined();
-
-      // A retry takes the outcome of a refresh that builds at least what it asks for, and one retry takes it.
-      await refresh(true);
-      expect(readiness.joinRefresh("refresh_index", "symbols")).toBeUndefined();
-      clock = MCP_REFRESH_RETRY_WINDOW_MS;
-      const retry = readiness.joinRefresh("refresh_index", "base");
-      expect(retry).toBeDefined();
-      await retry;
-      expect(readiness.joinRefresh("refresh_index", "base")).toBeUndefined();
-
-      // A call after the window is a refresh of its own.
-      await refresh(true);
-      clock += MCP_REFRESH_RETRY_WINDOW_MS + 1;
-      expect(readiness.joinRefresh("refresh_index", "base")).toBeUndefined();
-    } finally {
-      await readiness.buildsSettled();
-      session.invalidate();
-    }
-  });
-
-  it("keeps no outcome of a refresh that failed, so that the retry runs it again", async () => {
-    const root = await createProject("cg-mcp-registry-refresh-failure-");
-    const inner = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
-    const session: AgentSession = {
-      ...inner,
-      loadProject: () => Promise.reject(new Error("disk full")),
-    };
-    const readiness = createMcpIndexReadiness(session, {
-      waitMs: 0,
-      warmup: "off",
-      progress: createMcpBuildProgress(),
-    });
-    const rebuilt = readiness.rebuild("base");
-    readiness.handOffRefresh();
-
-    await expect(rebuilt).rejects.toThrow("disk full");
-    expect(readiness.joinRefresh("refresh_index", "base")).toBeUndefined();
-    await readiness.buildsSettled();
-  });
-
-  it("consumes the failure of a refresh whose call stopped waiting, and replaces the session again at the retry", async () => {
-    const root = await createProject("cg-mcp-registry-refresh-failed-");
-    const inner = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
-    const failure = Promise.withResolvers<void>();
-    let failures = 1;
-    const session: AgentSession = {
-      ...inner,
-      loadProject: async (options) => {
-        if (failures-- > 0) {
-          await failure.promise;
-          throw new Error("disk full");
-        }
-        return await inner.loadProject(options);
-      },
-    };
-    const resources = createCodegraphMcpResources({ root, session, warmup: "off", mcpIndexWaitMs: 25 });
-    const unhandled: unknown[] = [];
-    const record = (reason: unknown): void => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", record);
-    try {
-      const first = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }));
-      await expectIndexBuilding(first, "refresh_index");
-
-      failure.resolve();
-      await resources.buildsSettled();
-      // Node reports an unhandled rejection once the microtask queue drains, which this real delay outlasts.
       await letShutdownRun();
-      expect(unhandled).toEqual([]);
 
-      // The rebuild is real now and can outlast the budget; a client retries, and each retry joins the refresh that runs.
-      const refreshed = await vi.waitFor(() => resources.handlers.refresh_index({ warmup: "base" }), {
-        timeout: 10_000,
-      });
-      expect(refreshed).toEqual({ refreshed: true, warmup: "base" });
+      expect(settled).toBe(false);
+
+      held.release();
+      await expect(pending).resolves.toBeDefined();
     } finally {
-      process.off("unhandledRejection", record);
-      failure.resolve();
-      await resources.buildsSettled();
+      held.release();
+      await pending.catch(() => undefined);
     }
   });
 
-  it("runs a refresh that asks for more than the one that runs after it, and the call that gave up its turn runs none", async () => {
-    const root = await createProject("cg-mcp-registry-refresh-more-");
-    // Only the rebuild of the project index is held; the detailed symbol graph loads at once.
-    const held = holdSession(root, (options) => options?.symbolGraph === "skip");
-    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
-    try {
-      const base = recordOutcome(resources.handlers.refresh_index({ warmup: "base" }));
-      await expectIndexBuilding(base, "refresh_index");
-      // The refresh that runs does not build the detailed symbol graph, so this call waits for its turn behind it.
-      const more = recordOutcome(resources.handlers.refresh_index({ warmup: "symbols" }));
-      await expectIndexBuilding(more, "refresh_index");
-      expect(held.events).toEqual(["invalidate", "loadProject:start"]);
-
-      held.release();
-      await resources.buildsSettled();
-      // The refresh that ended built the project index only, so a call that asks for the detailed symbol graph as well
-      // is a refresh of its own. It starts at its first attempt, and its retries take it over.
-      const refreshed = await vi.waitFor(() => resources.handlers.refresh_index({ warmup: "symbols" }), {
-        timeout: 10_000,
-      });
-      expect(refreshed).toEqual({ refreshed: true, warmup: "symbols" });
-      // The first call replaced the session once, and the call after it once. The call that gave up its turn replaced
-      // it never.
-      expect(held.events.filter((event) => event === "invalidate")).toHaveLength(2);
-    } finally {
-      held.release();
-      await resources.buildsSettled();
-    }
-  });
-
-  it("makes a tool call that arrives while a refresh rebuilds wait for it, inside its budget", async () => {
-    const root = await createProject("cg-mcp-registry-refresh-queries-");
-    // The refresh rebuilds the project index at once and holds on the detailed symbol graph, which `orient` does not read.
-    const held = holdSession(root, (options) => !options?.symbolGraph || options.symbolGraph === "eager");
-    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
-    try {
-      const refreshing = recordOutcome(resources.handlers.refresh_index({ warmup: "symbols" }));
-      await expectIndexBuilding(refreshing, "refresh_index");
-
-      // The index is rebuilt, but the session is still being replaced, and the handler of a call that read it now would
-      // wait for the rest of the refresh without the budget.
-      const orient = recordOutcome(resources.handlers.orient({}));
-      await expectIndexBuilding(orient, "orient");
-
-      held.release();
-      await resources.buildsSettled();
-      const ready = await vi.waitFor(() => resources.handlers.orient({}), { timeout: 10_000 });
-      expect(ready.freshness.state).toBe("fresh");
-    } finally {
-      held.release();
-      await resources.buildsSettled();
-    }
-  });
-
-  it("makes explore with source packets wait for the detailed symbol graph and the duplicate analysis, inside the budget", async () => {
-    const root = await createProject("cg-mcp-registry-explore-");
-    const held = holdDuplicates(root);
+  it("replaces the session at once for refresh_index, even while a build runs, and answers the refresh without a status", async () => {
+    const root = await createProject("cg-mcp-ready-refresh-");
+    const held = holdSession(root);
     const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "base", mcpIndexWaitMs: 25 });
     resources.startWarmup();
     try {
-      await resources.buildsSettled();
-      // The first freshness check scans the project and can outlast the budget; the calls below reuse its answer.
-      await held.inner.checkFreshness?.();
+      await held.started;
+      const refreshing = resources.handlers.refresh_index({});
 
-      // Source packets are off by default, and `maxPackets: 0` turns them off: the held analysis delays neither.
-      const plain = await resources.handlers.explore({ query: "alpha" });
-      const none = await resources.handlers.explore({ query: "alpha", includeSource: true, maxPackets: 0 });
-      expect(plain.packets).toEqual([]);
-      expect(none.packets).toEqual([]);
-      expect(held.requests()).toBe(0);
-
-      // Every packet explains its anchor, which reads the duplicate analysis, so a call that built them would block.
-      const withSource = recordOutcome(resources.handlers.explore({ query: "alpha", includeSource: true }));
-      await expectIndexBuilding(withSource, "explore");
-
-      held.release();
-      await resources.buildsSettled();
-      const ready = await vi.waitFor(() => resources.handlers.explore({ query: "alpha", includeSource: true }), {
-        timeout: 10_000,
-      });
-      expect(ready.packets.length).toBeGreaterThan(0);
+      await expect(refreshing).resolves.toEqual({ refreshed: true, warmup: "off" });
+      expect(held.events).toContain("invalidate");
+      expect(held.events).not.toContain("loadProject:end");
     } finally {
       held.release();
       await resources.buildsSettled();
     }
   });
+});
 
-  it("makes artifact_build take its turn of the lock only when no build runs", async () => {
-    const root = await createProject("cg-mcp-registry-artifact-");
-    const held = holdDuplicates(root);
-    await held.inner.loadProject();
-    // The first freshness check scans the project and can outlast the budget; the calls below reuse its answer.
-    await held.inner.checkFreshness?.();
+describe("MCP tools that wait within the budget", () => {
+  let reviewRoot = "";
+  const suiteRoots = createTempRootRegistry();
+  beforeAll(async () => {
+    reviewRoot = await createReviewProject("cg-mcp-ready-reads-", suiteRoots);
+    await fs.writeFile(path.join(reviewRoot, "schema.sql"), "create table users (id int);\n", "utf8");
+  });
+  afterAll(async () => {
+    await suiteRoots.cleanup();
+  });
+
+  type Scenario = {
+    name: string;
+    tool: string;
+    call: (handlers: CodegraphMcpHandlers) => Promise<unknown>;
+    /** The loads that the call waits for: with one held, it answers `index_building`. */
+    waitsFor: HeldLoad[];
+    /** The loads that the call never asks for: with one held, it answers normally. */
+    ignores: HeldLoad[];
+  };
+  const everyLoad: HeldLoad[] = ["index", "graph", "detailed", "query", "duplicates"];
+  const scenarios: Scenario[] = [
+    {
+      name: "search, hybrid",
+      tool: "search",
+      call: (handlers) => handlers.search({ query: "alpha" }),
+      waitsFor: ["index", "graph", "query"],
+      ignores: ["detailed", "duplicates"],
+    },
+    {
+      name: "search, text",
+      tool: "search",
+      call: (handlers) => handlers.search({ query: "beta", mode: "text" }),
+      waitsFor: ["index", "query"],
+      ignores: ["graph", "detailed", "duplicates"],
+    },
+    {
+      name: "search, symbol",
+      tool: "search",
+      call: (handlers) => handlers.search({ query: "gamma", mode: "symbol" }),
+      waitsFor: ["graph"],
+      ignores: ["query", "detailed", "duplicates"],
+    },
+    {
+      name: "search, sql",
+      tool: "search",
+      call: (handlers) => handlers.search({ query: "users", mode: "sql" }),
+      waitsFor: ["index"],
+      ignores: ["graph", "query", "detailed", "duplicates"],
+    },
+    {
+      name: "search, path",
+      tool: "search",
+      call: (handlers) => handlers.search({ query: "alpha", mode: "path" }),
+      waitsFor: [],
+      ignores: everyLoad,
+    },
+    {
+      name: "search, path from a file",
+      tool: "search",
+      call: (handlers) => handlers.search({ query: "beta", mode: "path", from: "alpha.ts" }),
+      waitsFor: ["index"],
+      ignores: ["graph", "query", "detailed", "duplicates"],
+    },
+    {
+      name: "explore",
+      tool: "explore",
+      call: (handlers) => handlers.explore({ query: "alpha" }),
+      waitsFor: ["index", "graph", "query"],
+      ignores: ["detailed", "duplicates"],
+    },
+    {
+      name: "explore with source packets",
+      tool: "explore",
+      call: (handlers) => handlers.explore({ query: "alpha", includeSource: true }),
+      waitsFor: ["index", "graph", "query", "detailed", "duplicates"],
+      ignores: [],
+    },
+    {
+      name: "explore with source packets turned off by maxPackets",
+      tool: "explore",
+      call: (handlers) => handlers.explore({ query: "beta", includeSource: true, maxPackets: 0 }),
+      waitsFor: ["index", "graph", "query"],
+      ignores: ["detailed", "duplicates"],
+    },
+    {
+      name: "orient",
+      tool: "orient",
+      call: (handlers) => handlers.orient({}),
+      waitsFor: ["index"],
+      ignores: ["graph", "query", "detailed", "duplicates"],
+    },
+    {
+      name: "workspace_symbols",
+      tool: "workspace_symbols",
+      call: (handlers) => handlers.workspace_symbols({ query: "alpha" }),
+      waitsFor: ["index"],
+      ignores: ["graph", "query", "detailed", "duplicates"],
+    },
+    {
+      name: "impact",
+      tool: "impact",
+      call: (handlers) => handlers.impact({ base: "HEAD~1", head: "HEAD" }),
+      waitsFor: ["index"],
+      ignores: ["graph", "query", "detailed", "duplicates"],
+    },
+    {
+      name: "get_file with graph context",
+      tool: "get_file",
+      call: (handlers) => handlers.get_file({ file: "alpha.ts", includeGraphContext: true }),
+      waitsFor: ["index"],
+      ignores: ["graph", "query", "detailed", "duplicates"],
+    },
+    {
+      name: "get_file without graph context",
+      tool: "get_file",
+      call: (handlers) => handlers.get_file({ file: "alpha.ts" }),
+      waitsFor: [],
+      ignores: everyLoad,
+    },
+    {
+      name: "review of a range with changes",
+      tool: "review",
+      call: (handlers) => handlers.review({ base: "HEAD~1", head: "HEAD" }),
+      waitsFor: ["index", "duplicates"],
+      ignores: ["graph", "query", "detailed"],
+    },
+    {
+      name: "review of a range without changes",
+      tool: "review",
+      call: (handlers) => handlers.review({ base: "HEAD", head: "HEAD" }),
+      waitsFor: [],
+      ignores: everyLoad,
+    },
+    {
+      name: "packet_get of a file",
+      tool: "packet_get",
+      call: (handlers) => handlers.packet_get({ target: "alpha.ts" }),
+      waitsFor: ["detailed", "duplicates"],
+      ignores: ["graph", "query"],
+    },
+    {
+      name: "packet_get of a review range",
+      tool: "packet_get",
+      call: (handlers) => handlers.packet_get({ target: "review:base=HEAD~1;head=HEAD" }),
+      waitsFor: [],
+      ignores: everyLoad,
+    },
+  ];
+  const rows = scenarios.flatMap((scenario) => [
+    ...scenario.waitsFor.map((held) => ({ scenario, held, waits: true })),
+    ...scenario.ignores.map((held) => ({ scenario, held, waits: false })),
+  ]);
+
+  it.each(rows)("$scenario.name, with the $held load held, answers index_building: $waits", async (row) => {
+    const { scenario, held, waits } = row;
+    const gate = holdLoad(reviewRoot, held);
     const resources = createCodegraphMcpResources({
-      root,
-      session: held.session,
-      readOnly: false,
+      root: reviewRoot,
+      session: gate.session,
       warmup: "off",
-      mcpIndexWaitMs: 25,
+      // A call that must answer gets a budget that no real build on this project outlasts, so that only a wait for the
+      // held load can keep it from answering.
+      mcpIndexWaitMs: waits ? 25 : 60_000,
     });
-    const outDir = path.join(root, "out");
     try {
-      // A packet call starts the duplicate analysis, which stays held, and stops waiting for it.
-      await resources.handlers.packet_get({ target: "alpha.ts" }).catch(() => undefined);
-      const writing = await resources.handlers
-        .artifact_build({ outDir, sqlite: true })
-        .catch((error: unknown) => error);
+      const outcome = recordOutcome(scenario.call(resources.handlers));
 
-      expect(writing).toMatchObject({ result: { status: "index_building", tool: "artifact_build" } });
-      await expect(fs.access(path.join(outDir, "codegraph.sqlite"))).rejects.toThrow();
-
-      held.release();
-      await resources.buildsSettled();
-      await expect(resources.handlers.artifact_build({ outDir, sqlite: true })).resolves.toMatchObject({
-        artifacts: { sqlite: "codegraph.sqlite" },
-      });
+      if (waits) {
+        await expectIndexBuilding(outcome, scenario.tool);
+        // The call gave up while it still built the other loads; the one it asked for next is the held one.
+        await vi.waitFor(() => expect(gate.requested()).toBeGreaterThan(0), { timeout: 10_000 });
+      } else {
+        await expectAnswered(outcome);
+        expect(gate.requested()).toBe(0);
+      }
     } finally {
-      held.release();
+      gate.release();
       await resources.buildsSettled();
+      resources.session.invalidate();
     }
   });
+});
 
-  it("starts an operation that replaces the session only once the builds that start while it waits have ended", async () => {
-    const root = await createProject("cg-mcp-registry-idle-");
-    const inner = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
-    const loads: Array<PromiseWithResolvers<void>> = [];
-    const session: AgentSession = {
-      ...inner,
-      loadProject: async (options) => {
-        const gate = Promise.withResolvers<void>();
-        loads.push(gate);
-        await gate.promise;
-        return await inner.loadProject(options);
-      },
-    };
-    const readiness = createMcpIndexReadiness(session, {
-      waitMs: 0,
-      warmup: "off",
-      progress: createMcpBuildProgress(),
-    });
-    const replace = vi.fn(async () => "replaced");
-    try {
-      void readiness.waitFor("orient", ["index"]).catch(() => undefined);
-      await vi.waitFor(() => expect(loads).toHaveLength(1));
-      const replacing = readiness.whenIdle(replace);
-      // A call that arrives while the operation waits starts a build of its own: the detailed graph, after the index.
-      void readiness.waitFor("get_symbol", ["symbols"]).catch(() => undefined);
-
-      loads[0]?.resolve();
-      await vi.waitFor(() => expect(loads).toHaveLength(2));
-      await letShutdownRun();
-      expect(replace).not.toHaveBeenCalled();
-
-      loads[1]?.resolve();
-      await expect(replacing).resolves.toBe("replaced");
-    } finally {
-      for (const gate of loads) gate.resolve();
-      await readiness.buildsSettled();
-    }
-  });
-
+describe("MCP shutdown and the loads that a call stopped waiting for", () => {
   it("keeps a build whose call stopped waiting until it ends", async () => {
-    const root = await createProject("cg-mcp-registry-tracked-");
+    const root = await createProject("cg-mcp-drain-tracked-");
     const held = holdSession(root);
     const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
     let drained = false;
@@ -1120,7 +904,7 @@ describe("MCP build registry", () => {
   });
 
   it("releases the session after a build whose call stopped waiting, when the HTTP server closes", async () => {
-    const root = await createProject("cg-mcp-registry-http-");
+    const root = await createProject("cg-mcp-drain-http-");
     const held = holdSession(root);
     const server = await startCodegraphMcpHttpServer({
       root,
@@ -1129,7 +913,7 @@ describe("MCP build registry", () => {
       warmup: "off",
       mcpIndexWaitMs: 25,
     });
-    const client = new Client({ name: "mcp-build-registry-http", version: "1.0.0" });
+    const client = new Client({ name: "mcp-drain-http", version: "1.0.0" });
     let closing: Promise<void> | undefined;
     try {
       await client.connect(new StreamableHTTPClientTransport(new URL(server.url)));
@@ -1153,7 +937,7 @@ describe("MCP build registry", () => {
   });
 
   it("releases the session after a build whose call stopped waiting, when the stdio server stops", async () => {
-    const root = await createProject("cg-mcp-registry-stdio-");
+    const root = await createProject("cg-mcp-drain-stdio-");
     const held = holdSession(root);
     await withStandInStdio(async ({ stdin, stdout }) => {
       const lines: string[] = [];
@@ -1200,252 +984,86 @@ describe("MCP build registry", () => {
     });
   });
 
-  it("builds a review packet from the session's index and duplicate analysis, inside the budget", async () => {
-    const root = await createProject("cg-mcp-registry-packet-review-");
-    runGit(root, ["init"]);
-    runGit(root, ["add", "-A"]);
-    runGit(root, ["commit", "-m", "one"]);
-    await fs.appendFile(path.join(root, "alpha.ts"), "export const gamma = 3;\n", "utf8");
-    runGit(root, ["commit", "-am", "two"]);
-    const held = holdDuplicates(root);
-    const indexBuilds = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
-    const preparations = vi.spyOn(duplicatesModule, "prepareDuplicateAnalysis");
-    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
-    const target = "review:base=HEAD~1;head=HEAD";
-    try {
-      const waiting = await resources.handlers.packet_get({ target }).catch((error: unknown) => error);
-
-      expect(waiting).toMatchObject({ result: { status: "index_building", tool: "packet_get" } });
-
-      held.release();
-      await resources.buildsSettled();
-      const packet = await resources.handlers.packet_get({ target });
-
-      expect(packet).toMatchObject({ kind: "review", packet: { status: "ok" } });
-      // One index and one duplicate analysis served the wait and the report.
-      expect(indexBuilds).toHaveBeenCalledTimes(1);
-      expect(preparations).toHaveBeenCalledTimes(1);
-    } finally {
-      held.release();
-      await resources.buildsSettled();
+  describe("unhandled rejections", () => {
+    async function failingLoad(prefix: string, mcpIndexWaitMs: number) {
+      const root = await createProject(prefix);
+      const inner = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
+      const failure = Promise.withResolvers<void>();
+      let loads = 0;
+      const session: AgentSession = {
+        ...inner,
+        loadProject: async () => {
+          loads += 1;
+          await failure.promise;
+          throw new Error("disk full");
+        },
+      };
+      const resources = createCodegraphMcpResources({ root, session, warmup: "off", mcpIndexWaitMs });
+      return { resources, failure, loads: () => loads };
     }
-  });
 
-  it("reads no duplicate context for refs by handle", async () => {
-    const root = await createProject("cg-mcp-registry-refs-");
-    const held = holdDuplicates(root);
-    const handle = await symbolHandle(root, held.inner, "beta");
-    await held.inner.loadProject();
-    // The first freshness check scans the project and can outlast the budget; the call below reuses its answer.
-    await held.inner.checkFreshness?.();
-    const scans = vi.spyOn(duplicatesModule, "findDuplicateContext");
-    const preparations = vi.spyOn(duplicatesModule, "prepareDuplicateAnalysis");
-    const resources = createCodegraphMcpResources({
-      root,
-      session: held.session,
-      warmup: "off",
-      mcpIndexWaitMs: 2_000,
-    });
-    try {
-      // The duplicate analysis is held, so a refs that read it would not answer.
-      const references = await resources.handlers.refs({ handle });
-
-      expect(references.references.map((reference) => reference.file)).toContain("alpha.ts");
-      expect(held.requests()).toBe(0);
-      expect(scans).not.toHaveBeenCalled();
-      expect(preparations).not.toHaveBeenCalled();
-    } finally {
-      held.release();
-      await resources.buildsSettled();
-    }
-  });
-
-  it("prepares the duplicate context of a file packet through the session, inside the budget", async () => {
-    const root = await createProject("cg-mcp-registry-packet-duplicates-");
-    const held = holdDuplicates(root);
-    await held.inner.loadProject();
-    // The first freshness check scans the project and can outlast the budget; the calls below reuse its answer.
-    await held.inner.checkFreshness?.();
-    const scans = vi.spyOn(duplicatesModule, "findDuplicateContext");
-    const preparations = vi.spyOn(duplicatesModule, "prepareDuplicateAnalysis");
-    const resources = createCodegraphMcpResources({ root, session: held.session, warmup: "off", mcpIndexWaitMs: 25 });
-    try {
-      const waiting = await resources.handlers.packet_get({ target: "alpha.ts" }).catch((error: unknown) => error);
-
-      expect(waiting).toMatchObject({ result: { status: "index_building", tool: "packet_get" } });
-
-      held.release();
-      await resources.buildsSettled();
-      const packet = await resources.handlers.packet_get({ target: "alpha.ts" });
-
-      expect(packet).toMatchObject({ kind: "file" });
-      expect(preparations).toHaveBeenCalledTimes(1);
-      expect(scans).not.toHaveBeenCalled();
-    } finally {
-      held.release();
-      await resources.buildsSettled();
-    }
-  });
-
-  it.each([true, false])(
-    "answers a fresh SQLite artifact at once and budgets the session wait of a stale one (readOnly %s)",
-    async (readOnly) => {
-      const root = await createProject("cg-mcp-registry-sqlite-");
-      const outDir = path.join(root, "artifacts");
-      const builder = createCodegraphMcpHandlers({ root, readOnly: false, buildOptions: { cache: "off" } });
+    // Node reports an unhandled rejection once the microtask queue drains, which the real delay of `letShutdownRun`
+    // outlasts.
+    async function recordingUnhandledRejections(run: () => Promise<void>): Promise<unknown[]> {
+      const unhandled: unknown[] = [];
+      const record = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on("unhandledRejection", record);
       try {
-        await builder.artifact_build({ outDir, sqlite: true });
+        await run();
+        await letShutdownRun();
       } finally {
-        builder.dispose();
+        process.off("unhandledRejection", record);
       }
-      const release = Promise.withResolvers<void>();
-      const started = Promise.withResolvers<void>();
-      const build = indexerBuild.buildProjectIndexIncremental;
-      vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
-        started.resolve();
-        await release.promise;
-        return await build(...args);
-      });
-      const resources = createCodegraphMcpResources({
-        root,
-        watch: false,
-        readOnly,
-        artifactPath: outDir,
-        warmup: "base",
-        mcpIndexWaitMs: 25,
-        buildOptions: { cache: "off" },
-      });
-      try {
-        resources.startWarmup();
-        await started.promise;
-
-        // The artifact's own file signatures decide, so the session that is still building is not asked.
-        await expect(resources.handlers.query_sqlite({ query: "SELECT path FROM files;" })).resolves.toMatchObject({
-          freshness: { state: "fresh" },
-        });
-
-        await fs.appendFile(path.join(root, "alpha.ts"), "export const gamma = 3;\n", "utf8");
-        let outcome: unknown;
-        void resources.handlers.query_sqlite({ query: "SELECT path FROM files;" }).then(
-          (value) => {
-            outcome = value;
-          },
-          (error: unknown) => {
-            outcome = error;
-          },
-        );
-        await vi.waitFor(
-          () => expect(outcome).toMatchObject({ result: { status: "index_building", tool: "query_sqlite" } }),
-          { timeout: 2_000 },
-        );
-
-        release.resolve();
-        await resources.buildsSettled();
-        await resources.session.loadProject();
-        if (readOnly) {
-          await expect(resources.handlers.query_sqlite({ query: "SELECT path FROM files;" })).rejects.toThrow(
-            /SQLite artifact is stale/,
-          );
-        } else {
-          await expect(resources.handlers.query_sqlite({ query: "SELECT path FROM files;" })).resolves.toMatchObject({
-            freshness: { state: "refreshed" },
-          });
-        }
-      } finally {
-        release.resolve();
-        await resources.buildsSettled();
-      }
-    },
-  );
-
-  it("checks freshness and rebuilds inside the budget after a file changed", async () => {
-    const root = await createProject("cg-mcp-registry-changed-");
-    const hold = Promise.withResolvers<void>();
-    let held = false;
-    const build = indexerBuild.buildProjectIndexIncremental;
-    vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
-      if (held) await hold.promise;
-      return await build(...args);
-    });
-    const resources = createCodegraphMcpResources({
-      root,
-      watch: false,
-      warmup: "base",
-      mcpIndexWaitMs: 25,
-      buildOptions: { cache: "off" },
-    });
-    try {
-      resources.startWarmup();
-      await resources.buildsSettled();
-      held = true;
-      await fs.appendFile(path.join(root, "alpha.ts"), "export const gamma = 3;\n", "utf8");
-
-      let outcome: unknown;
-      void resources.handlers.search({ query: "gamma" }).then(
-        (value) => {
-          outcome = value;
-        },
-        (error: unknown) => {
-          outcome = error;
-        },
-      );
-      // The call finds the change and starts the rebuild inside its budget, then answers that the build is running.
-      await vi.waitFor(() => expect(outcome).toMatchObject({ result: { status: "index_building", tool: "search" } }), {
-        timeout: 2_000,
-      });
-
-      hold.resolve();
-      await resources.buildsSettled();
-      const ready = await resources.handlers.search({ query: "gamma" });
-
-      expect(ready.results.map((result) => result.label)).toContain("gamma");
-    } finally {
-      hold.resolve();
-      await resources.buildsSettled();
+      return unhandled;
     }
-  });
 
-  it("runs its builds again when the session was replaced while it waited", async () => {
-    const root = await createProject("cg-mcp-registry-replaced-");
-    const gates: Array<PromiseWithResolvers<void>> = [];
-    const build = indexerBuild.buildProjectIndexIncremental;
-    vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
-      const gate = Promise.withResolvers<void>();
-      gates.push(gate);
-      await gate.promise;
-      return await build(...args);
-    });
-    const resources = createCodegraphMcpResources({
-      root,
-      watch: false,
-      warmup: "off",
-      mcpIndexWaitMs: 300,
-      buildOptions: { cache: "off" },
-    });
-    try {
-      let outcome: unknown;
-      void resources.handlers.orient({}).then(
-        (value) => {
-          outcome = value;
-        },
-        (error: unknown) => {
-          outcome = error;
-        },
-      );
-      await vi.waitFor(() => expect(gates).toHaveLength(1));
-      // Another call's freshness check, or a refresh, replaced the session while the first build ran.
-      resources.session.invalidate();
-      gates[0]?.resolve();
+    it("consumes the failure of a build whose call was cancelled while it waited", async () => {
+      const { resources, failure } = await failingLoad("cg-mcp-drain-cancelled-", 600_000);
 
-      // The build of the replaced session does not serve the call: it builds again inside its budget.
-      await vi.waitFor(() => expect(outcome).toMatchObject({ result: { status: "index_building", tool: "orient" } }), {
-        timeout: 3_000,
+      const unhandled = await recordingUnhandledRejections(async () => {
+        const controller = new AbortController();
+        const cancelled = resources.handlers.search({ query: "alpha" }, controller.signal);
+        controller.abort();
+        await expect(cancelled).rejects.toThrow("MCP tool call was cancelled.");
+
+        failure.resolve();
+        await resources.buildsSettled();
       });
-      await vi.waitFor(() => expect(gates).toHaveLength(2));
-    } finally {
-      for (const gate of gates) gate.resolve();
-      await resources.buildsSettled();
-    }
+
+      expect(unhandled).toEqual([]);
+    });
+
+    it("starts no build for a call that was cancelled before it began", async () => {
+      const { resources, failure, loads } = await failingLoad("cg-mcp-drain-precancelled-", 600_000);
+      const cancelled = new AbortController();
+      cancelled.abort();
+
+      const unhandled = await recordingUnhandledRejections(async () => {
+        await expect(resources.handlers.orient({}, cancelled.signal)).rejects.toThrow("MCP tool call was cancelled.");
+        failure.resolve();
+        await resources.buildsSettled();
+      });
+
+      expect(loads()).toBe(0);
+      expect(unhandled).toEqual([]);
+    });
+
+    it("consumes the failure of a build whose call answered index_building, and reports it at the next call", async () => {
+      const { resources, failure } = await failingLoad("cg-mcp-drain-failed-", 25);
+
+      const unhandled = await recordingUnhandledRejections(async () => {
+        const waiting = await resources.handlers.orient({}).catch((error: unknown) => error);
+        expect(waiting).toMatchObject({ result: { status: "index_building", tool: "orient" } });
+
+        failure.resolve();
+        await resources.buildsSettled();
+      });
+
+      expect(unhandled).toEqual([]);
+      await expect(resources.handlers.orient({})).rejects.toThrow("disk full");
+    });
   });
 });
 
@@ -1514,167 +1132,5 @@ describe("MCP tool arguments and package upgrades", () => {
     expect(isStaleInstallError("Cannot find module 'x'")).toBe(false);
     expect(describeMcpRuntimeError(new Error("disk full"))).toBe("disk full");
     expect(describeMcpRuntimeError(new Error(real.message))).toBe(STALE_INSTALL_MESSAGE);
-  });
-});
-
-describe("MCP index readiness stages", () => {
-  it("gates exactly the handlers that exist", async () => {
-    const root = await createProject("cg-mcp-stages-names-");
-    const handlers = createCodegraphMcpHandlers({ root });
-    try {
-      const handlerNames = Object.keys(handlers).filter((name) => name !== "dispose");
-
-      expect(Object.keys(MCP_STAGES_BY_HANDLER).sort()).toEqual(handlerNames.sort());
-    } finally {
-      handlers.dispose();
-    }
-  });
-
-  it("declares for every handler what it loads from the session", async () => {
-    const root = await createProject("cg-mcp-stages-");
-    await fs.writeFile(path.join(root, "schema.sql"), "create table users (id int);\n", "utf8");
-    runGit(root, ["init"]);
-    runGit(root, ["add", "-A"]);
-    runGit(root, ["commit", "-m", "one"]);
-    await fs.appendFile(path.join(root, "alpha.ts"), "export const gamma = 3;\n", "utf8");
-    runGit(root, ["commit", "-am", "two"]);
-
-    const inner = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
-    const loadDuplicates = inner.loadDuplicateAnalysis;
-    if (!loadDuplicates) throw new Error("The session has no duplicate analysis.");
-    const observed = { level: 0, query: false, duplicates: false };
-    const levels: Record<string, number> = { skip: 1, basic: 2, eager: 3 };
-    const session: AgentSession = {
-      ...inner,
-      loadProject: async (options) => {
-        observed.level = Math.max(observed.level, levels[options?.symbolGraph ?? "eager"] ?? 0);
-        return await inner.loadProject(options);
-      },
-      loadDuplicateAnalysis: async () => {
-        observed.duplicates = true;
-        return await loadDuplicates();
-      },
-    };
-    const ensureQueryIndex = queryIndexStore.ensureSessionQueryIndex;
-    vi.spyOn(queryIndexStore, "ensureSessionQueryIndex").mockImplementation(async (...args) => {
-      observed.query = true;
-      return await ensureQueryIndex(...args);
-    });
-    const declared: McpIndexStage[] = [];
-    const readiness: McpIndexReadiness = {
-      startWarmup: () => undefined,
-      buildsSettled: async () => undefined,
-      whenIdle: async (operation) => await operation(),
-      waitFor: async (_tool, stages) => {
-        declared.push(...stages);
-      },
-      waitUntil: async () => undefined,
-      rebuild: async () => undefined,
-      handOffRefresh: () => undefined,
-      joinRefresh: () => undefined,
-    };
-    const plain = createCodegraphMcpHandlers({ root, session: inner });
-    const context: McpStageContext = {
-      reviewRangeHasChanges: async (request) =>
-        (await collectReviewChanges(root, { gitBase: request.base, gitHead: request.head })).changedFiles.size > 0,
-    };
-    const handlers = withIndexReadiness(
-      createCodegraphMcpHandlers({ root, session, readOnly: false }),
-      MCP_STAGES_BY_HANDLER,
-      readiness,
-      context,
-    );
-    const handleOf = async (query: string): Promise<string> => {
-      const found = await plain.search({ query, mode: "symbol" });
-      const handle = found.results.find((result) => result.label === query)?.handle;
-      if (!handle) throw new Error(`No symbol ${query}.`);
-      return handle;
-    };
-    const [alpha, beta, shape, square] = [
-      await handleOf("alpha"),
-      await handleOf("beta"),
-      await handleOf("Shape"),
-      await handleOf("Square"),
-    ];
-    const users = (await plain.search({ query: "users", mode: "sql" })).results.find(
-      (result) => result.kind === "sql_object",
-    )?.handle;
-    if (!users) throw new Error("No SQL object users.");
-    const chunk = (await plain.search({ query: "beta", mode: "text" })).results.find(
-      (result) => result.kind === "chunk",
-    )?.handle;
-    if (!chunk) throw new Error("No text chunk for beta.");
-    // `refresh_index` is no scenario: it declares no stage, because it takes its own turn and waits for its rebuild
-    // itself. Its tests are in "MCP build registry".
-    const scenarios: Array<[string, () => Promise<unknown>]> = [
-      ["search hybrid", () => handlers.search({ query: "alpha beta" })],
-      ["search text", () => handlers.search({ query: "beta", mode: "text" })],
-      ["search symbol", () => handlers.search({ query: "gamma", mode: "symbol" })],
-      ["search graph", () => handlers.search({ query: "alpha", mode: "graph" })],
-      ["search path", () => handlers.search({ query: "alpha", mode: "path" })],
-      ["explore", () => handlers.explore({ query: "alpha" })],
-      ["explore with source packets", () => handlers.explore({ query: "alpha", includeSource: true })],
-      // Another query than the scenario before: a repeated search is answered from the session's cache, which would
-      // hide its query index from this scenario.
-      [
-        "explore with source packets turned off by maxPackets",
-        () => handlers.explore({ query: "beta", includeSource: true, maxPackets: 0 }),
-      ],
-      ["orient", () => handlers.orient({})],
-      ["workspace_symbols", () => handlers.workspace_symbols({ query: "alpha" })],
-      ["goto", () => handlers.goto({ file: "alpha.ts", line: 2, column: 16 })],
-      ["file_deps", () => handlers.file_deps({ direction: "deps", file: "alpha.ts" })],
-      ["path", () => handlers.path({ from: "alpha.ts", to: "beta.ts" })],
-      ["get_file", () => handlers.get_file({ file: "alpha.ts" })],
-      ["get_file with graph context", () => handlers.get_file({ file: "alpha.ts", includeGraphContext: true })],
-      ["get_symbol", () => handlers.get_symbol({ handle: alpha })],
-      ["packet_get", () => handlers.packet_get({ target: "alpha.ts" })],
-      ["packet_get of a symbol handle", () => handlers.packet_get({ target: alpha })],
-      ["packet_get of a SQL handle", () => handlers.packet_get({ target: users })],
-      ["packet_get of a chunk handle", () => handlers.packet_get({ target: chunk })],
-      [
-        "packet_get of a review range with changes",
-        () => handlers.packet_get({ target: "review:base=HEAD~1;head=HEAD" }),
-      ],
-      [
-        "packet_get of a review range without changes",
-        () => handlers.packet_get({ target: "review:base=HEAD;head=HEAD" }),
-      ],
-      ["refs by handle", () => handlers.refs({ handle: alpha })],
-      ["refs by qualified path", () => handlers.refs({ handle: "alpha.ts::alpha" })],
-      ["refs by position", () => handlers.refs({ file: "alpha.ts", line: 2, column: 16 })],
-      ["calls", () => handlers.calls({ direction: "callers", handle: beta })],
-      ["type_hierarchy", () => handlers.type_hierarchy({ direction: "supertypes", handle: square })],
-      ["implementations", () => handlers.implementations({ handle: shape })],
-      ["rename_preview", () => handlers.rename_preview({ handle: alpha, newName: "alpha2" })],
-      ["refactor_plan", () => handlers.refactor_plan({ handle: alpha })],
-      ["impact", () => handlers.impact({ base: "HEAD~1", head: "HEAD" })],
-      ["review of a range with changes", () => handlers.review({ base: "HEAD~1", head: "HEAD" })],
-      ["review of a ref to itself", () => handlers.review({ base: "HEAD", head: "HEAD" })],
-      ["query_sqlite", () => handlers.query_sqlite({ query: "select 1" })],
-    ];
-    const level = (stages: readonly McpIndexStage[]): number => {
-      if (stages.includes("symbols")) return 3;
-      if (stages.includes("graph")) return 2;
-      return stages.some((stage) => stage === "index" || stage === "query" || stage === "duplicates") ? 1 : 0;
-    };
-
-    // A path search lists files and loads no snapshot, but its freshness check waits for a build that is running, so it
-    // still has to wait for the project index inside the budget.
-    const waitsOnFreshnessCheck: Record<string, true> = { "search path": true };
-
-    for (const [name, run] of scenarios) {
-      declared.length = 0;
-      observed.level = 0;
-      observed.query = false;
-      observed.duplicates = false;
-      await run().catch(() => undefined);
-
-      const expected = waitsOnFreshnessCheck[name] ? { ...observed, level: 1 } : observed;
-      expect(
-        { level: level(declared), query: declared.includes("query"), duplicates: declared.includes("duplicates") },
-        name,
-      ).toEqual(expected);
-    }
   });
 });

@@ -94,7 +94,7 @@ Filename results are suggestions only.
 - Current-state CLI queries reuse and validate the disk index. `init`, `index`, and `sync` are not prerequisites.
 - Check MCP `freshness`; on `stale`, run `refresh_index` and repeat the query. `artifact_build` requires fresh state and write access. `unchecked` comes only from an embedded manual-policy session: it cannot check or build a SQLite artifact, so rebuild the artifact with `codegraph artifact --sqlite`.
 - The MCP server watches project files and refreshes the index in the background by default (`--no-watch` turns that off), so a `stale` answer after a large change burst, such as a branch switch, usually clears on its own.
-- On a cold start, an MCP tool that outwaits its index build (20 s by default, `--index-wait-ms`) returns `{ "status": "index_building" }` with `progress`, not an error. The build continues, so call the same tool again; do not restart the server or switch tools.
+- On a cold start, MCP `search`, `explore`, `orient`, `get_file` with `includeGraphContext`, `review`, `packet_get`, `workspace_symbols`, and `impact` that outwait their index build (15 s by default, `--index-wait-ms`) return `{ "status": "index_building" }` with `progress`, not an error. The build continues, so call the same tool again; do not restart the server or switch tools. Other MCP tools wait for the index without a limit.
 - Plain `get_file` / `codegraph file` reads live bytes; optional indexed context can be stale.
 - Recognized sensitive files return summaries or metadata. Enable `--allow-sensitive` / `allowSensitive: true` only for deliberate raw access.
 

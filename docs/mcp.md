@@ -39,7 +39,7 @@ codegraph mcp serve --root . --stdio --no-warmup
 codegraph mcp serve --root . --port 7331 --warmup-symbols
 ```
 
-With `--no-warmup`, the first tool call that needs the index starts the build. In every mode, a tool call waits for the build it needs for at most `--index-wait-ms` (default 20000) and then answers `index_building`; see [Cold start and `index_building`](#cold-start-and-index_building).
+With `--no-warmup`, the first tool call that needs the index starts the build. In every mode, `search`, `explore`, `orient`, `get_file` with `includeGraphContext`, `review`, `packet_get`, `workspace_symbols`, and `impact` wait for a running build for at most `--index-wait-ms` (default 15000) and then answer `index_building`; every other tool waits for the index without a limit. See [Cold start and `index_building`](#cold-start-and-index_building).
 
 The server also watches the project for file changes and refreshes the index in the background. Pass `--no-watch` to turn that off; see [File watcher](#file-watcher).
 
@@ -51,9 +51,9 @@ HTTP protocol sessions track last activity, cap concurrent legacy sessions (defa
 
 Each MCP server permits four concurrent tool calls by default across every HTTP request and protocol session; a saturated server returns a retryable busy error rather than queueing unbounded work. The programmatic server options `mcpToolConcurrency`, `httpBodyTimeoutMs`, and `mcpToolTimeoutMs` tune concurrency, the 30-second HTTP request-body deadline, and the 5-minute per-tool execution deadline; an HTTP body that misses its deadline receives `408 Request Timeout`, while an expired tool call is aborted and names its configured limit. Completed legacy requests refresh session activity before idle eviction is considered.
 
-`mcpIndexWaitMs` (CLI `--index-wait-ms`) bounds only the wait for an index build, not the tool call itself; see [Cold start and `index_building`](#cold-start-and-index_building).
+`mcpIndexWaitMs` (CLI `--index-wait-ms`) bounds only the wait of those tools for an index build, not the tool call itself; see [Cold start and `index_building`](#cold-start-and-index_building).
 
-Client cancellation returns promptly, but does not discard shared index or artifact work. A cancelled call continues to occupy its concurrency slot until its underlying operation settles, preventing a burst of abandoned requests from exceeding the configured resource bound; the MCP SDK aborts the individual in-flight HTTP request when its response socket closes without closing the shared protocol session. Shutdown rejects new calls and waits for active work, and for every index build that a call stopped waiting for, before invalidating shared session resources.
+Client cancellation returns promptly, but does not discard shared index or artifact work. A cancelled call continues to occupy its concurrency slot until its underlying operation settles, preventing a burst of abandoned requests from exceeding the configured resource bound; the MCP SDK aborts the individual in-flight HTTP request when its response socket closes without closing the shared protocol session. Shutdown rejects new calls and waits for active work, for the startup warmup, and for every index build that a call stopped waiting for, before invalidating shared session resources.
 
 Use stdio for a client-owned subprocess. Use HTTP for one long-running codegraph process per repository, then point every MCP-capable IDE, terminal, or agent client at the same local URL. Exact config keys vary by client, but the MCP settings should use HTTP/Streamable HTTP transport plus the `/mcp` URL instead of a `command`/`args` stdio launch.
 
@@ -104,14 +104,14 @@ The server exposes the same bounded primitives as the CLI and library session la
 
 Compact contracts for high-traffic tools (`src/mcp/tools.ts`). Write gating: only `artifact_build` requires write access (`--allow-build`); all others are read-only.
 
-| Tool             | Required | Key enums / fields                                                                | Defaults                                                       | Maxima                                  | Write gate            |
-| ---------------- | -------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------- | --------------------- |
-| `search`         | `query`  | `mode`: hybrid\|symbol\|path\|text\|graph\|sql; optional `from`, `depth`, `limit` | `depth` 1, `limit` 20                                          | `depth` 5, `limit` 100                  | no                    |
-| `explore`        | `query`  | optional `limit`, `maxPackets`, `maxPaths`, `includeSource`                       | `limit` 5, `maxPackets` 3, `maxPaths` 3, `includeSource` false | `limit` 50, packets/paths 10            | no                    |
-| `packet_get`     | `target` | optional `maxSymbols`, `maxSnippets`, `maxDuplicates`                             | (unset uses server defaults)                                   | symbols 200, snippets 50, duplicates 20 | no                    |
-| `query_sqlite`   | `query`  | optional `params[]`, `limit`                                                      | `limit` 100                                                    | `limit` 500                             | no                    |
-| `refresh_index`  | (none)   | optional `warmup`: off\|base\|symbols                                             | (omit = invalidate only)                                       | -                                       | no                    |
-| `artifact_build` | (none)   | optional `outDir`, `sqlite`, `graphJson`, `report`, `questions`, `force`          | -                                                              | -                                       | yes (`--allow-build`) |
+| Tool             | Required                                                                                                                                                            | Key enums / fields                                                                | Defaults                 | Maxima                 | Write gate            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------ | ---------------------- | --------------------- |
+| `search`         | `query`                                                                                                                                                             | `mode`: hybrid\|symbol\|path\|text\|graph\|sql; optional `from`, `depth`, `limit` | `depth` 1, `limit` 20    | `depth` 5, `limit` 100 | no                    |
+| `explore`        | What a `hybrid` `search` reads. With `includeSource` (off by default over MCP) and `maxPackets` above 0, also the detailed symbol graph and the duplicate analysis. |
+| `packet_get`     | The detailed symbol graph and the duplicate analysis. A `review:` target builds its own report and reads no session build.                                          |
+| `query_sqlite`   | `query`                                                                                                                                                             | optional `params[]`, `limit`                                                      | `limit` 100              | `limit` 500            | no                    |
+| `refresh_index`  | (none)                                                                                                                                                              | optional `warmup`: off\|base\|symbols                                             | (omit = invalidate only) | -                      | no                    |
+| `artifact_build` | (none)                                                                                                                                                              | optional `outDir`, `sqlite`, `graphJson`, `report`, `questions`, `force`          | -                        | -                      | yes (`--allow-build`) |
 
 `refs` / `file_deps` collection limits: default 25, maximum 500. Legacy alias tool names are accepted by `tools/call` but omitted from `tools/list`.
 
@@ -128,38 +128,52 @@ Text and hybrid searches reuse a prepared handle for `.codegraph/cache/index-v1/
 
 If the sidecar is busy or unavailable, MCP uses the same exact in-memory matcher. [How it works](./how-it-works.md#cache-and-session-behavior) explains the search cache.
 
-Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits (the [file watcher](#file-watcher) rebuilds in the background after such a burst unless `--no-watch` is set). Concurrent refresh, artifact build, automatic SQLite artifact refresh, and file watcher refresh operations serialize per MCP server, so each bundle is written consistently and no two index builds overlap; the retry of a `refresh_index` that answered `index_building` takes the outcome of its refresh instead of starting another. With write access, `query_sqlite` refreshes codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
+Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits (the [file watcher](#file-watcher) rebuilds in the background after such a burst unless `--no-watch` is set). Concurrent refresh, artifact build, automatic SQLite artifact refresh, and file watcher refresh operations serialize per MCP server, so each bundle is written consistently and no two index builds overlap. With write access, `query_sqlite` refreshes codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
 A session created with `freshness: { policy: "manual" }` (only possible when a library caller passes its own session to `createCodegraphMcpHandlers`) reports `freshness.state: "unchecked"`. It records no file signatures, so it cannot check a SQLite artifact or build a new one: `query_sqlite` rejects a stale artifact with that explanation, and `artifact_build` fails. Rebuild the artifact from a session whose policy is `check` or `auto`, for example with `codegraph artifact --sqlite`.
 `get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server. Legacy paired names (`callers`, `callees`, `supertypes`, `subtypes`, `deps`, and `rdeps`) remain accepted by `tools/call` as aliases, but only the unified tools appear in `tools/list`.
 
 ### Cold start and `index_building`
 
-The first run on a large project builds the index from scratch, which can take longer than the 30 seconds that MCP clients commonly allow for one request. The server keeps every request inside that window:
+The first run on a large project builds the index from scratch, which can take longer than the 30 seconds that MCP clients commonly allow for one request. The main read tools stay inside that window:
 
-- `initialize` and `tools/list` answer at once on stdio and HTTP. The warmup starts after the server is serving and runs in the background; the HTTP server listens before it ends. `refresh_index`, `artifact_build`, and the file watcher's refresh take their turn only when no build runs, the warmup and the builds of tool calls included.
-- A tool call waits only for the builds it needs, and concurrent calls share them. Most tools need the project index; hybrid and text `search` and `explore` also need the search index; `get_symbol`, `packet_get`, `calls`, `type_hierarchy`, `implementations`, `rename_preview`, `refactor_plan`, `artifact_build`, `refs` with a symbol handle, and `explore` with `includeSource` (unless `maxPackets` is 0) need the detailed symbol graph; `packet_get` of a file or symbol and `explore` with source packets also need the duplicate analysis, as do `review` and `packet_get` of a range with changes, while a range without a changed file is answered from git alone; `artifact_build` also waits for every build that runs, and `query_sqlite` waits only when its SQLite artifact is stale. Every wait ends with the freshness check, so the rebuild that follows a file change counts against the budget.
-- `refresh_index` takes its turn once no build runs, replaces the session, and rebuilds what its `warmup` names (`base` the project index, `symbols` also the detailed symbol graph), all inside one budget. Past the budget it answers `index_building` and the refresh continues. The next `refresh_index` call that asks for no more than that refresh builds takes its outcome instead of replacing the session again, while the refresh runs and for one minute after it ended; a call after that starts a new refresh. A tool call that arrives during the rebuild waits for it first, inside its own budget.
-- `get_file` without `includeGraphContext` never waits: it reads the file from disk under the same root confinement as always.
-- A call that has waited `--index-wait-ms` (default 20000) without its build ending returns a normal result, not an error, and the build continues:
+- `initialize` and `tools/list` answer at once on stdio and HTTP. The warmup starts after the server is serving and runs in the background; the HTTP server listens before it ends.
+- `search`, `explore`, `orient`, `get_file` with `includeGraphContext`, `review`, `packet_get`, `workspace_symbols`, and `impact` wait for the builds they read for at most `--index-wait-ms` (default 15000). The warmup and concurrent calls share each build, so a call joins one that is running instead of starting another.
+- Every other tool, such as `goto`, `refs`, `calls`, `file_deps`, `query_sqlite`, `refresh_index`, and `artifact_build`, waits for the index without a limit, as it did before. A client that calls one of them during a cold build needs a request timeout that covers the build.
+- `get_file` without `includeGraphContext` never waits: it reads the file from disk under the same root confinement as always. A `review` of a range without a changed file is answered from git and waits for nothing.
+
+When one of these tools waits at all, it first waits for a build that is running, because it checks freshness against it, then for what it reads:
+
+| Tool                | Reads                                                                                                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `search`            | The project index. `hybrid`, `symbol`, and `graph` also read the symbol graph, and `hybrid` and `text` the search index. A `path` search without `from` lists files and reads no index. |
+| `explore`           | What a `hybrid` `search` reads. With `includeSource` (off by default over MCP) and `maxPackets` above 0, also the detailed symbol graph.                                                |
+| `orient`            | The project index.                                                                                                                                                                      |
+| `workspace_symbols` | The project index.                                                                                                                                                                      |
+| `impact`            | The project index.                                                                                                                                                                      |
+| `get_file`          | The project index, only with `includeGraphContext`.                                                                                                                                     |
+| `review`            | The project index and the duplicate analysis, for a range with a changed file.                                                                                                          |
+| `packet_get`        | The detailed symbol graph. A `review:` target builds its own report and reads no session build.                                                                                         |
+
+A call of these tools that has waited `--index-wait-ms` without its builds ending returns a normal result, not an error, and the builds continue:
 
 ```json
 {
   "status": "index_building",
   "tool": "search",
-  "message": "Codegraph is still building the index for this project (Building search index, 24s so far). The build continues in the background; call 'search' again to wait for it.",
+  "message": "Codegraph is still building the index for this project (Building search index, 19s so far). The build continues in the background; call 'search' again to wait for it.",
   "retryAfterMs": 1000,
-  "waitedMs": 20003,
-  "progress": { "activity": "Building search index", "elapsedMs": 24100 }
+  "waitedMs": 15003,
+  "progress": { "activity": "Building search index", "elapsedMs": 19100 }
 }
 ```
 
-- Call the same tool again. The retry waits for what is left of the build, up to the same budget, and then returns the normal result.
+- Call the same tool again. The retry joins the builds that run, waits for what is left of them, up to the same budget, and then returns the normal result.
 - `progress.activity` names what is running, such as `Indexing files` or `Preparing duplicate analysis`. `current` and `total` appear only while the work has a measurable total, such as files parsed.
-- A cancelled request stops waiting at once; the build is not cancelled.
-- The budget is a timer on the server's event loop. The builds hand the loop back every few milliseconds, between files, so the answer normally arrives within a second or two of the budget. A single large file can hold the loop longer, so keep the budget a few seconds below the client's timeout.
+- A cancelled request stops waiting at once; the builds are not cancelled.
+- The budget is a timer on the server's event loop. The builds hand the loop back every few milliseconds, between files, so the answer normally arrives within a second or two of the budget. A single large file can hold the loop longer, and a call also runs its own work once its builds end (a `review` of a large diff, for example), so keep the budget at least ten seconds below the client's timeout.
 
-Choose a request timeout longer than `--index-wait-ms`: the default of 20 seconds fits clients that allow 30. For a client that allows less, lower the budget (`--index-wait-ms 8000`); for one that allows more, raise it, or pass `--index-wait-ms 0` to wait for as long as the build takes (the per-tool deadline still applies). Library callers set `mcpIndexWaitMs`. The setting belongs to the server: `codegraph.config.json` has no key for it.
+Choose a request timeout longer than `--index-wait-ms`: the default of 15 seconds leaves a client that allows 30 fifteen seconds for the work that follows the builds; for a project where that is not enough, lower the budget. For a client that allows less, lower the budget (`--index-wait-ms 8000`); for one that allows more, raise it, or pass `--index-wait-ms 0` to make these tools wait for as long as the builds take too (the per-tool deadline still applies). Library callers set `mcpIndexWaitMs`. The setting belongs to the server: `codegraph.config.json` has no key for it.
 
 ### File watcher
 
@@ -169,7 +183,7 @@ Choose a request timeout longer than `--index-wait-ms`: the default of 20 second
 - 500 ms after the last event, and at least 5 seconds after the previous background refresh ended, the server runs the freshness check and rebuilds the index in the background. Each new event restarts the 500 ms wait, so no refresh starts while events still arrive. A query that arrives during the rebuild waits for it, as on a cold start.
 - The background rebuild also covers a change burst above the automatic refresh limits (50 files or 2 MB, for example a branch switch), which a query alone reports as `stale` until `refresh_index`. A session that cannot read its configuration keeps its snapshot, as it does without the watcher.
 - One refresh runs at a time, and events during it schedule exactly one more. A refresh takes its turn in the same queue as `refresh_index`, `artifact_build`, and the automatic SQLite artifact refresh, so `refresh_index` waits for a rebuild that is running instead of starting a second one beside it. A refresh that still waits for its turn when a newer event arrives, or when the watcher pauses, gives the turn up: the burst that the event belongs to starts its own refresh once it settles. On Linux, each read of the file list for the per-directory watches takes its turn in that queue as well, so the first read of a server that started with `--no-warmup` cannot overlap a `refresh_index`. A failed refresh writes `[codegraph] watch refresh failed: <message>` to stderr and leaves the freshness check as it was.
-- When the server shuts down (stdin closes, or the HTTP server closes), it stops the watches and timers at once, then waits for a refresh that is running, for a read of the file list that has started, and for every index build that runs, before it releases the session, so that none writes the cache or the file signatures afterwards.
+- When the server shuts down (stdin closes, or the HTTP server closes), it stops the watches and timers at once, then waits for a refresh that is running, for a read of the file list that has started, for the startup warmup, and for every index build that a call stopped waiting for, before it releases the session, so that none writes the cache or the file signatures afterwards.
 - After 30 minutes without a tool call, the server closes every watch and cancels pending refreshes, including one that still waits for its turn behind a `refresh_index` or an `artifact_build`. The next tool call reopens the watches and clears the cached freshness result first, so the check sees every edit made during the pause. This matters most for `codegraph server start`, whose process lives until `server stop`.
 - Windows and macOS use one recursive watch on the root. Other platforms use one watch per directory that holds a discovered file, because Node's recursive watching on Linux walks the whole tree, `node_modules` included, and can exhaust inotify watches.
 - A watch that is lost with its directory (a deleted project root on Windows, a removed and recreated directory on Linux) closes at the first event that names the directory and counts as a change; the next refresh opens it again once the directory exists.

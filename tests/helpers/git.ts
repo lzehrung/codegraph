@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 
 export function runGit(root: string, args: string[]): string {
   const result = spawnSync("git", args, {
+    windowsHide: true,
     cwd: root,
     env: {
       ...process.env,
@@ -11,7 +12,6 @@ export function runGit(root: string, args: string[]): string {
       GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? "codegraph@example.test",
     },
     encoding: "utf8",
-    windowsHide: true,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {

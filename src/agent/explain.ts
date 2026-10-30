@@ -73,8 +73,6 @@ export type AgentExplainTarget = {
   maxSnippets?: number;
   maxSymbols?: number;
   maxDuplicates?: number;
-  /** @internal Skips the duplicate context, for a caller that discards it: `duplicates` stays empty. */
-  skipDuplicates?: boolean;
 };
 
 export type AgentExplanationTarget = {
@@ -495,9 +493,7 @@ async function buildExplanation(
   const references = referenceContext.references;
   const snippets = referenceContext.snippets;
   const relatedSqlObjects = await collectRelatedSqlObjects(snapshot, lookup, resolved, file, maxRelatedSqlObjects);
-  const duplicates = request.skipDuplicates
-    ? emptyAgentBoundedList<AgentExplanationDuplicate>()
-    : await collectDuplicateContext(snapshot, session, resolved, relFile, maxDuplicates);
+  const duplicates = await collectDuplicateContext(snapshot, session, resolved, relFile, maxDuplicates);
   const followUps = collectFollowUps(snapshot, resolved, boundedSymbols.items, relFile, duplicates.items);
   const changedContext = await collectChangedContext(request);
 

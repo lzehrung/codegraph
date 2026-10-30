@@ -438,7 +438,7 @@ Transports:
   --warmup-symbols Also build the detailed symbol graph in the background
   --no-warmup     Skip the startup warmup; the first tool call that needs the index starts the build
   --no-watch      Do not watch project files; rely on the freshness check of each tool call
-  --index-wait-ms <ms> Longest wait of one tool call for a running index build before it answers index_building (default 20000; 0 waits without limit)
+  --index-wait-ms <ms> Longest wait of search, explore, orient, get_file with includeGraphContext, review, packet_get, workspace_symbols, and impact for a running index build before they answer index_building (default 15000; 0 waits without limit)
 
 Index Options:
   --cache <mode>     Session cache mode: disk, memory, off
@@ -492,7 +492,7 @@ Defaults:
   Transport defaults to stdio.
   HTTP transport binds to 127.0.0.1 unless --host is passed and serves /mcp.
   The server answers initialize and tools/list at once. By default it then builds the base session cache and the search index in the background; --warmup-symbols also warms the detailed symbol graph, and --no-warmup builds only when a tool call needs the index.
-  A tool call waits for the build it needs for at most --index-wait-ms (default 20000, below the 30 seconds that clients commonly allow). Past that it answers { "status": "index_building" } with progress and a retry hint; the build continues, and the same call succeeds once it ends. get_file without includeGraphContext never waits.
+  search, explore, orient, get_file with includeGraphContext, review, packet_get, workspace_symbols, and impact wait for a running build for at most --index-wait-ms (default 15000, well below the 30 seconds that clients commonly allow). Past that they answer { "status": "index_building" } with progress and a retry hint; the build continues, and the same call succeeds once it ends. Every other tool waits for the index without a limit.
   Warmup uses the configured session cache and shared index flags.
   The server watches project files and refreshes the index in the background: 500 ms after the last change, at most once every 5 seconds, and paused after 30 minutes without a tool call. --no-watch relies on the freshness check of each tool call instead.
   Tools are read-only unless --allow-build is passed.

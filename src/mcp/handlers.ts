@@ -34,7 +34,7 @@ import { resolveCacheLocation } from "../indexer/build-cache/location.js";
 import { analyzeImpactFromDiff, type CompactImpactReport } from "../impact/index.js";
 import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 import { buildReviewReport, type ReviewDepth } from "../review.js";
-import { collectReviewChanges, type ReviewChangeCollection } from "../review/changes.js";
+import { collectReviewChanges } from "../review/changes.js";
 import { boundReviewReportForTransport, type ReviewOptions, type ReviewReportForTransport } from "../review/types.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import type { SqliteArtifactFileSignature } from "../sqlite/types.js";
@@ -70,21 +70,20 @@ import {
 import { type CodegraphRuntimeIdentity } from "../runtime-identity.js";
 import { assertWritableDirectoryRealPathWithinRoot, resolveArtifactSqlitePathCandidate } from "./security.js";
 import { assertMcpWatchMs, createWatchController } from "./project-watcher.js";
-import { mcpCancellationError } from "./cancellation.js";
 import {
   assertMcpIndexWait,
   createMcpBuildProgress,
   createMcpIndexReadiness,
   DEFAULT_MCP_INDEX_WAIT_MS,
-  MCP_STAGES_BY_HANDLER,
-  McpIndexBuildingError,
-  withIndexReadiness,
-  type CodegraphMcpWarmupMode,
+  exploreNeeds,
+  searchNeeds,
   type McpBuildProgress,
+  type McpIndexNeed,
   type McpIndexReadiness,
 } from "./index-readiness.js";
 
-export type { CodegraphMcpWarmupMode };
+/** `"off"` skips warmup, leaving the first tool call to pay for discovery and building. */
+export type CodegraphMcpWarmupMode = "off" | "base" | "symbols";
 
 export type CodegraphMcpHandlerOptions = {
   root: string;
@@ -98,8 +97,8 @@ export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
   /**
    * Defaults to `"base"` when Codegraph creates the session itself; defaults to `"off"`
    * when `session` is supplied explicitly. Pass `"off"` to always start lazily. `"base"` builds the project
-   * index and the search index in the background, `"symbols"` also the detailed symbol graph. The server answers
-   * `initialize` and `tools/list` at once, whichever mode runs.
+   * index, the symbol graph, and the search index in the background, `"symbols"` also the detailed symbol graph.
+   * The server answers `initialize` and `tools/list` at once, whichever mode runs.
    */
   warmup?: CodegraphMcpWarmupMode;
   /**
@@ -134,10 +133,12 @@ export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
   /** Maximum time to execute one MCP tool call in ms. Use 0 to disable. Defaults to 5 minutes. */
   mcpToolTimeoutMs?: number;
   /**
-   * Longest time in ms that one index-backed tool call waits for an index build that is running. Past it, the call
-   * answers `{ "status": "index_building" }` with the build's progress and a retry hint instead of blocking until
-   * the client gives up; the build continues, and a retry waits for what is left of it. Use 0 to wait for as long as
-   * the build takes. Defaults to 20 seconds, below the 30 seconds that MCP clients commonly allow for a request.
+   * Longest time in ms that `search`, `explore`, `orient`, `get_file` with `includeGraphContext`, `review`, `packet_get`,
+   * `workspace_symbols`, and `impact` wait for an index build that is running. Past it, the call answers `{ "status": "index_building" }`
+   * with the build's progress and a retry hint instead of blocking until the client gives up; the build continues,
+   * and a retry waits for what is left of it. Every other tool waits without a limit. Use 0 to wait without a limit
+   * in these eight as well. Defaults to 15 seconds, well below the 30 seconds that MCP clients commonly allow for a
+   * request, because a call also runs its own work once its builds end.
    */
   mcpIndexWaitMs?: number;
   onHttpListen?: ((info: CodegraphMcpHttpServerInfo) => void) | undefined;
@@ -429,6 +430,55 @@ function rebuildSession(
 }
 
 /**
+ * What the startup warmup loads in the background: the project index, the symbol graph that hybrid searches read, and
+ * the search index; `"symbols"` also the detailed symbol graph.
+ */
+function warmupNeeds(mode: CodegraphMcpWarmupMode): McpIndexNeed[] {
+  if (mode === "off") return [];
+  if (mode === "symbols") return ["symbolGraph", "queryIndex", "detailedGraph"];
+  return ["symbolGraph", "queryIndex"];
+}
+
+/**
+ * Makes `search`, `explore`, `orient`, `workspace_symbols`, `impact`, `get_file` with `includeGraphContext`, and
+ * `packet_get` wait for the session loads they read, within the server's budget, before their handler runs. `review`
+ * waits in its own handler, which asks git first. Every other handler is left as it is and waits for the index without
+ * a limit.
+ */
+function withIndexBudget(
+  handlers: CodegraphMcpHandlers,
+  readiness: Pick<McpIndexReadiness, "waitFor">,
+): CodegraphMcpHandlers {
+  const budgeted =
+    <Request, Result>(
+      tool: string,
+      handler: (request: Request, signal?: AbortSignal) => Promise<Result>,
+      needsOf: (request: Request) => readonly McpIndexNeed[] | undefined,
+    ) =>
+    async (request: Request, signal?: AbortSignal): Promise<Result> => {
+      const needs = needsOf(request);
+      if (needs) await readiness.waitFor(tool, needs, signal);
+      return await handler(request, signal);
+    };
+  return {
+    ...handlers,
+    search: budgeted("search", handlers.search, searchNeeds),
+    explore: budgeted("explore", handlers.explore, exploreNeeds),
+    orient: budgeted("orient", handlers.orient, () => ["index"]),
+    workspace_symbols: budgeted("workspace_symbols", handlers.workspace_symbols, () => ["index"]),
+    impact: budgeted("impact", handlers.impact, () => ["index"]),
+    // Only a graph context reads the index; the bytes of a file come from disk.
+    get_file: budgeted("get_file", handlers.get_file, (request) =>
+      request.includeGraphContext ? ["index"] : undefined,
+    ),
+    // A `review:` target builds its own report from git; any other target reads the detailed symbol graph.
+    packet_get: budgeted("packet_get", handlers.packet_get, (request) =>
+      request.target.startsWith("review:") ? [] : ["detailedGraph", "duplicates"],
+    ),
+  };
+}
+
+/**
  * Reports every tool call to the watcher, so its idle timer counts calls and a paused watcher resumes on the
  * next one. This wraps the handler set instead of `checkMcpFreshness` because tools such as `workspace_symbols`,
  * `calls`, and `get_file` reach the session's freshness check through their own `*WithSession` helpers.
@@ -462,28 +512,25 @@ export type CodegraphMcpResources = {
    */
   startWarmup: () => void;
   /**
-   * Settles when no build runs, at once when none was started, and never rejects: a warmup failure is logged. That
-   * covers the startup warmup and every build that a tool call started, including one whose call stopped waiting.
-   * Await it, with `closeWatcher`, before `session.invalidate()`: the builds keep writing the cache until they end.
+   * Settles when no load that the server started runs, at once when none was started, and never rejects: a warmup
+   * failure is logged. That covers the startup warmup and the wait of every budgeted call, including one that stopped
+   * waiting. Await it, with `closeWatcher`, before `session.invalidate()`: the loads keep writing the cache until they
+   * end.
    */
   buildsSettled: () => Promise<void>;
 };
 
 type CodegraphMcpHandlerSet = {
   handlers: CodegraphMcpHandlers;
-  /**
-   * Runs `operation` in its turn of the lock that `refresh_index`, `artifact_build`, and the SQLite rebuild take. A turn
-   * starts once no build runs.
-   */
+  /** Runs `operation` in its turn of the lock that `refresh_index`, `artifact_build`, and the SQLite rebuild take. */
   runExclusive: <T>(operation: () => Promise<T>) => Promise<T>;
-  /** Whether the range of a `review` request has a changed file. Asks git once per request object. */
-  reviewRangeHasChanges: (request: { base: string; head: string }) => Promise<boolean>;
 };
 
 /**
  * Creates the session, its handlers, and the file watcher. It builds nothing: the index builds in the background once
- * `startWarmup` runs, or at the first tool call that needs it. Every index-backed handler waits for the builds it
- * needs, within `mcpIndexWaitMs`; see `index-readiness.ts`.
+ * `startWarmup` runs, or at the first tool call that needs it. `search`, `explore`, `orient`, `get_file` with
+ * `includeGraphContext`, `review`, `packet_get`, `workspace_symbols`, and `impact` wait for the loads they read within
+ * `mcpIndexWaitMs`; see `index-readiness.ts`. Every other handler waits for the index without a limit.
  */
 export function createCodegraphMcpResources(options: CodegraphMcpServerOptions): CodegraphMcpResources {
   const root = path.resolve(options.root);
@@ -511,10 +558,10 @@ export function createCodegraphMcpResources(options: CodegraphMcpServerOptions):
   const session = createCodegraphMcpSession(options, root, buildProgress);
   const readiness = createMcpIndexReadiness(session, {
     waitMs: indexWaitMs,
-    warmup: resolveStartupWarmupMode(warmup, sessionProvidedExplicitly),
+    warmup: warmupNeeds(resolveStartupWarmupMode(warmup, sessionProvidedExplicitly)),
     progress: buildProgress,
   });
-  const { handlers, runExclusive, reviewRangeHasChanges } = createCodegraphMcpHandlersForSession(
+  const { handlers, runExclusive } = createCodegraphMcpHandlersForSession(
     { ...handlerOptions, root },
     session,
     readiness,
@@ -533,9 +580,8 @@ export function createCodegraphMcpResources(options: CodegraphMcpServerOptions):
           idleMs: watchIdleMs,
           startPaused: warmup === "off",
         });
-  const indexedHandlers = withIndexReadiness(handlers, MCP_STAGES_BY_HANDLER, readiness, { reviewRangeHasChanges });
   return {
-    handlers: watcher ? withToolActivity(indexedHandlers, watcher.noteActivity) : indexedHandlers,
+    handlers: watcher ? withToolActivity(handlers, watcher.noteActivity) : handlers,
     session,
     closeWatcher: () => watcher?.close() ?? Promise.resolve(),
     startWarmup: readiness.startWarmup,
@@ -552,11 +598,9 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpHandlerOptions):
 function createCodegraphMcpHandlersForSession(
   options: CodegraphMcpHandlerOptions,
   session: AgentSession,
-  // The session's builds. Without it the handlers build what they need themselves, with no budget.
-  readiness?: Pick<
-    McpIndexReadiness,
-    "waitFor" | "whenIdle" | "waitUntil" | "rebuild" | "handOffRefresh" | "joinRefresh"
-  >,
+  // The budget of the eight tools that wait within `mcpIndexWaitMs`. Without it the handlers build what they need
+  // themselves and wait for as long as that takes.
+  readiness?: Pick<McpIndexReadiness, "waitFor">,
 ): CodegraphMcpHandlerSet {
   const root = path.resolve(options.root);
   const readOnly = options.readOnly ?? true;
@@ -574,9 +618,7 @@ function createCodegraphMcpHandlersForSession(
 
   // One turn at a time for everything that rebuilds the session's index or writes artifacts: `refresh_index`,
   // `artifact_build`, the SQLite rebuild for `query_sqlite`, and the watcher's background refresh. Two of them in
-  // flight would leave the file signatures of whichever build ended last, whatever snapshot the session serves. A turn
-  // also starts only once no build runs, with nothing awaiting between that moment and the operation: what replaces
-  // the session must not do so under a build that still writes to it.
+  // flight would leave the file signatures of whichever build ended last, whatever snapshot the session serves.
   let artifactWritePromise: Promise<void> | undefined;
   const withArtifactWriteLock = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = artifactWritePromise;
@@ -584,7 +626,7 @@ function createCodegraphMcpHandlersForSession(
     artifactWritePromise = complete.promise;
     try {
       if (previous) await previous.catch(() => undefined);
-      return await (readiness?.whenIdle(operation) ?? operation());
+      return await operation();
     } finally {
       complete.resolve();
       if (artifactWritePromise === complete.promise) artifactWritePromise = undefined;
@@ -1072,7 +1114,6 @@ function createCodegraphMcpHandlersForSession(
             root,
             target: handle,
             maxReferences: limit,
-            skipDuplicates: true,
           });
           return {
             references: explanation.references,
@@ -1126,26 +1167,6 @@ function createCodegraphMcpHandlersForSession(
       }),
   };
 
-  // The readiness gate asks git whether a review range has a changed file, to choose what the call waits for, and the
-  // handler of that call takes that answer instead of asking again. It is taken once, so that a request object used
-  // for a later call, after the working tree changed, gets a diff of its own.
-  const reviewChangesFromGate = new WeakMap<object, Promise<ReviewChangeCollection>>();
-  const reviewRangeOptions = (request: { base: string; head: string }): ReviewOptions => ({
-    ...options.buildOptions,
-    gitBase: request.base,
-    gitHead: request.head,
-  });
-  const reviewRangeHasChanges = async (request: { base: string; head: string }): Promise<boolean> => {
-    const changes = collectReviewChanges(root, reviewRangeOptions(request));
-    reviewChangesFromGate.set(request, changes);
-    return (await changes).changedFiles.size > 0;
-  };
-  const takeReviewChanges = (request: { base: string; head: string }): Promise<ReviewChangeCollection> => {
-    const fromGate = reviewChangesFromGate.get(request);
-    reviewChangesFromGate.delete(request);
-    return fromGate ?? collectReviewChanges(root, reviewRangeOptions(request));
-  };
-
   const reviewHandlers: McpHandlerFamily<"impact" | "review"> = {
     impact: async (request) =>
       await withFreshness(async () => {
@@ -1163,18 +1184,21 @@ function createCodegraphMcpHandlersForSession(
         })) as CompactImpactReport;
       }),
 
-    review: async (request) => {
-      const changes = await takeReviewChanges(request);
+    review: async (request, signal) => {
       const reviewOptions: ReviewOptions = {
-        ...reviewRangeOptions(request),
+        ...options.buildOptions,
+        gitBase: request.base,
+        gitHead: request.head,
         ...(request.reviewDepth !== undefined ? { reviewDepth: request.reviewDepth } : {}),
       };
-      // A range without a changed file reads no index, so git alone answers it. The freshness check below waits for a
-      // build that is running, which a review of nothing has no reason to do.
+      // The one diff of this call: the report below is built from it. A range without a changed file reads no index,
+      // so git alone answers it, without waiting for a build that runs.
+      const changes = await collectReviewChanges(root, reviewOptions);
       if (!changes.changedFiles.size) {
         const report = await buildReviewReport(root, reviewOptions, { changes });
         return { ...boundReviewReportForTransport(report), freshness: { state: "fresh" } };
       }
+      await readiness?.waitFor("review", ["index", "duplicates"], signal);
       return await withFreshness(async () => {
         const report = await buildReviewReport(root, reviewOptions, {
           changes,
@@ -1205,13 +1229,6 @@ function createCodegraphMcpHandlersForSession(
       let realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       let artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
       if (artifactFreshness.state !== "fresh") {
-        // Only this path asks the session, so a fresh artifact answers at once. The freshness check below waits for a
-        // build that is running, and an automatic rebuild of the artifact loads the detailed symbol graph.
-        await readiness?.waitFor(
-          "query_sqlite",
-          canRefreshSqliteArtifact() ? ["symbols", "idle"] : ["freshness"],
-          executionOptions?.signal,
-        );
         const sessionFreshness = await checkSessionFreshness(session);
         // An unchecked (manual) session cannot prove its snapshot matches disk, so rebuilding
         // the artifact from it is as unsafe as rebuilding from a known-stale one.
@@ -1229,22 +1246,9 @@ function createCodegraphMcpHandlersForSession(
       return { ...result, truncated: Boolean(result.truncated), freshness: artifactFreshness };
     },
 
-    refresh_index: async (request, signal) => {
-      if (signal?.aborted) throw mcpCancellationError(signal);
-      const warmup = request.warmup ?? "off";
-      // The retry of a call that stopped waiting for its refresh takes that refresh's outcome: replacing the session
-      // again would start the rebuild over, for a client that never sees it end.
-      const joined = readiness?.joinRefresh("refresh_index", warmup, signal);
-      if (joined) {
-        await joined;
-        return { refreshed: true, warmup };
-      }
-      let abandoned = false;
-      let started = false;
-      const turn = withArtifactWriteLock(async () => {
-        // The call stopped waiting for its turn, so it replaces nothing: its retry asks again.
-        if (abandoned) return;
-        started = true;
+    refresh_index: async (request) =>
+      await withArtifactWriteLock(async () => {
+        const warmup = request.warmup ?? "off";
         const previousRefresh = refreshPromise;
         const refresh = (async () => {
           if (previousRefresh) await previousRefresh.catch(() => undefined);
@@ -1253,8 +1257,7 @@ function createCodegraphMcpHandlersForSession(
           sqlitePath = configuredSqlitePath;
           sqliteOutDir = configuredSqliteOutDir;
           sqliteCanRefresh = configuredSqliteCanRefresh;
-          // The registry shares and tracks the rebuild, so that it outlives a call that stops waiting for it.
-          await (readiness?.rebuild(warmup) ?? rebuildSession(session, warmup));
+          await rebuildSession(session, warmup);
         })();
         refreshPromise = refresh;
         try {
@@ -1262,19 +1265,8 @@ function createCodegraphMcpHandlersForSession(
         } finally {
           if (refreshPromise === refresh) refreshPromise = undefined;
         }
-      });
-      try {
-        await (readiness ? readiness.waitUntil("refresh_index", turn, signal) : turn);
-      } catch (error) {
-        abandoned = true;
-        // The refresh that runs goes on without this call, and its retry takes it over.
-        if (readiness && started && (error instanceof McpIndexBuildingError || signal?.aborted)) {
-          readiness.handOffRefresh();
-        }
-        throw error;
-      }
-      return { refreshed: true, warmup };
-    },
+        return { refreshed: true, warmup };
+      }),
 
     artifact_build: async (request) =>
       await withArtifactWriteLock(async () => {
@@ -1324,9 +1316,14 @@ function createCodegraphMcpHandlersForSession(
     },
   };
 
+  const handlers: CodegraphMcpHandlers = {
+    ...searchHandlers,
+    ...navigationHandlers,
+    ...reviewHandlers,
+    ...artifactHandlers,
+  };
   return {
-    handlers: { ...searchHandlers, ...navigationHandlers, ...reviewHandlers, ...artifactHandlers },
+    handlers: readiness ? withIndexBudget(handlers, readiness) : handlers,
     runExclusive: withArtifactWriteLock,
-    reviewRangeHasChanges,
   };
 }
