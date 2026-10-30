@@ -8,10 +8,13 @@ import { pathToFileURL } from "node:url";
 import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { formatAgentSqlHandle } from "../src/agent/handles.js";
+import * as packetModule from "../src/agent/packet.js";
 import * as queryIndexStore from "../src/agent/query-index/session-store.js";
 import * as queryIndexUpdate from "../src/agent/query-index/update.js";
 import { createAgentSession, type AgentLoadProjectOptions, type AgentSession } from "../src/agent/session.js";
+import * as duplicatesModule from "../src/duplicates.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
+import { createMcpBuildProgress, createMcpIndexReadiness } from "../src/mcp/index-readiness.js";
 import { createCodegraphMcpResources } from "../src/mcp/handlers.js";
 import {
   createCodegraphMcpHandlers,
@@ -20,6 +23,7 @@ import {
   startCodegraphMcpHttpServer,
   type CodegraphMcpHandlers,
 } from "../src/mcp/server.js";
+import * as reviewModule from "../src/review.js";
 import { describeMcpRuntimeError, isStaleInstallError, STALE_INSTALL_MESSAGE } from "../src/mcp/stale-install.js";
 import * as gitUtil from "../src/util/git.js";
 import { isPlainRecord } from "../src/util/guards.js";
@@ -940,6 +944,200 @@ describe("MCP tools that wait within the budget", () => {
       gate.release();
       await resources.buildsSettled();
       resources.session.invalidate();
+    }
+  });
+});
+
+describe("MCP calls and a session that is replaced while they wait", () => {
+  /**
+   * Gates what a cold call does around the replacement of its session: the first duplicate analysis waits until
+   * `releaseDuplicates()`, the second project index build until `releaseRebuild()`, and `events` records in order what
+   * starts. Whatever replaces the session while the first analysis is held, the second build is the one that follows.
+   */
+  function gateDuplicatesThenRebuild() {
+    const events: string[] = [];
+    const duplicatesRequested = Promise.withResolvers<void>();
+    const duplicatesGate = Promise.withResolvers<void>();
+    const rebuildRequested = Promise.withResolvers<void>();
+    const rebuildGate = Promise.withResolvers<void>();
+    const build = indexerBuild.buildProjectIndexIncremental;
+    let builds = 0;
+    vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      builds += 1;
+      events.push(`build:${builds}`);
+      if (builds === 2) {
+        rebuildRequested.resolve();
+        await rebuildGate.promise;
+      }
+      return await build(...args);
+    });
+    const prepare = duplicatesModule.prepareDuplicateAnalysis;
+    let analyses = 0;
+    vi.spyOn(duplicatesModule, "prepareDuplicateAnalysis").mockImplementation(async (...args) => {
+      analyses += 1;
+      events.push(`duplicates:${analyses}`);
+      if (analyses === 1) {
+        duplicatesRequested.resolve();
+        await duplicatesGate.promise;
+      }
+      return await prepare(...args);
+    });
+    return {
+      events,
+      duplicatesRequested: duplicatesRequested.promise,
+      releaseDuplicates: duplicatesGate.resolve,
+      rebuildRequested: rebuildRequested.promise,
+      releaseRebuild: rebuildGate.resolve,
+    };
+  }
+
+  const untilHandler = (events: readonly string[]): string[] => events.slice(0, events.indexOf("handler"));
+
+  it("builds again inside the wait when a file changed while the duplicate analysis of a packet was prepared", async () => {
+    const root = await createProject("cg-mcp-edit-packet-");
+    const gated = gateDuplicatesThenRebuild();
+    const packet = packetModule.getCodegraphPacketWithSession;
+    vi.spyOn(packetModule, "getCodegraphPacketWithSession").mockImplementation(async (...args) => {
+      gated.events.push("handler");
+      return await packet(...args);
+    });
+    const resources = createCodegraphMcpResources({
+      root,
+      watch: false,
+      warmup: "off",
+      mcpIndexWaitMs: 600_000,
+      buildOptions: { cache: "off" },
+    });
+    try {
+      const call = resources.handlers.packet_get({ target: "alpha.ts" });
+      await gated.duplicatesRequested;
+      // The edit lands after the project index was built and before the final freshness check of the wait.
+      await fs.appendFile(path.join(root, "alpha.ts"), "export function alphaTwo() { return 2; }\n", "utf8");
+      gated.releaseDuplicates();
+      await gated.rebuildRequested;
+      await letShutdownRun();
+
+      // The check replaced the session. The build that follows belongs to the wait, which the handler has not left.
+      expect(gated.events).not.toContain("handler");
+
+      gated.releaseRebuild();
+      const answer = await call;
+
+      // The target is resolved again for the new session, so its duplicate analysis is part of the wait too.
+      expect(untilHandler(gated.events)).toEqual(["build:1", "duplicates:1", "build:2", "duplicates:2"]);
+      expect(answer.packet).toMatchObject({
+        symbols: expect.arrayContaining([expect.objectContaining({ name: "alphaTwo" })]),
+      });
+    } finally {
+      gated.releaseDuplicates();
+      gated.releaseRebuild();
+      await resources.buildsSettled();
+      resources.session.invalidate();
+    }
+  });
+
+  it("builds again inside the wait when a file changed while the duplicate analysis of a review was prepared", async () => {
+    const root = await createReviewProject("cg-mcp-edit-review-");
+    const gated = gateDuplicatesThenRebuild();
+    const report = reviewModule.buildReviewReport;
+    vi.spyOn(reviewModule, "buildReviewReport").mockImplementation(async (...args) => {
+      gated.events.push("handler");
+      return await report(...args);
+    });
+    const resources = createCodegraphMcpResources({
+      root,
+      watch: false,
+      warmup: "off",
+      mcpIndexWaitMs: 600_000,
+      buildOptions: { cache: "off" },
+    });
+    try {
+      const call = resources.handlers.review({ base: "HEAD~1", head: "HEAD" });
+      await gated.duplicatesRequested;
+      await fs.appendFile(path.join(root, "beta.ts"), "export function betaTwo() { return 2; }\n", "utf8");
+      gated.releaseDuplicates();
+      await gated.rebuildRequested;
+      await letShutdownRun();
+
+      expect(gated.events).not.toContain("handler");
+
+      gated.releaseRebuild();
+      const answer = await call;
+
+      expect(untilHandler(gated.events)).toEqual(["build:1", "duplicates:1", "build:2", "duplicates:2"]);
+      expect(answer).toMatchObject({ status: "ok" });
+    } finally {
+      gated.releaseDuplicates();
+      gated.releaseRebuild();
+      await resources.buildsSettled();
+      resources.session.invalidate();
+    }
+  });
+
+  it("builds again inside the wait when something else replaces the session while the duplicate analysis is prepared", async () => {
+    const root = await createReviewProject("cg-mcp-replace-review-");
+    const gated = gateDuplicatesThenRebuild();
+    const report = reviewModule.buildReviewReport;
+    vi.spyOn(reviewModule, "buildReviewReport").mockImplementation(async (...args) => {
+      gated.events.push("handler");
+      return await report(...args);
+    });
+    const resources = createCodegraphMcpResources({
+      root,
+      watch: false,
+      warmup: "off",
+      mcpIndexWaitMs: 600_000,
+      buildOptions: { cache: "off" },
+    });
+    try {
+      const call = resources.handlers.review({ base: "HEAD~1", head: "HEAD" });
+      await gated.duplicatesRequested;
+      // What the file watcher and refresh_index do. No file changed, so the freshness check has nothing to report: only
+      // the replacement itself tells the wait that what it loaded is gone.
+      resources.session.invalidate();
+      gated.releaseDuplicates();
+      await gated.rebuildRequested;
+      await letShutdownRun();
+
+      expect(gated.events).not.toContain("handler");
+
+      gated.releaseRebuild();
+      const answer = await call;
+
+      expect(untilHandler(gated.events)).toEqual(["build:1", "duplicates:1", "build:2", "duplicates:2"]);
+      expect(answer).toMatchObject({ status: "ok" });
+    } finally {
+      gated.releaseDuplicates();
+      gated.releaseRebuild();
+      await resources.buildsSettled();
+      resources.session.invalidate();
+    }
+  });
+
+  it("builds again at most three times when files keep changing, and leaves what is left to the handler", async () => {
+    const root = await createProject("cg-mcp-edit-storm-");
+    const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
+    const readiness = createMcpIndexReadiness(session, {
+      waitMs: 0,
+      warmup: [],
+      progress: createMcpBuildProgress(),
+    });
+    const builds = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+    const prepare = duplicatesModule.prepareDuplicateAnalysis;
+    // Every analysis ends with one more edit, which the file watcher of a server reports to the session as well.
+    vi.spyOn(duplicatesModule, "prepareDuplicateAnalysis").mockImplementation(async (...args) => {
+      const analysis = await prepare(...args);
+      await fs.appendFile(path.join(root, "alpha.ts"), "// edited again\n", "utf8");
+      session.markChanged?.();
+      return analysis;
+    });
+    try {
+      await readiness.waitFor("review", ["index", "duplicates"]);
+
+      expect(builds).toHaveBeenCalledTimes(3);
+    } finally {
+      await readiness.buildsSettled();
+      session.invalidate();
     }
   });
 });

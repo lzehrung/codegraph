@@ -5,6 +5,7 @@ import {
   type AgentSearchMode,
 } from "../agent/search.js";
 import { checkSessionFreshness, type AgentSession } from "../agent/session.js";
+import { registerSessionInvalidationHook } from "../agent/session-lifecycle.js";
 import type { ProgressUpdate } from "../types.js";
 import { mcpCancellationError } from "./cancellation.js";
 import { describeMcpRuntimeError } from "./stale-install.js";
@@ -160,8 +161,11 @@ export type McpIndexReadiness = {
   /**
    * Waits for the freshness check that every index-backed handler runs, for the session loads that `needs` names, for
    * the loads that `followUp` names once those are loaded, and for the check again, so that the handler that runs next
-   * finds all of it ready. It all shares one budget: past it the call throws {@link McpIndexBuildingError}; the loads
-   * continue, and the next call joins them. A load that fails fails the call at once. A cancelled call stops waiting.
+   * finds all of it ready. When the session is replaced meanwhile, which drops what was loaded, the loads run again for
+   * the new session, up to {@link MAX_READINESS_ROUNDS} times in all. A file that changed makes the final check do it,
+   * and so do the file watcher and `refresh_index`. It all shares one budget: past it the call throws
+   * {@link McpIndexBuildingError}; the loads continue, and the next call joins them. A load that fails fails the call at
+   * once. A cancelled call stops waiting.
    */
   waitFor: (
     tool: string,
@@ -179,6 +183,12 @@ const ACTIVITY: Record<McpIndexNeed, string> = {
   duplicates: "Preparing duplicate analysis",
 };
 const CHECKING_ACTIVITY = "Checking the project for changed files";
+
+/**
+ * How often one call runs its loads: once, and again each time that the session was replaced under what they had
+ * loaded. A session that keeps being replaced leaves the rest to the freshness check of the call's own handler.
+ */
+const MAX_READINESS_ROUNDS = 3;
 
 /**
  * Settles with `"ready"` when `work` settles, rethrows its failure, or settles with `"timeout"` after `budgetMs`.
@@ -228,6 +238,17 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
   const pending = new Set<Promise<unknown>>();
   let busySince: number | undefined;
   let warmupStarted = false;
+
+  // Counts the invalidations of the session, each of which drops what the loads loaded. A hook runs once, so it
+  // registers itself again.
+  let invalidations = 0;
+  const countInvalidations = (): void => {
+    registerSessionInvalidationHook(session, () => {
+      invalidations += 1;
+      countInvalidations();
+    });
+  };
+  countInvalidations();
 
   const track = <T>(work: Promise<T>): Promise<T> => {
     if (!pending.size) busySince = performance.now();
@@ -306,7 +327,9 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
   ): Promise<void> => {
     if (signal?.aborted) throw mcpCancellationError(signal);
     const startedAt = performance.now();
-    const wanted = [...needs];
+    // What this round asks for and has loaded: `wanted` grows by the follow-up, and both start over for a new round, so
+    // that the progress of an `index_building` answer names what runs now.
+    let wanted: McpIndexNeed[] = [...needs];
     const done = new Set<McpIndexNeed>();
     const loadAll = async (list: readonly McpIndexNeed[]): Promise<void> => {
       await Promise.all(
@@ -318,17 +341,26 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
     };
     // The check first, because it waits for a build that runs and replaces the session when files changed, so that the
     // loads below are the ones of the session the handler reads. The check again, because a session that was not built
-    // yet is checked against files only once it is.
+    // yet is checked against files only once it is. A file that changed while the loads ran makes that check replace the
+    // session, and so do the file watcher and `refresh_index`: what the loads loaded is gone, and the handler would
+    // build it again outside the budget. So the loads run again, and the target-dependent follow-up with them, inside
+    // the same wait. Each round ends with the check that starts the next one.
     const ready = track(
       (async (): Promise<void> => {
         await checkSessionFreshness(session);
-        await loadAll(needs);
-        if (followUp) {
-          const later = await followUp();
-          wanted.push(...later);
-          await loadAll(later);
+        for (let round = 0; round < MAX_READINESS_ROUNDS; round += 1) {
+          const loadedAt = invalidations;
+          wanted = [...needs];
+          done.clear();
+          await loadAll(needs);
+          if (followUp) {
+            const later = await followUp();
+            wanted.push(...later);
+            await loadAll(later);
+          }
+          await checkSessionFreshness(session);
+          if (invalidations === loadedAt) return;
         }
-        await checkSessionFreshness(session);
       })(),
     );
     if ((await settleWithinBudget(ready, options.waitMs, signal)) === "ready") return;
