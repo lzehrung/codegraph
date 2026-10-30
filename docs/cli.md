@@ -544,7 +544,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - `graph.json` carries `files`, `fileEdges`, `symbols`, and `symbolEdges` once (`schemaVersion: 3`) and is written in pieces, so a large repository does not reach Node.js's string limit. Each artifact file goes to a temporary file that is renamed when complete.
 - `drift --base-artifact` reads only `files` and `fileEdges` from a version 3 `graph.json`, in pieces, so a baseline larger than one string can hold still loads.
 - A failed `artifact build` removes the files it wrote (and the output directory when it created it) and names the artifact that failed.
-- `graph --json --output <path>` writes through a temporary file and replaces `<path>` only when the whole document is written; on stdout it writes one piece at a time and waits for a slow consumer.
+- `graph --json --output <path>` writes through a temporary file and replaces `<path>` only when the whole document is written, keeping the permission bits of a file it replaces (Linux and macOS; Windows has none to keep). A path that is not a regular file cannot be replaced by a rename, so the document is written into it in place: a device such as `/dev/null` or `\\.\NUL`, a FIFO, or a Windows named pipe (`\\.\pipe\<name>`). A symbolic link counts as the file it points to. On stdout it writes one piece at a time and waits for a slow consumer.
 
 #### Agent client installer
 

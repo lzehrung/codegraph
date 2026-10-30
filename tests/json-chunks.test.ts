@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeJsonAsLines, writeJsonFileInChunks, writeJsonInChunks } from "../src/util/json-chunks.js";
-import { createTempRootRegistry } from "./helpers/filesystem.js";
+import { createTempRootRegistry, openFifoForReading, tryCreateFifo, withUmask } from "./helpers/filesystem.js";
 import { limitJsonStringLength } from "./helpers/string-limit.js";
 
 const roots = createTempRootRegistry();
@@ -260,5 +260,36 @@ describe("writeJsonFileInChunks", () => {
 
     await expect(fsp.readFile(target, "utf8")).resolves.toBe("previous\n");
     expect(await fsp.readdir(root)).toEqual(["graph.json"]);
+  });
+
+  // POSIX permission bits do not exist on Windows; this runs in the Linux and macOS CI lanes.
+  it.skipIf(process.platform === "win32")("keeps the permission bits of the file it replaces", async () => {
+    const root = await roots.create("cg-json-chunks-mode-");
+    const target = path.join(root, "graph.json");
+    await fsp.writeFile(target, "previous\n", "utf8");
+    await fsp.chmod(target, 0o600);
+    const document = graphDocument(5);
+
+    await withUmask(0o022, () => writeJsonFileInChunks(target, document));
+
+    expect((await fsp.stat(target)).mode & 0o7777).toBe(0o600);
+    await expect(fsp.readFile(target, "utf8")).resolves.toBe(`${JSON.stringify(document, null, 2)}\n`);
+  });
+
+  // A FIFO does not exist on Windows; this runs in the Linux and macOS CI lanes.
+  it.skipIf(process.platform === "win32")("writes into a FIFO in place, with the same bytes", async () => {
+    const root = await roots.create("cg-json-chunks-fifo-");
+    const target = path.join(root, "graph.json");
+    if (!(await tryCreateFifo(target))) return;
+    const document = graphDocument(5);
+    const reader = await openFifoForReading(target);
+    try {
+      await writeJsonFileInChunks(target, document);
+
+      expect((await fsp.lstat(target)).isFIFO()).toBe(true);
+      await expect(reader.readFile("utf8")).resolves.toBe(`${JSON.stringify(document, null, 2)}\n`);
+    } finally {
+      await reader.close();
+    }
   });
 });

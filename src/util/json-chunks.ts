@@ -116,7 +116,8 @@ export async function writeJsonInChunks(
 /**
  * Writes `JSON.stringify(value, null, 2)` and a final newline to `filePath` in pieces; see `writeJsonInChunks`. The
  * pieces go to a temporary file beside `filePath`, which replaces it only once the whole document is written, so a
- * failure leaves a previous `filePath` as it was.
+ * failure leaves a previous `filePath` as it was. A `filePath` that is not a regular file (a device, a FIFO) gets the
+ * pieces in place, as `writeFileAtomicallyFrom` does.
  */
 export async function writeJsonFileInChunks(filePath: string, value: unknown): Promise<void> {
   await writeFileAtomicallyFrom(filePath, async (handle) => {
