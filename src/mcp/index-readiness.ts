@@ -138,6 +138,13 @@ export type McpIndexReadinessOptions = {
   progress: McpBuildProgress;
 };
 
+/**
+ * Needs that depend on what the first ones loaded, asked for once those are loaded and inside the same wait.
+ * `packet_get` reads the duplicate analysis only for a target that resolves to a file or a symbol, and the resolution
+ * reads the detailed symbol graph, so it cannot say what it needs before that graph is loaded.
+ */
+export type McpFollowUpNeeds = () => Promise<readonly McpIndexNeed[]>;
+
 export type McpIndexReadiness = {
   /**
    * Starts the startup warmup, once; call it when the server is ready to serve. The warmup runs in the background and
@@ -145,16 +152,23 @@ export type McpIndexReadiness = {
    */
   startWarmup: () => void;
   /**
-   * Settles when no load that the server started runs, at once when none was started: the warmup, and every wait of a
-   * call, including one that stopped waiting. Loads that start while it waits count too. Never rejects.
+   * Settles when no load that the server started runs, at once when none was started: the loads of the warmup and of
+   * every wait of a call, including a call that stopped waiting and a load that ran beside one that failed. Loads that
+   * start while it waits count too. Never rejects.
    */
   buildsSettled: () => Promise<void>;
   /**
-   * Waits for the freshness check that every index-backed handler runs, for the session loads that `needs` names, and
-   * for the check again, so that the handler that runs next finds all of it ready. Past the budget it throws
-   * {@link McpIndexBuildingError}; the loads continue, and the next call joins them. A cancelled call stops waiting.
+   * Waits for the freshness check that every index-backed handler runs, for the session loads that `needs` names, for
+   * the loads that `followUp` names once those are loaded, and for the check again, so that the handler that runs next
+   * finds all of it ready. It all shares one budget: past it the call throws {@link McpIndexBuildingError}; the loads
+   * continue, and the next call joins them. A load that fails fails the call at once. A cancelled call stops waiting.
    */
-  waitFor: (tool: string, needs: readonly McpIndexNeed[], signal?: AbortSignal) => Promise<void>;
+  waitFor: (
+    tool: string,
+    needs: readonly McpIndexNeed[],
+    signal?: AbortSignal,
+    followUp?: McpFollowUpNeeds,
+  ) => Promise<void>;
 };
 
 const ACTIVITY: Record<McpIndexNeed, string> = {
@@ -246,13 +260,17 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
     }
   };
 
+  // Each load is tracked on its own. When one fails, the loads of a call or of the warmup reject as a whole at once,
+  // while the others still run, and the shutdown has to wait for those too.
+  const trackedLoad = (need: McpIndexNeed): Promise<void> => track(load(need));
+
   const startWarmup = (): void => {
     if (warmupStarted) return;
     warmupStarted = true;
     if (!options.warmup.length) return;
     // The failure is logged here, where nobody else can report it: the next call that needs a build runs it again.
     void track(
-      Promise.all(options.warmup.map(load)).then(
+      Promise.all(options.warmup.map(trackedLoad)).then(
         () => undefined,
         (error: unknown) => {
           console.error(`[codegraph] MCP startup warmup failed: ${describeMcpRuntimeError(error)}`);
@@ -280,28 +298,42 @@ export function createMcpIndexReadiness(session: AgentSession, options: McpIndex
     return { activity: unfinished ? ACTIVITY[unfinished] : CHECKING_ACTIVITY, elapsedMs };
   };
 
-  const waitFor = async (tool: string, needs: readonly McpIndexNeed[], signal?: AbortSignal): Promise<void> => {
+  const waitFor = async (
+    tool: string,
+    needs: readonly McpIndexNeed[],
+    signal?: AbortSignal,
+    followUp?: McpFollowUpNeeds,
+  ): Promise<void> => {
     if (signal?.aborted) throw mcpCancellationError(signal);
     const startedAt = performance.now();
+    const wanted = [...needs];
     const done = new Set<McpIndexNeed>();
+    const loadAll = async (list: readonly McpIndexNeed[]): Promise<void> => {
+      await Promise.all(
+        list.map(async (need) => {
+          await trackedLoad(need);
+          done.add(need);
+        }),
+      );
+    };
     // The check first, because it waits for a build that runs and replaces the session when files changed, so that the
     // loads below are the ones of the session the handler reads. The check again, because a session that was not built
     // yet is checked against files only once it is.
     const ready = track(
       (async (): Promise<void> => {
         await checkSessionFreshness(session);
-        await Promise.all(
-          needs.map(async (need) => {
-            await load(need);
-            done.add(need);
-          }),
-        );
+        await loadAll(needs);
+        if (followUp) {
+          const later = await followUp();
+          wanted.push(...later);
+          await loadAll(later);
+        }
         await checkSessionFreshness(session);
       })(),
     );
     if ((await settleWithinBudget(ready, options.waitMs, signal)) === "ready") return;
     const waitedMs = Math.round(performance.now() - startedAt);
-    const progress = describeProgress(needs, done, waitedMs);
+    const progress = describeProgress(wanted, done, waitedMs);
     const counts = progress.total === undefined ? "" : ` ${progress.current ?? 0}/${progress.total}`;
     throw new McpIndexBuildingError({
       status: "index_building",

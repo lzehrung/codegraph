@@ -78,6 +78,7 @@ import {
   exploreNeeds,
   searchNeeds,
   type McpBuildProgress,
+  type McpFollowUpNeeds,
   type McpIndexNeed,
   type McpIndexReadiness,
 } from "./index-readiness.js";
@@ -448,16 +449,18 @@ function warmupNeeds(mode: CodegraphMcpWarmupMode): McpIndexNeed[] {
 function withIndexBudget(
   handlers: CodegraphMcpHandlers,
   readiness: Pick<McpIndexReadiness, "waitFor">,
+  session: AgentSession,
 ): CodegraphMcpHandlers {
   const budgeted =
     <Request, Result>(
       tool: string,
       handler: (request: Request, signal?: AbortSignal) => Promise<Result>,
       needsOf: (request: Request) => readonly McpIndexNeed[] | undefined,
+      followUpOf?: (request: Request) => McpFollowUpNeeds | undefined,
     ) =>
     async (request: Request, signal?: AbortSignal): Promise<Result> => {
       const needs = needsOf(request);
-      if (needs) await readiness.waitFor(tool, needs, signal);
+      if (needs) await readiness.waitFor(tool, needs, signal, followUpOf?.(request));
       return await handler(request, signal);
     };
   return {
@@ -471,9 +474,21 @@ function withIndexBudget(
     get_file: budgeted("get_file", handlers.get_file, (request) =>
       request.includeGraphContext ? ["index"] : undefined,
     ),
-    // A `review:` target builds its own report from git; any other target reads the detailed symbol graph.
-    packet_get: budgeted("packet_get", handlers.packet_get, (request) =>
-      request.target.startsWith("review:") ? [] : ["detailedGraph", "duplicates"],
+    // A `review:` target builds its own report from git and reads no session build. Any other target reads the detailed
+    // symbol graph, and also the duplicate analysis of its duplicate context, except a SQL object, which has none, and
+    // a target that does not resolve, which fails at once. What the target resolves to is known once the detailed
+    // symbol graph is loaded, so that decision follows it.
+    packet_get: budgeted(
+      "packet_get",
+      handlers.packet_get,
+      (request) => (request.target.startsWith("review:") ? [] : ["detailedGraph"]),
+      (request) =>
+        request.target.startsWith("review:")
+          ? undefined
+          : async () => {
+              const { kind } = await resolveCodegraphTargetWithSession(session, { target: request.target });
+              return kind === "sql_object" || kind === "not_found" ? [] : ["duplicates"];
+            },
     ),
   };
 }
@@ -513,9 +528,9 @@ export type CodegraphMcpResources = {
   startWarmup: () => void;
   /**
    * Settles when no load that the server started runs, at once when none was started, and never rejects: a warmup
-   * failure is logged. That covers the startup warmup and the wait of every budgeted call, including one that stopped
-   * waiting. Await it, with `closeWatcher`, before `session.invalidate()`: the loads keep writing the cache until they
-   * end.
+   * failure is logged. That covers the loads of the startup warmup and of the wait of every budgeted call, including a
+   * call that stopped waiting and a load that ran beside one that failed. Await it, with `closeWatcher`, before
+   * `session.invalidate()`: the loads keep writing the cache until they end.
    */
   buildsSettled: () => Promise<void>;
 };
@@ -1323,7 +1338,7 @@ function createCodegraphMcpHandlersForSession(
     ...artifactHandlers,
   };
   return {
-    handlers: readiness ? withIndexBudget(handlers, readiness) : handlers,
+    handlers: readiness ? withIndexBudget(handlers, readiness, session) : handlers,
     runExclusive: withArtifactWriteLock,
   };
 }

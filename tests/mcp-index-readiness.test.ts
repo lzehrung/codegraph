@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { formatAgentSqlHandle } from "../src/agent/handles.js";
 import * as queryIndexStore from "../src/agent/query-index/session-store.js";
 import * as queryIndexUpdate from "../src/agent/query-index/update.js";
 import { createAgentSession, type AgentLoadProjectOptions, type AgentSession } from "../src/agent/session.js";
@@ -144,6 +145,33 @@ function holdLoad(
     });
   }
   return { session, release: gate.resolve, requested: () => requests };
+}
+
+/**
+ * A session for the two loads that a hybrid search and the default warmup start side by side: the basic symbol graph
+ * fails at once, and the project index load that the search index starts with waits until `release()`. `events` records
+ * that load and the invalidation of the session.
+ */
+function failOneLoadHoldAnother(root: string): { session: AgentSession; release: () => void; events: string[] } {
+  const inner = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "auto" } });
+  const gate = Promise.withResolvers<void>();
+  const events: string[] = [];
+  const session: AgentSession = {
+    ...inner,
+    loadProject: async (options) => {
+      if (options?.symbolGraph === "basic") throw new Error("disk full");
+      events.push("loadProject:start");
+      await gate.promise;
+      const snapshot = await inner.loadProject(options);
+      events.push("loadProject:end");
+      return snapshot;
+    },
+    invalidate: () => {
+      events.push("invalidate");
+      inner.invalidate();
+    },
+  };
+  return { session, release: gate.resolve, events };
 }
 
 /** What `call` answers, once it has answered: a call that must answer within its budget leaves it empty when it blocks. */
@@ -704,6 +732,8 @@ describe("MCP tools that wait within the budget", () => {
   afterAll(async () => {
     await suiteRoots.cleanup();
   });
+  // The table `users` that `beforeAll` writes into `schema.sql`.
+  const sqlHandle = formatAgentSqlHandle({ name: "users", file: "schema.sql", line: 1 });
 
   type Scenario = {
     name: string;
@@ -836,6 +866,20 @@ describe("MCP tools that wait within the budget", () => {
       ignores: ["graph", "query"],
     },
     {
+      name: "packet_get of a SQL handle",
+      tool: "packet_get",
+      call: (handlers) => handlers.packet_get({ target: sqlHandle }),
+      waitsFor: ["detailed"],
+      ignores: ["graph", "query", "duplicates"],
+    },
+    {
+      name: "packet_get of a SQL object name",
+      tool: "packet_get",
+      call: (handlers) => handlers.packet_get({ target: "users" }),
+      waitsFor: ["detailed"],
+      ignores: ["graph", "query", "duplicates"],
+    },
+    {
       name: "packet_get of a review range",
       tool: "packet_get",
       call: (handlers) => handlers.packet_get({ target: "review:base=HEAD~1;head=HEAD" }),
@@ -870,6 +914,28 @@ describe("MCP tools that wait within the budget", () => {
         await expectAnswered(outcome);
         expect(gate.requested()).toBe(0);
       }
+    } finally {
+      gate.release();
+      await resources.buildsSettled();
+      resources.session.invalidate();
+    }
+  });
+
+  it("fails a packet_get whose target does not resolve at once, without waiting for the duplicate analysis", async () => {
+    const gate = holdLoad(reviewRoot, "duplicates");
+    const resources = createCodegraphMcpResources({
+      root: reviewRoot,
+      session: gate.session,
+      warmup: "off",
+      mcpIndexWaitMs: 2_000,
+    });
+    try {
+      await resources.session.loadProject();
+
+      await expect(resources.handlers.packet_get({ target: "noSuchSymbol" })).rejects.toThrow(
+        "Packet target did not resolve: noSuchSymbol",
+      );
+      expect(gate.requested()).toBe(0);
     } finally {
       gate.release();
       await resources.buildsSettled();
@@ -982,6 +1048,61 @@ describe("MCP shutdown and the loads that a call stopped waiting for", () => {
         await serving;
       }
     });
+  });
+
+  it("keeps the load that ran beside a failed one in the drain, for a call", async () => {
+    const root = await createProject("cg-mcp-drain-sibling-call-");
+    const sibling = failOneLoadHoldAnother(root);
+    const resources = createCodegraphMcpResources({
+      root,
+      session: sibling.session,
+      warmup: "off",
+      mcpIndexWaitMs: 600_000,
+    });
+    let drained = false;
+    try {
+      // The call reports the failure at once, while the load that ran beside it still waits.
+      await expect(resources.handlers.search({ query: "alpha" })).rejects.toThrow("disk full");
+
+      const settled = resources.buildsSettled().then(() => {
+        drained = true;
+      });
+      await letShutdownRun();
+      expect(drained).toBe(false);
+
+      sibling.release();
+      await settled;
+      expect(sibling.events).toEqual(["loadProject:start", "loadProject:end"]);
+    } finally {
+      sibling.release();
+      await resources.buildsSettled();
+      resources.session.invalidate();
+    }
+  });
+
+  it("releases the session after the load that ran beside a failed one of the warmup, when the HTTP server closes", async () => {
+    const root = await createProject("cg-mcp-drain-sibling-http-");
+    const sibling = failOneLoadHoldAnother(root);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const server = await startCodegraphMcpHttpServer({ root, port: 0, session: sibling.session, warmup: "base" });
+    let closing: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() =>
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("MCP startup warmup failed: disk full")),
+      );
+
+      closing = server.close();
+      await letShutdownRun();
+      // The warmup as a whole has failed, and the load that ran beside the failure still writes to the session.
+      expect(sibling.events).not.toContain("invalidate");
+
+      sibling.release();
+      await closing;
+      expect(sibling.events).toEqual(["loadProject:start", "loadProject:end", "invalidate"]);
+    } finally {
+      sibling.release();
+      await (closing ?? server.close());
+    }
   });
 
   describe("unhandled rejections", () => {
