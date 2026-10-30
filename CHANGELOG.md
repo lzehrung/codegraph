@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-10-30
+
 ### Fixed
 
 - Duplicates: `codegraph duplicates` no longer ends with `Map maximum size exceeded` or runs out of memory on a large monorepo whose files share many fingerprints. Fingerprint matching now counts the buckets each pair of units shares with one counter per unit, where it kept a table of every pair that shared a fingerprint, and candidate pairs are bounded by `--max-candidate-pairs` (default 2000000; `maxCandidatePairs` in `findDuplicates()`, `findDuplicateContext()`, and `findDuplicateContexts()`). Pairs are kept strongest evidence first, pairs that can never be scored (two units of one file in a cross-file run, or two that overlap) take no slot, and skipped ones are counted in `omittedCounts.candidatePairs` and `stats.candidatePairBudget`, with a partial-results note in pretty output. Cluster summaries are built once per clone family instead of once per group, which took minutes on a family of near-identical files, and the command now reports unit, candidate pair, scoring, and grouping progress on stderr and ends with its total elapsed time, where it reported only the index refresh.
@@ -768,7 +770,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.1.1...HEAD
+[3.1.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.1
 [3.1.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.0
 [3.0.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.0.1
 [3.0.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.0.0
