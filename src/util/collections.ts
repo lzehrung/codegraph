@@ -7,6 +7,23 @@ export function appendToArrayMap<TKey, TValue>(map: Map<TKey, TValue[]>, key: TK
   map.set(key, [value]);
 }
 
+/**
+ * Appends `items` to `target` one element at a time. `target.push(...items)` passes every element as a
+ * call argument, so it throws `RangeError: Maximum call stack size exceeded` once a list reaches roughly
+ * 120,000 elements. Use this wherever the length follows project or file size.
+ */
+export function pushAll<T>(target: T[], items: Iterable<T>): void {
+  const source = items === target ? target.slice() : items;
+  for (const item of source) target.push(item);
+}
+
+/** Replaces the contents of `target` with `items` in place, for an array that other code still holds. */
+export function replaceContents<T>(target: T[], items: readonly T[]): void {
+  if (items === target) return;
+  target.length = 0;
+  pushAll(target, items);
+}
+
 export function uniqueByKey<T>(items: Iterable<T>, keyFor: (item: T) => string): T[] {
   const unique: T[] = [];
   const seen = new Set<string>();

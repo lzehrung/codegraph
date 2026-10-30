@@ -136,7 +136,7 @@ import {
   type BareNameUse,
 } from "./name-resolution.js";
 import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";
-import { createUnionFind } from "../util/collections.js";
+import { createUnionFind, pushAll, replaceContents } from "../util/collections.js";
 import { toTreeSitterPosition } from "./shared.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -841,7 +841,7 @@ async function findReferencesInternal(
       const node = pending.pop()!;
       const alias = node.type === "export_specifier" ? node.childForFieldName("alias") : undefined;
       if (alias && definitionExportNames.has(alias.text)) return true;
-      pending.push(...node.namedChildren);
+      pushAll(pending, node.namedChildren);
     }
     return false;
   };
@@ -1763,8 +1763,7 @@ async function findReferencesInternal(
         seenRefs.set(key, kept.length);
         kept.push(ref);
       }
-      refs.length = 0;
-      refs.push(...kept);
+      replaceContents(refs, kept);
       for (const range of scoped.ranges) pushRef({ file: definitionFile, range });
       // Those static uses stay. A lookup in the same span may still name the callable by a
       // string, which this walk does not edit, so coverage must not claim to be complete.
@@ -1820,8 +1819,7 @@ async function findReferencesInternal(
       }
       kept.push(ref);
     }
-    refs.length = 0;
-    refs.push(...kept);
+    replaceContents(refs, kept);
   }
 
   await attachReferenceContext(index, refs, opts);

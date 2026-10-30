@@ -240,7 +240,7 @@ describe("architecture drift artifact baselines", () => {
     );
 
     await expect(loadArchitectureSnapshotFromArtifact(root)).rejects.toThrow(
-      "schema version 1 is unsupported; regenerate the drift baseline with schema version 2",
+      "schema version 1 is unsupported; regenerate the drift baseline with schema version 3",
     );
   });
 

@@ -194,6 +194,10 @@ export type ProjectIndex = {
   byFile: Map<FileId, ModuleIndex>;
   projectRoot?: string;
   languageExtensions?: LanguageExtensionMap;
+  /**
+   * Memoized `resolveExport` results. Keys are internal, and the cache is emptied between lookups once it holds
+   * a fixed number of entries, so its size does not follow the number of modules or queries.
+   */
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;
   parsed?: Map<string, ParsedFileContext> | undefined;

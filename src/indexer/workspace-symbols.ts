@@ -8,7 +8,7 @@ import { defNodeId } from "../graphs/symbol-graph.js";
 import { boundList, boundedNonNegativeIntegerOption } from "../presentation/bounds.js";
 import type { ImportBinding, ProjectIndex, SymbolDef, SymbolKind } from "./types.js";
 import { importNodeId } from "./import-types.js";
-import { compareCodeUnits } from "../util/collections.js";
+import { compareCodeUnits, pushAll } from "../util/collections.js";
 
 export const DEFAULT_WORKSPACE_SYMBOL_LIMIT = 50;
 export const MAX_WORKSPACE_SYMBOL_LIMIT = 500;
@@ -86,7 +86,7 @@ export async function workspaceSymbols(
   if (request.includeImports) {
     lookup.imports ??= buildImportCandidates(index);
     const importBuild = await lookup.imports;
-    candidates.push(...importBuild.symbols);
+    pushAll(candidates, importBuild.symbols);
     omittedImports = importBuild.omitted;
     importScanFailures = importBuild.failedFiles;
   }

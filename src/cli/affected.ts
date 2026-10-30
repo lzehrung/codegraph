@@ -9,6 +9,7 @@ import { deletedPathsForChange } from "../review/changes.js";
 import { listDirectDeletedFileImporters } from "../review/deleted.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath, resolveFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
+import { pushAll } from "../util/collections.js";
 import { exitWithError } from "./context.js";
 import { getCliCommandUsage, parseNonNegativeIntegerOption } from "./options.js";
 
@@ -276,7 +277,7 @@ async function collectChangedFileInputs(context: AffectedCommandContext): Promis
   const inputs: string[] = [...context.positionals];
   const deletedFiles: string[] = [];
   if (context.hasFlag("--stdin")) {
-    inputs.push(...parseStdinFiles(await context.readStdin()));
+    pushAll(inputs, parseStdinFiles(await context.readStdin()));
   }
 
   const base = context.getOpt("--base");

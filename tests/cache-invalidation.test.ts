@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -56,6 +57,7 @@ import * as resolverEnvironment from "../src/indexer/build-cache/resolver-enviro
 
 vi.mock("node:zlib", { spy: true });
 import { runGit } from "./helpers/git.js";
+import { limitJsonStringLength } from "./helpers/string-limit.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 import {
   DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
@@ -2047,6 +2049,82 @@ describe("Cache invalidation and strict hashing", () => {
     await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, rebuilt);
     const refreshed = await readProjectSnapshot(sidecarPath);
     expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
+  });
+
+  describe("with a graph whose text passes the string limit", () => {
+    /** The text, and from it the hash, that the writer built before it fed the hash in pieces: one `JSON.stringify`. */
+    function wholeGraphText(graph: SymbolGraph): string {
+      const descriptor: unknown = Object.getOwnPropertyDescriptor(graph, "nodeAliases")?.value;
+      const nodeAliases = descriptor instanceof Map ? [...descriptor.entries()] : [];
+      return JSON.stringify({ nodes: [...graph.nodes.values()], edges: graph.edges, nodeAliases });
+    }
+
+    function wholeStringHash(identity: string, graph: SymbolGraph): string {
+      return createHash("sha256").update(identity).update("\0").update(wholeGraphText(graph)).digest("hex");
+    }
+
+    async function createOverloadedProject(): Promise<{ root: string; sidecarPath: string }> {
+      // A long absolute path makes the hashed text, which holds absolute ids, longer than the persisted payload.
+      const root = path.join(await mkTmpDir("dg-detailed-hash-"), "a-deliberately-long-directory-name", "project");
+      await fsp.mkdir(root, { recursive: true });
+      await fsp.writeFile(
+        path.join(root, "entry.ts"),
+        [
+          "export function overloaded(a: string): string;",
+          "export function overloaded(a: number): number;",
+          "export function overloaded(a: unknown): unknown { return a; }",
+          "export function first() { return overloaded('x'); }",
+          "export function second() { return overloaded(2) + first(); }",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      return { root, sidecarPath: path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json") };
+    }
+
+    it("persists the graph with the hash one whole-graph string would give", async () => {
+      const { root, sidecarPath } = await createOverloadedProject();
+      const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      const graph = await buildSymbolGraphDetailed(index);
+      const identity = index.projectSnapshotIdentity!;
+      expect(Object.getOwnPropertyDescriptor(graph, "nodeAliases")?.value).toBeInstanceOf(Map);
+      await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
+      const unlimited = await readProjectSnapshot(sidecarPath);
+      const payloadChars = JSON.stringify(unlimited).length;
+      const wholeChars = wholeGraphText(graph).length;
+      expect(unlimited.graphHash).toBe(wholeStringHash(identity, graph));
+
+      // A limit between the persisted payload and the hashed text: one string for the whole graph cannot be built,
+      // yet the payload still fits.
+      expect(payloadChars).toBeLessThan(wholeChars);
+      await fsp.rm(sidecarPath);
+      const limit = limitJsonStringLength(Math.floor((payloadChars + wholeChars) / 2));
+      try {
+        await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
+      } finally {
+        limit.mockRestore();
+      }
+
+      const limited = await readProjectSnapshot(sidecarPath);
+      expect(limited.graphHash).toBe(unlimited.graphHash);
+    });
+
+    it("leaves no cache instead of failing when the payload cannot be built either", async () => {
+      const { root, sidecarPath } = await createOverloadedProject();
+      const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      const graph = await buildSymbolGraphDetailed(index);
+      const limit = limitJsonStringLength(200);
+      try {
+        await expect(
+          buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph),
+        ).resolves.toBeUndefined();
+      } finally {
+        limit.mockRestore();
+      }
+
+      await expect(fsp.stat(sidecarPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(buildCache.tryLoadDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index)).resolves.toBeNull();
+    });
   });
 
   it("rejects a detailed symbol graph sidecar built from stale input after a signature change", async () => {

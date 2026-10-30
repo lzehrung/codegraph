@@ -36,6 +36,7 @@ import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import {
   csharpNamespaceImportDirectories,
+  hasNamespaceReexport,
   javaKotlinFunctionOverloadIncludes,
   javaStaticNamedImportIncludes,
   resolveExport,
@@ -989,14 +990,18 @@ function filesExportingDefinition(
 ): string[] {
   const files = new Map<string, string>([[fileIdentityKey(def.file), def.file]]);
   const namespaceLinks: Array<{ sourceFile: string; exportedAs: string; targetFile: string }> = [];
+  // Only `export * as name from` makes `resolveExport` answer with a namespace, so a project with none has no link.
+  const mayLinkNamespaces = hasNamespaceReexport(index);
   for (const moduleIndex of index.byFile.values()) {
     if (!moduleIndex.exports.length) continue;
     const fileId = moduleIndex.file;
     const visibleExportNames = moduleExportProbeNames(index, moduleIndex, exportedNames);
-    for (const exportedName of visibleExportNames) {
-      const visible = resolveExport(index, fileId, exportedName, { allowLocalFallback: false });
-      if (visible?.kind !== "namespace") continue;
-      namespaceLinks.push({ sourceFile: fileId, exportedAs: exportedName, targetFile: visible.file });
+    if (mayLinkNamespaces) {
+      for (const exportedName of visibleExportNames) {
+        const visible = resolveExport(index, fileId, exportedName, { allowLocalFallback: false });
+        if (visible?.kind !== "namespace") continue;
+        namespaceLinks.push({ sourceFile: fileId, exportedAs: exportedName, targetFile: visible.file });
+      }
     }
     if (fileIdentityKey(fileId) === fileIdentityKey(def.file)) continue;
     for (const exportedName of visibleExportNames) {

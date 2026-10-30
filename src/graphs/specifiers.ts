@@ -26,6 +26,7 @@ import {
   isGraphOnlyLanguage,
 } from "../document-links.js";
 import { sliceText, unquote } from "../util/ast.js";
+import { pushAll } from "../util/collections.js";
 import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rust-test-modules.js";
 import { pythonTypeCheckingContext } from "../util/python-type-checking.js";
 import { rustSpecifierForParsedImport } from "../indexer/imports/text-import-extractors.js";
@@ -311,7 +312,7 @@ export function collectModuleSpecifiersFromSource(
       })();
     if (phpTree) {
       const qualifiedSpecifiers = extractPhpQualifiedSpecifiersFromTree(source, phpTree);
-      if (qualifiedSpecifiers.length) out.push(...qualifiedSpecifiers);
+      if (qualifiedSpecifiers.length) pushAll(out, qualifiedSpecifiers);
     }
   }
 

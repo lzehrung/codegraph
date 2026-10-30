@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { GRAPH_JSON_SCHEMA_VERSION } from "../agent/artifact.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
 import type { Edge, Graph } from "../types.js";
@@ -20,9 +21,10 @@ interface ArtifactManifest {
   artifacts: { graphJson: string };
 }
 
+/** `graph.json` version 2 repeated the portable graph under `graph`; version 3 holds it once, at the top level. */
+const NESTED_GRAPH_JSON_SCHEMA_VERSION = 2;
+
 interface PortableGraphJson {
-  schemaVersion: typeof ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION;
-  format: "codegraph.graph-json";
   graph: {
     files: string[];
     fileEdges: Edge[];
@@ -66,20 +68,25 @@ function parseGraphJson(value: unknown): PortableGraphJson {
   if (!isPlainRecord(value) || value.format !== "codegraph.graph-json") {
     throw new Error("Codegraph artifact graph.json is missing or invalid.");
   }
-  if (value.schemaVersion !== ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION) {
+  let portable: unknown;
+  if (value.schemaVersion === GRAPH_JSON_SCHEMA_VERSION) {
+    portable = value;
+  } else if (value.schemaVersion === NESTED_GRAPH_JSON_SCHEMA_VERSION) {
+    portable = value.graph;
+  } else {
     throw new Error(
-      `Codegraph artifact graph.json schema version ${String(value.schemaVersion)} is unsupported; regenerate the drift baseline with schema version ${ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION}.`,
+      `Codegraph artifact graph.json schema version ${String(value.schemaVersion)} is unsupported; regenerate the drift baseline with schema version ${GRAPH_JSON_SCHEMA_VERSION}.`,
     );
   }
-  if (!isPlainRecord(value.graph) || !Array.isArray(value.graph.files) || !Array.isArray(value.graph.fileEdges)) {
+  if (!isPlainRecord(portable) || !Array.isArray(portable.files) || !Array.isArray(portable.fileEdges)) {
     throw new Error("Codegraph artifact graph.json does not contain a portable graph.");
   }
-  const files = value.graph.files
+  const files = portable.files
     .filter((entry): entry is string => typeof entry === "string")
     .map(normalizePath)
     .sort();
   const fileEdges: Edge[] = [];
-  for (const edge of value.graph.fileEdges) {
+  for (const edge of portable.fileEdges) {
     if (
       !isPlainRecord(edge) ||
       typeof edge.from !== "string" ||
@@ -103,8 +110,8 @@ function parseGraphJson(value: unknown): PortableGraphJson {
     const rebuilt = edgeFromImportBinding(normalizePath(edge.from), to, source);
     fileEdges.push(source.typeOnly === false ? { ...rebuilt, typeOnly: false } : rebuilt);
   }
-  const symbols = Array.isArray(value.graph.symbols)
-    ? value.graph.symbols.filter((entry): entry is { file: string; name: string; kind: string } => {
+  const symbols = Array.isArray(portable.symbols)
+    ? portable.symbols.filter((entry): entry is { file: string; name: string; kind: string } => {
         return (
           isPlainRecord(entry) &&
           typeof entry.file === "string" &&
@@ -113,11 +120,7 @@ function parseGraphJson(value: unknown): PortableGraphJson {
         );
       })
     : [];
-  return {
-    schemaVersion: ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,
-    format: "codegraph.graph-json",
-    graph: { files, fileEdges, symbols },
-  };
+  return { graph: { files, fileEdges, symbols } };
 }
 
 function graphEdges(edges: readonly Edge[]): ArchitectureGraphEdge[] {

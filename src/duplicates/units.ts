@@ -32,6 +32,7 @@ import { getNativeDuplicateTokens, getNativeSingleQueryExecution } from "../nati
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
+import { pushAll } from "../util/collections.js";
 import { EVENT_LOOP_SLICE_MS, yieldToEventLoop } from "../util/concurrency.js";
 import {
   assertFilePathWithinRoot,
@@ -269,10 +270,10 @@ function sfcImportStatementRanges(source: string): SourceRange[] {
   const ranges: SourceRange[] = [];
   for (const block of parseSFC(source)) {
     if (block.type === "script") {
-      ranges.push(...importStatementRanges(prepareSFCBlockSource(source, block), scriptLanguageIdForBlock(block)));
+      pushAll(ranges, importStatementRanges(prepareSFCBlockSource(source, block), scriptLanguageIdForBlock(block)));
     } else if (block.type === "style") {
       const languageId = styleLanguageKey(block);
-      if (languageId) ranges.push(...importStatementRanges(prepareSFCBlockSource(source, block), languageId));
+      if (languageId) pushAll(ranges, importStatementRanges(prepareSFCBlockSource(source, block), languageId));
     }
   }
   return ranges;

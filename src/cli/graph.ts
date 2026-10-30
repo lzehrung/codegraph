@@ -20,14 +20,18 @@ import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
 import type { Edge, Graph } from "../types.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
+import { writeJsonFileInChunks, writeJsonInChunks } from "../util/json-chunks.js";
 import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
-import { toJSON, type CommandReport } from "./context.js";
+import { type CommandReport } from "./context.js";
 import {
   parseCacheModeOption,
   parseNonNegativeIntegerOption,
   parseOptionalNonNegativeIntegerOption,
   parseSymbolGraphScopeOption,
 } from "./options.js";
+
+/** Characters of JSON held back before a stdout write, so the output of a small graph stays one write. */
+const STDOUT_JSON_FLUSH_CHARS = 1 << 20;
 
 // Graph JSON output is always index-based: repeated file paths and symbol ids are
 // replaced with integer offsets into `files[]`/`symbolIdIndex[]` so large graphs don't
@@ -283,6 +287,29 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       context.writeStdoutLine(text);
     }
   };
+  // Graph JSON can pass V8's string limit, so it goes out in pieces instead of one string. A piece that goes to
+  // stdout ends at a line break, which makes the bytes the same as one `writeStdoutLine` of the whole text.
+  const writeJsonOut = async (value: unknown): Promise<void> => {
+    if (outputFile) {
+      try {
+        await writeJsonFileInChunks(outputFile, value);
+      } catch (error) {
+        await fsp.rm(outputFile, { force: true }).catch(() => undefined);
+        throw error;
+      }
+      return;
+    }
+    let pending = "";
+    await writeJsonInChunks(value, (chunk) => {
+      pending += chunk;
+      if (pending.length < STDOUT_JSON_FLUSH_CHARS) return;
+      const lineEnd = pending.lastIndexOf("\n");
+      if (lineEnd < 0) return;
+      context.writeStdoutLine(pending.slice(0, lineEnd));
+      pending = pending.slice(lineEnd + 1);
+    });
+    context.writeStdoutLine(pending);
+  };
   // Always populated (not gated behind --report/--progress) so a normal run can
   // detect and surface files native analysis skipped (for example
   // sourceTooLarge or queryFailure) via both the stderr warning and the --json
@@ -406,7 +433,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
         await writeOut(graphToDOTSymbols(sgraphOut, context.projectRootFs));
       } else {
         const allFiles = [...index.graph.nodes];
-        await writeOut(toJSON({ ...compactSymbolsOnly(allFiles, sgraphOut, stable), analysis }));
+        await writeJsonOut({ ...compactSymbolsOnly(allFiles, sgraphOut, stable), analysis });
       }
       await finalizeReport();
       return;
@@ -418,7 +445,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     } else if (format === "dot") {
       await writeOut(graphToDOTSymbolsWithFiles(sgraphOut, fgraphOut, context.projectRootFs));
     } else {
-      await writeOut(toJSON({ ...compactGraphWithSymbols(fgraphOut, sgraphOut, stable), analysis }));
+      await writeJsonOut({ ...compactGraphWithSymbols(fgraphOut, sgraphOut, stable), analysis });
     }
     await finalizeReport();
     return;
@@ -467,14 +494,12 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     const sqlFiles = includeSqlArtifacts ? files.filter((file) => isSqlFilePath(file, context.languageExtensions)) : [];
     const sqlArtifacts = sqlFiles.length ? await buildSqlArtifactGraphFromFiles(sqlFiles) : undefined;
     const { files: compactFiles, fileEdges } = compactFileGraph(graphOut, stable);
-    await writeOut(
-      toJSON({
-        files: compactFiles,
-        fileEdges,
-        ...(sqlArtifacts ? { sqlArtifacts } : {}),
-        analysis,
-      }),
-    );
+    await writeJsonOut({
+      files: compactFiles,
+      fileEdges,
+      ...(sqlArtifacts ? { sqlArtifacts } : {}),
+      analysis,
+    });
   }
   await finalizeReport();
 }

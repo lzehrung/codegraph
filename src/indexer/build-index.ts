@@ -43,6 +43,7 @@ import {
   normalizePath,
 } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
+import { pushAll } from "../util/collections.js";
 import { readConfinedUtf8File } from "../util/confined-file.js";
 import { resolveWorkerThreadCount } from "../util/worker-threads.js";
 import { logWithLevel } from "../logging.js";
@@ -631,12 +632,13 @@ async function buildIndexedModuleForFile(args: {
         });
   if (!nativeSourceLimitSkip) {
     for (const block of embeddedBlocks ?? []) {
-      imports.push(
-        ...(await collectImportsForFile(args.file, args.projectRoot, {
+      pushAll(
+        imports,
+        await collectImportsForFile(args.file, args.projectRoot, {
           source: block.source,
           sup: block.sup,
           ...sharedImportOptions,
-        })),
+        }),
       );
     }
   }

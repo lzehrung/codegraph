@@ -48,6 +48,7 @@ import { getNativeRuntimeFingerprint } from "../src/native/tree-sitter-native.js
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
 import { createTwoCommitCycleProject, mkTmpDir } from "./helpers/filesystem.js";
+import { limitJsonStringLength } from "./helpers/string-limit.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as mcpServer from "../src/mcp/server.js";
 import * as projectFilesModule from "../src/util/project-files.js";
@@ -1012,6 +1013,45 @@ describe("CLI command modules", () => {
     expect(backendCalls).toHaveLength(1);
     expect(backendCalls[0]?.showProgress).toBe(false);
     expect(backendCalls[0]?.report).toBeDefined();
+  });
+
+  test("graph --json writes a document that one string cannot hold, to a file and to stdout", async () => {
+    const root = await mkTmpDir("codegraph-graph-json-limit-");
+    const files: string[] = [];
+    for (let index = 0; index < 30; index += 1) {
+      const file = path.join(root, `m${index}.ts`);
+      const imported = index ? `import { value${index - 1} } from './m${index - 1}';\n` : "";
+      await fsp.writeFile(file, `${imported}export const value${index} = ${index};\n`, "utf8");
+      files.push(file.replace(/\\/g, "/"));
+    }
+    const base = { projectRootFs: root, cwd: () => root, resolveFiles: async () => files };
+    const stdout: string[] = [];
+
+    const limit = limitJsonStringLength(3_000, { prettyOnly: true });
+    try {
+      await handleGraphCommand(
+        createGraphContext({
+          ...base,
+          hasFlag: (name) => name === "--stdout" || name === "--json",
+          writeStdoutLine: (message) => stdout.push(message),
+        }),
+      );
+      await handleGraphCommand(
+        createGraphContext({
+          ...base,
+          getOpt: (name) => (name === "--output" ? "graph.json" : undefined),
+          hasFlag: (name) => name === "--json",
+        }),
+      );
+    } finally {
+      limit.mockRestore();
+    }
+
+    const fromStdout = readJsonRecord(JSON.parse(stdout.join("\n")));
+    const fromFile = readJsonRecord(JSON.parse(await fsp.readFile(path.join(root, "graph.json"), "utf8")));
+    expect(fromFile.files).toHaveLength(30);
+    expect(fromFile).toEqual(fromStdout);
+    expect((await fsp.readFile(path.join(root, "graph.json"), "utf8")).length).toBeGreaterThan(3_000);
   });
 
   test("graph --json --cache disk --cache-verify keeps the native backend when the module cache serves every file", async () => {

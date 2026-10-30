@@ -374,7 +374,7 @@ export function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!;
     if (t === "--") {
-      positionals.push(...tokens.slice(i + 1));
+      for (const token of tokens.slice(i + 1)) positionals.push(token);
       break;
     }
 

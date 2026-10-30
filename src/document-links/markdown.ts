@@ -1,5 +1,6 @@
 import path from "node:path";
 import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
+import { pushAll } from "../util/collections.js";
 import { type Range } from "../types.js";
 import { DOCUMENT_HTML_FORMS, type DocumentHtmlForm } from "./html-forms.js";
 import { extractDocumentHtmlSpecifiers } from "./html.js";
@@ -141,7 +142,7 @@ function extractMarkdownModuleSpecifiersFromSanitized(
     if (normalized) out.push(normalized);
   }
 
-  out.push(...collectMarkdownReferenceLinkSpecifiers(sanitized, referenceDefs));
+  pushAll(out, collectMarkdownReferenceLinkSpecifiers(sanitized, referenceDefs));
 
   for (const match of sanitized.matchAll(/<([^>\s]+)>/g)) {
     const candidate = match[1]?.trim();
@@ -153,7 +154,7 @@ function extractMarkdownModuleSpecifiersFromSanitized(
     if (normalized) out.push(normalized);
   }
 
-  out.push(...extractDocumentHtmlSpecifiers(sanitized, htmlForm));
+  pushAll(out, extractDocumentHtmlSpecifiers(sanitized, htmlForm));
 
   return dedupeModuleSpecifiers(out);
 }
@@ -161,7 +162,7 @@ function extractMarkdownModuleSpecifiersFromSanitized(
 export function extractMdxModuleSpecifiers(source: string): ModuleSpecifier[] {
   const sanitized = stripMarkdownCode(source);
   const out = extractMarkdownModuleSpecifiersFromSanitized(sanitized, DOCUMENT_HTML_FORMS.mdx);
-  out.push(...markResolutionKind(extractJsTsSpecifiers(sanitized), "source"));
+  pushAll(out, markResolutionKind(extractJsTsSpecifiers(sanitized), "source"));
   return dedupeModuleSpecifiers(out);
 }
 

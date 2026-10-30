@@ -1,3 +1,4 @@
+import { constants as bufferConstants } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getHotspots } from "../graphs/hotspots.js";
@@ -7,7 +8,9 @@ import type { BuildOptions } from "../indexer/types.js";
 import type { Edge } from "../types.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
 import type { SqliteArtifactFileSignature } from "../sqlite/types.js";
+import { errorMessage } from "../util/errors.js";
 import { isPlainRecord } from "../util/guards.js";
+import { writeJsonFileInChunks } from "../util/json-chunks.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
@@ -76,13 +79,19 @@ type PortableGraphBody = {
 };
 
 type PortableGraphJson = PortableGraphBody & {
-  schemaVersion: 2;
+  schemaVersion: typeof GRAPH_JSON_SCHEMA_VERSION;
   format: "codegraph.graph-json";
-  graph: PortableGraphBody;
 };
+
+/**
+ * Layout version of `graph.json`. Version 2 repeated `files`, `fileEdges`, `symbols`, and `symbolEdges` under
+ * `graph`, which doubled the file; version 3 writes them once, at the top level.
+ */
+export const GRAPH_JSON_SCHEMA_VERSION = 3;
 
 const DEFAULT_OUT_DIR = "codegraph-out";
 const SQLITE_FILE = "codegraph.sqlite";
+const SQLITE_SIDECAR_SUFFIXES = ["-journal", "-wal", "-shm"];
 const GRAPH_JSON_FILE = "graph.json";
 const REPORT_FILE = "CODEGRAPH_REPORT.md";
 const QUESTIONS_FILE = "questions.json";
@@ -129,66 +138,119 @@ export async function buildCodegraphArtifactWithSession(
     }
     sqliteFileSignatures = { signed: sqliteSignatures.length, skipped: sqliteFileSignatures.skipped };
   }
+  const outDirExisted = await directoryExists(outDir);
   await fs.mkdir(outDir, { recursive: true });
   if (request.force) {
     await prepareForcedOutputDirectory(outDir, selected);
   }
   const artifacts: CodegraphArtifactBuildResult["artifacts"] = {};
+  // Every file this build starts is listed before its write begins, so a failed write cannot leave it behind.
+  const written: string[] = [];
+  let writing = MANIFEST_FILE;
+  const begin = (fileName: string): void => {
+    writing = fileName;
+    written.push(fileName);
+  };
 
-  if (selected.sqlite) {
-    const outputPath = path.join(outDir, SQLITE_FILE);
-    await writeGraphSqlite({
-      fileGraph: snapshot.fileGraph,
-      symbolGraph: snapshot.symbolGraph,
-      outputPath,
-      fileSignatures: sqliteSignatures,
-    });
-    artifacts.sqlite = SQLITE_FILE;
-  }
+  try {
+    if (selected.sqlite) {
+      begin(SQLITE_FILE);
+      const outputPath = path.join(outDir, SQLITE_FILE);
+      await writeGraphSqlite({
+        fileGraph: snapshot.fileGraph,
+        symbolGraph: snapshot.symbolGraph,
+        outputPath,
+        fileSignatures: sqliteSignatures,
+      });
+      artifacts.sqlite = SQLITE_FILE;
+    }
 
-  if (selected.graphJson) {
-    await writeJson(path.join(outDir, GRAPH_JSON_FILE), buildCodegraphGraphJson(snapshot));
-    artifacts.graphJson = GRAPH_JSON_FILE;
-  }
+    if (selected.graphJson) {
+      begin(GRAPH_JSON_FILE);
+      await writeJsonFileInChunks(path.join(outDir, GRAPH_JSON_FILE), buildCodegraphGraphJson(snapshot));
+      artifacts.graphJson = GRAPH_JSON_FILE;
+    }
 
-  if (selected.report) {
-    await fs.writeFile(
-      path.join(outDir, REPORT_FILE),
-      buildReport(snapshot, selected.graphJson ? path.join(outDir, GRAPH_JSON_FILE) : undefined),
-      "utf8",
-    );
-    artifacts.report = REPORT_FILE;
-  }
+    if (selected.report) {
+      begin(REPORT_FILE);
+      await fs.writeFile(
+        path.join(outDir, REPORT_FILE),
+        buildReport(snapshot, selected.graphJson ? path.join(outDir, GRAPH_JSON_FILE) : undefined),
+        "utf8",
+      );
+      artifacts.report = REPORT_FILE;
+    }
 
-  if (selected.questions) {
-    await writeJson(path.join(outDir, QUESTIONS_FILE), {
+    if (selected.questions) {
+      begin(QUESTIONS_FILE);
+      await writeJsonFileInChunks(path.join(outDir, QUESTIONS_FILE), {
+        schemaVersion: 1,
+        format: "codegraph.questions",
+        questions: buildQuestions(snapshot),
+      });
+      artifacts.questions = QUESTIONS_FILE;
+    }
+
+    const manifestPath = path.join(outDir, MANIFEST_FILE);
+    const result: CodegraphArtifactBuildResult = {
       schemaVersion: 1,
-      format: "codegraph.questions",
-      questions: buildQuestions(snapshot),
-    });
-    artifacts.questions = QUESTIONS_FILE;
+      root,
+      outDir,
+      manifestPath,
+      artifacts,
+    };
+    const manifest: ArtifactManifest = {
+      ...result,
+      sql: {
+        supported: true,
+        limitation: "SQL support does not perform current-schema reconstruction.",
+        fileSignatures: sqliteFileSignatures,
+      },
+      graphJsonSchema: "codegraph.graph-json",
+    };
+    begin(MANIFEST_FILE);
+    await writeJsonFileInChunks(manifestPath, manifest);
+    return result;
+  } catch (error) {
+    await removePartialArtifacts(outDir, written, !outDirExisted);
+    throw artifactWriteError(error, writing, outDir);
   }
+}
 
-  const manifestPath = path.join(outDir, MANIFEST_FILE);
-  const result: CodegraphArtifactBuildResult = {
-    schemaVersion: 1,
-    root,
-    outDir,
-    manifestPath,
-    artifacts,
-  };
-  const manifest: ArtifactManifest = {
-    ...result,
-    sql: {
-      supported: true,
-      limitation: "SQL support does not perform current-schema reconstruction.",
-      fileSignatures: sqliteFileSignatures,
-    },
-    graphJsonSchema: "codegraph.graph-json",
-  };
-  await writeJson(manifestPath, manifest);
+/** Removes what a failed build wrote, and the output directory when the build created it and nothing else is in it. */
+async function removePartialArtifacts(
+  outDir: string,
+  written: readonly string[],
+  removeDirectory: boolean,
+): Promise<void> {
+  for (const fileName of written) {
+    const sidecars = fileName === SQLITE_FILE ? SQLITE_SIDECAR_SUFFIXES.map((suffix) => `${fileName}${suffix}`) : [];
+    for (const name of [fileName, ...sidecars]) {
+      try {
+        await fs.rm(path.join(outDir, name), { force: true });
+      } catch {
+        // Cleanup is best effort; the build error below is the one that matters.
+      }
+    }
+  }
+  if (!removeDirectory) return;
+  try {
+    await fs.rmdir(outDir);
+  } catch {
+    // Not empty, or already gone.
+  }
+}
 
-  return result;
+function artifactWriteError(error: unknown, artifact: string, outDir: string): Error {
+  const stringLimitHit =
+    (error instanceof RangeError && /invalid string length/i.test(error.message)) ||
+    (isNodeError(error) && error.code === "ERR_STRING_TOO_LONG");
+  const reason = stringLimitHit
+    ? `${errorMessage(error)} (a single string passed the ${bufferConstants.MAX_STRING_LENGTH}-character limit of this Node.js runtime)`
+    : errorMessage(error);
+  return new Error(`Failed to write ${artifact}: ${reason}. Partial output in ${outDir} was removed.`, {
+    cause: error,
+  });
 }
 
 function normalizeArtifactSelection(request: CodegraphArtifactBuildRequest): {
@@ -426,19 +488,11 @@ function outputIgnoreGlobs(root: string, outDir: string): string[] {
   return [`${relative}/**`];
 }
 
-export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
-  schemaVersion: 2;
-  format: "codegraph.graph-json";
-  files: PortableGraphJson["files"];
-  fileEdges: PortableGraphJson["fileEdges"];
-  symbols: PortableGraphJson["symbols"];
-  symbolEdges: PortableGraphJson["symbolEdges"];
-  graph: PortableGraphJson["graph"];
-} {
+export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): PortableGraphJson {
   const symbolIds = buildPortableSymbolIdMap(snapshot);
   const symbolPositions = buildPortableSymbolPositions(snapshot, symbolIds);
   const portableSymbolId = (id: string): string => symbolIds.get(id) ?? id;
-  const graph: PortableGraphBody = {
+  const body: PortableGraphBody = {
     files: [...snapshot.fileGraph.nodes].map((file) => normalizeAgentFilePath(snapshot.root, file)).sort(),
     fileEdges: [...snapshot.fileGraph.edges]
       .map((edge) => ({
@@ -505,15 +559,7 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
         return compareSymbolEdgeSites(snapshot.root, left.site, right.site);
       }),
   };
-  return {
-    schemaVersion: 2,
-    format: "codegraph.graph-json",
-    files: graph.files,
-    fileEdges: graph.fileEdges,
-    symbols: graph.symbols,
-    symbolEdges: graph.symbolEdges,
-    graph,
-  };
+  return { schemaVersion: GRAPH_JSON_SCHEMA_VERSION, format: "codegraph.graph-json", ...body };
 }
 
 type SymbolPosition = { line: number; column: number };
@@ -815,6 +861,11 @@ function collectSqlObjects(
     });
 }
 
-async function writeJson(filePath: string, value: unknown): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+async function directoryExists(directoryPath: string): Promise<boolean> {
+  try {
+    return (await fs.stat(directoryPath)).isDirectory();
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return false;
+    throw error;
+  }
 }

@@ -3589,10 +3589,8 @@ describe("codegraph MCP handlers", () => {
 
     await handlers.artifact_build({ outDir, graphJson: true, force: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
-      graph: { files: string[] };
-    };
-    expect(graph.graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
+    expect(graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
   });
 
   it("omits stale output files when the MCP root is a directory link", async () => {
@@ -3612,10 +3610,8 @@ describe("codegraph MCP handlers", () => {
 
     await handlers.artifact_build({ outDir, graphJson: true, force: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
-      graph: { files: string[] };
-    };
-    expect(graph.graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
+    expect(graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
   });
 
   it("accepts artifact paths and output directories through a symlinked root realpath", async () => {
@@ -3635,10 +3631,8 @@ describe("codegraph MCP handlers", () => {
 
     await buildHandlers.artifact_build({ outDir: realOutDir, sqlite: true, graphJson: true, force: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(realOutDir, "graph.json"), "utf8")) as {
-      graph: { files: string[] };
-    };
-    expect(graph.graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
+    const graph = JSON.parse(await fs.readFile(path.join(realOutDir, "graph.json"), "utf8")) as { files: string[] };
+    expect(graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
 
     const readHandlers = createCodegraphMcpHandlers({
       root: linkedRoot,
