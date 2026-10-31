@@ -105,6 +105,7 @@ export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 28;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
 const MAX_SNAPSHOT_CACHE_ENTRIES = 32;
+const DETAILED_GRAPH_HASH_CHUNK_CHARS = 1 << 20;
 
 type SnapshotFileIdentity = {
   size: number;
@@ -1107,24 +1108,24 @@ export async function writeDetailedSymbolGraphSnapshot(
   graph: SymbolGraph,
 ): Promise<void> {
   if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return;
-  const nodeAliases = [...detailedSymbolGraphAliases(graph)];
-  const payload = {
-    version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
-    projectRoot: serializedProjectRoot(projectRoot),
-    implementationFingerprint: getImplementationFingerprint(),
-    graphHash: detailedSymbolGraphContentHash(index.projectSnapshotIdentity, graph),
-    projectSnapshotIdentity: index.projectSnapshotIdentity,
-    graph: transformDetailedGraph(
-      {
-        nodes: [...graph.nodes.values()],
-        edges: graph.edges,
-        nodeAliases,
-      },
-      projectRoot,
-      true,
-    ),
-  } satisfies DetailedSymbolGraphSnapshotPayload;
   try {
+    const nodeAliases = [...detailedSymbolGraphAliases(graph)];
+    const payload = {
+      version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
+      projectRoot: serializedProjectRoot(projectRoot),
+      implementationFingerprint: getImplementationFingerprint(),
+      graphHash: detailedSymbolGraphContentHash(index.projectSnapshotIdentity, graph),
+      projectSnapshotIdentity: index.projectSnapshotIdentity,
+      graph: transformDetailedGraph(
+        {
+          nodes: [...graph.nodes.values()],
+          edges: graph.edges,
+          nodeAliases,
+        },
+        projectRoot,
+        true,
+      ),
+    } satisfies DetailedSymbolGraphSnapshotPayload;
     const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
     parsedSnapshotCache.delete(snapshotPath);
     transformedSnapshotModulesCache.delete(snapshotPath);
@@ -1145,7 +1146,8 @@ export async function writeDetailedSymbolGraphSnapshot(
       },
     });
   } catch {
-    // Detailed graph persistence is an optimization; source parsing remains authoritative.
+    // Persisting the graph is an optimization, and so is every step that prepares it: a graph whose text
+    // passes the string limit fails here and leaves no cache, and the caller keeps the graph it built.
   }
 }
 
@@ -1238,17 +1240,33 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
   }
 }
 
+/**
+ * SHA-256 over the project identity and the exact text `JSON.stringify({ nodes, edges, nodeAliases })` gives,
+ * fed to the hash in pieces. One string cannot hold a large graph: V8 stops at about 536 million characters,
+ * which a graph of a few million edges passes long before the heap runs out.
+ */
 function detailedSymbolGraphContentHash(projectSnapshotIdentity: string, graph: SymbolGraph): string {
   const hash = createHash("sha256");
   hash.update(projectSnapshotIdentity);
   hash.update("\0");
-  hash.update(
-    JSON.stringify({
-      nodes: [...graph.nodes.values()],
-      edges: graph.edges,
-      nodeAliases: [...detailedSymbolGraphAliases(graph)],
-    }),
-  );
+  let pending = '{"nodes":[';
+  const appendList = (items: Iterable<unknown>): void => {
+    let first = true;
+    for (const item of items) {
+      pending += first ? JSON.stringify(item) : `,${JSON.stringify(item)}`;
+      first = false;
+      if (pending.length >= DETAILED_GRAPH_HASH_CHUNK_CHARS) {
+        hash.update(pending);
+        pending = "";
+      }
+    }
+  };
+  appendList(graph.nodes.values());
+  pending += '],"edges":[';
+  appendList(graph.edges);
+  pending += '],"nodeAliases":[';
+  appendList(detailedSymbolGraphAliases(graph));
+  hash.update(`${pending}]}`);
   return hash.digest("hex");
 }
 

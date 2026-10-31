@@ -1,10 +1,12 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { GRAPH_JSON_SCHEMA_VERSION } from "../agent/artifact.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
 import type { Edge, Graph } from "../types.js";
 import { edgeFromImportBinding } from "../util/graph-edges.js";
 import { isPlainRecord, readStringRecord } from "../util/guards.js";
+import { readJsonMembers } from "../util/json-members.js";
 import { normalizePath } from "../util/paths.js";
 import { isCFamilyIncludeForm } from "../util/specifiers.js";
 import { countFilesByLanguage } from "./languages.js";
@@ -20,13 +22,13 @@ interface ArtifactManifest {
   artifacts: { graphJson: string };
 }
 
+/** `graph.json` version 2 repeated the portable graph under `graph`; version 3 holds it once, at the top level. */
+const NESTED_GRAPH_JSON_SCHEMA_VERSION = 2;
+
 interface PortableGraphJson {
-  schemaVersion: typeof ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION;
-  format: "codegraph.graph-json";
   graph: {
     files: string[];
     fileEdges: Edge[];
-    symbols?: Array<{ file: string; name: string; kind: string }>;
   };
 }
 
@@ -38,18 +40,37 @@ function parseManifest(value: unknown): ArtifactManifest | null {
   return { artifacts: { graphJson: artifacts.graphJson } };
 }
 
+function artifactReadError(error: unknown, label: string): unknown {
+  if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+    return new Error(`Codegraph artifact ${label} is missing.`);
+  }
+  if (error instanceof SyntaxError) return new Error(`Codegraph artifact ${label} is invalid JSON.`);
+  return error;
+}
+
 async function readJson(filePath: string, label: string): Promise<unknown> {
   try {
     return JSON.parse(await fsp.readFile(filePath, "utf8"));
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      throw new Error(`Codegraph artifact ${label} is missing.`);
-    }
-    if (error instanceof SyntaxError) {
-      throw new Error(`Codegraph artifact ${label} is invalid JSON.`);
-    }
-    throw error;
+    throw artifactReadError(error, label);
   }
+}
+
+/**
+ * The `graph.json` value `parseGraphJson` reads. Version 3 lists `schemaVersion`, `format`, `files`, and `fileEdges`
+ * ahead of the symbols that make the file large, and drift needs nothing else, so only those members are read: a
+ * baseline that one string cannot hold, or that would not fit the heap once parsed, still loads. Version 2 repeated
+ * the graph under `graph`, was written as one string, and is read whole.
+ */
+async function readGraphJson(graphPath: string): Promise<unknown> {
+  let head: Map<string, unknown>;
+  try {
+    head = await readJsonMembers(graphPath, ["schemaVersion", "format", "files", "fileEdges"]);
+  } catch (error) {
+    throw artifactReadError(error, "graph.json");
+  }
+  if (head.get("schemaVersion") === NESTED_GRAPH_JSON_SCHEMA_VERSION) return await readJson(graphPath, "graph.json");
+  return Object.fromEntries(head);
 }
 
 function assertArtifactChild(outDir: string, artifactPath: string): string {
@@ -66,20 +87,25 @@ function parseGraphJson(value: unknown): PortableGraphJson {
   if (!isPlainRecord(value) || value.format !== "codegraph.graph-json") {
     throw new Error("Codegraph artifact graph.json is missing or invalid.");
   }
-  if (value.schemaVersion !== ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION) {
+  let portable: unknown;
+  if (value.schemaVersion === GRAPH_JSON_SCHEMA_VERSION) {
+    portable = value;
+  } else if (value.schemaVersion === NESTED_GRAPH_JSON_SCHEMA_VERSION) {
+    portable = value.graph;
+  } else {
     throw new Error(
-      `Codegraph artifact graph.json schema version ${String(value.schemaVersion)} is unsupported; regenerate the drift baseline with schema version ${ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION}.`,
+      `Codegraph artifact graph.json schema version ${String(value.schemaVersion)} is unsupported; regenerate the drift baseline with schema version ${GRAPH_JSON_SCHEMA_VERSION}.`,
     );
   }
-  if (!isPlainRecord(value.graph) || !Array.isArray(value.graph.files) || !Array.isArray(value.graph.fileEdges)) {
+  if (!isPlainRecord(portable) || !Array.isArray(portable.files) || !Array.isArray(portable.fileEdges)) {
     throw new Error("Codegraph artifact graph.json does not contain a portable graph.");
   }
-  const files = value.graph.files
+  const files = portable.files
     .filter((entry): entry is string => typeof entry === "string")
     .map(normalizePath)
     .sort();
   const fileEdges: Edge[] = [];
-  for (const edge of value.graph.fileEdges) {
+  for (const edge of portable.fileEdges) {
     if (
       !isPlainRecord(edge) ||
       typeof edge.from !== "string" ||
@@ -103,21 +129,7 @@ function parseGraphJson(value: unknown): PortableGraphJson {
     const rebuilt = edgeFromImportBinding(normalizePath(edge.from), to, source);
     fileEdges.push(source.typeOnly === false ? { ...rebuilt, typeOnly: false } : rebuilt);
   }
-  const symbols = Array.isArray(value.graph.symbols)
-    ? value.graph.symbols.filter((entry): entry is { file: string; name: string; kind: string } => {
-        return (
-          isPlainRecord(entry) &&
-          typeof entry.file === "string" &&
-          typeof entry.name === "string" &&
-          typeof entry.kind === "string"
-        );
-      })
-    : [];
-  return {
-    schemaVersion: ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,
-    format: "codegraph.graph-json",
-    graph: { files, fileEdges, symbols },
-  };
+  return { graph: { files, fileEdges } };
 }
 
 function graphEdges(edges: readonly Edge[]): ArchitectureGraphEdge[] {
@@ -142,7 +154,7 @@ export async function loadArchitectureSnapshotFromArtifact(outDirInput: string):
     throw new Error("Codegraph artifact manifest is missing graph.json metadata.");
   }
   const graphPath = assertArtifactChild(outDir, manifest.artifacts.graphJson);
-  const graphJson = parseGraphJson(await readJson(graphPath, "graph.json"));
+  const graphJson = parseGraphJson(await readGraphJson(graphPath));
   const graph: Graph = { nodes: new Set(graphJson.graph.files), edges: graphJson.graph.fileEdges };
   return {
     schemaVersion: ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,

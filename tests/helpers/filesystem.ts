@@ -1,10 +1,54 @@
-import fsp from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
+import fsp, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
+
+/**
+ * Runs `run` with the process umask set to `mask` and restores the previous umask afterwards, so a test of the mode a
+ * file is created with does not depend on the umask of the machine that runs it. The umask belongs to the process: this
+ * needs a forked test worker (the default pool), and no other test in the same process may create files meanwhile.
+ */
+export async function withUmask<T>(mask: number, run: () => Promise<T>): Promise<T> {
+  const previous = process.umask(mask);
+  try {
+    return await run();
+  } finally {
+    process.umask(previous);
+  }
+}
+
+/**
+ * Creates a FIFO at `fifoPath`. Resolves to false where there is no FIFO to make (Windows, or no `mkfifo` tool), so a
+ * test can return early instead of failing for the machine it runs on.
+ */
+export async function tryCreateFifo(fifoPath: string): Promise<boolean> {
+  if (process.platform === "win32") return false;
+  try {
+    await execFileAsync("mkfifo", [fifoPath], { windowsHide: true });
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/**
+ * Opens the read end of a FIFO without waiting for a writer, so a test can then open the write end, which would
+ * block until there is a reader. Nothing drains the FIFO while it is written, so a test writes less than its capacity
+ * (a few KiB) and reads the content back afterwards.
+ */
+export async function openFifoForReading(fifoPath: string): Promise<FileHandle> {
+  return await fsp.open(fifoPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+}
+
 export type TempRootRegistry = {
   create(prefix: string): Promise<string>;
   cleanup(): Promise<void>;
@@ -178,6 +222,17 @@ export async function createArtifactOutputWithStaleFile(options: {
 export async function tryCreateDirectorySymlink(target: string, linkPath: string): Promise<boolean> {
   try {
     await fsp.symlink(target, linkPath, "junction");
+    return true;
+  } catch (error) {
+    if (isSymlinkUnavailable(error)) return false;
+    throw error;
+  }
+}
+
+/** Creates a symbolic link to a file. Resolves to false where links cannot be made (Windows without the privilege). */
+export async function tryCreateFileSymlink(target: string, linkPath: string): Promise<boolean> {
+  try {
+    await fsp.symlink(target, linkPath, "file");
     return true;
   } catch (error) {
     if (isSymlinkUnavailable(error)) return false;

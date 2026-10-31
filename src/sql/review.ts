@@ -3,6 +3,7 @@ import { languageExtensionPatterns, type LanguageExtensionMap } from "../languag
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles } from "../util/project-files.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
+import { pushAll } from "../util/collections.js";
 import { isSqlFilePath } from "./classify-sql-file.js";
 import { extractSqlFactsFromSource } from "./extract-facts.js";
 import { normalizeSqlObjectName, sqlObjectLookupKey } from "./lex.js";
@@ -161,7 +162,7 @@ async function collectChangedSqlLiteralSources(
     if (isSqlFilePath(changedFile, languageExtensions)) continue;
     const source = await readExistingFile(changedFile);
     if (!source) continue;
-    sources.push(...sqlLiteralsInSource(source));
+    pushAll(sources, sqlLiteralsInSource(source));
   }
   return sources;
 }

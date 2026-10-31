@@ -15,6 +15,7 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { fileIdentityKey } from "../util/paths.js";
+import { pushAll } from "../util/collections.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
 import { collectChangedLines } from "./hunks.js";
 import { toRange } from "../util/ast.js";
@@ -279,7 +280,7 @@ function findDeclarationNameDescendant(
     if (support.isDeclarationName(current) && sameRangeStartPosition(toRange(current), symbolRange)) {
       return current;
     }
-    queue.push(...(current.namedChildren ?? []));
+    pushAll(queue, current.namedChildren ?? []);
   }
   return null;
 }

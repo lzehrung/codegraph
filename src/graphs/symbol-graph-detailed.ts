@@ -54,6 +54,7 @@ import {
 import type { Binding } from "../indexer/scope-types.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { replaceContents } from "../util/collections.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import { buildSymbolGraph, defNodeId, type SymbolGraph } from "./symbol-graph.js";
 import { collectDetailedDeclarations } from "./symbol-graph-detailed/ast.js";
@@ -766,7 +767,7 @@ export async function buildSymbolGraphDetailed(
       reconciledEdgeKeys.add(key);
       reconciledEdges.push(reconciled);
     }
-    edges.splice(0, edges.length, ...reconciledEdges);
+    replaceContents(edges, reconciledEdges);
     added.clear();
     for (const edge of edges) added.add(edgeKey(edge.from, edge.to, edge.label, edge.site));
     edgeCount = edges.length;

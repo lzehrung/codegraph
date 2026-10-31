@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import type { Writable } from "node:stream";
 import type { BuildOptions, BuildReport } from "../indexer/types.js";
 import { formatNativeBackendAffectedLanguages } from "../native/backend-report-format.js";
 import type { ReviewBuildReport } from "../review.js";
@@ -20,6 +21,13 @@ export function toJSON(obj: unknown): string {
 
 export type CliRuntime = {
   stdout: (chunk: string) => void;
+  /**
+   * Resolves once the stream behind `stdout` can take more output: at once while its buffer has room, otherwise
+   * after `drain`. `writeStdoutLineAndWait` awaits it after each write, so a consumer that reads slowly (a pipe to
+   * `less`) holds back a command that streams a large document, where the whole document would otherwise wait in
+   * memory.
+   */
+  stdoutDrained: () => Promise<void>;
   stderr: (chunk: string) => void;
   exit: (code: number) => never;
   cwd: () => string;
@@ -87,6 +95,7 @@ type CliContext = {
 function createDefaultCliRuntime(): CliRuntime {
   return {
     stdout: (chunk) => process.stdout.write(chunk),
+    stdoutDrained: () => waitForStreamDrain(process.stdout),
     stderr: (chunk) => process.stderr.write(chunk),
     exit: (code) => process.exit(code),
     cwd: () => process.cwd(),
@@ -193,6 +202,34 @@ export function writeStdoutLine(message: string): void {
   const context = getCliContext();
   context.progressDisplay?.clear();
   context.runtime.stdout(`${message}\n`);
+}
+
+/** `writeStdoutLine`, resolved once stdout can take more output; see `CliRuntime.stdoutDrained`. */
+export async function writeStdoutLineAndWait(message: string): Promise<void> {
+  writeStdoutLine(message);
+  await getCliContext().runtime.stdoutDrained();
+}
+
+/**
+ * Resolves once `stream` can take more output: at once while its buffer has room, otherwise after `drain`. It also
+ * resolves when the stream closes and rejects when it errors, so a consumer that went away cannot leave it waiting.
+ */
+export function waitForStreamDrain(stream: Writable): Promise<void> {
+  if (!stream.writableNeedDrain) return Promise.resolve();
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const settle = (error?: Error): void => {
+    stream.off("drain", onDrainOrClose);
+    stream.off("close", onDrainOrClose);
+    stream.off("error", onError);
+    if (error) reject(error);
+    else resolve();
+  };
+  const onDrainOrClose = (): void => settle();
+  const onError = (error: Error): void => settle(error);
+  stream.on("drain", onDrainOrClose);
+  stream.on("close", onDrainOrClose);
+  stream.on("error", onError);
+  return promise;
 }
 
 export function writeJSONLine(value: unknown): void {
@@ -374,7 +411,7 @@ export function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!;
     if (t === "--") {
-      positionals.push(...tokens.slice(i + 1));
+      for (const token of tokens.slice(i + 1)) positionals.push(token);
       break;
     }
 

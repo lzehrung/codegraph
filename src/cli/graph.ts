@@ -20,8 +20,9 @@ import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
 import type { Edge, Graph } from "../types.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
+import { writeJsonAsLines, writeJsonFileInChunks } from "../util/json-chunks.js";
 import { type ProjectFileDiscoveryOptions } from "../util/project-files.js";
-import { toJSON, type CommandReport } from "./context.js";
+import { type CommandReport } from "./context.js";
 import {
   parseCacheModeOption,
   parseNonNegativeIntegerOption,
@@ -78,6 +79,8 @@ export type GraphCommandContext = {
     deletedFiles: string[];
   } | null>;
   writeStdoutLine: (message: string) => void;
+  /** `writeStdoutLine`, resolved once stdout can take more output, for a command that streams a large document. */
+  writeStdoutLineAndWait: (message: string) => Promise<void>;
   setStderrFilePath: (filePath: string | undefined) => void;
   writeCommandReport: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
   maybeWriteNativeBackendStatus: (report: BuildReport | undefined, showProgress: boolean) => void;
@@ -283,6 +286,20 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       context.writeStdoutLine(text);
     }
   };
+  // Graph JSON can pass V8's string limit, so it goes out in pieces instead of one string. `--output` is a destination
+  // the user named, so it is written the way a shell redirection to it would be: through a temporary file that
+  // replaces the file when complete (so a failed write leaves a previous file alone), a symbolic link at the path
+  // stays and its target is the file replaced, and a path that a rename must not replace (a device such as /dev/null, a
+  // FIFO, /dev/stdout) is written in place. On stdout, each piece ends at a line break (the bytes are those of one
+  // `writeStdoutLine` of the whole text) and is awaited, so a slow consumer holds the command back instead of the
+  // whole document piling up in memory.
+  const writeJsonOut = async (value: unknown): Promise<void> => {
+    if (outputFile) {
+      await writeJsonFileInChunks(outputFile, value, { userDestination: true });
+      return;
+    }
+    await writeJsonAsLines(value, context.writeStdoutLineAndWait);
+  };
   // Always populated (not gated behind --report/--progress) so a normal run can
   // detect and surface files native analysis skipped (for example
   // sourceTooLarge or queryFailure) via both the stderr warning and the --json
@@ -406,7 +423,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
         await writeOut(graphToDOTSymbols(sgraphOut, context.projectRootFs));
       } else {
         const allFiles = [...index.graph.nodes];
-        await writeOut(toJSON({ ...compactSymbolsOnly(allFiles, sgraphOut, stable), analysis }));
+        await writeJsonOut({ ...compactSymbolsOnly(allFiles, sgraphOut, stable), analysis });
       }
       await finalizeReport();
       return;
@@ -418,7 +435,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     } else if (format === "dot") {
       await writeOut(graphToDOTSymbolsWithFiles(sgraphOut, fgraphOut, context.projectRootFs));
     } else {
-      await writeOut(toJSON({ ...compactGraphWithSymbols(fgraphOut, sgraphOut, stable), analysis }));
+      await writeJsonOut({ ...compactGraphWithSymbols(fgraphOut, sgraphOut, stable), analysis });
     }
     await finalizeReport();
     return;
@@ -467,14 +484,12 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     const sqlFiles = includeSqlArtifacts ? files.filter((file) => isSqlFilePath(file, context.languageExtensions)) : [];
     const sqlArtifacts = sqlFiles.length ? await buildSqlArtifactGraphFromFiles(sqlFiles) : undefined;
     const { files: compactFiles, fileEdges } = compactFileGraph(graphOut, stable);
-    await writeOut(
-      toJSON({
-        files: compactFiles,
-        fileEdges,
-        ...(sqlArtifacts ? { sqlArtifacts } : {}),
-        analysis,
-      }),
-    );
+    await writeJsonOut({
+      files: compactFiles,
+      fileEdges,
+      ...(sqlArtifacts ? { sqlArtifacts } : {}),
+      analysis,
+    });
   }
   await finalizeReport();
 }

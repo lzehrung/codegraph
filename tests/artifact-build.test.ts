@@ -1,13 +1,21 @@
+import { constants as bufferConstants } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "../src/agent/artifact.js";
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { quoteShellArg } from "../src/agent/shell.js";
 import { buildGraph } from "../src/viewer/graph-builder.js";
 import { countingSession } from "./helpers/agent.js";
-import { createArtifactOutputWithStaleFile, mkTmpDir, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
+import {
+  createArtifactOutputWithStaleFile,
+  createTempRootRegistry,
+  mkTmpDir,
+  tryCreateDirectorySymlink,
+  tryCreateFileSymlink,
+} from "./helpers/filesystem.js";
+import { limitFileStringLength, limitJsonStringLength } from "./helpers/string-limit.js";
 
 describe("artifact build", () => {
   it("writes sqlite, graph JSON, optional report, questions, and manifest from real project logic", async () => {
@@ -60,7 +68,6 @@ describe("artifact build", () => {
       fileEdges: Array<{ from: string; to: { type: string; path?: string } }>;
       symbols: Array<{ id: string; file: string }>;
       symbolEdges: Array<{ from: string; to: string }>;
-      graph: { files: string[] };
     };
     expect(manifest.sql.fileSignatures).toEqual({
       signed: expect.any(Number),
@@ -71,10 +78,11 @@ describe("artifact build", () => {
     expect(manifest.artifacts.sqlite).toBe("codegraph.sqlite");
     expect(manifest.sql.supported).toBeTruthy();
     expect(manifest.sql.limitation).toContain("current-schema reconstruction");
-    expect(graph.schemaVersion).toBe(2);
+    expect(graph.schemaVersion).toBe(3);
     expect(graph.format).toBe("codegraph.graph-json");
-    expect(graph.files).toEqual(graph.graph.files);
-    expect(graph.graph.files.some((file) => file.includes(root.replace(/\\/g, "/")))).toBe(false);
+    // The portable graph is written once; version 2 repeated it under `graph`.
+    expect(Object.keys(graph)).toEqual(["schemaVersion", "format", "files", "fileEdges", "symbols", "symbolEdges"]);
+    expect(graph.files.some((file) => file.includes(root.replace(/\\/g, "/")))).toBe(false);
     const renderedGraph = buildGraph(graph, { includeSymbols: true, showExternal: false });
     expect(renderedGraph.size).toBeGreaterThan(0);
     expect(questions.questions.some((question) => question.command.includes("codegraph explain symbol:"))).toBeTruthy();
@@ -154,19 +162,17 @@ describe("artifact build", () => {
     await buildCodegraphArtifact({ root, outDir, graphJson: true });
 
     const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
-      graph: {
-        symbols: Array<{ id: string; file: string; kind: string; name: string }>;
-        symbolEdges: Array<{ from: string; to: string }>;
-      };
+      symbols: Array<{ id: string; file: string; kind: string; name: string }>;
+      symbolEdges: Array<{ from: string; to: string }>;
     };
-    const importNode = graph.graph.symbols.find(
+    const importNode = graph.symbols.find(
       (symbol) => symbol.kind === "import" && symbol.name === "sharedValue" && symbol.file === "consumer.ts",
     );
 
     expect(importNode).toBeDefined();
     expect(importNode?.id.startsWith("symbol:")).toBe(false);
     expect(importNode?.id).not.toContain(root.replace(/\\/g, "/"));
-    expect(graph.graph.symbolEdges.some((edge) => edge.from === importNode?.id)).toBeTruthy();
+    expect(graph.symbolEdges.some((edge) => edge.from === importNode?.id)).toBeTruthy();
   });
 
   it("refuses to overwrite a non-empty output directory unless force is set and removes stale known artifacts", async () => {
@@ -276,10 +282,8 @@ describe("artifact build", () => {
     });
     await buildCodegraphArtifact({ root, outDir, force: true, graphJson: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
-      graph: { files: string[] };
-    };
-    expect(graph.graph.files.some((file) => file.includes("codegraph-out"))).toBe(false);
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
+    expect(graph.files.some((file) => file.includes("codegraph-out"))).toBe(false);
   });
 
   it("skips (rather than throws on) sqlite signatures for graph nodes discovery never indexed (A1)", async () => {
@@ -368,10 +372,8 @@ describe("artifact build", () => {
 
     await buildCodegraphArtifact({ root, outDir, graphJson: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
-      graph: { files: string[] };
-    };
-    expect(graph.graph.files.some((file) => file.includes("linked") || file.includes("secret.ts"))).toBe(false);
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
+    expect(graph.files.some((file) => file.includes("linked") || file.includes("secret.ts"))).toBe(false);
   });
 
   it("serializes byte-identically across builds with same-name overloads and same-label multiedges (G3)", async () => {
@@ -408,14 +410,246 @@ describe("artifact build", () => {
     expect(normalizeOwnRoot(first)).toBe(normalizeOwnRoot(second));
 
     const graph = JSON.parse(first.text) as {
-      graph: {
-        symbols: Array<{ name: string }>;
-        symbolEdges: Array<{ from: string; to: string; label?: string }>;
-      };
+      symbols: Array<{ name: string }>;
+      symbolEdges: Array<{ from: string; to: string; label?: string }>;
     };
-    const fooSymbols = graph.graph.symbols.filter((symbol) => symbol.name === "foo");
+    const fooSymbols = graph.symbols.filter((symbol) => symbol.name === "foo");
     expect(fooSymbols.length).toBeGreaterThanOrEqual(1);
-    const fooEdges = graph.graph.symbolEdges.filter((edge) => edge.label === "calls" || edge.to.includes("foo"));
+    const fooEdges = graph.symbolEdges.filter((edge) => edge.label === "calls" || edge.to.includes("foo"));
     expect(fooEdges.length).toBeGreaterThanOrEqual(2);
+  });
+
+  describe("when a symbolic link is at an artifact path", () => {
+    const roots = createTempRootRegistry();
+
+    afterEach(async () => {
+      await roots.cleanup();
+    });
+
+    it("replaces a link that points at nothing, and creates nothing where it pointed", async () => {
+      const root = await roots.create("cg-artifact-link-");
+      const outDir = path.join(root, "codegraph-out");
+      const outside = await roots.create("cg-artifact-link-outside-");
+      await fs.mkdir(outDir);
+      await fs.writeFile(path.join(root, "entry.ts"), "export const value = 1;\n", "utf8");
+      // With `force` the build may write into a directory that has entries. Its cleanup removes known artifacts, but not
+      // a link that points at nothing, so the write of graph.json is the one that meets it.
+      if (!(await tryCreateFileSymlink(path.join(outside, "created.json"), path.join(outDir, "graph.json")))) return;
+
+      await buildCodegraphArtifact({ root, outDir, force: true, graphJson: true });
+
+      expect((await fs.lstat(path.join(outDir, "graph.json"))).isSymbolicLink()).toBe(false);
+      const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
+      expect(graph.files).toContain("entry.ts");
+      await expect(fs.readdir(outside)).resolves.toEqual([]);
+    });
+  });
+
+  describe("when a serialized value passes the string limit", () => {
+    const roots = createTempRootRegistry();
+
+    afterEach(async () => {
+      await roots.cleanup();
+    });
+
+    async function writeModuleChain(root: string, count: number): Promise<void> {
+      for (let index = 0; index < count; index += 1) {
+        const imported = index ? `import { value${index - 1} } from './m${index - 1}';\n` : "";
+        const body = index ? `export const value${index} = value${index - 1} + 1;\n` : "export const value0 = 1;\n";
+        await fs.writeFile(path.join(root, `m${index}.ts`), imported + body);
+      }
+    }
+
+    async function failureMessage(run: () => Promise<unknown>): Promise<string> {
+      try {
+        await run();
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+      throw new Error("The build was expected to fail.");
+    }
+
+    /** Builds over a string limit that graph.json cannot pass, with `before` run first, and returns the error text. */
+    async function failedBuildMessage(
+      root: string,
+      outDir: string,
+      before: () => { mockRestore(): void }[],
+    ): Promise<string> {
+      await writeModuleChain(root, 5);
+      const session = createAgentSession({ root });
+      await session.loadProject();
+      const spies = before();
+      const limit = limitJsonStringLength(60, { prettyOnly: true });
+      try {
+        return await failureMessage(() =>
+          buildCodegraphArtifactWithSession(session, { root, outDir, sqlite: true, graphJson: true }),
+        );
+      } finally {
+        limit.mockRestore();
+        for (const spy of spies) spy.mockRestore();
+      }
+    }
+
+    it("writes graph.json in pieces that each fit under the limit", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-limit-"));
+      const outDir = path.join(root, "codegraph-out");
+      await writeModuleChain(root, 40);
+      const session = createAgentSession({ root });
+      await session.loadProject();
+
+      const limit = limitJsonStringLength(8_000);
+      try {
+        await buildCodegraphArtifactWithSession(session, { root, outDir, graphJson: true });
+      } finally {
+        limit.mockRestore();
+      }
+
+      const text = await fs.readFile(path.join(outDir, "graph.json"), "utf8");
+      const graph = JSON.parse(text) as { files: string[]; fileEdges: unknown[] };
+      // One string would have passed the emulated limit; the file has the same text it always had.
+      expect(text.length).toBeGreaterThan(8_000);
+      expect(graph.files).toHaveLength(40);
+      expect(graph.fileEdges).toHaveLength(39);
+      expect(text).toBe(`${JSON.stringify(graph, null, 2)}\n`);
+    });
+
+    it("removes what the build wrote and names the artifact and the limit when graph.json cannot be written", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-limit-fail-"));
+      const outDir = path.join(root, "nested", "codegraph-out");
+      await writeModuleChain(root, 5);
+      const session = createAgentSession({ root });
+      await session.loadProject();
+
+      // The SQLite artifact is written first and must not stay behind; no graph member fits under this limit.
+      const limit = limitJsonStringLength(60, { prettyOnly: true });
+      try {
+        await expect(
+          buildCodegraphArtifactWithSession(session, {
+            root,
+            outDir,
+            sqlite: true,
+            graphJson: true,
+            report: true,
+            questions: true,
+          }),
+        ).rejects.toThrow(
+          `Failed to write graph.json: Invalid string length (a single string passed the ${bufferConstants.MAX_STRING_LENGTH}-character limit of this Node.js runtime)`,
+        );
+      } finally {
+        limit.mockRestore();
+      }
+
+      await expect(fs.stat(outDir)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("keeps unrelated files in an output directory that existed before the failed build", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-limit-keep-"));
+      const outDir = path.join(root, "codegraph-out");
+      await fs.mkdir(outDir);
+      await fs.writeFile(path.join(outDir, "keep.txt"), "operator data\n");
+      await writeModuleChain(root, 5);
+      const session = createAgentSession({ root });
+      await session.loadProject();
+
+      const limit = limitJsonStringLength(60, { prettyOnly: true });
+      try {
+        await expect(
+          buildCodegraphArtifactWithSession(session, { root, outDir, force: true, sqlite: true, graphJson: true }),
+        ).rejects.toThrow("Failed to write graph.json");
+      } finally {
+        limit.mockRestore();
+      }
+
+      await expect(fs.readdir(outDir)).resolves.toEqual(["keep.txt"]);
+    });
+
+    it("says it removed the partial output only when it did", async () => {
+      const root = await roots.create("cg-artifact-limit-clean-");
+      const outDir = path.join(root, "codegraph-out");
+
+      const message = await failedBuildMessage(root, outDir, () => []);
+
+      expect(message).toContain(`Partial output in ${outDir} was removed.`);
+      expect(message).not.toContain("Not removed");
+    });
+
+    it("lists a file it cannot remove instead of saying the output was removed", async () => {
+      const root = await roots.create("cg-artifact-limit-stuck-");
+      const outDir = path.join(root, "codegraph-out");
+      const realRm = fs.rm.bind(fs);
+
+      const message = await failedBuildMessage(root, outDir, () => [
+        vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+          if (path.basename(String(target)) === "codegraph.sqlite") {
+            throw Object.assign(new Error("simulated EPERM"), { code: "EPERM" });
+          }
+          await realRm(target, options);
+        }),
+      ]);
+
+      expect(message).toContain("Failed to write graph.json: Invalid string length");
+      expect(message).toContain(
+        `Partial output in ${outDir} could not be fully removed. Not removed: codegraph.sqlite (EPERM).`,
+      );
+      expect(message).not.toContain("was removed");
+      // The file is still there, in the directory that the build created.
+      await expect(fs.readdir(outDir)).resolves.toEqual(["codegraph.sqlite"]);
+    });
+
+    it("lists the output directory it created when that cannot be removed", async () => {
+      const root = await roots.create("cg-artifact-limit-dir-");
+      const outDir = path.join(root, "codegraph-out");
+
+      const message = await failedBuildMessage(root, outDir, () => [
+        vi.spyOn(fs, "rmdir").mockRejectedValue(Object.assign(new Error("simulated EBUSY"), { code: "EBUSY" })),
+      ]);
+
+      expect(message).toContain(
+        `Partial output in ${outDir} could not be fully removed. Not removed: the directory itself (EBUSY).`,
+      );
+      expect(message).not.toContain("was removed");
+      // Every file was removed; only the empty directory stays.
+      await expect(fs.readdir(outDir)).resolves.toEqual([]);
+    });
+
+    it("leaves a created directory alone that now holds files it did not write, and still reports its own output as removed", async () => {
+      const root = await roots.create("cg-artifact-limit-foreign-");
+      const outDir = path.join(root, "codegraph-out");
+      const realRm = fs.rm.bind(fs);
+
+      const message = await failedBuildMessage(root, outDir, () => [
+        vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+          if (path.basename(String(target)) === "codegraph.sqlite") {
+            await fs.writeFile(path.join(outDir, "operator.txt"), "added while the build ran\n");
+          }
+          await realRm(target, options);
+        }),
+      ]);
+
+      expect(message).toContain(`Partial output in ${outDir} was removed.`);
+      await expect(fs.readdir(outDir)).resolves.toEqual(["operator.txt"]);
+    });
+
+    it("rebuilds over a previous graph.json that no single string can hold", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-limit-force-"));
+      const outDir = path.join(root, "codegraph-out");
+      await writeModuleChain(root, 40);
+      await buildCodegraphArtifact({ root, outDir, graphJson: true });
+      const graphJsonPath = path.join(outDir, "graph.json");
+      const previousChars = (await fs.readFile(graphJsonPath, "utf8")).length;
+      // With a manifest the old files are removed by name; without one each is recognized by its content.
+      await fs.rm(path.join(outDir, "manifest.json"));
+
+      // Recognizing the old file as a codegraph artifact must not read all of it as one string.
+      const limit = limitFileStringLength("graph.json", Math.floor(previousChars / 2));
+      try {
+        await buildCodegraphArtifact({ root, outDir, force: true, graphJson: true });
+      } finally {
+        limit.mockRestore();
+      }
+
+      const rebuilt = JSON.parse(await fs.readFile(graphJsonPath, "utf8")) as { files: string[] };
+      expect(rebuilt.files).toHaveLength(40);
+    });
   });
 });

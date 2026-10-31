@@ -27,18 +27,48 @@ import {
   SymbolKind,
 } from "./types.js";
 
-function cacheKey(file: FileId, canonicalName: string): string {
-  return `${fileIdentityKey(file)}::canonical::${canonicalName}`;
+/**
+ * Most `resolveExport` results one index keeps. A lookup that finds the cache at the limit drops the
+ * whole cache first, so memory stays bounded by this many small entries no matter how many modules
+ * and names a session queries; every entry is recomputed from the index on demand.
+ */
+const EXPORT_CACHE_MAX_ENTRIES = 1 << 19;
+let exportCacheMaxEntries = EXPORT_CACHE_MAX_ENTRIES;
+
+/** Test seam: lowers the export cache limit, or restores the default when called without one. */
+export function setExportCacheLimitForTests(limit?: number): void {
+  exportCacheMaxEntries = limit ?? EXPORT_CACHE_MAX_ENTRIES;
 }
+
+/** Top-level `resolveExport` calls in progress; the cache is only trimmed while none is. */
+let activeExportLookups = 0;
+
 type ModuleNameLookup = {
+  /**
+   * Process-unique id of this lookup. Export cache keys carry it instead of the module path, which keeps a
+   * key short and keeps an index copy that shares its cache with another index from ever matching its ids.
+   */
+  id: number;
+  /** `normalizePath(module.file)`. */
+  file: string;
+  languageId: string | undefined;
   normalizeIdentifier: (name: string) => string;
   localExports: Map<string, SymbolDef[]>;
   namespaceReexports: Map<string, Extract<ExportEntry, { type: "namespaceReexport" }>[]>;
   reexports: Map<string, Extract<ExportEntry, { type: "reexport" }>[]>;
+  /** The module has an `export *`, whose targets are searched for every name. */
+  hasExportStar: boolean;
   locals: Map<string, SymbolDef[]>;
 };
 
-const moduleNameLookups = new WeakMap<ProjectIndex, Map<string, ModuleNameLookup>>();
+type ModuleNameLookups = {
+  byFile: Map<string, ModuleNameLookup>;
+  /** Some module has `export * as name from`, the only entry that makes a lookup answer with a namespace. */
+  hasNamespaceReexport: boolean;
+};
+
+let nextModuleNameLookupId = 0;
+const moduleNameLookups = new WeakMap<ProjectIndex, ModuleNameLookups>();
 
 export type ResolveExportOptions = {
   preferredKind?: SymbolKind;
@@ -76,20 +106,23 @@ function shouldSkipVisibilityLocalFallback(index: ProjectIndex, moduleEntry: Mod
   return languageId !== undefined && languageHasDeclarationVisibility(languageId);
 }
 
-function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup | undefined {
+function moduleNameLookupsFor(index: ProjectIndex): ModuleNameLookups {
   let lookups = moduleNameLookups.get(index);
   if (!lookups) {
-    lookups = new Map<string, ModuleNameLookup>();
+    lookups = { byFile: new Map<string, ModuleNameLookup>(), hasNamespaceReexport: false };
     for (const moduleEntry of index.byFile.values()) {
       // Only the normalizer is needed, and C and C++ share the default one, so a `.h` header
       // never has to be sampled here.
-      const normalizeIdentifier =
-        supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.normalizeIdentifier ??
-        ((name) => name);
+      const support = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions);
+      const normalizeIdentifier = support?.normalizeIdentifier ?? ((name) => name);
+      const file = normalizePath(moduleEntry.file);
+      const normalizedSupport =
+        file === moduleEntry.file ? support : supportForFileWithoutHeaderSample(file, index.languageExtensions);
       const localExports = new Map<string, SymbolDef[]>();
       const namespaceReexports = new Map<string, Extract<ExportEntry, { type: "namespaceReexport" }>[]>();
       const reexports = new Map<string, Extract<ExportEntry, { type: "reexport" }>[]>();
       const locals = new Map<string, SymbolDef[]>();
+      let hasExportStar = false;
       for (const entry of moduleEntry.exports) {
         if (entry.type === "local") {
           const canonicalName = normalizeIdentifier(entry.exportedAs);
@@ -101,11 +134,14 @@ function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup |
           const entries = namespaceReexports.get(canonicalName) ?? [];
           entries.push(entry);
           namespaceReexports.set(canonicalName, entries);
+          lookups.hasNamespaceReexport = true;
         } else if (entry.type === "reexport") {
           const canonicalName = normalizeIdentifier(entry.exportedAs);
           const entries = reexports.get(canonicalName) ?? [];
           entries.push(entry);
           reexports.set(canonicalName, entries);
+        } else {
+          hasExportStar = true;
         }
       }
       for (const local of moduleEntry.locals) {
@@ -114,17 +150,33 @@ function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup |
         entries.push(local);
         locals.set(canonicalName, entries);
       }
-      lookups.set(fileIdentityKey(moduleEntry.file), {
+      lookups.byFile.set(fileIdentityKey(moduleEntry.file), {
+        id: nextModuleNameLookupId++,
+        file,
+        languageId: normalizedSupport?.id,
         normalizeIdentifier,
         localExports,
         namespaceReexports,
         reexports,
+        hasExportStar,
         locals,
       });
     }
     moduleNameLookups.set(index, lookups);
   }
-  return lookups.get(fileIdentityKey(file));
+  return lookups;
+}
+
+function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup | undefined {
+  return moduleNameLookupsFor(index).byFile.get(fileIdentityKey(file));
+}
+
+/**
+ * Whether any module of the index has `export * as name from`. Without one, no `resolveExport`
+ * answer is a namespace, so a caller that only collects namespace answers has nothing to find.
+ */
+export function hasNamespaceReexport(index: ProjectIndex): boolean {
+  return moduleNameLookupsFor(index).hasNamespaceReexport;
 }
 
 function sameSymbolDef(index: ProjectIndex, left: SymbolDef, right: SymbolDef): boolean {
@@ -367,20 +419,25 @@ export function resolveExport(
   exportedName: string,
   opts?: ResolveExportOptions,
 ): ResolvedExport | null {
+  // Trim only between top-level lookups. One lookup walks re-export chains that can reach a module
+  // again, and the second visit has to find the entry the first visit stored.
+  if (!activeExportLookups && index.exportCache.size >= exportCacheMaxEntries) index.exportCache.clear();
   const visited = new Set<string>();
+  const fileKey = fileIdentityKey(file);
   const matchesOptions = (def: SymbolDef, namespace: ResolveExportOptions["cNamespace"]): boolean =>
     (!opts?.preferredKind || def.kind === opts.preferredKind) &&
     (namespace === undefined || (def.cTag ? "tag" : "ordinary") === namespace);
   const allowLocalFallback = opts?.allowLocalFallback ?? true;
 
   function resolveFromFile(fileInner: FileId, name: string, namespace = opts?.cNamespace): ResolvedExport | null {
-    const moduleEntry = moduleFor(index, fileInner);
+    const innerKey = fileIdentityKey(fileInner);
+    const moduleEntry = index.byFile.get(innerKey);
     if (!moduleEntry) return null;
     const names = moduleNameLookup(index, moduleEntry.file);
     if (!names) return null;
-    const normalizedFile = normalizePath(moduleEntry.file);
-    const referenceIndex = fileIdentityKey(fileInner) === fileIdentityKey(file) ? opts?.referenceIndex : undefined;
-    const languageId = supportForFileWithoutHeaderSample(normalizedFile, index.languageExtensions)?.id;
+    const normalizedFile = names.file;
+    const referenceIndex = innerKey === fileKey ? opts?.referenceIndex : undefined;
+    const languageId = names.languageId;
     const csharpFile = languageId === "csharp";
     // A dotted name is a namespace path even when the caller has no source position
     // (`using PT = N.Inner.Point` resolves through the bound file, not a use site).
@@ -399,11 +456,27 @@ export function resolveExport(
       unqualifiedName = name.slice("global::".length);
     }
     const canonicalName = names.normalizeIdentifier(unqualifiedName);
+    // A module with nothing under this name, no `export *`, and no fallback local answers null from its
+    // own tables. That costs less to recompute than to cache, and one entry per module and absent name
+    // is what made the cache grow with the project. Unit languages search their peers, so they keep theirs.
+    if (
+      !namespace &&
+      !(languageId && IMPLICIT_UNIT_LANGUAGES[languageId]) &&
+      !names.hasExportStar &&
+      !names.localExports.has(canonicalName) &&
+      !names.namespaceReexports.has(canonicalName) &&
+      !names.reexports.has(canonicalName) &&
+      !(allowLocalFallback && names.locals.has(canonicalName))
+    ) {
+      return null;
+    }
     const argumentCountKey = opts?.argumentCount === undefined ? "" : String(opts.argumentCount);
-    const key = `${cacheKey(normalizedFile, names.normalizeIdentifier(name))}::${opts?.preferredKind ?? ""}::${namespace ?? ""}::${allowLocalFallback ? "local" : "export"}::${referenceIndex ?? ""}::${argumentCountKey}`;
-    if (index.exportCache.has(key)) return index.exportCache.get(key)!;
+    // The module path is the lookup id, and the free-form name comes last so no field can run into it.
+    const key = `${names.id}|${opts?.preferredKind ?? ""}|${namespace ?? ""}|${allowLocalFallback ? 1 : 0}|${referenceIndex ?? ""}|${argumentCountKey}|${names.normalizeIdentifier(name)}`;
+    const cached = index.exportCache.get(key);
+    if (cached !== undefined) return cached;
 
-    const cycleKey = `${cacheKey(normalizedFile, canonicalName)}::${namespace ?? ""}`;
+    const cycleKey = `${names.id}|${canonicalName}|${namespace ?? ""}`;
     if (visited.has(cycleKey)) return null;
     visited.add(cycleKey);
 
@@ -591,7 +664,12 @@ export function resolveExport(
     return null;
   }
 
-  return resolveFromFile(file, exportedName);
+  activeExportLookups += 1;
+  try {
+    return resolveFromFile(file, exportedName);
+  } finally {
+    activeExportLookups -= 1;
+  }
 }
 
 function resolvePhpCaseInsensitiveExport(

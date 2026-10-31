@@ -1,4 +1,5 @@
 import { type ModuleSpecifier } from "../util/specifiers.js";
+import { pushAll } from "../util/collections.js";
 import { DOCUMENT_HTML_FORMS } from "./html-forms.js";
 import { extractDocumentHtmlSpecifiers } from "./html.js";
 import { dedupeModuleSpecifiers, normalizeDocumentFileSpecifier, normalizeReferenceLabel } from "./shared.js";
@@ -52,12 +53,12 @@ export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
     if (normalized) out.push(normalized);
   }
 
-  out.push(...extractRstToctreeSpecifiers(cleaned));
+  pushAll(out, extractRstToctreeSpecifiers(cleaned));
 
   // reStructuredText deliberately runs no HTML pass: see DOCUMENT_HTML_FORMS.rst
   // for the stated reason. Routing it through the shared helper keeps the
   // decision in one table instead of an implicit omission at this call site.
-  out.push(...extractDocumentHtmlSpecifiers(cleaned, DOCUMENT_HTML_FORMS.rst));
+  pushAll(out, extractDocumentHtmlSpecifiers(cleaned, DOCUMENT_HTML_FORMS.rst));
 
   return dedupeModuleSpecifiers(out);
 }

@@ -12,6 +12,7 @@ import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
 import { stripJsLikeComments } from "../util/comments.js";
+import { replaceContents } from "../util/collections.js";
 import {
   assertNativeRequiredAvailable,
   getNativeExtractionExecution,
@@ -236,7 +237,7 @@ export async function collectImportsForFile(
       }),
     pushBinding: (binding: ImportBinding) => imports.push(binding),
     getBindings: () => imports,
-    replaceBindings: (bindings: ImportBinding[]) => imports.splice(0, imports.length, ...bindings),
+    replaceBindings: (bindings: ImportBinding[]) => replaceContents(imports, bindings),
   };
   const statementOverrideState = createStatementImportOverrideState();
 

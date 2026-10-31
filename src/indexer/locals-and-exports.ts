@@ -14,6 +14,7 @@ import {
 } from "../native/tree-sitter-native.js";
 import { maskJsLikeCommentsAndStrings, maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
+import { replaceContents } from "../util/collections.js";
 import { callableIdentityForDeclaration, propagateCppInternalLinkage } from "./callable-identity.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
@@ -1680,8 +1681,7 @@ export function collectLocalsAndExportsFromSource(
       if (e.type === "reexport") return pythonAllExports.has(e.exportedAs);
       return true;
     });
-    exports.length = 0;
-    exports.push(...filtered);
+    replaceContents(exports, filtered);
   }
 
   if (

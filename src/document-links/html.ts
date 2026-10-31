@@ -1,4 +1,5 @@
 import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
+import { pushAll } from "../util/collections.js";
 import { SHARED_HTML_TAG_ATTRS, type DocumentHtmlForm } from "./html-forms.js";
 import { dedupeModuleSpecifiers, markResolutionKind, normalizeDocumentSpecifier } from "./shared.js";
 import {
@@ -261,7 +262,7 @@ function inlineScriptSpecifiersFromCleaned(cleaned: string): ModuleSpecifier[] {
     if (/\bsrc\s*=\s*["'][^"']+["']/i.test(attrs)) continue;
     const body = cleaned.slice(event.bodyStart, event.bodyEnd);
     if (!body.trim()) continue;
-    out.push(...markResolutionKind(extractJsTsSpecifiers(body), "source"));
+    pushAll(out, markResolutionKind(extractJsTsSpecifiers(body), "source"));
   }
   return dedupeModuleSpecifiers(out);
 }
@@ -316,8 +317,8 @@ export function extractDocumentHtmlSpecifiers(source: string, form: DocumentHtml
   if (!form.attributes && !form.inlineScript && !form.inlineStyle) return [];
   const cleaned = stripHtmlCommentsAndLiteralBlocks(source);
   const out: ModuleSpecifier[] = [];
-  if (form.attributes) out.push(...attributeSpecifiersFromCleaned(cleaned, form.attributes));
-  if (form.inlineScript) out.push(...inlineScriptSpecifiersFromCleaned(cleaned));
-  if (form.inlineStyle) out.push(...styleSpecifiersFromCleaned(cleaned));
+  if (form.attributes) pushAll(out, attributeSpecifiersFromCleaned(cleaned, form.attributes));
+  if (form.inlineScript) pushAll(out, inlineScriptSpecifiersFromCleaned(cleaned));
+  if (form.inlineStyle) pushAll(out, styleSpecifiersFromCleaned(cleaned));
   return dedupeModuleSpecifiers(out);
 }

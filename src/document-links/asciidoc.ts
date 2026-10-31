@@ -1,5 +1,6 @@
 import path from "node:path";
 import { type ModuleSpecifier } from "../util/specifiers.js";
+import { pushAll } from "../util/collections.js";
 import { DOCUMENT_HTML_FORMS } from "./html-forms.js";
 import { extractDocumentHtmlSpecifiers } from "./html.js";
 import { dedupeModuleSpecifiers, normalizeDocumentFileSpecifier } from "./shared.js";
@@ -105,7 +106,7 @@ export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier
     if (normalized) out.push(normalized);
   }
 
-  out.push(...extractDocumentHtmlSpecifiers(cleaned, DOCUMENT_HTML_FORMS.adoc));
+  pushAll(out, extractDocumentHtmlSpecifiers(cleaned, DOCUMENT_HTML_FORMS.adoc));
 
   return dedupeModuleSpecifiers(out);
 }
