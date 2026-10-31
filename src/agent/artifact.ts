@@ -153,6 +153,9 @@ export async function buildCodegraphArtifactWithSession(
     written.push(fileName);
   };
 
+  // graph.json, questions.json, and manifest.json are written by replacing the entry at each path, without
+  // `userDestination`: the directory is empty or was cleared of known artifacts above, so nothing is expected at these
+  // paths, and a link that appears there is replaced instead of being written through.
   try {
     if (selected.sqlite) {
       begin(SQLITE_FILE);

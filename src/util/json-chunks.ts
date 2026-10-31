@@ -1,4 +1,4 @@
-import { writeFileAtomicallyFrom } from "./atomic-file.js";
+import { writeFileAtomicallyFrom, type AtomicWriteOptions } from "./atomic-file.js";
 
 /** Characters a piece may reach before it goes to the sink, which also bounds every string this module holds. */
 const JSON_CHUNK_CHARS = 1 << 20;
@@ -115,15 +115,25 @@ export async function writeJsonInChunks(
 
 /**
  * Writes `JSON.stringify(value, null, 2)` and a final newline to `filePath` in pieces; see `writeJsonInChunks`. The
- * pieces go to a temporary file beside `filePath`, which replaces it only once the whole document is written, so a
- * failure leaves a previous `filePath` as it was. A `filePath` that a rename must not replace (a device, a FIFO, a
- * descriptor path such as `/dev/stdout`) gets the pieces in place, as `writeFileAtomicallyFrom` does.
+ * pieces go to a temporary file beside the file that `filePath` replaces, which replaces it only once the whole
+ * document is written, so a failure leaves a previous file as it was. `options` say how `filePath` is treated, as for
+ * `writeFileAtomicallyFrom`: by default the entry at `filePath` is replaced, and for a destination the user named
+ * (`userDestination`) a symbolic link is followed and a device, a FIFO or a descriptor path such as `/dev/stdout` gets
+ * the pieces in place.
  */
-export async function writeJsonFileInChunks(filePath: string, value: unknown): Promise<void> {
-  await writeFileAtomicallyFrom(filePath, async (handle) => {
-    await writeJsonInChunks(value, (chunk) => handle.writeFile(chunk));
-    await handle.writeFile("\n");
-  });
+export async function writeJsonFileInChunks(
+  filePath: string,
+  value: unknown,
+  options: AtomicWriteOptions = {},
+): Promise<void> {
+  await writeFileAtomicallyFrom(
+    filePath,
+    async (handle) => {
+      await writeJsonInChunks(value, (chunk) => handle.writeFile(chunk));
+      await handle.writeFile("\n");
+    },
+    options,
+  );
 }
 
 /**

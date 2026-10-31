@@ -3,12 +3,12 @@ import fsp, { type FileHandle } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeFileAtomically, writeFileAtomicallyFrom } from "../src/util/atomic-file.js";
+import { writeFileAtomically, writeFileAtomicallyFrom, type AtomicWriteOptions } from "../src/util/atomic-file.js";
 import {
   createTempRootRegistry,
-  isSymlinkUnavailable,
   openFifoForReading,
   tryCreateFifo,
+  tryCreateFileSymlink,
   withUmask,
 } from "./helpers/filesystem.js";
 import { runTsxScriptWithStdoutFile } from "./helpers/tsx.js";
@@ -28,16 +28,25 @@ async function temporaryNames(directory: string): Promise<string[]> {
   return (await fsp.readdir(directory)).filter((name) => name.endsWith(".tmp"));
 }
 
-const writers: Array<[string, (target: string, content: string) => Promise<void>]> = [
-  ["writeFileAtomically", (target, content) => writeFileAtomically(target, content)],
+type Write = (target: string, content: string, options?: AtomicWriteOptions) => Promise<void>;
+
+const writers: Array<[string, Write]> = [
+  ["writeFileAtomically", (target, content, options) => writeFileAtomically(target, content, options)],
   [
     "writeFileAtomicallyFrom",
-    (target, content) =>
-      writeFileAtomicallyFrom(target, async (handle) => {
-        await handle.writeFile(content);
-      }),
+    (target, content, options) =>
+      writeFileAtomicallyFrom(
+        target,
+        async (handle) => {
+          await handle.writeFile(content);
+        },
+        options,
+      ),
   ],
 ];
+
+/** A destination the user named, as `graph --json --output <path>` passes it. */
+const userDestination: AtomicWriteOptions = { userDestination: true };
 
 describe("writeFileAtomically", () => {
   it.each(["EBUSY", "EPERM", "ENOTEMPTY"])("retries a rename that fails with %s", async (code) => {
@@ -145,9 +154,90 @@ describe("writeFileAtomicallyFrom", () => {
   });
 });
 
+// Without `userDestination` a writer replaces the directory entry at the path and nothing else. The disk cache is written
+// this way, so a link planted at a cache file path cannot send a write to a file outside the cache.
+describe("a file that codegraph owns (no userDestination)", () => {
+  describe.each(writers)("%s", (_name, write) => {
+    it("replaces a symbolic link at the path and never writes the file the link points to", async () => {
+      const root = await roots.create("cg-atomic-owned-link-");
+      const cacheDir = path.join(root, "cache");
+      const outsideDir = path.join(root, "outside");
+      await fsp.mkdir(cacheDir);
+      await fsp.mkdir(outsideDir);
+      const outside = path.join(outsideDir, "secret.txt");
+      const entry = path.join(cacheDir, "state.json");
+      await fsp.writeFile(outside, "outside\n", "utf8");
+      if (!(await tryCreateFileSymlink(outside, entry))) return;
+
+      await write(entry, "next");
+
+      expect((await fsp.lstat(entry)).isSymbolicLink()).toBe(false);
+      await expect(fsp.readFile(entry, "utf8")).resolves.toBe("next");
+      await expect(fsp.readFile(outside, "utf8")).resolves.toBe("outside\n");
+      expect(await fsp.readdir(cacheDir)).toEqual(["state.json"]);
+      expect(await fsp.readdir(outsideDir)).toEqual(["secret.txt"]);
+    });
+
+    it("replaces a symbolic link that points at nothing, and creates nothing where it pointed", async () => {
+      const root = await roots.create("cg-atomic-owned-dangling-");
+      const cacheDir = path.join(root, "cache");
+      const outsideDir = path.join(root, "outside");
+      await fsp.mkdir(cacheDir);
+      await fsp.mkdir(outsideDir);
+      const entry = path.join(cacheDir, "state.json");
+      if (!(await tryCreateFileSymlink(path.join(outsideDir, "created.txt"), entry))) return;
+
+      await write(entry, "next");
+
+      expect((await fsp.lstat(entry)).isSymbolicLink()).toBe(false);
+      await expect(fsp.readFile(entry, "utf8")).resolves.toBe("next");
+      expect(await fsp.readdir(outsideDir)).toEqual([]);
+    });
+
+    // A descriptor path and a FIFO exist on Linux and macOS only.
+    it.skipIf(process.platform === "win32")(
+      "replaces a symbolic link to a descriptor path and never writes the file behind it",
+      async () => {
+        const root = await roots.create("cg-atomic-owned-fd-");
+        const heldPath = path.join(root, "held.json");
+        const entry = path.join(root, "state.json");
+        const held = await fsp.open(heldPath, "w+");
+        try {
+          await fsp.symlink(`/dev/fd/${held.fd}`, entry);
+
+          await write(entry, "next");
+
+          expect((await fsp.lstat(entry)).isSymbolicLink()).toBe(false);
+          await expect(fsp.readFile(entry, "utf8")).resolves.toBe("next");
+          await expect(fsp.readFile(heldPath, "utf8")).resolves.toBe("");
+        } finally {
+          await held.close();
+        }
+      },
+    );
+
+    it.skipIf(process.platform === "win32")("replaces a FIFO at the path instead of opening it", async () => {
+      const root = await roots.create("cg-atomic-owned-fifo-");
+      const entry = path.join(root, "state.json");
+      if (!(await tryCreateFifo(entry))) return;
+      // With a reader open, a writer that did open the FIFO would fail the checks below instead of waiting for one.
+      const reader = await openFifoForReading(entry);
+      try {
+        await write(entry, "next");
+
+        expect((await fsp.lstat(entry)).isFile()).toBe(true);
+        await expect(fsp.readFile(entry, "utf8")).resolves.toBe("next");
+        expect(await fsp.readdir(root)).toEqual(["state.json"]);
+      } finally {
+        await reader.close();
+      }
+    });
+  });
+});
+
 // POSIX permission bits do not exist on Windows: a mode there carries only the read-only attribute, and the writers
 // copy nothing on that platform. These tests run in the Linux and macOS CI lanes.
-describe.skipIf(process.platform === "win32")("permission bits of a replaced file", () => {
+describe.skipIf(process.platform === "win32")("permission bits of a replaced user destination", () => {
   const modeOf = async (file: string): Promise<number> => (await fsp.stat(file)).mode & 0o7777;
 
   describe.each(writers)("%s", (_name, write) => {
@@ -162,7 +252,7 @@ describe.skipIf(process.platform === "win32")("permission bits of a replaced fil
       await fsp.writeFile(target, "previous", "utf8");
       await fsp.chmod(target, mode);
 
-      await withUmask(umask, () => write(target, "next"));
+      await withUmask(umask, () => write(target, "next", userDestination));
 
       await expect(fsp.readFile(target, "utf8")).resolves.toBe("next");
       expect(await modeOf(target)).toBe(mode);
@@ -174,7 +264,7 @@ describe.skipIf(process.platform === "win32")("permission bits of a replaced fil
       const target = path.join(root, "state.json");
 
       // 0o666 without the bits that 0o027 removes.
-      await withUmask(0o027, () => write(target, "next"));
+      await withUmask(0o027, () => write(target, "next", userDestination));
 
       expect(await modeOf(target)).toBe(0o640);
     });
@@ -187,7 +277,7 @@ describe.skipIf(process.platform === "win32")("permission bits of a replaced fil
       await fsp.chmod(real, 0o640);
       await fsp.symlink(real, link);
 
-      await withUmask(0o022, () => write(link, "next"));
+      await withUmask(0o022, () => write(link, "next", userDestination));
 
       expect(await modeOf(real)).toBe(0o640);
       await expect(fsp.readFile(link, "utf8")).resolves.toBe("next");
@@ -202,17 +292,21 @@ describe.skipIf(process.platform === "win32")("permission bits of a replaced fil
     let modeWhileWriting = 0;
 
     await withUmask(0o022, () =>
-      writeFileAtomicallyFrom(target, async (handle) => {
-        modeWhileWriting = (await handle.stat()).mode & 0o777;
-        await handle.writeFile("secret");
-      }),
+      writeFileAtomicallyFrom(
+        target,
+        async (handle) => {
+          modeWhileWriting = (await handle.stat()).mode & 0o777;
+          await handle.writeFile("secret");
+        },
+        userDestination,
+      ),
     );
 
     expect(modeWhileWriting).toBe(0o600);
   });
 });
 
-describe("a destination that is not a regular file", () => {
+describe("a directory as a user destination", () => {
   describe.each(writers)("%s", (_name, write) => {
     it("fails for a directory and leaves it, and what is in it, alone", async () => {
       const root = await roots.create("cg-atomic-dir-");
@@ -220,7 +314,7 @@ describe("a destination that is not a regular file", () => {
       await fsp.mkdir(target);
       await fsp.writeFile(path.join(target, "keep.txt"), "kept", "utf8");
 
-      await expect(write(target, "next")).rejects.toMatchObject({ code: "EISDIR" });
+      await expect(write(target, "next", userDestination)).rejects.toMatchObject({ code: "EISDIR" });
 
       expect(await fsp.readdir(root)).toEqual(["output"]);
       expect(await fsp.readdir(target)).toEqual(["keep.txt"]);
@@ -228,18 +322,7 @@ describe("a destination that is not a regular file", () => {
   });
 });
 
-describe("a symbolic link as the destination", () => {
-  /** Resolves to false where symbolic links cannot be made (Windows without the privilege). */
-  async function makeLink(target: string, linkPath: string): Promise<boolean> {
-    try {
-      await fsp.symlink(target, linkPath, "file");
-      return true;
-    } catch (error) {
-      if (isSymlinkUnavailable(error)) return false;
-      throw error;
-    }
-  }
-
+describe("a symbolic link at a user destination", () => {
   describe.each(writers)("%s", (_name, write) => {
     it("replaces the file the link points to, beside that file, and keeps the link", async () => {
       const root = await roots.create("cg-atomic-link-");
@@ -250,10 +333,10 @@ describe("a symbolic link as the destination", () => {
       const real = path.join(realDir, "state.json");
       const link = path.join(linkDir, "state.json");
       await fsp.writeFile(real, "previous", "utf8");
-      if (!(await makeLink(real, link))) return;
+      if (!(await tryCreateFileSymlink(real, link))) return;
       const renameSpy = vi.spyOn(fsp, "rename");
 
-      await write(link, "next");
+      await write(link, "next", userDestination);
 
       expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
       await expect(fsp.readFile(link, "utf8")).resolves.toBe("next");
@@ -276,10 +359,10 @@ describe("a symbolic link as the destination", () => {
       const inner = path.join(root, "links", "inner.json");
       const outer = path.join(root, "links", "outer.json");
       await fsp.writeFile(real, "previous", "utf8");
-      if (!(await makeLink(path.join("..", "real", "state.json"), inner))) return;
-      await makeLink("inner.json", outer);
+      if (!(await tryCreateFileSymlink(path.join("..", "real", "state.json"), inner))) return;
+      await tryCreateFileSymlink("inner.json", outer);
 
-      await write(outer, "next");
+      await write(outer, "next", userDestination);
 
       expect((await fsp.lstat(outer)).isSymbolicLink()).toBe(true);
       expect((await fsp.lstat(inner)).isSymbolicLink()).toBe(true);
@@ -292,9 +375,9 @@ describe("a symbolic link as the destination", () => {
       const root = await roots.create("cg-atomic-link-dangling-");
       await fsp.mkdir(path.join(root, "shared"));
       const link = path.join(root, "state.json");
-      if (!(await makeLink(path.join("shared", "state.json"), link))) return;
+      if (!(await tryCreateFileSymlink(path.join("shared", "state.json"), link))) return;
 
-      await write(link, "next");
+      await write(link, "next", userDestination);
 
       expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
       await expect(fsp.readFile(path.join(root, "shared", "state.json"), "utf8")).resolves.toBe("next");
@@ -305,10 +388,10 @@ describe("a symbolic link as the destination", () => {
       const root = await roots.create("cg-atomic-link-loop-");
       const first = path.join(root, "a");
       const second = path.join(root, "b");
-      if (!(await makeLink("b", first))) return;
-      await makeLink("a", second);
+      if (!(await tryCreateFileSymlink("b", first))) return;
+      await tryCreateFileSymlink("a", second);
 
-      await expect(write(first, "next")).rejects.toMatchObject({ code: "ELOOP" });
+      await expect(write(first, "next", userDestination)).rejects.toMatchObject({ code: "ELOOP" });
 
       expect((await fsp.lstat(first)).isSymbolicLink()).toBe(true);
       expect((await fsp.lstat(second)).isSymbolicLink()).toBe(true);
@@ -319,7 +402,7 @@ describe("a symbolic link as the destination", () => {
 
 // A descriptor path names an open descriptor of a process, which can hold a regular file that a shell opened with `>` or
 // `>>`. Windows has no such paths.
-describe.skipIf(process.platform === "win32")("a descriptor path", () => {
+describe.skipIf(process.platform === "win32")("a descriptor path as a user destination", () => {
   const prefixes = process.platform === "linux" ? ["/dev/fd", "/proc/self/fd"] : ["/dev/fd"];
 
   describe.each(writers)("%s", (_name, write) => {
@@ -332,7 +415,7 @@ describe.skipIf(process.platform === "win32")("a descriptor path", () => {
         try {
           const before = await fsp.stat(file);
 
-          await write(`${prefix}/${held.fd}`, "next content");
+          await write(`${prefix}/${held.fd}`, "next content", userDestination);
 
           await expect(fsp.readFile(file, "utf8")).resolves.toBe("next content");
           expect((await fsp.stat(file)).ino).toBe(before.ino);
@@ -349,7 +432,7 @@ describe.skipIf(process.platform === "win32")("a descriptor path", () => {
       await fsp.writeFile(file, "head\n", "utf8");
       const held = await fsp.open(file, "a");
       try {
-        await write(`/dev/fd/${held.fd}`, "next content");
+        await write(`/dev/fd/${held.fd}`, "next content", userDestination);
 
         await expect(fsp.readFile(file, "utf8")).resolves.toBe("head\nnext content");
       } finally {
@@ -366,7 +449,7 @@ describe.skipIf(process.platform === "win32")("a descriptor path", () => {
         await fsp.symlink(`/dev/fd/${held.fd}`, link);
         const before = await fsp.stat(file);
 
-        await write(link, "next content");
+        await write(link, "next content", userDestination);
 
         expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
         await expect(fsp.readFile(file, "utf8")).resolves.toBe("next content");
@@ -436,7 +519,7 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 );
 
 // A FIFO and /dev/null are on Linux and macOS. Windows has the NUL device and named pipes, which are covered below.
-describe.skipIf(process.platform === "win32")("a FIFO or a device on a POSIX platform", () => {
+describe.skipIf(process.platform === "win32")("a FIFO or a device as a user destination on a POSIX platform", () => {
   describe.each(writers)("%s", (_name, write) => {
     it("writes into a FIFO in place: it stays a FIFO, and no temporary file is made", async () => {
       const root = await roots.create("cg-atomic-fifo-");
@@ -444,7 +527,7 @@ describe.skipIf(process.platform === "win32")("a FIFO or a device on a POSIX pla
       if (!(await tryCreateFifo(fifo))) return;
       const reader = await openFifoForReading(fifo);
       try {
-        await write(fifo, "next content");
+        await write(fifo, "next content", userDestination);
 
         expect((await fsp.lstat(fifo)).isFIFO()).toBe(true);
         await expect(reader.readFile("utf8")).resolves.toBe("next content");
@@ -462,7 +545,7 @@ describe.skipIf(process.platform === "win32")("a FIFO or a device on a POSIX pla
       await fsp.symlink(fifo, link);
       const reader = await openFifoForReading(fifo);
       try {
-        await write(link, "next content");
+        await write(link, "next content", userDestination);
 
         expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
         expect((await fsp.lstat(fifo)).isFIFO()).toBe(true);
@@ -475,7 +558,7 @@ describe.skipIf(process.platform === "win32")("a FIFO or a device on a POSIX pla
 
     // Root could rename a file over the device, so the test that names /dev/null runs for other users only.
     it.skipIf(process.getuid?.() === 0)("writes to /dev/null and leaves the device in place", async () => {
-      await write("/dev/null", "discarded");
+      await write("/dev/null", "discarded", userDestination);
 
       expect((await fsp.stat("/dev/null")).isCharacterDevice()).toBe(true);
     });
@@ -492,7 +575,7 @@ describe.skipIf(process.platform === "win32")("a FIFO or a device on a POSIX pla
       throw fileError("EBUSY");
     });
     try {
-      await expect(writeFileAtomicallyFrom(fifo, fill)).rejects.toMatchObject({ code: "EBUSY" });
+      await expect(writeFileAtomicallyFrom(fifo, fill, userDestination)).rejects.toMatchObject({ code: "EBUSY" });
 
       expect(fill).toHaveBeenCalledTimes(1);
       expect((await fsp.lstat(fifo)).isFIFO()).toBe(true);
@@ -506,19 +589,23 @@ describe.skipIf(process.platform === "win32")("a FIFO or a device on a POSIX pla
 
 // Windows has no FIFO and no /dev/null; its counterparts are the NUL device and named pipes. `stat` by path reports a
 // named pipe as a regular file there, and `Stats.isFIFO()` is always false, so the pipe test reads what the server got.
-describe.skipIf(process.platform !== "win32")("a device or a named pipe on Windows", () => {
+describe.skipIf(process.platform !== "win32")("a device or a named pipe as a user destination on Windows", () => {
   const nul = "\\\\.\\NUL";
 
   it("writes to the NUL device", async () => {
-    await expect(writeFileAtomically(nul, "discarded")).resolves.toBeUndefined();
+    await expect(writeFileAtomically(nul, "discarded", userDestination)).resolves.toBeUndefined();
   });
 
   it("hands fill the NUL device itself", async () => {
     let isDevice = false;
-    await writeFileAtomicallyFrom(nul, async (handle) => {
-      isDevice = (await handle.stat()).isCharacterDevice();
-      await handle.writeFile("discarded");
-    });
+    await writeFileAtomicallyFrom(
+      nul,
+      async (handle) => {
+        isDevice = (await handle.stat()).isCharacterDevice();
+        await handle.writeFile("discarded");
+      },
+      userDestination,
+    );
 
     expect(isDevice).toBe(true);
   });
@@ -540,7 +627,7 @@ describe.skipIf(process.platform !== "win32")("a device or a named pipe on Windo
       });
       await new Promise<void>((resolve) => server.listen(pipePath, resolve));
       try {
-        await write(pipePath, "next content");
+        await write(pipePath, "next content", userDestination);
         await closed;
 
         expect(Buffer.concat(received).toString("utf8")).toBe("next content");

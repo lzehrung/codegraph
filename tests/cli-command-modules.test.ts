@@ -47,7 +47,7 @@ import * as navigationModule from "../src/indexer/navigation.js";
 import { getNativeRuntimeFingerprint } from "../src/native/tree-sitter-native.js";
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
-import { createTwoCommitCycleProject, mkTmpDir } from "./helpers/filesystem.js";
+import { createTwoCommitCycleProject, mkTmpDir, tryCreateFileSymlink } from "./helpers/filesystem.js";
 import { limitJsonStringLength } from "./helpers/string-limit.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as mcpServer from "../src/mcp/server.js";
@@ -1102,6 +1102,34 @@ describe("CLI command modules", () => {
 
     await expect(fsp.readFile(output, "utf8")).resolves.toBe("previous\n");
     expect((await fsp.readdir(root)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("graph --json --output follows a symbolic link at the output path and keeps the link", async () => {
+    const root = await mkTmpDir("codegraph-graph-json-link-");
+    const entry = path.join(root, "entry.ts");
+    await fsp.writeFile(entry, "export const value = 1;\n", "utf8");
+    await fsp.mkdir(path.join(root, "reports"));
+    await fsp.mkdir(path.join(root, "data"));
+    const real = path.join(root, "data", "graph.json");
+    const link = path.join(root, "reports", "latest.json");
+    await fsp.writeFile(real, "previous\n", "utf8");
+    if (!(await tryCreateFileSymlink(real, link))) return;
+
+    await handleGraphCommand(
+      createGraphContext({
+        projectRootFs: root,
+        cwd: () => root,
+        resolveFiles: async () => [entry.replace(/\\/g, "/")],
+        getOpt: (name) => (name === "--output" ? path.join("reports", "latest.json") : undefined),
+        hasFlag: (name) => name === "--json",
+      }),
+    );
+
+    // The link is the user's own: it stays, and the file it points to holds the document.
+    expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(readJsonRecord(JSON.parse(await fsp.readFile(real, "utf8"))).files).toHaveLength(1);
+    expect(await fsp.readdir(path.join(root, "data"))).toEqual(["graph.json"]);
+    expect(await fsp.readdir(path.join(root, "reports"))).toEqual(["latest.json"]);
   });
 
   test("graph --json waits for stdout to take the document before it finishes", async () => {

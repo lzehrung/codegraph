@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
@@ -58,7 +58,7 @@ import * as resolverEnvironment from "../src/indexer/build-cache/resolver-enviro
 vi.mock("node:zlib", { spy: true });
 import { runGit } from "./helpers/git.js";
 import { limitJsonStringLength } from "./helpers/string-limit.js";
-import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
+import { createTempProjectRoot, createTempRootRegistry, mkTmpDir, tryCreateFileSymlink } from "./helpers/filesystem.js";
 import {
   DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
   type SnapshotComparableSignature,
@@ -421,6 +421,95 @@ describe("Cache invalidation and strict hashing", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+
+  // A link planted at a cache file path must be replaced by the cache write, not followed: a write through it would land
+  // in the file the link names, outside the cache. Cache files are written without `userDestination`.
+  describe("a symbolic link planted at a cache file path", () => {
+    const cacheOptions = { cache: "disk", threads: 1 } as const;
+    const roots = createTempRootRegistry();
+    const cachedRoots: string[] = [];
+
+    afterEach(async () => {
+      // The disk cache keeps its SQLite file open, which would keep Windows from removing the project directory.
+      for (const root of cachedRoots.splice(0)) buildCache.closeDiskCacheDatabase(root, cacheOptions);
+      await roots.cleanup();
+    });
+
+    async function cachedProject(): Promise<{ root: string; index: ProjectIndex; cacheDir: string }> {
+      const root = await roots.create("dg-cache-link-");
+      cachedRoots.push(root);
+      await fsp.writeFile(path.join(root, "entry.ts"), "export function planted() { return 1; }\n", "utf8");
+      const index = await buildProjectIndex(root, cacheOptions);
+      return { root, index, cacheDir: path.dirname(manifestPathFor(root)) };
+    }
+
+    /** Replaces the cache file `name` with a link to a file outside the cache, which holds `content`, and resolves to it. */
+    async function plantLink(cacheDir: string, name: string, content: Buffer | string): Promise<string | undefined> {
+      const outside = path.join(await roots.create("dg-cache-link-outside-"), name);
+      await fsp.writeFile(outside, content);
+      const cacheFile = path.join(cacheDir, name);
+      await fsp.rm(cacheFile, { force: true });
+      return (await tryCreateFileSymlink(outside, cacheFile)) ? outside : undefined;
+    }
+
+    async function writtenVersion(root: string, name: string, cacheFile: string): Promise<unknown> {
+      return name === "manifest.json"
+        ? (await readManifest(root)).version
+        : (await readProjectSnapshot(cacheFile)).version;
+    }
+
+    // One entry per cache file, with the writer that produces it.
+    const cacheWriters: Array<{ name: string; write: (root: string, index: ProjectIndex) => Promise<unknown> }> = [
+      { name: "manifest.json", write: (root) => writeManifest(root, cacheOptions, createManifest(root)) },
+      { name: "project-index-snapshot.json", write: (root, index) => rewriteProjectSnapshot(root, index) },
+      { name: "bloom-filters.json", write: (root, index) => rewriteProjectSnapshot(root, index) },
+      {
+        name: "detailed-symbol-graph.json",
+        write: async (root, index) =>
+          buildCache.writeDetailedSymbolGraphSnapshot(root, cacheOptions, index, await buildSymbolGraphDetailed(index)),
+      },
+    ];
+
+    it.each(cacheWriters)(
+      "is replaced when $name is written, and the file it pointed to is left alone",
+      async ({ name, write }) => {
+        const { root, index, cacheDir } = await cachedProject();
+        const outside = await plantLink(cacheDir, name, "outside\n");
+        if (!outside) return;
+
+        await write(root, index);
+
+        const cacheFile = path.join(cacheDir, name);
+        expect((await fsp.lstat(cacheFile)).isSymbolicLink()).toBe(false);
+        await expect(fsp.readFile(outside, "utf8")).resolves.toBe("outside\n");
+        expect(await writtenVersion(root, name, cacheFile)).toEqual(expect.any(Number));
+      },
+    );
+
+    it("indexing replaces the links at the cache files it rewrites and writes nothing outside the cache", async () => {
+      const { root, cacheDir } = await cachedProject();
+      // Each link points at a copy of the cache file, so the cache still reads as valid through the link.
+      const planted = new Map<string, { outside: string; content: Buffer }>();
+      for (const name of ["manifest.json", "project-index-snapshot.json", "bloom-filters.json"]) {
+        const content = await fsp.readFile(path.join(cacheDir, name));
+        const outside = await plantLink(cacheDir, name, content);
+        if (!outside) return;
+        planted.set(name, { outside, content });
+      }
+      await fsp.writeFile(
+        path.join(root, "entry.ts"),
+        "export function planted() { return 2; }\nexport const added = 1;\n",
+        "utf8",
+      );
+
+      await buildProjectIndex(root, cacheOptions);
+
+      for (const [name, { outside, content }] of planted) {
+        expect((await fsp.lstat(path.join(cacheDir, name))).isSymbolicLink(), `${name} is still a link`).toBe(false);
+        expect(await fsp.readFile(outside), `${name} outside the cache`).toEqual(content);
+      }
+    });
   });
 
   it("disk cache invalidates when content hash changes even if mtime is restored", async () => {

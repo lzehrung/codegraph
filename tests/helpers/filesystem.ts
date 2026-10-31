@@ -229,6 +229,17 @@ export async function tryCreateDirectorySymlink(target: string, linkPath: string
   }
 }
 
+/** Creates a symbolic link to a file. Resolves to false where links cannot be made (Windows without the privilege). */
+export async function tryCreateFileSymlink(target: string, linkPath: string): Promise<boolean> {
+  try {
+    await fsp.symlink(target, linkPath, "file");
+    return true;
+  } catch (error) {
+    if (isSymlinkUnavailable(error)) return false;
+    throw error;
+  }
+}
+
 export type TempLinkedRoot = {
   realRoot: string;
   parent: string;

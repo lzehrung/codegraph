@@ -13,6 +13,7 @@ import {
   createTempRootRegistry,
   mkTmpDir,
   tryCreateDirectorySymlink,
+  tryCreateFileSymlink,
 } from "./helpers/filesystem.js";
 import { limitFileStringLength, limitJsonStringLength } from "./helpers/string-limit.js";
 
@@ -416,6 +417,32 @@ describe("artifact build", () => {
     expect(fooSymbols.length).toBeGreaterThanOrEqual(1);
     const fooEdges = graph.symbolEdges.filter((edge) => edge.label === "calls" || edge.to.includes("foo"));
     expect(fooEdges.length).toBeGreaterThanOrEqual(2);
+  });
+
+  describe("when a symbolic link is at an artifact path", () => {
+    const roots = createTempRootRegistry();
+
+    afterEach(async () => {
+      await roots.cleanup();
+    });
+
+    it("replaces a link that points at nothing, and creates nothing where it pointed", async () => {
+      const root = await roots.create("cg-artifact-link-");
+      const outDir = path.join(root, "codegraph-out");
+      const outside = await roots.create("cg-artifact-link-outside-");
+      await fs.mkdir(outDir);
+      await fs.writeFile(path.join(root, "entry.ts"), "export const value = 1;\n", "utf8");
+      // With `force` the build may write into a directory that has entries. Its cleanup removes known artifacts, but not
+      // a link that points at nothing, so the write of graph.json is the one that meets it.
+      if (!(await tryCreateFileSymlink(path.join(outside, "created.json"), path.join(outDir, "graph.json")))) return;
+
+      await buildCodegraphArtifact({ root, outDir, force: true, graphJson: true });
+
+      expect((await fs.lstat(path.join(outDir, "graph.json"))).isSymbolicLink()).toBe(false);
+      const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
+      expect(graph.files).toContain("entry.ts");
+      await expect(fs.readdir(outside)).resolves.toEqual([]);
+    });
   });
 
   describe("when a serialized value passes the string limit", () => {

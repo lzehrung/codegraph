@@ -38,7 +38,7 @@ const LINK_TARGET_WRITE_FLAGS = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsC
  * `/dev/fd/<n>` and, on Linux, `/proc/<pid>/fd/<n>` (`self` is this process, `thread-self` this thread). The file
  * behind one can be a regular file that another process holds open, such as the one a shell's `> graph.json` gives to
  * `/dev/stdout`. That file must stay the file the shell holds, and the entry in `/dev` or `/proc` is no place for a
- * temp file, so these paths are written in place.
+ * temp file, so a user destination at such a path is written in place.
  */
 const DESCRIPTOR_PATH =
   /^\/(?:dev\/(?:std(?:in|out|err)|fd\/\d+)|proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?\/fd\/\d+)$/;
@@ -51,6 +51,22 @@ const MAX_SYMLINK_HOPS = 40;
  * a regular file there, and connects to the pipe's server to do it, so the form of the path is the only safe sign.
  */
 const WINDOWS_PIPE_PATH = /^[\\/]{2}[.?][\\/]pipe[\\/]/i;
+
+/** How a write treats what is already at its path. */
+export type AtomicWriteOptions = {
+  /**
+   * `filePath` is a destination the user named, such as the `--output` of `graph --json`. It is written the way a shell
+   * redirection to it would be (`planWrite`): a symbolic link at the path is followed and the file at its end is the one
+   * replaced; a device, a FIFO, a socket, a Windows named pipe, or a descriptor path such as `/dev/stdout` is written in
+   * place; and a regular file that is replaced keeps its permission bits.
+   *
+   * Leave it unset for a file that codegraph owns, such as a cache or an artifact file. The directory entry at the path
+   * is then replaced, whatever it is, and nothing else is touched: a symbolic link there is replaced by the new regular
+   * file and never followed, so a link planted in a cache directory cannot send a write to a file outside it, and nothing
+   * at the path is opened or inspected, so a FIFO there cannot hold the write for a reader.
+   */
+  userDestination?: boolean;
+};
 
 type DirectoryEntry = { name: string; isFile(): boolean };
 
@@ -130,10 +146,11 @@ async function linkReachesDescriptor(filePath: string): Promise<boolean> {
 type WritePlan = { target: string; mode: number | undefined } | { flags: number };
 
 /**
- * Decides how `filePath` is written. A regular file, or nothing yet, is replaced through a temp file and a rename, and
- * keeps the permission bits `lstat` finds. A symbolic link stays what it is: the file it points to is the one replaced,
- * and the temp file is made beside that file, never in the link's own directory, which may be one that no file can be
- * created in. Anything else is written in place, because a rename cannot replace it or must not:
+ * Decides how the user destination `filePath` is written (`AtomicWriteOptions.userDestination`). A regular file, or
+ * nothing yet, is replaced through a temp file and a rename, and keeps the permission bits `lstat` finds. A symbolic
+ * link stays what it is: the file it points to is the one replaced, and the temp file is made beside that file, never
+ * in the link's own directory, which may be one that no file can be created in. Anything else is written in place,
+ * because a rename cannot replace it or must not:
  *
  * - a device, a FIFO, a socket or a directory: a rename over one fails or destroys it;
  * - a descriptor path (`DESCRIPTOR_PATH`), as typed or at the end of symbolic links: it names a descriptor that can
@@ -162,29 +179,33 @@ async function planWrite(filePath: string): Promise<WritePlan> {
 }
 
 /**
- * Runs `writeTemp` against a unique `.<name>.<pid>.<uuid>.tmp` file beside the file it replaces (`planWrite`), fsyncs
- * that file, renames it over the file, and fsyncs the directory, so a reader sees the old or the new content, never a
- * partial write. A failure that looks like transient file contention retries with a fresh temp file after a short
- * backoff; any other failure throws. A failed attempt removes its own temp file and leaves the file as it was; a temp
- * file orphaned by a crash is left for `removeStaleTempFiles`. Resolves to `undefined` once the file is replaced, and
- * to the open flags for a write in place, having written nothing, when `planWrite` found that a rename must not
- * replace it: see `replaceFileAtomically`.
+ * Runs `writeTemp` against a unique `.<name>.<pid>.<uuid>.tmp` file beside the file it replaces, fsyncs that file,
+ * renames it over that file, and fsyncs the directory, so a reader sees the old or the new content, never a partial
+ * write. A failure that looks like transient file contention retries with a fresh temp file after a short backoff; any
+ * other failure throws. A failed attempt removes its own temp file and leaves the file as it was; a temp file orphaned
+ * by a crash is left for `removeStaleTempFiles`.
  *
- * A file that is replaced keeps its permission bits, as it would if it were written in place. On Windows a mode
- * carries one attribute, read-only, and a rename over a read-only file fails, so nothing is copied there. `writeTemp`
- * is given the mode to create the temp file with: the old file's, plus the owner's read and write bits. So the new
- * content is never open to more users than the old content was, not even before the rename, and the fsync below can
- * reopen the file by path when its mode is read-only. Then `chmod` sets the exact mode, which also restores the bits
- * that the umask removed at creation.
+ * The file replaced is the entry at `filePath`, whatever it is: nothing at `filePath` is opened or inspected, and a
+ * symbolic link there is replaced by the new regular file, not followed. With `userDestination`, `planWrite` decides
+ * instead. Resolves to `undefined` once the file is replaced, and to the open flags of a write in place, having
+ * written nothing, when `planWrite` found that a rename must not replace the destination: see `replaceFileAtomically`.
+ *
+ * A user destination that is replaced keeps its permission bits, as it would if it were written in place. On Windows a
+ * mode carries one attribute, read-only, and a rename over a read-only file fails, so nothing is copied there.
+ * `writeTemp` is given the mode to create the temp file with: the old file's, plus the owner's read and write bits. So
+ * the new content is never open to more users than the old content was, not even before the rename, and the fsync
+ * below can reopen the file by path when its mode is read-only. Then `chmod` sets the exact mode, which also restores
+ * the bits that the umask removed at creation.
  */
 async function replaceByRename(
   filePath: string,
   writeTemp: (tempPath: string, createMode: number | undefined) => Promise<void>,
+  userDestination: boolean,
 ): Promise<number | undefined> {
   for (let attempt = 0; ; attempt += 1) {
     let tempPath: string | undefined;
     try {
-      const plan = await planWrite(filePath);
+      const plan: WritePlan = userDestination ? await planWrite(filePath) : { target: filePath, mode: undefined };
       if ("flags" in plan) return plan.flags;
       const directory = path.dirname(plan.target);
       tempPath = path.join(directory, `.${path.basename(plan.target)}.${process.pid}.${randomUUID()}.tmp`);
@@ -210,28 +231,35 @@ async function replaceByRename(
 }
 
 /**
- * Replaces the file at `filePath` through a temp file and a rename (`replaceByRename`), or writes it in place with
- * `writeInPlace`, given the open flags `planWrite` chose, when a rename must not replace it. An in-place write makes
- * no temp file, renames nothing, fsyncs nothing (a pipe or a device may not support it), retries nothing (what went
- * out cannot be taken back), and removes nothing, whether it succeeds or fails; a failure part way leaves what was
- * already written.
+ * Replaces the file at `filePath` through a temp file and a rename (`replaceByRename`) or, for a user destination
+ * that a rename must not replace, writes it in place with `writeInPlace`, given the open flags `planWrite` chose. An
+ * in-place write makes no temp file, renames nothing, fsyncs nothing (a pipe or a device may not support it), retries
+ * nothing (what went out cannot be taken back), and removes nothing, whether it succeeds or fails; a failure part way
+ * leaves what was already written.
  */
 async function replaceFileAtomically(
   filePath: string,
   writeTemp: (tempPath: string, createMode: number | undefined) => Promise<void>,
   writeInPlace: (flags: number) => Promise<void>,
+  options: AtomicWriteOptions,
 ): Promise<void> {
-  const flags = await replaceByRename(filePath, writeTemp);
+  const flags = await replaceByRename(filePath, writeTemp, options.userDestination ?? false);
   if (flags !== undefined) await writeInPlace(flags);
 }
 
 /**
- * Replace `filePath` with `data` so a reader sees the old or the new content, never a partial write. A file that is
- * replaced keeps its permission bits, except on Windows, where they are not meaningful. A symbolic link at `filePath`
- * stays: the file it points to is replaced. A destination that cannot be replaced by a rename (`/dev/null`, a FIFO,
- * a Windows named pipe, a descriptor path such as `/dev/stdout`) gets `data` written into it in place.
+ * Replace `filePath` with `data` so a reader sees the old or the new content, never a partial write. The entry at
+ * `filePath` is replaced, a symbolic link included: the link is replaced by the new file, and the file it pointed to is
+ * never written. For a destination the user named (`options.userDestination`) the file behind a link is the one
+ * replaced, a replaced file keeps its permission bits (except on Windows, where they are not meaningful), and a
+ * destination that a rename cannot replace (`/dev/null`, a FIFO, a Windows named pipe, a descriptor path such as
+ * `/dev/stdout`) gets `data` written into it in place; see `AtomicWriteOptions`.
  */
-export async function writeFileAtomically(filePath: string, data: string | Uint8Array): Promise<void> {
+export async function writeFileAtomically(
+  filePath: string,
+  data: string | Uint8Array,
+  options: AtomicWriteOptions = {},
+): Promise<void> {
   await replaceFileAtomically(
     filePath,
     async (tempPath, createMode) => {
@@ -240,6 +268,7 @@ export async function writeFileAtomically(filePath: string, data: string | Uint8
     async (flags) => {
       await fsp.writeFile(filePath, data, { flag: flags });
     },
+    options,
   );
 }
 
@@ -262,19 +291,21 @@ async function fillFile(
  * `writeFileAtomically` for content produced piece by piece, such as a document too large to hold as one string:
  * `fill` writes it through the handle of a new temp file, and that file replaces `filePath` only after `fill` has
  * returned. A failure to open the temp file or in `fill` removes the temp file and leaves a previous `filePath`
- * untouched. A retry after transient contention calls `fill` again with a fresh temp file. A file that is replaced
- * keeps its permission bits, except on Windows, where they are not meaningful, and a symbolic link at `filePath`
- * stays. For a destination that cannot be replaced by a rename, `fill` writes through the handle of the destination
- * itself, once: a failure is thrown as it is, and leaves what was already written.
+ * untouched. A retry after transient contention calls `fill` again with a fresh temp file. `options` say how
+ * `filePath` is treated, as for `writeFileAtomically`; for a destination the user named that a rename cannot replace,
+ * `fill` writes through the handle of the destination itself, once, and a failure is thrown as it is and leaves what
+ * was already written.
  */
 export async function writeFileAtomicallyFrom(
   filePath: string,
   fill: (handle: FileHandle) => Promise<void>,
+  options: AtomicWriteOptions = {},
 ): Promise<void> {
   await replaceFileAtomically(
     filePath,
     (tempPath, createMode) => fillFile(tempPath, "wx", createMode, fill),
     (flags) => fillFile(filePath, flags, undefined, fill),
+    options,
   );
 }
 

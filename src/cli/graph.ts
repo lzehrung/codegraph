@@ -286,15 +286,16 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       context.writeStdoutLine(text);
     }
   };
-  // Graph JSON can pass V8's string limit, so it goes out in pieces instead of one string. A file is written to a
-  // temporary file that replaces it when complete, so a failed write leaves a previous file alone; a symbolic link
-  // stays and its target is the file replaced; a path that a rename must not replace (a device such as /dev/null, a
+  // Graph JSON can pass V8's string limit, so it goes out in pieces instead of one string. `--output` is a destination
+  // the user named, so it is written the way a shell redirection to it would be: through a temporary file that
+  // replaces the file when complete (so a failed write leaves a previous file alone), a symbolic link at the path
+  // stays and its target is the file replaced, and a path that a rename must not replace (a device such as /dev/null, a
   // FIFO, /dev/stdout) is written in place. On stdout, each piece ends at a line break (the bytes are those of one
   // `writeStdoutLine` of the whole text) and is awaited, so a slow consumer holds the command back instead of the
   // whole document piling up in memory.
   const writeJsonOut = async (value: unknown): Promise<void> => {
     if (outputFile) {
-      await writeJsonFileInChunks(outputFile, value);
+      await writeJsonFileInChunks(outputFile, value, { userDestination: true });
       return;
     }
     await writeJsonAsLines(value, context.writeStdoutLineAndWait);
