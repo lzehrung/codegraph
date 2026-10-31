@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeFileAtomically, writeFileAtomicallyFrom, type AtomicWriteOptions } from "../src/util/atomic-file.js";
+import { isFileSystemErrorCode } from "../src/util/errors.js";
 import {
   createTempRootRegistry,
   openFifoForReading,
@@ -232,6 +233,23 @@ describe("a file that codegraph owns (no userDestination)", () => {
         await reader.close();
       }
     });
+
+    // The disk cache removes its stale temporary files by this name (manifest.ts and project-snapshot.ts), so the writer
+    // has to keep making it.
+    it("makes its temporary file as .<name>.<pid>.<uuid>.tmp, the name the disk cache cleanups match", async () => {
+      const root = await roots.create("cg-atomic-owned-name-");
+      const entry = path.join(root, "state.json");
+      const renameSpy = vi.spyOn(fsp, "rename");
+
+      await write(entry, "next");
+
+      expect(renameSpy).toHaveBeenCalledTimes(1);
+      const [from] = renameSpy.mock.calls[0]!;
+      expect(path.basename(String(from))).toMatch(
+        /^\.state\.json\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/,
+      );
+      await expect(fsp.readFile(entry, "utf8")).resolves.toBe("next");
+    });
   });
 });
 
@@ -318,6 +336,31 @@ describe("a directory as a user destination", () => {
 
       expect(await fsp.readdir(root)).toEqual(["output"]);
       expect(await fsp.readdir(target)).toEqual(["keep.txt"]);
+    });
+  });
+});
+
+// The temporary file of a rename is made beside the destination, and the destination can have any name that one path
+// component allows. A temporary name built from the destination name, a pid and a UUID would exceed that limit for a
+// valid destination (`ENAMETOOLONG`, or `ENOENT` on Windows).
+describe("a user destination with a long name", () => {
+  describe.each(writers)("%s", (_name, write) => {
+    it.each([240, 255])("is replaced when its name is %i characters long", async (length) => {
+      const root = await roots.create("cg-atomic-long-");
+      const name = `${"a".repeat(length - ".json".length)}.json`;
+      const target = path.join(root, name);
+      try {
+        await fsp.writeFile(target, "previous", "utf8");
+      } catch (error) {
+        // A filesystem with a shorter limit cannot hold the destination itself, so there is nothing to replace.
+        if (isFileSystemErrorCode(error, "ENAMETOOLONG")) return;
+        throw error;
+      }
+
+      await write(target, "next", userDestination);
+
+      await expect(fsp.readFile(target, "utf8")).resolves.toBe("next");
+      expect(await fsp.readdir(root)).toEqual([name]);
     });
   });
 });

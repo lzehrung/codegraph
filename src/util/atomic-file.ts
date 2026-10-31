@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fsp, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
@@ -179,11 +179,24 @@ async function planWrite(filePath: string): Promise<WritePlan> {
 }
 
 /**
- * Runs `writeTemp` against a unique `.<name>.<pid>.<uuid>.tmp` file beside the file it replaces, fsyncs that file,
- * renames it over that file, and fsyncs the directory, so a reader sees the old or the new content, never a partial
- * write. A failure that looks like transient file contention retries with a fresh temp file after a short backoff; any
- * other failure throws. A failed attempt removes its own temp file and leaves the file as it was; a temp file orphaned
- * by a crash is left for `removeStaleTempFiles`.
+ * The name of the temp file for a write beside the file it replaces (`target`). A file that codegraph owns gets
+ * `.<name>.<pid>.<uuid>.tmp`, the form that the stale-temp cleanups of the disk cache match. A user destination gets
+ * `.cg-<16 hex digits>.tmp`, which has the same length whatever the destination is called: that name can be as long as
+ * one path component allows (255 bytes, or characters, on the common filesystems), and the first form adds a pid, a
+ * UUID and a suffix to it, so a valid destination name would make a temp name that exceeds the limit (`ENAMETOOLONG`,
+ * or `ENOENT` on Windows).
+ */
+function tempFileName(target: string, userDestination: boolean): string {
+  if (userDestination) return `.cg-${randomBytes(8).toString("hex")}.tmp`;
+  return `.${path.basename(target)}.${process.pid}.${randomUUID()}.tmp`;
+}
+
+/**
+ * Runs `writeTemp` against a unique temp file beside the file it replaces (`tempFileName`), fsyncs that file, renames
+ * it over that file, and fsyncs the directory, so a reader sees the old or the new content, never a partial write. A
+ * failure that looks like transient file contention retries with a fresh temp file after a short backoff; any other
+ * failure throws. A failed attempt removes its own temp file and leaves the file as it was; a temp file orphaned by a
+ * crash is left behind, and the disk cache removes its own with `removeStaleTempFiles`.
  *
  * The file replaced is the entry at `filePath`, whatever it is: nothing at `filePath` is opened or inspected, and a
  * symbolic link there is replaced by the new regular file, not followed. With `userDestination`, `planWrite` decides
@@ -208,7 +221,7 @@ async function replaceByRename(
       const plan: WritePlan = userDestination ? await planWrite(filePath) : { target: filePath, mode: undefined };
       if ("flags" in plan) return plan.flags;
       const directory = path.dirname(plan.target);
-      tempPath = path.join(directory, `.${path.basename(plan.target)}.${process.pid}.${randomUUID()}.tmp`);
+      tempPath = path.join(directory, tempFileName(plan.target, userDestination));
       await writeTemp(tempPath, plan.mode === undefined ? undefined : plan.mode | OWNER_READ_WRITE);
       await fsyncFile(tempPath);
       if (plan.mode !== undefined) await fsp.chmod(tempPath, plan.mode);

@@ -1086,10 +1086,10 @@ describe("CLI command modules", () => {
       limit.mockRestore();
     }
 
-    // The output file cannot be opened, as when it is read-only.
+    // The output directory refuses a new file, as when it is read-only: the temporary file cannot be created.
     const realOpen = fsp.open.bind(fsp);
     const open = vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
-      if (path.basename(String(file)).includes("graph.json")) {
+      if (flags === "wx" && path.resolve(path.dirname(String(file))) === path.resolve(root)) {
         throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
       }
       return await realOpen(file, flags, mode);
