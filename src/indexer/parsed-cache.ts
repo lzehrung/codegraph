@@ -55,14 +55,6 @@ export function cachedParsedContextForIndexSync(index: ProjectIndex, file: strin
   return index.parsed?.get(fileKey) ?? onDemandParsedContexts.get(index)?.get(fileKey)?.parsed;
 }
 
-/** Read an already retained tree without parsing a file just to check the cache. */
-export function cachedParsedContextForIndex(index: ProjectIndex, file: string): Promise<ParsedFileContext> | undefined {
-  const fileKey = fileIdentityKey(file);
-  const retained = index.parsed?.get(fileKey);
-  if (retained) return ensureParsedContext(file, retained, index.languageExtensions);
-  return onDemandParsedContexts.get(index)?.get(fileKey)?.promise;
-}
-
 /** Reuse one query-time syntax parse per file, including files loaded from a disk-cached index. */
 export function ensureParsedContextForIndex(
   index: ProjectIndex,
