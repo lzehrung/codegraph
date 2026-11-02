@@ -17,13 +17,13 @@ export const QUERY_INDEX_CANDIDATE_ROW_LIMIT = 2000;
  * path-ordered SQL reads and be kept once we do cheap in-memory ranking. */
 const QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT = QUERY_INDEX_CANDIDATE_ROW_LIMIT * 4;
 
-/** With 500 paths and LIMIT, 128 two-parameter predicates stay below even SQLite's
+/** With a batch's paths bound as one JSON value, 128 two-parameter predicates stay below even SQLite's
  * legacy 999-variable limit and its 1000-level expression-depth limit. */
 const QUERY_INDEX_INLINE_TERM_LIMIT = 128;
 
 /**
  * Eligible files are read in batches of this many, in the order given. The candidate cap and its lower-bound flag
- * depend on where a batch ends, so retrieval keeps the batches, however many statements it reads them with.
+ * depend on where a batch ends, so retrieval reads each batch with a statement of its own.
  */
 export const QUERY_INDEX_PATH_BATCH_SIZE = 500;
 
@@ -64,6 +64,15 @@ export type StoredQueryIndexChunk = QueryTextChunk & {
 export type QueryIndexCandidateRetrieval = {
   chunks: StoredQueryIndexChunk[];
   totalCandidatesLowerBound: boolean;
+};
+
+/** One pass of a candidate retrieval: what the chunks it keeps must meet. */
+type CandidatePass = {
+  /** A full-text lookup the chunks must be in: the FTS table to ask and its MATCH expression. */
+  match?: { table: "chunk_search" | "chunk_compact_search"; expression: string };
+  /** Other SQL conditions over `chunks`, and the values they bind in order. */
+  conditions: string[];
+  parameters: string[];
 };
 
 export class QueryIndexStaleError extends Error {
@@ -129,77 +138,6 @@ function chunkFromRow(row: Record<string, unknown>): QueryTextChunk | null {
   };
 }
 
-/**
- * The files a retrieval reads, batch after batch: the stored files among the eligible paths, each batch in path order.
- */
-type PathBatchPlan = {
-  /** The stored file ids of each batch that holds any. */
-  batches: ReadonlyArray<readonly number[]>;
-  /** The same ids as a JSON array of arrays for `json_each`. */
-  batchesJson: string;
-  /** The batch number of each of those arrays; a batch that holds no stored file has none. */
-  batchNumbers: readonly number[];
-};
-
-/** The batches of `paths` that list each file. A file listed in two batches is read in both, as separate reads would. */
-function pathBatches(paths: readonly string[], batchSize: number): Map<string, number[]> {
-  const batches = new Map<string, number[]>();
-  paths.forEach((path, position) => {
-    const batch = Math.floor(position / batchSize);
-    const listed = batches.get(path);
-    if (!listed) batches.set(path, [batch]);
-    else if (listed[listed.length - 1] !== batch) listed.push(batch);
-  });
-  return batches;
-}
-
-/** Raised when a candidate read hands rows back in an order its statement does not get from SQL. */
-class QueryIndexReadOrderError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "QueryIndexReadOrderError";
-  }
-}
-
-function isNumberArray(value: unknown): value is number[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "number");
-}
-
-/**
- * The chunk ids of one batch's read, from the JSON its statement builds. The read relies on the files coming in the
- * order they were listed and a file's chunks in ordinal order, which no ORDER BY promises, so each chunk carries the
- * position of its file and its ordinal and the whole read is checked before any of it is used. The last row is one
- * past what any use of the read needs: it is what shows the order inside the file the used rows end in, when that
- * file holds more matches than the read does.
- */
-function chunkIdsOfBatchRead(text: string): number[] {
-  const parsed: unknown = JSON.parse(text);
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("chunks" in parsed) ||
-    !("files" in parsed) ||
-    !("ordinals" in parsed)
-  ) {
-    throw new Error("Invalid query index batch read.");
-  }
-  const { chunks, files, ordinals } = parsed;
-  if (!isNumberArray(chunks) || !isNumberArray(files) || !isNumberArray(ordinals)) {
-    throw new Error("Invalid query index batch read.");
-  }
-  if (files.length !== chunks.length || ordinals.length !== chunks.length) {
-    throw new Error("Invalid query index batch read.");
-  }
-  for (let index = 1; index < chunks.length; index += 1) {
-    const file = files[index]!;
-    const previousFile = files[index - 1]!;
-    if (file < previousFile || (file === previousFile && ordinals[index]! <= ordinals[index - 1]!)) {
-      throw new QueryIndexReadOrderError("Query index chunks arrived out of read order.");
-    }
-  }
-  return chunks;
-}
-
 function storedCandidateChunkFromRow(row: Record<string, unknown>): StoredQueryIndexChunk | null {
   if (typeof row.path !== "string" || !(row.text instanceof Uint8Array)) return null;
   try {
@@ -219,20 +157,12 @@ export class QueryIndexStore {
   private closed = false;
   private normalizedFiles: Map<string, string> | undefined;
   private normalizedFilesMetadataKey: string | undefined;
-  private readOrderFallbackCount = 0;
 
   /** Whether `close()` has run. Lets callers check lifecycle without touching internals. */
   get isClosed(): boolean {
     return this.closed;
   }
 
-  /**
-   * How many candidate reads gave up the streamed read for ordered statements because SQLite returned rows in another
-   * order. It stays zero unless the SQLite build or its planner breaks the order the streamed read relies on.
-   */
-  get readOrderFallbacks(): number {
-    return this.readOrderFallbackCount;
-  }
   constructor(readonly filePath: string) {
     const db = new SqliteDatabase(filePath, { timeout: QUERY_INDEX_BUSY_TIMEOUT_MS });
     this.db = db;
@@ -241,6 +171,8 @@ export class QueryIndexStore {
       db.pragma("journal_mode = WAL");
       db.pragma("synchronous = NORMAL");
       db.pragma("foreign_keys = ON");
+      // The chunk ids of the full-text lookup of a candidate pass wait here for the batch reads of that pass.
+      db.exec("CREATE TEMP TABLE pass_hits (chunk_id INTEGER PRIMARY KEY)");
     } catch (error) {
       db.close();
       throw error;
@@ -501,36 +433,6 @@ export class QueryIndexStore {
     }
   }
 
-  /**
-   * Lays out the files the batches of `paths` read. A path listed twice in one batch is read once there; one listed in
-   * two batches is read in both, as separate reads of each batch would.
-   */
-  private planPathBatches(paths: readonly string[]): PathBatchPlan {
-    const batchesOfPath = pathBatches(paths, QUERY_INDEX_PATH_BATCH_SIZE);
-    const fileIdsOfBatch = new Map<number, number[]>();
-    // Stored files come in the order SQLite sorts their paths in, which is the order a batch reads its files in. A
-    // narrow search reads only the rows of the files it lists, through the path index.
-    const stored = (
-      this.wantsFewFiles(batchesOfPath.size)
-        ? this.db
-            .prepare("SELECT file_id, path FROM files WHERE path IN (SELECT value FROM json_each(?)) ORDER BY path")
-            .raw()
-            .all(JSON.stringify([...batchesOfPath.keys()]))
-        : this.db.prepare("SELECT file_id, path FROM files ORDER BY path").raw().all()
-    ) as unknown[][];
-    for (const [fileId, path] of stored) {
-      if (typeof fileId !== "number" || typeof path !== "string") continue;
-      for (const batch of batchesOfPath.get(path) ?? []) {
-        const fileIds = fileIdsOfBatch.get(batch);
-        if (fileIds) fileIds.push(fileId);
-        else fileIdsOfBatch.set(batch, [fileId]);
-      }
-    }
-    const batchNumbers = [...fileIdsOfBatch.keys()].sort((left, right) => left - right);
-    const batches = batchNumbers.map((batch) => fileIdsOfBatch.get(batch) ?? []);
-    return { batches, batchesJson: JSON.stringify(batches), batchNumbers };
-  }
-
   /** The stored rows of the given chunks, by chunk id. */
   private chunkRowsById(chunkIds: readonly number[]): Map<number, Record<string, unknown>> {
     const rowsById = new Map<number, Record<string, unknown>>();
@@ -569,156 +471,108 @@ export class QueryIndexStore {
     if (!normalizedLimit) {
       return { chunks: [], totalCandidatesLowerBound: false };
     }
-    const plan = this.planPathBatches(paths);
-    try {
-      return this.readCandidateChunks(terms, paths, plan, normalizedRankPhrase, normalizedLimit, false);
-    } catch (error) {
-      if (!(error instanceof QueryIndexReadOrderError)) throw error;
-      // SQLite returned rows in an order the streamed read does not get from SQL. The read runs again with an ORDER BY
-      // for every batch, which gives the same chunks in an order SQL promises.
-      this.readOrderFallbackCount += 1;
-      return this.readCandidateChunks(terms, paths, plan, normalizedRankPhrase, normalizedLimit, true);
-    }
-  }
-
-  /** Reads the chunks of `candidateChunkRetrievalForTerms`; `ordered` reads every batch with its own ORDER BY. */
-  private readCandidateChunks(
-    terms: readonly string[],
-    paths: readonly string[],
-    plan: PathBatchPlan,
-    normalizedRankPhrase: string,
-    normalizedLimit: number,
-    ordered: boolean,
-  ): QueryIndexCandidateRetrieval {
     const candidates = new Set<number>();
     let totalCandidatesLowerBound = false;
 
-    // Keeps what one batch's read returns as a capped read of that batch alone would: at most the rows the cap still
-    // allows, plus one that only shows whether more were left, so a read that fills it is only a lower bound. Returns
-    // whether the pass is decided, which it is once the cap is met.
-    const keepBatchRead = (chunkIds: readonly number[], batchNumber: number, maximum: number): boolean => {
-      const requested = maximum - candidates.size + 1;
-      if (chunkIds.length >= requested) totalCandidatesLowerBound = true;
-      for (let index = 0; index < chunkIds.length && index < requested; index += 1) {
-        const chunkId = chunkIds[index]!;
-        if (candidates.has(chunkId)) continue;
-        candidates.add(chunkId);
-        if (candidates.size >= maximum) break;
-      }
-      if (candidates.size < maximum) return false;
-      if ((batchNumber + 1) * QUERY_INDEX_PATH_BATCH_SIZE < paths.length) totalCandidatesLowerBound = true;
-      return true;
-    };
+    // The files of each batch as the JSON its reads take, made when a pass first reaches the batch.
+    const batchCount = Math.ceil(paths.length / QUERY_INDEX_PATH_BATCH_SIZE);
+    const batchPaths: string[] = [];
+    const batchJson = (batch: number): string =>
+      (batchPaths[batch] ??= JSON.stringify(
+        paths.slice(batch * QUERY_INDEX_PATH_BATCH_SIZE, (batch + 1) * QUERY_INDEX_PATH_BATCH_SIZE),
+      ));
 
-    // The streamed read of a pass is one statement. Its outer loop takes the batches in order, and for each batch a
-    // subquery runs through the batch's files in path order and returns the first `room + 1` chunks that match, `room`
-    // being what the cap leaves when the pass starts, each with the position of its file and its ordinal. A batch is
-    // therefore never asked for more than any read of it could use plus one row, however many chunks match, and it is
-    // not read until the pass reaches it, so a pass stops once its cap is decided. The CROSS JOIN keeps the files as
-    // the outer loop and the `+chunks.chunk_id` tests keep the planner from looping over chunk ids instead, which puts
-    // the rows in read order without a sort. No ORDER BY promises that, so every read is checked as it arrives (see
-    // `chunkIdsOfBatchRead`) and a read that fails the check reruns the whole retrieval with the ordered statements.
-    const collectStreamed = (conditions: readonly string[], parameters: readonly string[], maximum: number): void => {
-      if (candidates.size >= maximum || !plan.batchNumbers.length) return;
-      const room = maximum - candidates.size + 1;
-      const rows = this.db
-        .prepare(
-          `
-          SELECT batch.key,
-                 (SELECT json_object(
-                           'chunks', json_group_array(hit.chunk_id),
-                           'files', json_group_array(hit.file),
-                           'ordinals', json_group_array(hit.ordinal))
-                  FROM (
-                    SELECT chunks.chunk_id AS chunk_id, driver.key AS file, chunks.ordinal AS ordinal
-                    FROM json_each(batch.value) AS driver
-                    CROSS JOIN chunks ON chunks.file_id = driver.value
-                    WHERE ${conditions.join(" AND ")}
-                    LIMIT ?
-                  ) AS hit)
-          FROM json_each(?) AS batch
-        `,
-        )
-        .raw()
-        .iterate(...parameters, room + 1, plan.batchesJson) as Iterable<unknown[]>;
-      let lastKey = -1;
-      for (const [key, read] of rows) {
-        if (typeof key !== "number" || typeof read !== "string") throw new Error("Invalid query index candidate row.");
-        const batchNumber = plan.batchNumbers[key];
-        if (batchNumber === undefined)
-          throw new Error("Query index candidate row names a batch outside the read plan.");
-        if (key <= lastKey) throw new QueryIndexReadOrderError("Query index batches arrived out of read order.");
-        lastKey = key;
-        if (keepBatchRead(chunkIdsOfBatchRead(read), batchNumber, maximum)) break;
+    // A pass reads the batches of eligible files in order, each with one statement: the batch's files in path order,
+    // their chunks in ordinal order, and the first `allowance + 1` that match, the allowance being what the cap still
+    // leaves. The extra row only shows whether more matched, which makes the total a lower bound. The ORDER BY puts the
+    // rows in that order, so the statement gives the same chunks whichever way SQLite scans, and the pass stops reading
+    // once its cap is decided. The statement is prepared once for the pass. So is the full-text lookup: its chunk ids go
+    // into a temporary table that every batch read tests against, where a lookup inside the statement would run again
+    // for each batch.
+    const collect = (pass: CandidatePass, maximum: number): void => {
+      const conditions = [...pass.conditions];
+      if (pass.match) {
+        const { table, expression } = pass.match;
+        this.db.prepare("DELETE FROM temp.pass_hits").run();
+        this.db.prepare(`INSERT INTO temp.pass_hits SELECT rowid FROM ${table} WHERE ${table} MATCH ?`).run(expression);
+        // The `+` keeps SQLite looping over the batch's files, which is what gives the rows their order without a sort,
+        // instead of over the lookup's chunks.
+        conditions.unshift("+chunks.chunk_id IN (SELECT chunk_id FROM temp.pass_hits)");
       }
-    };
-
-    // The ordered read of a pass is a statement per batch with the ORDER BY and LIMIT of a capped read of that batch.
-    // It is slower, because every statement builds the trigram match sets again, and it is what a retrieval falls back
-    // to when the streamed read finds its rows out of order.
-    const collectOrdered = (conditions: readonly string[], parameters: readonly string[], maximum: number): void => {
-      if (candidates.size >= maximum) return;
       const statement = this.db
         .prepare(
           `
           SELECT chunks.chunk_id
           FROM chunks
           JOIN files ON files.file_id = chunks.file_id
-          WHERE chunks.file_id IN (SELECT value FROM json_each(?)) AND ${conditions.join(" AND ")}
+          WHERE files.path IN (SELECT value FROM json_each(?))
+            AND (${conditions.join(" AND ")})
           ORDER BY files.path, chunks.ordinal
           LIMIT ?
         `,
         )
         .raw();
-      for (const [index, batchNumber] of plan.batchNumbers.entries()) {
+      for (let batch = 0; batch < batchCount && candidates.size < maximum; batch += 1) {
         const requested = maximum - candidates.size + 1;
-        const rows = statement.all(JSON.stringify(plan.batches[index]), ...parameters, requested) as unknown[][];
-        const chunkIds = rows.flatMap(([chunkId]) => (typeof chunkId === "number" ? [chunkId] : []));
-        if (keepBatchRead(chunkIds, batchNumber, maximum)) break;
+        const rows = statement.all(batchJson(batch), ...pass.parameters, requested) as unknown[][];
+        if (rows.length === requested) totalCandidatesLowerBound = true;
+        for (const [chunkId] of rows) {
+          if (typeof chunkId !== "number" || candidates.has(chunkId)) continue;
+          candidates.add(chunkId);
+          if (candidates.size >= maximum) break;
+        }
+        if (candidates.size >= maximum && batch + 1 < batchCount) totalCandidatesLowerBound = true;
       }
     };
-    const collect = ordered ? collectOrdered : collectStreamed;
 
-    const termCondition = (term: string): { condition: string; parameters: string[] } => {
-      if (!supportsFtsTrigramTerm(term)) {
-        return {
-          condition: `(instr(chunks.normalized_text, ?) > 0 OR instr(replace(chunks.normalized_text, ' ', ''), ?) > 0)`,
-          parameters: [term, term],
-        };
-      }
-      // A spaced match comes from the normalized-text index and a match across word boundaries from the compact-text
-      // index; both are index lookups, so no chunk text is scanned.
-      const match = escapeFtsTrigramTerm(term);
-      return {
-        condition: `+chunks.chunk_id IN (
-          SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?
-          UNION
-          SELECT rowid FROM chunk_compact_search WHERE chunk_compact_search MATCH ?
-        )`,
-        parameters: [match, match],
-      };
-    };
+    // A normalized term with no space that the normalized text holds is also in the text without spaces, which holds
+    // the matches that span word boundaries too, so the index of that text answers both and no chunk text is scanned.
+    // Every other term is tested on each chunk, by the trigram index of the normalized text when it can answer it and
+    // by a scan of the chunk's text when it cannot.
+    const lookupTerm = (term: string): boolean =>
+      supportsFtsTrigramTerm(term) && !/\s/.test(term) && term === term.toLowerCase();
+    const compactMatch = (lookups: readonly string[]): NonNullable<CandidatePass["match"]> => ({
+      table: "chunk_compact_search",
+      expression: lookups.map(escapeFtsTrigramTerm).join(" AND "),
+    });
+    const testOfTerm = (term: string): Pick<CandidatePass, "conditions" | "parameters"> =>
+      supportsFtsTrigramTerm(term)
+        ? {
+            conditions: ["+chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)"],
+            parameters: [escapeFtsTrigramTerm(term)],
+          }
+        : {
+            conditions: [
+              `(instr(chunks.normalized_text, ?) > 0 OR instr(replace(chunks.normalized_text, ' ', ''), ?) > 0)`,
+            ],
+            parameters: [term, term],
+          };
+    const termPass = (term: string): CandidatePass =>
+      lookupTerm(term) ? { match: compactMatch([term]), conditions: [], parameters: [] } : testOfTerm(term);
 
-    const phrase = normalizedRankPhrase;
     if (terms.length > 1) {
-      const conditions = ["instr(chunks.normalized_text, ?) > 0"];
-      const parameters = [phrase];
+      const pass: CandidatePass = {
+        conditions: ["instr(chunks.normalized_text, ?) > 0"],
+        parameters: [normalizedRankPhrase],
+      };
       if (terms.every(supportsFtsTrigramTerm)) {
-        conditions.unshift("+chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)");
-        parameters.unshift(escapeFtsTrigramTerm(phrase));
+        pass.match = { table: "chunk_search", expression: escapeFtsTrigramTerm(normalizedRankPhrase) };
       }
-      collect(conditions, parameters, normalizedLimit);
+      collect(pass, normalizedLimit);
     }
 
     if (terms.length > 1) {
       if (candidates.size < normalizedLimit) {
         if (terms.length <= QUERY_INDEX_INLINE_TERM_LIMIT) {
-          const allTerms = terms.map(termCondition);
-          collect(
-            allTerms.map((term) => term.condition),
-            allTerms.flatMap((term) => term.parameters),
-            normalizedLimit,
-          );
+          // Every term the index answers is one lookup, which holds the chunks that have all of them.
+          const lookups = terms.filter(lookupTerm);
+          const tests = terms.filter((term) => !lookupTerm(term)).map(testOfTerm);
+          const pass: CandidatePass = {
+            conditions: tests.flatMap((test) => test.conditions),
+            parameters: tests.flatMap((test) => test.parameters),
+          };
+          if (lookups.length) pass.match = compactMatch(lookups);
+          collect(pass, normalizedLimit);
         } else {
           // Keep every term without growing SQL depth or bind count. NOT EXISTS
           // applies the same FTS/substring/compact match before the candidate cap.
@@ -727,8 +581,9 @@ export class QueryIndexStore {
             supportsFtsTrigramTerm(term) ? escapeFtsTrigramTerm(term) : null,
           ]);
           collect(
-            [
-              `NOT EXISTS (
+            {
+              conditions: [
+                `NOT EXISTS (
                 SELECT 1 FROM json_each(?) AS query_terms
                 WHERE NOT (
                   CASE WHEN json_extract(query_terms.value, '$[1]') IS NULL
@@ -741,8 +596,9 @@ export class QueryIndexStore {
                   OR instr(replace(chunks.normalized_text, ' ', ''), json_extract(query_terms.value, '$[0]')) > 0
                 )
               )`,
-            ],
-            [JSON.stringify(termValues)],
+              ],
+              parameters: [JSON.stringify(termValues)],
+            },
             normalizedLimit,
           );
         }
@@ -757,8 +613,7 @@ export class QueryIndexStore {
         totalCandidatesLowerBound = true;
         break;
       }
-      const termMatch = termCondition(terms[index]!);
-      collect([termMatch.condition], termMatch.parameters, Math.min(normalizedLimit, candidates.size + perTermLimit));
+      collect(termPass(terms[index]!), Math.min(normalizedLimit, candidates.size + perTermLimit));
     }
 
     const matches = [...candidates];

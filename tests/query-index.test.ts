@@ -9,7 +9,7 @@ import { disposeSessionQueryIndex, ensureSessionQueryIndex } from "../src/agent/
 import * as updateModule from "../src/agent/query-index/update.js";
 import { resolveQueryIndexPaths, resolveQueryIndexSourcePath } from "../src/agent/query-index/paths.js";
 import { expectedQueryIndexVersionMetadata, probeQueryIndexSqliteSupport } from "../src/agent/query-index/schema.js";
-import { SqliteDatabase, SqliteStatement, type SqliteRawRow } from "../src/sqlite-driver.js";
+import { SqliteDatabase, SqliteStatement } from "../src/sqlite-driver.js";
 import { ensureQueryIndex } from "../src/agent/query-index/update.js";
 import {
   QueryIndexStore,
@@ -1415,10 +1415,14 @@ describe("persistent query index", () => {
 
   type PlantedFile = { path: string; chunks: string[] };
 
+  /** What one batch read asked for (its LIMIT, the allowance the cap left plus one) and how many rows it got back. */
+  type BatchRead = { requested: number; returned: number };
+
   /**
    * The candidate cap as it is defined: eligible paths are read in batches, a batch yields its matching chunks in path
    * order, at most one more than the cap still allows, and the total is a lower bound when a read fills its allowance
-   * or the cap is met with batches left. Written as loops over the planted text, not as SQL.
+   * or the cap is met with batches left. Written as loops over the planted text, not as SQL. `reads` lists, in order,
+   * what every batch read asked for and got.
    */
   function batchedReference(
     files: readonly PlantedFile[],
@@ -1426,9 +1430,10 @@ describe("persistent query index", () => {
     paths: readonly string[],
     phrase: string,
     limit: number,
-  ): { keys: string[]; lowerBound: boolean } {
+  ): { keys: string[]; lowerBound: boolean; reads: BatchRead[] } {
     const byPath = new Map(files.map((file) => [file.path, file]));
     const candidates = new Set<string>();
+    const reads: BatchRead[] = [];
     let lowerBound = false;
     const hasTerm = (chunk: string, term: string): boolean =>
       chunk.includes(term) || chunk.replaceAll(" ", "").includes(term);
@@ -1443,6 +1448,7 @@ describe("persistent query index", () => {
         }
         const requested = maximum - candidates.size + 1;
         const read = rows.slice(0, requested);
+        reads.push({ requested, returned: read.length });
         if (read.length === requested) lowerBound = true;
         for (const key of read) {
           if (candidates.has(key)) continue;
@@ -1465,7 +1471,7 @@ describe("persistent query index", () => {
       }
       collect((chunk) => hasTerm(chunk, term), Math.min(limit, candidates.size + perTermLimit));
     }
-    return { keys: [...candidates], lowerBound };
+    return { keys: [...candidates], lowerBound, reads };
   }
 
   /** Files that each hold `alpha`, every third also `beta`, and every fifth both words. */
@@ -1495,9 +1501,8 @@ describe("persistent query index", () => {
   }
 
   /**
-   * The corpus of the narrow batch test: a search that lists a quarter of 2,400 files, which is few enough to read
-   * only their rows and enough for two batches. It lists the highest paths first, a path the store does not hold, and
-   * the first path again.
+   * The corpus of the quarter-listed batch test: a search that lists a quarter of 2,400 stored files, which is two
+   * batches. It lists the highest paths first, a path the store does not hold, and the first path again.
    */
   function narrowCorpus(): { files: PlantedFile[]; paths: string[] } {
     const files = alphaBetaFiles(2400);
@@ -1575,19 +1580,17 @@ describe("persistent query index", () => {
         COMPACT_METADATA("batches"),
       );
       expectBatchedReads(store, files, paths);
-      // SQLite gave the streamed read the order it relies on, so no retrieval gave the read up.
-      expect(store.readOrderFallbacks).toBe(0);
     } finally {
       store.close();
     }
   });
 
-  it("returns the same chunks through ordered statements when SQLite scans in the opposite order", async () => {
+  it("returns the reference chunks when SQLite scans selects without an ORDER BY backwards", async () => {
     const root = await createRepo();
     const { files, paths } = batchCorpus();
-    // `reverse_unordered_selects` runs every select without an ORDER BY backwards, which is what a read that relies on
-    // the order of a scan cannot survive. Every retrieval still returns what the reference does, through the fallback.
-    const fallbacks = withReversedUnorderedSelects(() => {
+    // `reverse_unordered_selects` makes every select without an ORDER BY scan backwards. A batch read has one, so it
+    // returns what the reference does, in the order SQL promises, whichever way SQLite would scan.
+    withReversedUnorderedSelects(() => {
       const store = new QueryIndexStore(path.join(root, "query-batches-reversed.sqlite"));
       try {
         store.replaceFiles(
@@ -1596,20 +1599,16 @@ describe("persistent query index", () => {
           COMPACT_METADATA("batches-reversed"),
         );
         expectBatchedReads(store, files, paths);
-        return store.readOrderFallbacks;
       } finally {
         store.close();
       }
     });
-    expect(fallbacks).toBeGreaterThan(0);
   });
 
-  it("catches a reversed scan that only shows in the row past the rows a read uses", async () => {
+  it("keeps the first chunks of a file in ordinal order when the cap cuts through the file", async () => {
     const root = await createRepo();
-    // The phrase pass keeps `a.ts#0`, which leaves room for one more chunk in the pass for both words, so a capped read
-    // of its batch is two rows. `b.ts` holds two chunks with both words and a backwards scan returns the second first,
-    // but the two rows are `a.ts#0` and one chunk of `b.ts`, which cannot show it. Only the third row, the other chunk
-    // of `b.ts`, does.
+    // The phrase pass keeps `a.ts#0`, which leaves room for one more chunk in the pass for both words. `b.ts` holds two
+    // chunks with both words, so the cap cuts through it: the chunk kept is its first, not its last.
     const files: PlantedFile[] = [
       { path: "src/a.ts", chunks: ["alpha beta one"] },
       { path: "src/b.ts", chunks: ["alpha then beta two", "alpha then beta three"] },
@@ -1619,7 +1618,7 @@ describe("persistent query index", () => {
     const expected = batchedReference(files, terms, paths, "alpha beta", 2);
     expect(expected.keys).toEqual(["src/a.ts#0", "src/b.ts#0"]);
 
-    const read = (name: string): { keys: string[]; lowerBound: boolean; fallbacks: number } => {
+    const read = (name: string): { keys: string[]; lowerBound: boolean } => {
       const store = new QueryIndexStore(path.join(root, `query-${name}.sqlite`));
       try {
         store.replaceFiles(
@@ -1628,64 +1627,60 @@ describe("persistent query index", () => {
           COMPACT_METADATA(name),
         );
         const result = store.candidateChunkRetrievalForTerms(terms, paths, "alpha beta", 2);
-        const keys = result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`);
-        return { keys, lowerBound: result.totalCandidatesLowerBound, fallbacks: store.readOrderFallbacks };
+        return {
+          keys: result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`),
+          lowerBound: result.totalCandidatesLowerBound,
+        };
       } finally {
         store.close();
       }
     };
-    const normal = read("boundary-normal");
-    expect(normal).toEqual({ keys: expected.keys, lowerBound: expected.lowerBound, fallbacks: 0 });
-    const reversed = withReversedUnorderedSelects(() => read("boundary-reversed"));
-    expect(reversed).toEqual({ keys: expected.keys, lowerBound: expected.lowerBound, fallbacks: 1 });
+    const same = { keys: expected.keys, lowerBound: expected.lowerBound };
+    expect(read("cut-normal")).toEqual(same);
+    expect(withReversedUnorderedSelects(() => read("cut-reversed"))).toEqual(same);
   });
 
-  /**
-   * Runs `run` while counting what every statement hands back: the chunks each `iterate()` statement returns across its
-   * rows, in the order the statements run, and the most any `all()` returns.
-   */
-  function countStatementRows<T>(run: () => T): { result: T; runs: number[]; largestAll: number } {
-    const runs: number[] = [];
-    let largestAll = 0;
-    const iterate = SqliteStatement.prototype.iterate;
+  /** One `all()` call a statement made: its SQL, its parameters, and the number of rows it handed back. */
+  type StatementCall = { sql: string; params: unknown[]; rows: number };
+
+  /** Runs `run` and records every `all()` call the statements make. */
+  async function recordStatements<T>(run: () => Promise<T> | T): Promise<{ result: T; calls: StatementCall[] }> {
+    const calls: StatementCall[] = [];
+    const sqlOf = new WeakMap<SqliteStatement, string>();
+    const prepare = SqliteDatabase.prototype.prepare;
+    const raw = SqliteStatement.prototype.raw;
     const all = SqliteStatement.prototype.all;
-    // A row of the streamed read is one batch: its JSON read lists the chunks in `chunks`.
-    const chunksInRow = (row: SqliteRawRow): number => {
-      const read = row[1];
-      if (typeof read !== "string") return 0;
-      const parsed: unknown = JSON.parse(read);
-      if (typeof parsed !== "object" || parsed === null || !("chunks" in parsed) || !Array.isArray(parsed.chunks)) {
-        return 0;
-      }
-      return parsed.chunks.length;
-    };
-    vi.spyOn(SqliteStatement.prototype, "iterate").mockImplementation(function (
-      this: SqliteStatement,
-      ...params: Parameters<SqliteStatement["iterate"]>
-    ) {
-      const rows = iterate.apply(this, params) as Iterable<SqliteRawRow>;
-      const index = runs.push(0) - 1;
-      return (function* () {
-        for (const row of rows) {
-          runs[index] = (runs[index] ?? 0) + chunksInRow(row);
-          yield row;
-        }
-      })();
+    vi.spyOn(SqliteDatabase.prototype, "prepare").mockImplementation(function (this: SqliteDatabase, sql: string) {
+      const statement = prepare.call(this, sql);
+      sqlOf.set(statement, sql);
+      return statement;
+    });
+    vi.spyOn(SqliteStatement.prototype, "raw").mockImplementation(function (this: SqliteStatement) {
+      const rawStatement = raw.call(this);
+      const sql = sqlOf.get(this);
+      if (sql !== undefined) sqlOf.set(rawStatement, sql);
+      return rawStatement;
     });
     vi.spyOn(SqliteStatement.prototype, "all").mockImplementation(function (
       this: SqliteStatement,
       ...params: Parameters<SqliteStatement["all"]>
     ) {
       const rows = all.apply(this, params);
-      largestAll = Math.max(largestAll, rows.length);
+      calls.push({ sql: sqlOf.get(this) ?? "", params, rows: rows.length });
       return rows;
     });
     try {
-      const result = run();
-      return { result, runs, largestAll };
+      return { result: await run(), calls };
     } finally {
       vi.restoreAllMocks();
     }
+  }
+
+  /** The batch reads among recorded calls, in order: each asked for its LIMIT, the last parameter, and got its rows. */
+  function batchReadsOf(calls: readonly StatementCall[]): BatchRead[] {
+    return calls
+      .filter((call) => call.sql.includes("ORDER BY files.path, chunks.ordinal"))
+      .map((call) => ({ requested: Number(call.params[call.params.length - 1]), returned: call.rows }));
   }
 
   /**
@@ -1711,42 +1706,15 @@ describe("persistent query index", () => {
 
   /**
    * Runs `run` while counting the rows that statements reading the `files` table hand back with `all()`: the rows the
-   * file lookups of a search read, which a selective search should keep to the files it matches or lists.
+   * file lookups of a search read, which a selective search should keep to the files it matches.
    */
   async function countFileRows<T>(run: () => Promise<T> | T): Promise<{ result: T; fileRows: number }> {
-    let fileRows = 0;
-    const sqlOf = new WeakMap<SqliteStatement, string>();
-    const prepare = SqliteDatabase.prototype.prepare;
-    const raw = SqliteStatement.prototype.raw;
-    const all = SqliteStatement.prototype.all;
-    vi.spyOn(SqliteDatabase.prototype, "prepare").mockImplementation(function (this: SqliteDatabase, sql: string) {
-      const statement = prepare.call(this, sql);
-      sqlOf.set(statement, sql);
-      return statement;
-    });
-    vi.spyOn(SqliteStatement.prototype, "raw").mockImplementation(function (this: SqliteStatement) {
-      const rawStatement = raw.call(this);
-      const sql = sqlOf.get(this);
-      if (sql !== undefined) sqlOf.set(rawStatement, sql);
-      return rawStatement;
-    });
-    vi.spyOn(SqliteStatement.prototype, "all").mockImplementation(function (
-      this: SqliteStatement,
-      ...params: Parameters<SqliteStatement["all"]>
-    ) {
-      const rows = all.apply(this, params);
-      if (/\bFROM files\b/.test(sqlOf.get(this) ?? "")) fileRows += rows.length;
-      return rows;
-    });
-    try {
-      const result = await run();
-      return { result, fileRows };
-    } finally {
-      vi.restoreAllMocks();
-    }
+    const { result, calls } = await recordStatements(run);
+    const fileRows = calls.filter((call) => /\bFROM files\b/.test(call.sql)).reduce((sum, call) => sum + call.rows, 0);
+    return { result, fileRows };
   }
 
-  it("hands back only the cap, the row past it and a row that proves the order, however many chunks match", async () => {
+  it("asks each batch for the allowance the cap still leaves and takes no more, however many chunks match", async () => {
     const root = await createRepo();
     const store = new QueryIndexStore(path.join(root, "query-bounded-read.sqlite"));
     // Three batches of files. Every file has two chunks with `alpha beta id`; every other file also has a `gamma` chunk,
@@ -1770,25 +1738,33 @@ describe("persistent query index", () => {
       );
       const paths = files.map((file) => file.path);
       // `id` is a scan the trigram index cannot answer, `alpha` and the pair are index lookups, and a cap of 400 on
-      // `gamma` needs the second batch because the first holds only 250 of its chunks. A pass hands back the matches
-      // of each batch it reaches up to the cap, the row past it and the row that proves the order: 42 for a cap of 40.
-      // The cap of 400 takes every `gamma` chunk of the first two batches, 250 each, and never reaches the third.
-      const queries: Array<{ terms: string[]; limit: number; handedBack: number }> = [
-        { terms: ["id"], limit: 40, handedBack: 42 },
-        { terms: ["alpha"], limit: 40, handedBack: 42 },
-        { terms: ["alpha", "beta"], limit: 40, handedBack: 42 },
-        { terms: ["gamma"], limit: 40, handedBack: 42 },
-        { terms: ["gamma"], limit: 400, handedBack: 500 },
+      // `gamma` needs the second batch because the first holds only 250 of its chunks. A cap of 40 is filled by the first
+      // batch, which is asked for 41 rows, the 40 and the one past the cap. The cap of 400 takes the 250 `gamma` chunks of
+      // the first batch and asks the second for the 151 that are left, the 150 and the one past the cap.
+      const queries: Array<{ terms: string[]; limit: number; reads: BatchRead[] }> = [
+        { terms: ["id"], limit: 40, reads: [{ requested: 41, returned: 41 }] },
+        { terms: ["alpha"], limit: 40, reads: [{ requested: 41, returned: 41 }] },
+        { terms: ["alpha", "beta"], limit: 40, reads: [{ requested: 41, returned: 41 }] },
+        { terms: ["gamma"], limit: 40, reads: [{ requested: 41, returned: 41 }] },
+        {
+          terms: ["gamma"],
+          limit: 400,
+          reads: [
+            { requested: 401, returned: 250 },
+            { requested: 151, returned: 151 },
+          ],
+        },
       ];
-      for (const { terms, limit, handedBack } of queries) {
+      for (const { terms, limit, reads } of queries) {
         const phrase = terms.join(" ");
         const label = `${phrase} limit ${limit}`;
         const expected = batchedReference(files, terms, paths, phrase, limit);
         expect(expected.keys, label).toHaveLength(limit);
         expect(expected.lowerBound, label).toBe(true);
-        // The second run finds the statement the first one stopped early; it must read from the start again.
+        expect(expected.reads, label).toEqual(reads);
+        // The second run finds the statements the first one left prepared; it asks for the same.
         for (let run = 0; run < 2; run += 1) {
-          const { result, runs, largestAll } = countStatementRows(() =>
+          const { result, calls } = await recordStatements(() =>
             store.candidateChunkRetrievalForTerms(terms, paths, phrase, limit),
           );
           expect(
@@ -1796,19 +1772,15 @@ describe("persistent query index", () => {
             label,
           ).toEqual(expected.keys);
           expect(result.totalCandidatesLowerBound, label).toBe(true);
-          // One statement, and it hands back no more than that.
-          expect(runs, label).toEqual([handedBack]);
-          // No `all()` returns the matching chunks: the files and the kept candidates are the most it reads at once.
-          expect(largestAll, label).toBeLessThanOrEqual(files.length);
+          expect(batchReadsOf(calls), label).toEqual(reads);
         }
       }
-      expect(store.readOrderFallbacks).toBe(0);
     } finally {
       store.close();
     }
   });
 
-  it("reads no more of a batch than its allowance when earlier passes already hold most of the cap", async () => {
+  it("asks a batch for no more than the cap leaves when earlier passes already hold most of it", async () => {
     const root = await createRepo();
     const store = new QueryIndexStore(path.join(root, "query-batch-allowance.sqlite"));
     // Three batches of files. The first 19 files hold the phrase `alpha beta` in two chunks each, 38 in all, and every
@@ -1833,34 +1805,40 @@ describe("persistent query index", () => {
       const expected = batchedReference(files, terms, paths, "alpha beta", limit);
       expect(expected.keys).toHaveLength(limit);
       expect(expected.lowerBound).toBe(true);
-      // The second run finds the statements the first one left behind.
+      // The phrase pass finds its 38 chunks in the first batch, which leaves room for one more, so it asks each of the
+      // other two batches for two rows and gets none. The pass for both words then asks each batch for two rows: the
+      // first batch's are chunks the phrase pass kept, and in the next batch the first row fills the cap and the second
+      // is the row past it. The other matches of the first batch are never read.
+      const reads: BatchRead[] = [
+        { requested: 40, returned: 38 },
+        { requested: 2, returned: 0 },
+        { requested: 2, returned: 0 },
+        { requested: 2, returned: 2 },
+        { requested: 2, returned: 2 },
+      ];
+      expect(expected.reads).toEqual(reads);
+      // The second run finds the statements the first one left prepared.
       for (let run = 0; run < 2; run += 1) {
-        const { result, runs } = countStatementRows(() =>
+        const { result, calls } = await recordStatements(() =>
           store.candidateChunkRetrievalForTerms(terms, paths, "alpha beta", limit),
         );
         expect(result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`)).toEqual(expected.keys);
         expect(result.totalCandidatesLowerBound).toBe(true);
-        // The phrase pass reads its 38 chunks, which leaves room for one more. A capped read of a batch is then two rows
-        // in the pass for both words, and the statement hands back no more than those two and a row that proves the
-        // order for any batch: the first batch spends its two on chunks the phrase pass kept and never reads its other
-        // 535 matches, and in the next batch the first row fills the cap and the second is the row past it. That is six
-        // rows from one statement.
-        expect(runs).toEqual([38, 6]);
-        expect(store.readOrderFallbacks).toBe(0);
+        expect(batchReadsOf(calls)).toEqual(reads);
       }
     } finally {
       store.close();
     }
   });
 
-  it("keeps the batches, caps and order when a narrow search reads only the rows of the files it lists", async () => {
+  it("keeps the batches, caps and order when the files listed are a quarter of the stored ones", async () => {
     const root = await createRepo();
     const { files, paths } = narrowCorpus();
-    // Two batches of 500 and 102 listed paths over 2,400 stored files: a quarter of them is few enough to be read by
-    // their keys. The files are stored from the highest path down, so their ids run against the order of their paths and
-    // a read that sorts them by id instead of by path would put the chunks in the wrong place.
+    // Two batches of 500 and 102 listed paths over 2,400 stored files. The files are stored from the highest path down,
+    // so their ids run against the order of their paths and a read that ordered them by id instead of by path would put
+    // the chunks in the wrong place.
     expect(Math.ceil(paths.length / QUERY_INDEX_PATH_BATCH_SIZE)).toBe(2);
-    const read = (name: string): number => {
+    const read = (name: string): void => {
       const store = new QueryIndexStore(path.join(root, `query-${name}.sqlite`));
       try {
         store.replaceFiles(
@@ -1870,13 +1848,12 @@ describe("persistent query index", () => {
         );
         const limits = [1, 2, 499, 500, 501, 600, 2500];
         expect(expectQueriesToMatchReference(store, files, paths, limits)).toEqual(new Set([true, false]));
-        return store.readOrderFallbacks;
       } finally {
         store.close();
       }
     };
-    expect(read("narrow-normal")).toBe(0);
-    expect(withReversedUnorderedSelects(() => read("narrow-reversed"))).toBeGreaterThan(0);
+    read("quarter-normal");
+    withReversedUnorderedSelects(() => read("quarter-reversed"));
   });
 
   it("reads only the rows of the files a selective query matches", async () => {
@@ -1896,15 +1873,15 @@ describe("persistent query index", () => {
 
       const { result, fileRows } = await countFileRows(() => findQueryIndexChunkCandidates(store, ["zebra"]));
       expect(result.candidates.map((candidate) => `${candidate.path}#${candidate.ordinal}`)).toEqual(expected.keys);
-      // The path of each of the two matching files is read once, and the read of the chunks looks each of them up once
-      // more, where the old reads took all 300 stored rows both times.
-      expect(fileRows).toBe(4);
+      // The path of each of the two matching files is read and nothing else is read from the file table, where a read
+      // of the whole table takes all 300 stored rows.
+      expect(fileRows).toBe(2);
     } finally {
       store.close();
     }
   });
 
-  it("reads only the row of the file a search is scoped to", async () => {
+  it("reads one batch of one file for a search scoped to it", async () => {
     const root = await createRepo();
     const store = new QueryIndexStore(path.join(root, "query-scoped-file.sqlite"));
     const files = selectiveCorpus();
@@ -1916,18 +1893,21 @@ describe("persistent query index", () => {
       );
       const expected = batchedReference(files, ["common"], ["src/f123.ts"], "common", 8000);
       expect(expected.keys).toEqual(["src/f123.ts#0"]);
+      // One read, of the one batch, asks for the cap and the row past it and gets the file's one chunk. No row of the
+      // file table is read besides it, where a read of the whole table takes all 300 stored rows.
+      expect(expected.reads).toEqual([{ requested: 8001, returned: 1 }]);
       const scoped = await countFileRows(() =>
         store.candidateChunkRetrievalForTerms(["common"], ["src/f123.ts"], "common"),
       );
       expect(scoped.result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`)).toEqual(expected.keys);
-      expect(scoped.fileRows).toBe(1);
+      expect(scoped.fileRows).toBe(0);
 
-      // A path the store does not hold costs no file row at all.
-      const missing = await countFileRows(() =>
+      // A path the store does not hold is read the same way and finds nothing.
+      const missing = await recordStatements(() =>
         store.candidateChunkRetrievalForTerms(["common"], ["src/missing.ts"], "common"),
       );
       expect(missing.result.chunks).toEqual([]);
-      expect(missing.fileRows).toBe(0);
+      expect(batchReadsOf(missing.calls)).toEqual([{ requested: 8001, returned: 0 }]);
     } finally {
       store.close();
     }
@@ -1937,7 +1917,7 @@ describe("persistent query index", () => {
     const root = await createRepo();
     const store = new QueryIndexStore(path.join(root, "query-awkward-paths.sqlite"));
     // Twelve different files: a space, a quote, a backslash, a newline, `%`, an apostrophe, two cases, a composed and a
-    // decomposed accent, CJK and an emoji. Twenty-four more keep a search that lists a few of them narrow.
+    // decomposed accent, CJK and an emoji. Twenty-four more files are around them.
     const awkward = [
       "src/a b.ts",
       'src/quote"d.ts',
@@ -1968,23 +1948,128 @@ describe("persistent query index", () => {
       for (const listedPath of awkward) {
         const expected = batchedReference(files, ["shared"], [listedPath], "shared", 8000);
         expect(expected.keys, listedPath).toEqual([`${listedPath}#0`]);
-        const { result, fileRows } = await countFileRows(() =>
-          store.candidateChunkRetrievalForTerms(["shared"], [listedPath], "shared"),
-        );
+        const result = store.candidateChunkRetrievalForTerms(["shared"], [listedPath], "shared");
         expect(
           result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`),
           listedPath,
         ).toEqual(expected.keys);
-        expect(fileRows, listedPath).toBe(1);
       }
 
       // Several at once, out of order, with a path the store does not hold: the chunks come in path order.
       const listed = [awkward[9]!, "src/missing.ts", awkward[0]!, awkward[3]!, awkward[7]!, awkward[8]!];
       const expected = batchedReference(files, ["shared"], listed, "shared", 8000);
       expect(expected.keys).toHaveLength(5);
-      const together = await countFileRows(() => store.candidateChunkRetrievalForTerms(["shared"], listed, "shared"));
-      expect(together.result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`)).toEqual(expected.keys);
-      expect(together.fileRows).toBe(5);
+      const together = store.candidateChunkRetrievalForTerms(["shared"], listed, "shared");
+      expect(together.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`)).toEqual(expected.keys);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("finds terms with a space or capitals in the spaced text and plain terms across word boundaries too", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-spaced-terms.sqlite"));
+    // `alpha beta` is two words in the first chunk and the start of `alpha betaz` in the third. `alphabeta` is one word in
+    // the second chunk, and the first and third hold it across a word boundary. `ALPHA` is not a normalized term, and it
+    // matches the lowercase text the way the trigram index of the normalized text does.
+    const files: PlantedFile[] = [
+      { path: "src/a.ts", chunks: ["alpha beta one", "alphabeta two", "alpha betaz three", "other beta four"] },
+    ];
+    try {
+      store.replaceFiles(
+        files.map((file) => preparedFile(file.path, file.chunks)),
+        [],
+        COMPACT_METADATA("spaced-terms"),
+      );
+      const paths = files.map((file) => file.path);
+      const queries = [
+        { term: "alpha beta", keys: ["src/a.ts#0", "src/a.ts#2"], reference: true },
+        { term: "alphabeta", keys: ["src/a.ts#0", "src/a.ts#1", "src/a.ts#2"], reference: true },
+        { term: "ALPHA", keys: ["src/a.ts#0", "src/a.ts#1", "src/a.ts#2"], reference: false },
+      ];
+      for (const { term, keys, reference } of queries) {
+        if (reference) expect(batchedReference(files, [term], paths, term, 8000).keys, term).toEqual(keys);
+        const result = store.candidateChunkRetrievalForTerms([term], paths, term);
+        expect(
+          result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`),
+          term,
+        ).toEqual(keys);
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  it("finds the chunks that have terms the trigram index answers together with terms it cannot", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-mixed-terms.sqlite"));
+    // `id` is too short for the trigram index, so the pass for both words tests it on each chunk's text while `alpha` is
+    // an index lookup. The chunks hold both words apart, run together, split across a word boundary, or only one.
+    const files: PlantedFile[] = [
+      {
+        path: "src/a.ts",
+        chunks: ["alpha id one", "alphaid two", "alpha only three", "al pha i d four", "plain id five"],
+      },
+      { path: "src/b.ts", chunks: ["id alpha six", "nothing seven"] },
+    ];
+    try {
+      store.replaceFiles(
+        files.map((file) => preparedFile(file.path, file.chunks)),
+        [],
+        COMPACT_METADATA("mixed-terms"),
+      );
+      const paths = files.map((file) => file.path);
+      const terms = ["alpha", "id"];
+      // The phrase pass keeps `alpha id one`, the pass for both words adds the other chunks that have both, and the
+      // passes for each word add the chunks that have only that one.
+      const all = batchedReference(files, terms, paths, "alpha id", 8000);
+      expect(all.keys).toEqual(["src/a.ts#0", "src/a.ts#1", "src/a.ts#3", "src/b.ts#0", "src/a.ts#2", "src/a.ts#4"]);
+      for (const limit of [1, 2, 3, 4, 5, 8000]) {
+        const expected = batchedReference(files, terms, paths, "alpha id", limit);
+        const result = store.candidateChunkRetrievalForTerms(terms, paths, "alpha id", limit);
+        expect(
+          result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`),
+          `limit ${limit}`,
+        ).toEqual(expected.keys);
+        expect(result.totalCandidatesLowerBound, `limit ${limit}`).toBe(expected.lowerBound);
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  it("runs candidate lookups inside a read snapshot and again after a snapshot rolls back", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-snapshot-lookups.sqlite"));
+    const files = selectiveCorpus();
+    try {
+      store.replaceFiles(
+        files.map((file) => preparedFile(file.path, file.chunks)),
+        [],
+        COMPACT_METADATA("snapshot-lookups"),
+      );
+      const paths = files.map((file) => file.path);
+      const keysOf = (term: string): string[] =>
+        store
+          .candidateChunkRetrievalForTerms([term], paths, term)
+          .chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`);
+      const expectedOf = (term: string): string[] => batchedReference(files, [term], paths, term, 8000).keys;
+      expect(expectedOf("common")).toHaveLength(300);
+      expect(expectedOf("zebra")).toEqual(["src/f007.ts#1", "src/f250.ts#1"]);
+
+      // A lookup that matches every file leaves nothing behind for the next one, inside a snapshot or outside one.
+      expect(store.withReadSnapshot("snapshot-lookups", () => keysOf("common"))).toEqual(expectedOf("common"));
+      expect(keysOf("zebra")).toEqual(expectedOf("zebra"));
+
+      // A snapshot that rolls back takes its lookup rows with it, and the next lookup runs as before.
+      expect(() =>
+        store.withReadSnapshot("snapshot-lookups", () => {
+          keysOf("common");
+          throw new Error("rolled back");
+        }),
+      ).toThrow("rolled back");
+      expect(keysOf("zebra")).toEqual(expectedOf("zebra"));
+      expect(keysOf("common")).toEqual(expectedOf("common"));
     } finally {
       store.close();
     }
@@ -2003,9 +2088,8 @@ describe("persistent query index", () => {
     await search(session, root, "filler", "text");
     const { result, fileRows } = await countFileRows(() => search(session, root, "zebra", "text"));
     expect(result.results.map((entry) => entry.file)).toContain("src/rare.ts");
-    // One row for the path of the matching file and one for the lookup of the read, where the old reads took every
-    // stored file both times.
-    expect(fileRows).toBe(2);
+    // One row for the path of the matching file, where a read of the whole table takes every stored file.
+    expect(fileRows).toBe(1);
   });
 
   it("reads only the eligible files for a term the trigram index cannot answer", async () => {
