@@ -9,7 +9,7 @@ import { disposeSessionQueryIndex, ensureSessionQueryIndex } from "../src/agent/
 import * as updateModule from "../src/agent/query-index/update.js";
 import { resolveQueryIndexPaths, resolveQueryIndexSourcePath } from "../src/agent/query-index/paths.js";
 import { expectedQueryIndexVersionMetadata, probeQueryIndexSqliteSupport } from "../src/agent/query-index/schema.js";
-import { SqliteDatabase } from "../src/sqlite-driver.js";
+import { SqliteDatabase, SqliteStatement, type SqliteRawRow } from "../src/sqlite-driver.js";
 import { ensureQueryIndex } from "../src/agent/query-index/update.js";
 import {
   QueryIndexStore,
@@ -1521,6 +1521,98 @@ describe("persistent query index", () => {
       // the first path overall (f0000, which sits in the last batch).
       const first = store.candidateChunkRetrievalForTerms(["alpha"], paths, "alpha", 1);
       expect(first.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`)).toEqual(["src/f0702.ts#0"]);
+    } finally {
+      store.close();
+    }
+  });
+
+  /** Runs `run` while counting the rows every statement hands back, one per `iterate()` pull and per `all()` result. */
+  function countStatementRows<T>(run: () => T): { result: T; iterated: number; largestAll: number } {
+    let iterated = 0;
+    let largestAll = 0;
+    const iterate = SqliteStatement.prototype.iterate;
+    const all = SqliteStatement.prototype.all;
+    vi.spyOn(SqliteStatement.prototype, "iterate").mockImplementation(function (
+      this: SqliteStatement,
+      ...params: Parameters<SqliteStatement["iterate"]>
+    ) {
+      const rows = iterate.apply(this, params) as Iterable<SqliteRawRow>;
+      return (function* () {
+        for (const row of rows) {
+          iterated += 1;
+          yield row;
+        }
+      })();
+    });
+    vi.spyOn(SqliteStatement.prototype, "all").mockImplementation(function (
+      this: SqliteStatement,
+      ...params: Parameters<SqliteStatement["all"]>
+    ) {
+      const rows = all.apply(this, params);
+      largestAll = Math.max(largestAll, rows.length);
+      return rows;
+    });
+    try {
+      const result = run();
+      return { result, iterated, largestAll };
+    } finally {
+      vi.restoreAllMocks();
+    }
+  }
+
+  it("pulls only the cap and the one row past it from the statement, however many chunks match", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-bounded-read.sqlite"));
+    // Three batches of files. Every file has two chunks with `alpha beta id`; every other file also has a `gamma` chunk,
+    // so each batch holds 250 `gamma` chunks but a thousand chunks of everything else.
+    const files: PlantedFile[] = Array.from({ length: 1100 }, (_, index) => {
+      const name = String(index).padStart(4, "0");
+      return {
+        path: `src/f${name}.ts`,
+        chunks: [
+          `alpha beta id ${name}`,
+          `alpha beta id again ${name}`,
+          index % 2 === 0 ? `gamma ${name}` : `plain ${name}`,
+        ],
+      };
+    });
+    try {
+      store.replaceFiles(
+        files.map((file) => preparedFile(file.path, file.chunks)),
+        [],
+        COMPACT_METADATA("bounded-read"),
+      );
+      const paths = files.map((file) => file.path);
+      // `id` is a scan the trigram index cannot answer, `alpha` and the pair are index lookups, and a cap of 400 on
+      // `gamma` needs the second batch because the first holds only 250 of its chunks.
+      const queries: Array<{ terms: string[]; limit: number }> = [
+        { terms: ["id"], limit: 40 },
+        { terms: ["alpha"], limit: 40 },
+        { terms: ["alpha", "beta"], limit: 40 },
+        { terms: ["gamma"], limit: 40 },
+        { terms: ["gamma"], limit: 400 },
+      ];
+      for (const { terms, limit } of queries) {
+        const phrase = terms.join(" ");
+        const label = `${phrase} limit ${limit}`;
+        const expected = batchedReference(files, terms, paths, phrase, limit);
+        expect(expected.keys, label).toHaveLength(limit);
+        expect(expected.lowerBound, label).toBe(true);
+        // The second run finds the statement the first one stopped early; it must read from the start again.
+        for (let run = 0; run < 2; run += 1) {
+          const { result, iterated, largestAll } = countStatementRows(() =>
+            store.candidateChunkRetrievalForTerms(terms, paths, phrase, limit),
+          );
+          expect(
+            result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`),
+            label,
+          ).toEqual(expected.keys);
+          expect(result.totalCandidatesLowerBound, label).toBe(true);
+          expect(iterated, label).toBe(limit + 1);
+          // No `all()` returns the matching chunks: the files and the kept candidates are the most it reads at once.
+          expect(largestAll, label).toBeLessThanOrEqual(files.length);
+        }
+      }
     } finally {
       store.close();
     }
