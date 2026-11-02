@@ -26,7 +26,8 @@ import {
 
 import { okGoToResult } from "./navigation-provenance.js";
 
-import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
+import type { ParsedFileContext } from "./parse-context.js";
+import { ensureParsedContextForIndex } from "./parsed-cache.js";
 
 import { nameLookupPolicyFor } from "./name-lookup-policies/index.js";
 import type {
@@ -94,7 +95,7 @@ export function createLoadingParsedFileProvider(
         const key = fileIdentityKey(file);
         if (loaded.has(key)) continue;
         try {
-          loaded.set(key, await ensureParsedContext(file, index.parsed?.get(key), index.languageExtensions));
+          loaded.set(key, await ensureParsedContextForIndex(index, file));
         } catch {
           // Reduced mode: a file that cannot be parsed stays unavailable, as before.
           loaded.set(key, null);

@@ -186,6 +186,17 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
   return parsePreparedFileContext(await prepareFileForIndexing(file));
 }
 
+/** Query-time navigation needs the syntax tree, not the indexer's native query captures. */
+export async function parseNavigationContext(
+  file: string,
+  languageExtensions?: LanguageExtensionMap,
+): Promise<ParsedFileContext> {
+  const prepared = await prepareSourceInput(file, { languageExtensions });
+  const context: PreparedFileContext = { file, source: prepared.source, sup: prepared.sup, nativeQueries: null };
+  if (prepared.embeddedBlocks) context.embeddedBlocks = prepared.embeddedBlocks;
+  return parsePreparedFileContext(context);
+}
+
 export async function ensureParsedContext(
   file: string,
   parsedEntry?: ParsedFileCacheEntry,

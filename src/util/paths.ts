@@ -16,9 +16,25 @@ export function normalizePath(p: string): string {
   return typeof p === "string" ? p.replace(/\\/g, "/") : "";
 }
 
+const PATH_CACHE_MAX_ENTRIES = 16_384;
+const normalizedPathCache = new Map<string, string>();
+
 function normalizeWindowsComparablePath(filePath: string): string {
-  return normalizePath(filePath).replace(/^([A-Za-z]):/, (_, driveLetter: string) => `${driveLetter.toUpperCase()}:`);
+  const cached = normalizedPathCache.get(filePath);
+  if (cached !== undefined) return cached;
+  const normalized = normalizePath(filePath).replace(
+    /^([A-Za-z]):/,
+    (_, driveLetter: string) => driveLetter.toUpperCase() + ":",
+  );
+  if (typeof filePath === "string") {
+    if (normalizedPathCache.size >= PATH_CACHE_MAX_ENTRIES) normalizedPathCache.clear();
+    normalizedPathCache.set(filePath, normalized);
+  }
+  return normalized;
 }
+
+/** Identity keys depend on the case mode; clear this cache if that mode changes. */
+const fileIdentityKeyCache = new Map<string, string>();
 
 const defaultCaseInsensitiveFileIdentity = process.platform === "win32" || process.platform === "darwin";
 let caseInsensitiveFileIdentity = defaultCaseInsensitiveFileIdentity;
@@ -35,6 +51,7 @@ let fileIdentityCaseSensitivityProbeGeneration = 0;
 export function setFileIdentityCaseInsensitive(caseInsensitive: boolean): void {
   if (fileIdentityCaseSensitivityFrozen) return;
   caseInsensitiveFileIdentity = caseInsensitive;
+  fileIdentityKeyCache.clear();
 }
 
 export function isFileIdentityCaseInsensitive(): boolean {
@@ -69,6 +86,7 @@ export function resetFileIdentityCaseSensitivityForTests(caseInsensitive?: boole
   fileIdentityCaseSensitivityProbeGeneration += 1;
   fileIdentityCaseSensitivityProbes.clear();
   caseInsensitiveFileIdentity = caseInsensitive ?? defaultCaseInsensitiveFileIdentity;
+  fileIdentityKeyCache.clear();
   fileIdentityCaseSensitivityFrozen = false;
   fileIdentityCaseSensitivityPinned = caseInsensitive !== undefined;
   fileIdentityCaseSensitivityRoot = undefined;
@@ -101,6 +119,7 @@ async function probeFileIdentityCaseSensitivity(resolvedRoot: string, generation
     return;
   }
   caseInsensitiveFileIdentity = caseInsensitive;
+  fileIdentityKeyCache.clear();
   fileIdentityCaseSensitivityFrozen = true;
   fileIdentityCaseSensitivityRoot = resolvedRoot;
 }
@@ -132,8 +151,15 @@ function flipPathCharacterCase(filePath: string): string | null {
  */
 export function fileIdentityKey(filePath: string): string {
   fileIdentityCaseSensitivityFrozen = true;
+  const cached = fileIdentityKeyCache.get(filePath);
+  if (cached !== undefined) return cached;
   const normalized = normalizeWindowsComparablePath(filePath);
-  return caseInsensitiveFileIdentity ? normalized.toLowerCase() : normalized;
+  const key = caseInsensitiveFileIdentity ? normalized.toLowerCase() : normalized;
+  if (typeof filePath === "string") {
+    if (fileIdentityKeyCache.size >= PATH_CACHE_MAX_ENTRIES) fileIdentityKeyCache.clear();
+    fileIdentityKeyCache.set(filePath, key);
+  }
+  return key;
 }
 
 function isWindowsQualifiedAbsolutePath(filePath: string): boolean {

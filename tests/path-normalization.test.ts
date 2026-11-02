@@ -156,11 +156,13 @@ describe("cross-platform path normalization", () => {
       setFileIdentityCaseInsensitive(true);
       expect(fileIdentityKey("E:/x")).toBe(fileIdentityKey("e:/X"));
       expect(fileIdentityKey("E:/repo/Util.ts")).toBe(fileIdentityKey("e:/REPO/util.ts"));
+      expect(fileIdentityKey("E:\\repo\\Util.ts")).toBe("e:/repo/util.ts");
 
       resetFileIdentityCaseSensitivityForTests();
       setFileIdentityCaseInsensitive(false);
       expect(fileIdentityKey("E:/x")).toBe(fileIdentityKey("e:/x"));
       expect(fileIdentityKey("E:/repo/Util.ts")).not.toBe(fileIdentityKey("E:/repo/util.ts"));
+      expect(fileIdentityKey("E:\\repo\\Util.ts")).toBe("E:/repo/Util.ts");
     } finally {
       resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
     }

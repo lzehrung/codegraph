@@ -3,7 +3,8 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type Lang
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { pythonPropertyDecorator } from "./python-property-decorator.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
+import { parseNavigationContext, type ParsedFileContext } from "./parse-context.js";
+import { ensureParsedContextForIndex } from "./parsed-cache.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
 import { isGoExportedMemberName } from "./declaration-visibility.js";
@@ -160,9 +161,7 @@ export async function goToDefinition(
   const scssResult = await goToScssDefinition(index, req);
   if (scssResult) return scssResult;
 
-  const context =
-    parsedContext ??
-    (await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)), index.languageExtensions));
+  const context = parsedContext ?? (await ensureParsedContextForIndex(index, file));
   const sup = context.sup;
   const source = context.source;
   const tree = context.tree;
@@ -557,10 +556,7 @@ export async function recoverIncludedCallableStar(
     const key = fileIdentityKey(candidate.def.file);
     if (parsedByFile.has(key)) continue;
     try {
-      parsedByFile.set(
-        key,
-        await ensureParsedContext(candidate.def.file, index.parsed?.get(key), index.languageExtensions),
-      );
+      parsedByFile.set(key, await ensureParsedContextForIndex(index, candidate.def.file));
     } catch {
       return languageId === "cpp"
         ? { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON }
@@ -602,8 +598,7 @@ export async function attachReferenceContext(
   for (const ref of refs) {
     let cached = perFileCache.get(fileIdentityKey(ref.file));
     if (!cached) {
-      const parsedEntry = index.parsed?.get(fileIdentityKey(ref.file));
-      const parsed = await ensureParsedContext(ref.file, parsedEntry, index.languageExtensions);
+      const parsed = await ensureParsedContextForIndex(index, ref.file);
       cached = { source: parsed.source, tree: parsed.tree, sup: parsed.sup };
       perFileCache.set(fileIdentityKey(ref.file), cached);
     }
@@ -627,11 +622,7 @@ export async function canonicalizePythonReceiverAttributeDefinition(
   },
 ): Promise<GoToResult | null> {
   if (supportForFileWithoutHeaderSample(position.file, index.languageExtensions)?.id !== "python") return null;
-  const context = await ensureParsedContext(
-    position.file,
-    index.parsed?.get(fileIdentityKey(position.file)),
-    index.languageExtensions,
-  );
+  const context = await ensureParsedContextForIndex(index, position.file);
   if (context.sup.id !== "python") return null;
   const nodePosition = { row: position.line - 1, column: position.column - 1 };
   const node = context.tree.rootNode.descendantForPosition(nodePosition, nodePosition);
@@ -764,8 +755,7 @@ async function findReferencesInternal(
     if (collectionMode === "all") return undefined;
     return (reference) => !reference.via?.reexport && referenceSiteKey(fileId, reference.range) !== definitionSiteKey;
   };
-  const parsedDef = index.parsed?.get(fileIdentityKey(definitionFile));
-  const parsedContext = await ensureParsedContext(definitionFile, parsedDef, index.languageExtensions);
+  const parsedContext = await ensureParsedContextForIndex(index, definitionFile);
   let cNamespace: "tag" | "ordinary" | undefined;
   if (parsedContext.sup.id === "c") cNamespace = def.cTag ? "tag" : "ordinary";
   const exportOptions = cNamespace ? { cNamespace } : undefined;
@@ -831,11 +821,7 @@ async function findReferencesInternal(
       }
     }
     if (!definitionExportNames.size) return false;
-    const parsedModule = await ensureParsedContext(
-      candidateModule.file,
-      index.parsed?.get(fileIdentityKey(candidateModule.file)),
-      index.languageExtensions,
-    );
+    const parsedModule = await ensureParsedContextForIndex(index, candidateModule.file);
     const pending: SyntaxNodeLike[] = [parsedModule.tree.rootNode];
     while (pending.length) {
       const node = pending.pop()!;
@@ -1120,8 +1106,7 @@ async function findReferencesInternal(
     let candidateParsedContext: ParsedFileContext | null = null;
     const ensureCandidateParsed = async (): Promise<ParsedFileContext> => {
       if (!candidateParsedContext) {
-        const parsedEntry = index.parsed?.get(fileIdentityKey(fileId));
-        candidateParsedContext = await ensureParsedContext(fileId, parsedEntry, index.languageExtensions);
+        candidateParsedContext = await ensureParsedContextForIndex(index, fileId);
       }
       return candidateParsedContext;
     };
@@ -2053,11 +2038,7 @@ async function cIncludeLinkedCallableEquivalents(index: ProjectIndex, def: Symbo
     if (!candidates.length) continue;
     let candidateParsed: ParsedFileContext;
     try {
-      candidateParsed = await ensureParsedContext(
-        moduleEntry.file,
-        index.parsed?.get(fileIdentityKey(moduleEntry.file)),
-        index.languageExtensions,
-      );
+      candidateParsed = await ensureParsedContextForIndex(index, moduleEntry.file);
     } catch {
       continue;
     }
@@ -2086,13 +2067,7 @@ async function cppEquivalentCallableFamily(
   if (!mod) {
     return { definition, referenceDef: definition, receiverOwner: null, localBinding: undefined, equivalents: [] };
   }
-  const context =
-    parsedContext ??
-    (await ensureParsedContext(
-      definition.file,
-      index.parsed?.get(fileIdentityKey(definition.file)),
-      index.languageExtensions,
-    ));
+  const context = parsedContext ?? (await ensureParsedContextForIndex(index, definition.file));
   const definitionNameNode = syntaxNodeForDefinition(context, definition);
   const receiverOwner = await cppOutOfLineReceiverOwner(index, mod, definition, context, definitionNameNode);
   const memberName = receiverOwner ? cppOutOfLineMemberName(definitionNameNode, context.source, context.sup) : null;
@@ -2173,11 +2148,7 @@ async function cppOutOfLineEquivalentDefinitions(
 ): Promise<SymbolDef[]> {
   const ownerModule = index.byFile.get(fileIdentityKey(owner.file));
   if (!ownerModule) return [];
-  const ownerParsed = await ensureParsedContext(
-    owner.file,
-    index.parsed?.get(fileIdentityKey(owner.file)),
-    index.languageExtensions,
-  );
+  const ownerParsed = await ensureParsedContextForIndex(index, owner.file);
   const ownerNameNode = syntaxNodeForDefinition(ownerParsed, owner);
   const declaration = cppOutOfLineMemberDeclarationNode(
     definitionNameNode,
@@ -2229,11 +2200,7 @@ async function cppInClassMemberEquivalentDefinitions(
       ) {
         continue;
       }
-      const candidateParsed = await ensureParsedContext(
-        entry.target.file,
-        index.parsed?.get(fileIdentityKey(entry.target.file)),
-        index.languageExtensions,
-      );
+      const candidateParsed = await ensureParsedContextForIndex(index, entry.target.file);
       const candidateNode = syntaxNodeForDefinition(candidateParsed, entry.target);
       const candidateShape = entry.target.callable;
       if (!candidateShape?.signature || !candidateShape.arity) continue;
@@ -2360,7 +2327,7 @@ export async function collectNamespaceMemberRefs(
   imports?: readonly ImportBinding[],
   scopeIndex?: ScopeIndex,
 ): Promise<Range[]> {
-  const parsed = parsedContext ?? (await ensureParsedContext(file, undefined, languageExtensions));
+  const parsed = parsedContext ?? (await parseNavigationContext(file, languageExtensions));
   const sup = parsed.sup;
   const source = parsed.source;
   const tree = parsed.tree;
