@@ -588,6 +588,11 @@ function appendJsLikeRegexFallbackExports(
     }
   }
 
+  // Every CommonJS form below spells the literal `exports` (`exports.name =`, `module.exports =`). The patterns are
+  // case-sensitive and read the comment- and string-masked text, which only blanks characters, so a file without the
+  // word there has no match, and the four scans would cost a pass over the source each for nothing.
+  if (!maskedSource.includes("exports")) return;
+
   while ((match = reCjsFn.exec(maskedSource))) {
     const exportedAs = match[1]!;
     const propertyIndex = match.index + match[0].indexOf(exportedAs);
