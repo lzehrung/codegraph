@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import { workspaceSymbolsInSnapshot } from "../src/agent/workspace-symbols.js";
+import { MAX_CALL_HIERARCHY_DEPTH } from "../src/indexer/call-hierarchy.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
 import { isPlainRecord } from "../src/util/guards.js";
 import { countingSession } from "./helpers/agent.js";
@@ -59,7 +60,12 @@ describe("call hierarchy MCP tools", () => {
       "limit",
     ]);
     expect(schema.properties.direction).toEqual({ type: "string", enum: ["callers", "callees"] });
-    expect(schema.properties.depth).toMatchObject({ type: "integer", minimum: 1, maximum: 5, default: 1 });
+    expect(schema.properties.depth).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: MAX_CALL_HIERARCHY_DEPTH,
+      default: 1,
+    });
     expect(schema.properties.limit).toMatchObject({ type: "integer", minimum: 0, maximum: 500, default: 25 });
     expect(schema.properties.includeHeuristic).toEqual({ type: "boolean" });
     const names = listCodegraphMcpTools().map((entry) => entry.name);
@@ -125,5 +131,59 @@ describe("call hierarchy MCP tools", () => {
     expect(callers.entries.map((entry) => entry.symbol.name)).toEqual(["middle", "outer"]);
     expect(callees.entries.map((entry) => entry.symbol.name)).toEqual(["middle", "leaf"]);
     expect(counted.loads()).toBe(1);
+  });
+
+  it("bounds a fifteen-level request by the symbol limit and counts the symbols it left out", async () => {
+    const chainRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-mcp-call-chain-"));
+    try {
+      const links = 18;
+      await fs.writeFile(
+        path.join(chainRoot, "chain.ts"),
+        Array.from({ length: links }, (_, index) =>
+          index + 1 < links
+            ? `export function f${index}(): number { return f${index + 1}(); }`
+            : `export function f${index}(): number { return 1; }`,
+        ).join("\n"),
+      );
+      const session = createAgentSession({
+        root: chainRoot,
+        buildOptions: { cache: "off" },
+        freshness: { policy: "manual" },
+      });
+      const chain = await session.loadProject();
+      const head = (await workspaceSymbolsInSnapshot(chain, { query: "f0" })).symbols.find(
+        (symbol) => symbol.localName === "f0",
+      );
+      if (!head) throw new Error("chain head was not indexed");
+      const handlers = createCodegraphMcpHandlers({ root: chainRoot, session });
+
+      const bounded = await handlers.calls({
+        direction: "callees",
+        handle: head.handle,
+        depth: MAX_CALL_HIERARCHY_DEPTH,
+        limit: 4,
+      });
+      expect(bounded.limits).toEqual({ symbols: 4, callsitesPerSymbol: 50 });
+      expect(bounded.omittedCounts).toEqual({ symbols: 11, callsites: 0, unresolvedSites: 0 });
+      expect(bounded.entries.map((entry) => [entry.depth, entry.symbol.name])).toEqual([
+        [1, "f1"],
+        [2, "f2"],
+        [3, "f3"],
+        [4, "f4"],
+      ]);
+
+      const whole = await handlers.calls({
+        direction: "callees",
+        handle: head.handle,
+        depth: MAX_CALL_HIERARCHY_DEPTH,
+        limit: 500,
+      });
+      expect(whole.omittedCounts).toEqual({ symbols: 0, callsites: 0, unresolvedSites: 0 });
+      expect(whole.entries.map((entry) => entry.depth)).toEqual(
+        Array.from({ length: MAX_CALL_HIERARCHY_DEPTH }, (_, index) => index + 1),
+      );
+    } finally {
+      await fs.rm(chainRoot, { recursive: true, force: true });
+    }
   });
 });

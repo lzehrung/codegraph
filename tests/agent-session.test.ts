@@ -2,11 +2,14 @@ import { disposeSessionQueryIndex, ensureSessionQueryIndex } from "../src/agent/
 import * as updateModule from "../src/agent/query-index/update.js";
 import * as sessionLifecycleModule from "../src/agent/session-lifecycle.js";
 import fs from "node:fs/promises";
-import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
-import { createHash } from "node:crypto";
+import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION } from "../src/indexer/build-cache/project-snapshot.js";
+import {
+  DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
+  encodeDetailedSymbolGraphSnapshot,
+  type DetailedSidecarColumns,
+} from "../src/indexer/build-cache/detailed-graph-snapshot.js";
 import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import {
   AGENT_FRESHNESS_CHECK_INTERVAL_MS,
@@ -18,6 +21,7 @@ import {
 } from "../src/agent/session.js";
 import type { QueryIndexHandle } from "../src/agent/query-index/update.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
+import * as baseSymbolGraphBuild from "../src/graphs/symbol-graph.js";
 import type { SymbolGraph } from "../src/graphs/symbol-graph.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { createProjectSnapshotIdentity } from "../src/indexer/build-cache.js";
@@ -27,6 +31,13 @@ import * as projectFilesModule from "../src/util/project-files.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { runGit as git } from "./helpers/git.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
+import { limitJsonStringLength } from "./helpers/string-limit.js";
+import {
+  detailedSidecarPath as detailedSymbolGraphSnapshotPath,
+  openDetailedSidecar,
+  patchDetailedSidecarHeader,
+  readDetailedSidecarHeader,
+} from "./helpers/detailed-sidecar.js";
 
 const tempRoots = createTempRootRegistry();
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -77,74 +88,9 @@ async function createConfigurationFreshnessFixture(): Promise<{
   await writeResolutionHint(root, "A");
   return { root, main, firstHeader, secondHeader };
 }
-function detailedSymbolGraphSnapshotPath(root: string): string {
-  return path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json");
-}
-
 function projectSnapshotPath(root: string): string {
   return path.join(root, ".codegraph", "cache", "index-v1", "project-index-snapshot.json");
 }
-
-async function readDetailedSidecar(sidecarPath: string): Promise<unknown> {
-  const raw = await fs.readFile(sidecarPath);
-  return JSON.parse(brotliDecompressSync(raw).toString("utf8"));
-}
-
-async function writeDetailedSidecar(sidecarPath: string, sidecar: unknown): Promise<void> {
-  await fs.writeFile(
-    sidecarPath,
-    brotliCompressSync(JSON.stringify(sidecar), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
-  );
-}
-type MutableDetailedSymbolGraphSidecar = {
-  version: number;
-  projectRoot: string;
-  implementationFingerprint: string;
-  projectSnapshotIdentity: string;
-  graphHash: string;
-  graph: {
-    nodes: Array<{
-      id: string;
-      file: string;
-      name: string;
-      complexity?: number;
-      callable?: true;
-    }>;
-    edges: Array<{
-      from: string;
-      to: string;
-      label?: string;
-      site?: {
-        file: string;
-        range: {
-          start: { line: number; column: number; index?: number };
-          end: { line: number; column: number; index?: number };
-        };
-      };
-    }>;
-    nodeAliases: Array<[string, string]>;
-  };
-};
-function refreshDetailedSidecarHash(sidecar: MutableDetailedSymbolGraphSidecar): void {
-  const hash = createHash("sha256");
-  hash.update(sidecar.projectSnapshotIdentity);
-  hash.update("\0");
-  hash.update(JSON.stringify(sidecar.graph));
-  sidecar.graphHash = hash.digest("hex");
-}
-
-function firstSidecarEdge(
-  sidecar: MutableDetailedSymbolGraphSidecar,
-): MutableDetailedSymbolGraphSidecar["graph"]["edges"][number] {
-  const existing = sidecar.graph.edges[0];
-  if (existing) return existing;
-  const [from, to] = sidecar.graph.nodes;
-  if (!from || !to) throw new Error("expected at least two persisted symbol nodes");
-  const edge = { from: from.id, to: to.id, label: "tamper-edge" };
-  sidecar.graph.edges.push(edge);
-  return edge;
-}
-
 /** Persisted `file::name` targets of the `calls` edges emitted from the named callable. */
 function detailedCallTargets(graph: SymbolGraph, fromName: string): string[] {
   const targets: string[] = [];
@@ -157,6 +103,12 @@ function detailedCallTargets(graph: SymbolGraph, fromName: string): string[] {
     targets.push(`${normalizePath(to.file)}::${to.name}`);
   }
   return targets;
+}
+
+/** The corruption records a session's build reported. The session always attaches its report. */
+function reportedCorruptions(snapshot: AgentProjectSnapshot): NonNullable<BuildReport["manifest"]>["corruptions"] {
+  if (!snapshot.buildReport) throw new Error("the session did not attach its build report");
+  return snapshot.buildReport.manifest?.corruptions;
 }
 
 describe("agent session", () => {
@@ -341,29 +293,14 @@ describe("agent session", () => {
     );
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const cold = await createAgentSession({ root }).loadProject();
-    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const sidecar = (await readDetailedSidecar(sidecarPath)) as {
-      version: number;
-      projectRoot: string;
-      implementationFingerprint: string;
-      projectSnapshotIdentity: string;
-      graph: { nodes: unknown[]; edges: unknown[]; nodeAliases: unknown[] };
-    };
+    const header = await readDetailedSidecarHeader(detailedSymbolGraphSnapshotPath(root));
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(sidecar.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
-    expect(sidecar.projectRoot).toBe(normalizePath(root));
-    expect(sidecar.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(sidecar.projectSnapshotIdentity).toBe(cold.index.projectSnapshotIdentity);
-    expect(Object.keys(sidecar).sort()).toEqual([
-      "graph",
-      "graphHash",
-      "implementationFingerprint",
-      "projectRoot",
-      "projectSnapshotIdentity",
-      "version",
-    ]);
-    expect(Object.keys(sidecar.graph).sort()).toEqual(["edges", "nodeAliases", "nodes"]);
+    expect(header.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
+    expect(header.projectRoot).toBe(normalizePath(root));
+    expect(header.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(header.projectSnapshotIdentity).toBe(cold.index.projectSnapshotIdentity);
+    expect(header.counts).toMatchObject({ nodes: cold.symbolGraph.nodes.size, edges: cold.symbolGraph.edges.length });
 
     symbolGraphSpy.mockClear();
     const warmSession = createAgentSession({ root });
@@ -394,7 +331,6 @@ describe("agent session", () => {
     );
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const cold = await createAgentSession({ root }).loadProject();
-    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
     expect([...cold.symbolGraph.nodes.values()].filter((node) => node.name === "run")).toHaveLength(1);
     expect(
       cold.symbolGraph.edges
@@ -402,8 +338,6 @@ describe("agent session", () => {
         .map((edge) => cold.symbolGraph.nodes.get(edge.to)?.name),
     ).toEqual(["run"]);
 
-    const sidecarStat = await fs.stat(sidecarPath);
-    await fs.utimes(sidecarPath, sidecarStat.atime, new Date(sidecarStat.mtimeMs + 2_000));
     symbolGraphSpy.mockClear();
     const warm = await createAgentSession({ root }).loadProject();
 
@@ -443,7 +377,6 @@ describe("agent session", () => {
     const variadicTarget = `${normalizePath(path.join(root, "Variadic.java"))}::target`;
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const cold = await createAgentSession({ root }).loadProject();
-    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     // The zero-argument default-parameter call and the two-argument varargs call are the
@@ -454,10 +387,6 @@ describe("agent session", () => {
     expect(detailedCallTargets(cold.symbolGraph, "twoArgCaller")).toContain(variadicTarget);
     expect(detailedCallTargets(cold.symbolGraph, "javaOneArgCaller")).toContain(variadicTarget);
 
-    // Bump the sidecar identity so the warm load reads the persisted bytes instead of the
-    // in-process memoized graph; the edges above must survive that real reload.
-    const sidecarStat = await fs.stat(sidecarPath);
-    await fs.utimes(sidecarPath, sidecarStat.atime, new Date(sidecarStat.mtimeMs + 2_000));
     symbolGraphSpy.mockClear();
     const warm = await createAgentSession({ root }).loadProject();
 
@@ -500,7 +429,6 @@ describe("agent session", () => {
     const extensionHelperTarget = `${normalizePath(path.join(root, "Box.swift"))}::helper`;
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const cold = await createAgentSession({ root }).loadProject();
-    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     // Each shared-owner call resolves to exactly one member: the partial-class member
@@ -509,8 +437,6 @@ describe("agent session", () => {
     expect(detailedCallTargets(cold.symbolGraph, "Use")).toEqual([partialHelperTarget]);
     expect(detailedCallTargets(cold.symbolGraph, "use")).toEqual([extensionHelperTarget]);
 
-    const sidecarStat = await fs.stat(sidecarPath);
-    await fs.utimes(sidecarPath, sidecarStat.atime, new Date(sidecarStat.mtimeMs + 2_000));
     symbolGraphSpy.mockClear();
     const warm = await createAgentSession({ root }).loadProject();
 
@@ -563,18 +489,43 @@ describe("agent session", () => {
     expect(detailedCallTargets(rebuilt.symbolGraph, "oneArgCaller")).toContain(targetId);
   });
 
-  it("memoizes a validated detailed sidecar until its file identity changes", async () => {
+  it("persists the detailed sidecar of a graph whose JSON text passes the string limit, and a new session reuses it", async () => {
+    const root = await mkGitRepo();
+    const links = 40;
+    await fs.writeFile(
+      path.join(root, "chain.ts"),
+      Array.from({ length: links }, (_, index) =>
+        index + 1 < links
+          ? `export function link${index}() { return link${index + 1}(); }`
+          : `export function link${index}() { return 1; }`,
+      ).join("\n"),
+      "utf8",
+    );
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+    // A project with millions of edges passes V8's string limit with the text of its graph alone. This limit falls far
+    // below the text of this graph, so a sidecar written as JSON text could not be built.
+    const limit = limitJsonStringLength(4_000);
+    let built: SymbolGraph;
+    try {
+      built = (await createAgentSession({ root }).loadProject()).symbolGraph;
+    } finally {
+      limit.mockRestore();
+    }
+    expect(JSON.stringify([...built.nodes.values()]).length + JSON.stringify(built.edges).length).toBeGreaterThan(
+      3 * 4_000,
+    );
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    const warm = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+    expect([...warm.symbolGraph.nodes]).toEqual([...built.nodes]);
+    expect(warm.symbolGraph.edges).toEqual(built.edges);
+  });
+
+  it("gives every load of a sidecar its own graph", async () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
-    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const sidecarBytes = await fs.readFile(sidecarPath);
-    await fs.writeFile(sidecarPath, Buffer.concat([sidecarBytes, Buffer.from("\n")]));
-    const originalReadFile = fs.readFile.bind(fs);
-    let sidecarReads = 0;
-    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-      if (path.resolve(String(args[0])) === path.resolve(sidecarPath)) sidecarReads++;
-      return await originalReadFile(...args);
-    });
 
     const first = await createAgentSession({ root }).loadProject();
     const retainedNode = first.symbolGraph.nodes.keys().next().value as string;
@@ -583,53 +534,39 @@ describe("agent session", () => {
 
     expect(second.symbolGraph).not.toBe(first.symbolGraph);
     expect(second.symbolGraph.nodes.has(retainedNode)).toBe(true);
-    expect(sidecarReads).toBe(1);
-    const beforeRewrite = await fs.stat(sidecarPath);
-    const unchangedBytes = (await originalReadFile(sidecarPath)) as Buffer;
-    await fs.writeFile(sidecarPath, unchangedBytes);
-    await fs.utimes(sidecarPath, beforeRewrite.atime, beforeRewrite.mtime);
-    await createAgentSession({ root }).loadProject();
-
-    expect(sidecarReads).toBe(2);
   });
 
-  it("does not cache a detailed graph across an atomic sidecar replacement", async () => {
+  it("rebuilds and refreshes a detailed sidecar that is not one, cut short, or damaged", async () => {
     const root = await mkGitRepo();
-    await createAgentSession({ root }).loadProject();
+    const cold = await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const sidecarBytes = await fs.readFile(sidecarPath);
-    await fs.writeFile(sidecarPath, Buffer.concat([sidecarBytes, Buffer.from("\n")]));
-    const originalStat = fs.stat.bind(fs);
-    let sidecarStats = 0;
-    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
-      if (path.resolve(String(args[0])) === path.resolve(sidecarPath)) {
-        sidecarStats++;
-        if (sidecarStats === 4) await fs.writeFile(sidecarPath, "{replacement", "utf8");
-      }
-      return await originalStat(...args);
-    });
+    const original = await fs.readFile(sidecarPath);
+    const lastByte = original[original.length - 1]!;
+    const damaged: Array<[string, Buffer]> = [
+      ["text that is not a sidecar", Buffer.from("{not-json", "utf8")],
+      ["a sidecar cut short", original.subarray(0, Math.floor(original.length / 2))],
+      [
+        "a sidecar with a changed payload byte",
+        Buffer.concat([original.subarray(0, -1), Buffer.from([lastByte ^ 0xff])]),
+      ],
+    ];
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
 
-    const rebuilt = await createAgentSession({ root }).loadProject();
+    for (const [label, bytes] of damaged) {
+      await fs.writeFile(sidecarPath, bytes);
+      symbolGraphSpy.mockClear();
 
-    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
-  });
+      const rebuilt = await createAgentSession({ root }).loadProject();
+      const refreshed = await readDetailedSidecarHeader(sidecarPath);
 
-  it("rebuilds and refreshes malformed detailed symbol graph sidecars", async () => {
-    const root = await mkGitRepo();
-    await createAgentSession({ root }).loadProject();
-    await fs.writeFile(detailedSymbolGraphSnapshotPath(root), "{not-json", "utf8");
-    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
-
-    const rebuilt = await createAgentSession({ root }).loadProject();
-    const refreshed = (await readDetailedSidecar(detailedSymbolGraphSnapshotPath(root))) as {
-      version: number;
-    };
-
-    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
-    expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
+      expect(symbolGraphSpy, label).toHaveBeenCalledTimes(1);
+      expect(rebuilt.symbolGraph.nodes.size, label).toBe(cold.symbolGraph.nodes.size);
+      expect(
+        reportedCorruptions(rebuilt)?.some((entry) => entry.artifact.endsWith(".bin")),
+        label,
+      ).toBe(true);
+      expect(refreshed.version, label).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
+    }
   });
 
   it("does not publish an identity or sidecar when the project snapshot write fails", async () => {
@@ -657,10 +594,9 @@ describe("agent session", () => {
   it("loads a detailed symbol graph sidecar with provenance from another root", async () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
-    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
-    sidecar.projectRoot = normalizePath(path.resolve(root, "..", "other-root"));
-    await writeDetailedSidecar(sidecarPath, sidecar);
+    await patchDetailedSidecarHeader(detailedSymbolGraphSnapshotPath(root), {
+      projectRoot: normalizePath(path.resolve(root, "..", "other-root")),
+    });
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
 
     const rebuilt = await createAgentSession({ root }).loadProject();
@@ -669,154 +605,104 @@ describe("agent session", () => {
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
   });
 
-  it("loads a detailed sidecar that includes extra edges between valid nodes", async () => {
+  it("loads the graph a sidecar holds without deriving it from the index again", async () => {
+    const root = await mkGitRepo();
+    const cold = await createAgentSession({ root }).loadProject();
+    const [from, to] = [...cold.symbolGraph.nodes.keys()];
+    if (!from || !to) throw new Error("expected at least two symbol nodes");
+    // An edge no derivation from the index gives: a load that derived the graph again would not accept it.
+    await fs.writeFile(
+      detailedSymbolGraphSnapshotPath(root),
+      await encodeDetailedSymbolGraphSnapshot({
+        projectRoot: root,
+        projectSnapshotIdentity: cold.index.projectSnapshotIdentity!,
+        graph: {
+          nodes: cold.symbolGraph.nodes,
+          edges: [...cold.symbolGraph.edges, { from, to, label: "detailed-extra-edge" }],
+        },
+      }),
+    );
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const baseGraphSpy = vi.spyOn(baseSymbolGraphBuild, "buildSymbolGraph");
+
+    const warm = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+    expect(baseGraphSpy).not.toHaveBeenCalled();
+    expect(reportedCorruptions(warm)).toBeUndefined();
+    expect(warm.symbolGraph.edges.some((edge) => edge.label === "detailed-extra-edge")).toBe(true);
+    expect(warm.symbolGraph.nodes.size).toBe(cold.symbolGraph.nodes.size);
+  });
+
+  it("rejects a sidecar whose columns refer outside the graph or the project", async () => {
     const root = await mkGitRepo();
     const cold = await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
-    const [from, to] = sidecar.graph.nodes;
-    if (!from || !to) throw new Error("expected at least two persisted symbol nodes");
-    sidecar.graph.edges.push({ from: from.id, to: to.id, label: "detailed-extra-edge" });
-    refreshDetailedSidecarHash(sidecar);
-    await writeDetailedSidecar(sidecarPath, sidecar);
+    const original = await fs.readFile(sidecarPath);
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    try {
-      const warm = await createAgentSession({ root }).loadProject();
-
-      expect(symbolGraphSpy).toHaveBeenCalledTimes(0);
-      expect(warn.mock.calls.flat().join(" ")).not.toContain("detailed symbol graph does not match project");
-      expect(warm.symbolGraph.edges.some((edge) => edge.label === "detailed-extra-edge")).toBe(true);
-      expect(warm.symbolGraph.nodes.size).toBe(cold.symbolGraph.nodes.size);
-    } finally {
-      symbolGraphSpy.mockRestore();
-      warn.mockRestore();
-    }
-  });
-
-  it("rejects well-typed sidecar tampering against the current project index", async () => {
-    const root = await mkGitRepo();
-    await createAgentSession({ root }).loadProject();
-    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
-    const tamperers: Array<(sidecar: MutableDetailedSymbolGraphSidecar) => void> = [
-      (sidecar) => {
-        firstSidecarEdge(sidecar).to = "missing-node";
-      },
-      (sidecar) => {
-        const node = sidecar.graph.nodes[0]!;
-        node.file = path.resolve(root, "..", "escaped.ts").replace(/\\/g, "/");
-        node.id = `${node.file}::escaped::0`;
-      },
-      (sidecar) => {
-        sidecar.graph.nodes[0]!.complexity = -1;
-      },
-      (sidecar) => {
-        const baseNode = sidecar.graph.nodes.find((node) => node.name === "add");
-        if (!baseNode) throw new Error("expected persisted add node");
-        baseNode.name = "tampered";
-      },
-      (sidecar) => {
-        const node = sidecar.graph.nodes[0]!;
-        sidecar.graph.nodes.push({
-          ...node,
-          id: `${node.file}::bogus-extra-node::0`,
-          name: "bogus-extra-node",
-        });
-      },
-      (sidecar) => {
-        firstSidecarEdge(sidecar).site = {
-          file: sidecar.graph.nodes[0]!.file,
-          range: {
-            start: { line: -1, column: 0, index: 0 },
-            end: { line: 0, column: 1, index: 1 },
-          },
-        };
-      },
+    // Same-length text keeps the file table valid, so the load meets the file itself.
+    const replaceFirstFile = (columns: DetailedSidecarColumns, text: (length: number) => string): void => {
+      const start = columns.fileOffsets[0]!;
+      const end = columns.fileOffsets[1]!;
+      columns.fileBlob.set(Buffer.from(text(end - start)), start);
+    };
+    const tamperers: Array<[string, (columns: DetailedSidecarColumns) => void]> = [
+      [
+        "an edge to a node past the end",
+        (columns) => {
+          columns.edgeTo[0] = 0x7fffffff;
+        },
+      ],
+      [
+        "a node of a file past the table",
+        (columns) => {
+          columns.nodeFile[0] = 0x7fffffff;
+        },
+      ],
+      [
+        "a node with an unknown kind",
+        (columns) => {
+          columns.nodeKind[0] = 250;
+        },
+      ],
+      [
+        "a node with an unknown id form",
+        (columns) => {
+          columns.nodeIdMode[0] = 9;
+        },
+      ],
+      [
+        "two nodes with one id",
+        (columns) => {
+          columns.nodeFile[1] = columns.nodeFile[0]!;
+          columns.nodeName[1] = columns.nodeName[0]!;
+          columns.nodeIdTail[1] = columns.nodeIdTail[0]!;
+          columns.nodeIdMode[1] = columns.nodeIdMode[0]!;
+        },
+      ],
+      [
+        "a file outside the project root",
+        (columns) => replaceFirstFile(columns, (length) => `../${"a".repeat(length - 3)}`),
+      ],
+      [
+        "a file the project does not index",
+        (columns) => replaceFirstFile(columns, (length) => `${"z".repeat(length - 3)}.ts`),
+      ],
     ];
 
-    for (const tamper of tamperers) {
-      const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
-      tamper(sidecar);
-      refreshDetailedSidecarHash(sidecar);
-      await writeDetailedSidecar(sidecarPath, sidecar);
+    for (const [label, tamper] of tamperers) {
+      await fs.writeFile(sidecarPath, original);
+      const sidecar = await openDetailedSidecar(sidecarPath);
+      tamper(sidecar.columns);
+      await sidecar.save();
       symbolGraphSpy.mockClear();
 
       const rebuilt = await createAgentSession({ root }).loadProject();
 
-      expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-      expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
+      expect(symbolGraphSpy, label).toHaveBeenCalledTimes(1);
+      expect(rebuilt.symbolGraph.nodes.size, label).toBe(cold.symbolGraph.nodes.size);
+      expect(reportedCorruptions(rebuilt)?.length, label).toBeGreaterThan(0);
     }
-  });
-
-  it("rejects a sidecar node whose callable marker is not literal true", async () => {
-    const root = await mkGitRepo();
-    await createAgentSession({ root }).loadProject();
-    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const original = await fs.readFile(sidecarPath);
-
-    const writeCallable = async (callable: unknown) => {
-      await fs.writeFile(sidecarPath, original);
-      const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
-      const node = sidecar.graph.nodes[0];
-      if (!node) throw new Error("expected at least one persisted symbol node");
-      (node as { callable?: unknown }).callable = callable;
-      refreshDetailedSidecarHash(sidecar);
-      await writeDetailedSidecar(sidecarPath, sidecar);
-    };
-
-    await writeCallable("true");
-    const malformedSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
-    const rebuilt = await createAgentSession({ root }).loadProject();
-    expect(malformedSpy).toHaveBeenCalledTimes(1);
-    expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
-    malformedSpy.mockRestore();
-
-    await writeCallable(true);
-    const literalSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
-    const loadedLiteral = await createAgentSession({ root }).loadProject();
-    expect(literalSpy).not.toHaveBeenCalled();
-    expect(loadedLiteral.symbolGraph.nodes.size).toBeGreaterThan(0);
-    literalSpy.mockRestore();
-
-    await writeCallable(false);
-    const falseSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
-    const rebuiltFalse = await createAgentSession({ root }).loadProject();
-    expect(falseSpy).toHaveBeenCalledTimes(1);
-    expect(rebuiltFalse.symbolGraph.nodes.size).toBeGreaterThan(0);
-    falseSpy.mockRestore();
-
-    await fs.writeFile(sidecarPath, original);
-    const absentSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
-    const loadedAbsent = await createAgentSession({ root }).loadProject();
-    expect(absentSpy).not.toHaveBeenCalled();
-    expect(loadedAbsent.symbolGraph.nodes.size).toBeGreaterThan(0);
-    absentSpy.mockRestore();
-  });
-
-  it("loads a valid sidecar from disk without re-verifying its self-reported graphHash", async () => {
-    const root = await mkGitRepo();
-    const cold = await createAgentSession({ root }).loadProject();
-    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-
-    // Corrupt only `graphHash`, leaving `graph` untouched: recomputing and comparing this
-    // field required re-stringifying and re-hashing the whole graph on every load (~36ms
-    // measured on an 11MB sidecar) purely to prove this file's own bytes are
-    // self-consistent, a guarantee the atomic write already provides. A stale or wrong hash
-    // must therefore no longer force a rebuild; correctness against the current project is
-    // proven by the structural and semantic checks in
-    // `isDetailedSymbolGraphCompatibleWithProject` instead, exercised separately by "rejects
-    // well-typed sidecar tampering against the current project index" above.
-    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
-    sidecar.graphHash = "f".repeat(64);
-    await writeDetailedSidecar(sidecarPath, sidecar);
-
-    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
-    const warm = await createAgentSession({ root }).loadProject();
-
-    expect(symbolGraphSpy).not.toHaveBeenCalled();
-    expect([...warm.symbolGraph.nodes]).toEqual([...cold.symbolGraph.nodes]);
-    expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
   });
 
   it("rebuilds and upgrades older detailed symbol graph sidecars", async () => {
@@ -826,23 +712,35 @@ describe("agent session", () => {
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     // Version 0 stands for a pre-schema sidecar; the previous persisted version stands for a
     // sidecar written before the persisted call-edge semantics changed. Both must rebuild
-    // instead of being reinterpreted under the current meaning.
+    // instead of being reinterpreted under the current meaning, and neither is damage.
     for (const legacyVersion of [0, DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION - 1]) {
-      const legacy = (await readDetailedSidecar(sidecarPath)) as {
-        version: number;
-        projectSnapshotIdentity: string;
-        graph: unknown;
-      };
-      legacy.version = legacyVersion;
-      await writeDetailedSidecar(sidecarPath, legacy);
+      await patchDetailedSidecarHeader(sidecarPath, { version: legacyVersion });
       symbolGraphSpy.mockClear();
 
-      await createAgentSession({ root }).loadProject();
-      const refreshed = (await readDetailedSidecar(sidecarPath)) as { version: number };
+      const rebuilt = await createAgentSession({ root }).loadProject();
+      const refreshed = await readDetailedSidecarHeader(sidecarPath);
 
       expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+      expect(reportedCorruptions(rebuilt)).toBeUndefined();
       expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
     }
+  });
+
+  it("ignores the text sidecar of earlier versions and removes it once the binary one is written", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const legacyPath = path.join(path.dirname(sidecarPath), "detailed-symbol-graph.json");
+    await fs.rm(sidecarPath);
+    await fs.writeFile(legacyPath, "legacy text sidecar", "utf8");
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    const rebuilt = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(reportedCorruptions(rebuilt)).toBeUndefined();
+    await expect(fs.stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await readDetailedSidecarHeader(sidecarPath)).version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
   });
 
   it("invalidates module, project snapshot, and detailed sidecar on core epoch drift", async () => {
@@ -867,10 +765,9 @@ describe("agent session", () => {
     };
     snapshot.implementationFingerprint = "0".repeat(64);
     await fs.writeFile(snapshotPath, brotliCompressSync(JSON.stringify(snapshot)));
-    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
-    sidecar.implementationFingerprint = "0".repeat(64);
-    await writeDetailedSidecar(sidecarPath, sidecar);
+    await patchDetailedSidecarHeader(detailedSymbolGraphSnapshotPath(root), {
+      implementationFingerprint: "0".repeat(64),
+    });
     const report: BuildReport = { timings: {} };
     await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report });
     expect(report.files?.parsed ?? 0).toBeGreaterThan(0);

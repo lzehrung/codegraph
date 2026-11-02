@@ -30,7 +30,7 @@ import {
   type McpToolOperationTracker,
 } from "../src/mcp/server.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex } from "../src/indexer/types.js";
-import { MCP_TOOL_REGISTRY } from "../src/mcp/tools.js";
+import { MAX_CALL_HIERARCHY_DEPTH, MCP_TOOL_REGISTRY } from "../src/mcp/tools.js";
 import { DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
 import type { Graph } from "../src/types.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
@@ -1088,6 +1088,79 @@ describe("codegraph MCP handlers", () => {
         sessionId ?? undefined,
       );
       expect(readProtocolError(overLimit.payload).code).toBe(-32602);
+    } finally {
+      await httpServer.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("advertises and enforces the call hierarchy depth maximum over MCP HTTP", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-calls-depth-"));
+    await fs.writeFile(
+      path.join(root, "chain.ts"),
+      ["export function a(): number { return b(); }", "export function b(): number { return 1; }", ""].join("\n"),
+      "utf8",
+    );
+    const httpServer = await startCodegraphMcpHttpServer({ root, port: 0 });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-calls-depth-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      const tools = await postMcpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+        sessionId ?? undefined,
+      );
+      const listedTools = readObject(tools.payload.result).tools;
+      expect(Array.isArray(listedTools)).toBe(true);
+      const calls = (listedTools as Array<Record<string, unknown>>).find((tool) => tool.name === "calls");
+      const depth = readObject(readObject(readObject(calls).inputSchema).properties).depth;
+      expect(readObject(depth)).toMatchObject({ minimum: 1, maximum: MAX_CALL_HIERARCHY_DEPTH, default: 1 });
+
+      const overLimit = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: {
+            name: "calls",
+            arguments: { handle: "chain.ts::a", direction: "callees", depth: MAX_CALL_HIERARCHY_DEPTH + 1 },
+          },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readProtocolError(overLimit.payload).code).toBe(-32602);
+
+      const atLimit = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 4,
+          method: "tools/call",
+          params: {
+            name: "calls",
+            arguments: { handle: "chain.ts::a", direction: "callees", depth: MAX_CALL_HIERARCHY_DEPTH },
+          },
+        },
+        sessionId ?? undefined,
+      );
+      expect(atLimit.payload.error).toBeUndefined();
+      expect(readToolJsonResult(atLimit.payload)).toMatchObject({
+        direction: "outgoing",
+        entries: [{ symbol: { name: "b" }, depth: 1 }],
+      });
     } finally {
       await httpServer.close();
       await fs.rm(root, { recursive: true, force: true });

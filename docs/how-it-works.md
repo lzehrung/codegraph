@@ -97,6 +97,8 @@ Disk loads reuse unchanged files and update changed ones. Codegraph validates fi
 
 Module and graph cache identities also include effective TypeScript `baseUrl`/`paths` (including `extends`) and workspace package names, locations, `main`, and `exports`. These inputs are checked even when `resolveNodeModules` is disabled, so configuration-only changes cannot leave cached import targets on the old files. Unchanged resolution inputs still permit reuse.
 
+The detailed symbol graph that `callers`, `callees`, `supertypes`, `subtypes`, `explain`, `packet get`, `rename-preview`, `refactor-plan`, and `artifact build` read persists beside them as `detailed-symbol-graph.bin`, a compressed binary file of typed columns that holds each file once as a project-relative path. A load builds the graph without parsing source: it checks the payload checksum, the project snapshot identity, and the implementation fingerprint, then rebases each file once and checks that the index holds it and that it lies inside the project root, not once per symbol and edge. No step builds the graph as one text string, so a graph of millions of edges persists. A changed project, configuration, or build, a damaged file, or an earlier format rebuilds the graph, and the earlier `detailed-symbol-graph.json` is ignored and removed by the next write.
+
 A cached module is keyed by its own content, but its import targets depend on other files. A warm build extracts a module again when:
 
 - the module changed;
