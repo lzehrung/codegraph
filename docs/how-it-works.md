@@ -58,6 +58,8 @@ Extraction produces raw module specifiers. Resolution then turns them into graph
 - Resolution hints and dynamic-import heuristics are opt-in because guesses can create false positives.
 - A specifier that cannot be mapped to a project file remains an `external` node instead of disappearing.
 
+An index build answers the file, directory, and real-path questions of resolution through one cache that lives for that build, so the next build sees a file created in between. The cache lists a directory once the build probes it for more than a few names and reads each answer from the listing as `stat` or `realpath` would on that volume, including its case rules; a symbolic link, a directory it cannot list, or a name it cannot match with certainty still goes to the file system. A resolution is cached by the importer's directory for a relative specifier, and by the tsconfig `baseUrl` and `paths` for a bare one, not by importer file.
+
 The resulting file nodes and typed edges are stored with forward and reverse adjacency indexes. That graph powers `graph`, `deps`, `rdeps`, `path`, `cycles`, unresolved-import checks, and the dependency portion of higher-level analysis. Mermaid, DOT, JSON, and SQLite are output views of the same graph model.
 
 ## Semantic navigation and impact

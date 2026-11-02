@@ -1,13 +1,33 @@
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { createMatchPath } from "tsconfig-paths";
+import {
+  createMatchPath,
+  createMatchPathAsync,
+  type FileExistsAsync,
+  type MatchPathAsync,
+  type ReadJsonAsync,
+} from "tsconfig-paths";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import { parseJsonc } from "../comments.js";
+import { currentProbeCache } from "../fs-probe-cache.js";
 import { fileIdentityKey, isFilePathWithinRoot, stripBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
 
 export type MatchPathFn = ReturnType<typeof createMatchPath>;
+
+/**
+ * Each matcher `loadNearestTsconfigFor` makes is paired with an asynchronous twin built from the same
+ * `baseUrl` and `paths`, and with a key for those two inputs. The twin runs the same candidate search through
+ * the build's probe cache. The key lets files whose configs resolve alike share one resolution.
+ */
+type MatchPathResolver = { scopeKey: string; matchAsync: MatchPathAsync };
+const matchPathResolvers = new WeakMap<MatchPathFn, MatchPathResolver>();
+const anonymousMatchPathKeys = new WeakMap<MatchPathFn, string>();
+let anonymousMatchPathCount = 0;
+const matchPathScopeIds = new Map<string, number>();
+const requireJson = createRequire(import.meta.url);
 
 type TsconfigResolutionInputs = {
   configFile: string;
@@ -180,6 +200,16 @@ async function createTsconfigResolution(
   try {
     const { baseUrl, paths } = await loadTsconfigConfig(cfgPath, projectRoot);
     const matchPath = createMatchPath(baseUrl, paths);
+    const scopeContent = JSON.stringify([baseUrl, Object.entries(paths)]);
+    let scopeId = matchPathScopeIds.get(scopeContent);
+    if (scopeId === undefined) {
+      scopeId = matchPathScopeIds.size + 1;
+      matchPathScopeIds.set(scopeContent, scopeId);
+    }
+    matchPathResolvers.set(matchPath, {
+      scopeKey: `config${scopeId}`,
+      matchAsync: createMatchPathAsync(baseUrl, paths),
+    });
     return { result: { matchPath }, inputs: { configFile: cfgPath, baseUrl, paths } };
   } catch (error) {
     logWithLevel(logLevel, "warn", `Warning: Failed to load tsconfig at ${cfgPath}:`, error);
@@ -201,6 +231,104 @@ export async function loadTsconfigResolutionInputsFor(
   logLevel?: LogLevel,
 ): Promise<TsconfigResolutionInputs | undefined> {
   return (await loadTsconfigFor(file, projectRoot, logLevel)).inputs;
+}
+
+/**
+ * The inputs that decide what `matchPath` resolves: the `baseUrl` and `paths` it was made from. Matchers made
+ * from equal inputs share a key. A matcher made elsewhere has a key of its own, so it never shares a result
+ * with one made from a config.
+ */
+export function matchPathScopeKey(matchPath: MatchPathFn | undefined): string {
+  if (!matchPath) return "none";
+  const registered = matchPathResolvers.get(matchPath);
+  if (registered) return registered.scopeKey;
+  let key = anonymousMatchPathKeys.get(matchPath);
+  if (key === undefined) {
+    anonymousMatchPathCount += 1;
+    key = `custom${anonymousMatchPathCount}`;
+    anonymousMatchPathKeys.set(matchPath, key);
+  }
+  return key;
+}
+
+function statIsFileSync(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+/**
+ * The path `matchPath` returns for `spec`: the first candidate under the config's `baseUrl` and `paths` that
+ * is a file inside the project root.
+ *
+ * Inside a build the candidates are answered by the build's probe cache. Outside a build, for a matcher not
+ * made by `loadNearestTsconfigFor`, and for an empty extension list (the library's asynchronous search then
+ * ends on a `package.json` probe and reads past its candidate list), `matchPath` runs as it is.
+ */
+export async function matchMappedSpecifier(
+  matchPath: MatchPathFn,
+  spec: string,
+  projectRoot: string,
+  resolutionExtensions: readonly string[],
+): Promise<string | undefined> {
+  const probes = currentProbeCache();
+  const resolver = matchPathResolvers.get(matchPath);
+  if (!probes || !resolver || !resolutionExtensions.length) {
+    return matchPath(
+      spec,
+      undefined,
+      (candidate: string) => isFilePathWithinRoot(projectRoot, candidate) && statIsFileSync(candidate),
+      resolutionExtensions,
+    );
+  }
+  const { promise, resolve, reject } = Promise.withResolvers<string | undefined>();
+  // A throw inside the library's continuation would otherwise escape as an unhandled rejection.
+  const guard = (continuation: () => void): void => {
+    try {
+      continuation();
+    } catch (error) {
+      reject(toError(error));
+    }
+  };
+  // A candidate outside the project root is rejected without a probe, as the standalone search does.
+  const fileExistsAsync: FileExistsAsync = (candidate, callback) => {
+    const kind = isFilePathWithinRoot(projectRoot, candidate) ? probes.kind(candidate) : Promise.resolve(null);
+    void kind.then((found) => {
+      guard(() => callback(undefined, found === "file"));
+    }, reject);
+  };
+  // `matchPath` reads a package.json with `require` when it exists, and so does this.
+  const readJsonAsync: ReadJsonAsync = (jsonPath, callback) => {
+    void probes.kind(jsonPath).then((kind) => {
+      guard(() => {
+        if (kind === null) {
+          callback();
+          return;
+        }
+        let content: unknown;
+        try {
+          content = requireJson(jsonPath);
+        } catch (error) {
+          callback(toError(error));
+          return;
+        }
+        callback(undefined, content);
+      });
+    }, reject);
+  };
+  guard(() => {
+    resolver.matchAsync(spec, readJsonAsync, fileExistsAsync, resolutionExtensions, (error, found) => {
+      if (error) reject(error);
+      else resolve(found);
+    });
+  });
+  return await promise;
 }
 
 export function clearTsconfigCache(): void {

@@ -46,6 +46,7 @@ import { mapLimit } from "../util/concurrency.js";
 import { pushAll } from "../util/collections.js";
 import { readConfinedUtf8File } from "../util/confined-file.js";
 import { resolveWorkerThreadCount } from "../util/worker-threads.js";
+import { runWithProbeCache } from "../util/fs-probe-cache.js";
 import { logWithLevel } from "../logging.js";
 import { collectGraph } from "../graph-builder.js";
 import { collectEdgesForFile } from "../graph-edge-collector.js";
@@ -1529,7 +1530,17 @@ async function cachedModulesWithMissingTargets(
   return missing;
 }
 
-async function buildIndexFromFileListShared(
+/** Resolution probes read one file system snapshot per build: `runWithProbeCache` gives the build its own cache. */
+function buildIndexFromFileListShared(
+  projectRoot: string,
+  rawFiles: readonly string[],
+  opts?: BuildOptions,
+  helperOpts?: BuildIndexHelperOptions,
+): Promise<ProjectIndex> {
+  return runWithProbeCache(() => buildIndexFromFileListInProbeCache(projectRoot, rawFiles, opts, helperOpts));
+}
+
+async function buildIndexFromFileListInProbeCache(
   projectRoot: string,
   rawFiles: readonly string[],
   opts?: BuildOptions,
@@ -2314,7 +2325,14 @@ async function buildDeclaredScopeIndex(
  * `gitBase`/`gitHead` range. `gitHead` accepts `WORKTREE`, `STAGED`, and `INDEX`
  * sentinels for review-agent workflows that analyze uncommitted changes.
  */
-export async function buildProjectIndexIncremental(
+export function buildProjectIndexIncremental(
+  projectRoot: string,
+  rawOpts?: IncrementalBuildOptions,
+): Promise<ProjectIndex> {
+  return runWithProbeCache(() => buildProjectIndexIncrementalInProbeCache(projectRoot, rawOpts));
+}
+
+async function buildProjectIndexIncrementalInProbeCache(
   projectRoot: string,
   rawOpts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {

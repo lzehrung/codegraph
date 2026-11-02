@@ -2,6 +2,7 @@ import fs, { type BigIntStats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { errorMessage, isMissingPathError } from "./errors.js";
+import { probeRealpath } from "./fs-probe-cache.js";
 
 export async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -381,8 +382,10 @@ export async function readUtf8WithoutBom(filePath: string): Promise<string> {
 export async function isPhysicalPathWithinRoot(projectRoot: string, filePath: string): Promise<boolean> {
   if (!isFilePathWithinRoot(projectRoot, filePath)) return false;
   try {
-    const realRoot = await fsp.realpath(projectRoot);
-    const realCandidate = await fsp.realpath(filePath);
+    const realRoot = await probeRealpath(projectRoot);
+    if (realRoot === null) return false;
+    const realCandidate = await probeRealpath(filePath);
+    if (realCandidate === null) return false;
     return isFilePathWithinRoot(realRoot, realCandidate);
   } catch {
     return false;
