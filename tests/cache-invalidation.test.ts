@@ -53,6 +53,8 @@ import {
   languageDefinitionFingerprintCoverage,
 } from "../src/indexer/build-cache/options.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { BloomFilter } from "../src/util/bloom-filter.js";
+import { BLOOM_FILTER_IDENTIFIER_SOURCE } from "../src/util/identifiers.js";
 import * as resolverEnvironment from "../src/indexer/build-cache/resolver-environment.js";
 
 vi.mock("node:zlib", { spy: true });
@@ -3284,6 +3286,44 @@ describe("Cache invalidation and strict hashing", () => {
     expect(incremental.bloomFilters?.get(normalize(alphaPath))?.mightContain("alphaValue")).toBe(true);
     bloomSpy.mockRestore();
   });
+
+  it("rebuilds the filters that the previous release stored with the callee fused to a Unicode separator", async () => {
+    const root = await mkTmpDir("dg-previous-bloom-tokens-");
+    const apiPath = path.join(root, "api.ts");
+    const usePath = path.join(root, "use.ts");
+    const useSource = 'import { Api } from "./api";\nexport const separated = Api.helper\u00a0("x");\n';
+    await fsp.writeFile(apiPath, "export class Api {\n  static helper(a: string) {\n    return a;\n  }\n}\n", "utf8");
+    await fsp.writeFile(usePath, useSource, "utf8");
+    await buildProjectIndex(root, { threads: 1, cache: "disk", useBloomFilters: true });
+
+    // The previous release stored the token `helper\u00a0` for use.ts and no `helper`, under snapshot version 13 and
+    // bloom sidecar version 4, in both the project snapshot and the sidecar.
+    const previousTokens = new Set(useSource.match(new RegExp(BLOOM_FILTER_IDENTIFIER_SOURCE, "gu")));
+    const previousFilter = BloomFilter.createOptimal(previousTokens.size);
+    for (const token of previousTokens) previousFilter.add(token);
+    expect(previousFilter.mightContain("helper")).toBe(false);
+    const { size, hashCount } = previousFilter.getMetadata();
+    const previousRecord = { size, hashCount, bitsBase64: previousFilter.toBuffer().toString("base64") };
+    const persistPreviousRelease = async (artifactPath: string, version: number): Promise<void> => {
+      const artifact = await readProjectSnapshot(artifactPath);
+      const filters = artifact.bloomFilters as Record<string, unknown>;
+      const key = Object.keys(filters).find((file) => file.endsWith("use.ts"));
+      if (!key) throw new Error(`Expected a persisted filter for use.ts in ${artifactPath}`);
+      artifact.version = version;
+      artifact.bloomFilters = { ...filters, [key]: previousRecord };
+      await writeProjectSnapshot(artifactPath, artifact);
+    };
+    const sidecarPath = path.join(root, ".codegraph", "cache", "index-v1", "bloom-filters.json");
+    await persistPreviousRelease(projectSnapshotPathFor(root), 13);
+    await persistPreviousRelease(sidecarPath, 4);
+
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 1, cache: "disk", useBloomFilters: true });
+
+    expect(rebuilt.bloomFilters?.get(normalize(usePath))?.mightContain("helper")).toBe(true);
+    expect((await readProjectSnapshot(projectSnapshotPathFor(root))).version).toBe(buildCache.PROJECT_SNAPSHOT_VERSION);
+    expect((await readProjectSnapshot(sidecarPath)).version).toBe(buildCache.BLOOM_FILTER_SNAPSHOT_VERSION);
+  });
+
   it("rejects stale snapshot modules after the manifest has advanced", async () => {
     const root = await mkTmpDir("dg-stale-snapshot-modules-");
     const entryPath = path.join(root, "entry.ts");

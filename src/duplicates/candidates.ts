@@ -22,7 +22,7 @@ export type CandidateFilter = {
   pair: PairFilter;
 };
 
-const NO_TARGETS: readonly DuplicateTarget[] = [];
+const NO_TARGETS: ReadonlySet<DuplicateTarget> = new Set<DuplicateTarget>();
 
 export type TargetCandidateFilter = {
   filter: CandidateFilter;
@@ -33,31 +33,32 @@ export type TargetCandidateFilter = {
 /**
  * The filter of a targeted run. Bucket passes ask about the same unit again for every bucket it is in and every pair
  * it forms, so the targets a unit touches are found once per unit, not once per ask. A pair touches a target when
- * either of its units does.
+ * either of its units does. A unit can touch most of the targets (a file target touches every unit of its file), so a
+ * pair is matched against the targets by set membership: the cost of one pair is the number of targets, not the square.
  */
 export function createTargetCandidateFilter(
   targets: readonly DuplicateTarget[],
   touches: (unit: DuplicateInternalUnit, target: DuplicateTarget) => boolean,
 ): TargetCandidateFilter {
-  const touchedByUnit = new WeakMap<DuplicateInternalUnit, readonly DuplicateTarget[]>();
-  const targetsTouchedBy = (unit: DuplicateInternalUnit): readonly DuplicateTarget[] => {
+  const touchedByUnit = new WeakMap<DuplicateInternalUnit, ReadonlySet<DuplicateTarget>>();
+  const targetsTouchedBy = (unit: DuplicateInternalUnit): ReadonlySet<DuplicateTarget> => {
     let touched = touchedByUnit.get(unit);
     if (!touched) {
-      const found = targets.filter((target) => touches(unit, target));
-      touched = found.length ? found : NO_TARGETS;
+      const found = new Set(targets.filter((target) => touches(unit, target)));
+      touched = found.size ? found : NO_TARGETS;
       touchedByUnit.set(unit, touched);
     }
     return touched;
   };
   return {
     filter: {
-      unit: (unit) => targetsTouchedBy(unit).length > 0,
-      pair: (left, right) => targetsTouchedBy(left).length > 0 || targetsTouchedBy(right).length > 0,
+      unit: (unit) => targetsTouchedBy(unit).size > 0,
+      pair: (left, right) => targetsTouchedBy(left).size > 0 || targetsTouchedBy(right).size > 0,
     },
     targetsTouchedByPair: (left, right) => {
       const leftTargets = targetsTouchedBy(left);
       const rightTargets = targetsTouchedBy(right);
-      return targets.filter((target) => leftTargets.includes(target) || rightTargets.includes(target));
+      return targets.filter((target) => leftTargets.has(target) || rightTargets.has(target));
     },
   };
 }

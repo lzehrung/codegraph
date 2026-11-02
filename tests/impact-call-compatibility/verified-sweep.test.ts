@@ -104,6 +104,62 @@ function newDiagnostics(): ImpactDiagnostics {
   };
 }
 
+// Only the member call spells the callee outside its definition: the importers name the class, so the filter of a file
+// holds the callee name only from the callee itself.
+type SeparatorSweepFixture = {
+  language: string;
+  callee: string;
+  definitionFile: string;
+  files: (separator: string) => Record<string, string>;
+  /** Spells another name before the separator, so neither sweep may report it as a callsite of the callee. */
+  decoyFile: string;
+  callsiteFiles: string[];
+};
+
+const SEPARATOR_SWEEP_FIXTURES: SeparatorSweepFixture[] = [
+  {
+    language: "TypeScript",
+    callee: "helper",
+    definitionFile: "api.ts",
+    files: (separator) => ({
+      "api.ts": "export class Api {\n  static helper(a: string, b: number) {\n    return a + b;\n  }\n}\n",
+      "plain.ts": 'import { Api } from "./api";\nexport const plain = Api.helper("x");\n',
+      "separated.ts": `import { Api } from "./api";\nexport const separated = Api.helper${separator}("x");\n`,
+      "decoy.ts": `export class Other {\n  static helperTwo(a: string) {\n    return a;\n  }\n}\nexport const decoy = Other.helperTwo${separator}("x");\n`,
+    }),
+    decoyFile: "decoy.ts",
+    callsiteFiles: ["plain.ts", "separated.ts"],
+  },
+  {
+    language: "C#",
+    callee: "Helper",
+    definitionFile: "Api.cs",
+    files: (separator) => ({
+      "Api.cs": "public class Api {\n  public static string Helper(string a, int b) {\n    return a;\n  }\n}\n",
+      "Plain.cs": 'public class Plain {\n  string v = Api.Helper("x");\n}\n',
+      "Separated.cs": `public class Separated {\n  string v = Api.Helper${separator}("x");\n}\n`,
+      "Decoy.cs": `public class Other {\n  public static string HelperTwo(string a) {\n    return a;\n  }\n}\npublic class Decoy {\n  string v = Other.HelperTwo${separator}("x");\n}\n`,
+    }),
+    decoyFile: "Decoy.cs",
+    callsiteFiles: ["Plain.cs", "Separated.cs"],
+  },
+];
+
+const SEPARATORS: Array<[string, string]> = [
+  ["a no-break space", "\u00a0"],
+  ["a line separator", "\u2028"],
+  ["an ideographic space", "\u3000"],
+];
+
+const SEPARATOR_SWEEP_CASES = SEPARATOR_SWEEP_FIXTURES.flatMap((fixture) =>
+  SEPARATORS.map(([name, separator]): [string, string, SeparatorSweepFixture, string] => [
+    fixture.language,
+    name,
+    fixture,
+    separator,
+  ]),
+);
+
 describe("verified callsite sweeps", () => {
   const roots: string[] = [];
 
@@ -231,4 +287,47 @@ describe("verified callsite sweeps", () => {
       expect.objectContaining({ status: "likely_mismatch", callsiteFile: "main.rb" }),
     ]);
   });
+
+  it.each(SEPARATOR_SWEEP_CASES)(
+    "finds a %s callsite whose callee is followed by %s, as an unfiltered sweep does",
+    async (_language, _name, fixture, separator) => {
+      const sweepCallsites = async (useBloomFilters: boolean): Promise<{ files: string[]; decoyParses: number }> => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-call-compat-sweep-separator-"));
+        roots.push(root);
+        for (const [relative, source] of Object.entries(fixture.files(separator))) {
+          await fsp.writeFile(path.join(root, relative), source, "utf8");
+        }
+        const index = await buildProjectIndex(root, { cache: "memory", useBloomFilters });
+        const module = [...index.byFile.values()].find((entry) => entry.file.endsWith(`/${fixture.definitionFile}`));
+        const callee = module?.locals.find((local) => local.localName === fixture.callee);
+        if (!module || !callee) throw new Error(`Expected a ${fixture.callee} definition in ${fixture.definitionFile}`);
+        const changed: ChangedSymbol = {
+          id: `${module.file}#${fixture.callee}`,
+          file: module.file,
+          name: fixture.callee,
+          kind: callee.kind,
+          exported: true,
+          range: callee.range,
+          signatureChanged: true,
+        };
+        parseRequests.length = 0;
+
+        await attachCallCompatibilityHints(index, [changed], { maxRefs: 10, projectRoot: root });
+
+        return {
+          files: (changed.callCompatibility ?? []).map((hint) => hint.callsiteFile).sort(),
+          decoyParses: parseRequestsFor(fixture.decoyFile),
+        };
+      };
+
+      const unfiltered = await sweepCallsites(false);
+      const filtered = await sweepCallsites(true);
+
+      expect(unfiltered.files).toEqual(fixture.callsiteFiles);
+      expect(filtered.files).toEqual(unfiltered.files);
+      // A filter that held the decoy's own name in place of the callee's rules the decoy out, so it is still never parsed.
+      expect(unfiltered.decoyParses).toBe(1);
+      expect(filtered.decoyParses).toBe(0);
+    },
+  );
 });
