@@ -1312,6 +1312,10 @@ describe("codegraph MCP handlers", () => {
   });
 
   it("does not idle-evict a session holding an open SSE stream", async () => {
+    // Fake only the idle clock and the eviction interval and move them solely through the explicit advance below. On the
+    // real clock the 30 ms idle window could elapse between the initialize response and the SSE GET, so the session was
+    // evicted before the stream opened and the GET answered 400.
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-sse-active-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
     const httpServer = await startCodegraphMcpHttpServer({
@@ -1337,11 +1341,8 @@ describe("codegraph MCP handlers", () => {
       expect(sessionId).toBeTruthy();
       const stream = await openMcpSse(httpServer.url, sessionId ?? "");
       expect(stream.statusCode).toBe(200);
-      // This integration test deliberately waits on the real eviction timer; fake timers do not control an interval
-      // created while the HTTP server is serving real Node requests.
-      const wait = Promise.withResolvers<void>();
-      setTimeout(wait.resolve, 120);
-      await wait.promise;
+      // The stream is open, so every eviction pass in this window must skip the session although it is far past idle.
+      await vi.advanceTimersByTimeAsync(120);
 
       const probe = await postMcpJson(
         httpServer.url,
@@ -1356,6 +1357,8 @@ describe("codegraph MCP handlers", () => {
       await streamClosed.promise;
     } finally {
       await httpServer.close();
+      await fs.rm(root, { recursive: true, force: true });
+      vi.useRealTimers();
     }
   });
 
