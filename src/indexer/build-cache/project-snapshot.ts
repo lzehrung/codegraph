@@ -48,9 +48,12 @@ import { compareCodeUnits } from "../../util/collections.js";
 import { expandStarImports } from "../expand-star-imports.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-export const PROJECT_SNAPSHOT_VERSION = 13;
+// The project snapshot embeds the filters that the bloom sidecar also holds, so a change to how a filter tokenizes
+// source bumps both versions and neither copy of a filter built the old way is reused.
+// Snapshot v14 and bloom sidecar v5: identifier tokens are also stored split at Unicode whitespace.
+export const PROJECT_SNAPSHOT_VERSION = 14;
 const LEGACY_EMBEDDED_MODULE_SNAPSHOT_VERSION = 10;
-export const BLOOM_FILTER_SNAPSHOT_VERSION = 4;
+export const BLOOM_FILTER_SNAPSHOT_VERSION = 5;
 export const BLOOM_FILTER_SNAPSHOT_FILENAME = "bloom-filters.json";
 
 export type BloomFilterSnapshotPayload = {
