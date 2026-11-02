@@ -40,15 +40,22 @@ export function retainedParsedCache(
   return parsedMap;
 }
 
-/** Parsed contexts follow the index lifetime, as scopeCache already retains their syntax trees. */
-const onDemandParsedContexts = new WeakMap<ProjectIndex, Map<string, Promise<ParsedFileContext>>>();
+/** Retain parsed contexts for the index lifetime so query consumers and scopes share one syntax tree. */
+type CachedParsedContext = { promise: Promise<ParsedFileContext>; parsed?: ParsedFileContext };
+const onDemandParsedContexts = new WeakMap<ProjectIndex, Map<string, CachedParsedContext>>();
+
+/** Synchronous owners can reuse a completed shared tree without creating another parser pass. */
+export function cachedParsedContextForIndexSync(index: ProjectIndex, file: string): ParsedFileContext | undefined {
+  const fileKey = fileIdentityKey(file);
+  return index.parsed?.get(fileKey) ?? onDemandParsedContexts.get(index)?.get(fileKey)?.parsed;
+}
 
 /** Read an already retained tree without parsing a file just to check the cache. */
 export function cachedParsedContextForIndex(index: ProjectIndex, file: string): Promise<ParsedFileContext> | undefined {
   const fileKey = fileIdentityKey(file);
   const retained = index.parsed?.get(fileKey);
   if (retained) return ensureParsedContext(file, retained, index.languageExtensions);
-  return onDemandParsedContexts.get(index)?.get(fileKey);
+  return onDemandParsedContexts.get(index)?.get(fileKey)?.promise;
 }
 
 /** Reuse one query-time syntax parse per file, including files loaded from a disk-cached index. */
@@ -67,12 +74,19 @@ export function ensureParsedContextForIndex(
     onDemandParsedContexts.set(index, cache);
   }
   const cached = cache.get(fileKey);
-  if (cached) return cached;
+  if (cached) return cached.promise;
 
   const promise = parsed ? Promise.resolve(parsed) : parseNavigationContext(file, index.languageExtensions);
-  cache.set(fileKey, promise);
-  void promise.catch(() => {
-    if (cache.get(fileKey) === promise) cache.delete(fileKey);
-  });
+  const entry: CachedParsedContext = { promise };
+  if (parsed) entry.parsed = parsed;
+  cache.set(fileKey, entry);
+  void promise.then(
+    (context) => {
+      if (cache.get(fileKey) === entry) entry.parsed = context;
+    },
+    () => {
+      if (cache.get(fileKey) === entry) cache.delete(fileKey);
+    },
+  );
   return promise;
 }

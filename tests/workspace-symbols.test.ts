@@ -2,10 +2,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { buildSymbolGraphDetailed } from "../src/graphs.js";
 import { workspaceSymbolsInSnapshot } from "../src/agent/workspace-symbols.js";
 import { resolveSemanticSymbol } from "../src/agent/semantic-symbols.js";
 import { tool_workspaceSymbols } from "../src/agent-tools.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
+import { buildProjectIndex, findReferences } from "../src/indexer.js";
+import { ensureParsedContextForIndex } from "../src/indexer/parsed-cache.js";
+import {
+  __resetNativeTreeSitterBindingForTests,
+  __setNativeTreeSitterBindingForTests,
+} from "../src/native/tree-sitter-native.js";
+import { loadBinding } from "../src/native/runtime.js";
 import { MAX_WORKSPACE_SYMBOL_LIMIT, workspaceSymbols } from "../src/indexer/workspace-symbols.js";
 import { SymbolKind, type ProjectIndex } from "../src/indexer/types.js";
 import type { AgentProjectSnapshot, AgentSession } from "../src/agent/session.js";
@@ -201,6 +209,97 @@ describe("workspace symbol lookup", () => {
       includeImports: true,
     });
     expect(mismatchedKind.symbols).toEqual([]);
+  });
+
+  it("shares a disk-cached file parse between workspace symbols and references", async () => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "cg-workspace-reference-"));
+    try {
+      const source = path.join(project, "source.ts").replace(/\\/g, "/");
+      const consumer = path.join(project, "consumer.ts").replace(/\\/g, "/");
+      await fs.writeFile(source, "export function first() { return 1; }\nexport function other() { return 2; }\n");
+      await fs.writeFile(consumer, "import { first as localFirst } from './source';\nlocalFirst();\n");
+      const cacheDir = path.join(project, "cache");
+      await buildProjectIndex(project, { cache: "disk", cacheDir });
+      const diskIndex = await buildProjectIndex(project, { cache: "disk", cacheDir });
+      expect(diskIndex.parsed).toBeUndefined();
+
+      const state = loadBinding();
+      if (!state.loaded) throw new Error("Native addon required for workspace/reference reuse test");
+      const originalExtract = state.binding.extractLanguage;
+      const originalParse = state.binding.parseSyntaxTree;
+      if (!originalParse) throw new Error("Native syntax-tree parser required for workspace/reference reuse test");
+      let extractions = 0;
+      const reads = new Map<string, number>();
+      __setNativeTreeSitterBindingForTests({
+        ...state,
+        binding: {
+          ...state.binding,
+          extractLanguage: (text, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+            extractions += 1;
+            return originalExtract(text, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+          },
+          parseSyntaxTree: (text, languageId) => {
+            const file = text.includes("function first()") ? "source" : "consumer";
+            reads.set(file, (reads.get(file) ?? 0) + 1);
+            return originalParse(text, languageId);
+          },
+        },
+      });
+      try {
+        const symbols = await workspaceSymbols(diskIndex, { query: "localFirst", includeImports: true });
+        expect(symbols.symbols.map((symbol) => symbol.name)).toEqual(["localFirst"]);
+        const result = await findReferences(diskIndex, { file: source, line: 1, column: 17 });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.references.some((ref) => ref.file === consumer && ref.range.start.line === 2)).toBe(true);
+          expect(result.references.some((ref) => ref.file === consumer && ref.range.start.line === 3)).toBe(false);
+        }
+        expect(reads.get("source")).toBe(1);
+        expect(reads.get("consumer")).toBe(1);
+        expect(extractions).toBe(0);
+        const parsed = await ensureParsedContextForIndex(diskIndex, consumer);
+        expect(diskIndex.scopeCache.get(fileIdentityKey(consumer))?.allScopes[0]?.node).toBe(parsed.tree.rootNode);
+      } finally {
+        __resetNativeTreeSitterBindingForTests();
+      }
+    } finally {
+      await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("shares the parsed tree with every scope-cache entry across query consumers", async () => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "cg-scope-parsed-identity-"));
+    try {
+      const source = path.join(project, "source.ts").replace(/\\/g, "/");
+      const consumer = path.join(project, "consumer.ts").replace(/\\/g, "/");
+      const decoy = path.join(project, "decoy.ts").replace(/\\/g, "/");
+      await fs.writeFile(source, "export function first() { return 1; }\n");
+      await fs.writeFile(consumer, "import { first as localFirst } from './source';\nlocalFirst();\n");
+      await fs.writeFile(decoy, "export function first() { return 2; }\nfirst();\n");
+      const cacheDir = path.join(project, "cache");
+      await buildProjectIndex(project, { cache: "disk", cacheDir });
+      const diskIndex = await buildProjectIndex(project, { cache: "disk", cacheDir });
+      const symbols = await workspaceSymbols(diskIndex, { query: "localFirst", includeImports: true });
+      expect(symbols.symbols.map((symbol) => symbol.name)).toEqual(["localFirst"]);
+      const refs = await findReferences(diskIndex, { file: source, line: 1, column: 17 });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.some((ref) => ref.file === consumer && ref.range.start.line === 2)).toBe(true);
+        expect(refs.references.some((ref) => ref.file === decoy && ref.range.start.line === 2)).toBe(false);
+      }
+      await buildSymbolGraphDetailed(diskIndex);
+      expect([...diskIndex.scopeCache.keys()].sort()).toEqual(
+        [source, consumer, decoy].map((file) => fileIdentityKey(file)).sort(),
+      );
+      for (const [fileKey, scope] of diskIndex.scopeCache) {
+        const file = diskIndex.byFile.get(fileKey)?.file;
+        if (!file) throw new Error("Scope cache contains a file absent from the project index");
+        const parsed = await ensureParsedContextForIndex(diskIndex, file);
+        expect(scope.allScopes[0]?.node).toBe(parsed.tree.rootNode);
+      }
+    } finally {
+      await fs.rm(project, { recursive: true, force: true });
+    }
   });
 
   it("reports namespace imports as unsupported omissions rather than returning stale handles", async () => {

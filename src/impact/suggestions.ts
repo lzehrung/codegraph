@@ -1,7 +1,7 @@
 import type { FileId, Range } from "../types.js";
 import { type ExportEntry, type ImportBinding, type ModuleIndex, type ProjectIndex } from "../indexer/types.js";
 import { goToDefinition } from "../indexer/navigation.js";
-import { ensureParsedContext } from "../indexer/parse-context.js";
+import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { toRange } from "../util/ast.js";
@@ -70,11 +70,7 @@ export async function collectImpactSuggestions(
       pushUniqueSuggestion(output, seen, suggestion);
     }
 
-    const parsedEntry = await ensureParsedContext(
-      absoluteFile,
-      index.parsed?.get(fileIdentityKey(absoluteFile)),
-      index.languageExtensions,
-    );
+    const parsedEntry = await ensureParsedContextForIndex(index, absoluteFile);
     if (!parsedEntry) continue;
 
     const changedLines = collectChangedLines(fileChange.hunks);

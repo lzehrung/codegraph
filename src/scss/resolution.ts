@@ -1,5 +1,5 @@
 import path from "node:path";
-import { ensureParsedContext } from "../indexer/parse-context.js";
+import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
 import { sameDef } from "../indexer/reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
@@ -200,11 +200,7 @@ export function isScssFile(index: ProjectIndex, file: FileId): boolean {
 
 async function computeFacts(index: ProjectIndex, module: ModuleIndex): Promise<ScssFileFacts | null> {
   try {
-    const parsed = await ensureParsedContext(
-      module.file,
-      index.parsed?.get(fileIdentityKey(module.file)),
-      index.languageExtensions,
-    );
+    const parsed = await ensureParsedContextForIndex(index, module.file);
     if (parsed.sup.id !== SCSS_LANGUAGE_ID) return null;
     return extractScssFacts(parsed.source);
   } catch (error) {
@@ -1879,11 +1875,7 @@ export async function scssScopedCallableRenameSites(
   // proposed name is the callee (`get-function`, `load-css`, ...), folded so `_` matches `-`.
   const nextForm = dynamicFormOf(newName);
   if (nextForm && next !== local.canonical) {
-    const parsed = await ensureParsedContext(
-      current.file,
-      index.parsed?.get(fileIdentityKey(current.file)),
-      index.languageExtensions,
-    );
+    const parsed = await ensureParsedContextForIndex(index, current.file);
     const source = parsed.source;
     const seen = new Set(captured.map((site) => site.range.start.index));
     for (const dynamic of current.facts.dynamics) {
