@@ -27,6 +27,12 @@ const QUERY_INDEX_INLINE_TERM_LIMIT = 128;
  */
 export const QUERY_INDEX_PATH_BATCH_SIZE = 500;
 
+/**
+ * Reading a file's row through its key costs about three times a row of a scan of the whole table, so a read that wants
+ * fewer than a third of the stored files goes through their keys, and a wider one scans the table once.
+ */
+const KEYED_FILE_READ_DIVISOR = 3;
+
 export function codePointLength(value: string): number {
   return Array.from(value).length;
 }
@@ -276,6 +282,13 @@ export class QueryIndexStore {
     }
     return identities;
   }
+
+  /** Whether a read of `wanted` files is narrow enough to go through their keys; see `KEYED_FILE_READ_DIVISOR`. */
+  private wantsFewFiles(wanted: number): boolean {
+    const row = this.db.prepare("SELECT count(*) AS count FROM files").get() as { count?: unknown } | undefined;
+    return typeof row?.count === "number" && wanted * KEYED_FILE_READ_DIVISOR < row.count;
+  }
+
   /**
    * Files whose normalized text plausibly contains at least one of the given terms.
    * ASCII terms of 3+ codepoints use the trigram FTS index; short and non-ASCII
@@ -306,10 +319,20 @@ export class QueryIndexStore {
       }
     }
     if (matchedFileIds.size) {
-      // Paths are read once for every matching file rather than joined to each matching chunk.
-      for (const row of this.db.prepare("SELECT file_id, path FROM files").all() as Array<Record<string, unknown>>) {
-        if (typeof row.file_id === "number" && typeof row.path === "string" && matchedFileIds.has(row.file_id)) {
-          paths.add(row.path);
+      // Paths are read once for the matching files rather than joined to each matching chunk.
+      if (this.wantsFewFiles(matchedFileIds.size)) {
+        // A selective query reads only the rows of the files it matches, through the primary key.
+        const rows = this.db
+          .prepare("SELECT path FROM files WHERE file_id IN (SELECT value FROM json_each(?))")
+          .all(JSON.stringify([...matchedFileIds])) as Array<{ path?: unknown }>;
+        for (const row of rows) {
+          if (typeof row.path === "string") paths.add(row.path);
+        }
+      } else {
+        for (const row of this.db.prepare("SELECT file_id, path FROM files").all() as Array<Record<string, unknown>>) {
+          if (typeof row.file_id === "number" && typeof row.path === "string" && matchedFileIds.has(row.file_id)) {
+            paths.add(row.path);
+          }
         }
       }
     }
@@ -485,8 +508,16 @@ export class QueryIndexStore {
   private planPathBatches(paths: readonly string[]): PathBatchPlan {
     const batchesOfPath = pathBatches(paths, QUERY_INDEX_PATH_BATCH_SIZE);
     const fileIdsOfBatch = new Map<number, number[]>();
-    // Stored files come in the order SQLite sorts their paths in, which is the order a batch reads its files in.
-    const stored = this.db.prepare("SELECT file_id, path FROM files ORDER BY path").raw().all() as unknown[][];
+    // Stored files come in the order SQLite sorts their paths in, which is the order a batch reads its files in. A
+    // narrow search reads only the rows of the files it lists, through the path index.
+    const stored = (
+      this.wantsFewFiles(batchesOfPath.size)
+        ? this.db
+            .prepare("SELECT file_id, path FROM files WHERE path IN (SELECT value FROM json_each(?)) ORDER BY path")
+            .raw()
+            .all(JSON.stringify([...batchesOfPath.keys()]))
+        : this.db.prepare("SELECT file_id, path FROM files ORDER BY path").raw().all()
+    ) as unknown[][];
     for (const [fileId, path] of stored) {
       if (typeof fileId !== "number" || typeof path !== "string") continue;
       for (const batch of batchesOfPath.get(path) ?? []) {

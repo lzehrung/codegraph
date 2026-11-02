@@ -1468,9 +1468,9 @@ describe("persistent query index", () => {
     return { keys: [...candidates], lowerBound };
   }
 
-  /** The corpus of the batch tests: every file holds `alpha`, every third file `beta`, and every fifth both words. */
-  function batchCorpus(): { files: PlantedFile[]; paths: string[] } {
-    const files: PlantedFile[] = Array.from({ length: 1201 }, (_, index) => {
+  /** Files that each hold `alpha`, every third also `beta`, and every fifth both words. */
+  function alphaBetaFiles(count: number): PlantedFile[] {
+    return Array.from({ length: count }, (_, index) => {
       const name = String(index).padStart(4, "0");
       return {
         path: `src/f${name}.ts`,
@@ -1481,6 +1481,11 @@ describe("persistent query index", () => {
         ],
       };
     });
+  }
+
+  /** The corpus of the batch tests: three batches of eligible files. */
+  function batchCorpus(): { files: PlantedFile[]; paths: string[] } {
+    const files = alphaBetaFiles(1201);
     // The first batch holds the highest paths, a path the store does not hold is skipped, and the first path is listed
     // again in the last batch.
     const paths = files.map((file) => file.path).reverse();
@@ -1489,10 +1494,41 @@ describe("persistent query index", () => {
     return { files, paths };
   }
 
-  /** Checks every query and cap of the batch tests against the reference. */
-  function expectBatchedReads(store: QueryIndexStore, files: readonly PlantedFile[], paths: readonly string[]): void {
-    // Three batches of eligible files.
-    expect(Math.ceil(paths.length / QUERY_INDEX_PATH_BATCH_SIZE)).toBe(3);
+  /**
+   * The corpus of the narrow batch test: a search that lists a quarter of 2,400 files, which is few enough to read
+   * only their rows and enough for two batches. It lists the highest paths first, a path the store does not hold, and
+   * the first path again.
+   */
+  function narrowCorpus(): { files: PlantedFile[]; paths: string[] } {
+    const files = alphaBetaFiles(2400);
+    const paths = files
+      .filter((_, index) => index % 4 === 0)
+      .map((file) => file.path)
+      .reverse();
+    paths.splice(3, 0, "src/not-indexed.ts");
+    paths.push(paths[0]!);
+    return { files, paths };
+  }
+
+  /** 300 files that each hold `common words`, two of which also hold the rare word `zebra`. */
+  function selectiveCorpus(): PlantedFile[] {
+    return Array.from({ length: 300 }, (_, index) => {
+      const name = String(index).padStart(3, "0");
+      const rare = index === 7 || index === 250;
+      return {
+        path: `src/f${name}.ts`,
+        chunks: rare ? [`common words ${name}`, `zebra crossing ${name}`] : [`common words ${name}`],
+      };
+    });
+  }
+
+  /** Checks every query at every cap against the reference. Returns the lower bounds the reference had. */
+  function expectQueriesToMatchReference(
+    store: QueryIndexStore,
+    files: readonly PlantedFile[],
+    paths: readonly string[],
+    limits: readonly number[],
+  ): Set<boolean> {
     const seenLowerBounds = new Set<boolean>();
     const queries: Array<{ terms: string[]; phrase: string }> = [
       { terms: ["alpha"], phrase: "alpha" },
@@ -1500,7 +1536,7 @@ describe("persistent query index", () => {
       { terms: ["alpha", "beta"], phrase: "alpha beta" },
     ];
     for (const { terms, phrase } of queries) {
-      for (const limit of [1, 2, 499, 500, 501, 1000, 1201, 2500]) {
+      for (const limit of limits) {
         const expected = batchedReference(files, terms, paths, phrase, limit);
         const actual = store.candidateChunkRetrievalForTerms(terms, paths, phrase, limit);
         const label = `${terms.join(" ")} limit ${limit}`;
@@ -1512,7 +1548,15 @@ describe("persistent query index", () => {
         seenLowerBounds.add(expected.lowerBound);
       }
     }
-    expect(seenLowerBounds).toEqual(new Set([true, false]));
+    return seenLowerBounds;
+  }
+
+  /** Checks every query and cap of the batch tests against the reference. */
+  function expectBatchedReads(store: QueryIndexStore, files: readonly PlantedFile[], paths: readonly string[]): void {
+    // Three batches of eligible files.
+    expect(Math.ceil(paths.length / QUERY_INDEX_PATH_BATCH_SIZE)).toBe(3);
+    const limits = [1, 2, 499, 500, 501, 1000, 1201, 2500];
+    expect(expectQueriesToMatchReference(store, files, paths, limits)).toEqual(new Set([true, false]));
 
     // With a cap of one, the chunk kept is the first of the first batch (f1200 down to f0702, in path order), not the
     // first path overall (f0000, which sits in the last batch).
@@ -1665,6 +1709,43 @@ describe("persistent query index", () => {
     }
   }
 
+  /**
+   * Runs `run` while counting the rows that statements reading the `files` table hand back with `all()`: the rows the
+   * file lookups of a search read, which a selective search should keep to the files it matches or lists.
+   */
+  async function countFileRows<T>(run: () => Promise<T> | T): Promise<{ result: T; fileRows: number }> {
+    let fileRows = 0;
+    const sqlOf = new WeakMap<SqliteStatement, string>();
+    const prepare = SqliteDatabase.prototype.prepare;
+    const raw = SqliteStatement.prototype.raw;
+    const all = SqliteStatement.prototype.all;
+    vi.spyOn(SqliteDatabase.prototype, "prepare").mockImplementation(function (this: SqliteDatabase, sql: string) {
+      const statement = prepare.call(this, sql);
+      sqlOf.set(statement, sql);
+      return statement;
+    });
+    vi.spyOn(SqliteStatement.prototype, "raw").mockImplementation(function (this: SqliteStatement) {
+      const rawStatement = raw.call(this);
+      const sql = sqlOf.get(this);
+      if (sql !== undefined) sqlOf.set(rawStatement, sql);
+      return rawStatement;
+    });
+    vi.spyOn(SqliteStatement.prototype, "all").mockImplementation(function (
+      this: SqliteStatement,
+      ...params: Parameters<SqliteStatement["all"]>
+    ) {
+      const rows = all.apply(this, params);
+      if (/\bFROM files\b/.test(sqlOf.get(this) ?? "")) fileRows += rows.length;
+      return rows;
+    });
+    try {
+      const result = await run();
+      return { result, fileRows };
+    } finally {
+      vi.restoreAllMocks();
+    }
+  }
+
   it("hands back only the cap, the row past it and a row that proves the order, however many chunks match", async () => {
     const root = await createRepo();
     const store = new QueryIndexStore(path.join(root, "query-bounded-read.sqlite"));
@@ -1770,6 +1851,161 @@ describe("persistent query index", () => {
     } finally {
       store.close();
     }
+  });
+
+  it("keeps the batches, caps and order when a narrow search reads only the rows of the files it lists", async () => {
+    const root = await createRepo();
+    const { files, paths } = narrowCorpus();
+    // Two batches of 500 and 102 listed paths over 2,400 stored files: a quarter of them is few enough to be read by
+    // their keys. The files are stored from the highest path down, so their ids run against the order of their paths and
+    // a read that sorts them by id instead of by path would put the chunks in the wrong place.
+    expect(Math.ceil(paths.length / QUERY_INDEX_PATH_BATCH_SIZE)).toBe(2);
+    const read = (name: string): number => {
+      const store = new QueryIndexStore(path.join(root, `query-${name}.sqlite`));
+      try {
+        store.replaceFiles(
+          [...files].reverse().map((file) => preparedFile(file.path, file.chunks)),
+          [],
+          COMPACT_METADATA(name),
+        );
+        const limits = [1, 2, 499, 500, 501, 600, 2500];
+        expect(expectQueriesToMatchReference(store, files, paths, limits)).toEqual(new Set([true, false]));
+        return store.readOrderFallbacks;
+      } finally {
+        store.close();
+      }
+    };
+    expect(read("narrow-normal")).toBe(0);
+    expect(withReversedUnorderedSelects(() => read("narrow-reversed"))).toBeGreaterThan(0);
+  });
+
+  it("reads only the rows of the files a selective query matches", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-selective-files.sqlite"));
+    const files = selectiveCorpus();
+    try {
+      store.replaceFiles(
+        files.map((file) => preparedFile(file.path, file.chunks)),
+        [],
+        COMPACT_METADATA("selective-files"),
+      );
+      const eligible = store.eligibleFilePaths(["zebra"]);
+      expect(eligible).toEqual(["src/f007.ts", "src/f250.ts"]);
+      const expected = batchedReference(files, ["zebra"], eligible, "zebra", 8000);
+      expect(expected.keys).toEqual(["src/f007.ts#1", "src/f250.ts#1"]);
+
+      const { result, fileRows } = await countFileRows(() => findQueryIndexChunkCandidates(store, ["zebra"]));
+      expect(result.candidates.map((candidate) => `${candidate.path}#${candidate.ordinal}`)).toEqual(expected.keys);
+      // The path of each of the two matching files is read once, and the read of the chunks looks each of them up once
+      // more, where the old reads took all 300 stored rows both times.
+      expect(fileRows).toBe(4);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("reads only the row of the file a search is scoped to", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-scoped-file.sqlite"));
+    const files = selectiveCorpus();
+    try {
+      store.replaceFiles(
+        files.map((file) => preparedFile(file.path, file.chunks)),
+        [],
+        COMPACT_METADATA("scoped-file"),
+      );
+      const expected = batchedReference(files, ["common"], ["src/f123.ts"], "common", 8000);
+      expect(expected.keys).toEqual(["src/f123.ts#0"]);
+      const scoped = await countFileRows(() =>
+        store.candidateChunkRetrievalForTerms(["common"], ["src/f123.ts"], "common"),
+      );
+      expect(scoped.result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`)).toEqual(expected.keys);
+      expect(scoped.fileRows).toBe(1);
+
+      // A path the store does not hold costs no file row at all.
+      const missing = await countFileRows(() =>
+        store.candidateChunkRetrievalForTerms(["common"], ["src/missing.ts"], "common"),
+      );
+      expect(missing.result.chunks).toEqual([]);
+      expect(missing.fileRows).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("finds a listed file by its exact path, however the path is spelled", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-awkward-paths.sqlite"));
+    // Twelve different files: a space, a quote, a backslash, a newline, `%`, an apostrophe, two cases, a composed and a
+    // decomposed accent, CJK and an emoji. Twenty-four more keep a search that lists a few of them narrow.
+    const awkward = [
+      "src/a b.ts",
+      'src/quote"d.ts',
+      "src/back\\slash.ts",
+      "src/new\nline.ts",
+      "src/percent%20.ts",
+      "src/it's.ts",
+      "src/UPPER.ts",
+      "src/upper.ts",
+      "src/caf\u00e9.ts",
+      "src/cafe\u0301.ts",
+      "src/\u65e5\u672c.ts",
+      "src/emoji-\u{1f600}.ts",
+    ];
+    const filler = Array.from({ length: 24 }, (_, index) => `src/filler${String(index).padStart(2, "0")}.ts`);
+    const files: PlantedFile[] = [...awkward, ...filler].map((filePath) => ({
+      path: filePath,
+      chunks: [`shared words in ${filePath}`],
+    }));
+    try {
+      store.replaceFiles(
+        files.map((file) => preparedFile(file.path, file.chunks)),
+        [],
+        COMPACT_METADATA("awkward-paths"),
+      );
+      // Listing a file reads that file and no other, so `UPPER` does not bring `upper` and a composed accent does not
+      // bring the decomposed one.
+      for (const listedPath of awkward) {
+        const expected = batchedReference(files, ["shared"], [listedPath], "shared", 8000);
+        expect(expected.keys, listedPath).toEqual([`${listedPath}#0`]);
+        const { result, fileRows } = await countFileRows(() =>
+          store.candidateChunkRetrievalForTerms(["shared"], [listedPath], "shared"),
+        );
+        expect(
+          result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`),
+          listedPath,
+        ).toEqual(expected.keys);
+        expect(fileRows, listedPath).toBe(1);
+      }
+
+      // Several at once, out of order, with a path the store does not hold: the chunks come in path order.
+      const listed = [awkward[9]!, "src/missing.ts", awkward[0]!, awkward[3]!, awkward[7]!, awkward[8]!];
+      const expected = batchedReference(files, ["shared"], listed, "shared", 8000);
+      expect(expected.keys).toHaveLength(5);
+      const together = await countFileRows(() => store.candidateChunkRetrievalForTerms(["shared"], listed, "shared"));
+      expect(together.result.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`)).toEqual(expected.keys);
+      expect(together.fileRows).toBe(5);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("reads only the files a text search matches, however many files the project holds", async () => {
+    const root = await createRepo();
+    await Promise.all(
+      Array.from({ length: 40 }, (_, index) =>
+        fs.writeFile(path.join(root, "src", `gen${index}.ts`), `export const value${index} = 'filler ${index}';\n`),
+      ),
+    );
+    await fs.writeFile(path.join(root, "src", "rare.ts"), "export const zebraCrossing = 'zebra unique marker';\n");
+    const session = createSession(root);
+    // The first search builds the sidecar. The second is a new query, which the session cannot answer from its cache.
+    await search(session, root, "filler", "text");
+    const { result, fileRows } = await countFileRows(() => search(session, root, "zebra", "text"));
+    expect(result.results.map((entry) => entry.file)).toContain("src/rare.ts");
+    // One row for the path of the matching file and one for the lookup of the read, where the old reads took every
+    // stored file both times.
+    expect(fileRows).toBe(2);
   });
 
   it("reads only the eligible files for a term the trigram index cannot answer", async () => {
