@@ -7,6 +7,7 @@ import {
   MAX_FILE_VIEW_LINES,
 } from "../agent/file-view.js";
 import { MAX_GRAPH_DEPTH } from "../agent/search.js";
+import { MAX_CALL_HIERARCHY_DEPTH } from "../indexer/call-hierarchy.js";
 import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../indexer/workspace-symbols.js";
 import { SymbolKind } from "../indexer/types.js";
 
@@ -22,7 +23,7 @@ export const MAX_TYPE_HIERARCHY_LIMIT = 500;
 export const MAX_TYPE_HIERARCHY_DEPTH = 10;
 export const DEFAULT_CALL_HIERARCHY_LIMIT = 25;
 export const MAX_CALL_HIERARCHY_LIMIT = 500;
-export const MAX_CALL_HIERARCHY_DEPTH = 5;
+export { MAX_CALL_HIERARCHY_DEPTH };
 
 type ToolInputSchemaProperties = NonNullable<Tool["inputSchema"]["properties"]>;
 

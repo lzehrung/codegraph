@@ -1,5 +1,6 @@
 import { findCallees, findCallers, type CallHierarchyResponse } from "../agent/call-hierarchy.js";
 import { formatSemanticSymbol, type SemanticLocation } from "../agent/semantic.js";
+import { MAX_CALL_HIERARCHY_DEPTH } from "../indexer/call-hierarchy.js";
 import { exitWithError, type CliAgentCommandContext } from "./context.js";
 import { CALLEES_HELP_TEXT, CALLERS_HELP_TEXT } from "./help.js";
 import { parseBoundedIntegerOption } from "./options.js";
@@ -7,7 +8,6 @@ import { parseBoundedIntegerOption } from "./options.js";
 export type CallHierarchyCommandContext = CliAgentCommandContext;
 
 const DEFAULT_CALL_HIERARCHY_DEPTH = 1;
-const MAX_CALL_HIERARCHY_DEPTH = 5;
 const DEFAULT_CALL_HIERARCHY_LIMIT = 100;
 const MAX_CALL_HIERARCHY_LIMIT = 500;
 

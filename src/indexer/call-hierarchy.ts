@@ -60,7 +60,8 @@ const CALL_HIERARCHY_CACHE = new WeakMap<SymbolGraph, CallHierarchyIndex>();
 const DEFAULT_CALL_HIERARCHY_LIMIT = 100;
 const MAX_CALL_HIERARCHY_LIMIT = 500;
 const DEFAULT_CALLSITE_LIMIT = 50;
-const MAX_CALL_HIERARCHY_DEPTH = 5;
+/** Deepest transitive caller or callee level `findCallHierarchy` visits; the CLI and MCP bounds come from here. */
+export const MAX_CALL_HIERARCHY_DEPTH = 15;
 
 export function findCallHierarchy(
   graph: SymbolGraph,
