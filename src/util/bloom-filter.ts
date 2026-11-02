@@ -72,8 +72,10 @@ export class BloomFilter {
    * Add an item to the bloom filter
    */
   add(item: string): void {
+    const digest = BloomFilter.digestOf(item);
     // Set all bits first, only increment count if all operations succeed
-    for (const hash of this.getHashes(item)) {
+    for (let round = 0; round < this.hashCount; round++) {
+      const hash = this.bitPosition(digest, round);
       const byteIndex = Math.floor(hash / 8);
       const bitIndex = hash % 8;
       if (byteIndex < 0 || byteIndex >= this.bits.length) return;
@@ -105,7 +107,21 @@ export class BloomFilter {
    * Returns false if definitely not present, true if might be present
    */
   mightContain(item: string): boolean {
-    for (const hash of this.getHashes(item)) {
+    return this.mightContainDigest(BloomFilter.digestOf(item));
+  }
+
+  /**
+   * The digest every bit position of an item derives from. Hash an item once with this, then probe
+   * any number of filters of any size with `mightContainDigest`.
+   */
+  static digestOf(item: string): Buffer {
+    return crypto.createHash("sha256").update(item).digest();
+  }
+
+  /** The answer of `mightContain` for an item given by its `digestOf` digest. */
+  mightContainDigest(digest: Buffer): boolean {
+    for (let round = 0; round < this.hashCount; round++) {
+      const hash = this.bitPosition(digest, round);
       const byteIndex = Math.floor(hash / 8);
       const bitIndex = hash % 8;
       if (byteIndex < 0 || byteIndex >= this.bits.length) return false;
@@ -118,18 +134,11 @@ export class BloomFilter {
   }
 
   /**
-   * Generate multiple hash values for an item
+   * Bit position of one hash round: a single digest supplies every round with a different 4-byte segment.
    */
-  private *getHashes(item: string): Generator<number> {
-    // Use a single hash and derive multiple values from it
-    const hash = crypto.createHash("sha256").update(item).digest();
-
-    for (let i = 0; i < this.hashCount; i++) {
-      // Take different 4-byte segments of the hash
-      const offset = (i * 4) % (hash.length - 4);
-      const value = hash.readUInt32LE(offset);
-      yield value % this.size;
-    }
+  private bitPosition(digest: Buffer, round: number): number {
+    const offset = (round * 4) % (digest.length - 4);
+    return digest.readUInt32LE(offset) % this.size;
   }
 
   /**
@@ -165,6 +174,17 @@ export class BloomFilter {
   getMetadata(): { size: number; hashCount: number } {
     return { size: this.size, hashCount: this.hashCount };
   }
+}
+
+const WHOLE_IDENTIFIER_TOKEN_PATTERN = new RegExp(`^${BLOOM_FILTER_IDENTIFIER_SOURCE}$`, "u");
+
+/**
+ * Whether `text` is one whole token of the alphabet `buildBloomFilterFromSource` splits source into.
+ * Only such text is stored as written: a filter holds a Ruby `empty?`, a C++ `operator()`, or a Rust
+ * `r#type` as its separate tokens, so a probe for the whole text can miss a file that spells it.
+ */
+export function isBloomIdentifierToken(text: string): boolean {
+  return WHOLE_IDENTIFIER_TOKEN_PATTERN.test(text);
 }
 
 /**

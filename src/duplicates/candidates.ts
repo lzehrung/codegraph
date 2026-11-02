@@ -4,6 +4,7 @@ import { normalizeDetectionFile } from "./units.js";
 import type {
   DuplicateInternalUnit,
   DuplicateSimilarityHint,
+  DuplicateTarget,
   PairEvidence,
   PairFilter,
   PreparedDuplicateBuckets,
@@ -20,6 +21,46 @@ export type CandidateFilter = {
   unit: UnitFilter;
   pair: PairFilter;
 };
+
+const NO_TARGETS: readonly DuplicateTarget[] = [];
+
+export type TargetCandidateFilter = {
+  filter: CandidateFilter;
+  /** The targets that either unit of a pair touches, in the order the run was given them. */
+  targetsTouchedByPair: (left: DuplicateInternalUnit, right: DuplicateInternalUnit) => DuplicateTarget[];
+};
+
+/**
+ * The filter of a targeted run. Bucket passes ask about the same unit again for every bucket it is in and every pair
+ * it forms, so the targets a unit touches are found once per unit, not once per ask. A pair touches a target when
+ * either of its units does.
+ */
+export function createTargetCandidateFilter(
+  targets: readonly DuplicateTarget[],
+  touches: (unit: DuplicateInternalUnit, target: DuplicateTarget) => boolean,
+): TargetCandidateFilter {
+  const touchedByUnit = new WeakMap<DuplicateInternalUnit, readonly DuplicateTarget[]>();
+  const targetsTouchedBy = (unit: DuplicateInternalUnit): readonly DuplicateTarget[] => {
+    let touched = touchedByUnit.get(unit);
+    if (!touched) {
+      const found = targets.filter((target) => touches(unit, target));
+      touched = found.length ? found : NO_TARGETS;
+      touchedByUnit.set(unit, touched);
+    }
+    return touched;
+  };
+  return {
+    filter: {
+      unit: (unit) => targetsTouchedBy(unit).length > 0,
+      pair: (left, right) => targetsTouchedBy(left).length > 0 || targetsTouchedBy(right).length > 0,
+    },
+    targetsTouchedByPair: (left, right) => {
+      const leftTargets = targetsTouchedBy(left);
+      const rightTargets = targetsTouchedBy(right);
+      return targets.filter((target) => leftTargets.includes(target) || rightTargets.includes(target));
+    },
+  };
+}
 
 export type CandidatePairOptions = {
   maxBucketSize: number;

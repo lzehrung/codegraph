@@ -1,15 +1,16 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_MAX_CANDIDATE_PAIRS } from "../src/duplicates/scoring.js";
 import {
   buildCandidatePairs,
+  createTargetCandidateFilter,
   prepareDuplicateCandidateBuckets,
   type CandidateFilter,
   type CandidatePairResult,
 } from "../src/duplicates/candidates.js";
-import type { DuplicateInternalUnit, PairEvidence } from "../src/duplicates/types.js";
+import type { DuplicateInternalUnit, DuplicateTarget, PairEvidence } from "../src/duplicates/types.js";
 import { buildInternalUnit } from "../src/duplicates/units.js";
 import {
   findDuplicateContextsWithPreparedAnalysis,
@@ -888,6 +889,73 @@ describe("duplicate candidate pairs", () => {
       expect(pairOf(result, "kept")).toMatchObject({ rawHash: true, signature: true, signatureMatches: 2 });
       expect(result.skippedPairs).toBe(1);
     });
+  });
+});
+
+describe("createTargetCandidateFilter", () => {
+  // Forty-four units in eleven files, whose ten-line ranges overlap their neighbours' within a file.
+  const units = makeVariedUnits(11, "none", "shared");
+  const files = [...new Set(units.map((unit) => unit.file))];
+  const targets: DuplicateTarget[] = [
+    { file: files[0]! },
+    { file: files[1]!, startLine: 1, endLine: 3 },
+    { file: files[2]!, startLine: 40, endLine: 50 },
+    // The same target twice: a pair that touches it reports both.
+    { file: files[0]! },
+    { file: "src/untouched.ts" },
+  ];
+  const touches = (unit: DuplicateInternalUnit, target: DuplicateTarget): boolean =>
+    unit.file === target.file &&
+    (target.startLine === undefined ||
+      (unit.startLine <= (target.endLine ?? target.startLine) && unit.endLine >= target.startLine));
+
+  test("answers like a direct check of every target", () => {
+    const { filter, targetsTouchedByPair } = createTargetCandidateFilter(targets, touches);
+
+    expect(units.some((unit) => targets.some((target) => touches(unit, target)))).toBe(true);
+    expect(units.some((unit) => !targets.some((target) => touches(unit, target)))).toBe(true);
+    for (const left of units) {
+      expect(filter.unit(left)).toBe(targets.some((target) => touches(left, target)));
+      for (const right of units) {
+        const touched = targets.filter((target) => touches(left, target) || touches(right, target));
+        expect(filter.pair(left, right)).toBe(touched.length > 0);
+        expect(targetsTouchedByPair(left, right)).toEqual(touched);
+      }
+    }
+  });
+
+  test("asks whether a unit touches a target once, however often the unit is filtered", () => {
+    const spy = vi.fn(touches);
+    const { filter, targetsTouchedByPair } = createTargetCandidateFilter(targets, spy);
+
+    for (let round = 0; round < 3; round++) {
+      for (const left of units) {
+        filter.unit(left);
+        for (const right of units) {
+          filter.pair(left, right);
+          targetsTouchedByPair(left, right);
+        }
+      }
+    }
+
+    expect(spy).toHaveBeenCalledTimes(units.length * targets.length);
+  });
+
+  test("keeps the pairs of a plain filter while asking once per unit across all the buckets it is in", async () => {
+    const plain: CandidateFilter = {
+      unit: (unit) => targets.some((target) => touches(unit, target)),
+      pair: (left, right) => targets.some((target) => touches(left, target) || touches(right, target)),
+    };
+    const spy = vi.fn(touches);
+    const { filter } = createTargetCandidateFilter(targets, spy);
+    const options = { maxBucketSize: 200, maxCandidatePairs: 1_000_000, crossFileOnly: false };
+
+    const expected = await buildCandidatePairs(prepareDuplicateCandidateBuckets(units), { ...options, filter: plain });
+    const actual = await buildCandidatePairs(prepareDuplicateCandidateBuckets(units), { ...options, filter });
+
+    expect(expected.pairs.size).toBeGreaterThan(0);
+    expect([...describePairs(actual.pairs)]).toEqual([...describePairs(expected.pairs)]);
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(units.length * targets.length);
   });
 });
 

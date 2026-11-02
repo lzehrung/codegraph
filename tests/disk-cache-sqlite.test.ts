@@ -13,13 +13,20 @@ import {
 } from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
 import {
+  DUPLICATE_UNIT_CACHE_MAX_ROWS,
+  DUPLICATE_UNIT_CACHE_MIN_ROWS,
   DUPLICATE_UNIT_CACHE_VERSION,
+  closeDuplicateUnitCacheForIndex,
+  duplicateUnitCacheRowLimit,
+  duplicateUnitDiskCache,
+  maintainDuplicateUnitDiskCache,
   tryLoadDuplicateUnitsFromCache,
   writeDuplicateUnitsBatchToCache,
   writeDuplicateUnitsToCache,
 } from "../src/duplicates/unit-cache.js";
 import { buildInternalUnit, formatDuplicateSqlHandle, formatDuplicateSymbolHandle } from "../src/duplicates/units.js";
 import * as buildCache from "../src/indexer/build-cache.js";
+import type { ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
 import { MANIFEST_VERSION, type IndexManifest } from "../src/indexer/build-cache/manifest.js";
 import { SqliteDatabase, SqliteStatement } from "../src/sqlite-driver.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
@@ -637,10 +644,13 @@ describe("disk cache uses sqlite backend", () => {
     ).toBe(0);
   });
 
-  it("enforces the duplicate cache row cap after analysis writes", async () => {
+  it("keeps a small project's duplicate cache to the minimum row limit after analysis writes", async () => {
     const root = await mkTmpDir("dg-disk-cache-cap-duplicates-");
     await writeDuplicateProject(root);
     const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    // The limit follows the project size, so a project of two files stays at the floor the fixed limit used to be.
+    const rowLimit = duplicateUnitCacheRowLimit(index.byFile.size);
+    expect(rowLimit).toBe(DUPLICATE_UNIT_CACHE_MIN_ROWS);
     await findDuplicates(index, { minConfidence: "high", limit: 5 });
     closeDuplicateUnitCacheDatabase(root);
     const db = new DatabaseSync(duplicateCacheDbPath(root));
@@ -649,7 +659,7 @@ describe("disk cache uses sqlite backend", () => {
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
     db.exec("BEGIN");
-    for (let row = 0; row < 5_001; row++) {
+    for (let row = 0; row <= rowLimit; row++) {
       insert.run(
         normalizePathForSql(path.join(root, "src", "a.ts"), root),
         `seed-${row}`,
@@ -664,14 +674,85 @@ describe("disk cache uses sqlite backend", () => {
 
     await findDuplicates(index, { minConfidence: "high", limit: 5 });
 
-    expect(readRowCount(duplicateCacheDbPath(root), "SELECT COUNT(*) AS count FROM duplicate_unit_cache")).toBe(5_000);
+    expect(readRowCount(duplicateCacheDbPath(root), "SELECT COUNT(*) AS count FROM duplicate_unit_cache")).toBe(
+      rowLimit,
+    );
     expect(
       readRowCount(
         duplicateCacheDbPath(root),
         "SELECT COUNT(*) AS count FROM duplicate_unit_cache WHERE variant = ?",
-        "seed-5000",
+        `seed-${rowLimit}`,
       ),
     ).toBe(1);
+  });
+
+  it("sizes the duplicate cache row limit to cover the project, between a floor and a ceiling", () => {
+    expect(duplicateUnitCacheRowLimit(0)).toBe(DUPLICATE_UNIT_CACHE_MIN_ROWS);
+    expect(duplicateUnitCacheRowLimit(DUPLICATE_UNIT_CACHE_MIN_ROWS)).toBeGreaterThan(DUPLICATE_UNIT_CACHE_MIN_ROWS);
+    // Every file of a project of this size has a row, with room left over for rows of another variant.
+    expect(duplicateUnitCacheRowLimit(11_718)).toBeGreaterThan(11_718);
+    expect(duplicateUnitCacheRowLimit(DUPLICATE_UNIT_CACHE_MAX_ROWS)).toBe(DUPLICATE_UNIT_CACHE_MAX_ROWS);
+    expect(duplicateUnitCacheRowLimit(10 * DUPLICATE_UNIT_CACHE_MAX_ROWS)).toBe(DUPLICATE_UNIT_CACHE_MAX_ROWS);
+  });
+
+  it("keeps the cached units of every file of a project larger than the former fixed row cap", async () => {
+    const root = await mkTmpDir("dg-disk-cache-large-duplicates-");
+    await writeDuplicateProject(root);
+    const smallIndex = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const template = [...smallIndex.byFile.values()][0];
+    if (!template) throw new Error("Expected an indexed file");
+    const files = Array.from({ length: DUPLICATE_UNIT_CACHE_MIN_ROWS + 100 }, (_, at) =>
+      normalizePathForSql(path.join(root, "src", `generated${at}.ts`)),
+    );
+    const generatedModules = files.map((file): [string, ModuleIndex] => [
+      fileIdentityKey(file),
+      { ...template, file, locals: [] },
+    ]);
+    const index: ProjectIndex = {
+      ...smallIndex,
+      byFile: new Map<string, ModuleIndex>([...smallIndex.byFile, ...generatedModules]),
+    };
+    const variant = "large-project";
+    const sourceOf = (file: string): string => `export const where = ${JSON.stringify(file)};\n`;
+
+    // A first analysis misses every file and stores each one, in the slices collectDuplicateUnits writes them in.
+    for (let start = 0; start < files.length; start += 25) {
+      const writes = files
+        .slice(start, start + 25)
+        .map((file) => ({ file, variant, units: [], source: sourceOf(file) }));
+      writeDuplicateUnitsBatchToCache(index, writes, root);
+    }
+    const db = duplicateUnitDiskCache(index)?.db;
+    if (!db) throw new Error("Expected an open duplicate-unit cache database");
+    // Rows of an earlier variant that no longer have a use, older than anything the analysis wrote.
+    const insertStale = db.prepare(
+      `INSERT INTO duplicate_unit_cache(file, variant, sig, version, payload, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    db.transaction(() => {
+      for (let row = 0; row < 6_000; row++) {
+        insertStale.run(
+          `src/stale${row}.ts`,
+          "stale",
+          "old",
+          DUPLICATE_UNIT_CACHE_VERSION,
+          "[]",
+          Date.now() - 60_000 + row,
+        );
+      }
+    })();
+
+    maintainDuplicateUnitDiskCache(index);
+    const misses = files.filter(
+      (file) => tryLoadDuplicateUnitsFromCache(index, file, variant, root, sourceOf(file)) === null,
+    );
+    closeDuplicateUnitCacheForIndex(index);
+
+    expect(files.length).toBeGreaterThan(DUPLICATE_UNIT_CACHE_MIN_ROWS);
+    expect(misses).toEqual([]);
+    expect(readRowCount(duplicateCacheDbPath(root), "SELECT COUNT(*) AS count FROM duplicate_unit_cache")).toBe(
+      duplicateUnitCacheRowLimit(index.byFile.size),
+    );
   });
 
   it("compresses duplicate cache payloads and drops fields unused after construction", async () => {
@@ -936,6 +1017,84 @@ describe("disk cache uses sqlite backend", () => {
         .run(row.payload, "src/a.ts", "handle-confinement");
       reset.close();
     }
+  });
+
+  describe("a file with several cached units", () => {
+    const names = ["alpha", "beta", "gamma"];
+
+    async function cacheUnitsOfOneFile(prefix: string) {
+      const root = await mkTmpDir(prefix);
+      await writeDuplicateProject(root);
+      const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      const file = normalizePathForSql(path.join(root, "src", "a.ts"));
+      const source = await fsp.readFile(file, "utf8");
+      const units = names.map((name, at) =>
+        buildInternalUnit(
+          {
+            file: "src/a.ts",
+            startLine: 1 + at * 10,
+            endLine: 8 + at * 10,
+            languageId: "typescript",
+            kind: "symbol",
+            name,
+          },
+          file,
+          source,
+          3,
+          2,
+          { symbolHandle: formatDuplicateSymbolHandle(file, name, 1 + at * 10, 0) },
+        ),
+      );
+      writeDuplicateUnitsToCache(index, file, "several-units", units, root);
+      closeDuplicateUnitCacheDatabase(root);
+      return { root, file, units, reopenedIndex: await buildProjectIndex(root, { cache: "disk", threads: 1 }) };
+    }
+
+    async function replaceCachedUnit(root: string, at: number, fields: Record<string, unknown>): Promise<void> {
+      const db = new DatabaseSync(duplicateCacheDbPath(root));
+      try {
+        const row = db
+          .prepare("SELECT payload FROM duplicate_unit_cache WHERE file = ? AND variant = ?")
+          .get("src/a.ts", "several-units") as { payload: Uint8Array } | undefined;
+        if (!row) throw new Error("expected duplicate cache row");
+        const units = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as Array<Record<string, unknown>>;
+        units[at] = { ...units[at], ...fields };
+        db.prepare("UPDATE duplicate_unit_cache SET payload = ? WHERE file = ? AND variant = ?").run(
+          brotliCompressSync(JSON.stringify(units)),
+          "src/a.ts",
+          "several-units",
+        );
+      } finally {
+        db.close();
+      }
+    }
+
+    it("gives every unit its own identity and handles when its paths are shared", async () => {
+      const { root, file, units, reopenedIndex } = await cacheUnitsOfOneFile("dg-disk-cache-several-units-");
+
+      const loaded = tryLoadDuplicateUnitsFromCache(reopenedIndex, file, "several-units", root);
+
+      expect(loaded?.map((unit) => unit.name)).toEqual(names);
+      expect(loaded?.map((unit) => unit.id)).toEqual(units.map((unit) => unit.id));
+      expect(loaded?.map((unit) => unit.absoluteFile)).toEqual(units.map(() => normalizePathForSql(file)));
+      expect(loaded?.map((unit) => unit.symbolHandle)).toEqual(
+        names.map((name, at) => formatDuplicateSymbolHandle("src/a.ts", name, 1 + at * 10, 0)),
+      );
+      expect(new Set(loaded?.map((unit) => unit.handle)).size).toBe(names.length);
+    });
+
+    it.each([
+      ["absolute file", { absoluteFile: "../outside.ts" }],
+      ["file", { file: "../outside.ts" }],
+      ["symbol handle", { symbolHandle: "symbol:..%2Foutside.ts:gamma:21:0" }],
+    ])("rejects the file when only its last unit has an out-of-root %s", async (_label, fields) => {
+      const { root, file, reopenedIndex } = await cacheUnitsOfOneFile("dg-disk-cache-several-units-escape-");
+      expect(tryLoadDuplicateUnitsFromCache(reopenedIndex, file, "several-units", root)).not.toBeNull();
+
+      await replaceCachedUnit(root, names.length - 1, fields);
+
+      expect(tryLoadDuplicateUnitsFromCache(reopenedIndex, file, "several-units", root)).toBeNull();
+    });
   });
 
   it("ignores duplicate cache rows written by an older payload version", async () => {

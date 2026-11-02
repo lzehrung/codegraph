@@ -1,6 +1,19 @@
 import { describe, test, expect } from "vitest";
-import { BloomFilter, buildBloomFilterFromSource, BloomFilterCache } from "../src/util/bloom-filter.js";
-import { CSHARP_SUPPORT, JAVA_SUPPORT, JS_SUPPORT, PHP_SUPPORT, PY_SUPPORT, TS_SUPPORT } from "../src/languages.js";
+import {
+  BloomFilter,
+  buildBloomFilterFromSource,
+  BloomFilterCache,
+  isBloomIdentifierToken,
+} from "../src/util/bloom-filter.js";
+import {
+  CSHARP_SUPPORT,
+  JAVA_SUPPORT,
+  JS_SUPPORT,
+  PHP_SUPPORT,
+  PY_SUPPORT,
+  RUBY_SUPPORT,
+  TS_SUPPORT,
+} from "../src/languages.js";
 describe("BloomFilter", () => {
   test("should detect items that were added", () => {
     const filter = new BloomFilter();
@@ -57,6 +70,47 @@ describe("BloomFilter", () => {
     // With 100 items in a 10000-bit filter with 3 hash functions,
     // the false positive rate should be very low
     expect(fpr).toBeLessThan(0.01); // Less than 1%
+  });
+
+  test("answers a probe by digest like a probe by item, for filters of any size", () => {
+    const filters = [new BloomFilter(10000, 3), new BloomFilter(1000, 7), BloomFilter.createOptimal(40)];
+    const added = Array.from({ length: 40 }, (_, at) => `added${at}`);
+    const absent = Array.from({ length: 200 }, (_, at) => `absent${at}`);
+    for (const filter of filters) {
+      for (const item of added) filter.add(item);
+    }
+
+    for (const filter of filters) {
+      for (const item of [...added, ...absent]) {
+        expect(filter.mightContainDigest(BloomFilter.digestOf(item))).toBe(filter.mightContain(item));
+      }
+      for (const item of added) expect(filter.mightContainDigest(BloomFilter.digestOf(item))).toBe(true);
+    }
+    expect(filters[1]!.mightContainDigest(BloomFilter.digestOf("absent0"))).toBe(false);
+  });
+});
+
+describe("isBloomIdentifierToken", () => {
+  test.each(["helper", "_private", "$ref", "name2", "caf\u00e9", "part\u200ename"])("accepts %s", (name) => {
+    expect(isBloomIdentifierToken(name)).toBe(true);
+  });
+
+  test.each(["empty?", "save!", "operator()", "r#type", "@class", "~Widget", "a b", "Outer::inner", ""])(
+    "rejects %j, which a filter stores in pieces",
+    (name) => {
+      expect(isBloomIdentifierToken(name)).toBe(false);
+    },
+  );
+
+  test("matches what a filter built from source stores whole", () => {
+    const filter = buildBloomFilterFromSource("list.empty?(1)\nlist.helper(2)\n", RUBY_SUPPORT);
+
+    expect(isBloomIdentifierToken("helper")).toBe(true);
+    expect(filter.mightContain("helper")).toBe(true);
+    // The filter holds `empty` and no `empty?`, so only a whole-token name can be probed.
+    expect(isBloomIdentifierToken("empty?")).toBe(false);
+    expect(filter.mightContain("empty")).toBe(true);
+    expect(filter.mightContain("empty?")).toBe(false);
   });
 });
 

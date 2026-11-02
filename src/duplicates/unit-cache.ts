@@ -46,7 +46,14 @@ export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY = "duplicate_unit_cache.sch
 // grammar produced, so entries written by the previous one must miss rather than survive
 // DUPLICATE_UNIT_CACHE_MAX_AGE_MS. Bump this whenever the grammar changes.
 export const DUPLICATE_TOKENIZER_REVISION = 6;
-export const DUPLICATE_UNIT_CACHE_MAX_ROWS = 5_000;
+// The disk cache keeps one row per file and unit-collection variant. Its row limit follows the size of
+// the project, so every analyzed file of a larger project stays cached: a fixed limit below the file
+// count evicts the oldest rows on each run and recomputes those files on the next. The floor serves
+// small projects with several variants, the ratio leaves room for a second variant (an option change
+// or an epoch bump) beside the current one, and the ceiling bounds the cache of a very large project.
+export const DUPLICATE_UNIT_CACHE_MIN_ROWS = 5_000;
+export const DUPLICATE_UNIT_CACHE_ROWS_PER_FILE = 2;
+export const DUPLICATE_UNIT_CACHE_MAX_ROWS = 100_000;
 export const DUPLICATE_UNIT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
 export const DUPLICATE_UNIT_MEMORY_CACHE_MAX_ENTRIES = 2_048;
 export const DUPLICATE_UNIT_MEMORY_CACHE_MAX_BYTES = 64 * 1024 * 1024;
@@ -267,6 +274,11 @@ export function createDuplicateUnitDiskStatements(db: SqliteDatabase): Duplicate
   };
 }
 
+export function duplicateUnitCacheRowLimit(fileCount: number): number {
+  const projectRows = fileCount * DUPLICATE_UNIT_CACHE_ROWS_PER_FILE;
+  return Math.min(DUPLICATE_UNIT_CACHE_MAX_ROWS, Math.max(DUPLICATE_UNIT_CACHE_MIN_ROWS, projectRows));
+}
+
 export function maintainDuplicateUnitDiskCache(index: ProjectIndex): void {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return;
   const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
@@ -276,7 +288,7 @@ export function maintainDuplicateUnitDiskCache(index: ProjectIndex): void {
   try {
     db.transaction(() => {
       statements.pruneExpired.run(Date.now() - DUPLICATE_UNIT_CACHE_MAX_AGE_MS);
-      statements.pruneOverflow.run(DUPLICATE_UNIT_CACHE_MAX_ROWS);
+      statements.pruneOverflow.run(duplicateUnitCacheRowLimit(index.byFile.size));
     })();
   } catch (error) {
     logWithLevel(undefined, "warn", `Warning: Failed to prune duplicate cache ${dbPath}:`, error);
@@ -519,7 +531,20 @@ export function serializeDuplicateUnits(units: DuplicateInternalUnit[]): Duplica
     signatures: [...unit.signatures],
   }));
 }
-function transformDuplicateHandle(root: string, value: string): string {
+/** Remembers one pure answer per string, for the paths that every unit of one cached file repeats. */
+function memoizeByString<T extends string | boolean>(compute: (value: string) => T): (value: string) => T {
+  const answers = new Map<string, T>();
+  return (value) => {
+    let answer = answers.get(value);
+    if (answer === undefined) {
+      answer = compute(value);
+      answers.set(value, answer);
+    }
+    return answer;
+  };
+}
+
+function transformDuplicateHandle(relativeEncodedFile: (encodedFile: string) => string, value: string): string {
   const parts = value.split(":");
   let filePartIndex = -1;
   if (parts[0] === "file" || parts[0] === "chunk" || parts[0] === "symbol") {
@@ -531,7 +556,7 @@ function transformDuplicateHandle(root: string, value: string): string {
   const encodedFile = parts[filePartIndex];
   if (encodedFile === undefined) return value;
   try {
-    parts[filePartIndex] = encodeURIComponent(cacheRelativePath(root, decodeURIComponent(encodedFile)));
+    parts[filePartIndex] = relativeEncodedFile(encodedFile);
     return parts.join(":");
   } catch {
     return value;
@@ -547,7 +572,10 @@ function duplicateHandleFilePartIndex(value: string): number | null {
   return null;
 }
 
-function hasPersistedDuplicateHandlePathWithinRoot(root: string, value: string): boolean {
+function hasPersistedDuplicateHandlePathWithinRoot(
+  encodedFileWithinRoot: (encodedFile: string) => boolean,
+  value: string,
+): boolean {
   const filePartIndex = duplicateHandleFilePartIndex(value);
   const handlePrefix = value.split(":")[0];
   if (filePartIndex === null) {
@@ -555,12 +583,12 @@ function hasPersistedDuplicateHandlePathWithinRoot(root: string, value: string):
   }
   const encodedFile = value.split(":")[filePartIndex];
   if (!encodedFile) return false;
+  return encodedFileWithinRoot(encodedFile);
+}
+
+function persistedPathWithinRoot(root: string, file: string, label: string): boolean {
   try {
-    assertFilePathWithinRoot(
-      root,
-      cacheAbsolutePath(root, decodeURIComponent(encodedFile)),
-      "Persisted duplicate handle path",
-    );
+    assertFilePathWithinRoot(root, cacheAbsolutePath(root, file), label);
     return true;
   } catch {
     return false;
@@ -568,16 +596,24 @@ function hasPersistedDuplicateHandlePathWithinRoot(root: string, value: string):
 }
 
 function validatePersistedDuplicateUnits(root: string, value: unknown[]): value is DuplicateSerializedUnit[] {
-  return value.every((unit) => {
-    if (!isDuplicateSerializedUnit(unit)) return false;
+  // A file's units repeat its paths and the file part of their handles, so each distinct one is checked once.
+  const unitPathWithinRoot = memoizeByString((file: string) =>
+    persistedPathWithinRoot(root, file, "Persisted duplicate unit path"),
+  );
+  const encodedFileWithinRoot = memoizeByString((encodedFile: string) => {
     try {
-      assertFilePathWithinRoot(root, cacheAbsolutePath(root, unit.file), "Persisted duplicate unit file");
-      assertFilePathWithinRoot(root, cacheAbsolutePath(root, unit.absoluteFile), "Persisted duplicate unit path");
+      return persistedPathWithinRoot(root, decodeURIComponent(encodedFile), "Persisted duplicate handle path");
     } catch {
       return false;
     }
+  });
+  return value.every((unit) => {
+    if (!isDuplicateSerializedUnit(unit)) return false;
+    if (!unitPathWithinRoot(unit.file) || !unitPathWithinRoot(unit.absoluteFile)) return false;
     const handles = [unit.handle, unit.fileHandle, unit.chunkHandle, unit.symbolHandle, unit.sqlHandle];
-    return handles.every((handle) => handle === undefined || hasPersistedDuplicateHandlePathWithinRoot(root, handle));
+    return handles.every(
+      (handle) => handle === undefined || hasPersistedDuplicateHandlePathWithinRoot(encodedFileWithinRoot, handle),
+    );
   });
 }
 
@@ -590,20 +626,28 @@ function transformDuplicateUnits(
   units: DuplicateSerializedUnit[],
   toRelative: boolean,
 ): DuplicateSerializedUnit[] {
+  // A file's units repeat its paths and the file part of their handles, so each distinct one is resolved once.
+  const relativePath = memoizeByString((file: string) => cacheRelativePath(root, file));
+  const unitAbsolutePath = toRelative
+    ? relativePath
+    : memoizeByString((file: string) =>
+        assertFilePathWithinRoot(root, cacheAbsolutePath(root, file), "Persisted duplicate unit path"),
+      );
+  const relativeEncodedFile = memoizeByString((encodedFile: string) =>
+    encodeURIComponent(cacheRelativePath(root, decodeURIComponent(encodedFile))),
+  );
   return units.map((unit) => {
-    const absoluteFile = toRelative
-      ? cacheRelativePath(root, unit.absoluteFile)
-      : assertFilePathWithinRoot(root, cacheAbsolutePath(root, unit.absoluteFile), "Persisted duplicate unit path");
+    const absoluteFile = unitAbsolutePath(unit.absoluteFile);
     return {
       ...unit,
-      file: cacheRelativePath(root, unit.file),
+      file: relativePath(unit.file),
       absoluteFile,
       id: duplicateUnitId(unit, absoluteFile),
-      handle: transformDuplicateHandle(root, unit.handle),
-      fileHandle: transformDuplicateHandle(root, unit.fileHandle),
-      ...(unit.sqlHandle ? { sqlHandle: transformDuplicateHandle(root, unit.sqlHandle) } : {}),
-      chunkHandle: transformDuplicateHandle(root, unit.chunkHandle),
-      ...(unit.symbolHandle ? { symbolHandle: transformDuplicateHandle(root, unit.symbolHandle) } : {}),
+      handle: transformDuplicateHandle(relativeEncodedFile, unit.handle),
+      fileHandle: transformDuplicateHandle(relativeEncodedFile, unit.fileHandle),
+      ...(unit.sqlHandle ? { sqlHandle: transformDuplicateHandle(relativeEncodedFile, unit.sqlHandle) } : {}),
+      chunkHandle: transformDuplicateHandle(relativeEncodedFile, unit.chunkHandle),
+      ...(unit.symbolHandle ? { symbolHandle: transformDuplicateHandle(relativeEncodedFile, unit.symbolHandle) } : {}),
     };
   });
 }
