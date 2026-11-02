@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
 import { fileExists } from "../workspace.js";
+import { probeKind } from "../fs-probe-cache.js";
 
 export const JVM_PACKAGE_MANIFEST_NAMES = [
   "pom.xml",
@@ -181,10 +182,5 @@ export function resolveNearestManifestRootSync(
 }
 
 export async function isDirectory(p: string): Promise<boolean> {
-  try {
-    const st = await fsp.stat(p);
-    return st.isDirectory();
-  } catch {
-    return false;
-  }
+  return (await probeKind(p)) === "directory";
 }
