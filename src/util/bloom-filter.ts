@@ -5,7 +5,7 @@
  * allowing us to skip files that definitely don't contain the symbol.
  */
 
-import { BLOOM_FILTER_IDENTIFIER_SOURCE, foldPhpIdentifierCase } from "./identifiers.js";
+import { BLOOM_FILTER_IDENTIFIER_SOURCE, BLOOM_FILTER_SEPARATOR_SOURCE, foldPhpIdentifierCase } from "./identifiers.js";
 import type { LanguageSupport } from "../languages.js";
 import { fileIdentityKey } from "./paths.js";
 import crypto from "node:crypto";
@@ -72,8 +72,10 @@ export class BloomFilter {
    * Add an item to the bloom filter
    */
   add(item: string): void {
+    const digest = BloomFilter.digestOf(item);
     // Set all bits first, only increment count if all operations succeed
-    for (const hash of this.getHashes(item)) {
+    for (let round = 0; round < this.hashCount; round++) {
+      const hash = this.bitPosition(digest, round);
       const byteIndex = Math.floor(hash / 8);
       const bitIndex = hash % 8;
       if (byteIndex < 0 || byteIndex >= this.bits.length) return;
@@ -105,7 +107,21 @@ export class BloomFilter {
    * Returns false if definitely not present, true if might be present
    */
   mightContain(item: string): boolean {
-    for (const hash of this.getHashes(item)) {
+    return this.mightContainDigest(BloomFilter.digestOf(item));
+  }
+
+  /**
+   * The digest every bit position of an item derives from. Hash an item once with this, then probe
+   * any number of filters of any size with `mightContainDigest`.
+   */
+  static digestOf(item: string): Buffer {
+    return crypto.createHash("sha256").update(item).digest();
+  }
+
+  /** The answer of `mightContain` for an item given by its `digestOf` digest. */
+  mightContainDigest(digest: Buffer): boolean {
+    for (let round = 0; round < this.hashCount; round++) {
+      const hash = this.bitPosition(digest, round);
       const byteIndex = Math.floor(hash / 8);
       const bitIndex = hash % 8;
       if (byteIndex < 0 || byteIndex >= this.bits.length) return false;
@@ -118,18 +134,11 @@ export class BloomFilter {
   }
 
   /**
-   * Generate multiple hash values for an item
+   * Bit position of one hash round: a single digest supplies every round with a different 4-byte segment.
    */
-  private *getHashes(item: string): Generator<number> {
-    // Use a single hash and derive multiple values from it
-    const hash = crypto.createHash("sha256").update(item).digest();
-
-    for (let i = 0; i < this.hashCount; i++) {
-      // Take different 4-byte segments of the hash
-      const offset = (i * 4) % (hash.length - 4);
-      const value = hash.readUInt32LE(offset);
-      yield value % this.size;
-    }
+  private bitPosition(digest: Buffer, round: number): number {
+    const offset = (round * 4) % (digest.length - 4);
+    return digest.readUInt32LE(offset) % this.size;
   }
 
   /**
@@ -167,9 +176,27 @@ export class BloomFilter {
   }
 }
 
+const WHOLE_IDENTIFIER_TOKEN_PATTERN = new RegExp(`^${BLOOM_FILTER_IDENTIFIER_SOURCE}$`, "u");
+const SEPARATOR_PATTERN = new RegExp(BLOOM_FILTER_SEPARATOR_SOURCE, "u");
+
+/**
+ * Whether `text` is one whole token of the alphabet `buildBloomFilterFromSource` splits source into.
+ * Only such text is stored as written: a filter holds a Ruby `empty?`, a C++ `operator()`, or a Rust
+ * `r#type` as its separate tokens, so a probe for the whole text can miss a file that spells it.
+ */
+export function isBloomIdentifierToken(text: string): boolean {
+  return WHOLE_IDENTIFIER_TOKEN_PATTERN.test(text);
+}
+
 /**
  * Build a bloom filter from source code with auto-sizing.
  * Extracts all identifiers and adds them to an optimally-sized filter.
+ *
+ * Tokens are the runs of code points that some supported language allows in an identifier. The runs
+ * include Unicode spaces and line separators, because a PHP or Ruby identifier may hold any non-ASCII
+ * code point, so the TypeScript call `helper\u00A0("x")` gives the token `helper\u00A0`. The filter
+ * stores such a token whole and also the pieces of it split at those separators, so a probe for
+ * `helper` finds the file whichever language the file is in.
  *
  * PHP resolves class, interface, trait, enum, and function names case-insensitively, but a
  * probe can only test one spelling per lookup. For a PHP file, every identifier token is
@@ -188,12 +215,21 @@ export function buildBloomFilterFromSource(
   const identifierPattern = new RegExp(BLOOM_FILTER_IDENTIFIER_SOURCE, "gu");
   const matches = source.match(identifierPattern);
   const isPhp = support.id === "php";
+  // Few sources hold a separator, so one scan of the source tells whether any token needs splitting.
+  const hasSeparator = SEPARATOR_PATTERN.test(source);
 
   const unique = new Set<string>();
-  for (const identifier of matches ?? []) {
+  const add = (identifier: string): void => {
     const normalized = support.normalizeIdentifier(identifier);
     unique.add(normalized);
     if (isPhp) unique.add(foldPhpIdentifierCase(normalized));
+  };
+  for (const identifier of matches ?? []) {
+    add(identifier);
+    if (!hasSeparator || !SEPARATOR_PATTERN.test(identifier)) continue;
+    for (const piece of identifier.split(SEPARATOR_PATTERN)) {
+      if (piece) add(piece);
+    }
   }
   if (support.id === "java" && source.includes("\\u")) unique.add(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN);
 

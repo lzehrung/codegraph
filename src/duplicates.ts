@@ -19,7 +19,6 @@ import type {
   DuplicateDetectionResult,
   DuplicateDetectionStats,
   DuplicateGroup,
-  DuplicateInternalUnit,
   DuplicatePreparedAnalysis,
   DuplicatePreparedAnalysisData,
   DuplicatePreparationOptions,
@@ -29,13 +28,17 @@ import type {
   DuplicateUnitCollectionOptions,
   DuplicateUnitRef,
   PairEvidence,
-  PairFilter,
   PreparedDuplicateBuckets,
   UnitFilter,
 } from "./duplicates/types.js";
 
 const { collectDuplicateUnits, normalizeDetectionFile } = duplicateUnits;
-const { buildCandidatePairs, filterPreparedDuplicateBuckets, prepareDuplicateCandidateBuckets } = duplicateCandidates;
+const {
+  buildCandidatePairs,
+  createTargetCandidateFilter,
+  filterPreparedDuplicateBuckets,
+  prepareDuplicateCandidateBuckets,
+} = duplicateCandidates;
 const {
   DEFAULT_GROUP_VARIANT_LIMIT,
   DEFAULT_LIMIT,
@@ -521,8 +524,6 @@ async function findDuplicatesTouchingTargets(
   const crossFileOnly = options.crossFileOnly ?? !(options.includeSameFile ?? false);
   const minConfidence = normalizeConfidence(options.minConfidence);
   const { units, belowThresholdUnits } = collectedUnits ?? (await collectDuplicateUnitsForOptions(index, options));
-  const touchesTarget: UnitFilter = (unit) =>
-    normalizedTargets.some((target) => unitTouchesDuplicateTarget(unit, target));
   const targetCandidateCounts = new Map<string, number>();
   const targetCompareCounts = new Map<string, number>();
   const targetSkippedCandidateCounts = new Map<string, number>();
@@ -530,11 +531,7 @@ async function findDuplicatesTouchingTargets(
   for (const target of normalizedTargets) {
     targetSuggestionKeys.set(duplicateTargetKey(target), new Set());
   }
-  const targetsTouchedByPair = (left: DuplicateInternalUnit, right: DuplicateInternalUnit): DuplicateTarget[] =>
-    normalizedTargets.filter(
-      (target) => unitTouchesDuplicateTarget(left, target) || unitTouchesDuplicateTarget(right, target),
-    );
-  const touchesAnyTarget: PairFilter = (left, right) => targetsTouchedByPair(left, right).length > 0;
+  const { filter, targetsTouchedByPair } = createTargetCandidateFilter(normalizedTargets, unitTouchesDuplicateTarget);
   const { pairs, oversizedBuckets, skippedPairs, unscorablePairs, overlappingPairs } = await buildCandidatePairs(
     preparedBuckets ?? prepareDuplicateCandidateBuckets(units),
     {
@@ -543,7 +540,7 @@ async function findDuplicatesTouchingTargets(
       crossFileOnly,
       similarityHints: options.similarityHints,
       projectRoot,
-      filter: { unit: touchesTarget, pair: touchesAnyTarget },
+      filter,
     },
   );
   const candidatePairBudget = skippedPairs ? { limit: maxCandidatePairs, skipped: skippedPairs } : undefined;
