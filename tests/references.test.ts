@@ -173,8 +173,12 @@ describe("Find References", () => {
     }
   });
 
-  for (const graphFirst of [true, false]) {
-    const order = graphFirst ? "graph then references" : "references then graph";
+  for (const order of [
+    "graph then references",
+    "references then graph",
+    "graph concurrently with references",
+  ] as const) {
+    const graphFirst = order === "graph then references";
     it(`${order} share each indexed syntax tree`, async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-graph-reference-tree-"));
       try {
@@ -213,9 +217,41 @@ describe("Find References", () => {
           },
         });
         try {
-          if (graphFirst) await buildSymbolGraphDetailed(index);
-          const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
-          if (!graphFirst) await buildSymbolGraphDetailed(index);
+          let result: Awaited<ReturnType<typeof indexer.findReferences>>;
+          if (order === "graph concurrently with references") {
+            let notifyGraphRead!: () => void;
+            const graphReadStarted = new Promise<void>((resolve) => {
+              notifyGraphRead = resolve;
+            });
+            let releaseGraphRead!: () => void;
+            const graphReadGate = new Promise<void>((resolve) => {
+              releaseGraphRead = resolve;
+            });
+            const originalReadFile = fsp.readFile.bind(fsp);
+            let intercepted = false;
+            const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (file, options) => {
+              if (file === sourceFile && !intercepted) {
+                intercepted = true;
+                notifyGraphRead();
+                await graphReadGate;
+              }
+              return originalReadFile(file, options);
+            });
+            try {
+              const graphPromise = buildSymbolGraphDetailed(index);
+              await graphReadStarted;
+              const lookupPromise = indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+              releaseGraphRead();
+              [, result] = await Promise.all([graphPromise, lookupPromise]);
+            } finally {
+              releaseGraphRead();
+              readSpy.mockRestore();
+            }
+          } else {
+            if (graphFirst) await buildSymbolGraphDetailed(index);
+            result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+            if (!graphFirst) await buildSymbolGraphDetailed(index);
+          }
           expect(result.status).toBe("ok");
           if (result.status === "ok") {
             expect(result.references.map((ref) => ref.file + ":" + ref.range.start.line).sort()).toEqual([

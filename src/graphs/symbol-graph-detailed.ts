@@ -9,16 +9,11 @@ import {
   type NameResolution,
 } from "../indexer/name-resolution.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
-import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/file-prep.js";
+import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
-import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { SyntaxNodeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import { ProjectedSyntaxTree } from "../native/projected-tree.js";
-import {
-  assertNativeRequiredAvailable,
-  getNativeSyntaxTreeExecution,
-  isNativeRequiredUnavailableError,
-} from "../native/tree-sitter-native.js";
+import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from "../native/tree-sitter-native.js";
 
 import { cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { cjsRequireValueBinding, resolveExport } from "../indexer/navigation-resolve.js";
@@ -42,7 +37,7 @@ import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
 import { getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
-import { cachedParsedContextForIndex, ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
+import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
 
 import type { CallableIdentity } from "../languages/callable-arity.js";
 import {
@@ -205,7 +200,6 @@ export async function buildSymbolGraphDetailed(
   const nodes = new Map(base.nodes);
   const edges = base.edges.slice(0, maxEdges);
   let omittedEdges = Math.max(0, base.edges.length - edges.length);
-  let skippedSyntaxTreeFiles = 0;
 
   const added = new Set<string>();
   const membersOnly = !!opts?.membersOnly;
@@ -367,38 +361,10 @@ export async function buildSymbolGraphDetailed(
     }
     try {
       const fileKey = fileIdentityKey(file);
-      const cachedPromise = cachedParsedContextForIndex(index, file);
-      const cached = cachedPromise ? await cachedPromise : undefined;
-      let sup = cached?.sup;
-      let src = cached?.source;
-      let tree: SyntaxTreeLike | undefined = cached?.tree;
-      if (!sup || src === undefined) {
-        const prep = await prepareSourceInput(file, {
-          languageExtensions: index.languageExtensions,
-        });
-        sup = prep.sup;
-        src = prep.source;
-      }
-      if (sup && !sup.supportsCrossModuleSymbols) {
-        continue;
-      }
-      if (sup && src !== undefined && !tree) {
-        const nativeTreeExecution = getNativeSyntaxTreeExecution(src, sup);
-        if (nativeTreeExecution.tree) {
-          tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
-        } else {
-          skippedSyntaxTreeFiles += 1;
-          continue;
-        }
-      }
-      if (!sup || src === undefined || !tree) {
-        throw new Error(`Failed to parse ${file}`);
-      }
-      const parsed =
-        cached ?? (await ensureParsedContextForIndex(index, file, { source: src, tree, sup, nativeQueries: null }));
-      src = parsed.source;
-      tree = parsed.tree;
-      sup = parsed.sup;
+      // Register the pending read and parse before another query can request this disk-cached file.
+      const parsed = await ensureParsedContextForIndex(index, file);
+      const { sup, source: src, tree } = parsed;
+      if (!sup.supportsCrossModuleSymbols) continue;
       ownershipParsedContexts.set(fileKey, Promise.resolve(parsed));
 
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
@@ -781,14 +747,6 @@ export async function buildSymbolGraphDetailed(
     edgeCount = edges.length;
   }
   emitMemberImplementationEdges({ nodes, edges }, recordEdge);
-
-  if (skippedSyntaxTreeFiles > 0) {
-    logWithLevel(
-      opts?.logLevel,
-      "warn",
-      `Warning: Skipped detailed symbol edges for ${skippedSyntaxTreeFiles} file(s) because no syntax-tree backend was available.`,
-    );
-  }
 
   const graph: DetailedSymbolGraph = {
     nodes,
