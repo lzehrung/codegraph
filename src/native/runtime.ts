@@ -59,6 +59,21 @@ export function __setNativeTreeSitterBindingForTests(state: NativeBindingState):
   bindingState = state;
 }
 
+/**
+ * Serves this thread's runtime from an addon the thread has already loaded, as a native extraction worker loads the
+ * addon its parent verified. Indexing code that the worker runs reaches the runtime, which then uses that addon
+ * instead of resolving and loading the package a second time. A thread whose runtime has loaded keeps its own.
+ */
+export function adoptLoadedNativeBinding(loaded: { binding: NativeBinding; origin: NativeBindingOrigin }): void {
+  if (bindingState || typeof loaded.binding.registerQuerySet !== "function") return;
+  bindingState = {
+    loaded: true,
+    binding: loaded.binding,
+    supportedLanguageIds: new Set(loaded.binding.supportedLanguageIds()),
+    origin: loaded.origin,
+  };
+}
+
 export function loadBinding(): NativeBindingState {
   if (bindingState) return bindingState;
   cachedRuntimeFingerprints.clear();

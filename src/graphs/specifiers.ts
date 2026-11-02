@@ -7,7 +7,7 @@ import { isJvmLanguage, parseSyntaxTree, readsSyntaxTree } from "../util/syntax-
 import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import type { BuildReport } from "../indexer/types.js";
 import { errorMessage } from "../util/errors.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../worker/native-extract-worker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../native/source-limits.js";
 import type { LogLevel } from "../logging.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import {
@@ -32,6 +32,7 @@ import { pythonTypeCheckingContext } from "../util/python-type-checking.js";
 import { rustSpecifierForParsedImport } from "../indexer/imports/text-import-extractors.js";
 import {
   cFamilyImportFormFromText,
+  extractDynamicImportSpecifiers,
   isJsTsTypeOnlySpecifierStatement,
   isRubyLoadForm,
   type ModuleSpecifier,
@@ -416,4 +417,33 @@ export function collectModuleSpecifiersFromSource(
     }
   }
   return normalizeModuleSpecifiers(out);
+}
+
+function appendMissingSpecifiers(target: ModuleSpecifier[], incoming: readonly ModuleSpecifier[]): void {
+  if (!incoming.length) return;
+  const existing = new Set(target.map((entry) => entry.spec));
+  for (const entry of incoming) {
+    if (existing.has(entry.spec)) continue;
+    existing.add(entry.spec);
+    target.push(entry);
+  }
+}
+
+/**
+ * The specifiers a file's dependency edges resolve: the module specifiers of `source`, then, with
+ * `dynamicImportHeuristics`, each specifier the dynamic import heuristics add that the file does not already name.
+ */
+export function collectEdgeModuleSpecifiers(
+  support: LanguageSupport,
+  source: string,
+  opts: CollectModuleSpecifiersOptions & { file: string; projectRoot: string; dynamicImportHeuristics: boolean },
+): ModuleSpecifier[] {
+  const specifiers = collectModuleSpecifiersFromSource(support, source, opts);
+  if (opts.dynamicImportHeuristics) {
+    appendMissingSpecifiers(
+      specifiers,
+      extractDynamicImportSpecifiers(support.id, source, opts.file, opts.projectRoot),
+    );
+  }
+  return specifiers;
 }

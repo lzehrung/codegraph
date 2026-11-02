@@ -26,6 +26,7 @@ import { phpConstructorPromotedVariable, phpPropertyPromotionParameter } from ".
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { importCapture } from "../languages/graph-captures.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
+import { resolvedImportFile } from "./imports/context.js";
 import type { CallableIdentity } from "../languages/callable-arity.js";
 import type { Range } from "../types.js";
 
@@ -1241,7 +1242,7 @@ export function collectLocalsAndExportsFromSource(
             (binding.kind === "namespace" && binding.localNS === spreadName),
         );
         if (imported) {
-          const fromModule = typeof imported.resolved === "string" ? imported.resolved : imported.from;
+          const fromModule = resolvedImportFile(imported) ?? imported.from;
           if (!exports.some((entry) => entry.type === "exportStar" && entry.fromModule === fromModule)) {
             exports.push({
               type: "exportStar",
@@ -1597,11 +1598,13 @@ export function collectLocalsAndExportsFromSource(
             // Included declarations are not available during per-file extraction.
             // Retain the qualified target for resolution against the completed index.
             for (const imp of imports) {
-              if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
+              if (imp.kind !== "star") continue;
+              const fromModule = resolvedImportFile(imp);
+              if (fromModule === undefined) continue;
               exports.push({
                 type: "reexport",
                 exportedAs,
-                fromModule: imp.resolved,
+                fromModule,
                 sourceSpecifier: importedName,
               });
             }
@@ -1644,13 +1647,15 @@ export function collectLocalsAndExportsFromSource(
 
   if (support.id === "python") {
     for (const binding of imports) {
-      if (binding.mechanism !== "python" || !binding.moduleLevel || typeof binding.resolved !== "string") continue;
+      if (binding.mechanism !== "python" || !binding.moduleLevel) continue;
+      const fromModule = resolvedImportFile(binding);
+      if (fromModule === undefined) continue;
       if (binding.kind === "named") {
         if (binding.local.startsWith("_")) continue;
         exports.push({
           type: "reexport",
           exportedAs: binding.local,
-          fromModule: binding.resolved,
+          fromModule,
           moduleSpecifier: binding.from,
           sourceSpecifier: binding.imported,
         });
@@ -1658,14 +1663,14 @@ export function collectLocalsAndExportsFromSource(
         exports.push({
           type: "namespaceReexport",
           exportedAs: binding.localNS,
-          fromModule: binding.resolved,
+          fromModule,
           moduleSpecifier: binding.from,
         });
       } else if (binding.kind === "star") {
-        if (!exports.some((entry) => entry.type === "exportStar" && entry.fromModule === binding.resolved)) {
+        if (!exports.some((entry) => entry.type === "exportStar" && entry.fromModule === fromModule)) {
           exports.push({
             type: "exportStar",
-            fromModule: binding.resolved,
+            fromModule,
             moduleSpecifier: binding.from,
             sourceSpecifier: binding.from,
           });

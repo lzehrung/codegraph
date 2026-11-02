@@ -7,11 +7,16 @@ import { isMainThread, workerData } from "node:worker_threads";
 import type {
   CompactQueryResults,
   NativeBinding,
+  NativeBindingOrigin,
   NativeFallbackReason,
   NativeQueryResults,
   NativeSyntaxTree,
   NativeWorkerBindingHandoff,
 } from "../native/contracts.js";
+import type { ModuleRecordFallback, ModuleRecordPayload, ModuleRecordTask } from "../indexer/module-record.js";
+import type * as ModuleRecords from "../indexer/module-record.js";
+import type * as ProjectedTrees from "../native/projected-tree.js";
+import type { LanguageSupport } from "../languages.js";
 import { loadNativeBinding } from "../native/binding-loader.js";
 import { getNativeQuerySetId } from "../native/queries.js";
 import {
@@ -21,8 +26,10 @@ import {
   REQUIRED_NATIVE_EXTRACTION_VERSION,
 } from "../native/tree-shape.js";
 import type { NativeBindingLoadResult } from "../native/binding-loader.js";
+import { adoptLoadedNativeBinding } from "../native/runtime.js";
 import { supportById } from "../languages.js";
 import { buildBloomFilterFromSource } from "../util/bloom-filter.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../native/source-limits.js";
 
 export type NativeBloomFilterPayload = {
   bits: Uint8Array;
@@ -58,6 +65,11 @@ export type NativeExtractTask = {
   includeBloomFilter?: boolean | undefined;
   compact?: boolean | undefined;
   limits?: NativeExtractLimits | undefined;
+  /**
+   * Build the file's module record (`module-record.ts`) from this extraction and return it in place of the native
+   * results and the syntax tree. A file the record does not cover returns the extraction as usual.
+   */
+  moduleRecord?: ModuleRecordTask | undefined;
 };
 
 export type NativeExtractResult = {
@@ -70,6 +82,10 @@ export type NativeExtractResult = {
   bloomFilter?: NativeBloomFilterPayload;
   fallbackReason?: NativeFallbackReason;
   error?: string;
+  /** The file's encoded module record, when the task asked for one. The native results and tree are then null. */
+  moduleRecord?: ModuleRecordPayload;
+  /** Why the task asked for a module record and got the extraction instead. */
+  moduleRecordFallback?: ModuleRecordFallback;
 };
 
 export type NativeExtractBatchTask = {
@@ -82,13 +98,6 @@ export type NativeExtractBatchResult = {
 
 export const NATIVE_WORKER_BATCH_SIZE = 32;
 export { REQUIRED_NATIVE_EXTRACTION_VERSION } from "../native/tree-shape.js";
-
-/**
- * Default source byte cap before native parse/projection.
- * 8 MiB is above virtually all hand-written sources while preventing a single
- * generated/minified file from OOM-ing a long-lived extraction worker.
- */
-export const DEFAULT_NATIVE_SOURCE_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
  * Mirrored documentation of native projection defaults (enforced in Rust).
@@ -107,7 +116,50 @@ type NativeExtractorDeps = {
   loadBinding: () => NativeBindingLoadResult<NativeBinding>;
   readFile: (filePath: string, encoding: BufferEncoding) => Promise<string>;
   statFile?: (filePath: string) => Promise<{ size: number }>;
+  /** Called once with the binding the extractor loaded and accepted. */
+  onBindingLoaded?: (loaded: { binding: NativeBinding; origin: NativeBindingOrigin }) => void;
 };
+
+let moduleRecordModules: Promise<[typeof ModuleRecords, typeof ProjectedTrees]> | undefined;
+
+/** The module record code loads in a worker only once a task asks for a record. */
+function loadModuleRecordModules(): Promise<[typeof ModuleRecords, typeof ProjectedTrees]> {
+  moduleRecordModules ??= Promise.all([import("../indexer/module-record.js"), import("../native/projected-tree.js")]);
+  return moduleRecordModules;
+}
+
+/**
+ * Builds the module record a task asked for from the file's extraction. The record takes the place of the native
+ * results and the syntax tree; a file the record does not cover keeps the extraction and says why.
+ */
+async function withModuleRecord(
+  recordTask: ModuleRecordTask,
+  task: NativeExtractTask,
+  support: LanguageSupport,
+  source: string,
+  extracted: NativeExtractResult,
+): Promise<NativeExtractResult> {
+  if (!extracted.syntaxTree || !extracted.nativeResults) return extracted;
+  const [records, trees] = await loadModuleRecordModules();
+  const outcome = await records.buildModuleRecord({
+    ...recordTask,
+    file: task.filePath,
+    source,
+    support,
+    nativeQueries: extracted.nativeResults,
+    tree: new trees.ProjectedSyntaxTree(source, extracted.syntaxTree),
+  });
+  if ("fallback" in outcome) return { ...extracted, moduleRecordFallback: outcome.fallback };
+  return {
+    filePath: task.filePath,
+    languageId: task.languageId,
+    nativeResults: null,
+    compactResults: null,
+    syntaxTree: null,
+    ...(extracted.bloomFilter ? { bloomFilter: extracted.bloomFilter } : {}),
+    moduleRecord: records.encodeModuleRecord(outcome.record),
+  };
+}
 
 export type NativeExtractor = (task: NativeExtractTask) => Promise<NativeExtractResult>;
 
@@ -201,6 +253,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
       }
       binding = loaded.binding;
       supportedIds = new Set(binding.supportedLanguageIds());
+      deps.onBindingLoaded?.({ binding: loaded.binding, origin: loaded.origin });
       return;
     }
     loadError =
@@ -287,6 +340,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
       };
     }
 
+    let extracted: NativeExtractResult;
     try {
       if (task.compact && binding.runImportsQueryCompact) {
         const compactResults = binding.runImportsQueryCompact(source, getNativeQuerySetId(binding, support, "imports"));
@@ -322,7 +376,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
           error: loadError,
         };
       }
-      return {
+      extracted = {
         filePath: task.filePath,
         languageId: task.languageId,
         ...(includeSource ? { source } : {}),
@@ -348,6 +402,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         error: message,
       };
     }
+    return task.moduleRecord ? await withModuleRecord(task.moduleRecord, task, support, source, extracted) : extracted;
   };
 }
 
@@ -358,6 +413,8 @@ const runExtraction = createNativeExtractor({
     const stat = await fsp.stat(filePath);
     return { size: stat.size };
   },
+  // Module records run indexing code that reaches the native runtime, which then uses the addon this worker loaded.
+  ...(isMainThread ? {} : { onBindingLoaded: adoptLoadedNativeBinding }),
 });
 
 export async function runExtractionBatch(

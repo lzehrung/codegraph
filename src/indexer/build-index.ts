@@ -10,8 +10,7 @@ import {
   type LanguageSupport,
 } from "../languages.js";
 import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "./import-resolution-tables.js";
-import { isJsTsLanguage } from "../languages/js-family.js";
-import { loadWorkspaceConfig, resolveWorkspacePackage, type WorkspaceConfig } from "../util/workspace.js";
+import { loadWorkspaceConfig, type WorkspaceConfig } from "../util/workspace.js";
 import {
   DEFAULT_PROJECT_PATTERNS,
   createProjectDiscoveryContext,
@@ -22,12 +21,7 @@ import {
   type ProjectFileInfo,
 } from "../util/project-files.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
-import {
-  clearResolutionCaches,
-  loadNearestTsconfigFor,
-  resolveSpecifier,
-  type MatchPathFn,
-} from "../util/resolution.js";
+import { clearResolutionCaches, loadNearestTsconfigFor, type MatchPathFn } from "../util/resolution.js";
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
 import { collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
 import { collectJvmFileFacts } from "../util/jvm-tree.js";
@@ -49,7 +43,7 @@ import { resolveWorkerThreadCount } from "../util/worker-threads.js";
 import { runWithProbeCache } from "../util/fs-probe-cache.js";
 import { logWithLevel } from "../logging.js";
 import { collectGraph } from "../graph-builder.js";
-import { collectEdgesForFile } from "../graph-edge-collector.js";
+import { collectEdgesForFile, type FileEdgeSource } from "../graph-edge-collector.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
 import type { GraphBuildOptions, GraphCacheEntry } from "../graphs/types.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
@@ -58,9 +52,20 @@ import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { collectImportsForFile } from "./imports.js";
 import type { ImportDegradedHook } from "./imports/context.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
+import {
+  buildModuleRecord,
+  collectJsonDependencies,
+  finishModuleRecord,
+  isModuleRecordLanguage,
+  resolveCrossModuleSymbolExports,
+  type ModuleRecord,
+  type ModuleRecordTask,
+} from "./module-record.js";
+import { collectParseErrorRanges } from "./parse-errors.js";
 import { expandStarImports } from "./expand-star-imports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
-import { BloomFilter, buildBloomFilterFromSource } from "../util/bloom-filter.js";
+import { BloomFilter, buildBloomFilterFromSource, type BloomFilterCache } from "../util/bloom-filter.js";
+import type { NativeBloomFilterPayload } from "../worker/native-extract-worker.js";
 import { initNativeBackendReport, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
 import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from "../native/tree-sitter-native.js";
@@ -122,11 +127,10 @@ import {
   type ModuleIndex,
   type ProjectIndex,
   type ProjectIndexManifestEntry,
-  type ParseErrorRange,
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
-import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/file-prep.js";
+import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 
 import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/source-graph.js";
@@ -163,18 +167,39 @@ import {
 import { propagateReexportSurfaceChanges, publicSurfaceKind, publicSurfaceSignature } from "./public-surface.js";
 import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 
-type IndexedFileGraphContext = {
-  source: string;
-  sup: LanguageSupport;
-  nativeQueries?: import("../native/tree-sitter-native.js").NativeQueryResults | null;
-  tree?: SyntaxTreeLike;
-  embeddedBlocks?: PreparedSFCEmbeddedBlock[];
-};
-
 type IndexedFileModuleResult = {
   module: ModuleIndex;
   cacheWrite?: PendingModuleCacheWrite | undefined;
-  graphContext: IndexedFileGraphContext;
+  graphContext: FileEdgeSource;
+};
+
+/**
+ * How a build indexes JavaScript and TypeScript files through module records (`module-record.ts`): on the main thread
+ * whenever it parses such a file there, and in the native workers when `inWorkers` is set.
+ */
+type ModuleRecordPolicy = { inWorkers: boolean };
+
+type IndexedFileBuildArgs = {
+  file: string;
+  support: LanguageSupport;
+  projectRoot: string;
+  opts: BuildOptions | undefined;
+  report: BuildReport | undefined;
+  graphOptions: GraphBuildOptions;
+  workspaceConfig?: WorkspaceConfig;
+  matchPath?: MatchPathFn;
+  workerSetup: WorkerPoolSetupResult;
+  parsedMap: Map<string, ParsedFileContext>;
+  parsedCacheMaxEntries: number;
+  jsonDependencies: Map<string, string>;
+  bloomFilterCache: BloomFilterCache | undefined;
+  fileSignatures: Map<string, FileSignature>;
+  cacheEnabled: boolean;
+  resolverEnvironmentFingerprint?: string | null;
+  confinedRoot?: string;
+  trustedSource?: string | undefined;
+  /** Index JavaScript and TypeScript files through module records; without it every file is indexed as before them. */
+  moduleRecords?: ModuleRecordPolicy;
 };
 
 function isConfinedFileReadError(error: unknown): boolean {
@@ -202,50 +227,6 @@ function unparsedModuleIndex(file: string): ModuleIndex {
  */
 function failedModuleIndex(file: string): ModuleIndex {
   return { ...createEmptyModuleIndex(file), parserDegraded: true };
-}
-
-function collectParseErrorRanges(tree: ProjectedSyntaxTree): ParseErrorRange[] {
-  const columns = tree.columns;
-  const isParseErrorNode = (nodeId: number): boolean => {
-    const kind = columns.kinds[columns.kindIds[nodeId]!]!;
-    return kind === "ERROR" || columns.isMissing[nodeId] !== 0;
-  };
-  const ranges: ParseErrorRange[] = [];
-  for (let nodeId = 0; nodeId < columns.nodeCount; nodeId += 1) {
-    if (!isParseErrorNode(nodeId)) continue;
-    let parentId = columns.parentIds[nodeId]!;
-    let hasErrorAncestor = false;
-    while (parentId >= 0) {
-      if (isParseErrorNode(parentId)) {
-        hasErrorAncestor = true;
-        break;
-      }
-      parentId = columns.parentIds[parentId]!;
-    }
-    if (hasErrorAncestor) continue;
-    // MISSING nodes are zero-width; prefer a containing statement/declaration, then the nearest non-empty ancestor.
-    let rangeNodeId = nodeId;
-    if (columns.isMissing[nodeId] !== 0) {
-      let ancestorId = columns.parentIds[nodeId]!;
-      let nearestNonZeroAncestorId = -1;
-      while (ancestorId >= 0) {
-        if (columns.startIndex[ancestorId] !== columns.endIndex[ancestorId]) {
-          if (nearestNonZeroAncestorId < 0) nearestNonZeroAncestorId = ancestorId;
-          const kind = columns.kinds[columns.kindIds[ancestorId]!]!;
-          if (kind === "statement" || kind.endsWith("_statement") || kind.endsWith("_declaration")) {
-            rangeNodeId = ancestorId;
-            break;
-          }
-        }
-        ancestorId = columns.parentIds[ancestorId]!;
-      }
-      if (rangeNodeId === nodeId && nearestNonZeroAncestorId >= 0) rangeNodeId = nearestNonZeroAncestorId;
-    }
-    const startIndex = tree.stringIndexForByte(columns.startIndex[rangeNodeId]!);
-    const endIndex = tree.stringIndexForByte(columns.endIndex[rangeNodeId]!);
-    ranges.push({ startIndex, endIndex });
-  }
-  return ranges;
 }
 
 /**
@@ -455,58 +436,56 @@ async function collectNoManifestDeletedDeclarationFiles(args: {
     }));
 }
 
-async function resolveCrossModuleSymbolExports(
-  file: string,
-  mod: ModuleIndex,
-  support: LanguageSupport,
-  projectRoot: string,
-  graphOptions: GraphBuildOptions,
-  workspaceConfig: WorkspaceConfig | undefined,
-  matchPath: MatchPathFn | undefined,
-): Promise<void> {
-  if (!support.supportsCrossModuleSymbols || !isJsTsLanguage(support.id)) return;
-  const reexports = mod.exports.filter(
-    (entry) => entry.type === "reexport" || entry.type === "exportStar" || entry.type === "namespaceReexport",
-  );
-  if (!reexports.length) return;
-  for (const entry of reexports) {
-    if (entry.fromModule.startsWith(".")) {
-      entry.moduleSpecifier ??= entry.fromModule;
-      const resolved = await resolveSpecifier(file, entry.fromModule, projectRoot, matchPath, workspaceConfig, {
-        resolveNodeModules: !!graphOptions.resolveNodeModules,
-        ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
-      });
-      if (typeof resolved === "string" && isFilePathWithinRoot(projectRoot, resolved)) entry.fromModule = resolved;
-      continue;
-    }
-    const pkgResolved = await resolveWorkspacePackage(entry.fromModule, workspaceConfig);
-    if (pkgResolved) {
-      entry.moduleSpecifier ??= entry.fromModule;
-      if (isFilePathWithinRoot(projectRoot, pkgResolved)) entry.fromModule = pkgResolved;
-    }
-  }
+/** The signature a file's module is cached under; undefined when the build has no signature for the file. */
+function moduleCacheSignature(args: IndexedFileBuildArgs): (() => Promise<string>) | undefined {
+  const sigInfo = args.fileSignatures.get(args.file);
+  if (!sigInfo) return undefined;
+  return async () =>
+    args.cacheEnabled
+      ? await moduleCacheSignatureForFile(args.file, sigInfo, args.opts, args.resolverEnvironmentFingerprint)
+      : sigInfo.cacheSig;
 }
 
-async function buildIndexedModuleForFile(args: {
-  file: string;
-  support: LanguageSupport;
-  projectRoot: string;
-  opts: BuildOptions | undefined;
-  report: BuildReport | undefined;
-  graphOptions: GraphBuildOptions;
-  workspaceConfig?: WorkspaceConfig;
-  matchPath?: MatchPathFn;
-  workerSetup: WorkerPoolSetupResult;
-  parsedMap: Map<string, ParsedFileContext>;
-  parsedCacheMaxEntries: number;
-  jsonDependencies: Map<string, string>;
-  bloomFilterCache: import("../util/bloom-filter.js").BloomFilterCache | undefined;
-  fileSignatures: Map<string, FileSignature>;
-  cacheEnabled: boolean;
-  resolverEnvironmentFingerprint?: string | null;
-  confinedRoot?: string;
-  trustedSource?: string | undefined;
-}): Promise<IndexedFileModuleResult> {
+function bloomFilterFromWorker(payload: NativeBloomFilterPayload): BloomFilter {
+  return BloomFilter.fromBuffer(Buffer.from(payload.bits), payload.size, payload.hashCount, payload.itemCount);
+}
+
+async function finishModuleRecordForBuild(
+  args: IndexedFileBuildArgs,
+  record: ModuleRecord,
+  sup: LanguageSupport,
+): Promise<IndexedFileModuleResult> {
+  const cacheSignature = moduleCacheSignature(args);
+  const finished = await finishModuleRecord(record, {
+    file: args.file,
+    support: sup,
+    projectRoot: args.projectRoot,
+    graphOptions: args.graphOptions,
+    ...(args.workspaceConfig ? { workspaceConfig: args.workspaceConfig } : {}),
+    ...(args.matchPath ? { matchPath: args.matchPath } : {}),
+    ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+    ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
+    ...(args.report ? { report: args.report } : {}),
+    parsedFiles: args.parsedMap,
+    jsonDependencies: args.jsonDependencies,
+    ...(cacheSignature ? { cacheSignature } : {}),
+  });
+  return {
+    module: finished.module,
+    ...(finished.cacheWrite ? { cacheWrite: finished.cacheWrite } : {}),
+    graphContext: finished.edgeSource,
+  };
+}
+
+async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<IndexedFileModuleResult> {
+  const recordTask: ModuleRecordTask | undefined =
+    args.moduleRecords && isModuleRecordLanguage(args.support.id)
+      ? {
+          projectRoot: args.projectRoot,
+          dynamicImportHeuristics: !!args.graphOptions.dynamicImportHeuristics,
+          ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+        }
+      : undefined;
   const prepared = await prepareFileContextForBuild(
     args.file,
     args.support,
@@ -517,7 +496,14 @@ async function buildIndexedModuleForFile(args: {
     args.projectRoot,
     args.trustedSource,
     !!args.bloomFilterCache,
+    args.moduleRecords?.inWorkers ? recordTask : undefined,
   );
+  if (prepared.moduleRecord) {
+    if (args.bloomFilterCache && prepared.workerBloomFilter) {
+      args.bloomFilterCache.set(args.file, bloomFilterFromWorker(prepared.workerBloomFilter));
+    }
+    return await finishModuleRecordForBuild(args, prepared.moduleRecord, prepared.sup);
+  }
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let tree: SyntaxTreeLike | undefined;
   // Every degradation recorded below also marks the module, including a failed import extraction of the file's source
@@ -597,14 +583,30 @@ async function buildIndexedModuleForFile(args: {
 
   if (args.bloomFilterCache && !nativeSourceLimitSkip) {
     const filter = prepared.workerBloomFilter
-      ? BloomFilter.fromBuffer(
-          Buffer.from(prepared.workerBloomFilter.bits),
-          prepared.workerBloomFilter.size,
-          prepared.workerBloomFilter.hashCount,
-          prepared.workerBloomFilter.itemCount,
-        )
+      ? bloomFilterFromWorker(prepared.workerBloomFilter)
       : buildBloomFilterFromSource(source, sup);
     args.bloomFilterCache.set(args.file, filter);
+  }
+
+  // A file the main thread parsed is indexed through the same module record a worker would have built. A worker that
+  // declined the record decided it from the file's content, so the main thread would decline it as well.
+  if (
+    recordTask &&
+    !prepared.moduleRecordFallback &&
+    tree instanceof ProjectedSyntaxTree &&
+    !embeddedBlocks &&
+    !prepared.nativeFallbackReason &&
+    isModuleRecordLanguage(sup.id)
+  ) {
+    const outcome = await buildModuleRecord({
+      ...recordTask,
+      file: args.file,
+      source,
+      support: sup,
+      nativeQueries,
+      tree,
+    });
+    if ("record" in outcome) return await finishModuleRecordForBuild(args, outcome.record, sup);
   }
 
   // A failed extraction leaves this file's imports incomplete, so it marks the module like a missing syntax tree.
@@ -683,15 +685,10 @@ async function buildIndexedModuleForFile(args: {
     args.matchPath,
   );
 
-  const sigInfo = args.fileSignatures.get(args.file);
-  const cacheable = !prepared.nativeFallbackReason && !lacksParserContext;
-  let cacheWrite: PendingModuleCacheWrite | undefined;
-  if (sigInfo && cacheable) {
-    const cacheSig = args.cacheEnabled
-      ? await moduleCacheSignatureForFile(args.file, sigInfo, args.opts, args.resolverEnvironmentFingerprint)
-      : sigInfo.cacheSig;
-    cacheWrite = { file: args.file, sig: cacheSig, mod };
-  }
+  const cacheSignature = !prepared.nativeFallbackReason && !lacksParserContext ? moduleCacheSignature(args) : undefined;
+  const cacheWrite: PendingModuleCacheWrite | undefined = cacheSignature
+    ? { file: args.file, sig: await cacheSignature(), mod }
+    : undefined;
 
   return {
     module: mod,
@@ -704,17 +701,6 @@ async function buildIndexedModuleForFile(args: {
       ...(embeddedBlocks ? { embeddedBlocks } : {}),
     },
   };
-}
-
-function isJsonFile(filePath: string): boolean {
-  return filePath.toLowerCase().endsWith(".json");
-}
-
-function collectJsonDependencies(imports: ImportBinding[], bucket: Map<string, string>): void {
-  for (const imp of imports) {
-    const resolved = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : null;
-    if (resolved && isJsonFile(resolved)) bucket.set(fileIdentityKey(resolved), resolved);
-  }
 }
 
 function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): void {
@@ -1804,6 +1790,22 @@ async function buildIndexFromFileListInProbeCache(
     opts,
     countNativeWorkerEligibleFiles(cacheMisses, opts?.languageExtensions),
   );
+  // A worker that builds a file's module record keeps the file's syntax tree. Count only misses that can retain a
+  // parsed tree; unsupported and graph-only files cannot use the parsed-file cache.
+  let parsedCacheMisses = 0;
+  if (opts?.keepParsed) {
+    for (const file of cacheMisses) {
+      const support = supportForFileWithoutHeaderSample(file, opts.languageExtensions);
+      if (support && !isGraphOnlyLanguage(support.id)) parsedCacheMisses += 1;
+    }
+  }
+  const moduleRecords: ModuleRecordPolicy = {
+    inWorkers: !opts?.keepParsed || parsedCacheMisses > parsedCacheMaxEntries(opts),
+  };
+  // With module records, twice the pool's files in flight keep workers busy while the main thread finishes the
+  // others. An explicit `threads` keeps its own limit, even when smaller than the worker pool.
+  const threadsRequested = Number(opts?.threads || 0) > 0;
+  const parseConcurrency = workerSetup.pool && !threadsRequested ? 2 * (workerSetup.report?.threads ?? 0) : conc;
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
     const bloomFilterCache = useBloomFilters
@@ -1831,7 +1833,7 @@ async function buildIndexFromFileListInProbeCache(
       emitIndexLifecycleProgress(opts, "start", "build", totalFiles);
     };
     if (cacheMisses.length) ensureBuildProgressStarted();
-    const fileResults = await mapLimit(normalizedFiles, conc, async (file) => {
+    const fileResults = await mapLimit(normalizedFiles, parseConcurrency, async (file) => {
       try {
         const cacheProbe = cacheProbes.get(file);
         if (!cacheProbe) throw new Error(`Missing module cache probe for ${file}`);
@@ -1881,7 +1883,7 @@ async function buildIndexFromFileListInProbeCache(
         const support = supportForFile(file, opts?.languageExtensions);
         if (!support) return [file, unparsedModuleIndex(file), [], undefined] as const;
         ensureBuildProgressStarted();
-        let graphContext: IndexedFileGraphContext | undefined;
+        let graphContext: FileEdgeSource | undefined;
         let cacheWrite: PendingModuleCacheWrite | undefined;
         const matchPath = support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
         if (!mod) {
@@ -1903,6 +1905,7 @@ async function buildIndexFromFileListInProbeCache(
             fileSignatures,
             cacheEnabled,
             ...(confinedRoot ? { confinedRoot, trustedSource: trustedSources?.get(file) } : {}),
+            moduleRecords,
           });
           mod = built.module;
           graphContext = built.graphContext;

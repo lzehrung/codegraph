@@ -399,6 +399,8 @@ export type WorkerPoolReport = {
   threads: number;
   tasksSubmitted: number;
   tasksFailed: number;
+  /** Files whose JavaScript or TypeScript module record the workers built, so the main thread only finished it. */
+  moduleRecords?: number;
   startupError?: string;
   errors?: Array<{ file: string; message: string }>;
   totalWorkerMs?: number;

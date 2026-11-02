@@ -3,7 +3,7 @@ import type { LanguageExtensionMap, LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
 import { loadNearestTsconfigFor } from "./util/resolution.js";
 import type { WorkspaceConfig } from "./util/workspace.js";
-import { extractDynamicImportSpecifiers, type ModuleSpecifier } from "./util/specifiers.js";
+import type { ModuleSpecifier } from "./util/specifiers.js";
 import { fileIdentityKey } from "./util/paths.js";
 import { edgeKey } from "./util/graph-edges.js";
 import { parseSyntaxTree, readsSyntaxTree } from "./util/syntax-tree.js";
@@ -16,8 +16,8 @@ import {
 import { getCompactImportsExecution } from "./native/tree-sitter-native.js";
 import type { CompactQueryResults, NativeQueryResults } from "./native/tree-sitter-native.js";
 import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "./native/native-backend-report.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "./worker/native-extract-worker.js";
-import { collectModuleSpecifiersFromSource } from "./graphs/specifiers.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "./native/source-limits.js";
+import { collectEdgeModuleSpecifiers } from "./graphs/specifiers.js";
 import { resolveModuleSpecifierEdges } from "./graphs/edge-resolution.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
@@ -31,16 +31,6 @@ const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
   to: edge.to.type === "file" ? { type: "file", path: edge.to.path } : { type: "external", name: edge.to.name },
 });
-
-function appendMissingSpecifiers(target: ModuleSpecifier[], incoming: readonly ModuleSpecifier[]): void {
-  if (!incoming.length) return;
-  const existing = new Set(target.map((entry) => entry.spec));
-  for (const entry of incoming) {
-    if (existing.has(entry.spec)) continue;
-    existing.add(entry.spec);
-    target.push(entry);
-  }
-}
 
 /**
  * Collapses duplicate edges.
@@ -84,34 +74,45 @@ export function hasBetterProvenance(candidate: Edge, previous: Edge): boolean {
   return candidateConfidence > previousConfidence;
 }
 
-export async function collectEdgesForFile(
-  file: string,
-  projectRoot: string,
-  workspaceConfig: WorkspaceConfig | undefined,
-  opts: {
-    parsed?: {
+/**
+ * What a file's edges are collected from: the file's parse, or the specifiers its module record (`module-record.ts`)
+ * already collected from that parse, dynamic import heuristics included.
+ */
+export type FileEdgeSource =
+  | {
       source: string;
       tree?: SyntaxTreeLike;
       sup: LanguageSupport;
       nativeQueries?: NativeQueryResults | null;
       embeddedBlocks?: PreparedSFCEmbeddedBlock[];
-    };
-    resolveNodeModules?: boolean;
-    dynamicImportHeuristics?: boolean;
-    resolutionHints?: string[];
-    fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
-    sqlCorpusSig?: string;
-    cachedFileEdges?: GraphCacheEntry;
-    /** Root stored with the manifest that supplied `cachedFileEdges`. */
-    cachedFileEdgesProjectRoot?: string;
-    languageExtensions?: LanguageExtensionMap;
-    onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
-    parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
-    report?: BuildReport;
-    logLevel?: LogLevel;
-    allFiles?: readonly string[];
-    sqlFactCache?: SqlFactCache;
-  },
+      specifiers?: undefined;
+    }
+  | { sup: LanguageSupport; specifiers: readonly ModuleSpecifier[] };
+
+type CollectEdgesOptions = {
+  parsed?: FileEdgeSource;
+  resolveNodeModules?: boolean;
+  dynamicImportHeuristics?: boolean;
+  resolutionHints?: string[];
+  fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
+  sqlCorpusSig?: string;
+  cachedFileEdges?: GraphCacheEntry;
+  /** Root stored with the manifest that supplied `cachedFileEdges`. */
+  cachedFileEdgesProjectRoot?: string;
+  languageExtensions?: LanguageExtensionMap;
+  onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
+  report?: BuildReport;
+  logLevel?: LogLevel;
+  allFiles?: readonly string[];
+  sqlFactCache?: SqlFactCache;
+};
+
+export async function collectEdgesForFile(
+  file: string,
+  projectRoot: string,
+  workspaceConfig: WorkspaceConfig | undefined,
+  opts: CollectEdgesOptions,
 ): Promise<Edge[]> {
   const normalizedFile = file.replace(/\\/g, "/");
   const sigEntry = opts.fileSignature;
@@ -144,6 +145,13 @@ export async function collectEdgesForFile(
   }
 
   const parsed = opts.parsed;
+  if (parsed?.specifiers) {
+    const recordSupport = parsed.sup;
+    const specSources = parsed.specifiers.map((entry) => ({ entry, support: recordSupport }));
+    const edges = await resolveSpecifierEdges(file, projectRoot, workspaceConfig, opts, recordSupport, specSources);
+    emitCacheEntry(edges);
+    return edges;
+  }
   let sup = parsed?.sup;
   let src = parsed?.source;
   let embeddedBlocks = parsed?.embeddedBlocks ?? [];
@@ -218,43 +226,52 @@ export async function collectEdgesForFile(
     return sqlEdges;
   }
 
-  const specs = collectModuleSpecifiersFromSource(sup, src, {
+  const dynamicImportHeuristics = !!opts.dynamicImportHeuristics;
+  const fileSupport = sup;
+  const specSources = collectEdgeModuleSpecifiers(fileSupport, src, {
     ...(tree ? { tree } : {}),
     ...(parsed && parsed.nativeQueries !== undefined ? { nativeQueries: parsed.nativeQueries } : {}),
     ...(queriesImports ? { compactNativeImports } : {}),
     file: normalizedFile,
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
     ...(opts.report ? { report: opts.report } : {}),
-  });
-
-  if (opts.dynamicImportHeuristics) {
-    appendMissingSpecifiers(specs, extractDynamicImportSpecifiers(sup.id, src, normalizedFile, projectRoot));
-  }
-
-  const specSources = specs.map((entry) => ({ entry, support: sup }));
+    projectRoot,
+    dynamicImportHeuristics,
+  }).map((entry) => ({ entry, support: fileSupport }));
   for (const block of embeddedBlocks) {
-    const blockSpecs = collectModuleSpecifiersFromSource(block.sup, block.source, {
+    const blockSpecs = collectEdgeModuleSpecifiers(block.sup, block.source, {
       file: normalizedFile,
       ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(opts.report ? { report: opts.report } : {}),
+      projectRoot,
+      dynamicImportHeuristics,
     });
-    if (opts.dynamicImportHeuristics) {
-      appendMissingSpecifiers(
-        blockSpecs,
-        extractDynamicImportSpecifiers(block.sup.id, block.source, normalizedFile, projectRoot),
-      );
-    }
     for (const entry of blockSpecs) {
       specSources.push({ entry, support: block.sup });
     }
   }
 
-  const graphOnlyAliasLanguage = graphOnlyLanguage && graphOnlyLanguageSupportsImportAliases(sup.id);
+  const edges = await resolveSpecifierEdges(file, projectRoot, workspaceConfig, opts, fileSupport, specSources);
+  emitCacheEntry(edges);
+  return edges;
+}
+
+/** Resolves the specifiers of a file, each with the language support that read it, to its deduplicated edges. */
+async function resolveSpecifierEdges(
+  file: string,
+  projectRoot: string,
+  workspaceConfig: WorkspaceConfig | undefined,
+  opts: CollectEdgesOptions,
+  sup: LanguageSupport,
+  specSources: ReadonlyArray<{ entry: ModuleSpecifier; support: LanguageSupport }>,
+): Promise<Edge[]> {
+  const normalizedFile = file.replace(/\\/g, "/");
+  const graphOnlyAliasLanguage = isGraphOnlyLanguage(sup.id) && graphOnlyLanguageSupportsImportAliases(sup.id);
   const needsGraphOnlyResolutionConfig =
     graphOnlyAliasLanguage && specSources.some(({ entry }) => graphOnlySpecifierNeedsResolutionConfig(entry.spec));
   const { matchPath } =
     sup.id === "ts" || sup.id === "tsx" || needsGraphOnlyResolutionConfig
-      ? await loadNearestTsconfigFor(file, projectRoot, opts?.logLevel)
+      ? await loadNearestTsconfigFor(file, projectRoot, opts.logLevel)
       : { matchPath: undefined };
   const edges: Edge[] = [];
   const edgeResolutionTasks = specSources.map(async ({ entry, support }) => {
@@ -288,7 +305,5 @@ export async function collectEdgesForFile(
     }
   }
 
-  const deduplicatedEdges = deduplicateEdges(edges);
-  emitCacheEntry(deduplicatedEdges);
-  return deduplicatedEdges;
+  return deduplicateEdges(edges);
 }

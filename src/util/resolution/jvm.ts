@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { supportById } from "../../languages.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../worker/native-extract-worker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../native/source-limits.js";
 import {
   buildDeclaredContainerIndex,
   getOrCreateProjectSymbolIndex,

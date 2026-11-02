@@ -15,8 +15,16 @@ import type {
   NativeExtractResult,
   NativeExtractTask,
 } from "../worker/native-extract-worker.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES, NATIVE_WORKER_BATCH_SIZE } from "../worker/native-extract-worker.js";
+import { NATIVE_WORKER_BATCH_SIZE } from "../worker/native-extract-worker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../native/source-limits.js";
 import { prepareFileForIndexing, type PreparedFileContext } from "./parse-context.js";
+import {
+  decodeModuleRecord,
+  isModuleRecordLanguage,
+  type ModuleRecord,
+  type ModuleRecordFallback,
+  type ModuleRecordTask,
+} from "./module-record.js";
 import type { BuildOptions, BuildReport, ModuleIndex, WorkerPoolReport } from "./types.js";
 
 /**
@@ -103,18 +111,33 @@ function buildWorkerTask(
   sup: LanguageSupport,
   source?: string,
   includeBloomFilter = false,
+  moduleRecord?: ModuleRecordTask,
 ): NativeExtractTask {
   return {
     filePath,
     languageId: sup.id,
     ...(source !== undefined ? { source, includeSourceInResult: false } : {}),
     ...(includeBloomFilter ? { includeBloomFilter: true } : {}),
+    ...(moduleRecord && isModuleRecordLanguage(sup.id) ? { moduleRecord } : {}),
   };
 }
 
-type PreparedFileContextWithWorkerBloomFilter = PreparedFileContext & {
+export type PreparedFileContextWithWorkerBloomFilter = PreparedFileContext & {
+  workerBloomFilter?: NativeBloomFilterPayload;
+  moduleRecord?: undefined;
+  /** Why a worker that was asked for the file's module record returned the extraction instead. */
+  moduleRecordFallback?: ModuleRecordFallback;
+};
+
+/** A file a worker indexed into a module record: the main thread finishes the record with `finishModuleRecord`. */
+export type PreparedModuleRecordFile = {
+  file: string;
+  sup: LanguageSupport;
+  moduleRecord: ModuleRecord;
   workerBloomFilter?: NativeBloomFilterPayload;
 };
+
+export type PreparedBuildFile = PreparedFileContextWithWorkerBloomFilter | PreparedModuleRecordFile;
 
 function workerResultToPrepared(
   result: NativeExtractResult,
@@ -135,6 +158,7 @@ function workerResultToPrepared(
     ...(result.fallbackReason ? { nativeFallbackReason: result.fallbackReason } : {}),
     ...(result.error ? { nativeError: result.error } : {}),
     ...(result.bloomFilter ? { workerBloomFilter: result.bloomFilter } : {}),
+    ...(result.moduleRecordFallback ? { moduleRecordFallback: result.moduleRecordFallback } : {}),
   };
 }
 
@@ -252,8 +276,33 @@ export async function prepareFileContextForBuild(
   confinedRoot?: string,
   lexicalRoot?: string,
   trustedSource?: string,
+  includeBloomFilter?: boolean,
+): Promise<PreparedFileContextWithWorkerBloomFilter>;
+/** With `moduleRecord`, a worker builds the module record of a file whose language has them. */
+export async function prepareFileContextForBuild(
+  file: string,
+  support: LanguageSupport,
+  opts: BuildOptions | undefined,
+  workerSetup: WorkerPoolSetupResult,
+  report: BuildReport | undefined,
+  confinedRoot: string | undefined,
+  lexicalRoot: string | undefined,
+  trustedSource: string | undefined,
+  includeBloomFilter: boolean,
+  moduleRecord: ModuleRecordTask | undefined,
+): Promise<PreparedBuildFile>;
+export async function prepareFileContextForBuild(
+  file: string,
+  support: LanguageSupport,
+  opts: BuildOptions | undefined,
+  workerSetup: WorkerPoolSetupResult,
+  report: BuildReport | undefined,
+  confinedRoot?: string,
+  lexicalRoot?: string,
+  trustedSource?: string,
   includeBloomFilter = false,
-): Promise<PreparedFileContextWithWorkerBloomFilter> {
+  moduleRecord?: ModuleRecordTask,
+): Promise<PreparedBuildFile> {
   const source =
     trustedSource ??
     (confinedRoot ? await readConfinedUtf8File(confinedRoot, lexicalRoot ?? confinedRoot, file) : undefined);
@@ -266,13 +315,25 @@ export async function prepareFileContextForBuild(
     recordPreparedNativeExecutionOutcome(report, prepared);
     return prepared;
   }
-  let prepared: PreparedFileContext;
+  let prepared: PreparedFileContextWithWorkerBloomFilter;
   if (workerSetup.pool && isNativeWorkerEligibleFile(file, support)) {
     if (workerSetup.report) workerSetup.report.tasksSubmitted++;
     try {
       const workerResult = (await workerSetup.pool.run(
-        buildWorkerTask(file, support, source, includeBloomFilter),
+        buildWorkerTask(file, support, source, includeBloomFilter, moduleRecord),
       )) as NativeExtractResult;
+      if (workerResult.moduleRecord) {
+        const recorded: PreparedModuleRecordFile = {
+          file,
+          sup: support,
+          moduleRecord: decodeModuleRecord(workerResult.moduleRecord),
+          ...(workerResult.bloomFilter ? { workerBloomFilter: workerResult.bloomFilter } : {}),
+        };
+        if (workerSetup.report) workerSetup.report.moduleRecords = (workerSetup.report.moduleRecords ?? 0) + 1;
+        // A worker builds a module record only from native query results.
+        recordNativeExecutionOutcome(report, { file, support, languageId: support.id, results: recorded.moduleRecord });
+        return recorded;
+      }
       prepared = workerResultToPrepared(workerResult, support, file, source);
     } catch (error) {
       if (isNativeRequiredUnavailableError(error) && error instanceof Error) throw error;
