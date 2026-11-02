@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { MAX_CALL_HIERARCHY_DEPTH } from "../src/indexer/call-hierarchy.js";
 import { isPlainRecord } from "../src/util/guards.js";
 import { captureCli, stripCliProgressLines } from "./helpers/cli.js";
 
@@ -97,17 +98,21 @@ describe("call hierarchy CLI", () => {
     const help = await captureCli(["callers", "--json", "--help"]);
     expect(help).toMatchObject({ stderr: "", exitCode: undefined });
     expect(help.stdout).toContain(
-      "Usage: codegraph callers <symbol-target> [--root <path>] [--depth <1-5>] [--limit <0-500>]",
+      `Usage: codegraph callers <symbol-target> [--root <path>] [--depth <1-${MAX_CALL_HIERARCHY_DEPTH}>] [--limit <0-500>]`,
     );
+    const calleesHelp = await captureCli(["callees", "--json", "--help"]);
+    expect(calleesHelp.stdout).toContain(`[--depth <1-${MAX_CALL_HIERARCHY_DEPTH}>]`);
 
     const missing = await captureCli(["callees", "--json"]);
     expect(missing.exitCode).toBe(2);
     expect(missing.stderr).toContain("Usage: codegraph callees <symbol-target>");
-    const highDepth = await captureCli(["callers", "--json", "cg:symbol:unused", "--depth", "6"]);
+    expect(missing.stderr).toContain(`[--depth <1-${MAX_CALL_HIERARCHY_DEPTH}>]`);
+    const tooDeep = String(MAX_CALL_HIERARCHY_DEPTH + 1);
+    const highDepth = await captureCli(["callers", "--json", "cg:symbol:unused", "--depth", tooDeep]);
 
     expect(highDepth).toEqual({
       stdout: "",
-      stderr: 'Invalid --depth value "6". Expected an integer from 1 to 5.\n',
+      stderr: `Invalid --depth value "${tooDeep}". Expected an integer from 1 to ${MAX_CALL_HIERARCHY_DEPTH}.\n`,
       exitCode: 2,
     });
 
@@ -184,5 +189,85 @@ describe("call hierarchy CLI receiver method calls", () => {
         },
       ],
     });
+  });
+});
+
+describe("call hierarchy CLI at the depth cap", () => {
+  const links = 18;
+  let chainRoot = "";
+
+  beforeAll(async () => {
+    chainRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-call-chain-"));
+    // f0 calls f1, which calls f2, and so on to f17: seventeen levels below f0 and above f17.
+    const lines = Array.from({ length: links }, (_, index) =>
+      index + 1 < links
+        ? `export function f${index}(): number { return f${index + 1}(); }`
+        : `export function f${index}(): number { return 1; }`,
+    );
+    await fs.writeFile(path.join(chainRoot, "chain.ts"), lines.join("\n"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(chainRoot, { recursive: true, force: true });
+  });
+
+  async function entryNames(command: "callers" | "callees", target: string): Promise<Array<[number, string]>> {
+    const result = await captureCli([
+      command,
+      `chain.ts::${target}`,
+      "--root",
+      chainRoot,
+      "--cache",
+      "off",
+      "--depth",
+      String(MAX_CALL_HIERARCHY_DEPTH),
+      "--limit",
+      "500",
+      "--json",
+    ]);
+    expect(result.exitCode).toBeUndefined();
+    const parsed: unknown = JSON.parse(result.stdout);
+    if (!isPlainRecord(parsed) || !Array.isArray(parsed.entries))
+      throw new Error("call hierarchy response was invalid");
+    expect(parsed.omittedCounts).toMatchObject({ symbols: 0 });
+    return parsed.entries.map((entry: unknown): [number, string] => {
+      if (!isPlainRecord(entry) || !isPlainRecord(entry.symbol)) throw new Error("call hierarchy entry was invalid");
+      return [Number(entry.depth), String(entry.symbol.name)];
+    });
+  }
+
+  it("walks callees fifteen levels down and stops at the cap", async () => {
+    const names = await entryNames("callees", "f0");
+    expect(names).toEqual(Array.from({ length: 15 }, (_, index): [number, string] => [index + 1, `f${index + 1}`]));
+  });
+
+  it("walks callers fifteen levels up and stops at the cap", async () => {
+    const names = await entryNames("callers", `f${links - 1}`);
+    expect(names).toEqual(
+      Array.from({ length: 15 }, (_, index): [number, string] => [index + 1, `f${links - 2 - index}`]),
+    );
+  });
+
+  it("bounds a fifteen-level result by --limit and prints the omitted symbol count", async () => {
+    const result = await captureCli([
+      "callees",
+      "chain.ts::f0",
+      "--root",
+      chainRoot,
+      "--cache",
+      "off",
+      "--depth",
+      "15",
+      "--limit",
+      "3",
+    ]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).toContain("Callees: 3");
+    // Each function sits on its own line, so f1 is declared on line 2 and f3 on line 4.
+    expect(result.stdout).toContain("1. f1 [function] chain.ts:2:17");
+    expect(result.stdout).toContain("3. f3 [function] chain.ts:4:17");
+    expect(result.stdout).not.toContain("4. f4");
+    expect(result.stdout).toContain("Omitted symbols: 12");
   });
 });

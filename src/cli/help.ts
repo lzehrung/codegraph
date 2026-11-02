@@ -282,7 +282,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const CALLERS_HELP_TEXT = `codegraph callers - Find proven semantic callers
 
-Usage: codegraph callers <symbol-target> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
+Usage: codegraph callers <symbol-target> [--root <path>] [--depth <1-15>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
 
 Returns grouped caller symbols and exact project-relative callsites from resolved calls edges. --include-heuristic is accepted for forward compatibility, but current results remain limited to proven semantic edges.
 
@@ -291,7 +291,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const CALLEES_HELP_TEXT = `codegraph callees - Find proven semantic callees
 
-Usage: codegraph callees <symbol-target> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
+Usage: codegraph callees <symbol-target> [--root <path>] [--depth <1-15>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
 
 Returns grouped callee symbols and exact project-relative callsites from resolved calls edges. --include-heuristic is accepted for forward compatibility, but current results remain limited to proven semantic edges.
 
