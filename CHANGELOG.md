@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [3.1.2] - 2026-11-02
+
 ### Changed
 
 - A cold index of a JavaScript or TypeScript project builds each file's module in the native worker that parsed it: imports (resolved later), locals and exports, parse error ranges, and edge specifiers come back as one compact record, and the main thread only resolves the distinct imports and finishes the module and its edges. The build keeps twice as many files in flight as there are workers unless `threads` is set, and `--report` counts worker-built files in `workerPool.moduleRecords`; files that need the main thread (such as a CommonJS `module.exports = { ...required }` spread) and incremental updates are indexed as before. On a 16,700-file project a cold build took 46 s instead of 111 s (main-thread CPU 36 s instead of 108 s; peak RSS 3.4 GB instead of 2.9 GB), and on an 11,700-file monorepo 8.4 s instead of 14.2 s. Modules, edges, module-cache rows, and manifest entries are unchanged.
@@ -800,7 +802,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.1.1...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.1.2...HEAD
+[3.1.2]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.2
 [3.1.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.1
 [3.1.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.0
 [3.0.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.0.1
