@@ -1,8 +1,20 @@
 import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import os from "node:os";
+import { brotliDecompressSync } from "node:zlib";
 import path from "node:path";
 import v8 from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildProjectIndexFromFiles, listProjectFiles, type BuildReport, type ProjectIndex } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  listProjectFiles,
+  type BuildReport,
+  type ProjectIndex,
+} from "../src/index.js";
+import { cacheRoot } from "../src/indexer/build-cache/location.js";
+import { fileIdentityKey } from "../src/util/paths.js";
+import * as nativeWorkerPool from "../src/worker/native-worker-pool.js";
 import * as moduleRecords from "../src/indexer/module-record.js";
 import {
   buildModuleRecord,
@@ -121,20 +133,59 @@ afterEach(() => {
 
 describe("module records", () => {
   for (const root of jsTsRoots) {
-    it(`builds the same index in native workers as on the main thread: ${slash(path.relative(repoRoot, root))}`, async () => {
+    it(`builds the same index and disk cache in native workers as on the main thread: ${slash(path.relative(repoRoot, root))}`, async () => {
       const files = await listProjectFiles(root);
-      const workerReport: BuildReport = { timings: {} };
-      const inWorkers = await buildProjectIndexFromFiles(root, files, {
-        useNativeWorkers: true,
-        nativeThreads: 2,
-        report: workerReport,
-      });
-      const onMainThread = await buildProjectIndexFromFiles(root, files, { useNativeWorkers: false });
+      const cacheDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codegraph-module-record-parity-"));
+      try {
+        const workerCacheDir = path.join(cacheDirectory, "workers");
+        const mainCacheDir = path.join(cacheDirectory, "main");
+        const workerReport: BuildReport = { timings: {} };
+        const inWorkers = await buildProjectIndex(root, {
+          cache: "disk",
+          cacheDir: workerCacheDir,
+          useNativeWorkers: true,
+          nativeThreads: 2,
+          report: workerReport,
+        });
+        const onMainThread = await buildProjectIndex(root, {
+          cache: "disk",
+          cacheDir: mainCacheDir,
+          useNativeWorkers: false,
+        });
 
-      // The compiled worker in dist ran and built the records, so this compares the worker path itself.
-      expect(workerReport.workerPool?.moduleRecords).toBeGreaterThan(0);
-      expect(moduleTexts(inWorkers)).toEqual(moduleTexts(onMainThread));
-      expect(edgeTexts(inWorkers)).toEqual(edgeTexts(onMainThread));
+        // The compiled worker in dist ran and built the records, so this compares the worker path itself.
+        expect(workerReport.workerPool?.moduleRecords).toBeGreaterThan(0);
+        expect(moduleTexts(inWorkers)).toEqual(moduleTexts(onMainThread));
+        expect(edgeTexts(inWorkers)).toEqual(edgeTexts(onMainThread));
+        const diskContents = (cacheDir: string) => {
+          const location = cacheRoot(root, { cache: "disk", cacheDir });
+          const db = new DatabaseSync(path.join(location, "index-cache.sqlite"), { readOnly: true });
+          try {
+            const rows = db
+              .prepare("SELECT file, sig, version, payload FROM module_cache ORDER BY file")
+              .all() as Array<{ file: string; sig: string; version: number; payload: Uint8Array }>;
+            const modules = rows.map(({ file, sig, version, payload }) => ({
+              file,
+              sig,
+              version,
+              module: JSON.parse(brotliDecompressSync(payload).toString("utf8")) as unknown,
+            }));
+            const manifest = JSON.parse(fs.readFileSync(path.join(location, "manifest.json"), "utf8")) as {
+              files: Record<string, unknown>;
+            };
+            return { modules, manifestFiles: manifest.files };
+          } finally {
+            db.close();
+          }
+        };
+        const workerDisk = diskContents(workerCacheDir);
+        const mainDisk = diskContents(mainCacheDir);
+        expect(workerDisk.modules.length).toBeGreaterThan(0);
+        expect(Object.keys(workerDisk.manifestFiles)).toHaveLength(files.length);
+        expect(workerDisk).toEqual(mainDisk);
+      } finally {
+        await fs.promises.rm(cacheDirectory, { recursive: true, force: true });
+      }
     }, 60_000);
   }
 
@@ -201,6 +252,77 @@ describe("module records", () => {
       report: overflowReport,
     });
     expect(overflowReport.workerPool?.moduleRecords).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("keeps parsed trees when non-parsed files exceed the parsed cache's file limit", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codegraph-module-record-trees-"));
+    try {
+      const files = ["first.ts", "second.ts", "settings.json", "notes.md"].map((name) => path.join(root, name));
+      await Promise.all(
+        files.map((file) =>
+          fs.promises.writeFile(
+            file,
+            file.endsWith(".ts") ? `export const ${path.basename(file, ".ts")} = 1;\n` : "{}\n",
+            "utf8",
+          ),
+        ),
+      );
+      const report: BuildReport = { timings: {} };
+      const index = await buildProjectIndexFromFiles(root, files, {
+        useNativeWorkers: true,
+        nativeThreads: 2,
+        keepParsed: true,
+        parsedCacheMaxEntries: 2,
+        report,
+      });
+      expect(report.workerPool?.tasksSubmitted).toBe(2);
+      expect(report.workerPool?.moduleRecords ?? 0).toBe(0);
+      expect([...(index.parsed?.keys() ?? [])].map(fileIdentityKey).sort()).toEqual(
+        files.slice(0, 2).map(fileIdentityKey).sort(),
+      );
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("keeps the automatic parse window to twice a one-thread worker pool", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codegraph-module-record-window-"));
+    try {
+      const files = Array.from({ length: 10 }, (_, index) => path.join(root, `file-${index}.ts`));
+      await Promise.all(files.map((file) => fs.promises.writeFile(file, "export const value = 1;\n", "utf8")));
+      let inFlight = 0;
+      let maximumInFlight = 0;
+      const bothStarted = Promise.withResolvers<void>();
+      const originalCreatePool = nativeWorkerPool.createNativeWorkerPool;
+      vi.spyOn(nativeWorkerPool, "createNativeWorkerPool").mockImplementation((options) => {
+        const pool = originalCreatePool(options);
+        const originalRun = pool.run.bind(pool);
+        vi.spyOn(pool, "run").mockImplementation(async (task, runOptions) => {
+          inFlight += 1;
+          maximumInFlight = Math.max(maximumInFlight, inFlight);
+          if (inFlight === 2) bothStarted.resolve();
+          try {
+            await bothStarted.promise;
+            const result = await originalRun(task, runOptions);
+            return result;
+          } finally {
+            inFlight -= 1;
+          }
+        });
+        return pool;
+      });
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, files, {
+        useNativeWorkers: true,
+        nativeThreads: 1,
+        report,
+      });
+      expect(report.workerPool?.threads).toBe(1);
+      expect(report.workerPool?.moduleRecords).toBe(files.length);
+      expect(maximumInFlight).toBe(2);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
   }, 60_000);
 
   describe("buildModuleRecord", () => {

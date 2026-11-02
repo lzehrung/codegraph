@@ -1790,16 +1790,22 @@ async function buildIndexFromFileListInProbeCache(
     opts,
     countNativeWorkerEligibleFiles(cacheMisses, opts?.languageExtensions),
   );
-  // A worker that builds a file's module record keeps the file's syntax tree. A keepParsed build whose parse misses fit
-  // in its parsed-file cache asks the workers for the trees instead, so it retains every parsed tree as before.
+  // A worker that builds a file's module record keeps the file's syntax tree. Count only misses that can retain a
+  // parsed tree; unsupported and graph-only files cannot use the parsed-file cache.
+  let parsedCacheMisses = 0;
+  if (opts?.keepParsed) {
+    for (const file of cacheMisses) {
+      const support = supportForFile(file, opts.languageExtensions);
+      if (support && !isGraphOnlyLanguage(support.id) && support.id !== "sql") parsedCacheMisses += 1;
+    }
+  }
   const moduleRecords: ModuleRecordPolicy = {
-    inWorkers: !opts?.keepParsed || cacheMisses.length > parsedCacheMaxEntries(opts),
+    inWorkers: !opts?.keepParsed || parsedCacheMisses > parsedCacheMaxEntries(opts),
   };
-  // With module records, the main thread's share of a file is small, so twice the pool's files in flight keep every
-  // worker busy while the main thread finishes the others. An explicit `threads` keeps its own limit.
+  // With module records, twice the pool's files in flight keep workers busy while the main thread finishes the
+  // others. An explicit `threads` keeps its own limit, even when smaller than the worker pool.
   const threadsRequested = Number(opts?.threads || 0) > 0;
-  const parseConcurrency =
-    workerSetup.pool && !threadsRequested ? Math.max(conc, 2 * (workerSetup.report?.threads ?? 0)) : conc;
+  const parseConcurrency = workerSetup.pool && !threadsRequested ? 2 * (workerSetup.report?.threads ?? 0) : conc;
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
     const bloomFilterCache = useBloomFilters
