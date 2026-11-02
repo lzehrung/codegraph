@@ -211,18 +211,9 @@ describe("parse-error reference coverage", () => {
       ...loaded,
       binding: {
         ...loaded.binding,
-        extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
-          const extraction = originalExtractLanguage(
-            source,
-            languageId,
-            importsQuery,
-            exportsQuery,
-            localsQuery,
-            importBindingsQuery,
-          );
-          return languageId === "sql" && source.startsWith("SELECT normalize_email")
-            ? { ...extraction, syntaxTree: legacyTree }
-            : extraction;
+        extractLanguage: (source, querySetId) => {
+          const extraction = originalExtractLanguage(source, querySetId);
+          return source.startsWith("SELECT normalize_email") ? { ...extraction, syntaxTree: legacyTree } : extraction;
         },
       },
     });

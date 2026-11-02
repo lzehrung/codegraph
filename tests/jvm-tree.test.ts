@@ -534,9 +534,9 @@ describe("JVM importers while a package file has no readable syntax tree", () =>
           if (source.includes(marker)) throw new Error("forced JVM parse failure");
           return parseSyntaxTree(source, languageId);
         },
-        extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+        extractLanguage: (source, querySetId) => {
           if (source.includes(marker)) throw new Error("forced JVM extraction failure");
-          return extractLanguage(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+          return extractLanguage(source, querySetId);
         },
       },
     });

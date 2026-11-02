@@ -4,6 +4,7 @@ mod languages;
 mod parser_pool;
 mod projection;
 mod query;
+mod query_set;
 mod types;
 
 #[cfg(test)]
@@ -17,10 +18,8 @@ use napi_derive::napi;
 use crate::languages::language_for_id;
 use crate::parser_pool::parse_source;
 use crate::projection::{project_columns, ProjectedColumns, ProjectionLimits};
-use crate::query::{
-    execute_language_queries_cached, execute_query_cached, execute_query_compact,
-    LanguageQueryTexts,
-};
+use crate::query::execute_query_cached;
+use crate::query_set::{registered_query_set, LanguageQueryTexts, QuerySet};
 use crate::types::{
     CompactQueryResults, NativeDuplicateTokens, NativeQueryResults, NativeQueryRunResult,
 };
@@ -30,16 +29,6 @@ use crate::types::{NativeLanguageExtraction, NativeSyntaxTree};
 #[napi]
 pub fn supported_language_ids() -> Vec<String> {
     languages::supported_language_ids()
-}
-
-fn execute_language_queries(
-    source: &str,
-    language_id: &str,
-    language: &tree_sitter::Language,
-    root: tree_sitter::Node<'_>,
-    queries: LanguageQueryTexts<'_>,
-) -> Result<NativeQueryResults> {
-    execute_language_queries_cached(source, root, language, language_id, queries)
 }
 
 /// Parse and project without touching any JS value, so unit tests can exercise the
@@ -52,18 +41,15 @@ fn parse_syntax_tree_columns(source: &str, language_id: &str) -> Result<Projecte
         .map_err(|error| napi::Error::from_reason(error.message()))
 }
 
-/// Run the language queries and project the tree from a single parse, without touching
+/// Run the set's queries and project the tree from a single parse, without touching
 /// any JS value. `extract_language` is the thin marshalling wrapper.
 fn extract_language_parts(
     source: &str,
-    language_id: &str,
-    queries: LanguageQueryTexts<'_>,
+    set: &QuerySet,
 ) -> Result<(NativeQueryResults, ProjectedColumns)> {
-    let language = language_for_id(language_id)
-        .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
-    let tree = parse_source(source, language_id, &language)?;
+    let tree = parse_source(source, set.language_id(), set.language())?;
     let root = tree.root_node();
-    let results = execute_language_queries(source, language_id, &language, root, queries)?;
+    let results = set.execute(source, root)?;
     let columns = project_columns(root, ProjectionLimits::default())
         .map_err(|error| napi::Error::from_reason(error.message()))?;
     Ok((results, columns))
@@ -94,24 +80,24 @@ fn to_native_syntax_tree(columns: ProjectedColumns) -> NativeSyntaxTree {
     }
 }
 
+/// Register one language's imports, exports, locals, and import-binding queries and return an id
+/// that stands for them. The extraction calls (`runLanguageQueries`, `extractLanguage`,
+/// `runImportsQueryCompact`) take that id instead of the query text.
+///
+/// Registration is by content and process-wide: the same texts for the same language return the
+/// same id from any thread, and every thread runs the same compiled queries. Nothing compiles
+/// until the first extraction that needs it, so a query that does not compile fails that call,
+/// not the registration. An empty or blank text means the kind does not run.
 #[napi]
-pub fn run_language_queries(
-    source: String,
+pub fn register_query_set(
     language_id: String,
     imports_query: String,
     exports_query: String,
     locals_query: String,
     import_bindings_query: String,
-) -> Result<NativeQueryResults> {
-    let language = language_for_id(&language_id)
-        .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
-    let tree = parse_source(source.as_str(), language_id.as_str(), &language)?;
-    let root = tree.root_node();
-    execute_language_queries(
-        source.as_str(),
+) -> Result<u32> {
+    query_set::register_query_set(
         language_id.as_str(),
-        &language,
-        root,
         LanguageQueryTexts {
             imports: imports_query.as_str(),
             exports: exports_query.as_str(),
@@ -121,26 +107,26 @@ pub fn run_language_queries(
     )
 }
 
+/// How many Tree-sitter queries compiling this registered set has cost so far. A diagnostic for
+/// tests and benchmarks: it stays at one for a set that runs merged, however many threads or
+/// calls use it.
+#[napi]
+pub fn query_set_compile_count(query_set_id: u32) -> Result<u32> {
+    Ok(registered_query_set(query_set_id)?.compile_count())
+}
+
+#[napi]
+pub fn run_language_queries(source: String, query_set_id: u32) -> Result<NativeQueryResults> {
+    let set = registered_query_set(query_set_id)?;
+    let tree = parse_source(source.as_str(), set.language_id(), set.language())?;
+    set.execute(source.as_str(), tree.root_node())
+}
+
 #[cfg(not(test))]
 #[napi]
-pub fn extract_language(
-    source: String,
-    language_id: String,
-    imports_query: String,
-    exports_query: String,
-    locals_query: String,
-    import_bindings_query: String,
-) -> Result<NativeLanguageExtraction> {
-    let (results, columns) = extract_language_parts(
-        source.as_str(),
-        language_id.as_str(),
-        LanguageQueryTexts {
-            imports: imports_query.as_str(),
-            exports: exports_query.as_str(),
-            locals: locals_query.as_str(),
-            import_bindings: import_bindings_query.as_str(),
-        },
-    )?;
+pub fn extract_language(source: String, query_set_id: u32) -> Result<NativeLanguageExtraction> {
+    let set = registered_query_set(query_set_id)?;
+    let (results, columns) = extract_language_parts(source.as_str(), &set)?;
     Ok(NativeLanguageExtraction {
         results,
         syntax_tree: to_native_syntax_tree(columns),
@@ -148,26 +134,13 @@ pub fn extract_language(
 }
 
 #[napi]
-/// Run only the imports query and return compact results (name + text only).
+/// Run only the imports query of a registered set and return compact results (name + text only).
 /// This is the graph-mode entrypoint optimized for minimal marshaling.
-pub fn run_imports_query_compact(
-    source: String,
-    language_id: String,
-    imports_query: String,
-) -> Result<CompactQueryResults> {
-    let language = language_for_id(&language_id)
-        .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
-    let tree = parse_source(source.as_str(), language_id.as_str(), &language)?;
-    let root = tree.root_node();
-
+pub fn run_imports_query_compact(source: String, query_set_id: u32) -> Result<CompactQueryResults> {
+    let set = registered_query_set(query_set_id)?;
+    let tree = parse_source(source.as_str(), set.language_id(), set.language())?;
     Ok(CompactQueryResults {
-        imports: execute_query_compact(
-            source.as_str(),
-            root,
-            &language,
-            imports_query.as_str(),
-            language_id.as_str(),
-        )?,
+        imports: set.execute_imports_compact(source.as_str(), tree.root_node())?,
     })
 }
 

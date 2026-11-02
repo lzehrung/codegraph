@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { buildProjectIndex, type BuildReport } from "../src/index.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import { supportById } from "../src/languages.js";
+import * as bindingLoader from "../src/native/binding-loader.js";
+import type { NativeBindingOrigin } from "../src/native/contracts.js";
 import {
   __resetNativeTreeSitterBindingForTests,
   __setNativeTreeSitterBindingForTests,
@@ -24,6 +26,31 @@ describe("required native runtime", () => {
     await expect(buildProjectIndex(samplePath, { cache: "off" })).rejects.toThrow(
       /Required native addon @lzehrung\/codegraph-native is unavailable.*codegraph doctor/,
     );
+  });
+
+  it("treats an addon that predates registered query sets as unavailable and says to reinstall it", async () => {
+    const origin: NativeBindingOrigin = { mode: "workspace", packageName: "@lzehrung/codegraph-native" };
+    // An addon from before query sets exports the extraction calls but not `registerQuerySet`.
+    const legacyBinding = {
+      supportedLanguageIds: () => ["ts"],
+      runLanguageQueries: () => ({ imports: [], exports: [], locals: [], importBindings: [] }),
+    };
+    const load = vi.spyOn(bindingLoader, "loadNativeBinding").mockReturnValue({ binding: legacyBinding, origin });
+    __resetNativeTreeSitterBindingForTests();
+    try {
+      const state = loadBinding();
+
+      expect(state.loaded).toBe(false);
+      if (state.loaded) throw new Error("An addon without registerQuerySet must not load.");
+      expect(String(state.error)).toMatch(/registerQuerySet.*Reinstall the native package/);
+      expect(state.origin).toEqual(origin);
+      await expect(buildProjectIndex(samplePath, { cache: "off" })).rejects.toThrow(
+        /Required native addon @lzehrung\/codegraph-native is unavailable.*codegraph doctor.*registerQuerySet/,
+      );
+    } finally {
+      load.mockRestore();
+      __resetNativeTreeSitterBindingForTests();
+    }
   });
 
   it("reports a failed native import query without recovering imports from source text", () => {

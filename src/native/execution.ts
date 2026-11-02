@@ -11,7 +11,7 @@ import type {
   NativeSingleQueryExecution,
   NativeSyntaxTreeExecution,
 } from "./contracts.js";
-import { getCachedNormalizedQuery, normalizeNativeQueryForSupport } from "./queries.js";
+import { getNativeQuerySetId, normalizeNativeQueryForSupport } from "./queries.js";
 import { assertNativeRequiredAvailable, loadBinding } from "./runtime.js";
 import { isColumnarSyntaxTree, nativeShapeMismatchMessage, REQUIRED_NATIVE_EXTRACTION_VERSION } from "./tree-shape.js";
 
@@ -45,17 +45,9 @@ export function getNativeQueryExecutionForState(
   if (!state.supportedLanguageIds.has(support.id)) {
     return { results: null, fallbackReason: "unsupportedLanguage" };
   }
-  const importsOnly = scope === "imports";
   try {
     return {
-      results: state.binding.runLanguageQueries(
-        source,
-        support.id,
-        getCachedNormalizedQuery(support, "imports"),
-        importsOnly ? "" : getCachedNormalizedQuery(support, "exports"),
-        importsOnly ? "" : getCachedNormalizedQuery(support, "locals"),
-        importsOnly ? "" : getCachedNormalizedQuery(support, "importBindings"),
-      ),
+      results: state.binding.runLanguageQueries(source, getNativeQuerySetId(state.binding, support, scope)),
     };
   } catch (error) {
     return {
@@ -87,11 +79,10 @@ export function getCompactImportsExecution(source: string, support: LanguageSupp
   if (!state.supportedLanguageIds.has(support.id)) {
     return { results: null, fallbackReason: "unsupportedLanguage" };
   }
-  const importsQuery = getCachedNormalizedQuery(support, "imports");
   try {
     if (state.binding.runImportsQueryCompact) {
       return {
-        results: state.binding.runImportsQueryCompact(source, support.id, importsQuery),
+        results: state.binding.runImportsQueryCompact(source, getNativeQuerySetId(state.binding, support, "imports")),
       };
     }
     const full = getNativeQueryExecutionForState(source, support, state, "imports");
@@ -178,14 +169,7 @@ export function getNativeExtractionExecution(source: string, support: LanguageSu
     };
   }
   try {
-    const extraction = state.binding.extractLanguage(
-      source,
-      support.id,
-      getCachedNormalizedQuery(support, "imports"),
-      getCachedNormalizedQuery(support, "exports"),
-      getCachedNormalizedQuery(support, "locals"),
-      getCachedNormalizedQuery(support, "importBindings"),
-    );
+    const extraction = state.binding.extractLanguage(source, getNativeQuerySetId(state.binding, support, "full"));
     const tree = extraction.syntaxTree ?? null;
     // A missing tree is a tolerated state; a present-but-legacy tree means the installed
     // native package predates the columnar projection and cannot be read here. Query

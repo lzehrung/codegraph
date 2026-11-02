@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { NativeExtractBatchResult } from "../src/worker/native-extract-worker.js";
 import { loadProductionBinding, readWorkerBindingHandoff } from "../src/worker/native-extract-worker.js";
 import { createNativeWorkerPool } from "../src/worker/native-worker-pool.js";
-import { getCachedNormalizedQuery } from "../src/native/tree-sitter-native.js";
 import { getNativeWorkerBindingHandoff, loadBinding } from "../src/native/runtime.js";
 import { supportForFile } from "../src/languages.js";
 
@@ -25,10 +24,6 @@ function extractionTask(filePath: string): Record<string, unknown> {
     languageId: support.id,
     source: SOURCE,
     includeSourceInResult: false,
-    importsQuery: getCachedNormalizedQuery(support, "imports"),
-    exportsQuery: getCachedNormalizedQuery(support, "exports"),
-    localsQuery: getCachedNormalizedQuery(support, "locals"),
-    importBindingsQuery: getCachedNormalizedQuery(support, "importBindings"),
   };
 }
 

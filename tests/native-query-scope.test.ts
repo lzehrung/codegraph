@@ -19,19 +19,27 @@ afterEach(() => {
  */
 function createScopeSpy() {
   const executedKinds: string[] = [];
+  const registeredKinds = new Map<number, string[]>();
+  let registrations = 0;
   const binding = {
-    runLanguageQueries: (
-      _source: string,
+    registerQuerySet: (
       _languageId: string,
       importsQuery: string,
       exportsQuery: string,
       localsQuery: string,
       importBindingsQuery: string,
-    ): NativeQueryResults => {
-      if (importsQuery.trim()) executedKinds.push("imports");
-      if (exportsQuery.trim()) executedKinds.push("exports");
-      if (localsQuery.trim()) executedKinds.push("locals");
-      if (importBindingsQuery.trim()) executedKinds.push("importBindings");
+    ): number => {
+      registrations += 1;
+      const kinds: string[] = [];
+      if (importsQuery.trim()) kinds.push("imports");
+      if (exportsQuery.trim()) kinds.push("exports");
+      if (localsQuery.trim()) kinds.push("locals");
+      if (importBindingsQuery.trim()) kinds.push("importBindings");
+      registeredKinds.set(registrations, kinds);
+      return registrations;
+    },
+    runLanguageQueries: (_source: string, querySetId: number): NativeQueryResults => {
+      executedKinds.push(...(registeredKinds.get(querySetId) ?? []));
       return {
         imports: [],
         exports: [],
@@ -53,7 +61,7 @@ function createScopeSpy() {
     supportedLanguageIds: new Set(["ts", "tsx", "js", "python", "go", "rust"]),
     origin: { mode: "workspace" as const, packageName: "@lzehrung/codegraph-native" },
   };
-  return { executedKinds, state };
+  return { executedKinds, registrations: () => registrations, state };
 }
 
 describe("native query scope", () => {
@@ -85,6 +93,27 @@ describe("native query scope", () => {
     expect(executedKinds).toContain("exports");
     expect(executedKinds).toContain("locals");
     expect(executedKinds).toContain("importBindings");
+  });
+
+  it("registers each language and scope once per binding and reuses the id", () => {
+    const support = supportById("ts")!;
+    const { executedKinds, registrations, state } = createScopeSpy();
+    const allKinds = ["imports", "exports", "locals", "importBindings"];
+
+    for (let call = 0; call < 3; call += 1) {
+      getNativeQueryExecutionForState("export const value = 1;", support, state, "imports");
+      getNativeQueryExecutionForState("export const value = 1;", support, state, "full");
+    }
+
+    expect(registrations()).toBe(2);
+    expect(executedKinds).toEqual([
+      ...["imports"],
+      ...allKinds,
+      ...["imports"],
+      ...allKinds,
+      ...["imports"],
+      ...allKinds,
+    ]);
   });
 
   it("defaults to full scope when no scope is specified", () => {

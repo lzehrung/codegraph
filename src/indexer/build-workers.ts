@@ -5,7 +5,6 @@ import { stringifyUnknown } from "../util/ast.js";
 import { readConfinedUtf8File } from "../util/confined-file.js";
 import { recordNativeExecutionOutcome } from "../native/native-backend-report.js";
 import {
-  getCachedNormalizedQuery,
   getNativeWorkerBindingHandoff,
   isNativeRequiredUnavailableError,
   isNativeTreeSitterAvailable,
@@ -110,10 +109,6 @@ function buildWorkerTask(
     languageId: sup.id,
     ...(source !== undefined ? { source, includeSourceInResult: false } : {}),
     ...(includeBloomFilter ? { includeBloomFilter: true } : {}),
-    importsQuery: getCachedNormalizedQuery(sup, "imports"),
-    exportsQuery: getCachedNormalizedQuery(sup, "exports"),
-    localsQuery: getCachedNormalizedQuery(sup, "locals"),
-    importBindingsQuery: getCachedNormalizedQuery(sup, "importBindings"),
   };
 }
 

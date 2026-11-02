@@ -1,22 +1,15 @@
 use super::{
-    extract_language_parts, parse_syntax_tree_columns, run_imports_query_compact,
-    run_language_queries, run_query, supported_language_ids,
+    extract_language_parts, parse_syntax_tree_columns, register_query_set,
+    run_imports_query_compact, run_language_queries, run_query, supported_language_ids,
 };
-use crate::projection::ProjectedColumns;
 use crate::languages::language_for_id;
 use crate::parser_pool::{parse_invocations_for_tests, reset_parse_invocations_for_tests};
-use crate::query::{
-    execute_language_queries_cached_with_match_limit,
-    execute_language_queries_separately,
-    execute_query,
-    record_merged_query_compile_failure_for_tests,
-    try_execute_merged_language_queries,
-    try_execute_merged_language_queries_with_match_limit,
-    LanguageQueryTexts,
-    QueryCache,
-};
-use crate::types::NativeMatch;
+use crate::projection::ProjectedColumns;
+use crate::query::{compile_query, execute_query, AdHocQueryCache};
+use crate::query_set::{registered_query_set, LanguageQueryTexts, QuerySet, QuerySetRegistry};
+use crate::types::{NativeMatch, NativeQueryResults};
 use std::collections::HashSet;
+use std::sync::Arc;
 use tree_sitter::Parser;
 
 /// Column-by-column equality between two projections of the same source.
@@ -221,58 +214,98 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
         assert_eq!(first_capture_texts(&matches), vec!["value".to_string()]);
     }
 
-    #[test]
-    fn run_language_queries_returns_imports_and_locals_for_javascript() {
-        let results = run_language_queries(
-            "import { helper } from \"./dep.js\";\nconst value = helper();".to_string(),
-            "js".to_string(),
-            "(import_statement (string) @mod) @stmt".to_string(),
-            "".to_string(),
-            "(variable_declarator name: (identifier) @name)".to_string(),
-            "(import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from) @stmt"
-                .to_string(),
-        )
-        .expect("native query execution should succeed");
+/// Register `texts` for `language_id` and return the set's id.
+fn register(
+    language_id: &str,
+    imports: &str,
+    exports: &str,
+    locals: &str,
+    import_bindings: &str,
+) -> u32 {
+    register_query_set(
+        language_id.to_string(),
+        imports.to_string(),
+        exports.to_string(),
+        locals.to_string(),
+        import_bindings.to_string(),
+    )
+    .expect("query set should register")
+}
 
-        assert_eq!(results.imports.len(), 1);
-        assert_eq!(results.import_bindings.len(), 1);
-        assert_eq!(
-            first_capture_texts(&results.locals),
-            vec!["value".to_string()]
+fn register_locals(language_id: &str, locals: &str) -> u32 {
+    register(language_id, "", "", locals, "")
+}
+
+/// A set outside the process-wide registry, so a test can count what it compiles.
+fn private_set(
+    language_id: &str,
+    imports: &str,
+    exports: &str,
+    locals: &str,
+    import_bindings: &str,
+) -> QuerySet {
+    QuerySet::new(
+        language_id,
+        LanguageQueryTexts {
+            imports,
+            exports,
+            locals,
+            import_bindings,
+        },
+    )
+    .expect("query set should build")
+}
+
+const TS_SOURCE: &str =
+    "import { helper } from './dep';\nexport const value = helper();\nexport function greet() {}";
+const TS_IMPORTS: &str = "(import_statement (string) @mod) @stmt";
+const TS_EXPORTS: &str = "(export_statement) @export";
+const TS_LOCALS: &str = "(variable_declarator name: (identifier) @name)";
+const TS_BINDINGS: &str = "(import_specifier name: (identifier) @iname)";
+
+#[test]
+fn run_language_queries_returns_imports_and_locals_for_javascript() {
+    let id = register(
+        "js",
+        "(import_statement (string) @mod) @stmt",
+        "",
+        "(variable_declarator name: (identifier) @name)",
+        "(import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from) @stmt",
+    );
+    let results = run_language_queries(
+        "import { helper } from \"./dep.js\";\nconst value = helper();".to_string(),
+        id,
+    )
+    .expect("native query execution should succeed");
+
+    assert_eq!(results.imports.len(), 1);
+    assert_eq!(results.import_bindings.len(), 1);
+    assert_eq!(
+        first_capture_texts(&results.locals),
+        vec!["value".to_string()]
+    );
+}
+
+#[test]
+fn merged_language_queries_match_separate_queries_for_every_supported_language() {
+    for language_id in supported_language_ids() {
+        let (source, query) = smoke_case(language_id.as_str());
+        let tree = parse_root(source, language_id.as_str());
+        let two_patterns = format!("{query}\n{query}");
+        let set = private_set(
+            language_id.as_str(),
+            query,
+            two_patterns.as_str(),
+            "",
+            query,
         );
-    }
-
-    #[test]
-    fn merged_language_queries_match_separate_queries_for_every_supported_language() {
-        for language_id in supported_language_ids() {
-            let (source, query) = smoke_case(language_id.as_str());
-            let language = language_for_id(language_id.as_str())
-                .expect("supported language should resolve to a parser language");
-            let tree = parse_root(source, language_id.as_str());
-            let two_patterns = format!("{query}\n{query}");
-            let queries = LanguageQueryTexts {
-                imports: query,
-                exports: two_patterns.as_str(),
-                locals: "",
-                import_bindings: query,
-            };
-            let separate = execute_language_queries_separately(
-                source,
-                tree.root_node(),
-                &language,
-                language_id.as_str(),
-                queries,
-            )
+        let separate = set
+            .execute_separately(source, tree.root_node())
             .unwrap_or_else(|error| {
                 panic!("separate query execution failed for {language_id}: {error}")
             });
-            let merged = try_execute_merged_language_queries(
-                source,
-                tree.root_node(),
-                &language,
-                language_id.as_str(),
-                queries,
-            )
+        let merged = set
+            .execute_merged(source, tree.root_node(), None)
             .unwrap_or_else(|error| {
                 panic!("merged query execution failed for {language_id}: {error}")
             })
@@ -280,354 +313,536 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
                 panic!("merged query should compile for {language_id}");
             });
 
-            assert_eq!(
-                merged, separate,
-                "merged query results should preserve every capture and pattern index for {language_id}"
-            );
-        }
-    }
-
-    #[test]
-    fn cached_merged_compile_failures_skip_retries() {
-        let source = "const cachedMergeFailure = 1;";
-        let query = "(identifier) @cached_merge_failure";
-        let language = language_for_id("ts").expect("typescript language should exist");
-        let tree = parse_root(source, "ts");
-        record_merged_query_compile_failure_for_tests("ts", &format!("{query}\n{query}\n"));
-
-        let merged = try_execute_merged_language_queries(
-            source,
-            tree.root_node(),
-            &language,
-            "ts",
-            LanguageQueryTexts {
-                imports: query,
-                exports: query,
-                locals: "",
-                import_bindings: "",
-            },
-        )
-        .expect("individual query should compile");
-
-        assert!(
-            merged.is_none(),
-            "a cached merged compile failure must skip recompiling the same query text"
-        );
-    }
-
-    #[test]
-    fn compiled_query_cache_keeps_a_repeated_query_warm() {
-        let language = language_for_id("js").expect("javascript language should exist");
-        let mut cache = QueryCache::with_capacity(2);
-        let query_text = "(identifier) @name";
-
-        cache
-            .get_or_compile("js", &language, query_text)
-            .expect("query should compile");
-        cache
-            .get_or_compile("js", &language, query_text)
-            .expect("repeated query should reuse the compiled entry");
-
-        assert_eq!(cache.len(), 1, "repeating a query must not grow the cache");
-        assert!(cache.contains("js", query_text));
-    }
-
-    #[test]
-    fn compiled_query_cache_evicts_lru_entries_after_capacity() {
-        let language = language_for_id("js").expect("javascript language should exist");
-        let mut cache = QueryCache::with_capacity(2);
-        let first = "(identifier) @first";
-        let second = "(identifier) @second";
-        let third = "(identifier) @third";
-
-        cache
-            .get_or_compile("js", &language, first)
-            .expect("first query should compile");
-        cache
-            .get_or_compile("js", &language, second)
-            .expect("second query should compile");
-        cache
-            .get_or_compile("js", &language, first)
-            .expect("first query should stay warm");
-        cache
-            .get_or_compile("js", &language, third)
-            .expect("third query should compile");
-
-        assert_eq!(cache.len(), 2, "cache must not grow past capacity");
-        assert!(cache.contains("js", first), "recently used query must remain");
-        assert!(cache.contains("js", third), "newest query must remain");
-        assert!(
-            !cache.contains("js", second),
-            "least recently used query must be evicted"
-        );
-    }
-
-    #[test]
-    fn merged_query_compile_failure_memo_evicts_after_capacity() {
-        let mut cache = QueryCache::with_capacity(2);
-        cache.record_failed_merged("ts", "one");
-        cache.record_failed_merged("ts", "two");
-        assert!(cache.has_failed_merged("ts", "one"));
-        cache.touch_failed_merged("ts", "one");
-        cache.record_failed_merged("ts", "three");
-
         assert_eq!(
-            cache.failed_merged_len(),
-            2,
-            "failure memo must not grow past capacity"
-        );
-        assert!(
-            cache.has_failed_merged("ts", "one"),
-            "a repeatedly hit merged failure must stay warm instead of evicting as if cold"
-        );
-        assert!(cache.has_failed_merged("ts", "three"));
-        assert!(
-            !cache.has_failed_merged("ts", "two"),
-            "least recently recorded merged failure must be evicted"
+            merged, separate,
+            "merged query results should preserve every capture and pattern index for {language_id}"
         );
     }
+}
 
-    #[test]
-    fn compiled_query_cache_releases_inner_capacity_after_partial_eviction() {
-        let js = language_for_id("js").expect("javascript language should exist");
-        let ts = language_for_id("ts").expect("typescript language should exist");
-        let mut cache = QueryCache::with_capacity(50);
+#[test]
+fn merged_language_queries_keep_each_kinds_patterns_when_texts_start_with_comments() {
+    // Kinds that open with comments, hold several patterns, trail a comment with no newline, or
+    // hold nothing but a comment must still route every pattern to the kind that wrote it.
+    let imports = "; imports\n; two comment lines\n(import_statement (string) @mod) @stmt";
+    let exports = "(export_statement) @export\n; between patterns\n(export_statement declaration: (lexical_declaration)) @lexical\n(export_statement declaration: (function_declaration)) @function ; trailing";
+    let locals = "; nothing here but a comment";
+    let bindings = "\n\n  (import_specifier name: (identifier) @iname) @binding";
+    let set = private_set("ts", imports, exports, locals, bindings);
+    let tree = parse_root(TS_SOURCE, "ts");
 
-        for i in 0..50 {
-            let query_text = format!("(identifier) @q{i}");
-            cache
-                .get_or_compile("js", &js, &query_text)
-                .expect("js query should compile");
-        }
-        let peak_capacity = cache.language_query_capacity("js");
-        assert_eq!(cache.len(), 50, "cache must hold every js query up to capacity");
+    let merged = set
+        .execute_merged(TS_SOURCE, tree.root_node(), None)
+        .expect("merged execution should succeed")
+        .expect("texts that split into whole patterns per kind must run merged");
+    let separate = set
+        .execute_separately(TS_SOURCE, tree.root_node())
+        .expect("separate execution should succeed");
 
-        for i in 0..40 {
-            let query_text = format!("(identifier) @r{i}");
-            cache
-                .get_or_compile("ts", &ts, &query_text)
-                .expect("ts query should compile");
-        }
+    assert_eq!(merged, separate);
+    assert_eq!(merged.imports.len(), 1);
+    assert_eq!(merged.exports.len(), 4, "{:?}", merged.exports);
+    assert!(merged.locals.is_empty());
+    assert_eq!(merged.import_bindings.len(), 1);
+    let mut pattern_indexes: Vec<u32> = merged
+        .exports
+        .iter()
+        .map(|query_match| query_match.pattern_index)
+        .collect();
+    pattern_indexes.sort_unstable();
+    assert_eq!(
+        pattern_indexes,
+        vec![0, 0, 1, 2],
+        "pattern indexes count from the start of the kind, not of the merged query"
+    );
+    assert_eq!(
+        set.compile_count(),
+        5,
+        "the merged query, then the four kinds the separate run compiled on their own"
+    );
+}
 
-        assert_eq!(cache.len(), 50, "cache must not grow past capacity");
-        let remaining_js: usize = (0..50)
-            .filter(|i| cache.contains("js", &format!("(identifier) @q{i}")))
-            .count();
-        assert_eq!(
-            remaining_js, 10,
-            "only the most recently used js queries should survive eviction"
-        );
-        let shrunk_capacity = cache.language_query_capacity("js");
-        assert!(
-            shrunk_capacity < peak_capacity,
-            "js query map must release capacity from its historical peak after eviction, \
-             got shrunk_capacity={shrunk_capacity} peak_capacity={peak_capacity}"
-        );
+#[test]
+fn a_merged_set_compiles_once_however_often_it_runs() {
+    let set = private_set("ts", TS_IMPORTS, TS_EXPORTS, TS_LOCALS, TS_BINDINGS);
+    let tree = parse_root(TS_SOURCE, "ts");
+
+    let first = set
+        .execute(TS_SOURCE, tree.root_node())
+        .expect("first run should succeed");
+    for _ in 0..4 {
+        let again = set
+            .execute(TS_SOURCE, tree.root_node())
+            .expect("later runs should succeed");
+        assert_eq!(again, first);
     }
 
-    #[test]
-    fn merged_query_compile_failure_memo_releases_inner_capacity_after_partial_eviction() {
-        let mut cache = QueryCache::with_capacity(50);
+    assert_eq!(
+        set.compile_count(),
+        1,
+        "the merged query is the only compile: the four kinds are not compiled on their own"
+    );
+}
 
-        for i in 0..50 {
-            cache.record_failed_merged("ts", &format!("query-{i}"));
-        }
-        let peak_capacity = cache.failed_merged_capacity("ts");
-        assert_eq!(cache.failed_merged_len(), 50, "memo must hold every failure up to capacity");
+#[test]
+fn threads_share_one_compile_of_a_registered_set() {
+    // Distinct capture names keep this set from being shared with any other test.
+    let id = register(
+        "ts",
+        "(import_statement (string) @shared_compile_mod) @shared_compile_stmt",
+        "(export_statement) @shared_compile_export",
+        "(variable_declarator name: (identifier) @shared_compile_name)",
+        "(import_specifier name: (identifier) @shared_compile_iname)",
+    );
+    let thread_count = 8;
+    let barrier = std::sync::Barrier::new(thread_count);
 
-        for i in 0..40 {
-            cache.record_failed_merged("py", &format!("query-{i}"));
-        }
+    let results: Vec<NativeQueryResults> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..thread_count)
+            .map(|_| {
+                scope.spawn(|| {
+                    // Every thread asks for the set at the same moment, before any has compiled it.
+                    barrier.wait();
+                    run_language_queries(TS_SOURCE.to_string(), id)
+                        .expect("every thread should run the set")
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("thread should finish"))
+            .collect()
+    });
 
-        assert_eq!(cache.failed_merged_len(), 50, "memo must not grow past capacity");
-        let remaining_ts: usize = (0..50)
-            .filter(|i| cache.has_failed_merged("ts", &format!("query-{i}")))
-            .count();
-        assert_eq!(
-            remaining_ts, 10,
-            "only the most recently recorded ts failures should survive eviction"
-        );
-        let shrunk_capacity = cache.failed_merged_capacity("ts");
+    assert!(
+        results.iter().all(|result| result == &results[0]),
+        "every thread must see the same matches"
+    );
+    assert_eq!(results[0].imports.len(), 1);
+    assert_eq!(results[0].exports.len(), 2);
+    let set = registered_query_set(id).expect("registered set should be found");
+    assert_eq!(
+        set.compile_count(),
+        1,
+        "{thread_count} threads must share one compile, not repeat it"
+    );
+}
+
+#[test]
+fn registering_the_same_texts_returns_the_same_id() {
+    let mut registry = QuerySetRegistry::with_capacity(8);
+    let texts = LanguageQueryTexts {
+        imports: TS_IMPORTS,
+        exports: "",
+        locals: TS_LOCALS,
+        import_bindings: "",
+    };
+
+    let id = registry.register("ts", texts).expect("set should register");
+    assert_eq!(id, 1, "ids start at 1 so 0 is never a valid id");
+    assert_eq!(
+        registry.register("ts", texts).expect("set should register"),
+        id
+    );
+    assert_eq!(registry.len(), 1, "equal texts must not add a set");
+
+    let other_locals = LanguageQueryTexts {
+        locals: "(identifier) @name",
+        ..texts
+    };
+    let other_text = registry
+        .register("ts", other_locals)
+        .expect("set should register");
+    let other_language = registry
+        .register("tsx", texts)
+        .expect("set should register");
+    assert_ne!(other_text, id, "different text is a different set");
+    assert_ne!(
+        other_language, id,
+        "a different language is a different set"
+    );
+    assert_ne!(other_language, other_text);
+
+    assert!(registry.get(0).is_none());
+    assert!(registry.get(other_language + 1).is_none());
+    assert_eq!(
+        registry.get(id).expect("set should be found").language_id(),
+        "ts"
+    );
+}
+
+#[test]
+fn the_registry_refuses_sets_past_its_capacity_but_not_repeats() {
+    let mut registry = QuerySetRegistry::with_capacity(2);
+    let make = |locals: &'static str| LanguageQueryTexts {
+        imports: "",
+        exports: "",
+        locals,
+        import_bindings: "",
+    };
+
+    registry
+        .register("ts", make("(identifier) @one"))
+        .expect("first set should register");
+    registry
+        .register("ts", make("(identifier) @two"))
+        .expect("second set should register");
+    let error = registry
+        .register("ts", make("(identifier) @three"))
+        .expect_err("a set past capacity should be refused");
+
+    assert!(
+        error.to_string().contains("Too many query sets"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(registry.len(), 2);
+    assert_eq!(
+        registry
+            .register("ts", make("(identifier) @two"))
+            .expect("a registered set stays registrable at capacity"),
+        2
+    );
+}
+
+#[test]
+fn registering_an_unsupported_language_fails() {
+    let error = register_query_set(
+        "unknown".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "".to_string(),
+    )
+    .expect_err("unsupported language should fail");
+
+    assert!(
+        error.to_string().contains("Unsupported language"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn running_an_unregistered_id_fails() {
+    for id in [0, u32::MAX] {
+        let error = run_language_queries("value".to_string(), id)
+            .expect_err("an unregistered id should fail");
+
         assert!(
-            shrunk_capacity < peak_capacity,
-            "failure memo must release capacity from its historical peak after eviction, \
-             got shrunk_capacity={shrunk_capacity} peak_capacity={peak_capacity}"
+            error.to_string().contains("Unknown query set id"),
+            "unexpected error for {id}: {error}"
         );
     }
+}
 
-    #[test]
-    fn merged_language_queries_skip_single_active_kind() {
-        let source = "const singleQueryKind = 1;";
-        let query = "(identifier) @single_query_kind";
-        let language = language_for_id("ts").expect("typescript language should exist");
-        let tree = parse_root(source, "ts");
-        let merged = try_execute_merged_language_queries(
-            source,
-            tree.root_node(),
-            &language,
-            "ts",
-            LanguageQueryTexts {
-                imports: query,
-                exports: "",
-                locals: "",
-                import_bindings: "",
-            },
-        )
-        .expect("individual query should compile");
+#[test]
+fn a_set_with_one_active_kind_runs_that_kind_without_a_merged_compile() {
+    let set = private_set("ts", TS_IMPORTS, "", "  ", "");
+    let tree = parse_root(TS_SOURCE, "ts");
 
-        assert!(
-            merged.is_none(),
-            "one active query kind should use the independent executor without merged compilation"
-        );
-    }
+    let merged = set
+        .execute_merged(TS_SOURCE, tree.root_node(), None)
+        .expect("a single kind needs no compile to decline merging");
+    assert!(
+        merged.is_none(),
+        "one active query kind should use the independent executor without merged compilation"
+    );
+    assert_eq!(set.compile_count(), 0);
 
-    #[test]
-    fn merged_language_queries_fall_back_when_the_match_limit_is_exceeded() {
-        let source = "/* one */\n/* two */\n/* three */\nfunction target() {}";
-        let query = "(((comment) @comment)* (function_declaration name: (identifier) @name))";
-        let language = language_for_id("js").expect("javascript language should exist");
-        let tree = parse_root(source, "js");
-        let queries = LanguageQueryTexts {
-            imports: query,
-            exports: query,
-            locals: "",
-            import_bindings: "",
-        };
-        let merged = try_execute_merged_language_queries_with_match_limit(
-            source,
-            tree.root_node(),
-            &language,
-            "js",
-            queries,
-            1,
-        )
+    let results = set
+        .execute(TS_SOURCE, tree.root_node())
+        .expect("the one kind should run");
+    assert_eq!(results.imports.len(), 1);
+    assert!(results.exports.is_empty() && results.locals.is_empty());
+    assert_eq!(set.compile_count(), 1, "only the one kind compiles");
+}
+
+#[test]
+fn a_set_without_query_text_matches_nothing_and_compiles_nothing() {
+    let set = private_set("ts", "", " ", "\n", "");
+    let tree = parse_root(TS_SOURCE, "ts");
+
+    let results = set
+        .execute(TS_SOURCE, tree.root_node())
+        .expect("an empty set should run");
+
+    assert!(
+        results.imports.is_empty()
+            && results.exports.is_empty()
+            && results.locals.is_empty()
+            && results.import_bindings.is_empty()
+    );
+    assert_eq!(set.compile_count(), 0);
+}
+
+#[test]
+fn merged_language_queries_fall_back_when_the_match_limit_is_exceeded() {
+    let source = "/* one */\n/* two */\n/* three */\nfunction target() {}";
+    let query = "(((comment) @comment)* (function_declaration name: (identifier) @name))";
+    let set = private_set("js", query, query, "", "");
+    let tree = parse_root(source, "js");
+
+    let merged = set
+        .execute_merged(source, tree.root_node(), Some(1))
         .expect("valid queries should execute");
-        assert!(
-            merged.is_none(),
-            "an exceeded shared match limit must reject partial merged results"
-        );
+    assert!(
+        merged.is_none(),
+        "an exceeded shared match limit must reject partial merged results"
+    );
+    assert_eq!(
+        set.compile_count(),
+        1,
+        "the kinds have not run on their own yet"
+    );
 
-        let fallback = execute_language_queries_cached_with_match_limit(
-            source,
-            tree.root_node(),
-            &language,
-            "js",
-            queries,
-            1,
-        )
+    let fallback = set
+        .execute_with_match_limit(source, tree.root_node(), 1)
         .expect("fallback queries should execute");
-        let separate = execute_language_queries_separately(
-            source,
-            tree.root_node(),
-            &language,
-            "js",
-            queries,
-        )
+    let separate = set
+        .execute_separately(source, tree.root_node())
         .expect("independent queries should execute");
-        assert_eq!(
-            fallback, separate,
-            "an exceeded shared match limit must return independent-query results"
-        );
-    }
+    assert_eq!(
+        fallback, separate,
+        "an exceeded shared match limit must return independent-query results"
+    );
+    assert_eq!(
+        set.compile_count(),
+        3,
+        "the merged query and the two kinds, each compiled once however often they run"
+    );
+}
 
-    #[test]
-    fn extract_language_matches_separate_queries_and_projection_with_one_parse() {
-        let cases = [
-            (
-                "ts",
-                "import { helper } from './dep';\nexport function greet() { return helper(); }",
-                "(function_declaration name: (identifier) @name)",
-            ),
-            (
-                "python",
-                "from dep import helper\ndef greet():\n    return helper()",
-                "(function_definition name: (identifier) @name)",
-            ),
-            (
-                "go",
-                "package main\nfunc greet() { helper() }",
-                "(function_declaration name: (identifier) @name)",
-            ),
-        ];
+#[test]
+fn extract_language_matches_separate_queries_and_projection_with_one_parse() {
+    let cases = [
+        (
+            "ts",
+            "import { helper } from './dep';\nexport function greet() { return helper(); }",
+            "(function_declaration name: (identifier) @name)",
+        ),
+        (
+            "python",
+            "from dep import helper\ndef greet():\n    return helper()",
+            "(function_definition name: (identifier) @name)",
+        ),
+        (
+            "go",
+            "package main\nfunc greet() { helper() }",
+            "(function_declaration name: (identifier) @name)",
+        ),
+    ];
 
-        for (language_id, source, locals_query) in cases {
-            let separate_results = run_language_queries(
-                source.to_string(),
-                language_id.to_string(),
-                "".to_string(),
-                "".to_string(),
-                locals_query.to_string(),
-                "".to_string(),
-            )
+    for (language_id, source, locals_query) in cases {
+        let id = register_locals(language_id, locals_query);
+        let separate_results = run_language_queries(source.to_string(), id)
             .expect("separate native queries should succeed");
-            let separate_tree = parse_syntax_tree_columns(source, language_id)
-                .expect("separate syntax tree projection should succeed");
+        let separate_tree = parse_syntax_tree_columns(source, language_id)
+            .expect("separate syntax tree projection should succeed");
 
-            reset_parse_invocations_for_tests();
-            let (combined_results, combined_tree) = extract_language_parts(
-                source,
-                language_id,
-                LanguageQueryTexts {
-                    imports: "",
-                    exports: "",
-                    locals: locals_query,
-                    import_bindings: "",
-                },
-            )
+        reset_parse_invocations_for_tests();
+        let set = registered_query_set(id).expect("registered set should be found");
+        let (combined_results, combined_tree) = extract_language_parts(source, &set)
             .expect("combined native extraction should succeed");
 
-            assert_eq!(
-                parse_invocations_for_tests(),
-                1,
-                "combined extraction should parse {language_id} exactly once"
-            );
-            assert_eq!(
-                combined_results, separate_results,
-                "combined query results should match separate queries for {language_id}"
-            );
-            assert_columns_match(
-                &combined_tree,
-                &separate_tree,
-                &format!("combined projection should match separate projection for {language_id}"),
-            );
-        }
-    }
-
-    #[test]
-    fn run_language_queries_rejects_unsupported_languages() {
-        let error = run_language_queries(
-            "value".to_string(),
-            "unknown".to_string(),
-            "".to_string(),
-            "".to_string(),
-            "".to_string(),
-            "".to_string(),
-        )
-        .expect_err("unsupported language should fail");
-
-        assert!(
-            error.to_string().contains("Unsupported language"),
-            "unexpected error: {error}"
+        assert_eq!(
+            parse_invocations_for_tests(),
+            1,
+            "combined extraction should parse {language_id} exactly once"
+        );
+        assert_eq!(
+            combined_results, separate_results,
+            "combined query results should match separate queries for {language_id}"
+        );
+        assert_columns_match(
+            &combined_tree,
+            &separate_tree,
+            &format!("combined projection should match separate projection for {language_id}"),
         );
     }
+}
 
-    #[test]
-    fn run_language_queries_surfaces_query_compile_failures() {
-        let error = run_language_queries(
-            "export const value = 1;".to_string(),
-            "ts".to_string(),
-            "(".to_string(),
-            "".to_string(),
-            "".to_string(),
-            "".to_string(),
-        )
+#[test]
+fn run_language_queries_surfaces_query_compile_failures() {
+    let id = register_query_set(
+        "ts".to_string(),
+        "(".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "".to_string(),
+    )
+    .expect("a query that does not compile still registers");
+    let error = run_language_queries("export const value = 1;".to_string(), id)
         .expect_err("invalid query should fail");
 
-        assert!(
-            error.to_string().contains("Failed to compile query"),
-            "unexpected error: {error}"
+    assert!(
+        error.to_string().contains("Failed to compile query"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn a_query_that_does_not_compile_reports_its_own_error_and_is_not_compiled_again() {
+    let language = language_for_id("ts").expect("typescript language should exist");
+    let alone = compile_query(&language, "(").expect_err("the query should not compile");
+    let set = private_set("ts", TS_IMPORTS, "(", TS_LOCALS, "");
+    let tree = parse_root(TS_SOURCE, "ts");
+
+    for _ in 0..3 {
+        let error = set
+            .execute(TS_SOURCE, tree.root_node())
+            .expect_err("an invalid kind should fail the set");
+        assert_eq!(
+            error.to_string(),
+            napi::Error::from_reason(alone.clone()).to_string(),
+            "the error is the invalid kind's own, as when it was compiled first"
         );
     }
+
+    // The merged text, then each kind up to and including the invalid one; later calls reuse them.
+    assert_eq!(set.compile_count(), 3);
+}
+
+#[test]
+fn a_pattern_that_runs_from_one_kind_into_the_next_does_not_hide_the_invalid_kinds() {
+    // `(call_expression` and `function: (identifier)) @call` are each invalid, but their text
+    // joined by a newline is one valid pattern, so the merged query compiles. It cannot be split
+    // back into the kinds, and each kind still reports its own error.
+    let set = private_set(
+        "js",
+        "(call_expression",
+        "function: (identifier)) @call",
+        "",
+        "",
+    );
+    let tree = parse_root("f();", "js");
+
+    let error = set
+        .execute("f();", tree.root_node())
+        .expect_err("an invalid kind should fail the set even when the merged text compiles");
+
+    assert!(
+        error.to_string().contains("Failed to compile query"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn registered_sets_run_a_smoke_query_in_every_supported_language() {
+    for language_id in supported_language_ids() {
+        let (source, query) = smoke_case(language_id.as_str());
+        let id = register(language_id.as_str(), query, "", query, "");
+        let results = run_language_queries(source.to_string(), id).unwrap_or_else(|error| {
+            panic!("registered smoke set failed for {language_id}: {error}")
+        });
+
+        assert!(
+            !results.imports.is_empty() && !results.locals.is_empty(),
+            "expected the registered smoke queries to match for {language_id}"
+        );
+    }
+}
+
+#[test]
+fn the_caller_query_cache_keeps_a_repeated_query_warm() {
+    let mut cache = AdHocQueryCache::with_capacity(2);
+    let query_text = "(identifier) @name";
+
+    let first = cache.entry("js", query_text);
+    let second = cache.entry("js", query_text);
+
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "repeating a query must reuse its compiled entry"
+    );
+    assert_eq!(cache.len(), 1, "repeating a query must not grow the cache");
+    assert!(cache.contains("js", query_text));
+}
+
+#[test]
+fn the_caller_query_cache_evicts_lru_entries_after_capacity() {
+    let mut cache = AdHocQueryCache::with_capacity(2);
+    let first = "(identifier) @first";
+    let second = "(identifier) @second";
+    let third = "(identifier) @third";
+
+    cache.entry("js", first);
+    cache.entry("js", second);
+    cache.entry("js", first);
+    cache.entry("js", third);
+
+    assert_eq!(cache.len(), 2, "cache must not grow past capacity");
+    assert!(
+        cache.contains("js", first),
+        "recently used query must remain"
+    );
+    assert!(cache.contains("js", third), "newest query must remain");
+    assert!(
+        !cache.contains("js", second),
+        "least recently used query must be evicted"
+    );
+}
+
+#[test]
+fn the_caller_query_cache_releases_inner_capacity_after_partial_eviction() {
+    let mut cache = AdHocQueryCache::with_capacity(50);
+
+    for i in 0..50 {
+        cache.entry("js", &format!("(identifier) @q{i}"));
+    }
+    let peak_capacity = cache.language_query_capacity("js");
+    assert_eq!(
+        cache.len(),
+        50,
+        "cache must hold every js query up to capacity"
+    );
+
+    for i in 0..40 {
+        cache.entry("ts", &format!("(identifier) @r{i}"));
+    }
+
+    assert_eq!(cache.len(), 50, "cache must not grow past capacity");
+    let remaining_js: usize = (0..50)
+        .filter(|i| cache.contains("js", &format!("(identifier) @q{i}")))
+        .count();
+    assert_eq!(
+        remaining_js, 10,
+        "only the most recently used js queries should survive eviction"
+    );
+    let shrunk_capacity = cache.language_query_capacity("js");
+    assert!(
+        shrunk_capacity < peak_capacity,
+        "js query map must release capacity from its historical peak after eviction, \
+         got shrunk_capacity={shrunk_capacity} peak_capacity={peak_capacity}"
+    );
+}
+
+#[test]
+fn threads_running_the_same_caller_query_agree() {
+    // The entry is shared, so threads that ask while it compiles wait for one compile.
+    let source = "export const first = 1;\nexport const second = 2;";
+    let query =
+        "(lexical_declaration (variable_declarator name: (identifier) @shared_caller_name))";
+    let barrier = std::sync::Barrier::new(8);
+
+    let results: Vec<Vec<String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    let results =
+                        run_query(source.to_string(), "ts".to_string(), query.to_string())
+                            .expect("caller query should run");
+                    first_capture_texts(&results.matches)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("thread should finish"))
+            .collect()
+    });
+
+    assert!(results.iter().all(|texts| texts == &["first", "second"]));
+}
 
     #[test]
     fn smoke_cases_cover_all_supported_language_ids() {
@@ -660,89 +875,96 @@ fn assert_columns_match(left: &ProjectedColumns, right: &ProjectedColumns, conte
         }
     }
 
-    #[test]
-    fn repeated_calls_with_same_language_produce_same_results() {
-        // Verifies parser reuse and query caching produce consistent results
-        let source = "import { foo } from './bar';\nexport const x = 1;";
-        let query_text = "(lexical_declaration (variable_declarator name: (identifier) @name))";
+#[test]
+fn repeated_calls_with_same_language_produce_same_results() {
+    // Verifies parser reuse and the shared compiled queries produce consistent results
+    let source = "import { foo } from './bar';\nexport const x = 1;";
+    let id = register_locals(
+        "ts",
+        "(lexical_declaration (variable_declarator name: (identifier) @name))",
+    );
 
-        let first = run_language_queries(
-            source.to_string(),
-            "ts".to_string(),
-            "".to_string(),
-            "".to_string(),
-            query_text.to_string(),
-            "".to_string(),
-        )
-        .expect("first call should succeed");
+    let first = run_language_queries(source.to_string(), id).expect("first call should succeed");
+    let second = run_language_queries(source.to_string(), id).expect("second call should succeed");
 
-        let second = run_language_queries(
-            source.to_string(),
-            "ts".to_string(),
-            "".to_string(),
-            "".to_string(),
-            query_text.to_string(),
-            "".to_string(),
-        )
-        .expect("second call should succeed");
+    assert_eq!(first.locals.len(), second.locals.len());
+    assert_eq!(
+        first_capture_texts(&first.locals),
+        first_capture_texts(&second.locals),
+    );
+}
 
-        assert_eq!(first.locals.len(), second.locals.len());
-        assert_eq!(
-            first_capture_texts(&first.locals),
-            first_capture_texts(&second.locals),
-        );
-    }
+#[test]
+fn different_query_texts_do_not_cross_contaminate() {
+    let source = "export const value = 1;\nfunction helper() {}";
+    let id_a = register_locals(
+        "ts",
+        "(lexical_declaration (variable_declarator name: (identifier) @name))",
+    );
+    let id_b = register_locals("ts", "(function_declaration name: (identifier) @name)");
 
-    #[test]
-    fn different_query_texts_do_not_cross_contaminate() {
-        let source = "export const value = 1;\nfunction helper() {}";
+    let results_a = run_language_queries(source.to_string(), id_a).expect("query A should succeed");
+    let results_b = run_language_queries(source.to_string(), id_b).expect("query B should succeed");
 
-        let results_a = run_language_queries(
-            source.to_string(),
-            "ts".to_string(),
-            "".to_string(),
-            "".to_string(),
-            "(lexical_declaration (variable_declarator name: (identifier) @name))".to_string(),
-            "".to_string(),
-        )
-        .expect("query A should succeed");
+    assert_eq!(first_capture_texts(&results_a.locals), vec!["value"]);
+    assert_eq!(first_capture_texts(&results_b.locals), vec!["helper"]);
+}
 
-        let results_b = run_language_queries(
-            source.to_string(),
-            "ts".to_string(),
-            "".to_string(),
-            "".to_string(),
-            "(function_declaration name: (identifier) @name)".to_string(),
-            "".to_string(),
-        )
-        .expect("query B should succeed");
+#[test]
+fn compact_imports_query_returns_name_and_text_only() {
+    let id = register_query_set(
+        "js".to_string(),
+        "(import_statement (string) @mod) @stmt".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "".to_string(),
+    )
+    .expect("imports-only set should register");
+    let results = run_imports_query_compact(
+        "import { helper } from \"./dep.js\";\nconst value = helper();".to_string(),
+        id,
+    )
+    .expect("compact imports query should succeed");
 
-        assert_eq!(first_capture_texts(&results_a.locals), vec!["value"]);
-        assert_eq!(first_capture_texts(&results_b.locals), vec!["helper"]);
-    }
+    assert_eq!(results.imports.len(), 1);
+    let captures = &results.imports[0].captures;
+    assert!(captures.iter().any(|c| c.name == "mod"));
+    assert!(captures.iter().any(|c| c.name == "stmt"));
+}
 
-    #[test]
-    fn compact_imports_query_returns_name_and_text_only() {
-        let results = run_imports_query_compact(
-            "import { helper } from \"./dep.js\";\nconst value = helper();".to_string(),
-            "js".to_string(),
-            "(import_statement (string) @mod) @stmt".to_string(),
-        )
-        .expect("compact imports query should succeed");
+#[test]
+fn compact_imports_only_runs_the_imports_query_of_the_set() {
+    // The set's other kinds would match too; only the imports query may run.
+    let id = register_query_set(
+        "js".to_string(),
+        "(import_statement (string) @mod) @stmt".to_string(),
+        "(function_declaration name: (identifier) @name)".to_string(),
+        "(variable_declarator name: (identifier) @name)".to_string(),
+        "".to_string(),
+    )
+    .expect("full set should register");
+    let results = run_imports_query_compact(
+        "import { helper } from \"./dep.js\";\nfunction f() {}\nconst value = helper();"
+            .to_string(),
+        id,
+    )
+    .expect("compact imports query should succeed");
 
-        assert_eq!(results.imports.len(), 1);
-        let captures = &results.imports[0].captures;
-        assert!(captures.iter().any(|c| c.name == "mod"));
-        assert!(captures.iter().any(|c| c.name == "stmt"));
-    }
+    assert_eq!(results.imports.len(), 1);
+    assert!(results.imports[0].captures.iter().all(|c| c.name != "name"));
+}
 
-    #[test]
+#[test]
 fn compact_imports_returns_empty_for_blank_query() {
-        let results = run_imports_query_compact(
-            "export const x = 1;".to_string(),
-            "ts".to_string(),
-            "   ".to_string(),
-        )
+    let id = register_query_set(
+        "ts".to_string(),
+        "   ".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "".to_string(),
+    )
+    .expect("blank set should register");
+    let results = run_imports_query_compact("export const x = 1;".to_string(), id)
         .expect("compact blank query should succeed");
 
     assert!(results.imports.is_empty());

@@ -45,10 +45,6 @@ describe("native extraction resource limits", () => {
     const task = {
       filePath: "sample.ts",
       languageId: "ts",
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
     };
 
     const result = await runExtractionBatch({ tasks: [task, task] }, async (currentTask) => {
@@ -74,6 +70,7 @@ describe("native extraction resource limits", () => {
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
+          registerQuerySet: () => 1,
           supportedLanguageIds: () => ["ts"],
           runLanguageQueries: () => emptyResults(),
           extractLanguage,
@@ -91,10 +88,6 @@ describe("native extraction resource limits", () => {
       languageId: "ts",
       source: oversized,
       includeBloomFilter: true,
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
     });
 
     expect(result.nativeResults).toBeNull();
@@ -113,6 +106,7 @@ describe("native extraction resource limits", () => {
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
+          registerQuerySet: () => 1,
           supportedLanguageIds: () => ["ts"],
           runLanguageQueries: () => emptyResults(),
           extractLanguage: () => ({ results: emptyResults(), syntaxTree: createStubNativeSyntaxTree() }),
@@ -126,10 +120,6 @@ describe("native extraction resource limits", () => {
       filePath: "worker-bloom.ts",
       languageId: "ts",
       includeBloomFilter: true,
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
     });
     expect(result.bloomFilter).toBeDefined();
     if (!result.bloomFilter) throw new Error("Expected worker bloom filter.");
@@ -173,6 +163,7 @@ describe("native extraction resource limits", () => {
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
+          registerQuerySet: () => 1,
           supportedLanguageIds: () => ["ts"],
           runLanguageQueries: () => emptyResults(),
           extractLanguage,
@@ -186,10 +177,6 @@ describe("native extraction resource limits", () => {
     const result = await extractor({
       filePath: "on-disk.ts",
       languageId: "ts",
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
       limits: { maxSourceBytes: 32 },
     });
 
@@ -204,6 +191,7 @@ describe("native extraction resource limits", () => {
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
+          registerQuerySet: () => 1,
           supportedLanguageIds: () => ["ts"],
           runLanguageQueries: () => emptyResults(),
           extractLanguage: () => {
@@ -219,10 +207,6 @@ describe("native extraction resource limits", () => {
       filePath: "deep.ts",
       languageId: "ts",
       includeBloomFilter: true,
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
     });
 
     expect(result.fallbackReason).toBe("queryFailure");
@@ -247,6 +231,7 @@ describe("native extraction resource limits", () => {
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
+          registerQuerySet: () => 1,
           supportedLanguageIds: () => ["ts"],
           runLanguageQueries: () => emptyResults(),
           extractLanguage: () => ({ results: emptyResults(), syntaxTree: tree }),
@@ -259,10 +244,6 @@ describe("native extraction resource limits", () => {
     const result = await extractor({
       filePath: "ok.ts",
       languageId: "ts",
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
     });
 
     expect(result.fallbackReason).toBeUndefined();
