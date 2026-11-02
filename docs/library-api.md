@@ -799,7 +799,7 @@ const incremental = await buildProjectIndexIncremental(root, {
 });
 ```
 
-`buildProjectIndexIncremental` loads the cached manifest, reuses unchanged modules and edges, and reparses only the files reported as changed by Git flags or an explicit `files` list.
+`buildProjectIndexIncremental` loads the cached manifest, reuses unchanged modules and edges, and reparses the files reported as changed by Git flags or an explicit `files` list, plus the importers of a changed file when its public surface changed (see [How it works](./how-it-works.md)).
 
 Pass `report: { timings: {} }` to receive optional build timing fields. `sourceDiscoveryMs` measures source-file discovery, `metadataDiscoveryMs` measures project-metadata discovery, `gitListMs` measures Git candidate listing, `filesystemScanMs` measures the glob scan used when Git listing is unavailable, and `cacheProbeMs` measures Git signatures plus per-file cache probes before parse. `steps` lists named discovery durations for finer diagnosis. Each field is present only when the caller supplied `report` and that discovery step ran. Reusing the same report object replaces those discovery fields for the current build.
 

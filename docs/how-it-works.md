@@ -108,6 +108,13 @@ A cached module is keyed by its own content, but its import targets depend on ot
 
 With an index manifest, the build re-resolves the affected specifiers of added files. Without one (a `memory` cache, or a `disk` cache that no manifest-writing build has seen), the cached import bindings replace the manifest edges.
 
+An incremental update (`codegraph index`, `buildProjectIndexIncremental`, agent sessions) extracts the importers of a changed file again only when the file's public surface changed:
+
+- The public surface is the file's exported names and kinds, its re-export sources, and, for a file with no exports, the names that a star import would bind. Bodies, parameters, and positions are not part of it, so a body or signature edit extracts only the edited file.
+- A changed surface extracts the direct importers. An importer that re-exports from the file has a changed surface too, so a chain of re-exports extracts every importer along it.
+- `manifest.json` stores each file's surface (`surface`). A manifest from an earlier version has none, so the first change to each file counts as a surface change.
+- The transitive importers of a changed C#, Java, Kotlin, PHP, C++, or Rust file, or a Python `__init__.py`, always extract again, because they resolve through its declarations.
+
 Declaration-based imports name a package, namespace, or module, not a file:
 
 - Any added, changed, or deleted file of the language re-resolves that language's importers. The file suffix or the configured language selects the file.

@@ -389,6 +389,22 @@ export function collectTrackedFileDependents(
 }
 
 /**
+ * Files that import one of the files named by `fileKeys` (`fileIdentityKey` values), by the previous
+ * build's manifest edges and without following their own importers. An importer caches only what a
+ * target's public surface covers, so a file whose surface changed invalidates exactly these.
+ */
+export function collectDirectDependents(
+  reverseDeps: ReadonlyMap<string, ReadonlySet<string>>,
+  fileKeys: Iterable<string>,
+): Set<string> {
+  const dependents = new Set<string>();
+  for (const fileKey of fileKeys) {
+    for (const dependent of reverseDeps.get(fileKey) ?? []) dependents.add(dependent);
+  }
+  return dependents;
+}
+
+/**
  * List new, untracked files that Git sees but the manifest does not yet know about,
  * filtered to the same discovery patterns/ignores a full scan would apply.
  *
