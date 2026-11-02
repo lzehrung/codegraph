@@ -8,6 +8,7 @@ import { fileIdentityKey } from "./paths.js";
 import { stripHashInlineComment } from "./comments.js";
 import { resolvePackageExportTargets, type PackageExportConditionMode } from "./package-exports.js";
 import { listResolutionCandidates } from "./resolution-candidates.js";
+import { currentProbeCache, resetCurrentProbeCache } from "./fs-probe-cache.js";
 
 async function pathMatchesCachedStat(
   cache: Map<string, boolean>,
@@ -28,10 +29,14 @@ async function pathMatchesCachedStat(
 }
 
 export async function fileExists(p: string): Promise<boolean> {
+  const probes = currentProbeCache();
+  if (probes) return (await probes.kind(p)) === "file";
   return await pathMatchesCachedStat(fileExistsCache, p, (stat) => stat.isFile());
 }
 
 export async function directoryExists(p: string): Promise<boolean> {
+  const probes = currentProbeCache();
+  if (probes) return (await probes.kind(p)) === "directory";
   return await pathMatchesCachedStat(directoryExistsCache, p, (stat) => stat.isDirectory());
 }
 
@@ -344,13 +349,13 @@ export async function resolveWorkspacePackage(
   return null;
 }
 
-export function clearWorkspaceCaches(): void {
-  fileExistsCache.clear();
-  directoryExistsCache.clear();
-  workspaceCache.clear();
-}
-
 export function clearFileExistsCache(): void {
   fileExistsCache.clear();
   directoryExistsCache.clear();
+  resetCurrentProbeCache();
+}
+
+export function clearWorkspaceCaches(): void {
+  clearFileExistsCache();
+  workspaceCache.clear();
 }
