@@ -137,6 +137,7 @@ import {
   emptyWorkerPoolSetup,
   preparedNativeOutcome,
   setupWorkerPool,
+  shouldEnableNativeWorkers,
   teardownWorkerPool,
   type WorkerPoolSetupResult,
 } from "./build-workers.js";
@@ -146,6 +147,7 @@ import {
   buildTrackedFileReverseDependencies,
   addedResolutionStems,
   collectDeletedTrackedFileDependents,
+  collectDirectDependents,
   collectTrackedFileDependents,
   collectSpecifierEdgeCandidates,
   collectPythonPackageImporters,
@@ -157,6 +159,7 @@ import {
   partitionTrackedManifestFiles,
   probePathExistence,
 } from "./incremental-plan.js";
+import { propagateReexportSurfaceChanges, publicSurfaceKind, publicSurfaceSignature } from "./public-surface.js";
 import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 
 type IndexedFileGraphContext = {
@@ -1631,6 +1634,7 @@ async function buildIndexFromFileListShared(
     ? await getGitBlobHashes(projectRoot, normalizedFiles, {
         gitAvailable,
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+        ...(opts?.cacheStrict ? { strict: true } : {}),
       })
     : new Map<string, string>();
   const signatureStrict = needsPersistentSignatures ? opts?.cacheStrict : false;
@@ -2010,6 +2014,12 @@ async function buildIndexFromFileListShared(
           ...(signature.gitSig ? { gitSig: signature.gitSig } : {}),
           edges: [],
         });
+      }
+      // The next incremental build reads each file's public surface to decide which importers to extract again.
+      for (const [file, entry] of manifestEntries) {
+        const mod = modules.get(fileIdentityKey(file));
+        const surface = mod ? publicSurfaceSignature(file, mod, projectRoot, opts?.languageExtensions) : undefined;
+        if (surface !== undefined) manifestEntries.set(file, { ...entry, surface });
       }
     }
     if (manifestEntries && !staleRowRemovalFailed) {
@@ -2842,6 +2852,7 @@ export async function buildProjectIndexIncremental(
         ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
             gitAvailable,
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+            ...(opts?.cacheStrict ? { strict: true } : {}),
           })
         : new Map<string, string>();
       const fileSignatures = await prepareFileSignatures({
@@ -2874,19 +2885,32 @@ export async function buildProjectIndexIncremental(
       const reverseDeps = buildTrackedFileReverseDependencies(trackedEntries);
       // Dependents rebuilt only because a file they depend on changed: their own source may be unchanged.
       const dependentsToPrime = new Set<string>();
-      const invalidateCachedDependents = () => {
-        const dependentFilesOfChanged = collectTrackedFileDependents(trackedEntries, changedFiles, reverseDeps);
-        for (const file of dependentFilesOfChanged) {
-          const key = fileIdentityKey(file);
-          if (modules.has(key)) {
-            modules.delete(key);
-            if (fileReport) {
-              fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
-            }
-          } else if (!changedFiles.has(file)) {
-            dependentsToPrime.add(file);
+      // Loaded modules dropped for a rebuild: their public surface stands in for a manifest that recorded none.
+      const retiredModules = new Map<string, ModuleIndex>();
+      const rebuildDependent = (file: string): void => {
+        const key = fileIdentityKey(file);
+        const loaded = modules.get(key);
+        if (loaded) {
+          retiredModules.set(key, loaded);
+          modules.delete(key);
+          if (fileReport) {
+            fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
           }
-          markAsChanged(file);
+        } else if (!changedFiles.has(file)) {
+          dependentsToPrime.add(file);
+        }
+        markAsChanged(file);
+      };
+      // A changed file with a content surface (see public-surface.ts) can move what its importers resolved from its
+      // declarations, so every transitive importer extracts again. Any other file rebuilds its importers only when its
+      // public surface changed, which is known once it is extracted: see the extraction waves below.
+      const invalidateCachedDependents = () => {
+        const contentSurfaceFiles = new Set<string>();
+        for (const file of changedFiles) {
+          if (publicSurfaceKind(file, opts?.languageExtensions) === "content") contentSurfaceFiles.add(file);
+        }
+        for (const file of collectTrackedFileDependents(trackedEntries, contentSurfaceFiles, reverseDeps)) {
+          rebuildDependent(file);
         }
       };
       invalidateCachedDependents();
@@ -3025,11 +3049,37 @@ export async function buildProjectIndexIncremental(
         emitIndexLifecycleProgress(opts, "start", "update", changedList.length);
       }
       if (fileReport) fileReport.changed = changedList.length;
-      if (changedList.length) {
+      // Public surfaces of the files extracted in this build, by identity key. Content-surface files have none.
+      const extractedFiles = new Map<string, string>();
+      const freshSurfaces = new Map<string, string>();
+      let processedFiles = 0;
+      let plannedFiles = changedList.length;
+      let parseMs = 0;
+      // Importers that must extract again because a file in `extractedFiles` changed what an importer can cache from it:
+      // its public surface differs from the one the previous build recorded in the manifest (a dropped loaded module
+      // supplies it when the manifest has none), or neither is known. A file that re-exports from such a file exposes
+      // different names itself, so its importers count too. Content-surface files rebuilt their importers above.
+      const collectSurfaceDependents = (): string[] => {
+        const surfaceChanged = new Set<string>();
+        for (const [key, file] of extractedFiles) {
+          const surface = freshSurfaces.get(key);
+          if (surface === undefined) continue;
+          const retired = retiredModules.get(key);
+          const previous =
+            trackedEntries[file]?.surface ??
+            (retired ? publicSurfaceSignature(file, retired, projectRoot, opts?.languageExtensions) : undefined);
+          if (previous !== surface) surfaceChanged.add(key);
+        }
+        if (!surfaceChanged.size) return [];
+        propagateReexportSurfaceChanges(modules, surfaceChanged);
+        return Array.from(collectDirectDependents(reverseDeps, surfaceChanged)).filter(
+          (file) => allFiles.has(file) && !changedFiles.has(file),
+        );
+      };
+      let wave = changedList;
+      while (wave.length) {
         const parseStart = performance.now();
-        let processedFiles = 0;
-        const totalFiles = changedList.length;
-        const fileResults = await mapLimit(changedList, conc, async (file) => {
+        const fileResults = await mapLimit(wave, conc, async (file) => {
           try {
             if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
             const support = supportForFile(file, opts?.languageExtensions);
@@ -3071,21 +3121,35 @@ export async function buildProjectIndexIncremental(
                 mode: "update",
                 message: `Indexed ${file}`,
                 current: ++processedFiles,
-                total: totalFiles,
+                total: plannedFiles,
               });
             }
           }
         });
         const pendingIncrementalCacheWrites: PendingModuleCacheWrite[] = [];
         for (const [file, mod, cacheWrite] of fileResults) {
-          modules.set(fileIdentityKey(file), mod);
+          const key = fileIdentityKey(file);
+          modules.set(key, mod);
+          extractedFiles.set(key, file);
+          const surface = publicSurfaceSignature(file, mod, projectRoot, opts?.languageExtensions);
+          if (surface !== undefined) freshSurfaces.set(key, surface);
           if (cacheWrite) pendingIncrementalCacheWrites.push(cacheWrite);
         }
         if (pendingIncrementalCacheWrites.length) {
           writeModulesToCache(projectRoot, pendingIncrementalCacheWrites, opts);
         }
-        if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
+        parseMs += performance.now() - parseStart;
+        wave = collectSurfaceDependents();
+        if (!wave.length) break;
+        for (const file of wave) rebuildDependent(file);
+        plannedFiles += wave.length;
+        if (fileReport) fileReport.changed = changedFiles.size;
+        if (!workerSetup.pool) {
+          const eligibleFiles = countNativeWorkerEligibleFiles(wave, opts?.languageExtensions);
+          if (shouldEnableNativeWorkers(opts, eligibleFiles)) workerSetup = await setupWorkerPool(opts, eligibleFiles);
+        }
       }
+      if (timings && changedList.length) timings.parseMs = Math.round(parseMs);
       for (const jsonPath of jsonDependencies.values()) {
         ensureJsonModule(modules, jsonPath);
       }
@@ -3161,15 +3225,25 @@ export async function buildProjectIndexIncremental(
       }
       // A Git blob match proves source bytes, not mtime. Refresh every retained
       // entry from the stat signatures computed above before declaring lifecycle
-      // signatures fresh.
+      // signatures fresh. The next build reads each entry's public surface to decide which importers to extract again:
+      // an extracted file takes its new one, and a file that never recorded one gets it from its loaded module.
       for (const [file, entry] of manifestEntries) {
         const signature = fileSignatures.get(file);
         if (!signature) continue;
-        const { gitSig: _previousGitSig, ...entryWithoutGitSig } = entry;
+        const { gitSig: _previousGitSig, surface: retainedSurface, ...entryWithoutGitSig } = entry;
+        const key = fileIdentityKey(file);
+        let surface = freshSurfaces.get(key);
+        if (surface === undefined && publicSurfaceKind(file, opts?.languageExtensions) === "api") {
+          const loaded = modules.get(key);
+          surface =
+            retainedSurface ??
+            (loaded ? publicSurfaceSignature(file, loaded, projectRoot, opts?.languageExtensions) : undefined);
+        }
         manifestEntries.set(file, {
           ...entryWithoutGitSig,
           sig: signature.sig,
           ...(signature.gitSig ? { gitSig: signature.gitSig } : {}),
+          ...(surface !== undefined ? { surface } : {}),
         });
       }
       await timeIndexBuildPhase({
@@ -3347,6 +3421,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
           gitAvailable,
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+          ...(opts?.cacheStrict ? { strict: true } : {}),
         })
       : new Map<string, string>();
     for (const file of allFiles) {
