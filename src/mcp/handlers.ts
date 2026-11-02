@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { buildCodegraphArtifactWithSession } from "../agent/artifact.js";
 import type { CodegraphArtifactBuildResult } from "../agent/artifact.js";
-import { explainCodegraphTargetWithSession, resolveCodegraphTargetWithSession } from "../agent/explain.js";
+import { explainTargetReferencesWithSession, resolveCodegraphTargetWithSession } from "../agent/explain.js";
 import type {
   AgentExplanation,
   AgentExplanationReference,
@@ -1125,17 +1125,17 @@ function createCodegraphMcpHandlersForSession(
             const result = await findReferences(snapshot.index, { def: resolved.def }, { maxReferences: limit + 1 });
             return boundedReferencesFromResult(result, limit);
           }
-          const explanation = await explainCodegraphTargetWithSession(session, {
+          const explanation = await explainTargetReferencesWithSession(session, {
             root,
             target: handle,
             maxReferences: limit,
           });
           return {
             references: explanation.references,
-            limit: explanation.limits.references,
-            totalSeen: explanation.references.length + explanation.omittedCounts.references,
-            truncated: explanation.omittedCounts.references > 0,
-            omitted: explanation.omittedCounts.references,
+            limit: explanation.limit,
+            totalSeen: explanation.references.length + explanation.omitted,
+            truncated: explanation.omitted > 0,
+            omitted: explanation.omitted,
             ...(explanation.referenceCoverage ? { referenceCoverage: explanation.referenceCoverage } : {}),
           };
         }

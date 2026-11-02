@@ -129,7 +129,7 @@ Declaration-based imports name a package, namespace, or module, not a file:
 
 Existing `.codegraph-cache/` directories migrate automatically to `.codegraph/cache/` on the next run.
 
-Disk search can also store normalized source and chunk text in SQLite. Treat that cache as sensitive derived source data; use `--cache off` to avoid it and stop codegraph before deletion.
+Disk search can also store normalized source and chunk text in SQLite, with two trigram indexes over it: the normalized text, and the same text without spaces, so a term that spans word boundaries is an index lookup, not a scan of every chunk. A sidecar from an earlier schema version is upgraded in place on first use from its stored text, without reading source files. Treat that cache as sensitive derived source data; use `--cache off` to avoid it and stop codegraph before deletion.
 
 Long-lived sessions reuse only compatible state and refresh on drift. `codegraph init` can warm the disk cache, but index-backed commands do not require lifecycle initialization.
 

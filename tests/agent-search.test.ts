@@ -8,15 +8,16 @@ import {
   type AgentProjectSnapshot,
   type AgentSession,
 } from "../src/agent/session.js";
-import { searchCodegraph, searchCodegraphWithSession } from "../src/agent/search.js";
+import { searchCodegraph, searchCodegraphWithSession, type AgentSearchResult } from "../src/agent/search.js";
 import { formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
-import { formatAgentSymbolHandle } from "../src/agent/handles.js";
+import { formatAgentFileHandle, formatAgentSymbolHandle } from "../src/agent/handles.js";
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../src/graphs.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../src/indexer/types.js";
 import type { Edge, Graph, Range } from "../src/types.js";
 import { createTempRootRegistry, isSymlinkUnavailable } from "./helpers/filesystem.js";
+import { queryTerms, scanScore } from "./helpers/search-scan.js";
 
 const tempRoots = createTempRootRegistry();
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -1186,5 +1187,200 @@ describe("agent search", () => {
     } finally {
       session.invalidate();
     }
+  });
+});
+
+type PlantedSymbol = {
+  file: string;
+  name: string;
+  docstring?: string;
+  line?: number;
+  column?: number;
+  index?: number;
+};
+
+// Non-ASCII names are escapes so the file stays typeable; each is still real multi-byte text.
+const PLANTED_SYMBOLS: readonly PlantedSymbol[] = [
+  { file: "src/auth/session.ts", name: "getUserId", docstring: "Looks up the user id for a token." },
+  { file: "src/auth/session.ts", name: "userIdentity" },
+  { file: "src/auth/session.ts", name: "ID" },
+  { file: "src/auth/session.ts", name: "x" },
+  { file: "src/idle/worker.ts", name: "run" },
+  { file: "src/idle/worker.ts", name: "parseJSON" },
+  { file: "src/util/snake.ts", name: "snake_case_helper" },
+  { file: "src/uid/helper.ts", name: "helper" },
+  { file: "src/compute.ts", name: "compute", docstring: "Computes uid values from the identity map." },
+  { file: "src/intl/names.ts", name: "r\u00e9sum\u00e9" },
+  { file: "src/intl/names.ts", name: "\u65e5\u672c\u8a9e\u30d1\u30fc\u30b5\u30fc" },
+  { file: "src/intl/names.ts", name: "stra\u00dfe" },
+  { file: "src/unrelated.ts", name: "unrelatedThing" },
+  { file: "src/unrelated.ts", name: "zzz" },
+];
+
+function plantedProject(root: string, planted: readonly PlantedSymbol[]): AgentSession {
+  const defsByFile = new Map<string, SymbolDef[]>();
+  const nodes = new Map<string, SymbolNode>();
+  planted.forEach((symbol, ordinal) => {
+    const file = path.join(root, symbol.file);
+    const line = symbol.line ?? ordinal + 1;
+    const column = symbol.column ?? 1;
+    const startIndex = symbol.index ?? ordinal * 100;
+    const def: SymbolDef = {
+      file,
+      localName: symbol.name,
+      kind: SymbolKind.Function,
+      range: {
+        start: { line, column, index: startIndex },
+        end: { line, column: column + symbol.name.length, index: startIndex + symbol.name.length },
+      },
+    };
+    defsByFile.set(file, [...(defsByFile.get(file) ?? []), def]);
+    const node = symbolNode(def);
+    nodes.set(node.id, symbol.docstring ? { ...node, docstring: symbol.docstring } : node);
+  });
+  const files = [...defsByFile.keys()];
+  const byFile = new Map<string, ModuleIndex>();
+  for (const file of files) byFile.set(file, moduleIndex(file, defsByFile.get(file) ?? []));
+  const fileGraph: Graph = { nodes: new Set(files), edges: [] };
+  const index: ProjectIndex = {
+    graph: fileGraph,
+    modules: byFile,
+    byFile,
+    exportCache: new Map(),
+    scopeCache: new Map(),
+  };
+  return snapshotSession({ root, files, index, fileGraph, symbolGraph: { nodes, edges: [] } });
+}
+
+/** Every symbol a full scan of names, paths, and docstrings scores, by handle. Every planted symbol is exported (+5). */
+function scanPlantedSymbols(planted: readonly PlantedSymbol[], query: string): Map<string, number> {
+  const terms = queryTerms(query);
+  const expected = new Map<string, number>();
+  planted.forEach((symbol, ordinal) => {
+    const nameScore = scanScore(symbol.name, terms).score;
+    const fileScore = scanScore(symbol.file, terms).score;
+    const docScore = symbol.docstring ? scanScore(symbol.docstring, terms).score : 0;
+    const score = nameScore * 4 + fileScore + docScore;
+    if (score <= 0) return;
+    const handle = formatAgentSymbolHandle({
+      file: symbol.file,
+      name: symbol.name,
+      line: symbol.line ?? ordinal + 1,
+      column: symbol.column ?? 1,
+    });
+    expected.set(handle, (expected.get(handle) ?? 0) + score + 5);
+  });
+  return expected;
+}
+
+function scoresByHandle(results: readonly AgentSearchResult[]): Map<string, number> {
+  const scores = new Map<string, number>();
+  for (const result of results) scores.set(result.handle, result.score);
+  return scores;
+}
+
+describe("agent search candidate selection", () => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await tempRoots.cleanup();
+  });
+
+  const SYMBOL_QUERIES = [
+    "id",
+    "uid",
+    "ui",
+    "userid",
+    "user id",
+    "idle",
+    "case helper",
+    "x",
+    "ty",
+    "r\u00e9sum\u00e9",
+    "\u65e5\u672c",
+    "parse json",
+  ];
+
+  it("returns every symbol a full scan of names, paths, and docstrings scores, with the same scores", async () => {
+    const root = await mkTmpDir("cg-agent-search-scan-");
+    const session = plantedProject(root, PLANTED_SYMBOLS);
+
+    for (const query of SYMBOL_QUERIES) {
+      const expected = scanPlantedSymbols(PLANTED_SYMBOLS, query);
+      const response = await searchCodegraphWithSession(session, { root, query, mode: "symbol", limit: 100 });
+      const actual = scoresByHandle(response.results);
+      expect(expected.size, `a scan of the planted symbols scores something for ${query}`).toBeGreaterThan(0);
+      expect(actual, query).toEqual(expected);
+      expect(response.totalCandidates, query).toBe(expected.size);
+    }
+
+    // The queries that a trigram index cannot answer still find their symbols: a two-letter token and a cross-word run.
+    const crossWord = await searchCodegraphWithSession(session, { root, query: "userid", mode: "symbol", limit: 100 });
+    expect(crossWord.results.map((result) => result.label)).toContain("getUserId");
+    const shortToken = await searchCodegraphWithSession(session, { root, query: "ty", mode: "symbol", limit: 100 });
+    expect(shortToken.results.map((result) => result.label)).toContain("userIdentity");
+    for (const query of ["resume", "nothingmatches"]) {
+      const none = await searchCodegraphWithSession(session, { root, query, mode: "symbol", limit: 100 });
+      expect(none.results, query).toEqual([]);
+      expect(none.totalCandidates).toBe(0);
+    }
+  });
+
+  it("scores file paths like a full scan, including tokens shorter than a trigram", async () => {
+    const root = await mkTmpDir("cg-agent-search-scan-files-");
+    const session = plantedProject(root, PLANTED_SYMBOLS);
+    const files = [...new Set(PLANTED_SYMBOLS.map((symbol) => symbol.file))];
+
+    for (const query of ["id", "ui", "uid", "idle", "intl names", "src", "ts", "work"]) {
+      const terms = queryTerms(query);
+      const expected = new Map<string, number>();
+      for (const file of files) {
+        const score = scanScore(file, terms).score;
+        if (score > 0) expected.set(formatAgentFileHandle({ file }), score * 2);
+      }
+      const response = await searchCodegraphWithSession(session, { root, query, mode: "path", limit: 100 });
+      expect(expected.size, `a scan of the planted files scores something for ${query}`).toBeGreaterThan(0);
+      expect(scoresByHandle(response.results), query).toEqual(expected);
+      expect(response.totalCandidates, query).toBe(expected.size);
+    }
+  });
+
+  it("ranks and counts the same when only the best candidates are built as when every candidate is", async () => {
+    const root = await mkTmpDir("cg-agent-search-rank-");
+    const session = plantedProject(root, PLANTED_SYMBOLS);
+
+    for (const query of ["id", "src", "u"]) {
+      // An anchor that resolves to no file leaves every score alone but makes the search build every candidate.
+      const everyCandidate = await searchCodegraphWithSession(session, {
+        root,
+        query,
+        mode: "hybrid",
+        limit: 4,
+        from: "no-such-anchor",
+      });
+      const bestCandidates = await searchCodegraphWithSession(session, { root, query, mode: "hybrid", limit: 4 });
+      expect(bestCandidates.results.length, query).toBe(4);
+      expect(bestCandidates.totalCandidates, query).toBeGreaterThan(4);
+      expect(bestCandidates, query).toEqual(everyCandidate);
+    }
+  });
+
+  it("merges symbols that share a handle into one result, as every candidate built on its own would", async () => {
+    const root = await mkTmpDir("cg-agent-search-collision-");
+    const twin = { file: "src/twin.ts", name: "twinSymbol", line: 3, column: 4 };
+    const single = plantedProject(root, [{ ...twin, index: 10 }]);
+    const merged = plantedProject(root, [
+      { ...twin, index: 10 },
+      { ...twin, index: 20 },
+      { file: "src/other.ts", name: "twinOther" },
+    ]);
+
+    const alone = await searchCodegraphWithSession(single, { root, query: "twin symbol", mode: "symbol", limit: 5 });
+    const together = await searchCodegraphWithSession(merged, { root, query: "twin symbol", mode: "symbol", limit: 5 });
+
+    const aloneScore = alone.results.find((result) => result.label === "twinSymbol")?.score ?? 0;
+    expect(aloneScore).toBeGreaterThan(0);
+    expect(together.results.filter((result) => result.label === "twinSymbol")).toHaveLength(1);
+    expect(together.results.find((result) => result.label === "twinSymbol")?.score).toBe(aloneScore * 2);
+    expect(together.totalCandidates).toBe(2);
   });
 });

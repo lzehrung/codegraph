@@ -17,9 +17,21 @@ export const QUERY_INDEX_CANDIDATE_ROW_LIMIT = 2000;
  * path-ordered SQL reads and be kept once we do cheap in-memory ranking. */
 const QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT = QUERY_INDEX_CANDIDATE_ROW_LIMIT * 4;
 
-/** With 500 paths and LIMIT, 128 two-parameter predicates stay below even SQLite's
+/** With a batch's paths bound as one JSON value, 128 two-parameter predicates stay below even SQLite's
  * legacy 999-variable limit and its 1000-level expression-depth limit. */
 const QUERY_INDEX_INLINE_TERM_LIMIT = 128;
+
+/**
+ * Eligible files are read in batches of this many, in the order given. The candidate cap and its lower-bound flag
+ * depend on where a batch ends, so retrieval reads each batch with a statement of its own.
+ */
+export const QUERY_INDEX_PATH_BATCH_SIZE = 500;
+
+/**
+ * Reading a file's row through its key costs about three times a row of a scan of the whole table, so a read that wants
+ * fewer than a third of the stored files goes through their keys, and a wider one scans the table once.
+ */
+const KEYED_FILE_READ_DIVISOR = 3;
 
 export function codePointLength(value: string): number {
   return Array.from(value).length;
@@ -52,6 +64,15 @@ export type StoredQueryIndexChunk = QueryTextChunk & {
 export type QueryIndexCandidateRetrieval = {
   chunks: StoredQueryIndexChunk[];
   totalCandidatesLowerBound: boolean;
+};
+
+/** One pass of a candidate retrieval: what the chunks it keeps must meet. */
+type CandidatePass = {
+  /** A full-text lookup the chunks must be in: the FTS table to ask and its MATCH expression. */
+  match?: { table: "chunk_search" | "chunk_compact_search"; expression: string };
+  /** Other SQL conditions over `chunks`, and the values they bind in order. */
+  conditions: string[];
+  parameters: string[];
 };
 
 export class QueryIndexStaleError extends Error {
@@ -117,11 +138,6 @@ function chunkFromRow(row: Record<string, unknown>): QueryTextChunk | null {
   };
 }
 
-function storedCandidateRowKey(row: Record<string, unknown>): string | null {
-  if (typeof row.path !== "string" || typeof row.ordinal !== "number") return null;
-  return `${row.path}\0${row.ordinal}`;
-}
-
 function storedCandidateChunkFromRow(row: Record<string, unknown>): StoredQueryIndexChunk | null {
   if (typeof row.path !== "string" || !(row.text instanceof Uint8Array)) return null;
   try {
@@ -146,6 +162,7 @@ export class QueryIndexStore {
   get isClosed(): boolean {
     return this.closed;
   }
+
   constructor(readonly filePath: string) {
     const db = new SqliteDatabase(filePath, { timeout: QUERY_INDEX_BUSY_TIMEOUT_MS });
     this.db = db;
@@ -154,6 +171,8 @@ export class QueryIndexStore {
       db.pragma("journal_mode = WAL");
       db.pragma("synchronous = NORMAL");
       db.pragma("foreign_keys = ON");
+      // The chunk ids of the full-text lookup of a candidate pass wait here for the batch reads of that pass.
+      db.exec("CREATE TEMP TABLE pass_hits (chunk_id INTEGER PRIMARY KEY)");
     } catch (error) {
       db.close();
       throw error;
@@ -195,6 +214,13 @@ export class QueryIndexStore {
     }
     return identities;
   }
+
+  /** Whether a read of `wanted` files is narrow enough to go through their keys; see `KEYED_FILE_READ_DIVISOR`. */
+  private wantsFewFiles(wanted: number): boolean {
+    const row = this.db.prepare("SELECT count(*) AS count FROM files").get() as { count?: unknown } | undefined;
+    return typeof row?.count === "number" && wanted * KEYED_FILE_READ_DIVISOR < row.count;
+  }
+
   /**
    * Files whose normalized text plausibly contains at least one of the given terms.
    * ASCII terms of 3+ codepoints use the trigram FTS index; short and non-ASCII
@@ -203,6 +229,7 @@ export class QueryIndexStore {
   eligibleFilePaths(normalizedTerms: readonly string[]): string[] {
     if (!normalizedTerms.length) return [];
     const paths = new Set<string>();
+    const matchedFileIds = new Set<number>();
     const shortTerms: string[] = [];
     for (const term of normalizedTerms) {
       if (codePointLength(term) < 3 || !isAscii(term)) {
@@ -212,16 +239,33 @@ export class QueryIndexStore {
       const rows = this.db
         .prepare(
           `
-          SELECT DISTINCT files.path AS path
+          SELECT DISTINCT chunks.file_id AS file_id
           FROM chunk_search
           JOIN chunks ON chunks.chunk_id = chunk_search.rowid
-          JOIN files ON files.file_id = chunks.file_id
           WHERE chunk_search MATCH ?
         `,
         )
-        .all(escapeFtsTrigramTerm(term)) as Array<{ path?: unknown }>;
+        .all(escapeFtsTrigramTerm(term)) as Array<{ file_id?: unknown }>;
       for (const row of rows) {
-        if (typeof row.path === "string") paths.add(row.path);
+        if (typeof row.file_id === "number") matchedFileIds.add(row.file_id);
+      }
+    }
+    if (matchedFileIds.size) {
+      // Paths are read once for the matching files rather than joined to each matching chunk.
+      if (this.wantsFewFiles(matchedFileIds.size)) {
+        // A selective query reads only the rows of the files it matches, through the primary key.
+        const rows = this.db
+          .prepare("SELECT path FROM files WHERE file_id IN (SELECT value FROM json_each(?))")
+          .all(JSON.stringify([...matchedFileIds])) as Array<{ path?: unknown }>;
+        for (const row of rows) {
+          if (typeof row.path === "string") paths.add(row.path);
+        }
+      } else {
+        for (const row of this.db.prepare("SELECT file_id, path FROM files").all() as Array<Record<string, unknown>>) {
+          if (typeof row.file_id === "number" && typeof row.path === "string" && matchedFileIds.has(row.file_id)) {
+            paths.add(row.path);
+          }
+        }
       }
     }
     if (shortTerms.length) {
@@ -389,6 +433,31 @@ export class QueryIndexStore {
     }
   }
 
+  /** The stored rows of the given chunks, by chunk id. */
+  private chunkRowsById(chunkIds: readonly number[]): Map<number, Record<string, unknown>> {
+    const rowsById = new Map<number, Record<string, unknown>>();
+    if (!chunkIds.length) return rowsById;
+    const rows = this.db
+      .prepare(
+        `
+        SELECT chunks.chunk_id AS chunk_id, files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
+               chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+        FROM chunks
+        JOIN files ON files.file_id = chunks.file_id
+        WHERE chunks.chunk_id IN (SELECT value FROM json_each(?))
+      `,
+      )
+      .all(JSON.stringify(chunkIds)) as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      if (typeof row.chunk_id === "number") rowsById.set(row.chunk_id, row);
+    }
+    return rowsById;
+  }
+
+  /**
+   * The chunks that match the terms in the eligible files, read pass by pass (the phrase, every term together, then
+   * each term alone) in batches of 500 files, each pass kept up to its cap.
+   */
   candidateChunkRetrievalForTerms(
     terms: readonly string[],
     paths: readonly string[],
@@ -402,77 +471,108 @@ export class QueryIndexStore {
     if (!normalizedLimit) {
       return { chunks: [], totalCandidatesLowerBound: false };
     }
-    const candidates = new Map<string, Record<string, unknown>>();
-    const batchSize = 500;
+    const candidates = new Set<number>();
     let totalCandidatesLowerBound = false;
 
-    const collect = (conditions: readonly string[], parameters: readonly string[], maximum: number): void => {
-      for (let offset = 0; offset < paths.length && candidates.size < maximum; offset += batchSize) {
-        const batch = paths.slice(offset, offset + batchSize);
-        const placeholders = batch.map(() => "?").join(", ");
-        const remaining = maximum - candidates.size;
-        const requested = remaining + 1;
-        const rows = this.db
-          .prepare(
-            `
-            SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
-                   chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
-            FROM chunks
-            JOIN files ON files.file_id = chunks.file_id
-            WHERE files.path IN (${placeholders})
-              AND (${conditions.join(" AND ")})
-            ORDER BY files.path, chunks.ordinal
-            LIMIT ?
-          `,
-          )
-          .all(...batch, ...parameters, requested) as Array<Record<string, unknown>>;
+    // The files of each batch as the JSON its reads take, made when a pass first reaches the batch.
+    const batchCount = Math.ceil(paths.length / QUERY_INDEX_PATH_BATCH_SIZE);
+    const batchPaths: string[] = [];
+    const batchJson = (batch: number): string =>
+      (batchPaths[batch] ??= JSON.stringify(
+        paths.slice(batch * QUERY_INDEX_PATH_BATCH_SIZE, (batch + 1) * QUERY_INDEX_PATH_BATCH_SIZE),
+      ));
+
+    // A pass reads the batches of eligible files in order, each with one statement: the batch's files in path order,
+    // their chunks in ordinal order, and the first `allowance + 1` that match, the allowance being what the cap still
+    // leaves. The extra row only shows whether more matched, which makes the total a lower bound. The ORDER BY puts the
+    // rows in that order, so the statement gives the same chunks whichever way SQLite scans, and the pass stops reading
+    // once its cap is decided. The statement is prepared once for the pass. So is the full-text lookup: its chunk ids go
+    // into a temporary table that every batch read tests against, where a lookup inside the statement would run again
+    // for each batch.
+    const collect = (pass: CandidatePass, maximum: number): void => {
+      const conditions = [...pass.conditions];
+      if (pass.match) {
+        const { table, expression } = pass.match;
+        this.db.prepare("DELETE FROM temp.pass_hits").run();
+        this.db.prepare(`INSERT INTO temp.pass_hits SELECT rowid FROM ${table} WHERE ${table} MATCH ?`).run(expression);
+        // The `+` keeps SQLite looping over the batch's files, which is what gives the rows their order without a sort,
+        // instead of over the lookup's chunks.
+        conditions.unshift("+chunks.chunk_id IN (SELECT chunk_id FROM temp.pass_hits)");
+      }
+      const statement = this.db
+        .prepare(
+          `
+          SELECT chunks.chunk_id
+          FROM chunks
+          JOIN files ON files.file_id = chunks.file_id
+          WHERE files.path IN (SELECT value FROM json_each(?))
+            AND (${conditions.join(" AND ")})
+          ORDER BY files.path, chunks.ordinal
+          LIMIT ?
+        `,
+        )
+        .raw();
+      for (let batch = 0; batch < batchCount && candidates.size < maximum; batch += 1) {
+        const requested = maximum - candidates.size + 1;
+        const rows = statement.all(batchJson(batch), ...pass.parameters, requested) as unknown[][];
         if (rows.length === requested) totalCandidatesLowerBound = true;
-        for (const row of rows) {
-          const key = storedCandidateRowKey(row);
-          if (!key || candidates.has(key)) continue;
-          candidates.set(key, row);
+        for (const [chunkId] of rows) {
+          if (typeof chunkId !== "number" || candidates.has(chunkId)) continue;
+          candidates.add(chunkId);
           if (candidates.size >= maximum) break;
         }
-        if (candidates.size >= maximum && offset + batchSize < paths.length) {
-          totalCandidatesLowerBound = true;
-        }
+        if (candidates.size >= maximum && batch + 1 < batchCount) totalCandidatesLowerBound = true;
       }
     };
 
-    const termCondition = (term: string): { condition: string; parameters: string[] } => {
-      const compactCondition = "instr(replace(chunks.normalized_text, ' ', ''), ?) > 0";
-      if (!supportsFtsTrigramTerm(term)) {
-        return {
-          condition: `(instr(chunks.normalized_text, ?) > 0 OR ${compactCondition})`,
-          parameters: [term, term],
-        };
-      }
-      return {
-        condition: `(chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?) OR ${compactCondition})`,
-        parameters: [escapeFtsTrigramTerm(term), term],
-      };
-    };
+    // A normalized term with no space that the normalized text holds is also in the text without spaces, which holds
+    // the matches that span word boundaries too, so the index of that text answers both and no chunk text is scanned.
+    // Every other term is tested on each chunk, by the trigram index of the normalized text when it can answer it and
+    // by a scan of the chunk's text when it cannot.
+    const lookupTerm = (term: string): boolean =>
+      supportsFtsTrigramTerm(term) && !/\s/.test(term) && term === term.toLowerCase();
+    const compactMatch = (lookups: readonly string[]): NonNullable<CandidatePass["match"]> => ({
+      table: "chunk_compact_search",
+      expression: lookups.map(escapeFtsTrigramTerm).join(" AND "),
+    });
+    const testOfTerm = (term: string): Pick<CandidatePass, "conditions" | "parameters"> =>
+      supportsFtsTrigramTerm(term)
+        ? {
+            conditions: ["+chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)"],
+            parameters: [escapeFtsTrigramTerm(term)],
+          }
+        : {
+            conditions: [
+              `(instr(chunks.normalized_text, ?) > 0 OR instr(replace(chunks.normalized_text, ' ', ''), ?) > 0)`,
+            ],
+            parameters: [term, term],
+          };
+    const termPass = (term: string): CandidatePass =>
+      lookupTerm(term) ? { match: compactMatch([term]), conditions: [], parameters: [] } : testOfTerm(term);
 
-    const phrase = normalizedRankPhrase;
     if (terms.length > 1) {
-      const conditions = ["instr(chunks.normalized_text, ?) > 0"];
-      const parameters = [phrase];
+      const pass: CandidatePass = {
+        conditions: ["instr(chunks.normalized_text, ?) > 0"],
+        parameters: [normalizedRankPhrase],
+      };
       if (terms.every(supportsFtsTrigramTerm)) {
-        conditions.unshift("chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)");
-        parameters.unshift(escapeFtsTrigramTerm(phrase));
+        pass.match = { table: "chunk_search", expression: escapeFtsTrigramTerm(normalizedRankPhrase) };
       }
-      collect(conditions, parameters, normalizedLimit);
+      collect(pass, normalizedLimit);
     }
 
     if (terms.length > 1) {
       if (candidates.size < normalizedLimit) {
         if (terms.length <= QUERY_INDEX_INLINE_TERM_LIMIT) {
-          const allTerms = terms.map(termCondition);
-          collect(
-            allTerms.map((term) => term.condition),
-            allTerms.flatMap((term) => term.parameters),
-            normalizedLimit,
-          );
+          // Every term the index answers is one lookup, which holds the chunks that have all of them.
+          const lookups = terms.filter(lookupTerm);
+          const tests = terms.filter((term) => !lookupTerm(term)).map(testOfTerm);
+          const pass: CandidatePass = {
+            conditions: tests.flatMap((test) => test.conditions),
+            parameters: tests.flatMap((test) => test.parameters),
+          };
+          if (lookups.length) pass.match = compactMatch(lookups);
+          collect(pass, normalizedLimit);
         } else {
           // Keep every term without growing SQL depth or bind count. NOT EXISTS
           // applies the same FTS/substring/compact match before the candidate cap.
@@ -481,8 +581,9 @@ export class QueryIndexStore {
             supportsFtsTrigramTerm(term) ? escapeFtsTrigramTerm(term) : null,
           ]);
           collect(
-            [
-              `NOT EXISTS (
+            {
+              conditions: [
+                `NOT EXISTS (
                 SELECT 1 FROM json_each(?) AS query_terms
                 WHERE NOT (
                   CASE WHEN json_extract(query_terms.value, '$[1]') IS NULL
@@ -495,8 +596,9 @@ export class QueryIndexStore {
                   OR instr(replace(chunks.normalized_text, ' ', ''), json_extract(query_terms.value, '$[0]')) > 0
                 )
               )`,
-            ],
-            [JSON.stringify(termValues)],
+              ],
+              parameters: [JSON.stringify(termValues)],
+            },
             normalizedLimit,
           );
         }
@@ -511,12 +613,14 @@ export class QueryIndexStore {
         totalCandidatesLowerBound = true;
         break;
       }
-      const termMatch = termCondition(terms[index]!);
-      collect([termMatch.condition], termMatch.parameters, Math.min(normalizedLimit, candidates.size + perTermLimit));
+      collect(termPass(terms[index]!), Math.min(normalizedLimit, candidates.size + perTermLimit));
     }
 
-    const chunks = [...candidates.values()].flatMap((row) => {
-      const chunk = storedCandidateChunkFromRow(row);
+    const matches = [...candidates];
+    const rowsByChunkId = this.chunkRowsById(matches);
+    const chunks = matches.flatMap((chunkId) => {
+      const row = rowsByChunkId.get(chunkId);
+      const chunk = row ? storedCandidateChunkFromRow(row) : null;
       return chunk ? [chunk] : [];
     });
     return {
@@ -584,42 +688,6 @@ export class QueryIndexStore {
     return candidates;
   }
 
-  compactChunkCandidates(
-    query: string,
-    paths: readonly string[],
-    limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT,
-  ): StoredQueryIndexChunk[] {
-    const normalizedLimit = normalizedCandidateLimit(limit);
-    const candidates: StoredQueryIndexChunk[] = [];
-    const batchSize = 500;
-    for (let offset = 0; offset < paths.length; offset += batchSize) {
-      const batch = paths.slice(offset, offset + batchSize);
-      const placeholders = batch.map(() => "?").join(", ");
-      const remaining = normalizedLimit - candidates.length;
-      if (remaining <= 0) break;
-      const rows = this.db
-        .prepare(
-          `
-          SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
-                 chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
-          FROM chunks
-          JOIN files ON files.file_id = chunks.file_id
-          WHERE files.path IN (${placeholders})
-            AND instr(replace(chunks.normalized_text, ' ', ''), ?) > 0
-          ORDER BY files.path, chunks.ordinal
-          LIMIT ?
-        `,
-        )
-        .all(...batch, query, remaining) as Array<Record<string, unknown>>;
-      for (const row of rows) {
-        const chunk = storedCandidateChunkFromRow(row);
-        if (chunk) candidates.push(chunk);
-        if (candidates.length >= normalizedLimit) break;
-      }
-      if (candidates.length >= normalizedLimit) break;
-    }
-    return candidates;
-  }
   checkpoint(): void {
     this.db.pragma("wal_checkpoint(TRUNCATE)");
   }

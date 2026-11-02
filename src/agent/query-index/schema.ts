@@ -1,7 +1,7 @@
 import { SqliteDatabase } from "../../sqlite-driver.js";
 import { QUERY_INDEX_CHUNKER_VERSION, QUERY_INDEX_NORMALIZER_VERSION } from "./content.js";
 
-export const QUERY_INDEX_SCHEMA_VERSION = 3;
+export const QUERY_INDEX_SCHEMA_VERSION = 4;
 
 export type QueryIndexMetadata = {
   schemaVersion: string;
@@ -70,23 +70,37 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunk_search USING fts5(
   tokenize='trigram'
 );
 
-
+-- Trigram index of each chunk's normalized text with its spaces removed, so a term that spans word boundaries is
+-- found without scanning chunk text. It is case sensitive and keeps no content: every character of the compact text
+-- is already lowercase and a hit must equal an exact substring of it.
+CREATE VIRTUAL TABLE IF NOT EXISTS chunk_compact_search USING fts5(
+  compact_text,
+  content='',
+  contentless_delete=1,
+  tokenize='trigram case_sensitive 1'
+);
 
 CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
   INSERT INTO chunk_search(rowid, normalized_text) VALUES (new.chunk_id, new.normalized_text);
+  INSERT INTO chunk_compact_search(rowid, compact_text) VALUES (new.chunk_id, replace(new.normalized_text, ' ', ''));
 END;
 CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
   INSERT INTO chunk_search(chunk_search, rowid, normalized_text)
   VALUES ('delete', old.chunk_id, old.normalized_text);
+  DELETE FROM chunk_compact_search WHERE rowid = old.chunk_id;
 END;
 CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
   INSERT INTO chunk_search(chunk_search, rowid, normalized_text)
   VALUES ('delete', old.chunk_id, old.normalized_text);
   INSERT INTO chunk_search(rowid, normalized_text) VALUES (new.chunk_id, new.normalized_text);
+  DELETE FROM chunk_compact_search WHERE rowid = old.chunk_id;
+  INSERT INTO chunk_compact_search(rowid, compact_text) VALUES (new.chunk_id, replace(new.normalized_text, ' ', ''));
 END;
 `;
 
-const REQUIRED_TABLES = ["metadata", "files", "chunks", "chunk_search"];
+const REQUIRED_TABLES = ["metadata", "files", "chunks", "chunk_search", "chunk_compact_search"];
+/** The tables a version 3 sidecar holds; version 4 adds the compact-text index. */
+const VERSION_3_TABLES = ["metadata", "files", "chunks", "chunk_search"];
 
 function numericValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
@@ -121,6 +135,39 @@ function rebuildDerivedQueryIndexSchema(db: SqliteDatabase): void {
   })();
 }
 
+/**
+ * Version 3 sidecars hold every chunk's normalized text already, so the compact-text index is derived from them
+ * rather than rebuilt from source. The write lock is taken first so a second opener sees the finished migration.
+ */
+function backfillCompactSearch(db: SqliteDatabase): void {
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    if (readQueryIndexSchemaVersion(db) === 3) {
+      const existing = existingQueryTables(db);
+      const missing = VERSION_3_TABLES.filter((table) => !existing.has(table));
+      if (missing.length) throw new QueryIndexSchemaError(`Query index schema is missing: ${missing.join(", ")}.`);
+      db.exec("DROP TRIGGER IF EXISTS chunks_ai;");
+      db.exec("DROP TRIGGER IF EXISTS chunks_ad;");
+      db.exec("DROP TRIGGER IF EXISTS chunks_au;");
+      db.exec(QUERY_INDEX_SCHEMA_SQL);
+      db.exec(
+        "INSERT INTO chunk_compact_search(rowid, compact_text) SELECT chunk_id, replace(normalized_text, ' ', '') FROM chunks;",
+      );
+      // The rows now match the current schema, so the sidecar keeps its content instead of being rebuilt from source.
+      db.exec("UPDATE metadata SET value = '4' WHERE key = 'schemaVersion';");
+      db.pragma(`user_version = ${QUERY_INDEX_SCHEMA_VERSION}`);
+    }
+    db.exec("COMMIT;");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK;");
+    } catch {
+      // Preserve the original migration failure.
+    }
+    throw error;
+  }
+}
+
 export function ensureQueryIndexSchema(db: SqliteDatabase): void {
   const version = readQueryIndexSchemaVersion(db);
   if (version > QUERY_INDEX_SCHEMA_VERSION) throw new QueryIndexFutureSchemaError(version);
@@ -138,6 +185,8 @@ export function ensureQueryIndexSchema(db: SqliteDatabase): void {
   }
   if (version === 1 || version === 2) {
     rebuildDerivedQueryIndexSchema(db);
+  } else if (version === 3) {
+    backfillCompactSearch(db);
   } else if (version < QUERY_INDEX_SCHEMA_VERSION) {
     throw new QueryIndexSchemaError(`Query index schema version ${version} has no supported migration.`);
   }
