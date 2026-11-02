@@ -2,7 +2,7 @@ import fs, { type BigIntStats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { errorMessage, isMissingPathError } from "./errors.js";
-import { probeRealpath } from "./fs-probe-cache.js";
+import type { probeRealpath } from "./fs-probe-cache.js";
 
 export async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -379,12 +379,24 @@ export async function readUtf8WithoutBom(filePath: string): Promise<string> {
   return stripBom(await fsp.readFile(filePath, "utf8"));
 }
 
+let loadedProbeRealpath: typeof probeRealpath | undefined;
+
+/**
+ * The probe cache loads with the first physical check. A static import would put it in the startup module budget of
+ * `doctor`, which loads this module but never checks a physical path (`tests/cli-startup-eager-modules.test.ts`).
+ */
+async function loadProbeRealpath(): Promise<typeof probeRealpath> {
+  loadedProbeRealpath ??= (await import("./fs-probe-cache.js")).probeRealpath;
+  return loadedProbeRealpath;
+}
+
 export async function isPhysicalPathWithinRoot(projectRoot: string, filePath: string): Promise<boolean> {
   if (!isFilePathWithinRoot(projectRoot, filePath)) return false;
+  const realpathOf = await loadProbeRealpath();
   try {
-    const realRoot = await probeRealpath(projectRoot);
+    const realRoot = await realpathOf(projectRoot);
     if (realRoot === null) return false;
-    const realCandidate = await probeRealpath(filePath);
+    const realCandidate = await realpathOf(filePath);
     if (realCandidate === null) return false;
     return isFilePathWithinRoot(realRoot, realCandidate);
   } catch {
