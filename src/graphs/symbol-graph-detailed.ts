@@ -11,6 +11,7 @@ import {
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
+import { detectSFCFramework } from "../languages/sfc.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from "../native/tree-sitter-native.js";
@@ -37,7 +38,7 @@ import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
 import { getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
-import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
+import { ensureParsedContextForIndex, tryEnsureParsedContextForIndex } from "../indexer/parsed-cache.js";
 
 import type { CallableIdentity } from "../languages/callable-arity.js";
 import {
@@ -200,6 +201,7 @@ export async function buildSymbolGraphDetailed(
   const nodes = new Map(base.nodes);
   const edges = base.edges.slice(0, maxEdges);
   let omittedEdges = Math.max(0, base.edges.length - edges.length);
+  let skippedSyntaxTreeFiles = 0;
 
   const added = new Set<string>();
   const membersOnly = !!opts?.membersOnly;
@@ -360,9 +362,15 @@ export async function buildSymbolGraphDetailed(
       if (!(hasFuncOrClass && isImportedOrImports)) continue;
     }
     try {
+      const fileSupport = supportForFileWithoutHeaderSample(file, index.languageExtensions);
+      if (fileSupport && !fileSupport.supportsCrossModuleSymbols && !detectSFCFramework(file)) continue;
       const fileKey = fileIdentityKey(file);
       // Register the pending read and parse before another query can request this disk-cached file.
-      const parsed = await ensureParsedContextForIndex(index, file);
+      const parsed = await tryEnsureParsedContextForIndex(index, file);
+      if (!parsed) {
+        skippedSyntaxTreeFiles += 1;
+        continue;
+      }
       const { sup, source: src, tree } = parsed;
       if (!sup.supportsCrossModuleSymbols) continue;
       ownershipParsedContexts.set(fileKey, Promise.resolve(parsed));
@@ -747,6 +755,14 @@ export async function buildSymbolGraphDetailed(
     edgeCount = edges.length;
   }
   emitMemberImplementationEdges({ nodes, edges }, recordEdge);
+
+  if (skippedSyntaxTreeFiles > 0) {
+    logWithLevel(
+      opts?.logLevel,
+      "warn",
+      `Warning: Skipped detailed symbol edges for ${skippedSyntaxTreeFiles} file(s) because no syntax-tree backend was available.`,
+    );
+  }
 
   const graph: DetailedSymbolGraph = {
     nodes,

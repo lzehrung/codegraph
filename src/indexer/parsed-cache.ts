@@ -1,5 +1,10 @@
 import { fileIdentityKey } from "../util/paths.js";
-import { ensureParsedContext, parseNavigationContext, type ParsedFileContext } from "./parse-context.js";
+import {
+  ensureParsedContext,
+  parseNavigationContext,
+  SyntaxTreeUnavailableError,
+  type ParsedFileContext,
+} from "./parse-context.js";
 import type { BuildOptions, ProjectIndex } from "./types.js";
 
 export function parsedCacheMaxEntries(opts: BuildOptions | undefined): number {
@@ -89,4 +94,17 @@ export function ensureParsedContextForIndex(
     },
   );
   return promise;
+}
+
+/** Graph builds may skip a missing tree; navigation still rejects, and failed parses remain retryable. */
+export async function tryEnsureParsedContextForIndex(
+  index: ProjectIndex,
+  file: string,
+): Promise<ParsedFileContext | null> {
+  try {
+    return await ensureParsedContextForIndex(index, file);
+  } catch (error) {
+    if (error instanceof SyntaxTreeUnavailableError) return null;
+    throw error;
+  }
 }

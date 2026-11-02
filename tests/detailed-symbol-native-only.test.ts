@@ -50,6 +50,7 @@ describe("detailed symbol graph in native-only installs", () => {
     index.parsed = new Map();
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let syntaxTreeAvailable = false;
 
     vi.resetModules();
     vi.doMock("../src/native/tree-sitter-native.js", async () => {
@@ -58,10 +59,10 @@ describe("detailed symbol graph in native-only installs", () => {
       );
       return {
         ...actual,
-        getNativeSyntaxTreeExecution: vi.fn(() => ({
-          tree: null,
-          fallbackReason: "unavailable",
-        })),
+        getNativeSyntaxTreeExecution: vi.fn((...args: Parameters<typeof actual.getNativeSyntaxTreeExecution>) => {
+          if (syntaxTreeAvailable) return actual.getNativeSyntaxTreeExecution(...args);
+          return { tree: null, fallbackReason: "unavailable" };
+        }),
       };
     });
 
@@ -74,6 +75,18 @@ describe("detailed symbol graph in native-only installs", () => {
       "Warning: Skipped detailed symbol edges for 1 file(s) because no syntax-tree backend was available.",
     );
     expect(detailed.edges).toEqual([]);
+
+    syntaxTreeAvailable = true;
+    const { findReferences } = await import("../src/indexer.js");
+    const references = await findReferences(index, {
+      file: normalizePath(path.join(root, "legacy.js")),
+      line: 1,
+      column: 17,
+    });
+    expect(references.status).toBe("ok");
+    if (references.status === "ok") {
+      expect(references.references.some((reference) => reference.range.start.line === 1)).toBe(true);
+    }
   });
 
   it("builds the project index without per-file warnings when both tree paths are unavailable", async () => {
