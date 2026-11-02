@@ -44,6 +44,12 @@ class FakeFs implements FsProbeOps {
     readonly root = path.resolve(path.sep, "fake-volume"),
   ) {}
 
+  /** While set, `readdir` and `lstat` wait for it, so a test decides when a probe finishes. */
+  readdirGate: Promise<void> | undefined;
+  lstatGate: Promise<void> | undefined;
+  /** When set, `lstat` fails with it. */
+  lstatError: NodeJS.ErrnoException | undefined;
+
   at(...segments: string[]): string {
     return path.join(this.root, ...segments);
   }
@@ -146,27 +152,22 @@ class FakeFs implements FsProbeOps {
     }
   }
 
-  readdir(directory: string): Promise<readonly ProbeDirent[]> {
+  async readdir(directory: string): Promise<readonly ProbeDirent[]> {
     this.calls.readdir += 1;
-    try {
-      const { node } = this.resolve(this.segmentsOf(directory), true);
-      if (node.type !== "directory") throw errno("ENOTDIR", directory);
-      if (!node.listable) throw errno("EACCES", directory);
-      return Promise.resolve(
-        [...node.children].map(([name, child]) => ({
-          name,
-          isFile: () => child.type === "file",
-          isDirectory: () => child.type === "directory",
-          isSymbolicLink: () => child.type === "symlink",
-          isFIFO: () => false,
-          isSocket: () => false,
-          isCharacterDevice: () => false,
-          isBlockDevice: () => false,
-        })),
-      );
-    } catch (error) {
-      return Promise.reject(error as Error);
-    }
+    await this.readdirGate;
+    const { node } = this.resolve(this.segmentsOf(directory), true);
+    if (node.type !== "directory") throw errno("ENOTDIR", directory);
+    if (!node.listable) throw errno("EACCES", directory);
+    return [...node.children].map(([name, child]) => ({
+      name,
+      isFile: () => child.type === "file",
+      isDirectory: () => child.type === "directory",
+      isSymbolicLink: () => child.type === "symlink",
+      isFIFO: () => false,
+      isSocket: () => false,
+      isCharacterDevice: () => false,
+      isBlockDevice: () => false,
+    }));
   }
 
   stat(target: string): Promise<{ isFile(): boolean; isDirectory(): boolean }> {
@@ -179,13 +180,11 @@ class FakeFs implements FsProbeOps {
     }
   }
 
-  lstat(target: string): Promise<unknown> {
+  async lstat(target: string): Promise<unknown> {
     this.calls.lstat += 1;
-    try {
-      return Promise.resolve(this.resolve(this.segmentsOf(target), false).node);
-    } catch (error) {
-      return Promise.reject(error as Error);
-    }
+    await this.lstatGate;
+    if (this.lstatError) throw this.lstatError;
+    return this.resolve(this.segmentsOf(target), false).node;
   }
 
   realpath(target: string): Promise<string> {
@@ -761,4 +760,85 @@ describe("probe cache over names that do not round-trip", () => {
     }
     expect(await cache.kind(path.join(root, "\uFFFD.ts"))).toBeNull();
   });
+});
+
+describe("probe cache case rule timing", () => {
+  /** Lets every probe that can run, run: the others are queued behind the gate a test holds. */
+  function settle(): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setImmediate(resolve);
+    return promise;
+  }
+
+  /** A directory listed by probes of names that exist, so no probe has asked for its case rule yet. */
+  async function listedWithoutCaseRule(caseInsensitive: boolean): Promise<{ fake: FakeFs; cache: FsProbeCache }> {
+    const fake = new FakeFs(caseInsensitive);
+    fake.mkdir("d");
+    const names = ["Util.ts", "other.ts", "third.ts", "fourth.ts"];
+    for (const name of names) fake.file(`d/${name}`);
+    const cache = new FsProbeCache(fake);
+    for (const name of names) expect(await cache.kind(fake.at("d", name))).toBe("file");
+    expect(fake.calls.readdir).toBe(1);
+    expect(fake.calls.lstat).toBe(0);
+    return { fake, cache };
+  }
+
+  it.each([false, true])(
+    "holds an answer that depends on the case rule until it is read (case-insensitive: %s)",
+    async (caseInsensitive) => {
+      const { fake, cache } = await listedWithoutCaseRule(caseInsensitive);
+      const gate = Promise.withResolvers<void>();
+      fake.lstatGate = gate.promise;
+      const names = ["util.ts", "UTIL.TS", "Util.ts", "OTHER.ts", "other.ts", "missing.ts"];
+      const settled = new Set<string>();
+      const answers = names.map((name) =>
+        cache.kind(fake.at("d", name)).then((kind) => {
+          settled.add(name);
+          return kind;
+        }),
+      );
+      await settle();
+
+      // A name with no exact entry waits for the one read of the rule: it is never answered as either case rule.
+      for (const name of ["util.ts", "UTIL.TS", "OTHER.ts", "missing.ts"]) expect(settled.has(name), name).toBe(false);
+      expect(fake.calls.lstat).toBe(1);
+      gate.resolve();
+      const kinds = await Promise.all(answers);
+
+      expect(kinds).toEqual(names.map((name) => fake.truthKind(fake.at("d", name))));
+      expect(fake.truthKind(fake.at("d", "util.ts"))).toBe(caseInsensitive ? "file" : null);
+      expect(fake.calls.lstat).toBe(1);
+    },
+  );
+
+  it("holds probes of a directory while its listing is read, then answers as the file system does", async () => {
+    const fake = new FakeFs(false);
+    fake.mkdir("d");
+    fake.file("d/Util.ts");
+    const cache = new FsProbeCache(fake);
+    const gate = Promise.withResolvers<void>();
+    fake.readdirGate = gate.promise;
+    const names = ["Util.ts", "util.ts", "UTIL.ts", "x1", "x2", "x3", "x4", "x5"];
+    const answers = names.map((name) => cache.kind(fake.at("d", name)));
+    await settle();
+    expect(fake.calls.readdir).toBeLessThanOrEqual(1);
+    gate.resolve();
+
+    expect(await Promise.all(answers)).toEqual(names.map((name) => fake.truthKind(fake.at("d", name))));
+  });
+
+  it.each([false, true])(
+    "asks the file system when the case rule cannot be read (case-insensitive: %s)",
+    async (caseInsensitive) => {
+      const { fake, cache } = await listedWithoutCaseRule(caseInsensitive);
+      fake.lstatError = errno("EACCES", "lstat");
+      const statBefore = fake.calls.stat;
+      for (const name of ["util.ts", "UTIL.ts", "OTHER.ts", "missing.ts"]) {
+        const target = fake.at("d", name);
+        expect(await cache.kind(target), name).toBe(fake.truthKind(target));
+      }
+
+      expect(fake.calls.stat).toBeGreaterThan(statBefore);
+    },
+  );
 });

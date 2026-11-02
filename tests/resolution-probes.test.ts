@@ -541,17 +541,16 @@ describe("file system semantics", () => {
 
     for (const [index, spec] of specs.entries()) {
       const resolved = answers[fillers.length + index] as string;
-      const spelled = path.resolve(path.dirname(main), spec);
-      let statSaysFile = false;
-      for (const candidate of [spelled, `${spelled}.ts`, path.join(spelled, "index.ts")]) {
+      // The resolver reads an explicit extension in lower case (`./util.TS` tries `util.ts`), so stat is asked about the
+      // candidates it lists for this spelling, in its order, and the first file that stat finds is the answer.
+      let expected = `external:${spec}`;
+      for (const candidate of listResolutionCandidates(path.resolve(path.dirname(main), spec))) {
         const stat = await fsp.stat(candidate).catch(() => undefined);
-        if (stat?.isFile()) {
-          statSaysFile = true;
-          break;
-        }
+        if (!stat?.isFile()) continue;
+        expected = normalizePath(path.resolve(candidate));
+        break;
       }
-      expect(resolved.startsWith("external:"), `${spec} -> ${resolved}`).toBe(!statSaysFile);
-      if (!resolved.startsWith("external:")) expect(resolved.toLowerCase().endsWith(".ts")).toBe(true);
+      expect(resolved, spec).toBe(expected);
     }
     // One build listed `src` once, whatever case each import spelled.
     expect(calls.filter((call) => call.api === "readdir" && call.target === "src")).toHaveLength(1);
