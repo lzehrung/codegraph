@@ -43,8 +43,20 @@ export function retainedParsedCache(
 /** Parsed contexts follow the index lifetime, as scopeCache already retains their syntax trees. */
 const onDemandParsedContexts = new WeakMap<ProjectIndex, Map<string, Promise<ParsedFileContext>>>();
 
+/** Read an already retained tree without parsing a file just to check the cache. */
+export function cachedParsedContextForIndex(index: ProjectIndex, file: string): Promise<ParsedFileContext> | undefined {
+  const fileKey = fileIdentityKey(file);
+  const retained = index.parsed?.get(fileKey);
+  if (retained) return ensureParsedContext(file, retained, index.languageExtensions);
+  return onDemandParsedContexts.get(index)?.get(fileKey);
+}
+
 /** Reuse one query-time syntax parse per file, including files loaded from a disk-cached index. */
-export function ensureParsedContextForIndex(index: ProjectIndex, file: string): Promise<ParsedFileContext> {
+export function ensureParsedContextForIndex(
+  index: ProjectIndex,
+  file: string,
+  parsed?: ParsedFileContext,
+): Promise<ParsedFileContext> {
   const fileKey = fileIdentityKey(file);
   const retained = index.parsed?.get(fileKey);
   if (retained) return ensureParsedContext(file, retained, index.languageExtensions);
@@ -57,7 +69,7 @@ export function ensureParsedContextForIndex(index: ProjectIndex, file: string): 
   const cached = cache.get(fileKey);
   if (cached) return cached;
 
-  const promise = parseNavigationContext(file, index.languageExtensions);
+  const promise = parsed ? Promise.resolve(parsed) : parseNavigationContext(file, index.languageExtensions);
   cache.set(fileKey, promise);
   void promise.catch(() => {
     if (cache.get(fileKey) === promise) cache.delete(fileKey);

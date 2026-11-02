@@ -13,6 +13,8 @@ import {
 } from "../src/indexer/navigation-references.js";
 import { findUsageReferences } from "../src/indexer/navigation.js";
 import { goToDefinition, type ProjectIndex } from "../src/index.js";
+import { buildSymbolGraphDetailed } from "../src/graphs.js";
+import { ensureParsedContextForIndex } from "../src/indexer/parsed-cache.js";
 import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
@@ -170,6 +172,77 @@ describe("Find References", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  for (const graphFirst of [true, false]) {
+    const order = graphFirst ? "graph then references" : "references then graph";
+    it(`${order} share each indexed syntax tree`, async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-graph-reference-tree-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(
+          sourceFile,
+          "export function first() { return 1; }\nexport function second() { return 2; }\n",
+        );
+        await fsp.writeFile(consumerFile, 'import { first, second } from "./source";\nfirst();\nsecond();\n');
+        const cacheDir = path.join(root, "cache");
+        await indexer.buildProjectIndex(root, { cache: "disk", cacheDir });
+        const index = await indexer.buildProjectIndex(root, { cache: "disk", cacheDir });
+        expect(index.parsed).toBeUndefined();
+
+        const state = loadBinding();
+        if (!state.loaded) throw new Error("Native addon required for graph/reference reuse test");
+        const originalExtract = state.binding.extractLanguage;
+        const originalParse = state.binding.parseSyntaxTree;
+        if (!originalParse) throw new Error("Native syntax-tree parser required for graph/reference reuse test");
+        let extractions = 0;
+        const reads = new Map<string, number>();
+        __setNativeTreeSitterBindingForTests({
+          ...state,
+          binding: {
+            ...state.binding,
+            extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+              extractions += 1;
+              return originalExtract(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+            },
+            parseSyntaxTree: (source, languageId) => {
+              const file = source.includes("function first()") ? "source" : "consumer";
+              reads.set(file, (reads.get(file) ?? 0) + 1);
+              return originalParse(source, languageId);
+            },
+          },
+        });
+        try {
+          if (graphFirst) await buildSymbolGraphDetailed(index);
+          const result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+          if (!graphFirst) await buildSymbolGraphDetailed(index);
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(result.references.map((ref) => ref.file + ":" + ref.range.start.line).sort()).toEqual([
+              consumerFile + ":1",
+              consumerFile + ":2",
+              sourceFile + ":1",
+            ]);
+            expect(result.references.some((ref) => ref.file === consumerFile && ref.range.start.line === 3)).toBe(
+              false,
+            );
+          }
+          expect(reads.get("source")).toBe(1);
+          expect(reads.get("consumer")).toBe(1);
+          expect(extractions).toBe(0);
+          for (const file of [sourceFile, consumerFile]) {
+            const parsed = await ensureParsedContextForIndex(index, file);
+            const scopeRoot = index.scopeCache.get(fileIdentityKey(file))?.allScopes[0]?.node;
+            expect(scopeRoot).toBe(parsed.tree.rootNode);
+          }
+        } finally {
+          __resetNativeTreeSitterBindingForTests();
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
 
   it("marks Python property accessors as strategy-unavailable", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-property-references-"));

@@ -41,7 +41,8 @@ import {
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
 import { getOrBuildScopeIndex } from "../indexer/navigation-local.js";
-import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
+import type { ParsedFileContext } from "../indexer/parse-context.js";
+import { cachedParsedContextForIndex, ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
 
 import type { CallableIdentity } from "../languages/callable-arity.js";
 import {
@@ -319,7 +320,7 @@ export async function buildSymbolGraphDetailed(
     const fileKey = fileIdentityKey(file);
     const cached = ownershipParsedContexts.get(fileKey);
     if (cached) return cached;
-    const pending = ensureParsedContext(file, index.parsed?.get(fileKey), index.languageExtensions).catch(() => null);
+    const pending = ensureParsedContextForIndex(index, file).catch(() => null);
     ownershipParsedContexts.set(fileKey, pending);
     return pending;
   };
@@ -365,10 +366,12 @@ export async function buildSymbolGraphDetailed(
       if (!(hasFuncOrClass && isImportedOrImports)) continue;
     }
     try {
-      const parsedEntry = index.parsed?.get(fileIdentityKey(file));
-      let sup = parsedEntry?.sup;
-      let src = parsedEntry?.source;
-      let tree: SyntaxTreeLike | undefined = parsedEntry?.tree;
+      const fileKey = fileIdentityKey(file);
+      const cachedPromise = cachedParsedContextForIndex(index, file);
+      const cached = cachedPromise ? await cachedPromise : undefined;
+      let sup = cached?.sup;
+      let src = cached?.source;
+      let tree: SyntaxTreeLike | undefined = cached?.tree;
       if (!sup || src === undefined) {
         const prep = await prepareSourceInput(file, {
           languageExtensions: index.languageExtensions,
@@ -391,7 +394,12 @@ export async function buildSymbolGraphDetailed(
       if (!sup || src === undefined || !tree) {
         throw new Error(`Failed to parse ${file}`);
       }
-      ownershipParsedContexts.set(fileIdentityKey(file), Promise.resolve({ source: src, tree, sup }));
+      const parsed =
+        cached ?? (await ensureParsedContextForIndex(index, file, { source: src, tree, sup, nativeQueries: null }));
+      src = parsed.source;
+      tree = parsed.tree;
+      sup = parsed.sup;
+      ownershipParsedContexts.set(fileKey, Promise.resolve(parsed));
 
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
       const { aliasToTargetDef, aliasToTargetModule } = buildImportAliasMaps(
