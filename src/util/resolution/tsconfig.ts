@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -26,7 +27,6 @@ type MatchPathResolver = { scopeKey: string; matchAsync: MatchPathAsync };
 const matchPathResolvers = new WeakMap<MatchPathFn, MatchPathResolver>();
 const anonymousMatchPathKeys = new WeakMap<MatchPathFn, string>();
 let anonymousMatchPathCount = 0;
-const matchPathScopeIds = new Map<string, number>();
 const requireJson = createRequire(import.meta.url);
 
 type TsconfigResolutionInputs = {
@@ -192,6 +192,17 @@ async function loadTsconfigFor(file: string, projectRoot: string, logLevel?: Log
   return val;
 }
 
+/**
+ * The key of a matcher's inputs: a digest of its `baseUrl` and `paths`. Matchers with equal inputs share a key and
+ * different inputs never do, whichever configs were read before, so no table of keys grows in a long-lived process.
+ */
+function matchPathInputsKey(baseUrl: string, paths: Record<string, string[]>): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify([baseUrl, Object.entries(paths)]))
+    .digest("hex");
+  return `config${digest.slice(0, 32)}`;
+}
+
 async function createTsconfigResolution(
   cfgPath: string,
   projectRoot: string,
@@ -200,14 +211,8 @@ async function createTsconfigResolution(
   try {
     const { baseUrl, paths } = await loadTsconfigConfig(cfgPath, projectRoot);
     const matchPath = createMatchPath(baseUrl, paths);
-    const scopeContent = JSON.stringify([baseUrl, Object.entries(paths)]);
-    let scopeId = matchPathScopeIds.get(scopeContent);
-    if (scopeId === undefined) {
-      scopeId = matchPathScopeIds.size + 1;
-      matchPathScopeIds.set(scopeContent, scopeId);
-    }
     matchPathResolvers.set(matchPath, {
-      scopeKey: `config${scopeId}`,
+      scopeKey: matchPathInputsKey(baseUrl, paths),
       matchAsync: createMatchPathAsync(baseUrl, paths),
     });
     return { result: { matchPath }, inputs: { configFile: cfgPath, baseUrl, paths } };

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProjectIndex } from "../src/index.js";
 import { runWithProbeCache } from "../src/util/fs-probe-cache.js";
 import { clearResolutionCaches, loadNearestTsconfigFor, resolveSpecifier } from "../src/util/resolution.js";
-import { matchMappedSpecifier } from "../src/util/resolution/tsconfig.js";
+import { clearTsconfigCache, matchMappedSpecifier } from "../src/util/resolution/tsconfig.js";
 import {
   getResolutionExtensions,
   iterateResolutionCandidates,
@@ -385,6 +385,76 @@ describe("what a cached resolution depends on", () => {
       expect(await order(), `standalone order ${index}`).toEqual(expected[index]);
       clearResolutionCaches();
       expect(await runWithProbeCache(order), `in build order ${index}`).toEqual(expected[index]);
+    }
+  });
+
+  it("keys a tsconfig scope by its inputs, whichever configs a process read before", async () => {
+    const root = await roots.create("dg-probe-scope-keys-");
+    const count = 30;
+    const importers: string[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const paths = { "@a/*": [`lib${index}/*`] };
+      await write(root, `p${index}/tsconfig.json`, JSON.stringify({ compilerOptions: { baseUrl: ".", paths } }));
+      importers.push(await write(root, `p${index}/src/main.ts`, "export {};\n"));
+    }
+    // A fresh copy of the module has read no config yet, as a new process has.
+    const keysInOrder = async (order: readonly number[]): Promise<string[]> => {
+      vi.resetModules();
+      const tsconfig = await import("../src/util/resolution/tsconfig.js");
+      const keys: string[] = [];
+      for (const index of order) {
+        const { matchPath } = await tsconfig.loadNearestTsconfigFor(importers[index] as string, root);
+        keys[index] = tsconfig.matchPathScopeKey(matchPath);
+      }
+      return keys;
+    };
+    const ascending = Array.from({ length: count }, (_, index) => index);
+
+    const forward = await keysInOrder(ascending);
+    const backward = await keysInOrder([...ascending].reverse());
+
+    expect(backward).toEqual(forward);
+    expect(new Set(forward).size).toBe(count);
+    // A key does not grow with the number of configs read, so nothing about them is kept.
+    expect(new Set(forward.map((key) => key.length)).size).toBe(1);
+  });
+
+  it("never answers a changed tsconfig from what was cached for the one before", async () => {
+    const root = await roots.create("dg-probe-config-change-");
+    const importer = await write(root, "src/main.ts", "export {};\n");
+    const targets = new Map<string, string>();
+    for (const name of ["one", "two", "three"]) targets.set(name, normalizePath(await write(root, `${name}/thing.ts`)));
+    // The config is read again, as the next build does, while the resolution cache keeps what it holds.
+    const resolveWith = async (directory: string): Promise<string> => {
+      const paths = { "@x/*": [`${directory}/*`] };
+      await write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { baseUrl: ".", paths } }));
+      clearTsconfigCache();
+      const { matchPath } = await loadNearestTsconfigFor(importer, root);
+      return plain(await resolveSpecifier(importer, "@x/thing", root, matchPath));
+    };
+
+    const answers: string[] = [];
+    for (const directory of ["one", "two", "three", "two", "one"]) answers.push(await resolveWith(directory));
+
+    expect(answers).toEqual(["one", "two", "three", "two", "one"].map((name) => targets.get(name)));
+  });
+
+  it("follows a tsconfig that changes between repeated builds", async () => {
+    const root = await roots.create("dg-probe-repeated-builds-");
+    const app = await write(root, "src/app.ts", 'import "@x/thing";\nexport {};\n');
+    const targets = new Map<string, string>();
+    for (const name of ["one", "two", "three"]) targets.set(name, normalizePath(await write(root, `${name}/thing.ts`)));
+    const targetOfBuild = async (directory: string): Promise<string[]> => {
+      const paths = { "@x/*": [`${directory}/*`] };
+      await write(root, "tsconfig.json", JSON.stringify({ compilerOptions: { baseUrl: ".", paths } }));
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      return index.graph.edges
+        .filter((edge) => edge.from === normalizePath(app))
+        .map((edge) => (edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`));
+    };
+
+    for (const directory of ["one", "two", "three", "one"]) {
+      expect(await targetOfBuild(directory), directory).toEqual([targets.get(directory)]);
     }
   });
 
