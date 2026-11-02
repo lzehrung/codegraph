@@ -305,7 +305,7 @@ export const coverageFacts = perIndexCache((index): CoverageFacts => {
   const entries = referenceModuleTable(index).entries;
   for (let rank = 0; rank < entries.length; rank += 1) {
     const entry = entries[rank]!;
-    const module = index.byFile.get(entry.key);
+    const module = index.byFile.get(fileIdentityKey(entry.file));
     if (!module) continue;
     if (module.parseErrorRanges === undefined) withoutParseInfo.push({ file: entry.file, key: entry.key, rank });
     else if (module.parseErrorRanges.length) withParseErrors.push({ file: entry.file, key: entry.key, rank });
