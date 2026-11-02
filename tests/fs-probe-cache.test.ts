@@ -1,4 +1,5 @@
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -29,13 +30,13 @@ function errno(code: string, syscall: string): NodeJS.ErrnoException {
  */
 class FakeFs implements FsProbeOps {
   readonly calls = { readdir: 0, stat: 0, lstat: 0, realpath: 0, access: 0 };
-  readonly root = path.resolve(path.sep, "fake-volume");
   private readonly top: FakeNode = { type: "directory", children: new Map(), listable: true, searchable: true };
 
   constructor(
     private readonly caseInsensitive: boolean,
     readonly normalizationInsensitive = false,
     readonly realpathStoresCase = true,
+    readonly root = path.resolve(path.sep, "fake-volume"),
   ) {}
 
   at(...segments: string[]): string {
@@ -612,5 +613,68 @@ describe("probe cache over the real file system", () => {
     expect(await cache.kind(path.join(root, "package.json"))).toBe("file");
     expect(await cache.kind(path.join(root, "pnpm-workspace.yaml"))).toBeNull();
     expect(await cache.kind(path.join(root, "lerna.json"))).toBeNull();
+  });
+
+  it("answers a drive or filesystem root and the paths around it as stat and realpath do", async () => {
+    const tmp = os.tmpdir();
+    const root = path.parse(tmp).root;
+    const cache = new FsProbeCache();
+    // Four different names list the root, so its own entry is then asked of a loaded listing.
+    for (const name of ["rp-root-a", "rp-root-b", "rp-root-c", "rp-root-d"]) await cache.kind(path.join(root, name));
+    const targets = [
+      root,
+      path.join(root, "."),
+      path.join(root, "rp-root-missing", ".."),
+      tmp,
+      path.join(tmp, ".."),
+      path.join(tmp, "rp-root-missing"),
+    ];
+    for (const target of targets) {
+      expect(await cache.kind(target), target).toBe(await truthKind(target));
+      expect(await cache.realpath(target), target).toBe(await truthRealpath(target));
+    }
+  });
+});
+
+describe.skipIf(process.platform !== "win32")("probe cache over a UNC share", () => {
+  function share(): FakeFs {
+    const fake = new FakeFs(true, false, true, "\\\\fake-server\\fake-share");
+    fake.mkdir("src");
+    fake.file("a.ts");
+    fake.file("src/b.ts");
+    return fake;
+  }
+
+  it("answers the share root, spelled in any form, and the paths around it as the file system does", async () => {
+    const fake = share();
+    const cache = new FsProbeCache(fake);
+    // Four different names directly under the share list it, so its own root is then asked of a loaded listing.
+    for (const name of ["a.ts", "b.ts", "c.ts", "d.ts"]) await cache.kind(fake.at(name));
+    expect(fake.calls.readdir).toBe(1);
+    const targets = [
+      fake.root,
+      `${fake.root}\\`,
+      `${fake.root}\\.`,
+      `${fake.root}\\src\\..`,
+      fake.at("a.ts"),
+      fake.at("src"),
+      fake.at("src", "b.ts"),
+      fake.at("missing.ts"),
+    ];
+    for (const target of targets) {
+      expect(await cache.kind(target), target).toBe(fake.truthKind(target));
+      expect(await cache.realpath(target), target).toBe(fake.truthRealpath(target));
+    }
+  });
+
+  it("answers a file directly under the share root from the share's listing", async () => {
+    const fake = share();
+    const cache = new FsProbeCache(fake);
+    for (const name of ["a.ts", "b.ts", "c.ts", "d.ts"]) await cache.kind(fake.at(name));
+    const statBefore = fake.calls.stat;
+    expect(await cache.kind(fake.at("a.ts"))).toBe("file");
+    expect(await cache.kind(fake.at("A.TS"))).toBe("file");
+    expect(await cache.kind(fake.at("e.ts"))).toBeNull();
+    expect(fake.calls.stat).toBe(statBefore);
   });
 });

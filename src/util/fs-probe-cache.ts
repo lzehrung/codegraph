@@ -107,7 +107,11 @@ function cacheablePath(target: string): string | undefined {
   if (last === 0x2f || (IS_WINDOWS && last === 0x5c)) return undefined;
   if (!IS_WINDOWS) return target;
   if (/^(?:\\\\|\/\/)[?.][\\/]/.test(target)) return undefined;
-  return path.win32.normalize(target);
+  const normalized = path.win32.normalize(target);
+  // A root has no entry name in any spelling. `normalize` turns the share root `\\server\share` into `\\server\share\`,
+  // and the name of that path would be the share, looked up in its own listing. The parsed root decides, not the spelling.
+  const { root, base } = path.win32.parse(normalized);
+  return base && root !== normalized ? normalized : undefined;
 }
 
 const SEPARATOR = IS_WINDOWS ? "\\" : "/";
@@ -279,8 +283,11 @@ export class FsProbeCache {
     const remembered = this.statKinds.get(file);
     if (remembered !== undefined) return remembered;
     const name = nameOf(file);
-    if (!name || name === "." || name === ".." || isWindowsHazardousName(name)) return this.statKindOf(file, true);
     const directory = directoryOf(file);
+    // A path that is its own directory is a root, which no listing holds: the file system answers.
+    if (directory === file || !name || name === "." || name === ".." || isWindowsHazardousName(name)) {
+      return this.statKindOf(file, true);
+    }
     const state = this.directoryState(directory);
     if (state.loaded === undefined && state.listing === undefined && !state.parentChecked) {
       state.parentChecked = true;
@@ -316,7 +323,14 @@ export class FsProbeCache {
     const name = nameOf(file);
     const directory = directoryOf(file);
     const listing = this.directories.get(directory)?.loaded;
-    if (listing === undefined || !name || name === "." || name === ".." || isWindowsHazardousName(name)) {
+    if (
+      directory === file ||
+      listing === undefined ||
+      !name ||
+      name === "." ||
+      name === ".." ||
+      isWindowsHazardousName(name)
+    ) {
       return this.statRealpathOf(file, true);
     }
     if (listing === MISSING_DIRECTORY) return null;
