@@ -87,12 +87,12 @@ function setNativeIndexingFailureFor(marker: string, message: string): () => num
         }
         return parseSyntaxTree(source, languageId);
       },
-      extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+      extractLanguage: (source, querySetId) => {
         if (source.includes(marker)) {
           failures += 1;
           throw new Error(message);
         }
-        return extractLanguage(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+        return extractLanguage(source, querySetId);
       },
     },
   });
@@ -114,19 +114,19 @@ function countNativeTreeParses(): () => number {
         count += 1;
         return parseSyntaxTree(source, languageId);
       },
-      extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+      extractLanguage: (source, querySetId) => {
         count += 1;
-        return extractLanguage(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+        return extractLanguage(source, querySetId);
       },
-      runLanguageQueries: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+      runLanguageQueries: (source, querySetId) => {
         count += 1;
-        return runLanguageQueries(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+        return runLanguageQueries(source, querySetId);
       },
       ...(runImportsQueryCompact
         ? {
-            runImportsQueryCompact: (source: string, languageId: string, importsQuery: string) => {
+            runImportsQueryCompact: (source: string, querySetId: number) => {
               count += 1;
-              return runImportsQueryCompact(source, languageId, importsQuery);
+              return runImportsQueryCompact(source, querySetId);
             },
           }
         : {}),

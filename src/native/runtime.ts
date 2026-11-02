@@ -11,6 +11,7 @@ import {
   readPlatformPackage,
 } from "./binding-loader.js";
 import { lookupNativeRuntimeCacheEntry, recordNativeRuntimeCacheIdentity } from "./runtime-cache.js";
+import { nativeQuerySetsUnavailableMessage } from "./tree-shape.js";
 import { markWindowsProcessDrainRequired } from "../util/windows-process-drain.js";
 import type {
   NativeBinding,
@@ -68,8 +69,15 @@ export function loadBinding(): NativeBindingState {
     resolveFn: require.resolve,
   });
   if (loaded.binding) {
-    const supportedLanguageIds = new Set(loaded.binding.supportedLanguageIds());
+    // The addon is already loaded, so its native handles need the Windows exit drain even when it is rejected below.
     markWindowsProcessDrainRequired();
+    if (typeof loaded.binding.registerQuerySet !== "function") {
+      // An addon from before query sets takes the query text on every extraction call, which this build no longer
+      // passes. Treat it as unusable here, where the error names the fix, instead of failing each call.
+      bindingState = { loaded: false, error: new Error(nativeQuerySetsUnavailableMessage()), origin: loaded.origin };
+      return bindingState;
+    }
+    const supportedLanguageIds = new Set(loaded.binding.supportedLanguageIds());
     bindingState = {
       loaded: true,
       binding: loaded.binding,

@@ -1,5 +1,6 @@
 import type { LanguageSupport } from "../languages.js";
 import type { NativeCompatibilityQueryKind, NativeQueryKind } from "../languages/types.js";
+import type { NativeBinding, NativeQueryScope } from "./contracts.js";
 
 export const NATIVE_QUERY_KINDS: NativeQueryKind[] = ["imports", "exports", "locals", "importBindings"];
 
@@ -44,6 +45,39 @@ function getOrComputeNormalizedEntry(
  */
 export function getCachedNormalizedQuery(support: LanguageSupport, kind: NativeQueryKind): string {
   return getOrComputeNormalizedEntry(support, kind).text;
+}
+
+/**
+ * Ids the addon returned for each (language, scope) query set, per binding. An id means something only to the binding
+ * that issued it, so a different binding object (a test double, a reloaded addon) registers again and gets its own.
+ */
+const querySetIdsByBinding = new WeakMap<NativeBinding, Map<string, number>>();
+
+/**
+ * The id of `support`'s normalized queries in `binding`, registered on first use. The "full" scope names every query
+ * kind and "imports" only the imports query, so an extraction call carries the id instead of up to several kilobytes of
+ * query text. The addon registers by content, so each thread of a process that asks gets the same id and the same
+ * compiled queries.
+ */
+export function getNativeQuerySetId(binding: NativeBinding, support: LanguageSupport, scope: NativeQueryScope): number {
+  let ids = querySetIdsByBinding.get(binding);
+  if (!ids) {
+    ids = new Map();
+    querySetIdsByBinding.set(binding, ids);
+  }
+  const key = `${support.id}:${scope}`;
+  const known = ids.get(key);
+  if (known !== undefined) return known;
+  const importsOnly = scope === "imports";
+  const id = binding.registerQuerySet(
+    support.id,
+    getCachedNormalizedQuery(support, "imports"),
+    importsOnly ? "" : getCachedNormalizedQuery(support, "exports"),
+    importsOnly ? "" : getCachedNormalizedQuery(support, "locals"),
+    importsOnly ? "" : getCachedNormalizedQuery(support, "importBindings"),
+  );
+  ids.set(key, id);
+  return id;
 }
 
 /**

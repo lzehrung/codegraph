@@ -134,9 +134,9 @@ describe("Find References", () => {
         ...state,
         binding: {
           ...state.binding,
-          extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+          extractLanguage: (source, querySetId) => {
             extractions += 1;
-            return originalExtract(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+            return originalExtract(source, querySetId);
           },
           parseSyntaxTree: (source, languageId) => {
             const key = source.includes("function first()") ? "source" : "consumer";
@@ -205,9 +205,9 @@ describe("Find References", () => {
           ...state,
           binding: {
             ...state.binding,
-            extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+            extractLanguage: (source, querySetId) => {
               extractions += 1;
-              return originalExtract(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+              return originalExtract(source, querySetId);
             },
             parseSyntaxTree: (source, languageId) => {
               const file = source.includes("function first()") ? "source" : "consumer";

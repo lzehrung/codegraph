@@ -143,24 +143,24 @@ export type NativeExtractionExecution = {
 export type NativeQueryScope = "imports" | "full";
 
 export type NativeBinding = {
-  runLanguageQueries: (
-    source: string,
+  /**
+   * Registers one language's four extraction queries and returns the id the extraction calls take in place of the
+   * query text. Registration is by content and shared by every thread of the process: the same texts return the
+   * same id, and the queries compile once, on first use. An empty text means that kind does not run.
+   */
+  registerQuerySet: (
     languageId: string,
     importsQuery: string,
     exportsQuery: string,
     localsQuery: string,
     importBindingsQuery: string,
-  ) => NativeQueryResults;
-  extractLanguage: (
-    source: string,
-    languageId: string,
-    importsQuery: string,
-    exportsQuery: string,
-    localsQuery: string,
-    importBindingsQuery: string,
-  ) => NativeLanguageExtraction;
-  runImportsQueryCompact?: (source: string, languageId: string, importsQuery: string) => CompactQueryResults;
+  ) => number;
+  runLanguageQueries: (source: string, querySetId: number) => NativeQueryResults;
+  extractLanguage: (source: string, querySetId: number) => NativeLanguageExtraction;
+  runImportsQueryCompact?: (source: string, querySetId: number) => CompactQueryResults;
   runQuery?: (source: string, languageId: string, queryText: string) => { matches: NativeMatch[] };
+  /** Diagnostic: how many Tree-sitter compiles a registered set has cost. One for a set that runs merged. */
+  querySetCompileCount?: (querySetId: number) => number;
   parseSyntaxTree?: (source: string, languageId: string) => NativeSyntaxTree;
   tokenizeDuplicateSource?: (source: string) => NativeDuplicateTokens;
   supportedLanguageIds: () => string[];

@@ -30,16 +30,10 @@ nativeDescribe("combined native extraction", () => {
     ];
 
     for (const testCase of cases) {
-      const separateResults = loaded.binding.runLanguageQueries(
-        testCase.source,
-        testCase.languageId,
-        "",
-        "",
-        testCase.localsQuery,
-        "",
-      );
+      const querySetId = loaded.binding.registerQuerySet(testCase.languageId, "", "", testCase.localsQuery, "");
+      const separateResults = loaded.binding.runLanguageQueries(testCase.source, querySetId);
       const separateTree = loaded.binding.parseSyntaxTree?.(testCase.source, testCase.languageId);
-      const combined = extractLanguage(testCase.source, testCase.languageId, "", "", testCase.localsQuery, "");
+      const combined = extractLanguage(testCase.source, querySetId);
 
       expect(combined.results).toEqual(separateResults);
       expect(combined.syntaxTree).toEqual(separateTree);

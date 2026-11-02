@@ -13,8 +13,10 @@ import type {
   NativeWorkerBindingHandoff,
 } from "../native/contracts.js";
 import { loadNativeBinding } from "../native/binding-loader.js";
+import { getNativeQuerySetId } from "../native/queries.js";
 import {
   isColumnarSyntaxTree,
+  nativeQuerySetsUnavailableMessage,
   nativeShapeMismatchMessage,
   REQUIRED_NATIVE_EXTRACTION_VERSION,
 } from "../native/tree-shape.js";
@@ -54,11 +56,6 @@ export type NativeExtractTask = {
   /** Omit the source from the result only when the caller supplied the exact source above. */
   includeSourceInResult?: boolean | undefined;
   includeBloomFilter?: boolean | undefined;
-
-  importsQuery: string;
-  exportsQuery: string;
-  localsQuery: string;
-  importBindingsQuery: string;
   compact?: boolean | undefined;
   limits?: NativeExtractLimits | undefined;
 };
@@ -198,6 +195,10 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
           "the installed native binary does not provide extractLanguage. Reinstall the native package.";
         return;
       }
+      if (typeof loaded.binding.registerQuerySet !== "function") {
+        loadError = nativeQuerySetsUnavailableMessage();
+        return;
+      }
       binding = loaded.binding;
       supportedIds = new Set(binding.supportedLanguageIds());
       return;
@@ -271,7 +272,9 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
       };
     }
 
-    if (!supportedIds.has(task.languageId)) {
+    // The binding parses the language, but only a language this build defines has queries to run.
+    const support = supportById(task.languageId);
+    if (!support || !supportedIds.has(task.languageId)) {
       return {
         filePath: task.filePath,
         languageId: task.languageId,
@@ -286,7 +289,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
 
     try {
       if (task.compact && binding.runImportsQueryCompact) {
-        const compactResults = binding.runImportsQueryCompact(source, task.languageId, task.importsQuery);
+        const compactResults = binding.runImportsQueryCompact(source, getNativeQuerySetId(binding, support, "imports"));
         return {
           filePath: task.filePath,
           languageId: task.languageId,
@@ -298,14 +301,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         };
       }
 
-      const extraction = binding.extractLanguage(
-        source,
-        task.languageId,
-        task.importsQuery,
-        task.exportsQuery,
-        task.localsQuery,
-        task.importBindingsQuery,
-      );
+      const extraction = binding.extractLanguage(source, getNativeQuerySetId(binding, support, "full"));
       // A missing tree is a tolerated state downstream; a present-but-legacy tree is a
       // version mismatch this build cannot read, so only the latter fails the task. The
       // query results came from the same extractLanguage call and are unaffected by the

@@ -16,7 +16,7 @@ export interface CompactQueryResults {
   imports: Array<CompactMatch>
 }
 
-export declare function extractLanguage(source: string, languageId: string, importsQuery: string, exportsQuery: string, localsQuery: string, importBindingsQuery: string): NativeLanguageExtraction
+export declare function extractLanguage(source: string, querySetId: number): NativeLanguageExtraction
 
 export interface NativeCapture {
   name: string
@@ -111,12 +111,31 @@ export interface NativeSyntaxTree {
 export declare function parseSyntaxTree(source: string, languageId: string): NativeSyntaxTree
 
 /**
- * Run only the imports query and return compact results (name + text only).
+ * How many Tree-sitter queries compiling this registered set has cost so far. A diagnostic for
+ * tests and benchmarks: it stays at one for a set that runs merged, however many threads or
+ * calls use it.
+ */
+export declare function querySetCompileCount(querySetId: number): number
+
+/**
+ * Register one language's imports, exports, locals, and import-binding queries and return an id
+ * that stands for them. The extraction calls (`runLanguageQueries`, `extractLanguage`,
+ * `runImportsQueryCompact`) take that id instead of the query text.
+ *
+ * Registration is by content and process-wide: the same texts for the same language return the
+ * same id from any thread, and every thread runs the same compiled queries. Nothing compiles
+ * until the first extraction that needs it, so a query that does not compile fails that call,
+ * not the registration. An empty or blank text means the kind does not run.
+ */
+export declare function registerQuerySet(languageId: string, importsQuery: string, exportsQuery: string, localsQuery: string, importBindingsQuery: string): number
+
+/**
+ * Run only the imports query of a registered set and return compact results (name + text only).
  * This is the graph-mode entrypoint optimized for minimal marshaling.
  */
-export declare function runImportsQueryCompact(source: string, languageId: string, importsQuery: string): CompactQueryResults
+export declare function runImportsQueryCompact(source: string, querySetId: number): CompactQueryResults
 
-export declare function runLanguageQueries(source: string, languageId: string, importsQuery: string, exportsQuery: string, localsQuery: string, importBindingsQuery: string): NativeQueryResults
+export declare function runLanguageQueries(source: string, querySetId: number): NativeQueryResults
 
 /** Execute a single arbitrary query and return full capture metadata. */
 export declare function runQuery(source: string, languageId: string, queryText: string): NativeQueryRunResult

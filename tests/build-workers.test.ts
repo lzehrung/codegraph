@@ -208,10 +208,6 @@ describe("native build worker batches", () => {
       filePath: file,
       languageId: "ts",
       source,
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
     };
     const workerResult = await workerExtractor(task);
 

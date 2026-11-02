@@ -16,6 +16,7 @@ import { compareEdges, edgeKey, parseGoImportAlias, toRelativeEdge } from "../sr
 import { collectImportsForFile } from "../src/indexer.js";
 import { TS_SUPPORT } from "../src/languages.js";
 import type { NativeCapture, NativeQueryResults } from "../src/native/tree-sitter-native.js";
+import { getCachedNormalizedQuery } from "../src/native/queries.js";
 import { createStubNativeSyntaxTree } from "./helpers/native.js";
 
 const makeRange = (start: number, end: number) => ({
@@ -330,10 +331,6 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
       filePath: "virtual.ts",
       languageId: "definitely-not-a-supported-language",
       source: "export const value = 1;\n",
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
     });
 
     if ("results" in result) throw new Error("expected a single extraction result, received a batch");
@@ -354,6 +351,9 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
       loadBinding: () => ({
         binding: {
           supportedLanguageIds: () => ["ts"],
+          registerQuerySet: () => {
+            throw new Error("unexpected registration");
+          },
           runLanguageQueries: () => {
             throw new Error("unexpected query");
           },
@@ -369,19 +369,11 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
     const unavailable = await unavailableExtractor({
       filePath: "virtual.ts",
       languageId: "ts",
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
     });
     const unsupported = await unsupportedExtractor({
       filePath: "virtual.go",
       languageId: "go",
       source: "package main\n",
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
     });
 
     expect(unavailable).toMatchObject({
@@ -401,30 +393,53 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
 
   it("creates injectable native extractors for success compact and failure paths", async () => {
     let loadCount = 0;
+    const sets: Array<Record<"languageId" | "imports" | "exports" | "locals" | "importBindings", string>> = [];
     const extractor = createNativeExtractor({
       loadBinding: () => {
         loadCount += 1;
         return {
           binding: {
             supportedLanguageIds: () => ["ts"],
-            runLanguageQueries: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => ({
-              imports: [{ patternIndex: 0, captures: [capture("source", source), capture("language", languageId)] }],
-              exports: [{ patternIndex: 0, captures: [capture("query", exportsQuery)] }],
-              locals: [{ patternIndex: 0, captures: [capture("query", localsQuery)] }],
-              importBindings: [{ patternIndex: 0, captures: [capture("query", importBindingsQuery)] }],
+            registerQuerySet: (languageId, imports, exports, locals, importBindings) => {
+              sets.push({ languageId, imports, exports, locals, importBindings });
+              return sets.length - 1;
+            },
+            runLanguageQueries: (source, querySetId) => ({
+              imports: [{ patternIndex: 0, captures: [capture("source", source)] }],
+              exports: [{ patternIndex: 0, captures: [capture("query", sets[querySetId]?.exports ?? "")] }],
+              locals: [{ patternIndex: 0, captures: [capture("query", sets[querySetId]?.locals ?? "")] }],
+              importBindings: [
+                { patternIndex: 0, captures: [capture("query", sets[querySetId]?.importBindings ?? "")] },
+              ],
             }),
-            extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => ({
+            extractLanguage: (source, querySetId) => ({
               results: {
-                imports: [{ patternIndex: 0, captures: [capture("source", source), capture("language", languageId)] }],
-                exports: [{ patternIndex: 0, captures: [capture("query", exportsQuery)] }],
-                locals: [{ patternIndex: 0, captures: [capture("query", localsQuery)] }],
-                importBindings: [{ patternIndex: 0, captures: [capture("query", importBindingsQuery)] }],
+                imports: [
+                  {
+                    patternIndex: 0,
+                    captures: [capture("source", source), capture("language", sets[querySetId]?.languageId ?? "")],
+                  },
+                ],
+                exports: [{ patternIndex: 0, captures: [capture("query", sets[querySetId]?.exports ?? "")] }],
+                locals: [{ patternIndex: 0, captures: [capture("query", sets[querySetId]?.locals ?? "")] }],
+                importBindings: [
+                  { patternIndex: 0, captures: [capture("query", sets[querySetId]?.importBindings ?? "")] },
+                ],
               },
               syntaxTree: createStubNativeSyntaxTree(),
             }),
-            runImportsQueryCompact: (source, languageId, importsQuery) => ({
+            runImportsQueryCompact: (source, querySetId) => ({
               imports: [
-                { patternIndex: 0, captures: [{ name: languageId, text: `${importsQuery}:${source}`, startIndex: 0 }] },
+                {
+                  patternIndex: 0,
+                  captures: [
+                    {
+                      name: sets[querySetId]?.languageId ?? "",
+                      text: `${sets[querySetId]?.imports ?? ""}:${source}`,
+                      startIndex: 0,
+                    },
+                  ],
+                },
               ],
             }),
           },
@@ -437,29 +452,37 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
     const full = await extractor({
       filePath: "virtual.ts",
       languageId: "ts",
-      importsQuery: "imports",
-      exportsQuery: "exports",
-      localsQuery: "locals",
-      importBindingsQuery: "bindings",
     });
     const compact = await extractor({
       filePath: "virtual.ts",
       languageId: "ts",
       source: "provided",
-      importsQuery: "imports",
-      exportsQuery: "exports",
-      localsQuery: "locals",
-      importBindingsQuery: "bindings",
       compact: true,
     });
 
     expect(loadCount).toBe(1);
     expect(full.source).toBe("from disk");
     expect(full.nativeResults?.imports[0]?.captures[0]?.text).toBe("from disk");
+    expect(full.nativeResults?.imports[0]?.captures[1]?.text).toBe("ts");
+    // The worker registers the language's own normalized queries: every kind for a full task, and only the imports
+    // query for a compact one.
+    const normalized = (kind: "imports" | "exports" | "locals" | "importBindings") =>
+      getCachedNormalizedQuery(TS_SUPPORT, kind);
+    expect(sets).toEqual([
+      {
+        languageId: "ts",
+        imports: normalized("imports"),
+        exports: normalized("exports"),
+        locals: normalized("locals"),
+        importBindings: normalized("importBindings"),
+      },
+      { languageId: "ts", imports: normalized("imports"), exports: "", locals: "", importBindings: "" },
+    ]);
+    expect(full.nativeResults?.exports[0]?.captures[0]?.text).toBe(normalized("exports"));
     expect(compact.nativeResults).toBeNull();
     expect(compact.compactResults?.imports[0]?.captures[0]).toEqual({
       name: "ts",
-      text: "imports:provided",
+      text: `${normalized("imports")}:provided`,
       startIndex: 0,
     });
 
@@ -467,6 +490,7 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
       loadBinding: () => ({
         binding: {
           supportedLanguageIds: () => ["ts"],
+          registerQuerySet: () => 0,
           runLanguageQueries: () => {
             throw new Error("query failed");
           },
@@ -485,10 +509,6 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
       filePath: "virtual.ts",
       languageId: "ts",
       source: "provided",
-      importsQuery: "",
-      exportsQuery: "",
-      localsQuery: "",
-      importBindingsQuery: "",
     });
 
     expect(failed).toMatchObject({

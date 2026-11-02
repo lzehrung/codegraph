@@ -56,6 +56,8 @@ const binding = loadBinding();
 
 export const parseSyntaxTree = binding.parseSyntaxTree;
 export const extractLanguage = binding.extractLanguage;
+export const querySetCompileCount = binding.querySetCompileCount;
+export const registerQuerySet = binding.registerQuerySet;
 export const runImportsQueryCompact = binding.runImportsQueryCompact;
 export const runLanguageQueries = binding.runLanguageQueries;
 export const runQuery = binding.runQuery;

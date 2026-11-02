@@ -33,3 +33,14 @@ export function nativeShapeMismatchMessage(): string {
     "the installed native binary returns the legacy syntax-tree shape without required projected syntax-tree columns. Reinstall the native package."
   );
 }
+
+/**
+ * A binary from before query sets takes the query text on every extraction call. This build registers the queries once
+ * and passes an id, so it cannot call such a binary.
+ */
+export function nativeQuerySetsUnavailableMessage(): string {
+  return (
+    "The @lzehrung/codegraph-native version that ships with your Codegraph release is required; " +
+    "the installed native binary does not provide registerQuerySet and takes query text on every call. Reinstall the native package."
+  );
+}
