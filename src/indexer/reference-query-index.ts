@@ -177,6 +177,25 @@ const modulesByDirectory = perIndexCache((index): ReadonlyMap<string, readonly M
   return byDirectory;
 });
 
+/** Each module's position in the index's module table, the order a scan of every module visits them. */
+const moduleOrdinals = perIndexCache((index): ReadonlyMap<ModuleIndex, number> => {
+  const ordinals = new Map<ModuleIndex, number>();
+  for (const module of index.byFile.values()) ordinals.set(module, ordinals.size);
+  return ordinals;
+});
+
+/**
+ * `modules` in the order a scan of every module of the index visits them. `resolveExport` caches the answers of
+ * the modules it passes through, including the one a star-export cycle cut short, so the order in which modules
+ * are probed decides what a cold index answers; a test that replaces such a scan with the few modules that can
+ * matter has to probe them in the scan's order.
+ */
+export function inModuleOrder(index: ProjectIndex, modules: readonly ModuleIndex[]): ModuleIndex[] {
+  const ordinals = moduleOrdinals(index);
+  const position = (module: ModuleIndex): number => ordinals.get(module) ?? Number.MAX_SAFE_INTEGER;
+  return [...modules].sort((left, right) => position(left) - position(right));
+}
+
 export type ReachOptions = {
   /** Export names whose dangling re-exports (`export { name } from "./x"`) are reach seeds. */
   danglingNames?: readonly string[];
@@ -185,7 +204,7 @@ export type ReachOptions = {
 };
 
 export type ReachResult = {
-  /** The reached modules, seeds first. */
+  /** The reached modules, in the order a scan of every module visits them (`inModuleOrder`). */
   modules: ModuleIndex[];
   /** `fileIdentityKey` of every reached file, including a seed that is not an indexed module. */
   keys: Set<string>;
@@ -240,7 +259,7 @@ export function reverseReachableModules(
   }
   const modules: ModuleIndex[] = [];
   for (const module of reached.values()) if (module) modules.push(module);
-  return { modules, keys: new Set(reached.keys()) };
+  return { modules: inModuleOrder(index, modules), keys: new Set(reached.keys()) };
 }
 
 export type LocalExportRef = {

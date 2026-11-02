@@ -36,6 +36,7 @@ import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import {
   coverageFacts,
   csharpNamespaceImporters,
+  inModuleOrder,
   jvmModuleEntries,
   parserReportFactsFor,
   referenceModuleTable,
@@ -1232,30 +1233,44 @@ function importersReachingDefinition(search: ImporterSearch): Map<string, string
     return found;
   }
 
-  const tested = new Set<string>();
+  // A scan of every module tests the modules no exporting file's importer set offers first, in module order, and then
+  // the offered files in sorted order. `resolveExport` caches what it answers on the way, so the order of these tests
+  // decides what a cold index answers for a name that a star-export cycle cuts short; keep that order.
+  const offered = new Set<string>();
+  const offeredNeedingFullTest: Array<{ key: string; importer: string; moduleIndex: ModuleIndex }> = [];
   for (const exportingFile of exportingFileIds) {
     for (const importer of candidateFilesImportingTarget(importerIndex, exportingFile) ?? []) {
       const key = fileIdentityKey(importer);
-      if (key === definitionKey || tested.has(key)) continue;
-      tested.add(key);
+      if (key === definitionKey || offered.has(key)) continue;
+      offered.add(key);
       const moduleIndex = index.byFile.get(key);
-      if (moduleIndex && reachesThroughAnyImport(moduleIndex)) found.set(key, importer);
+      if (!moduleIndex) continue;
+      if (importsExportingFile(moduleIndex)) found.set(key, importer);
+      else offeredNeedingFullTest.push({ key, importer, moduleIndex });
     }
   }
-  const testIndirect = (importer: string): void => {
+  const indirect = new Map<string, ModuleIndex>();
+  const collectIndirect = (importer: string): void => {
     const key = fileIdentityKey(importer);
-    if (key === definitionKey || tested.has(key)) return;
-    tested.add(key);
+    if (key === definitionKey || offered.has(key) || indirect.has(key)) return;
     const moduleIndex = index.byFile.get(key);
-    if (moduleIndex && reachesThroughIndirectImport(moduleIndex)) found.set(key, importer);
+    if (moduleIndex) indirect.set(key, moduleIndex);
   };
   for (const targetKey of indirectKeys) {
     if (exportingFiles.has(targetKey)) continue;
-    for (const importer of candidateFilesImportingTarget(importerIndex, targetKey) ?? []) testIndirect(importer);
+    for (const importer of candidateFilesImportingTarget(importerIndex, targetKey) ?? []) collectIndirect(importer);
   }
   if (languageId === "csharp") {
     const definitionDirectory = fileIdentityKey(path.posix.dirname(normalizePath(def.file)));
-    for (const importer of csharpNamespaceImporters(index).get(definitionDirectory) ?? []) testIndirect(importer.file);
+    for (const importer of csharpNamespaceImporters(index).get(definitionDirectory) ?? [])
+      collectIndirect(importer.file);
+  }
+  for (const moduleIndex of inModuleOrder(index, [...indirect.values()])) {
+    if (reachesThroughIndirectImport(moduleIndex)) found.set(fileIdentityKey(moduleIndex.file), moduleIndex.file);
+  }
+  offeredNeedingFullTest.sort((left, right) => left.importer.localeCompare(right.importer));
+  for (const { key, importer, moduleIndex } of offeredNeedingFullTest) {
+    if (reachesThroughAnyImport(moduleIndex)) found.set(key, importer);
   }
   return found;
 }

@@ -3,11 +3,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildProjectIndex,
+  buildProjectIndexFromFiles,
   buildProjectIndexIncremental,
   findReferences,
   listSymbols,
   resolveSymbolId,
 } from "../src/index.js";
+import { previewRenameInSnapshot } from "../src/agent/rename-preview.js";
+import type { AgentProjectSnapshot } from "../src/agent/session.js";
 import { supportForFileWithoutHeaderSample } from "../src/languages.js";
 import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
 import {
@@ -54,6 +57,59 @@ function candidateFilesOf(index: ProjectIndex, root: string, def: SymbolDef): st
     (file) => relativeTo(root, file),
   );
 }
+
+/**
+ * An index object of its own over the same modules, with empty export and scope caches and no per-index table built:
+ * what one side resolved is not visible to the other, and every lookup starts cold. `resolveExport` caches the
+ * answers of the modules it passes through, so a comparison that shares one index lets the first side decide what
+ * the second sees and hides any difference in the order the two sides probe modules.
+ */
+function coldClone(index: ProjectIndex): ProjectIndex {
+  return { ...index, exportCache: new Map(), scopeCache: new Map() };
+}
+
+const CYCLE_DEFINITION = "export function foo(): number {\n  return 1;\n}\n";
+
+/**
+ * Re-export cycles in which a module's answer for a name depends on which module of the cycle is probed first: the
+ * module probed first answers through the other, which is mid-resolution and answers nothing, and the cache keeps that
+ * nothing for the other. The first module of each cycle in file order is the one the consumer imports, or the one
+ * that is not, so both probe orders occur.
+ */
+const CYCLE_PROJECTS: Record<string, Record<string, string>> = {
+  "star cycle, the importer's module sorts first": {
+    "a.ts": 'export * from "./b";\n',
+    "b.ts": 'export * from "./a";\nexport * from "./def";\n',
+    "def.ts": CYCLE_DEFINITION,
+    "consumer.ts": 'import { foo } from "./a";\nexport const x = foo();\n',
+  },
+  "star cycle, the importer's module sorts last": {
+    "m2.ts": 'export * from "./m1";\n',
+    "m1.ts": 'export * from "./m2";\nexport * from "./def";\n',
+    "def.ts": CYCLE_DEFINITION,
+    "consumer.ts": 'import { foo } from "./m2";\nexport const x = foo();\n',
+  },
+  "named cycle, the importer's module sorts first": {
+    "a.ts": 'export { foo } from "./b";\n',
+    "b.ts": 'export { foo } from "./a";\nexport * from "./def";\n',
+    "def.ts": CYCLE_DEFINITION,
+    "consumer.ts": 'import { foo } from "./a";\nexport const x = foo();\n',
+  },
+  "named cycle, the importer's module sorts last": {
+    "m2.ts": 'export { foo } from "./m1";\n',
+    "m1.ts": 'export { foo } from "./m2";\nexport * from "./def";\n',
+    "def.ts": CYCLE_DEFINITION,
+    "consumer.ts": 'import { foo } from "./m2";\nexport const x = foo();\n',
+  },
+  "three-module star cycle": {
+    "x.ts": 'export * from "./y";\n',
+    "y.ts": 'export * from "./z";\n',
+    "z.ts": 'export * from "./x";\nexport * from "./def";\n',
+    "def.ts": CYCLE_DEFINITION,
+    "use-x.ts": 'import { foo } from "./x";\nexport const a = foo();\n',
+    "use-y.ts": 'import { foo } from "./y";\nexport const b = foo();\n',
+  },
+};
 
 const CHAIN_PROJECT: Record<string, string> = {
   "src/def.ts": "export function helper(value: number): number {\n  return value + 1;\n}\nexport const other = 2;\n",
@@ -145,6 +201,7 @@ describe("reference candidate selection", () => {
         if (scenario.isDirectory()) projectRoots.push(path.join(languageRoot, scenario.name));
       }
     }
+    for (const files of Object.values(CYCLE_PROJECTS)) projectRoots.push(await writeProject(files));
 
     let compared = 0;
     const mismatches: string[] = [];
@@ -159,8 +216,8 @@ describe("reference candidate selection", () => {
           const nameSets = [exported.length || def.isMember ? exported : [def.localName]];
           if (def.isMember) nameSets.push([def.localName]);
           for (const names of nameSets) {
-            const expected = referenceCandidatesByFullScan(index, def, names, languageId);
-            const actual = getCachedReferenceCandidateFiles(index, def, names, false, languageId);
+            const expected = referenceCandidatesByFullScan(coldClone(index), def, names, languageId);
+            const actual = getCachedReferenceCandidateFiles(coldClone(index), def, names, false, languageId);
             compared += 1;
             if (JSON.stringify(actual) !== JSON.stringify(expected)) {
               mismatches.push(
@@ -399,5 +456,74 @@ describe("reference coverage of a member lookup", () => {
 
   it("reports only the files the receiver scan reached before the reference limit", async () => {
     expect(await coverageOf(1)).toEqual({ reasons: ["parse_error", "truncated"], affected: ["0-broken.ts"] });
+  });
+});
+
+describe("lookups through a star-export cycle on a cold index", () => {
+  const files = CYCLE_PROJECTS["star cycle, the importer's module sorts first"]!;
+
+  it("lists the importer of a module that star-exports its own star exporter", async () => {
+    const root = await writeProject(files);
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const def = definitionOf(index, "foo", "def.ts");
+
+    // `a.ts` and `b.ts` star-export each other and `b.ts` also star-exports `def.ts`. A scan of every module probes
+    // `a.ts` first and caches its answer; probing `b.ts` first cuts `a.ts` short and caches nothing for it.
+    expect(candidateFilesOf(index, root, def)).toEqual(["a.ts", "b.ts", "consumer.ts"]);
+    const result = await findReferences(index, { def });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect([...new Set(result.references.map((reference) => relativeTo(root, reference.file)))].sort()).toEqual([
+      "consumer.ts",
+      "def.ts",
+    ]);
+    expect(result.referenceCoverage?.state).toBe("complete");
+  });
+
+  it("probes the reachable modules in the order a scan of every module visits them", async () => {
+    const root = await writeProject(files);
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const def = definitionOf(index, "foo", "def.ts");
+
+    const reached = reverseReachableModules(index, [def.file], { danglingNames: ["foo"] });
+
+    const scanOrder = [...index.byFile.values()].filter((module) => reached.modules.includes(module));
+    expect(reached.modules.map((module) => relativeTo(root, module.file))).toEqual(["a.ts", "b.ts", "def.ts"]);
+    expect(reached.modules).toEqual(scanOrder);
+  });
+
+  it("previews a rename that reaches the importer through the cycle", async () => {
+    const root = await writeProject(files);
+    // A session snapshot would load the symbol graph, which resolves exports module by module before the rename
+    // runs; this snapshot holds the cold index alone, so the rename's own lookup is the first to probe the cycle.
+    const projectFiles = Object.keys(files)
+      .sort()
+      .map((name) => path.join(root, name).replace(/\\/g, "/"));
+    const index = await buildProjectIndexFromFiles(root, projectFiles, { cache: "off", keepParsed: true });
+    const snapshot: AgentProjectSnapshot = {
+      root,
+      files: projectFiles,
+      index,
+      fileGraph: index.graph,
+      symbolGraph: { nodes: new Map(), edges: [] },
+      analysis: {
+        mode: "semantic",
+        backend: "unknown",
+        parserDegradedFiles: 0,
+        nativeFilesUsed: 0,
+        nativeFilesFellBack: 0,
+        label: "semantic",
+      },
+    };
+
+    const preview = await previewRenameInSnapshot(snapshot, { root, handle: "def.ts::foo", newName: "renamed" });
+
+    const edited = new Set(
+      preview.edits.map((edit) => (path.isAbsolute(edit.file) ? relativeTo(root, edit.file) : edit.file)),
+    );
+    expect([...edited].sort()).toEqual(["consumer.ts", "def.ts"]);
+    expect(preview.edits.filter((edit) => edit.file.endsWith("consumer.ts")).map((edit) => edit.kind)).toContain(
+      "import",
+    );
   });
 });
