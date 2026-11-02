@@ -54,18 +54,23 @@ export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.bi
 const LEGACY_JSON_SIDECAR_FILENAME = "detailed-symbol-graph.json";
 
 /**
- * Persisted detailed symbol graph: `[magic][u32 header length][header JSON][brotli payload]`.
+ * Persisted detailed symbol graph: `[magic][u32 header length][SHA-256][header JSON][brotli payload]`.
  *
  * The payload is one body of 8-byte aligned little-endian columns (typed arrays), not text, so it never needs a
  * string as long as the graph and loads as views. Strings live in two tables (files, then everything else) of
  * UTF-8 bytes plus offsets; a node refers to its file and name by table index and rebuilds its id from them
  * (`file::name::tail`, the form every indexed node has), and an edge refers to nodes by position. Every distinct
  * file is stored once as a project-relative path, so a load rebases and validates it once, not once per node and
- * edge. The header names the project identity and implementation the graph was derived for, and carries the
- * SHA-256 of the payload bytes, so a changed project, a different build, and a damaged file are told apart.
+ * edge. The header names the project identity and implementation the graph was derived for. It also holds graph
+ * data: the counts that shape the columns, the text of strings UTF-8 cannot hold, and the property orders of nodes.
+ * The SHA-256 therefore covers every other byte of the file, header and payload alike: a changed project, a
+ * different build, and a damaged file are told apart, and a byte changed anywhere is damage, never a changed graph.
  */
 const SNAPSHOT_MAGIC = "CGDG";
-const PREFIX_BYTES = 8;
+/** The checksum follows the magic and the header length, which it covers. */
+const CHECKSUM_OFFSET = 8;
+const CHECKSUM_BYTES = 32;
+const PREFIX_BYTES = CHECKSUM_OFFSET + CHECKSUM_BYTES;
 const SECTION_ALIGNMENT = 8;
 const STRING_CHUNK_BYTES = 1 << 20;
 const BROTLI_QUALITY = 4;
@@ -155,7 +160,6 @@ export type DetailedSidecarHeader = {
   /** Property orders of nodes that do not list their properties in canonical order; a node refers by position + 1. */
   nodeKeyOrders: string[][];
   bodyBytes: number;
-  payloadSha256: string;
 };
 
 type RecordCounts = Pick<SidecarCounts, "nodes" | "edges" | "sites" | "aliases">;
@@ -369,8 +373,6 @@ function isSidecarHeader(value: unknown): value is DetailedSidecarHeader {
     /^[a-f0-9]{64}$/.test(value.implementationFingerprint) &&
     typeof value.projectSnapshotIdentity === "string" &&
     /^[a-f0-9]{64}$/.test(value.projectSnapshotIdentity) &&
-    typeof value.payloadSha256 === "string" &&
-    /^[a-f0-9]{64}$/.test(value.payloadSha256) &&
     isPlainRecord(counts) &&
     isCount(counts.files) &&
     isCount(counts.strings) &&
@@ -778,18 +780,24 @@ function copyColumns(target: object, source: object): void {
   }
 }
 
-/** A sidecar file: `header` as JSON, then the compressed `payload` its checksum covers. */
+/** A sidecar file: the prefix, the `header` as JSON, and the compressed `payload`, sealed by one checksum. */
 export function packDetailedSymbolGraphSidecar(header: DetailedSidecarHeader, payload: Uint8Array): Buffer {
   const headerBytes = Buffer.from(JSON.stringify(header), "utf8");
   const prefix = Buffer.alloc(PREFIX_BYTES);
   prefix.write(SNAPSHOT_MAGIC, 0, "ascii");
   prefix.writeUInt32LE(headerBytes.length, 4);
+  createHash("sha256")
+    .update(prefix.subarray(0, CHECKSUM_OFFSET))
+    .update(headerBytes)
+    .update(payload)
+    .digest()
+    .copy(prefix, CHECKSUM_OFFSET);
   return Buffer.concat([prefix, headerBytes, payload]);
 }
 
 /**
- * Compresses `body` and puts it behind `header`, filling in the length and the checksum of the payload. It is the
- * last step of a write, and of a test that alters a column and needs a sidecar that still verifies.
+ * Compresses `body` and puts it behind `header`, filling in the body length and sealing the file. It is the last
+ * step of a write, and of a test that alters a column and needs a sidecar that still verifies.
  */
 export async function assembleDetailedSymbolGraphSidecar(
   header: DetailedSidecarHeader,
@@ -801,10 +809,7 @@ export async function assembleDetailedSymbolGraphSidecar(
       [zlibConstants.BROTLI_PARAM_SIZE_HINT]: body.byteLength,
     },
   });
-  return packDetailedSymbolGraphSidecar(
-    { ...header, bodyBytes: body.byteLength, payloadSha256: createHash("sha256").update(payload).digest("hex") },
-    payload,
-  );
+  return packDetailedSymbolGraphSidecar({ ...header, bodyBytes: body.byteLength }, payload);
 }
 
 /** The bytes of a sidecar for `input.graph`, as a write stores them. */
@@ -838,13 +843,12 @@ export async function encodeDetailedSymbolGraphSnapshot(input: DetailedSymbolGra
       illFormedStrings: strings.illFormed,
       nodeKeyOrders: [...keyOrders.keys()].map((order) => order.split(",")),
       bodyBytes: 0,
-      payloadSha256: "",
     },
     body,
   );
 }
 
-/** The header and the payload of a sidecar's bytes; throws for bytes that are not one. */
+/** The header and the payload of a sidecar's bytes, not yet verified; throws for bytes that are not a sidecar. */
 export function splitDetailedSymbolGraphSidecar(bytes: Uint8Array): { header: unknown; payload: Uint8Array } {
   const raw = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (raw.length < PREFIX_BYTES || raw.toString("ascii", 0, 4) !== SNAPSHOT_MAGIC) {
@@ -858,14 +862,27 @@ export function splitDetailedSymbolGraphSidecar(bytes: Uint8Array): { header: un
   };
 }
 
-/** The body of a sidecar once the checksum of its payload has held. */
+/**
+ * Throws unless the checksum of a sidecar's bytes holds. It covers every byte of the file but its own, the header as
+ * much as the payload, so what {@link splitDetailedSymbolGraphSidecar} returned may shape a graph only after this has
+ * passed.
+ */
+function verifyDetailedSymbolGraphSidecarChecksum(bytes: Uint8Array): void {
+  const raw = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const actual = createHash("sha256")
+    .update(raw.subarray(0, CHECKSUM_OFFSET))
+    .update(raw.subarray(PREFIX_BYTES))
+    .digest();
+  if (!actual.equals(raw.subarray(CHECKSUM_OFFSET, PREFIX_BYTES))) {
+    throw new SidecarRejection("detailed symbol graph checksum mismatch");
+  }
+}
+
+/** The body of a sidecar's payload, once {@link verifyDetailedSymbolGraphSidecarChecksum} has passed for its file. */
 export async function inflateDetailedSymbolGraphSidecar(
   header: DetailedSidecarHeader,
   payload: Uint8Array,
 ): Promise<Buffer> {
-  if (createHash("sha256").update(payload).digest("hex") !== header.payloadSha256) {
-    throw new SidecarRejection("detailed symbol graph checksum mismatch");
-  }
   const body = await brotliDecompressAsync(payload, { maxOutputLength: Math.max(1, header.bodyBytes) });
   if (body.length !== header.bodyBytes) throw new SidecarRejection("detailed symbol graph body length mismatch");
   return body;
@@ -1140,6 +1157,8 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
       recordCacheCorruption(report, snapshotPath, "invalid detailed symbol graph payload", opts?.logLevel);
       return null;
     }
+    // Every gate below and every byte the graph is built from comes from a file that verifies as a whole.
+    verifyDetailedSymbolGraphSidecarChecksum(bytes);
     if (header.implementationFingerprint !== getImplementationFingerprint()) {
       recordSnapshotInvalidation(snapshotPath, "implementation fingerprint mismatch", opts?.logLevel);
       return null;

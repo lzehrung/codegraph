@@ -34,6 +34,7 @@ import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { limitJsonStringLength } from "./helpers/string-limit.js";
 import {
   detailedSidecarPath as detailedSymbolGraphSnapshotPath,
+  editDetailedSidecarHeaderText,
   openDetailedSidecar,
   patchDetailedSidecarHeader,
   readDetailedSidecarHeader,
@@ -548,6 +549,10 @@ describe("agent session", () => {
       [
         "a sidecar with a changed payload byte",
         Buffer.concat([original.subarray(0, -1), Buffer.from([lastByte ^ 0xff])]),
+      ],
+      [
+        "a sidecar whose header changed after it was written",
+        editDetailedSidecarHeaderText(original, (text) => text.replace('"projectRoot":"', (head) => `${head}x`)),
       ],
     ];
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");

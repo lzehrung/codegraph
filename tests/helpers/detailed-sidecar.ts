@@ -21,7 +21,7 @@ export async function readDetailedSidecarHeader(sidecarPath: string): Promise<De
   return header as DetailedSidecarHeader;
 }
 
-/** Rewrites the named header fields and leaves the payload bytes, and so the checksum they carry, untouched. */
+/** Rewrites the named header fields and seals the file again, so a load meets the changed field, not a failed checksum. */
 export async function patchDetailedSidecarHeader(
   sidecarPath: string,
   patch: Partial<Record<keyof DetailedSidecarHeader, unknown>>,
@@ -29,6 +29,24 @@ export async function patchDetailedSidecarHeader(
   const { header, payload } = splitDetailedSymbolGraphSidecar(await fs.readFile(sidecarPath));
   const patched = { ...(header as DetailedSidecarHeader), ...patch } as DetailedSidecarHeader;
   await fs.writeFile(sidecarPath, packDetailedSymbolGraphSidecar(patched, payload));
+}
+
+/**
+ * The bytes of a sidecar with its header text passed through `edit`, and the checksum and the payload left as they
+ * were written: the file is well formed and no longer verifies, as after a byte of its header changes. An edit that
+ * leaves the text as it was throws, because a file that still verifies would prove nothing.
+ */
+export function editDetailedSidecarHeaderText(raw: Buffer, edit: (text: string) => string): Buffer {
+  const { payload } = splitDetailedSymbolGraphSidecar(raw);
+  const headerLength = raw.readUInt32LE(4);
+  const prefixLength = raw.length - payload.length - headerLength;
+  const text = raw.toString("utf8", prefixLength, prefixLength + headerLength);
+  const edited = edit(text);
+  if (edited === text) throw new Error("the edit did not change the header text");
+  const headerBytes = Buffer.from(edited, "utf8");
+  const prefix = Buffer.from(raw.subarray(0, prefixLength));
+  prefix.writeUInt32LE(headerBytes.length, 4);
+  return Buffer.concat([prefix, headerBytes, payload]);
 }
 
 /**

@@ -1,13 +1,18 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../src/graphs/symbol-graph.js";
-import { buildProjectIndex, buildSymbolGraphDetailed } from "../src/index.js";
+import { buildProjectIndex, buildSymbolGraphDetailed, type BuildReport } from "../src/index.js";
 import * as buildCache from "../src/indexer/build-cache.js";
 import { encodeDetailedSymbolGraphSnapshot } from "../src/indexer/build-cache/detailed-graph-snapshot.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
-import { assertFilePathWithinRoot, normalizePath } from "../src/util/paths.js";
-import { detailedSidecarPath, patchDetailedSidecarHeader } from "./helpers/detailed-sidecar.js";
+import { assertFilePathWithinRoot, fileIdentityKey, normalizePath } from "../src/util/paths.js";
+import {
+  detailedSidecarPath,
+  editDetailedSidecarHeaderText,
+  patchDetailedSidecarHeader,
+  readDetailedSidecarHeader,
+} from "./helpers/detailed-sidecar.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 
 const cacheOptions = { cache: "disk", threads: 1 } as const;
@@ -326,6 +331,159 @@ describe("detailed symbol graph sidecar", () => {
       if (!loaded) throw new Error(`the ${name} sample graph was not persisted`);
       expect(graph.nodes.size).toBeGreaterThan(0);
       expect(describeGraph(loaded)).toEqual(describeGraph(graph));
+    });
+  });
+
+  // The header holds graph data: the counts that shape the columns, the text of strings UTF-8 cannot hold, and the
+  // property orders of nodes. The checksum covers it with the payload, so a header that changed after the file was
+  // written is a damaged file, however well formed the changed header is.
+  describe("a sidecar whose header changed after it was written", () => {
+    const CHECKSUM_MISMATCH = "detailed symbol graph checksum mismatch";
+
+    function replaceAfter(text: string, marker: string, from: string, to: string): string {
+      const start = text.indexOf(marker);
+      const at = text.indexOf(from, start);
+      if (start < 0 || at < 0) throw new Error(`${marker} holds no ${from}`);
+      return text.slice(0, at) + to + text.slice(at + from.length);
+    }
+
+    /** A written sidecar whose header carries both ill-formed lists, a node property order, and an odd edge count. */
+    async function writtenFixture() {
+      const project = await indexedProject({ "a.ts": "export const a = 1;\n" });
+      const [template] = project.index.byFile.values();
+      if (!template) throw new Error("the project indexed no file");
+      // Two indexed files whose names hold a lone surrogate, which UTF-8 cannot store.
+      const odd = project.file("odd\ud800.ts");
+      const otherOdd = project.file("odd\ud801.ts");
+      for (const file of [odd, otherOdd]) project.index.byFile.set(fileIdentityKey(file), { ...template, file });
+      const a = project.file("a.ts");
+      const alpha: SymbolNode = {
+        id: `${a}::alpha::0`,
+        file: a,
+        name: "alpha",
+        kind: "function",
+        docstring: "note \ud800 text",
+      };
+      // `callable` before `memberArity` is not the canonical order, so the header lists it.
+      const beta: SymbolNode = Object.assign(
+        { id: `${a}::beta::1`, file: a, name: "beta", kind: "function" as const },
+        { callable: true as const },
+        { memberArity: 1 },
+      );
+      const gamma: SymbolNode = { id: `${odd}::gamma::0`, file: odd, name: "gamma", kind: "variable" };
+      // An odd number of edges: the columns hold the count one higher without growing, in zero padding.
+      const edges: SymbolEdge[] = [
+        { from: alpha.id, to: beta.id, label: "calls", site: { file: a, range: range(1, 2, 1, 8, [3, 9]) } },
+        { from: beta.id, to: gamma.id, label: "uses" },
+        { from: gamma.id, to: alpha.id, label: "calls" },
+      ];
+      const graph = graphOf([alpha, beta, gamma], edges);
+      await buildCache.writeDetailedSymbolGraphSnapshot(project.root, { cache: "disk" }, project.index, graph);
+      const sidecarPath = detailedSidecarPath(project.root);
+      const header = await readDetailedSidecarHeader(sidecarPath);
+      // The fixture is only worth its tests while the header holds what they change.
+      expect(header.illFormedFiles).toHaveLength(1);
+      expect(header.illFormedStrings).toHaveLength(1);
+      expect(header.nodeKeyOrders).toEqual([["id", "file", "name", "kind", "callable", "memberArity"]]);
+      expect(header.counts.edges).toBe(3);
+      return { project, graph, sidecarPath, original: await fsp.readFile(sidecarPath) };
+    }
+
+    async function loadReporting(project: Project) {
+      const report: BuildReport = { timings: {} };
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(
+          project.root,
+          { cache: "disk" },
+          project.index,
+          report,
+        );
+        return { loaded, reasons: (report.manifest?.corruptions ?? []).map((entry) => entry.reason) };
+      } finally {
+        warn.mockRestore();
+      }
+    }
+
+    it("loads as it was written, ill-formed text and property order included", async () => {
+      const { project, graph } = await writtenFixture();
+
+      const { loaded, reasons } = await loadReporting(project);
+
+      if (!loaded) throw new Error("the written sidecar was not loaded");
+      expect(describeGraph(loaded)).toEqual(describeGraph(graph));
+      expect(reasons).toEqual([]);
+    });
+
+    it.each<[string, (text: string) => string]>([
+      ["character of an ill-formed string", (text) => replaceAfter(text, '"illFormedStrings"', "\\ud800", "\\ud801")],
+      [
+        "ill-formed file name, which then names another indexed file",
+        (text) => replaceAfter(text, '"illFormedFiles"', "\\ud800", "\\ud801"),
+      ],
+      ["property order of a node", (text) => text.replace('"callable","memberArity"', '"memberArity","callable"')],
+      ["edge count to one that still fits the padded columns", (text) => text.replace('"edges":3', '"edges":4')],
+      ["recorded project root", (text) => text.replace('"projectRoot":"', (head) => `${head}x`)],
+    ])("rejects a changed %s", async (_what, edit) => {
+      const { project, sidecarPath, original } = await writtenFixture();
+      await fsp.writeFile(sidecarPath, editDetailedSidecarHeaderText(original, edit));
+
+      const { loaded, reasons } = await loadReporting(project);
+
+      expect(loaded).toBeNull();
+      expect(reasons).toEqual([CHECKSUM_MISMATCH]);
+    });
+
+    it.each<[string, (original: Buffer) => Buffer]>([
+      ["a byte appended to the file", (original) => Buffer.concat([original, Buffer.from([0])])],
+      ["the last byte of the file cut off", (original) => original.subarray(0, -1)],
+      ["the file cut inside its header", (original) => original.subarray(0, 100)],
+    ])("rejects %s", async (_what, damage) => {
+      const { project, sidecarPath, original } = await writtenFixture();
+      await fsp.writeFile(sidecarPath, damage(original));
+
+      const { loaded, reasons } = await loadReporting(project);
+
+      expect(loaded).toBeNull();
+      expect(reasons).toHaveLength(1);
+    });
+
+    it("rejects a change of any single bit of the file, the header and the checksum included", async () => {
+      const { project, sidecarPath, original } = await writtenFixture();
+      const realReadFile = fsp.readFile.bind(fsp);
+      let served = original;
+      // The load reads the sidecar through `fsp.readFile`; serving the damaged bytes from memory keeps the loop fast.
+      const readFile = vi.spyOn(fsp, "readFile").mockImplementation(async (target, options) => {
+        if (path.resolve(String(target)) === path.resolve(sidecarPath)) return served;
+        return await realReadFile(target, options);
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const accepted: number[] = [];
+      try {
+        for (let offset = 0; offset < original.length; offset += 1) {
+          served = Buffer.from(original);
+          served[offset] = served[offset]! ^ 1;
+          const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(
+            project.root,
+            { cache: "disk" },
+            project.index,
+          );
+          if (loaded) accepted.push(offset);
+        }
+        served = original;
+        const control = await buildCache.tryLoadDetailedSymbolGraphSnapshot(
+          project.root,
+          { cache: "disk" },
+          project.index,
+        );
+        expect(control).not.toBeNull();
+      } finally {
+        readFile.mockRestore();
+        warn.mockRestore();
+      }
+
+      expect(original.length).toBeGreaterThan(400);
+      expect(accepted).toEqual([]);
     });
   });
 });
