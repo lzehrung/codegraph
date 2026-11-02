@@ -16,6 +16,7 @@ const nativeRequiredSuites = [
   "tests/call-hierarchy-language-parity.test.ts",
   "tests/type-hierarchy-language-parity.test.ts",
   "tests/native-combined-extraction.test.ts",
+  "tests/native-query-sets.test.ts",
   "tests/cache-path-confinement.test.ts",
   "tests/duplicates.test.ts",
 ];

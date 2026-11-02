@@ -234,9 +234,9 @@ describe("workspace symbol lookup", () => {
         ...state,
         binding: {
           ...state.binding,
-          extractLanguage: (text, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+          extractLanguage: (text, querySetId) => {
             extractions += 1;
-            return originalExtract(text, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+            return originalExtract(text, querySetId);
           },
           parseSyntaxTree: (text, languageId) => {
             const file = text.includes("function first()") ? "source" : "consumer";

@@ -15,10 +15,8 @@ export function failNativeTreeReconstructionFor(marker: string): void {
     ...state,
     binding: {
       ...state.binding,
-      extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
-        const extraction = {
-          ...extractLanguage(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery),
-        };
+      extractLanguage: (source, querySetId) => {
+        const extraction = { ...extractLanguage(source, querySetId) };
         if (source.includes(marker)) Reflect.deleteProperty(extraction, "syntaxTree");
         return extraction;
       },
@@ -43,9 +41,9 @@ export function failNativeExtractionFor(marker: string): void {
     ...state,
     binding: {
       ...state.binding,
-      extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+      extractLanguage: (source, querySetId) => {
         if (source.includes(marker)) throw new Error("forced extraction failure");
-        return extractLanguage(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+        return extractLanguage(source, querySetId);
       },
       parseSyntaxTree: (source, languageId) => {
         if (source.includes(marker)) throw new Error("forced tree parse failure");
@@ -69,9 +67,9 @@ export function failNativeBlockQueriesFor(marker: string): void {
     ...state,
     binding: {
       ...state.binding,
-      runLanguageQueries: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+      runLanguageQueries: (source, querySetId) => {
         if (source.includes(marker)) throw new Error("forced block query failure");
-        return runLanguageQueries(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+        return runLanguageQueries(source, querySetId);
       },
     },
   });
