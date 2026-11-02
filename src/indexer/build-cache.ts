@@ -38,16 +38,18 @@ export {
 } from "./build-cache/module-cache.js";
 export { cacheRoot, resolveCacheLocation } from "./build-cache/location.js";
 export {
+  tryLoadDetailedSymbolGraphSnapshot,
+  writeDetailedSymbolGraphSnapshot,
+} from "./build-cache/detailed-graph-snapshot.js";
+export {
   BLOOM_FILTER_SNAPSHOT_FILENAME,
   BLOOM_FILTER_SNAPSHOT_VERSION,
   PROJECT_SNAPSHOT_VERSION,
   createProjectSnapshotIdentity,
   projectSnapshotFilesSignature,
-  tryLoadDetailedSymbolGraphSnapshot,
   tryLoadPersistedBloomFilters,
   tryLoadProjectSnapshotModules,
   tryLoadProjectIndexSnapshot,
-  writeDetailedSymbolGraphSnapshot,
   writeProjectIndexSnapshot,
 } from "./build-cache/project-snapshot.js";
 export {

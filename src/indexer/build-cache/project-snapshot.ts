@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { isRubyLoadForm } from "../../util/specifiers.js";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import path from "node:path";
-import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
+import type { Edge, EdgeTo, Graph } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
 import { buildReferenceCandidateIndex } from "../reference-candidates.js";
 import type { ProjectFileInfo } from "../../util/project-files.js";
@@ -18,7 +18,6 @@ import { SymbolKind } from "../types.js";
 import { callableIdentityWithFile, isCallableIdentity } from "../callable-identity.js";
 import { isCsharpNamespaceFacts } from "../../util/csharp-tree.js";
 import { isJvmFileFacts } from "../../util/jvm-tree.js";
-import { importNodeId } from "../import-types.js";
 import type {
   BackendReport,
   BuildOptions,
@@ -29,15 +28,6 @@ import type {
   SymbolDef,
   BuildReport,
 } from "../types.js";
-import {
-  buildSymbolGraph,
-  defNodeId,
-  type SymbolEdge,
-  type SymbolGraph,
-  type SymbolNode,
-  type SymbolNodeKind,
-  type SymbolVisibility,
-} from "../../graphs/symbol-graph.js";
 import { getImplementationFingerprint, normalizeGraphOptions } from "./options.js";
 import {
   cacheAbsolutePath,
@@ -58,9 +48,12 @@ import { compareCodeUnits } from "../../util/collections.js";
 import { expandStarImports } from "../expand-star-imports.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-export const PROJECT_SNAPSHOT_VERSION = 13;
+// The project snapshot embeds the filters that the bloom sidecar also holds, so a change to how a filter tokenizes
+// source bumps both versions and neither copy of a filter built the old way is reused.
+// Snapshot v14 and bloom sidecar v5: identifier tokens are also stored split at Unicode whitespace.
+export const PROJECT_SNAPSHOT_VERSION = 14;
 const LEGACY_EMBEDDED_MODULE_SNAPSHOT_VERSION = 10;
-export const BLOOM_FILTER_SNAPSHOT_VERSION = 4;
+export const BLOOM_FILTER_SNAPSHOT_VERSION = 5;
 export const BLOOM_FILTER_SNAPSHOT_FILENAME = "bloom-filters.json";
 
 export type BloomFilterSnapshotPayload = {
@@ -75,37 +68,8 @@ const BLOOM_FILTER_MIN_SIZE = 1_000;
 const BLOOM_FILTER_MAX_SIZE = 1_000_000;
 const BLOOM_FILTER_MIN_HASH_COUNT = 1;
 const BLOOM_FILTER_MAX_HASH_COUNT = 10;
-// v5: nodes carry Kotlin and Swift memberArity plus the proven-callable marker.
-// v6: Swift ownership/arity fixes change persisted detailed-graph edges and memberArity.
-// v7: callable-binding proof corrections change persisted callable flags and call edges.
-// v8: receiver edge reconciliation, Kotlin ancestry, and static receiver scope change persisted graph edges.
-// v9: exact C++ qualified ownership changes persisted member ownership and receiver call edges.
-// v10: C/C++ void-parameter arity changes persisted memberArity and call edges.
-// v11: canonical C/C++ declaration aliases preserve base-graph compatibility across cache loads.
-// v12: shared callable ranges, cross-file ownership, and Zig visibility change detailed call edges.
-// v13: same-file C# constructor edges respect namespace visibility instead of file-wide names.
-// v14: C# alias-qualified targets and shared partial-type identity change persisted edges.
-// v15: trivia-safe package peers can change cross-file detailed call edges.
-// v16: Swift extension visibility and nested C# partial owner identity change persisted call edges.
-// v17: qualified C# generic type uses can change persisted constructor/type edges.
-// v18: constrained Swift extensions no longer donate members to unproven nominal owners.
-// v19: Swift constraint-token equivalence can restore peer call edges across formatting.
-// v20: C# verbatim namespace/type identifiers can merge shared-owner identities and call edges.
-// v21: C# `file` types lose cross-file edges; extension receivers change persisted member arity.
-// v22: C# verbatim namespace aliases (`@X` vs `X`) can add alias-qualified type and constructor edges.
-// v23: C# `file partial` owners in different files no longer share member and call edges.
-// v24: C# top-level types beside block namespaces become global-namespace peers with new edges.
-// v25: identical C# aliases in separate namespace blocks each resolve their own scoped uses.
-// v26: accuracy-audit fixes add Go cross-package, Ruby ancestry, TS static, Rust impl, PHP
-// namespace, and same-unit peer edges, and drop invalid cross-file, unexported, and ambiguous ones.
-// v27: C# type aliases in a multi-file namespace can add call edges, or drop a guessed one.
-// A same-named type in another namespace is not the alias target.
-// v28: JVM type-on-demand imports only bind direct nested classifiers.
-export const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 28;
-const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
 const MAX_SNAPSHOT_CACHE_ENTRIES = 32;
-const DETAILED_GRAPH_HASH_CHUNK_CHARS = 1 << 20;
 
 type SnapshotFileIdentity = {
   size: number;
@@ -129,36 +93,16 @@ type TransformedSnapshotModulesCacheEntry = {
   root: string;
   payload: unknown;
 };
-type DetailedSymbolGraphCacheEntry = {
-  identity: SnapshotFileIdentity;
-  projectSnapshotIdentity: string;
-  graph: DetailedSymbolGraphSnapshotPayload["graph"];
-};
 
 const parsedSnapshotCache = new Map<string, ParsedSnapshotCacheEntry>();
 const transformedSnapshotCache = new Map<string, TransformedSnapshotCacheEntry>();
 const transformedSnapshotModulesCache = new Map<string, TransformedSnapshotModulesCacheEntry>();
 const hydratedSnapshotModulesCache = new Map<string, HydratedSnapshotModulesCacheEntry>();
-const detailedSymbolGraphCache = new Map<string, DetailedSymbolGraphCacheEntry>();
-const EMPTY_DETAILED_SYMBOL_GRAPH_ALIASES: ReadonlyMap<string, string> = new Map();
 
 type HydratedSnapshotModulesCacheEntry = {
   identity: SnapshotFileIdentity;
   root: string;
   modules: Map<string, ModuleIndex>;
-};
-
-type DetailedSymbolGraphSnapshotPayload = {
-  version: number;
-  projectRoot: string;
-  implementationFingerprint: string;
-  projectSnapshotIdentity: string;
-  graph: {
-    nodes: SymbolNode[];
-    edges: SymbolEdge[];
-    nodeAliases: Array<[string, string]>;
-  };
-  graphHash: string;
 };
 
 type SerializedBloomFilter = {
@@ -256,13 +200,6 @@ function transformPath(root: string, value: string, toRelative: boolean): string
     return path.isAbsolute(value) ? cacheRelativePath(root, value) : value;
   }
   return assertFilePathWithinRoot(root, cacheAbsolutePath(root, value), "Persisted cache path");
-}
-
-function transformHandle(root: string, value: string, toRelative: boolean): string {
-  const separator = value.indexOf("::");
-  if (separator < 0) return transformPath(root, value, toRelative);
-  const file = value.slice(0, separator);
-  return `${transformPath(root, file, toRelative)}${value.slice(separator)}`;
 }
 
 function transformModule(root: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
@@ -400,35 +337,6 @@ function migrateProjectSnapshotPayload(value: unknown, currentRoot: string): unk
   delete migrated.projectFiles;
   return migrated;
 }
-function transformDetailedGraph(
-  graph: DetailedSymbolGraphSnapshotPayload["graph"],
-  root: string,
-  toRelative: boolean,
-): DetailedSymbolGraphSnapshotPayload["graph"] {
-  return {
-    nodes: graph.nodes.map((node) => {
-      const file = transformPath(root, node.file, toRelative);
-      return { ...node, file, id: transformHandle(root, node.id, toRelative) };
-    }),
-    edges: graph.edges.map((edge) => ({
-      ...edge,
-      from: transformHandle(root, edge.from, toRelative),
-      to: transformHandle(root, edge.to, toRelative),
-      ...(edge.site
-        ? {
-            site: {
-              ...edge.site,
-              file: transformPath(root, edge.site.file, toRelative),
-            },
-          }
-        : {}),
-    })),
-    nodeAliases: graph.nodeAliases.map(([aliasId, canonicalId]) => [
-      transformHandle(root, aliasId, toRelative),
-      transformHandle(root, canonicalId, toRelative),
-    ]),
-  };
-}
 
 function sameSnapshotFileIdentity(left: SnapshotFileIdentity, right: SnapshotFileIdentity): boolean {
   return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
@@ -450,7 +358,7 @@ function isSnapshotTempName(name: string, snapshotName: string): boolean {
   return /^\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(marker);
 }
 
-async function writeSnapshotAtomically(snapshotPath: string, data: Buffer): Promise<void> {
+export async function writeSnapshotAtomically(snapshotPath: string, data: Buffer): Promise<void> {
   const snapshotDirectory = path.dirname(snapshotPath);
   await fsp.mkdir(snapshotDirectory, { recursive: true });
   const snapshotName = path.basename(snapshotPath);
@@ -478,36 +386,14 @@ function freezeSnapshotPayload<T>(value: T): T {
   return value;
 }
 
-type CanonicalizedSymbolGraph = SymbolGraph & {
-  nodeAliases?: ReadonlyMap<string, string>;
-};
-
-function detailedSymbolGraphAliases(graph: SymbolGraph): ReadonlyMap<string, string> {
-  return (graph as CanonicalizedSymbolGraph).nodeAliases ?? EMPTY_DETAILED_SYMBOL_GRAPH_ALIASES;
-}
-
-function materializeDetailedSymbolGraph(
-  payload: DetailedSymbolGraphSnapshotPayload["graph"],
-): CanonicalizedSymbolGraph {
-  const serialized = structuredClone(payload);
-  const graph: CanonicalizedSymbolGraph = {
-    nodes: new Map(serialized.nodes.map((node) => [node.id, node])),
-    edges: serialized.edges,
-  };
-  if (serialized.nodeAliases.length) {
-    Object.defineProperty(graph, "nodeAliases", { value: new Map(serialized.nodeAliases) });
-  }
-  return graph;
-}
-
 function decodeSnapshotPayload(compressed: Buffer): unknown {
   return JSON.parse(brotliDecompressSync(compressed).toString("utf8")) as unknown;
 }
 
-function recordSnapshotInvalidation(artifact: string, reason: string, logLevel: BuildOptions["logLevel"]): void {
+export function recordSnapshotInvalidation(artifact: string, reason: string, logLevel: BuildOptions["logLevel"]): void {
   logWithLevel(logLevel, "debug", `Cache artifact invalidated ${artifact}: ${reason}`);
 }
-function isMissingArtifactError(error: unknown): boolean {
+export function isMissingArtifactError(error: unknown): boolean {
   return !!error && typeof error === "object" && "code" in error && error.code === "ENOENT";
 }
 
@@ -1099,462 +985,6 @@ function bloomFilterSnapshotPath(projectRoot: string, opts: BuildOptions | undef
     throw new Error(`Bloom filter snapshot escaped cache root: ${snapshotPath}`);
   }
   return snapshotPath;
-}
-
-export async function writeDetailedSymbolGraphSnapshot(
-  projectRoot: string,
-  opts: BuildOptions | undefined,
-  index: ProjectIndex,
-  graph: SymbolGraph,
-): Promise<void> {
-  if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return;
-  try {
-    const nodeAliases = [...detailedSymbolGraphAliases(graph)];
-    const payload = {
-      version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
-      projectRoot: serializedProjectRoot(projectRoot),
-      implementationFingerprint: getImplementationFingerprint(),
-      graphHash: detailedSymbolGraphContentHash(index.projectSnapshotIdentity, graph),
-      projectSnapshotIdentity: index.projectSnapshotIdentity,
-      graph: transformDetailedGraph(
-        {
-          nodes: [...graph.nodes.values()],
-          edges: graph.edges,
-          nodeAliases,
-        },
-        projectRoot,
-        true,
-      ),
-    } satisfies DetailedSymbolGraphSnapshotPayload;
-    const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
-    parsedSnapshotCache.delete(snapshotPath);
-    transformedSnapshotModulesCache.delete(snapshotPath);
-    detailedSymbolGraphCache.delete(snapshotPath);
-    const compressed = brotliCompressSync(JSON.stringify(payload), {
-      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
-    });
-    await writeSnapshotAtomically(snapshotPath, compressed);
-    const identity = await snapshotFileIdentity(snapshotPath);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed, payload });
-    setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
-      identity,
-      projectSnapshotIdentity: index.projectSnapshotIdentity,
-      graph: {
-        nodes: [...graph.nodes.values()],
-        edges: graph.edges,
-        nodeAliases,
-      },
-    });
-  } catch {
-    // Persisting the graph is an optimization, and so is every step that prepares it: a graph whose text
-    // passes the string limit fails here and leaves no cache, and the caller keeps the graph it built.
-  }
-}
-
-function detailedSymbolGraphSnapshotPath(projectRoot: string, opts: BuildOptions | undefined): string {
-  const root = path.resolve(cacheRoot(projectRoot, opts));
-  const snapshotPath = path.resolve(root, DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME);
-  if (!isFilePathWithinRoot(root, snapshotPath)) {
-    throw new Error(`Detailed symbol graph snapshot escaped cache root: ${snapshotPath}`);
-  }
-  return snapshotPath;
-}
-
-export async function tryLoadDetailedSymbolGraphSnapshot(
-  projectRoot: string,
-  opts: BuildOptions | undefined,
-  index: ProjectIndex,
-  report?: BuildReport,
-): Promise<SymbolGraph | null> {
-  if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return null;
-  const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
-  try {
-    const observedIdentity = await snapshotFileIdentity(snapshotPath);
-    const cached = detailedSymbolGraphCache.get(snapshotPath);
-    if (
-      cached &&
-      cached.projectSnapshotIdentity === index.projectSnapshotIdentity &&
-      sameSnapshotFileIdentity(cached.identity, observedIdentity)
-    ) {
-      setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, cached);
-      return materializeDetailedSymbolGraph(cached.graph);
-    }
-    const parsed = await readParsedSnapshot(snapshotPath);
-    const migratedPayload = parsed.payload;
-    const serializedVersion =
-      migratedPayload &&
-      typeof migratedPayload === "object" &&
-      !Array.isArray(migratedPayload) &&
-      "version" in migratedPayload &&
-      typeof migratedPayload.version === "number"
-        ? migratedPayload.version
-        : null;
-    if (serializedVersion !== null && serializedVersion < DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION) {
-      recordSnapshotInvalidation(snapshotPath, "detailed symbol graph derivation version mismatch", opts?.logLevel);
-      return null;
-    }
-    const payload =
-      migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
-        ? {
-            ...(migratedPayload as DetailedSymbolGraphSnapshotPayload),
-            graph: transformDetailedGraph(
-              (migratedPayload as DetailedSymbolGraphSnapshotPayload).graph,
-              projectRoot,
-              false,
-            ),
-          }
-        : migratedPayload;
-    if (!isDetailedSymbolGraphSnapshotPayload(payload)) {
-      recordCacheCorruption(report, snapshotPath, "invalid detailed symbol graph payload", opts?.logLevel);
-      return null;
-    }
-    if (payload.implementationFingerprint !== getImplementationFingerprint()) {
-      recordSnapshotInvalidation(snapshotPath, "implementation fingerprint mismatch", opts?.logLevel);
-      return null;
-    }
-    if (payload.projectSnapshotIdentity !== index.projectSnapshotIdentity) {
-      recordSnapshotInvalidation(snapshotPath, "project snapshot identity mismatch", opts?.logLevel);
-      return null;
-    }
-    const graph = materializeDetailedSymbolGraph(payload.graph);
-    if (!(await isDetailedSymbolGraphCompatibleWithProject(projectRoot, index, graph))) {
-      recordCacheCorruption(report, snapshotPath, "detailed symbol graph does not match project", opts?.logLevel);
-      return null;
-    }
-    const identity = await snapshotFileIdentity(snapshotPath);
-    if (!sameSnapshotFileIdentity(parsed.identity, identity)) {
-      recordCacheCorruption(report, snapshotPath, "detailed symbol graph changed while reading", opts?.logLevel);
-      return null;
-    }
-    setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
-      identity,
-      projectSnapshotIdentity: index.projectSnapshotIdentity,
-      graph: payload.graph,
-    });
-    return graph;
-  } catch (error) {
-    if (!isMissingArtifactError(error)) {
-      recordCacheCorruption(report, snapshotPath, String(error), opts?.logLevel);
-    }
-    return null;
-  }
-}
-
-/**
- * SHA-256 over the project identity and the exact text `JSON.stringify({ nodes, edges, nodeAliases })` gives,
- * fed to the hash in pieces. One string cannot hold a large graph: V8 stops at about 536 million characters,
- * which a graph of a few million edges passes long before the heap runs out.
- */
-function detailedSymbolGraphContentHash(projectSnapshotIdentity: string, graph: SymbolGraph): string {
-  const hash = createHash("sha256");
-  hash.update(projectSnapshotIdentity);
-  hash.update("\0");
-  let pending = '{"nodes":[';
-  const appendList = (items: Iterable<unknown>): void => {
-    let first = true;
-    for (const item of items) {
-      pending += first ? JSON.stringify(item) : `,${JSON.stringify(item)}`;
-      first = false;
-      if (pending.length >= DETAILED_GRAPH_HASH_CHUNK_CHARS) {
-        hash.update(pending);
-        pending = "";
-      }
-    }
-  };
-  appendList(graph.nodes.values());
-  pending += '],"edges":[';
-  appendList(graph.edges);
-  pending += '],"nodeAliases":[';
-  appendList(detailedSymbolGraphAliases(graph));
-  hash.update(`${pending}]}`);
-  return hash.digest("hex");
-}
-
-function isDetailedSymbolGraphSnapshotPayload(value: unknown): value is DetailedSymbolGraphSnapshotPayload {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const payload = value as Partial<DetailedSymbolGraphSnapshotPayload>;
-  if (
-    payload.version !== DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION ||
-    typeof payload.projectRoot !== "string" ||
-    typeof payload.implementationFingerprint !== "string" ||
-    !/^[a-f0-9]{64}$/.test(payload.implementationFingerprint) ||
-    typeof payload.projectSnapshotIdentity !== "string" ||
-    !/^[a-f0-9]{64}$/.test(payload.projectSnapshotIdentity) ||
-    typeof payload.graphHash !== "string" ||
-    !/^[a-f0-9]{64}$/.test(payload.graphHash) ||
-    !payload.graph ||
-    !Array.isArray(payload.graph.nodes) ||
-    !payload.graph.nodes.every(isSymbolNode) ||
-    !Array.isArray(payload.graph.edges) ||
-    !payload.graph.edges.every(isSymbolEdge) ||
-    !Array.isArray(payload.graph.nodeAliases) ||
-    !payload.graph.nodeAliases.every(isDetailedSymbolGraphAlias)
-  ) {
-    return false;
-  }
-  // `graphHash` remains serialized and shape-validated, but load does not re-stringify and
-  // re-hash the full graph. The atomic write prevents partial data, and compatibility with the
-  // current project is re-derived structurally below.
-  return (
-    new Set(payload.graph.nodes.map((node) => node.id)).size === payload.graph.nodes.length &&
-    new Set(payload.graph.nodeAliases.map(([aliasId]) => aliasId)).size === payload.graph.nodeAliases.length
-  );
-}
-
-function isDetailedSymbolGraphAlias(value: unknown): value is [string, string] {
-  return (
-    Array.isArray(value) &&
-    value.length === 2 &&
-    typeof value[0] === "string" &&
-    !!value[0] &&
-    typeof value[1] === "string" &&
-    !!value[1]
-  );
-}
-
-function isSymbolNode(value: unknown): value is SymbolNode {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const node = value as Partial<SymbolNode>;
-  return (
-    typeof node.id === "string" &&
-    !!node.id &&
-    typeof node.file === "string" &&
-    !!node.file &&
-    typeof node.name === "string" &&
-    !!node.name &&
-    isSymbolNodeKind(node.kind) &&
-    (node.docstring === undefined || typeof node.docstring === "string") &&
-    isOptionalNonnegativeInteger(node.lineSpan) &&
-    isOptionalNonnegativeFiniteNumber(node.complexity) &&
-    (node.visibility === undefined || isSymbolVisibility(node.visibility)) &&
-    (node.implementationTarget === undefined || typeof node.implementationTarget === "boolean") &&
-    isOptionalNonnegativeInteger(node.memberArity) &&
-    (node.callable === undefined || (typeof node.callable === "boolean" && node.callable))
-  );
-}
-
-function isSymbolNodeKind(value: unknown): value is SymbolNodeKind {
-  return (
-    value === "function" ||
-    value === "class" ||
-    value === "variable" ||
-    value === "interface" ||
-    value === "type" ||
-    value === "default" ||
-    value === "table" ||
-    value === "view" ||
-    value === "index" ||
-    value === "constraint" ||
-    value === "routine" ||
-    value === "resource" ||
-    value === "data" ||
-    value === "module" ||
-    value === "output" ||
-    value === "import" ||
-    value === "namespaceImport"
-  );
-}
-
-function isSymbolVisibility(value: unknown): value is SymbolVisibility {
-  return value === "public" || value === "private" || value === "protected" || value === "internal";
-}
-
-function isOptionalNonnegativeInteger(value: unknown): boolean {
-  return value === undefined || (typeof value === "number" && Number.isInteger(value) && value >= 0);
-}
-
-function isOptionalNonnegativeFiniteNumber(value: unknown): boolean {
-  return value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0);
-}
-
-function isDetailedRange(value: unknown): value is Range {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const range = value as Partial<Range>;
-  if (!isDetailedPosition(range.start) || !isDetailedPosition(range.end)) return false;
-  if (range.start.index !== undefined && range.end.index !== undefined) {
-    return range.start.index <= range.end.index;
-  }
-  if (range.start.line !== range.end.line) return range.start.line <= range.end.line;
-  return range.start.column <= range.end.column;
-}
-
-function isDetailedPosition(value: unknown): value is Pos {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const position = value as Partial<Pos>;
-  return (
-    typeof position.line === "number" &&
-    Number.isInteger(position.line) &&
-    position.line >= 0 &&
-    typeof position.column === "number" &&
-    Number.isInteger(position.column) &&
-    position.column >= 0 &&
-    (position.index === undefined ||
-      (typeof position.index === "number" && Number.isInteger(position.index) && position.index >= 0))
-  );
-}
-
-function isSymbolEdge(value: unknown): value is SymbolEdge {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const edge = value as Partial<SymbolEdge>;
-  return (
-    typeof edge.from === "string" &&
-    typeof edge.to === "string" &&
-    (edge.label === undefined || typeof edge.label === "string") &&
-    (edge.site === undefined ||
-      (!!edge.site &&
-        typeof edge.site === "object" &&
-        typeof edge.site.file === "string" &&
-        !!edge.site.file &&
-        isDetailedRange(edge.site.range)))
-  );
-}
-
-function sameSymbolNodeSemantics(actual: SymbolNode, expected: SymbolNode): boolean {
-  return (
-    actual.file === expected.file &&
-    actual.name === expected.name &&
-    actual.kind === expected.kind &&
-    actual.docstring === expected.docstring &&
-    actual.lineSpan === expected.lineSpan &&
-    actual.complexity === expected.complexity
-  );
-}
-function mergeCanonicalSymbolNode(canonical: SymbolNode, alias: SymbolNode): SymbolNode {
-  const merged = { ...canonical };
-  if (!merged.docstring && alias.docstring) merged.docstring = alias.docstring;
-  merged.lineSpan = Math.max(merged.lineSpan ?? 0, alias.lineSpan ?? 0);
-  merged.complexity = Math.max(merged.complexity ?? 0, alias.complexity ?? 0);
-  return merged;
-}
-
-function indexDefinesSymbolNode(index: ProjectIndex, node: SymbolNode): boolean {
-  const moduleEntry = index.byFile.get(fileIdentityKey(node.file));
-  if (!moduleEntry) return false;
-  if (moduleEntry.locals.some((local) => defNodeId(local) === node.id)) return true;
-  const displayFile = normalizePath(moduleEntry.file);
-  return moduleEntry.imports.some((imp) => {
-    if (imp.kind === "star") return false;
-    return node.id === importNodeId(displayFile, imp);
-  });
-}
-
-async function isDetailedSymbolGraphCompatibleWithProject(
-  projectRoot: string,
-  index: ProjectIndex,
-  graph: SymbolGraph,
-): Promise<boolean> {
-  const normalizedRoot = path.resolve(projectRoot);
-  const indexedFiles = new Set([...index.byFile.keys()]);
-  for (const node of graph.nodes.values()) {
-    const normalizedFile = normalizePath(node.file);
-    if (
-      !indexedFiles.has(fileIdentityKey(normalizedFile)) ||
-      !isFilePathWithinRoot(normalizedRoot, normalizedFile) ||
-      !node.id.startsWith(`${normalizedFile}::`)
-    ) {
-      return false;
-    }
-  }
-  for (const edge of graph.edges) {
-    if (!graph.nodes.has(edge.from) || !graph.nodes.has(edge.to)) return false;
-    if (edge.site) {
-      const normalizedSiteFile = normalizePath(edge.site.file);
-      if (
-        !indexedFiles.has(fileIdentityKey(normalizedSiteFile)) ||
-        !isFilePathWithinRoot(normalizedRoot, normalizedSiteFile)
-      ) {
-        return false;
-      }
-    }
-  }
-
-  const base = await buildSymbolGraph(index);
-  const nodeAliases = detailedSymbolGraphAliases(graph);
-  const expectedNodes = nodeAliases.size ? new Map(base.nodes) : base.nodes;
-  for (const [aliasId, canonicalId] of nodeAliases) {
-    if (
-      aliasId === canonicalId ||
-      graph.nodes.has(aliasId) ||
-      nodeAliases.has(canonicalId) ||
-      !graph.nodes.has(canonicalId)
-    ) {
-      return false;
-    }
-    const aliasNode = base.nodes.get(aliasId);
-    const canonicalNode = expectedNodes.get(canonicalId);
-    if (
-      !aliasNode ||
-      !canonicalNode ||
-      aliasNode.name !== canonicalNode.name ||
-      aliasNode.kind !== canonicalNode.kind
-    ) {
-      return false;
-    }
-    expectedNodes.set(canonicalId, mergeCanonicalSymbolNode(canonicalNode, aliasNode));
-  }
-  for (const [id, expected] of expectedNodes) {
-    if (nodeAliases.has(id)) continue;
-    const actual = graph.nodes.get(id);
-    if (!actual || !sameSymbolNodeSemantics(actual, expected)) return false;
-  }
-  for (const node of graph.nodes.values()) {
-    if (base.nodes.has(node.id)) continue;
-    if (!indexDefinesSymbolNode(index, node)) return false;
-  }
-  if (!nodeAliases.size) return symbolEdgeMultisetContains(graph.edges, base.edges);
-  const canonicalBaseEdges = new Map<string, SymbolEdge>();
-  for (const edge of base.edges) {
-    const canonicalEdge = {
-      ...edge,
-      from: nodeAliases.get(edge.from) ?? edge.from,
-      to: nodeAliases.get(edge.to) ?? edge.to,
-    };
-    canonicalBaseEdges.set(symbolEdgeKey(canonicalEdge), canonicalEdge);
-  }
-  return symbolEdgeMultisetContains(graph.edges, [...canonicalBaseEdges.values()]);
-}
-
-function symbolEdgeMultisetContains(haystack: readonly SymbolEdge[], needles: readonly SymbolEdge[]): boolean {
-  const counts = new Map<string, number>();
-  for (const edge of haystack) {
-    const key = symbolEdgeKey(edge);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  for (const edge of needles) {
-    const key = symbolEdgeKey(edge);
-    const remaining = counts.get(key);
-    if (remaining === undefined) return false;
-    if (remaining === 1) counts.delete(key);
-    else counts.set(key, remaining - 1);
-  }
-  return true;
-}
-
-function symbolEdgeKey(edge: SymbolEdge): string {
-  const from = lengthPrefixedSymbolEdgeField(edge.from);
-  const to = lengthPrefixedSymbolEdgeField(edge.to);
-  const label = edge.label === undefined ? "u" : `s${lengthPrefixedSymbolEdgeField(edge.label)}`;
-  if (!edge.site) return `f${from}t${to}l${label}s`;
-
-  const { file, range } = edge.site;
-  const startIndex = range.start.index === undefined ? "u" : `n${range.start.index}`;
-  const endIndex = range.end.index === undefined ? "u" : `n${range.end.index}`;
-  return [
-    `f${from}`,
-    `t${to}`,
-    `l${label}`,
-    `s${lengthPrefixedSymbolEdgeField(file)}`,
-    `sl${range.start.line}`,
-    `sc${range.start.column}`,
-    `si${startIndex}`,
-    `el${range.end.line}`,
-    `ec${range.end.column}`,
-    `ei${endIndex}`,
-  ].join("");
-}
-
-function lengthPrefixedSymbolEdgeField(value: string): string {
-  return `${value.length}:${value}`;
 }
 
 function isProjectFileInfo(value: unknown): value is ProjectFileInfo {

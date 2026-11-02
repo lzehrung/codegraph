@@ -12,6 +12,7 @@ import { MAX_WORKSPACE_SYMBOL_LIMIT } from "../indexer/workspace-symbols.js";
 import type { GoToResult } from "../indexer/types.js";
 import {
   listCodegraphMcpTools,
+  MAX_CALL_HIERARCHY_DEPTH,
   MAX_RENAME_PREVIEW_EDITS,
   MCP_TOOL_REGISTRY,
   MAX_REFACTOR_PLAN_LIMIT,
@@ -647,7 +648,7 @@ const refactorPlanSchema = z
 const callHierarchySchema = z
   .object({
     handle: z.string(),
-    depth: z.number().int().min(1).max(5).optional(),
+    depth: z.number().int().min(1).max(MAX_CALL_HIERARCHY_DEPTH).optional(),
     limit: z.number().int().nonnegative().max(500).optional(),
     includeHeuristic: z.boolean().optional(),
   })

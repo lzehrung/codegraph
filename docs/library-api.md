@@ -223,7 +223,7 @@ For tool hosts, `tool_workspaceSymbols(root, request, runtimeOptions)` is export
 
 ## Call hierarchy
 
-`@lzehrung/codegraph-core/agent` exports `findCallers`, `findCallees`, and their `WithSession` variants. Requests use `root`, a portable callable `handle`, optional `depth` from 1 to 5, optional `limit` from 0 to 500, optional `includeHeuristic`, and optional standalone `buildOptions`.
+`@lzehrung/codegraph-core/agent` exports `findCallers`, `findCallees`, and their `WithSession` variants. Requests use `root`, a portable callable `handle`, optional `depth` from 1 to 15, optional `limit` from 0 to 500, optional `includeHeuristic`, and optional standalone `buildOptions`.
 
 ```ts
 import { createAgentSession, findCallersWithSession } from "@lzehrung/codegraph-core/agent";

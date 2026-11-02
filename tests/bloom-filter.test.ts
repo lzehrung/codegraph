@@ -1,6 +1,20 @@
 import { describe, test, expect } from "vitest";
-import { BloomFilter, buildBloomFilterFromSource, BloomFilterCache } from "../src/util/bloom-filter.js";
-import { CSHARP_SUPPORT, JAVA_SUPPORT, JS_SUPPORT, PHP_SUPPORT, PY_SUPPORT, TS_SUPPORT } from "../src/languages.js";
+import {
+  BloomFilter,
+  buildBloomFilterFromSource,
+  BloomFilterCache,
+  isBloomIdentifierToken,
+} from "../src/util/bloom-filter.js";
+import {
+  CSHARP_SUPPORT,
+  JAVA_SUPPORT,
+  JS_SUPPORT,
+  PHP_SUPPORT,
+  PY_SUPPORT,
+  RUBY_SUPPORT,
+  TS_SUPPORT,
+} from "../src/languages.js";
+import { BLOOM_FILTER_IDENTIFIER_SOURCE } from "../src/util/identifiers.js";
 describe("BloomFilter", () => {
   test("should detect items that were added", () => {
     const filter = new BloomFilter();
@@ -57,6 +71,50 @@ describe("BloomFilter", () => {
     // With 100 items in a 10000-bit filter with 3 hash functions,
     // the false positive rate should be very low
     expect(fpr).toBeLessThan(0.01); // Less than 1%
+  });
+
+  test("answers a probe by digest like a probe by item, for filters of any size", () => {
+    const filters = [new BloomFilter(10000, 3), new BloomFilter(1000, 7), BloomFilter.createOptimal(40)];
+    const added = Array.from({ length: 40 }, (_, at) => `added${at}`);
+    const absent = Array.from({ length: 200 }, (_, at) => `absent${at}`);
+    for (const filter of filters) {
+      for (const item of added) filter.add(item);
+    }
+
+    for (const filter of filters) {
+      for (const item of [...added, ...absent]) {
+        expect(filter.mightContainDigest(BloomFilter.digestOf(item))).toBe(filter.mightContain(item));
+      }
+      for (const item of added) expect(filter.mightContainDigest(BloomFilter.digestOf(item))).toBe(true);
+    }
+    expect(filters[1]!.mightContainDigest(BloomFilter.digestOf("absent0"))).toBe(false);
+  });
+});
+
+describe("isBloomIdentifierToken", () => {
+  test.each(["helper", "_private", "$ref", "name2", "caf\u00e9", "part\u200ename", "part\u00a0name"])(
+    "accepts %s",
+    (name) => {
+      expect(isBloomIdentifierToken(name)).toBe(true);
+    },
+  );
+
+  test.each(["empty?", "save!", "operator()", "r#type", "@class", "~Widget", "a b", "Outer::inner", ""])(
+    "rejects %j, which a filter stores in pieces",
+    (name) => {
+      expect(isBloomIdentifierToken(name)).toBe(false);
+    },
+  );
+
+  test("matches what a filter built from source stores whole", () => {
+    const filter = buildBloomFilterFromSource("list.empty?(1)\nlist.helper(2)\n", RUBY_SUPPORT);
+
+    expect(isBloomIdentifierToken("helper")).toBe(true);
+    expect(filter.mightContain("helper")).toBe(true);
+    // The filter holds `empty` and no `empty?`, so only a whole-token name can be probed.
+    expect(isBloomIdentifierToken("empty?")).toBe(false);
+    expect(filter.mightContain("empty")).toBe(true);
+    expect(filter.mightContain("empty?")).toBe(false);
   });
 });
 
@@ -191,6 +249,81 @@ describe("buildBloomFilterFromSource", () => {
     const filter = buildBloomFilterFromSource(`class Entry { void ${identifier}() {} }`, CSHARP_SUPPORT);
 
     expect(filter.mightContain(CSHARP_SUPPORT.normalizeIdentifier(identifier))).toBe(true);
+  });
+});
+
+// The code points a grammar reads as whitespace or a line break, none of which a TypeScript identifier holds.
+const SEPARATORS = [
+  0x0085,
+  0x00a0,
+  0x1680,
+  ...Array.from({ length: 0x200b - 0x2000 + 1 }, (_, at) => 0x2000 + at),
+  0x2028,
+  0x2029,
+  0x202f,
+  0x205f,
+  0x2060,
+  0x3000,
+  0xfeff,
+].map((codePoint) => String.fromCodePoint(codePoint));
+
+function codePointLabel(character: string): string {
+  return `U+${character.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`;
+}
+
+describe("buildBloomFilterFromSource next to a Unicode separator", () => {
+  const separators = SEPARATORS.map((separator): [string, string] => [codePointLabel(separator), separator]);
+
+  test.each(separators)("%s after a callee does not join it to the name", (_label, separator) => {
+    const filter = buildBloomFilterFromSource(`export const v = Api.helper${separator}("x");\n`, TS_SUPPORT);
+
+    expect(filter.mightContain("helper")).toBe(true);
+    expect(filter.mightContain("Api")).toBe(true);
+    expect(filter.mightContain("missing")).toBe(false);
+  });
+
+  test.each(separators)("%s between two names keeps them apart and stores the whole run too", (_label, separator) => {
+    const filter = buildBloomFilterFromSource(`first${separator}second`, TS_SUPPORT);
+
+    expect(filter.mightContain("first")).toBe(true);
+    expect(filter.mightContain("second")).toBe(true);
+    expect(filter.mightContain(`first${separator}second`)).toBe(true);
+  });
+
+  test.each(separators)("%s inside a PHP name is stored with the name whole and in pieces", (_label, separator) => {
+    const filter = buildBloomFilterFromSource(`<?php function helper${separator}() {}`, PHP_SUPPORT);
+
+    expect(filter.mightContain(`helper${separator}`)).toBe(true);
+    expect(filter.mightContain("helper")).toBe(true);
+  });
+
+  test("a byte order mark before the first name does not join it", () => {
+    const filter = buildBloomFilterFromSource("\ufeffhelper();\n", TS_SUPPORT);
+
+    expect(filter.mightContain("helper")).toBe(true);
+  });
+
+  test("splits a name's pieces with the language's own identifier normalization", () => {
+    const filter = buildBloomFilterFromSource("class Entry { void part\u200ename\u00a0() {} }", CSHARP_SUPPORT);
+
+    expect(filter.mightContain("partname")).toBe(true);
+    expect(filter.mightContain("Entry")).toBe(true);
+  });
+
+  test("keeps a name with a non-ASCII letter whole", () => {
+    const filter = buildBloomFilterFromSource("export const caf\u00e9\u00a0= 1;\n", TS_SUPPORT);
+
+    expect(filter.mightContain("caf\u00e9")).toBe(true);
+    expect(filter.mightContain("caf")).toBe(false);
+  });
+
+  test("builds the filter it built before for a source without a separator", () => {
+    const source = 'export const caf\u00e9 = Api.helper("x") + na\u00efve_name;\n// \u65e5\u672c\u8a9e helper\n';
+    const tokens = new Set(source.match(new RegExp(BLOOM_FILTER_IDENTIFIER_SOURCE, "gu")));
+    const expected = BloomFilter.createOptimal(tokens.size);
+    for (const token of tokens) expected.add(token);
+
+    expect(buildBloomFilterFromSource(source, JS_SUPPORT).toBuffer()).toEqual(expected.toBuffer());
   });
 });
 
