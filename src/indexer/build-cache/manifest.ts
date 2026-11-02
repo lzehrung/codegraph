@@ -447,7 +447,7 @@ export async function verifyManifestEntries(
   const existingFiles = files.filter((file) => fs.existsSync(file));
   const missing = files.length - existingFiles.length;
   const gitSigMap = gitAvailable
-    ? await getGitBlobHashes(projectRoot, existingFiles, { gitAvailable })
+    ? await getGitBlobHashes(projectRoot, existingFiles, { gitAvailable, strict: true })
     : new Map<string, string>();
   let mismatches = 0;
   for (const file of existingFiles) {

@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graph-only-extensions.js";
 import { confineResolvedPath, fileIdentityKey, isFilePathWithinRoot, normalizeResolutionHints } from "./paths.js";
@@ -25,7 +23,12 @@ import { resolveFromNodeModules } from "./resolution/node.js";
 import { clearPhpResolutionCaches, resolvePhpImportPath } from "./resolution/php.js";
 import { clearPythonResolutionCache } from "./resolution/python.js";
 import { resolveRustImportPath } from "./resolution/rust.js";
-import { clearTsconfigCache, type MatchPathFn } from "./resolution/tsconfig.js";
+import {
+  clearTsconfigCache,
+  matchMappedSpecifier,
+  matchPathScopeKey,
+  type MatchPathFn,
+} from "./resolution/tsconfig.js";
 import type {
   CFamilyIncludeForm,
   ModuleSpecifierExportCondition,
@@ -33,6 +36,7 @@ import type {
 } from "./specifiers.js";
 import type { PackageExportConditionMode } from "./package-exports.js";
 import { lruMapGet, lruMapSet } from "./lru-map.js";
+import { currentProbeCache, probeKind } from "./fs-probe-cache.js";
 export { resolveGoImportPath } from "./resolution/go.js";
 export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
 export { getPhpComposerImplicitFiles } from "./resolution/php.js";
@@ -43,13 +47,22 @@ export { mapLimit } from "./concurrency.js";
 export { listResolutionCandidates } from "./resolution-candidates.js";
 
 const MAX_RESOLVE_SPECIFIER_CACHE_ENTRIES = 10_000;
-const resolveSpecifierCache = new Map<string, FileId | { external: string }>();
 
-function getResolveSpecifierCacheEntry(key: string): FileId | { external: string } | undefined {
+/**
+ * `probeCacheId` names the build probe cache that proved a file result, so a hit inside the same build needs
+ * no second check. Any other hit (another build, or a call outside a build) is checked against the file system.
+ */
+type ResolveSpecifierCacheEntry = {
+  result: FileId | { external: string };
+  probeCacheId: number | undefined;
+};
+const resolveSpecifierCache = new Map<string, ResolveSpecifierCacheEntry>();
+
+function getResolveSpecifierCacheEntry(key: string): ResolveSpecifierCacheEntry | undefined {
   return lruMapGet(resolveSpecifierCache, key);
 }
 
-function setResolveSpecifierCacheEntry(key: string, value: FileId | { external: string }): void {
+function setResolveSpecifierCacheEntry(key: string, value: ResolveSpecifierCacheEntry): void {
   lruMapSet(resolveSpecifierCache, key, value, MAX_RESOLVE_SPECIFIER_CACHE_ENTRIES);
 }
 
@@ -128,23 +141,11 @@ const GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS: Record<string, readonly 
   astro: [...DEFAULT_RESOLUTION_EXTENSIONS, ".astro"],
 };
 
-function fileExistsSync(p: string): boolean {
-  try {
-    return fs.statSync(p).isFile();
-  } catch {
-    return false;
-  }
-}
-
 async function acceptFirstPartyFile(projectRoot: string, filePath: string | null | undefined): Promise<string | null> {
   const confined = await confineResolvedPath(projectRoot, filePath);
   if (!confined) return null;
-  try {
-    const st = await fsp.stat(confined);
-    if (st.isDirectory()) return null;
-  } catch {
-    return null;
-  }
+  const kind = await probeKind(confined);
+  if (kind === null || kind === "directory") return null;
   return confined;
 }
 
@@ -340,6 +341,23 @@ export async function resolveImportSpecifier(
   });
 }
 
+/** Importer extensions whose bare specifiers may also name a first-party source path. */
+const PATH_LIKE_FALLBACK_EXTENSIONS: readonly string[] = [".go", ".java", ".cs", ".rb", ".rs", ".swift"];
+
+/**
+ * Resolves a specifier written in `fromFile` to the first-party file it names, or to its external name.
+ *
+ * The cache key holds what decides the result, by branch:
+ * - A specifier that starts with `.` resolves from the importer's directory, not its name, so the files of one
+ *   directory share an entry.
+ * - A `/`-rooted or Windows-absolute specifier depends on the project root alone.
+ * - A bare specifier depends on the tsconfig mappings of the importer (the `baseUrl` and `paths` of its nearest
+ *   config, so packages that extend one base config share an entry), the workspace, the hints, and whether the
+ *   importer's language falls back to a path-like lookup. It also depends on the importer's directory where a
+ *   `node_modules` walk starts there (`resolveNodeModules`) or a stylesheet tries it as a relative path first.
+ * - An SCSS partial depends on whether the importer is a `.scss` file.
+ * The options of the call (extensions, kind, hints, export condition, `node_modules` lookup) are in every key.
+ */
 export async function resolveSpecifier(
   fromFile: string,
   spec: string,
@@ -355,15 +373,38 @@ export async function resolveSpecifier(
     exportCondition?: ModuleSpecifierExportCondition;
   },
 ): Promise<FileId | { external: string }> {
+  const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
+  const isWindowsAbsolutePath = /^[A-Za-z]:[\\/]/.test(spec);
+  if (!isWindowsAbsolutePath && (hasSchemePrefix || spec.startsWith("//"))) {
+    return { external: spec };
+  }
+
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
   const hintKey = resolutionHints.join("|");
   const resolutionExtensions = getResolutionExtensions(opts?.resolutionExtensions);
-  const extensionKey = resolutionExtensions.join("|");
+  const extensionKey = opts?.resolutionExtensions === undefined ? "default" : resolutionExtensions.join("|");
   const workspaceKey = workspaceConfig ? fileIdentityKey(path.resolve(workspaceConfig.rootDir)) : "";
   const exportCondition: PackageExportConditionMode = opts?.exportCondition === "require" ? "require" : "import";
+  const isRelativeOrAbsolute = spec.startsWith(".") || spec.startsWith("/") || isWindowsAbsolutePath;
+  const stylesheetBareSpecifier = opts?.resolutionKind === "stylesheet" && !isRelativeOrAbsolute;
+  const importerExtension = path.extname(fromFile).toLowerCase();
+  const prefersPathLikeFallback = PATH_LIKE_FALLBACK_EXTENSIONS.includes(importerExtension);
+  const scssPartialImporter = !!opts?.allowScssPartialResolution && importerExtension === ".scss";
+  let importerScope: string;
+  if (spec.startsWith(".")) {
+    importerScope = `dir=${fileIdentityKey(path.dirname(path.resolve(fromFile)))}`;
+  } else if (isRelativeOrAbsolute) {
+    importerScope = "root";
+  } else {
+    importerScope = `mappings=${matchPathScopeKey(matchPath)}:pathLike=${prefersPathLikeFallback ? 1 : 0}`;
+    if (opts?.resolveNodeModules || stylesheetBareSpecifier) {
+      importerScope += `:dir=${fileIdentityKey(path.dirname(path.resolve(fromFile)))}`;
+    }
+  }
+  if (scssPartialImporter && (isRelativeOrAbsolute || stylesheetBareSpecifier)) importerScope += ":scss";
   const cacheKey = [
     fileIdentityKey(path.resolve(projectRoot)),
-    fileIdentityKey(path.resolve(fromFile)),
+    importerScope,
     spec,
     `workspace=${workspaceKey}`,
     `nm=${opts?.resolveNodeModules ? 1 : 0}`,
@@ -373,23 +414,20 @@ export async function resolveSpecifier(
     `exts=${extensionKey}`,
     `exportCondition=${exportCondition}`,
   ].join("::");
+  const probeCacheId = currentProbeCache()?.id;
   const cached = getResolveSpecifierCacheEntry(cacheKey);
   if (cached) {
-    if (typeof cached !== "string") return cached;
-    const confinedCached = await acceptFirstPartyFile(projectRoot, cached);
+    if (typeof cached.result !== "string") return cached.result;
+    if (probeCacheId !== undefined && cached.probeCacheId === probeCacheId) return cached.result;
+    const confinedCached = await acceptFirstPartyFile(projectRoot, cached.result);
     if (confinedCached) return confinedCached;
     resolveSpecifierCache.delete(cacheKey);
   }
-  const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
-  const isWindowsAbsolutePath = /^[A-Za-z]:[\\/]/.test(spec);
-  if (!isWindowsAbsolutePath && (hasSchemePrefix || spec.startsWith("//"))) {
-    const ext = { external: spec } as const;
-    setResolveSpecifierCacheEntry(cacheKey, ext);
-    return ext;
-  }
+  const remember = <T extends FileId | { external: string }>(result: T): T => {
+    setResolveSpecifierCacheEntry(cacheKey, { result, probeCacheId });
+    return result;
+  };
 
-  const isRelativeOrAbsolute = spec.startsWith(".") || spec.startsWith("/") || isWindowsAbsolutePath;
-  const stylesheetBareSpecifier = opts?.resolutionKind === "stylesheet" && !isRelativeOrAbsolute;
   if (isRelativeOrAbsolute || stylesheetBareSpecifier) {
     let base = path.resolve(path.dirname(fromFile), spec);
     if (isWindowsAbsolutePath) {
@@ -401,56 +439,30 @@ export async function resolveSpecifier(
       projectRoot,
       await findFirstExistingResolutionCandidate(base, resolutionExtensions),
     );
-    if (hit) {
-      setResolveSpecifierCacheEntry(cacheKey, hit);
-      return hit;
-    }
-    if (opts?.allowScssPartialResolution && path.extname(fromFile).toLowerCase() === ".scss") {
+    if (hit) return remember(hit);
+    if (scssPartialImporter) {
       const partialHit = await acceptFirstPartyFile(projectRoot, await findFirstExistingScssPartialCandidate(base));
-      if (partialHit) {
-        setResolveSpecifierCacheEntry(cacheKey, partialHit);
-        return partialHit;
-      }
+      if (partialHit) return remember(partialHit);
     }
-    if (isRelativeOrAbsolute) {
-      const ext = { external: spec } as const;
-      setResolveSpecifierCacheEntry(cacheKey, ext);
-      return ext;
-    }
+    if (isRelativeOrAbsolute) return remember({ external: spec });
   }
   // Bare specifier: prefer TS path mappings (tsconfig `paths`) before workspace/node_modules.
   if (matchPath) {
-    const m = matchPath(
-      spec,
-      undefined,
-      (candidate: string) => {
-        return isFilePathWithinRoot(projectRoot, candidate) && fileExistsSync(candidate);
-      },
-      resolutionExtensions,
-    );
+    const m = await matchMappedSpecifier(matchPath, spec, projectRoot, resolutionExtensions);
     if (m) {
       const cand = path.resolve(m);
       const hasExt = !!path.extname(cand);
       if (hasExt) {
         const mappedFile = await acceptFirstPartyFile(projectRoot, cand);
-        if (mappedFile) {
-          setResolveSpecifierCacheEntry(cacheKey, mappedFile);
-          return mappedFile;
-        }
+        if (mappedFile) return remember(mappedFile);
       }
       for (const e of resolutionExtensions) {
         const mappedFile = await acceptFirstPartyFile(projectRoot, cand + e);
-        if (mappedFile) {
-          setResolveSpecifierCacheEntry(cacheKey, mappedFile);
-          return mappedFile;
-        }
+        if (mappedFile) return remember(mappedFile);
       }
       for (const e of resolutionExtensions) {
         const mappedFile = await acceptFirstPartyFile(projectRoot, path.join(cand, "index" + e));
-        if (mappedFile) {
-          setResolveSpecifierCacheEntry(cacheKey, mappedFile);
-          return mappedFile;
-        }
+        if (mappedFile) return remember(mappedFile);
       }
     }
   }
@@ -460,29 +472,18 @@ export async function resolveSpecifier(
       projectRoot,
       await resolveWorkspacePackage(spec, workspaceConfig, opts?.resolutionExtensions, exportCondition),
     );
-    if (resolvedWs) {
-      setResolveSpecifierCacheEntry(cacheKey, resolvedWs);
-      return resolvedWs;
-    }
-    const fromExt = path.extname(fromFile).toLowerCase();
-    const prefersPathLikeFallback = [".go", ".java", ".cs", ".rb", ".rs", ".swift"].includes(fromExt);
+    if (resolvedWs) return remember(resolvedWs);
     if (prefersPathLikeFallback) {
       // These languages use package-like specifiers for first-party source paths.
       const pathLike = await resolvePathLikeModule(projectRoot, spec, opts?.resolutionExtensions);
-      if (pathLike) {
-        setResolveSpecifierCacheEntry(cacheKey, pathLike);
-        return pathLike;
-      }
+      if (pathLike) return remember(pathLike);
     }
     if (opts?.resolveNodeModules) {
       const nm = await acceptFirstPartyFile(
         projectRoot,
         await resolveFromNodeModules(spec, fromFile, projectRoot, opts?.resolutionExtensions, exportCondition),
       );
-      if (nm) {
-        setResolveSpecifierCacheEntry(cacheKey, nm);
-        return nm;
-      }
+      if (nm) return remember(nm);
     }
   }
   if (resolutionHints.length) {
@@ -495,15 +496,10 @@ export async function resolveSpecifier(
         projectRoot,
         await findFirstExistingResolutionCandidate(base, resolutionExtensions),
       );
-      if (hit) {
-        setResolveSpecifierCacheEntry(cacheKey, hit);
-        return hit;
-      }
+      if (hit) return remember(hit);
     }
   }
-  const ext = { external: spec } as const;
-  setResolveSpecifierCacheEntry(cacheKey, ext);
-  return ext;
+  return remember({ external: spec });
 }
 
 export function clearImportResolutionCaches(): void {

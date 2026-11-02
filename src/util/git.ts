@@ -430,10 +430,72 @@ async function runGitPathPredicate(projectRoot: string, args: string[]): Promise
   }
 }
 
+type IndexedBlob = {
+  rel: string;
+  /** The blob id the index holds, set only when the worktree file provably has that content. */
+  blob: string | undefined;
+};
+
+const GIT_LISTING_MAX_BUFFER = 64 * 1024 * 1024;
+
+/**
+ * Tracked files among `relFileSet`, in index order, with the blob id for each file whose worktree content Git
+ * already knows to match its index entry. `trustIndex` is false when the caller needs every file read again.
+ *
+ * An entry is reusable when it is a plain cached regular file (not flagged assume-unchanged or skip-worktree, which
+ * hide edits from Git, and not unmerged) and `git ls-files --modified` does not list it. That is the check
+ * `git status` relies on: a stat match, or a content comparison when the stat differs. Every other file is read
+ * with `git hash-object`. The two ids agree, except for a file whose committed blob is not its worktree bytes after
+ * a Git clean filter (Git LFS, or a line-ending conversion that `hash-object` applies and the index entry predates):
+ * the index id then names the committed content, which stays the same while the file is unchanged.
+ */
+async function listIndexedBlobs(
+  projectRoot: string,
+  relFileSet: ReadonlySet<string>,
+  trustIndex: boolean,
+): Promise<IndexedBlob[]> {
+  if (!trustIndex) {
+    const { stdout } = await runGit(projectRoot, ["ls-files", "-z"], { maxBuffer: GIT_LISTING_MAX_BUFFER });
+    return stdout
+      .split("\0")
+      .filter((rel) => rel && relFileSet.has(rel))
+      .map((rel) => ({ rel, blob: undefined }));
+  }
+  const [staged, modified] = await Promise.all([
+    runGit(projectRoot, ["ls-files", "-v", "-s", "-z"], { maxBuffer: GIT_LISTING_MAX_BUFFER }),
+    runGit(projectRoot, ["ls-files", "-m", "-z"], { maxBuffer: GIT_LISTING_MAX_BUFFER }),
+  ]);
+  const modifiedRel = new Set(modified.stdout.split("\0").filter(Boolean));
+  const entries = new Map<string, IndexedBlob>();
+  for (const record of staged.stdout.split("\0")) {
+    // `<tag> <mode> <blob> <stage>\t<path>`
+    const tab = record.indexOf("\t");
+    if (tab < 0) continue;
+    const rel = record.slice(tab + 1);
+    if (!relFileSet.has(rel)) continue;
+    const previous = entries.get(rel);
+    if (previous) {
+      // An unmerged path is listed once per stage.
+      previous.blob = undefined;
+      continue;
+    }
+    const [tag, mode, blob, stage] = record.slice(0, tab).split(" ");
+    const regularFile = mode === "100644" || mode === "100755";
+    const reusable = tag === "H" && stage === "0" && regularFile && !modifiedRel.has(rel);
+    entries.set(rel, { rel, blob: reusable ? blob : undefined });
+  }
+  return [...entries.values()];
+}
+
+/**
+ * Blob ids of the tracked files among `files`, keyed by normalized absolute path. A tracked file whose worktree
+ * content matches its index entry reuses the index's blob id; the others are hashed with `git hash-object`.
+ * `strict` hashes every file instead of trusting Git's stat-based change detection.
+ */
 export async function getGitBlobHashes(
   projectRoot: string,
   files: string[],
-  opts?: { gitAvailable?: boolean; logLevel?: LogLevel },
+  opts?: { gitAvailable?: boolean; logLevel?: LogLevel; strict?: boolean },
 ): Promise<Map<string, string>> {
   const gitAvailable = opts?.gitAvailable ?? true;
   if (!gitAvailable) return new Map();
@@ -451,27 +513,25 @@ export async function getGitBlobHashes(
     // memory costs a little extra parsing but stays correct at any repo size.
     // Full-repo NUL listings can exceed Node's default 1 MiB execFile maxBuffer on large
     // trees; raising it keeps the argv-limit fix from regressing into a silent maxBuffer miss.
-    const { stdout: trackedStdout } = await runGit(projectRoot, ["ls-files", "-z"], {
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    const trackedRel = trackedStdout.split("\0").filter((rel) => rel && relFileSet.has(rel));
-    if (!trackedRel.length) return new Map();
-    const hashes = await hashGitPaths(projectRoot, trackedRel);
-    if (hashes.length !== trackedRel.length) {
+    const indexed = await listIndexedBlobs(projectRoot, relFileSet, !opts?.strict);
+    if (!indexed.length) return new Map();
+    const rehashedRel = indexed.filter((entry) => entry.blob === undefined).map((entry) => entry.rel);
+    const hashes = await hashGitPaths(projectRoot, rehashedRel);
+    if (hashes.length !== rehashedRel.length) {
       logWithLevel(
         opts?.logLevel,
         "warn",
-        `Warning: git hash-object returned ${hashes.length} hash(es) for ${trackedRel.length} ` +
+        `Warning: git hash-object returned ${hashes.length} hash(es) for ${rehashedRel.length} ` +
           "requested file(s); discarding Git signatures for this build.",
       );
       return new Map();
     }
     const out = new Map<string, string>();
-    for (let i = 0; i < trackedRel.length; i += 1) {
-      const rel = trackedRel[i]!;
-      const hash = hashes[i];
+    let rehashed = 0;
+    for (const entry of indexed) {
+      const hash = entry.blob ?? hashes[rehashed++];
       if (!hash) continue;
-      const abs = normalizePath(path.resolve(projectRoot, rel));
+      const abs = normalizePath(path.resolve(projectRoot, entry.rel));
       out.set(abs, hash);
     }
     return out;

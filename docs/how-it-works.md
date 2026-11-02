@@ -58,6 +58,8 @@ Extraction produces raw module specifiers. Resolution then turns them into graph
 - Resolution hints and dynamic-import heuristics are opt-in because guesses can create false positives.
 - A specifier that cannot be mapped to a project file remains an `external` node instead of disappearing.
 
+An index build answers the file, directory, and real-path questions of resolution through one cache that lives for that build, so the next build sees a file created in between. The cache lists a directory once the build probes it for more than a few names and reads each answer from the listing as `stat` or `realpath` would on that volume, including its case rules; a symbolic link, a directory it cannot list, or a name it cannot match with certainty still goes to the file system. A resolution is cached by the importer's directory for a relative specifier, and by the tsconfig `baseUrl` and `paths` for a bare one, not by importer file.
+
 The resulting file nodes and typed edges are stored with forward and reverse adjacency indexes. That graph powers `graph`, `deps`, `rdeps`, `path`, `cycles`, unresolved-import checks, and the dependency portion of higher-level analysis. Mermaid, DOT, JSON, and SQLite are output views of the same graph model.
 
 ## Semantic navigation and impact
@@ -109,6 +111,13 @@ A cached module is keyed by its own content, but its import targets depend on ot
 - it is a C#, Java, Kotlin, PHP, or C++ module, and a file it depends on changed. These imports resolve through the namespace or package declarations of other files.
 
 With an index manifest, the build re-resolves the affected specifiers of added files. Without one (a `memory` cache, or a `disk` cache that no manifest-writing build has seen), the cached import bindings replace the manifest edges.
+
+An incremental update (`codegraph index`, `buildProjectIndexIncremental`, agent sessions) extracts the importers of a changed file again only when the file's public surface changed:
+
+- The public surface is the file's exported names and kinds, its re-export sources, and, for a file with no exports, the names that a star import would bind. Bodies, parameters, and positions are not part of it, so a body or signature edit extracts only the edited file.
+- A changed surface extracts the direct importers. An importer that re-exports from the file has a changed surface too, so a chain of re-exports extracts every importer along it.
+- `manifest.json` stores each file's surface (`surface`). A manifest from an earlier version has none, so the first change to each file counts as a surface change.
+- The transitive importers of a changed C#, Java, Kotlin, PHP, C++, or Rust file, or a Python `__init__.py`, always extract again, because they resolve through its declarations.
 
 Declaration-based imports name a package, namespace, or module, not a file:
 

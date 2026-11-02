@@ -77,8 +77,12 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * and `importLookupIncomplete`) like an unreadable C# lookup, as does a package wildcard while a file of its package is
  * incomplete or one whose package is unreadable may belong to it. A Java static member import resolves through the
  * type that owns the member, for its dependency edge as for its binding.
+ * Epoch 103 caches an import resolution by the importer's tsconfig `baseUrl` and `paths` instead of by importer file. A
+ * call that passed no path aliases (the module-level import of a Vue block) no longer decides the answer of a later call
+ * for the same file and specifier that did, so a style import through a path alias gets its file edge. Edges cached by
+ * an older build kept the external answer.
  */
-export const CORE_ALGORITHM_EPOCH = 102;
+export const CORE_ALGORITHM_EPOCH = 103;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
