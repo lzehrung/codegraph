@@ -725,6 +725,178 @@ fn a_pattern_that_runs_from_one_kind_into_the_next_does_not_hide_the_invalid_kin
     );
 }
 
+// Tree-sitter resolves the capture a predicate names against every capture the text defined before
+// it. In the merged text of a set, a predicate in one kind can therefore read a capture that only
+// an earlier kind defines, which that kind could not do when it was compiled by itself.
+const LEANING_IMPORTS: &str = "(identifier) @a";
+const LEANING_EXPORTS: &str = "((identifier) @b (#eq? @a \"x\"))";
+
+/// The error `text` gives when it is compiled by itself, which is what an invalid kind reports.
+fn error_of_compiling_alone(language_id: &str, text: &str) -> String {
+    let language = language_for_id(language_id).expect("language should exist");
+    compile_query(&language, text).expect_err("the text should not compile by itself")
+}
+
+fn assert_set_fails_with(set: &QuerySet, alone: &str) {
+    let tree = parse_root(TS_SOURCE, "ts");
+    for _ in 0..3 {
+        let error = set
+            .execute(TS_SOURCE, tree.root_node())
+            .expect_err("a kind that is invalid by itself should fail the set");
+        assert_eq!(
+            error.to_string(),
+            napi::Error::from_reason(alone.to_string()).to_string(),
+            "the error is the invalid kind's own, as when each kind was compiled first"
+        );
+    }
+}
+
+#[test]
+fn a_predicate_that_reads_another_kinds_capture_reports_its_own_kinds_error() {
+    let language = language_for_id("ts").expect("typescript language should exist");
+    let merged_text = format!("{LEANING_IMPORTS}\n{LEANING_EXPORTS}\n");
+    assert!(
+        compile_query(&language, &merged_text).is_ok(),
+        "the merged text compiles because @a is defined by the time the predicate reads it"
+    );
+    let alone = error_of_compiling_alone("ts", LEANING_EXPORTS);
+    let set = private_set("ts", LEANING_IMPORTS, LEANING_EXPORTS, "", "");
+
+    assert_set_fails_with(&set, &alone);
+
+    // The merged text, then the kinds in order up to and including the invalid one; later calls
+    // reuse them.
+    assert_eq!(set.compile_count(), 3);
+}
+
+#[test]
+fn a_predicate_that_reads_a_capture_before_its_own_kind_defines_it_does_not_borrow_one() {
+    // Imports defines @a too, so the merged text resolves the predicate. Exports by itself reads
+    // @a before the node that defines it.
+    let exports = "((identifier) (#eq? @a \"x\") (identifier) @a)";
+    let language = language_for_id("ts").expect("typescript language should exist");
+    let merged_text = format!("{LEANING_IMPORTS}\n{exports}\n");
+    assert!(
+        compile_query(&language, &merged_text).is_ok(),
+        "the merged text compiles because imports defined @a first"
+    );
+    let alone = error_of_compiling_alone("ts", exports);
+    let set = private_set("ts", LEANING_IMPORTS, exports, "", "");
+
+    assert_set_fails_with(&set, &alone);
+}
+
+#[test]
+fn a_predicate_that_reads_a_capture_only_a_later_kind_defines_reports_its_own_kinds_error() {
+    let imports = "((identifier) @a (#eq? @b \"x\"))";
+    let alone = error_of_compiling_alone("ts", imports);
+    let set = private_set("ts", imports, "(identifier) @b", "", "");
+
+    assert_set_fails_with(&set, &alone);
+
+    // The merged text fails too, so imports is compiled by itself and fails first.
+    assert_eq!(set.compile_count(), 2);
+}
+
+#[test]
+fn kinds_that_define_and_read_the_same_capture_names_still_compile_once() {
+    let imports = "((identifier) @name (#eq? @name \"helper\"))";
+    let exports = "((identifier) @name (#match? @name \"^value\"))";
+    let set = private_set("ts", imports, exports, "", "");
+    let tree = parse_root(TS_SOURCE, "ts");
+
+    let merged = set
+        .execute(TS_SOURCE, tree.root_node())
+        .expect("kinds that read their own captures should run");
+    assert_eq!(
+        set.compile_count(),
+        1,
+        "the merged query is the only compile: the kinds are not compiled on their own"
+    );
+
+    let separate = set
+        .execute_separately(TS_SOURCE, tree.root_node())
+        .expect("separate execution should succeed");
+    assert_eq!(merged, separate);
+    assert_eq!(merged.imports.len(), 2, "helper is read twice");
+    assert_eq!(merged.exports.len(), 1, "value is declared once");
+}
+
+/// What a set must do when each kind is compiled by itself: run, or fail with the error of the
+/// first kind that does not compile.
+fn expected_by_compiling_each_kind(
+    language: &tree_sitter::Language,
+    texts: [&str; 4],
+) -> std::result::Result<(), String> {
+    for text in texts.iter().filter(|text| !text.trim().is_empty()) {
+        compile_query(language, text)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_set_runs_exactly_when_each_of_its_kinds_compiles_by_itself() {
+    // Kinds that define captures, read their own, read one an earlier or a later kind defines, or
+    // read one before they define it.
+    const SNIPPETS: [&str; 9] = [
+        "(identifier) @a",
+        "(identifier) @b",
+        "((identifier) @a (#eq? @a \"x\"))",
+        "((identifier) @b (#eq? @a \"x\"))",
+        "((identifier) (#eq? @a \"x\") (identifier) @a)",
+        "((string) @s (#eq? @s @a))",
+        "(string) @s",
+        "((identifier) @c (#set! role \"x\"))",
+        "; only a comment",
+    ];
+    let language = language_for_id("ts").expect("typescript language should exist");
+    let tree = parse_root(TS_SOURCE, "ts");
+    let mut cases: Vec<[&str; 4]> = Vec::new();
+    for imports in SNIPPETS {
+        for exports in SNIPPETS {
+            cases.push([imports, exports, "", ""]);
+        }
+    }
+    // A capture the first kind defines, read by a kind two places later.
+    for locals in SNIPPETS {
+        cases.push(["(identifier) @a", "(string) @s", locals, ""]);
+    }
+
+    let (mut ran, mut merged_but_invalid_alone) = (0, 0);
+    for texts in cases {
+        let set = private_set("ts", texts[0], texts[1], texts[2], texts[3]);
+        let outcome = set.execute(TS_SOURCE, tree.root_node());
+        match expected_by_compiling_each_kind(&language, texts) {
+            Ok(()) => {
+                outcome.unwrap_or_else(|error| {
+                    panic!("{texts:?} compiles kind by kind, but the set failed: {error}")
+                });
+                ran += 1;
+            }
+            Err(alone) => {
+                let error = outcome.expect_err(&format!(
+                    "{texts:?} should fail with its invalid kind's error"
+                ));
+                assert_eq!(
+                    error.to_string(),
+                    napi::Error::from_reason(alone).to_string(),
+                    "{texts:?}"
+                );
+                let merged_text = texts.join("\n") + "\n";
+                if compile_query(&language, &merged_text).is_ok() {
+                    merged_but_invalid_alone += 1;
+                }
+            }
+        }
+    }
+
+    assert!(ran > 20, "the cases should include sets that run: {ran}");
+    assert!(
+        merged_but_invalid_alone > 5,
+        "the cases should include sets whose merged text compiles but a kind does not: {merged_but_invalid_alone}"
+    );
+}
+
 #[test]
 fn registered_sets_run_a_smoke_query_in_every_supported_language() {
     for language_id in supported_language_ids() {

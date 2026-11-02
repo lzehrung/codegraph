@@ -61,6 +61,15 @@ function compileCount(binding: NativeBinding, querySetId: number): number {
   return binding.querySetCompileCount(querySetId);
 }
 
+function thrownMessage(call: () => unknown): string {
+  try {
+    call();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("Expected the call to throw.");
+}
+
 afterEach(() => {
   __resetNativeTreeSitterBindingForTests();
 });
@@ -137,6 +146,38 @@ nativeDescribe("native query sets", () => {
       expect(() => binding.runLanguageQueries("export const value = 1;", id)).toThrow(/Failed to compile query/);
     }
 
+    expect(compileCount(binding, id)).toBe(1);
+  });
+
+  it("reports the error of a kind that reads a capture only another kind defines, as when each kind was compiled alone", () => {
+    const { binding } = realBinding();
+    const { runQuery } = binding;
+    if (!runQuery) throw new Error("The addon does not expose runQuery.");
+    const source = "export const value = 1;";
+    // Merged, `@a` is already defined when the exports predicate reads it. The exports query does not define it, so on
+    // its own it does not compile, and the set must fail with that error and not run.
+    const imports = `; ${randomUUID()}\n(identifier) @a`;
+    const exports = '((identifier) @b (#eq? @a "x"))';
+    const alone = thrownMessage(() => runQuery(source, "ts", exports));
+    expect(alone).toMatch(/Failed to compile query/);
+    const id = binding.registerQuerySet("ts", imports, exports, "", "");
+
+    for (let call = 0; call < 3; call += 1) {
+      expect(thrownMessage(() => binding.runLanguageQueries(source, id))).toBe(alone);
+    }
+    expect(compileCount(binding, id)).toBe(3);
+  });
+
+  it("still compiles a set once when its kinds define and read the same capture names", () => {
+    const { binding } = realBinding();
+    const imports = `; ${randomUUID()}\n((identifier) @name (#eq? @name "helper"))`;
+    const exports = '((identifier) @name (#match? @name "^value"))';
+    const id = binding.registerQuerySet("ts", imports, exports, "", "");
+
+    const results = binding.runLanguageQueries("import { helper } from './a';\nexport const value = helper();", id);
+
+    expect(results.imports).toHaveLength(2);
+    expect(results.exports).toHaveLength(1);
     expect(compileCount(binding, id)).toBe(1);
   });
 

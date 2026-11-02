@@ -11,7 +11,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock, PoisonError, RwLock};
 use streaming_iterator::StreamingIterator;
-use tree_sitter::{Language, Node, Query, QueryCursor};
+use tree_sitter::{Language, Node, Query, QueryCursor, QueryErrorKind};
 
 use crate::languages::language_for_id;
 use crate::query::{capture_to_object, collect_compact_matches, collect_matches, compile_query};
@@ -133,7 +133,9 @@ impl QuerySet {
         &self.language
     }
 
-    /// Tree-sitter compiles this set has cost so far, whether or not they succeeded.
+    /// Tree-sitter compiles this set has cost so far, whether or not they succeeded. The parse-only
+    /// check in `reads_alone` stops before the analysis that makes a compile expensive, so it is
+    /// not counted.
     pub(crate) fn compile_count(&self) -> u32 {
         self.compiles.load(Ordering::Relaxed)
     }
@@ -173,11 +175,12 @@ impl QuerySet {
     /// Decide how the set executes, compiling what that needs.
     ///
     /// Two or more kinds run in one traversal of a merged query. The merged text is compiled once
-    /// and stands for all of them: when it splits back into whole patterns per kind (see
-    /// `merged_routes`), each kind's text is a run of complete patterns, so it compiles on its own
-    /// and the kinds need no compile of their own. Otherwise the kinds are compiled one at a time
-    /// in order, so a query that is invalid on its own reports its own error, and a set whose
-    /// texts are each valid but do not merge runs the kinds separately.
+    /// and stands for all of them when it splits back into whole patterns per kind (see
+    /// `merged_routes`) and every kind after the first reads on its own (see `reads_alone`): each
+    /// kind's text is then a run of complete patterns that compiles on its own, so the kinds need
+    /// no compile of their own. Otherwise the kinds are compiled one at a time in order, so a
+    /// query that is invalid on its own reports its own error, and a set whose texts are each
+    /// valid but do not merge runs the kinds separately.
     fn build_plan(&self) -> std::result::Result<Plan, String> {
         self.build_plan_with(|merged_text| self.compile(merged_text))
     }
@@ -212,7 +215,14 @@ impl QuerySet {
 
         if let Ok(query) = compile_merged(&merged_text) {
             if let Some(routes) = merged_routes(&query, &merged_text, &segments) {
-                return Ok(Plan::Merged(MergedQuery { query, routes }));
+                // The first kind opens the merged text, so it reads there as it would by itself.
+                let later_kinds_read_alone = active
+                    .iter()
+                    .skip(1)
+                    .all(|kind| reads_alone(&self.language, self.text(*kind)));
+                if later_kinds_read_alone {
+                    return Ok(Plan::Merged(MergedQuery { query, routes }));
+                }
             }
         }
 
@@ -322,6 +332,28 @@ fn results_for(results: &mut NativeQueryResults, kind: QueryKind) -> &mut Vec<Na
         QueryKind::Exports => &mut results.exports,
         QueryKind::Locals => &mut results.locals,
         QueryKind::ImportBindings => &mut results.import_bindings,
+    }
+}
+
+/// Whether `text` reads on its own as complete patterns whose predicates name only captures it
+/// defines first, which is what compiling it by itself would require of its parse.
+///
+/// Tree-sitter resolves a capture named in a predicate against every capture defined earlier in
+/// the text it parses. In a merged text, a predicate in one kind can therefore read a capture that
+/// only an earlier kind defines. The merged text compiles, but the kind by itself does not, and
+/// the kind has to report its own error.
+///
+/// The check parses `text` followed by a stray `)`. Tree-sitter parses every pattern before it
+/// analyzes any, and the stray `)` ends the parse with a syntax error right where `text` ends, so
+/// a text that reads cleanly stops there without reaching the analysis that makes a compile
+/// expensive. A text that does not read cleanly stops earlier, with an error of its own. This is
+/// not a compile, so the set's compile count does not include it.
+fn reads_alone(language: &Language, text: &str) -> bool {
+    let probe = format!("{text}\n)");
+    match Query::new(language, &probe) {
+        Err(error) => error.kind == QueryErrorKind::Syntax && error.offset == text.len() + 1,
+        // A stray `)` is always a syntax error, so a probe that compiled stopped nowhere expected.
+        Ok(_) => false,
     }
 }
 
@@ -623,6 +655,42 @@ mod tests {
         ];
 
         assert!(merged_routes(&query, &merged_text, &segments).is_none());
+    }
+
+    #[test]
+    fn a_text_reads_alone_only_when_it_parses_to_its_end_with_every_capture_it_reads_defined() {
+        let language = language_for_id("ts").expect("typescript language should exist");
+
+        for text in [
+            "(identifier) @a",
+            "(identifier) @a ; ends in a comment",
+            "; nothing but a comment",
+            "((identifier) @a (#eq? @a \"x\"))",
+            // Defined by an earlier pattern of the same text.
+            "(identifier) @a\n((identifier) @b (#eq? @a \"x\"))",
+        ] {
+            assert!(reads_alone(&language, text), "{text:?} should read alone");
+        }
+
+        for (text, why) in [
+            ("((identifier) @b (#eq? @a \"x\"))", "@a is never defined"),
+            (
+                "((identifier) (#eq? @a \"x\") (identifier) @a)",
+                "@a is defined after the predicate reads it",
+            ),
+            ("(not_a_node_type) @a", "no such node type"),
+            ("(identifier) @a )", "a stray paren inside the text"),
+            ("\"unterminated", "a string that never ends"),
+            (
+                "(identifier",
+                "a group left open, which the probe's own paren would close",
+            ),
+        ] {
+            assert!(
+                !reads_alone(&language, text),
+                "{text:?} should not read alone: {why}"
+            );
+        }
     }
 
     #[test]
