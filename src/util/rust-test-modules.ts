@@ -34,8 +34,8 @@ function cachedByteMap(source: string): ByteToStringIndexMap {
   if (cached) return cached.map;
   // A pure ASCII source builds no table: the map only records that byte offsets and string indexes coincide.
   const map = buildByteMap(source);
-  // The cache keeps the source alive as its key, so the budget counts it (two bytes per UTF-16 unit) with the table.
-  const retainedBytes = source.length * 2 + map.byteToStringIndex.byteLength;
+  // The key retains the UTF-16 source; the map retains a typed byte table and numeric line starts.
+  const retainedBytes = source.length * 2 + map.byteToStringIndex.byteLength + map.lineStartBytes.length * 8;
   byteMapCache.set(source, { map, retainedBytes });
   byteMapCacheBytes += retainedBytes;
   // The entry just added stays, however large: evicting it would rebuild its table on every call.

@@ -188,7 +188,17 @@ describe("conversion tables of utf8ByteOffsetToStringIndex", () => {
     }
   });
 
-  it("keeps a source larger than the byte budget cached and drops older tables to stay inside it", () => {
+  it("evicts line-dense sources when their retained line starts exceed the byte budget", () => {
+    const sources = [freshSource() + "é\n".repeat(1_500_000), freshSource() + "é\n".repeat(1_500_000)];
+    for (const source of sources) utf8ByteOffsetToStringIndex(source, 1_000_001);
+    const byteLength = vi.spyOn(Buffer, "byteLength");
+    utf8ByteOffsetToStringIndex(sources[1]!, 1_000_001);
+    expect(byteLength).not.toHaveBeenCalled();
+    utf8ByteOffsetToStringIndex(sources[0]!, 1_000_001);
+    expect(byteLength).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts older tables at the byte budget", () => {
     const sources = [0, 1, 2, 3].map((id) => `${"é".repeat(2_000_000)}${id}`);
     for (const source of sources) utf8ByteOffsetToStringIndex(source, 1_000_001);
     const byteLength = vi.spyOn(Buffer, "byteLength");
@@ -198,6 +208,17 @@ describe("conversion tables of utf8ByteOffsetToStringIndex", () => {
     expect(utf8ByteOffsetToStringIndex(sources[0]!, 1_000_001)).toBe(500_001);
     expect(byteLength).toHaveBeenCalledTimes(1);
     // Release the large tables for the tests that follow.
+    for (let index = 0; index < 100; index += 1) utf8ByteOffsetToStringIndex(freshSource(), 5);
+  });
+
+  it("keeps a single entry above the byte budget cached", () => {
+    // Source, byte table, and line starts together retain over 64 MiB.
+    const source = freshSource() + "é\n".repeat(2_850_000);
+    utf8ByteOffsetToStringIndex(source, 1_000_001);
+    const byteLength = vi.spyOn(Buffer, "byteLength");
+    utf8ByteOffsetToStringIndex(source, 1_000_002);
+    expect(byteLength).not.toHaveBeenCalled();
+    // Release the oversized entry for the tests that follow.
     for (let index = 0; index < 100; index += 1) utf8ByteOffsetToStringIndex(freshSource(), 5);
   });
 });
