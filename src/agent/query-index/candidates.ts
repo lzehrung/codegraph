@@ -13,7 +13,6 @@ export type QueryIndexCandidateScore = {
 
 export type QueryIndexCandidate = StoredQueryIndexChunk & {
   score: QueryIndexCandidateScore;
-  matchedLine: number;
 };
 
 export type QueryIndexCandidateResult = {
@@ -71,7 +70,8 @@ function scoreCandidateChunk(
   return { score, matched, exactPhrase, proximity, matchedTerms: matched.length };
 }
 
-function firstMatchingLine(
+/** The first line of a candidate's text that scores for the terms, or the first line when none does. */
+export function firstMatchingLine(
   text: string,
   rankTerms: readonly string[],
   normalizedRankPhrase = rankTerms.join(" "),
@@ -106,7 +106,6 @@ export function findQueryIndexChunkCandidates(
     .map((chunk) => ({
       ...chunk,
       score: scoreCandidateChunk(chunk.normalizedText, terms, normalizedRankPhrase),
-      matchedLine: firstMatchingLine(chunk.text, terms, normalizedRankPhrase),
     }))
     .filter((candidate) => candidate.score.score > 0)
     .sort(compareCandidateChunks);

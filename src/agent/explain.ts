@@ -48,6 +48,7 @@ import {
   parseAgentGraphHandle,
   parseAgentSqlHandle,
   parseAgentSymbolHandle,
+  type AgentSymbolHandle,
 } from "./handles.js";
 import {
   collectDefinitionFollowUps,
@@ -57,7 +58,7 @@ import {
   resolveAgentSnapshotFile,
 } from "./normalize.js";
 import { createRequestSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
-import { buildSymbolLookup, type SymbolLookup } from "./symbol-lookup.js";
+import { buildSymbolLookup, symbolDefsInFile, type SymbolLookup } from "./symbol-lookup.js";
 import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 
 export type AgentExplainTarget = {
@@ -245,6 +246,73 @@ export async function resolveCodegraphTargetWithSession(
   return explainTarget(snapshot, resolved, relFile);
 }
 
+/** The `references` section of an explanation, with the reference limit it applied. */
+export type AgentExplanationReferences = {
+  references: AgentExplanationReference[];
+  limit: number;
+  omitted: number;
+  referenceCoverage?: AgentExplanationReferenceCoverage;
+};
+
+/**
+ * The `references` section of `explainCodegraphTargetWithSession`. A portable symbol handle that names a definition
+ * outside SQL files needs only the reference search, so it skips the detailed symbol graph, the duplicate analysis,
+ * and every other section; any other target takes the full explanation.
+ */
+export async function explainTargetReferencesWithSession(
+  session: AgentSession,
+  request: AgentExplainTarget,
+): Promise<AgentExplanationReferences> {
+  const direct = await collectSymbolHandleReferences(session, request);
+  if (direct) return direct;
+  const explanation = await explainCodegraphTargetWithSession(session, request);
+  return {
+    references: explanation.references,
+    limit: explanation.limits.references,
+    omitted: explanation.omittedCounts.references,
+    ...(explanation.referenceCoverage ? { referenceCoverage: explanation.referenceCoverage } : {}),
+  };
+}
+
+async function collectSymbolHandleReferences(
+  session: AgentSession,
+  request: AgentExplainTarget,
+): Promise<AgentExplanationReferences | undefined> {
+  const parsed = parseAgentSymbolHandle(request.target);
+  if (!parsed) return undefined;
+  const snapshot = await session.loadProject({ symbolGraph: "skip" });
+  // Resolution tries a project file first, then the handle's file; either failing leaves the answer to the full path.
+  if (resolveAgentSnapshotFile(snapshot, request.target)) return undefined;
+  const file = resolveAgentSnapshotFile(snapshot, parsed.file);
+  if (!file) return undefined;
+  const def = findHandleDefinition(snapshot, parsed, file);
+  if (!def) return undefined;
+  const { maxReferences, maxSnippets } = explainReferenceLimits(request);
+  const context = await collectReferenceContext(snapshot, def, maxReferences, maxSnippets, false);
+  return {
+    references: context.references.items,
+    limit: maxReferences,
+    omitted: context.references.omitted,
+    ...(context.referenceCoverage ? { referenceCoverage: context.referenceCoverage } : {}),
+  };
+}
+
+/** The reference and snippet limits an explanation applies; the search collects a multiple of the larger. */
+function explainReferenceLimits(request: AgentExplainTarget): { maxReferences: number; maxSnippets: number } {
+  return {
+    maxReferences: defaultAgentLimit(
+      request.maxReferences ?? request.maxDependencies,
+      AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
+      AGENT_EXPLAIN_MAX_DEPENDENCY_LIMIT,
+    ),
+    maxSnippets: defaultAgentLimit(
+      request.maxSnippets,
+      AGENT_EXPLAIN_DEFAULT_SNIPPET_LIMIT,
+      AGENT_EXPLAIN_MAX_SNIPPET_LIMIT,
+    ),
+  };
+}
+
 export function formatAgentExplanation(explanation: AgentExplanation): string {
   const lines = [
     `${explanation.target.kind}: ${explanation.target.label}`,
@@ -312,20 +380,15 @@ function resolveSymbolHandle(
   if (parsed) {
     const file = resolveAgentSnapshotFile(snapshot, parsed.file);
     if (!file) return null;
-    for (const def of lookup.defById.values()) {
-      if (isSqlFilePath(def.file, snapshot.index.languageExtensions)) continue;
-      if (normalizePath(def.file) !== file) continue;
-      if (def.localName !== parsed.name) continue;
-      if (def.range.start.line !== parsed.line || def.range.start.column !== parsed.column) continue;
-      return symbolTarget(def, snapshot.symbolGraph.nodes.get(defNodeId(def)));
-    }
+    const def = findHandleDefinition(snapshot, parsed, file);
+    if (def) return symbolTarget(def, snapshot.symbolGraph.nodes.get(defNodeId(def)));
     for (const node of snapshot.symbolGraph.nodes.values()) {
-      const def = lookup.defById.get(node.id);
-      if (!def || isAgentSqlObjectNode(node)) continue;
+      const nodeDef = lookup.defById.get(node.id);
+      if (!nodeDef || isAgentSqlObjectNode(node)) continue;
       if (normalizePath(node.file) !== file) continue;
       if (node.name !== parsed.name) continue;
-      if (def.range.start.line !== parsed.line || def.range.start.column !== parsed.column) continue;
-      return symbolTarget(def, node);
+      if (nodeDef.range.start.line !== parsed.line || nodeDef.range.start.column !== parsed.column) continue;
+      return symbolTarget(nodeDef, node);
     }
     return null;
   }
@@ -333,6 +396,21 @@ function resolveSymbolHandle(
   const id = handle.slice("symbol:".length);
   const def = lookup.defById.get(id);
   return def ? symbolTarget(def, snapshot.symbolGraph.nodes.get(id)) : null;
+}
+
+/** The first definition outside SQL files that a portable symbol handle names, read from its file's definitions. */
+function findHandleDefinition(
+  snapshot: AgentProjectSnapshot,
+  parsed: AgentSymbolHandle,
+  file: string,
+): SymbolDef | null {
+  for (const { def } of symbolDefsInFile(snapshot, file)) {
+    if (isSqlFilePath(def.file, snapshot.index.languageExtensions)) continue;
+    if (def.localName !== parsed.name) continue;
+    if (def.range.start.line !== parsed.line || def.range.start.column !== parsed.column) continue;
+    return def;
+  }
+  return null;
 }
 
 function resolveSqlHandle(
@@ -446,20 +524,11 @@ async function buildExplanation(
     AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
     AGENT_EXPLAIN_MAX_DEPENDENCY_LIMIT,
   );
-  const maxReferences = defaultAgentLimit(
-    request.maxReferences ?? request.maxDependencies,
-    AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
-    AGENT_EXPLAIN_MAX_DEPENDENCY_LIMIT,
-  );
+  const { maxReferences, maxSnippets } = explainReferenceLimits(request);
   const maxRelatedSqlObjects = defaultAgentLimit(
     request.maxRelatedSqlObjects ?? request.maxDependencies,
     AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
     AGENT_EXPLAIN_MAX_DEPENDENCY_LIMIT,
-  );
-  const maxSnippets = defaultAgentLimit(
-    request.maxSnippets,
-    AGENT_EXPLAIN_DEFAULT_SNIPPET_LIMIT,
-    AGENT_EXPLAIN_MAX_SNIPPET_LIMIT,
   );
   const maxSymbols = defaultAgentLimit(
     request.maxSymbols,
@@ -489,7 +558,7 @@ async function buildExplanation(
   const referenceContext =
     resolved.kind === "file"
       ? emptyReferenceContext()
-      : await collectReferenceContext(snapshot, resolved.def, maxReferences, maxSnippets);
+      : await collectReferenceContext(snapshot, resolved.def, maxReferences, maxSnippets, true);
   const references = referenceContext.references;
   const snippets = referenceContext.snippets;
   const relatedSqlObjects = await collectRelatedSqlObjects(snapshot, lookup, resolved, file, maxRelatedSqlObjects);
@@ -783,13 +852,21 @@ async function collectReferenceContext(
   def: SymbolDef,
   referenceLimit: number,
   snippetLimit: number,
+  includeSnippets: boolean,
 ): Promise<ReferenceContext> {
   const displayLimit = Math.max(referenceLimit, snippetLimit);
   if (displayLimit <= 0) {
     return emptyReferenceContext();
   }
   const collectionLimit = displayLimit * AGENT_EXPLAIN_REFERENCE_COLLECTION_MULTIPLIER;
-  const result = await findReferences(snapshot.index, { def }, { context: "line", maxReferences: collectionLimit });
+  const result = await findReferences(
+    snapshot.index,
+    { def },
+    {
+      ...(includeSnippets ? { context: "line" as const } : {}),
+      maxReferences: collectionLimit,
+    },
+  );
   if (result.status !== "ok") return emptyReferenceContext();
 
   const references = result.references

@@ -21,6 +21,12 @@ const QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT = QUERY_INDEX_CANDIDATE_ROW_LIMIT * 4
  * legacy 999-variable limit and its 1000-level expression-depth limit. */
 const QUERY_INDEX_INLINE_TERM_LIMIT = 128;
 
+/**
+ * Eligible files are read in batches of this many, in the order given. The candidate cap and its lower-bound flag
+ * depend on where a batch ends, so retrieval keeps the batches, however many statements it reads them with.
+ */
+export const QUERY_INDEX_PATH_BATCH_SIZE = 500;
+
 export function codePointLength(value: string): number {
   return Array.from(value).length;
 }
@@ -117,9 +123,24 @@ function chunkFromRow(row: Record<string, unknown>): QueryTextChunk | null {
   };
 }
 
-function storedCandidateRowKey(row: Record<string, unknown>): string | null {
-  if (typeof row.path !== "string" || typeof row.ordinal !== "number") return null;
-  return `${row.path}\0${row.ordinal}`;
+type MatchedChunk = { chunkId: number; path: string; ordinal: number };
+
+function matchedChunkFromRow(row: readonly unknown[]): MatchedChunk | null {
+  const [chunkId, path, ordinal] = row;
+  if (typeof chunkId !== "number" || typeof path !== "string" || typeof ordinal !== "number") return null;
+  return { chunkId, path, ordinal };
+}
+
+/** The batches of `paths` that list each file. A file listed in two batches is read in both, as separate reads would. */
+function pathBatches(paths: readonly string[], batchSize: number): Map<string, number[]> {
+  const batches = new Map<string, number[]>();
+  paths.forEach((path, position) => {
+    const batch = Math.floor(position / batchSize);
+    const listed = batches.get(path);
+    if (!listed) batches.set(path, [batch]);
+    else if (listed[listed.length - 1] !== batch) listed.push(batch);
+  });
+  return batches;
 }
 
 function storedCandidateChunkFromRow(row: Record<string, unknown>): StoredQueryIndexChunk | null {
@@ -203,6 +224,7 @@ export class QueryIndexStore {
   eligibleFilePaths(normalizedTerms: readonly string[]): string[] {
     if (!normalizedTerms.length) return [];
     const paths = new Set<string>();
+    const matchedFileIds = new Set<number>();
     const shortTerms: string[] = [];
     for (const term of normalizedTerms) {
       if (codePointLength(term) < 3 || !isAscii(term)) {
@@ -212,16 +234,23 @@ export class QueryIndexStore {
       const rows = this.db
         .prepare(
           `
-          SELECT DISTINCT files.path AS path
+          SELECT DISTINCT chunks.file_id AS file_id
           FROM chunk_search
           JOIN chunks ON chunks.chunk_id = chunk_search.rowid
-          JOIN files ON files.file_id = chunks.file_id
           WHERE chunk_search MATCH ?
         `,
         )
-        .all(escapeFtsTrigramTerm(term)) as Array<{ path?: unknown }>;
+        .all(escapeFtsTrigramTerm(term)) as Array<{ file_id?: unknown }>;
       for (const row of rows) {
-        if (typeof row.path === "string") paths.add(row.path);
+        if (typeof row.file_id === "number") matchedFileIds.add(row.file_id);
+      }
+    }
+    if (matchedFileIds.size) {
+      // Paths are read once for every matching file rather than joined to each matching chunk.
+      for (const row of this.db.prepare("SELECT file_id, path FROM files").all() as Array<Record<string, unknown>>) {
+        if (typeof row.file_id === "number" && typeof row.path === "string" && matchedFileIds.has(row.file_id)) {
+          paths.add(row.path);
+        }
       }
     }
     if (shortTerms.length) {
@@ -389,6 +418,37 @@ export class QueryIndexStore {
     }
   }
 
+  /** The ids of the stored files among the given paths, as a JSON array a statement reads with `json_each`. */
+  private fileIdsOfPaths(wanted: ReadonlyMap<string, unknown>): string {
+    const ids: number[] = [];
+    const rows = this.db.prepare("SELECT file_id, path FROM files").all() as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      const listed = typeof row.path === "string" && wanted.has(row.path);
+      if (listed && typeof row.file_id === "number") ids.push(row.file_id);
+    }
+    return JSON.stringify(ids);
+  }
+
+  /** The stored rows of the given chunks, by chunk id. */
+  private chunkRowsById(chunkIds: readonly number[]): Map<number, Record<string, unknown>> {
+    const rowsById = new Map<number, Record<string, unknown>>();
+    if (!chunkIds.length) return rowsById;
+    const rows = this.db
+      .prepare(
+        `
+        SELECT chunks.chunk_id AS chunk_id, chunks.ordinal, chunks.kind, chunks.name,
+               chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+        FROM chunks
+        WHERE chunks.chunk_id IN (SELECT value FROM json_each(?))
+      `,
+      )
+      .all(JSON.stringify(chunkIds)) as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      if (typeof row.chunk_id === "number") rowsById.set(row.chunk_id, row);
+    }
+    return rowsById;
+  }
+
   candidateChunkRetrievalForTerms(
     terms: readonly string[],
     paths: readonly string[],
@@ -402,54 +462,75 @@ export class QueryIndexStore {
     if (!normalizedLimit) {
       return { chunks: [], totalCandidatesLowerBound: false };
     }
-    const candidates = new Map<string, Record<string, unknown>>();
-    const batchSize = 500;
+    const candidates = new Map<string, MatchedChunk>();
+    const batchesOfPath = pathBatches(paths, QUERY_INDEX_PATH_BATCH_SIZE);
+    const eligibleFileIds = this.fileIdsOfPaths(batchesOfPath);
     let totalCandidatesLowerBound = false;
 
+    // Every chunk that matches is read in one statement, in path order, and dealt into the batches its file is listed
+    // in. The cap and the lower-bound flag fall where reading the batches one after another puts them, without
+    // repeating the match once per batch.
     const collect = (conditions: readonly string[], parameters: readonly string[], maximum: number): void => {
-      for (let offset = 0; offset < paths.length && candidates.size < maximum; offset += batchSize) {
-        const batch = paths.slice(offset, offset + batchSize);
-        const placeholders = batch.map(() => "?").join(", ");
-        const remaining = maximum - candidates.size;
-        const requested = remaining + 1;
-        const rows = this.db
-          .prepare(
-            `
-            SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
-                   chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
-            FROM chunks
-            JOIN files ON files.file_id = chunks.file_id
-            WHERE files.path IN (${placeholders})
-              AND (${conditions.join(" AND ")})
-            ORDER BY files.path, chunks.ordinal
-            LIMIT ?
-          `,
-          )
-          .all(...batch, ...parameters, requested) as Array<Record<string, unknown>>;
-        if (rows.length === requested) totalCandidatesLowerBound = true;
-        for (const row of rows) {
-          const key = storedCandidateRowKey(row);
-          if (!key || candidates.has(key)) continue;
-          candidates.set(key, row);
+      if (candidates.size >= maximum) return;
+      const rows = this.db
+        .prepare(
+          `
+          SELECT chunks.chunk_id, files.path, chunks.ordinal
+          FROM chunks
+          JOIN files ON files.file_id = chunks.file_id
+          WHERE (${conditions.join(" AND ")})
+            AND chunks.file_id IN (SELECT value FROM json_each(?))
+          ORDER BY files.path, chunks.ordinal
+        `,
+        )
+        .raw()
+        .all(...parameters, eligibleFileIds) as unknown[][];
+      const matchesByBatch = new Map<number, MatchedChunk[]>();
+      for (const row of rows) {
+        const match = matchedChunkFromRow(row);
+        if (!match) continue;
+        for (const batch of batchesOfPath.get(match.path) ?? []) {
+          const inBatch = matchesByBatch.get(batch);
+          if (inBatch) inBatch.push(match);
+          else matchesByBatch.set(batch, [match]);
+        }
+      }
+      for (const batch of [...matchesByBatch.keys()].sort((left, right) => left - right)) {
+        if (candidates.size >= maximum) break;
+        const inBatch = matchesByBatch.get(batch) ?? [];
+        // A batch is read one row past what the cap still allows, so a read that fills it is only a lower bound.
+        const requested = maximum - candidates.size + 1;
+        if (inBatch.length >= requested) totalCandidatesLowerBound = true;
+        for (let position = 0; position < inBatch.length && position < requested; position += 1) {
+          const match = inBatch[position]!;
+          const key = `${match.path}\0${match.ordinal}`;
+          if (candidates.has(key)) continue;
+          candidates.set(key, match);
           if (candidates.size >= maximum) break;
         }
-        if (candidates.size >= maximum && offset + batchSize < paths.length) {
+        if (candidates.size >= maximum && (batch + 1) * QUERY_INDEX_PATH_BATCH_SIZE < paths.length) {
           totalCandidatesLowerBound = true;
         }
       }
     };
 
     const termCondition = (term: string): { condition: string; parameters: string[] } => {
-      const compactCondition = "instr(replace(chunks.normalized_text, ' ', ''), ?) > 0";
       if (!supportsFtsTrigramTerm(term)) {
         return {
-          condition: `(instr(chunks.normalized_text, ?) > 0 OR ${compactCondition})`,
+          condition: `(instr(chunks.normalized_text, ?) > 0 OR instr(replace(chunks.normalized_text, ' ', ''), ?) > 0)`,
           parameters: [term, term],
         };
       }
+      // A spaced match comes from the normalized-text index and a match across word boundaries from the compact-text
+      // index; both are index lookups, so no chunk text is scanned.
+      const match = escapeFtsTrigramTerm(term);
       return {
-        condition: `(chunks.chunk_id IN (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?) OR ${compactCondition})`,
-        parameters: [escapeFtsTrigramTerm(term), term],
+        condition: `chunks.chunk_id IN (
+          SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?
+          UNION
+          SELECT rowid FROM chunk_compact_search WHERE chunk_compact_search MATCH ?
+        )`,
+        parameters: [match, match],
       };
     };
 
@@ -515,8 +596,11 @@ export class QueryIndexStore {
       collect([termMatch.condition], termMatch.parameters, Math.min(normalizedLimit, candidates.size + perTermLimit));
     }
 
-    const chunks = [...candidates.values()].flatMap((row) => {
-      const chunk = storedCandidateChunkFromRow(row);
+    const matches = [...candidates.values()];
+    const rowsByChunkId = this.chunkRowsById(matches.map((match) => match.chunkId));
+    const chunks = matches.flatMap((match) => {
+      const row = rowsByChunkId.get(match.chunkId);
+      const chunk = row ? storedCandidateChunkFromRow({ ...row, path: match.path }) : null;
       return chunk ? [chunk] : [];
     });
     return {
@@ -584,42 +668,6 @@ export class QueryIndexStore {
     return candidates;
   }
 
-  compactChunkCandidates(
-    query: string,
-    paths: readonly string[],
-    limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT,
-  ): StoredQueryIndexChunk[] {
-    const normalizedLimit = normalizedCandidateLimit(limit);
-    const candidates: StoredQueryIndexChunk[] = [];
-    const batchSize = 500;
-    for (let offset = 0; offset < paths.length; offset += batchSize) {
-      const batch = paths.slice(offset, offset + batchSize);
-      const placeholders = batch.map(() => "?").join(", ");
-      const remaining = normalizedLimit - candidates.length;
-      if (remaining <= 0) break;
-      const rows = this.db
-        .prepare(
-          `
-          SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
-                 chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
-          FROM chunks
-          JOIN files ON files.file_id = chunks.file_id
-          WHERE files.path IN (${placeholders})
-            AND instr(replace(chunks.normalized_text, ' ', ''), ?) > 0
-          ORDER BY files.path, chunks.ordinal
-          LIMIT ?
-        `,
-        )
-        .all(...batch, query, remaining) as Array<Record<string, unknown>>;
-      for (const row of rows) {
-        const chunk = storedCandidateChunkFromRow(row);
-        if (chunk) candidates.push(chunk);
-        if (candidates.length >= normalizedLimit) break;
-      }
-      if (candidates.length >= normalizedLimit) break;
-    }
-    return candidates;
-  }
   checkpoint(): void {
     this.db.pragma("wal_checkpoint(TRUNCATE)");
   }

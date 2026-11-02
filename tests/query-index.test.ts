@@ -11,7 +11,11 @@ import { resolveQueryIndexPaths, resolveQueryIndexSourcePath } from "../src/agen
 import { expectedQueryIndexVersionMetadata, probeQueryIndexSqliteSupport } from "../src/agent/query-index/schema.js";
 import { SqliteDatabase } from "../src/sqlite-driver.js";
 import { ensureQueryIndex } from "../src/agent/query-index/update.js";
-import { QueryIndexStore, QUERY_INDEX_CANDIDATE_ROW_LIMIT } from "../src/agent/query-index/store.js";
+import {
+  QueryIndexStore,
+  QUERY_INDEX_CANDIDATE_ROW_LIMIT,
+  QUERY_INDEX_PATH_BATCH_SIZE,
+} from "../src/agent/query-index/store.js";
 import * as queryIndexWorkerPool from "../src/agent/query-index/worker-pool.js";
 import { buildProjectIndexIncremental } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
@@ -340,6 +344,50 @@ describe("persistent query index", () => {
       sidecarState: "updated",
       filesUpdated: 1,
     });
+  });
+
+  it("returns the same text results when only the best indexed candidates are built as when every candidate is", async () => {
+    const root = await createRepo();
+    // Many chunks match `alpha session`: an exact phrase, the words apart, one word alone, in code and in docs. Code
+    // labels sort before docs labels, so only the docs boost puts an exact-phrase docs chunk ahead of a code chunk
+    // that scores the same without it.
+    const phrases = ["alpha session", "alpha token session", "alpha only"];
+    await Promise.all(
+      Array.from({ length: 12 }, async (_, index) => {
+        const phrase = phrases[index % phrases.length]!;
+        await fs.writeFile(
+          path.join(root, "src", `mod${index}.ts`),
+          `export const aMarker${index} = '${phrase} ${index}';\nexport function aRun${index}() {\n  return '${phrase}';\n}\n`,
+        );
+        await fs.writeFile(
+          path.join(root, "docs", `note${index}.md`),
+          `# Notes ${index}\n\nThe ${phrase} is described here.\n`,
+        );
+      }),
+    );
+
+    for (const mode of ["text", "hybrid"] as const) {
+      for (const limit of [1, 3, 7]) {
+        const everyCandidate = await searchCodegraphWithSession(createSession(root), {
+          root,
+          query: "alpha session",
+          mode,
+          limit: 100,
+        });
+        const best = await searchCodegraphWithSession(createSession(root), {
+          root,
+          query: "alpha session",
+          mode,
+          limit,
+        });
+        const label = `${mode} limit ${limit}`;
+        expect(everyCandidate.totalCandidates, label).toBeGreaterThan(limit);
+        expect(best.results, label).toEqual(everyCandidate.results.slice(0, limit));
+        expect(best.totalCandidates, label).toBe(everyCandidate.totalCandidates);
+        expect(best.omittedCounts.results, label).toBe(everyCandidate.totalCandidates - limit);
+        expect(best.candidateCounts, label).toEqual(everyCandidate.candidateCounts);
+      }
+    }
   });
 
   it("updates only added and modified files while removing deleted rows", async () => {
@@ -766,7 +814,7 @@ describe("persistent query index", () => {
       type?: unknown;
     }>;
     inspected.close();
-    expect(version?.user_version).toBe(3);
+    expect(version?.user_version).toBe(4);
     expect(fileColumns).toContainEqual(expect.objectContaining({ name: "normalized_text", type: "BLOB" }));
     expect(chunkColumns).toContainEqual(expect.objectContaining({ name: "text", type: "BLOB" }));
   });
@@ -814,7 +862,7 @@ describe("persistent query index", () => {
       type?: unknown;
     }>;
     inspected.close();
-    expect(version?.user_version).toBe(3);
+    expect(version?.user_version).toBe(4);
     expect(fileColumns).toContainEqual(expect.objectContaining({ name: "normalized_text", type: "BLOB" }));
   });
 
@@ -924,6 +972,219 @@ describe("persistent query index", () => {
       storeA.close();
       storeB.close();
     }
+  });
+
+  const COMPACT_METADATA = (projectSnapshotIdentity: string) => ({
+    ...expectedQueryIndexVersionMetadata(),
+    projectSnapshotIdentity,
+    projectRootIdentity: "root-compact",
+    createdByCodegraphVersion: "test",
+    updatedAt: new Date().toISOString(),
+  });
+
+  function chunkKeys(chunks: ReadonlyArray<{ path: string; ordinal: number }>): string[] {
+    return chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`).sort();
+  }
+
+  it("finds a term that spans word boundaries through the compact-text index, only in files the term is eligible in", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-compact.sqlite"));
+    try {
+      store.replaceFiles(
+        [
+          // `getuser` is a word in the second chunk, so the file is eligible; the first chunk holds it across a space.
+          preparedFile("src/spaced.ts", ["get user data", "getuser 1", "unrelated words"]),
+          // The same run exists only across a space, so no chunk of this file has the term as a word.
+          preparedFile("src/across-only.ts", ["get user data", "other text"]),
+        ],
+        [],
+        COMPACT_METADATA("compact-1"),
+      );
+
+      const eligible = store.eligibleFilePaths(["getuser"]);
+      expect(eligible).toEqual(["src/spaced.ts"]);
+      const retrieval = store.candidateChunkRetrievalForTerms(["getuser"], eligible, "getuser");
+      expect(chunkKeys(retrieval.chunks)).toEqual(["src/spaced.ts#0", "src/spaced.ts#1"]);
+      // Asked for explicitly, the file that only holds the run across a space still answers: the index is not the filter.
+      const direct = store.candidateChunkRetrievalForTerms(["getuser"], ["src/across-only.ts"], "getuser");
+      expect(chunkKeys(direct.chunks)).toEqual(["src/across-only.ts#0"]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("returns the chunks a scan of chunk text returns for every indexable term", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-compact-scan.sqlite"));
+    try {
+      // A small vocabulary of short words makes terms that span word boundaries, repeat, and nearly match common.
+      const words = ["get", "user", "id", "set", "data", "parse", "json", "ab", "cd", "abc", "xyz", "end", "t"];
+      let seed = 20_251_101;
+      const next = (bound: number): number => {
+        seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+        return seed % bound;
+      };
+      const files: Array<{ path: string; chunks: string[]; sampled: number }> = [];
+      // Every file also holds each pair of words written as one word, so a run across a space in another chunk of the
+      // file is a term the file is eligible for.
+      const pairWords = words.flatMap((left) => words.map((right) => `${left}${right}`)).join(" ");
+      for (let fileIndex = 0; fileIndex < 7; fileIndex += 1) {
+        const chunks: string[] = [];
+        for (let chunk = 0; chunk < 3 + next(4); chunk += 1) {
+          chunks.push(Array.from({ length: 1 + next(6) }, () => words[next(words.length)]!).join(" "));
+        }
+        files.push({ path: `src/file-${fileIndex}.ts`, chunks: [...chunks, pairWords], sampled: chunks.length });
+      }
+      store.replaceFiles(
+        files.map((file) => preparedFile(file.path, file.chunks)),
+        [],
+        COMPACT_METADATA("compact-scan"),
+      );
+
+      const terms = new Set<string>(["getuser", "userid", "zzzz", "setdata", "parsejson", "abcd"]);
+      for (const file of files) {
+        for (const chunk of file.chunks.slice(0, file.sampled)) {
+          const compact = chunk.replaceAll(" ", "");
+          for (let start = 0; start + 3 <= compact.length; start += 2) {
+            terms.add(compact.slice(start, start + 3 + (start % 3)));
+          }
+        }
+      }
+
+      let spanning = 0;
+      for (const term of terms) {
+        const eligible = store.eligibleFilePaths([term]);
+        const eligibleScan = files
+          .filter((file) => file.chunks.some((chunk) => chunk.includes(term)))
+          .map((file) => file.path)
+          .sort((left, right) => left.localeCompare(right));
+        expect(eligible, term).toEqual(eligibleScan);
+
+        const expected: string[] = [];
+        for (const file of files) {
+          if (!eligibleScan.includes(file.path)) continue;
+          file.chunks.forEach((chunk, ordinal) => {
+            const compact = chunk.replaceAll(" ", "");
+            if (chunk.includes(term) || compact.includes(term)) expected.push(`${file.path}#${ordinal}`);
+            if (!chunk.includes(term) && compact.includes(term)) spanning += 1;
+          });
+        }
+        const retrieval = store.candidateChunkRetrievalForTerms([term], eligible, term, 8000);
+        expect(chunkKeys(retrieval.chunks), term).toEqual(expected.sort());
+      }
+      expect(terms.size).toBeGreaterThan(40);
+      expect(spanning).toBeGreaterThan(10);
+    } finally {
+      store.close();
+    }
+  });
+
+  function createVersion3Sidecar(databasePath: string): void {
+    const v3 = new SqliteDatabase(databasePath);
+    v3.exec(`
+      CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+      CREATE TABLE files(
+        file_id INTEGER PRIMARY KEY,
+        path TEXT NOT NULL UNIQUE,
+        source_identity TEXT NOT NULL,
+        surface TEXT NOT NULL,
+        language TEXT,
+        normalized_text BLOB NOT NULL,
+        byte_length INTEGER NOT NULL,
+        line_count INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE chunks(
+        chunk_id INTEGER PRIMARY KEY,
+        file_id INTEGER NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        text BLOB NOT NULL,
+        normalized_text TEXT NOT NULL,
+        UNIQUE(file_id, ordinal)
+      ) STRICT;
+      CREATE INDEX chunks_file_id_idx ON chunks(file_id);
+      CREATE VIRTUAL TABLE chunk_search USING fts5(
+        normalized_text, content='chunks', content_rowid='chunk_id', tokenize='trigram'
+      );
+      CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+        INSERT INTO chunk_search(rowid, normalized_text) VALUES (new.chunk_id, new.normalized_text);
+      END;
+      CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
+        INSERT INTO chunk_search(chunk_search, rowid, normalized_text)
+        VALUES ('delete', old.chunk_id, old.normalized_text);
+      END;
+      CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
+        INSERT INTO chunk_search(chunk_search, rowid, normalized_text)
+        VALUES ('delete', old.chunk_id, old.normalized_text);
+        INSERT INTO chunk_search(rowid, normalized_text) VALUES (new.chunk_id, new.normalized_text);
+      END;
+      INSERT INTO metadata(key, value) VALUES ('schemaVersion', '3'), ('projectSnapshotIdentity', 'old-snapshot');
+    `);
+    v3.prepare(
+      "INSERT INTO files(path, source_identity, surface, language, normalized_text, byte_length, line_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run("src/old.ts", "old", "code", "typescript", compressQueryText("get user data\ngetuser 1"), 24, 2);
+    const insertChunk = v3.prepare(
+      "INSERT INTO chunks(file_id, ordinal, kind, name, start_line, end_line, text, normalized_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    insertChunk.run(1, 0, "source", null, 1, 1, compressQueryText("get user data"), "get user data");
+    insertChunk.run(1, 1, "source", null, 2, 2, compressQueryText("getuser 1"), "getuser 1");
+    v3.exec("PRAGMA user_version = 3;");
+    v3.close();
+  }
+
+  it("backfills the compact-text index of a version 3 sidecar and keeps its rows", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-v3.sqlite");
+    createVersion3Sidecar(databasePath);
+
+    const migrated = new QueryIndexStore(databasePath);
+    try {
+      expect([...migrated.sourceIdentities()]).toEqual([["src/old.ts", "old"]]);
+      expect(migrated.metadata().schemaVersion).toBe(expectedQueryIndexVersionMetadata().schemaVersion);
+      // The pre-existing chunk that holds the run across a space is found through the backfilled index.
+      const retrieval = migrated.candidateChunkRetrievalForTerms(["getuser"], ["src/old.ts"], "getuser");
+      expect(chunkKeys(retrieval.chunks)).toEqual(["src/old.ts#0", "src/old.ts#1"]);
+
+      // Rows written and removed after the upgrade keep the compact index in step through the triggers.
+      migrated.replaceFiles(
+        [preparedFile("src/new.ts", ["xyzzy plugh", "zzyp 2"])],
+        ["src/old.ts"],
+        COMPACT_METADATA("after-migration"),
+      );
+      const added = migrated.candidateChunkRetrievalForTerms(["zzyp"], ["src/new.ts"], "zzyp");
+      expect(chunkKeys(added.chunks)).toEqual(["src/new.ts#0", "src/new.ts#1"]);
+      const removed = migrated.candidateChunkRetrievalForTerms(["getuser"], ["src/old.ts", "src/new.ts"], "getuser");
+      expect(removed.chunks).toEqual([]);
+    } finally {
+      migrated.close();
+    }
+
+    const inspected = new SqliteDatabase(databasePath, { readonly: true });
+    const version = inspected.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
+    const compactRows = inspected.prepare("SELECT count(*) AS count FROM chunk_compact_search_docsize").get() as
+      | { count?: unknown }
+      | undefined;
+    inspected.close();
+    expect(version?.user_version).toBe(4);
+    expect(compactRows?.count).toBe(2);
+  });
+
+  it("rejects a version 3 sidecar that lost a table instead of backfilling an empty index", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-v3-broken.sqlite");
+    createVersion3Sidecar(databasePath);
+    const broken = new SqliteDatabase(databasePath);
+    broken.exec("DROP TRIGGER chunks_ai; DROP TRIGGER chunks_ad; DROP TRIGGER chunks_au; DROP TABLE chunk_search;");
+    broken.close();
+
+    expect(() => new QueryIndexStore(databasePath)).toThrow(/missing: chunk_search/);
+    const inspected = new SqliteDatabase(databasePath, { readonly: true });
+    const version = inspected.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
+    inspected.close();
+    expect(version?.user_version).toBe(3);
   });
 
   it("hydrates a duplicate multi-term chunk once without changing candidate ranking", async () => {
@@ -1147,6 +1408,147 @@ describe("persistent query index", () => {
       expect(overlapResult.totalCandidates).toBe(1);
       expect(overlapResult.totalCandidatesLowerBound).toBe(false);
       expect(overlapResult.omittedCandidates).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  type PlantedFile = { path: string; chunks: string[] };
+
+  /**
+   * The candidate cap as it is defined: eligible paths are read in batches, a batch yields its matching chunks in path
+   * order, at most one more than the cap still allows, and the total is a lower bound when a read fills its allowance
+   * or the cap is met with batches left. Written as loops over the planted text, not as SQL.
+   */
+  function batchedReference(
+    files: readonly PlantedFile[],
+    terms: readonly string[],
+    paths: readonly string[],
+    phrase: string,
+    limit: number,
+  ): { keys: string[]; lowerBound: boolean } {
+    const byPath = new Map(files.map((file) => [file.path, file]));
+    const candidates = new Set<string>();
+    let lowerBound = false;
+    const hasTerm = (chunk: string, term: string): boolean =>
+      chunk.includes(term) || chunk.replaceAll(" ", "").includes(term);
+    const collect = (matches: (chunk: string) => boolean, maximum: number): void => {
+      for (let offset = 0; offset < paths.length && candidates.size < maximum; offset += QUERY_INDEX_PATH_BATCH_SIZE) {
+        const rows: string[] = [];
+        const batch = new Set(paths.slice(offset, offset + QUERY_INDEX_PATH_BATCH_SIZE));
+        for (const filePath of [...batch].sort()) {
+          byPath.get(filePath)?.chunks.forEach((chunk, ordinal) => {
+            if (matches(chunk)) rows.push(`${filePath}#${ordinal}`);
+          });
+        }
+        const requested = maximum - candidates.size + 1;
+        const read = rows.slice(0, requested);
+        if (read.length === requested) lowerBound = true;
+        for (const key of read) {
+          if (candidates.has(key)) continue;
+          candidates.add(key);
+          if (candidates.size >= maximum) break;
+        }
+        if (candidates.size >= maximum && offset + QUERY_INDEX_PATH_BATCH_SIZE < paths.length) lowerBound = true;
+      }
+    };
+    if (terms.length > 1) collect((chunk) => chunk.includes(phrase), limit);
+    if (terms.length > 1) {
+      if (candidates.size < limit) collect((chunk) => terms.every((term) => hasTerm(chunk, term)), limit);
+      else lowerBound = true;
+    }
+    const perTermLimit = Math.max(1, Math.ceil(limit / terms.length));
+    for (const term of terms) {
+      if (candidates.size >= limit) {
+        lowerBound = true;
+        break;
+      }
+      collect((chunk) => hasTerm(chunk, term), Math.min(limit, candidates.size + perTermLimit));
+    }
+    return { keys: [...candidates], lowerBound };
+  }
+
+  it("reads eligible files in batches in the order given, so the cap and lower bound fall where batch reads put them", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-batches.sqlite"));
+    // Three batches of eligible files: every file has the term `alpha`, every third `beta`, and every fifth both.
+    const files: PlantedFile[] = Array.from({ length: 1201 }, (_, index) => {
+      const name = String(index).padStart(4, "0");
+      return {
+        path: `src/f${name}.ts`,
+        chunks: [
+          `alpha item ${name}`,
+          index % 3 === 0 ? `beta item ${name}` : `plain ${name}`,
+          index % 5 === 0 ? `alpha beta ${name}` : `other ${name}`,
+        ],
+      };
+    });
+    try {
+      store.replaceFiles(
+        files.map((file) => preparedFile(file.path, file.chunks)),
+        [],
+        COMPACT_METADATA("batches"),
+      );
+      // The first batch holds the highest paths, a path the store does not hold is skipped, and the first path is
+      // listed again in the last batch.
+      const paths = files.map((file) => file.path).reverse();
+      paths.splice(3, 0, "src/not-indexed.ts");
+      paths.push(paths[0]!);
+      expect(Math.ceil(paths.length / QUERY_INDEX_PATH_BATCH_SIZE)).toBe(3);
+
+      const seenLowerBounds = new Set<boolean>();
+      const queries: Array<{ terms: string[]; phrase: string }> = [
+        { terms: ["alpha"], phrase: "alpha" },
+        { terms: ["alphaitem"], phrase: "alphaitem" },
+        { terms: ["alpha", "beta"], phrase: "alpha beta" },
+      ];
+      for (const { terms, phrase } of queries) {
+        for (const limit of [1, 2, 499, 500, 501, 1000, 1201, 2500]) {
+          const expected = batchedReference(files, terms, paths, phrase, limit);
+          const actual = store.candidateChunkRetrievalForTerms(terms, paths, phrase, limit);
+          const label = `${terms.join(" ")} limit ${limit}`;
+          expect(
+            actual.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`),
+            label,
+          ).toEqual(expected.keys);
+          expect(actual.totalCandidatesLowerBound, label).toBe(expected.lowerBound);
+          seenLowerBounds.add(expected.lowerBound);
+        }
+      }
+      expect(seenLowerBounds).toEqual(new Set([true, false]));
+
+      // With a cap of one, the chunk kept is the first of the first batch (f1200 down to f0702, in path order), not
+      // the first path overall (f0000, which sits in the last batch).
+      const first = store.candidateChunkRetrievalForTerms(["alpha"], paths, "alpha", 1);
+      expect(first.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`)).toEqual(["src/f0702.ts#0"]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("reads only the eligible files for a term the trigram index cannot answer", async () => {
+    const root = await createRepo();
+    const store = new QueryIndexStore(path.join(root, "query-short-eligible.sqlite"));
+    try {
+      store.replaceFiles(
+        [
+          preparedFile("src/a.ts", ["id one", "other words"]),
+          preparedFile("src/b.ts", ["id two"]),
+          preparedFile("src/c.ts", ["nothing here"]),
+        ],
+        [],
+        COMPACT_METADATA("short-eligible"),
+      );
+      const scoped = store.candidateChunkRetrievalForTerms(["id"], ["src/a.ts", "src/not-indexed.ts"], "id");
+      expect(chunkKeys(scoped.chunks)).toEqual(["src/a.ts#0"]);
+      expect(scoped.totalCandidatesLowerBound).toBe(false);
+
+      // Within a batch the chunks come in path order, whatever order the paths are listed in.
+      const both = store.candidateChunkRetrievalForTerms(["id"], ["src/b.ts", "src/a.ts"], "id");
+      expect(both.chunks.map((chunk) => `${chunk.path}#${chunk.ordinal}`)).toEqual(["src/a.ts#0", "src/b.ts#0"]);
+
+      const none = store.candidateChunkRetrievalForTerms(["id"], ["src/c.ts"], "id");
+      expect(none.chunks).toEqual([]);
     } finally {
       store.close();
     }

@@ -3,7 +3,7 @@ import { type AnalysisBackend, type AnalysisMode, type AnalysisSummary } from ".
 import { SymbolKind, type BuildOptions, type SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { type SymbolNode } from "../graphs/symbol-graph.js";
-import { buildSymbolLookup, type SymbolLookup as SymbolDefLookup } from "./symbol-lookup.js";
+import { buildSymbolLookup } from "./symbol-lookup.js";
 import {
   AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT,
   AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT,
@@ -22,7 +22,6 @@ import {
   formatAgentFileHandle,
   formatAgentGraphHandle,
   formatAgentSqlHandle,
-  formatAgentSymbolHandle,
   parseAgentChunkHandle,
   parseAgentFileHandle,
   parseAgentGraphHandle,
@@ -33,7 +32,6 @@ import {
   collectDefinitionFollowUps,
   collectFileFollowUps as collectCommonFileFollowUps,
   type AgentFileSnapshot,
-  isAgentSqlObjectNode,
   normalizeAgentFilePath,
   resolveAgentSnapshotFile,
 } from "./normalize.js";
@@ -54,6 +52,7 @@ import {
 } from "./query-index/content.js";
 import {
   findQueryIndexChunkCandidates,
+  firstMatchingLine,
   QUERY_INDEX_CANDIDATE_VERSION,
   type QueryIndexCandidate,
   type QueryIndexCandidateResult,
@@ -61,6 +60,24 @@ import {
 import { QUERY_INDEX_CANDIDATE_ROW_LIMIT } from "./query-index/store.js";
 import { registerSessionInvalidationHook } from "./session-lifecycle.js";
 import type { QueryIndexHandle } from "./query-index/update.js";
+import {
+  emptyTokenMatch,
+  matchTokenScore,
+  matchTokenScoreFromNormalized,
+  type SearchQueryTerms,
+  type TokenMatch,
+} from "./search-scoring.js";
+import {
+  collectFileCandidates,
+  collectSymbolCandidates,
+  getSearchFileTable,
+  getSymbolSearchIndex,
+  selectTopCandidates,
+  selectTopFileCandidates,
+  selectTopSymbolCandidates,
+  symbolHandleAt,
+  type FileCandidates,
+} from "./search-index.js";
 
 export type AgentSearchMode = "hybrid" | "symbol" | "path" | "text" | "graph" | "sql";
 
@@ -176,20 +193,6 @@ type ReachableFile = {
   relation: string;
 };
 
-type SearchQueryTerms = {
-  tokens: string[];
-  rankTokens: string[];
-  normalizedRankPhrase: string;
-  identifierLike: boolean;
-};
-
-type TokenMatch = {
-  score: number;
-  matched: string[];
-  exactPhrase: boolean;
-  proximity: boolean;
-};
-
 type SearchTextChunk = QueryTextChunk;
 
 type SearchCache = {
@@ -197,6 +200,10 @@ type SearchCache = {
   normalizedText: Map<string, Promise<string | null>>;
   textChunks: Map<string, Promise<SearchTextChunk[]>>;
   filesBySymbolName?: Map<string, Set<string>>;
+  symbolNeighbors?: Map<string, SymbolNeighbor[]>;
+  fileNeighbors?: Map<string, FileNeighbor[]>;
+  /** Project-relative display paths by source path, so neighbors do not resolve one path many times. */
+  relativePaths: Map<string, string>;
 };
 
 const DEFAULT_LIMIT = 20;
@@ -328,39 +335,40 @@ async function searchSnapshot(
   const query = buildQueryTerms(request.query, snapshot);
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
-  let fileNeighborIndex: Map<string, FileNeighbor[]> | undefined;
   let indexedTextCandidateResult: QueryIndexCandidateResult | undefined;
-  const getFileNeighborIndex = (): Map<string, FileNeighbor[]> => {
-    fileNeighborIndex ??= buildFileNeighborIndex(snapshot);
-    return fileNeighborIndex;
-  };
+  // Candidates are ranked one source at a time and only the best `limit` of each become results, because the final
+  // top `limit` lies within them. The graph neighborhood re-scores every result, so it needs them all.
+  const rankedLimit = request.from !== undefined && (mode === "hybrid" || mode === "graph") ? undefined : limit;
+  let unmaterializedCandidates = 0;
 
   if (query.rankTokens.length) {
     if (mode === "sql") {
-      addSqlResults(snapshot, resultMap, getFileNeighborIndex(), query);
+      addSqlResults(snapshot, resultMap, getFileNeighborIndex(snapshot), query);
     } else if (mode === "hybrid" || mode === "symbol" || mode === "graph") {
-      const symbolLookup = buildSymbolLookup(snapshot);
-      addSymbolResults(snapshot, resultMap, symbolLookup, buildSymbolNeighborIndex(snapshot), query, mode);
+      unmaterializedCandidates += addSymbolResults(snapshot, resultMap, query, mode, rankedLimit);
     }
     if (mode === "hybrid" || mode === "path" || mode === "graph") {
-      addPathResults(snapshot, resultMap, getFileNeighborIndex(), query);
+      unmaterializedCandidates += addPathResults(snapshot, resultMap, query, rankedLimit);
     }
     if (mode === "hybrid" || mode === "text") {
-      indexedTextCandidateResult = await addTextResults(
+      const textResults = await addTextResults(
         snapshot,
         resultMap,
         query,
         request.includeSnippets ?? true,
         mode,
+        rankedLimit,
         queryIndex,
       );
+      indexedTextCandidateResult = textResults.candidateResult;
+      unmaterializedCandidates += textResults.unmaterializedCandidates;
     }
   }
   if (request.from !== undefined && (mode === "hybrid" || mode === "graph")) {
     applyGraphNeighborhood(
       snapshot,
       resultMap,
-      getFileNeighborIndex(),
+      getFileNeighborIndex(snapshot),
       getFilesBySymbolName(snapshot),
       query,
       request.from,
@@ -368,7 +376,7 @@ async function searchSnapshot(
     );
   }
 
-  const selectedResults = selectTopResults(resultMap, limit);
+  const selectedResults = selectTopResults(resultMap, limit, unmaterializedCandidates);
   const results = selectedResults.items.map(finalizeResult);
 
   return {
@@ -455,12 +463,15 @@ function searchPathOnly(
   const query = buildQueryTerms(request.query, { root, files });
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
+  let unmaterializedCandidates = 0;
 
   if (query.tokens.length) {
-    for (const file of files) {
-      const relFile = normalizeAgentFilePath(root, file);
-      const pathMatch = matchTokenScore(relFile, query);
-      if (pathMatch.score <= 0) continue;
+    const candidates = collectFileCandidates(getSearchFileTable(root, files), query);
+    const selected = rankFileCandidates(candidates, limit);
+    unmaterializedCandidates = candidates.slots.length - selected.length;
+    for (const position of selected) {
+      const relFile = candidates.table.relative[candidates.slots[position]!]!;
+      const pathMatch = candidates.matches[position]!;
 
       const result = upsertResult(resultMap, {
         handle: formatAgentFileHandle({ file: relFile }),
@@ -480,7 +491,7 @@ function searchPathOnly(
     }
   }
 
-  const selectedResults = selectTopResults(resultMap, limit);
+  const selectedResults = selectTopResults(resultMap, limit, unmaterializedCandidates);
   const results = selectedResults.items.map(finalizeResult);
 
   return {
@@ -572,100 +583,45 @@ function isIdentifierLikeQuery(input: string): boolean {
   return /^[A-Za-z_$][A-Za-z0-9_$]*(?:[.#:][A-Za-z_$][A-Za-z0-9_$]*)*$/.test(trimmed);
 }
 
-function emptyTokenMatch(): TokenMatch {
-  return { score: 0, matched: [], exactPhrase: false, proximity: false };
-}
-
-function matchTokenScore(text: string, query: SearchQueryTerms): TokenMatch {
-  const normalized = normalizeSearchText(text);
-  return matchTokenScoreFromNormalized(normalized, query);
-}
-
-function matchTokenScoreFromNormalized(normalized: string, query: SearchQueryTerms): TokenMatch {
-  if (!normalized) return emptyTokenMatch();
-  const words = new Set(normalized.split(/\s+/).filter(Boolean));
-  const compact = normalized.replace(/\s+/g, "");
-  const matched: string[] = [];
-  let score = 0;
-
-  for (const token of query.rankTokens) {
-    if (words.has(token)) {
-      score += 10;
-      matched.push(token);
-    } else if (compact.includes(token)) {
-      score += 7;
-      matched.push(token);
-    } else if (normalized.includes(token)) {
-      score += 4;
-      matched.push(token);
-    }
-  }
-
-  let exactPhrase = false;
-  let proximity = false;
-  if (matched.length === query.rankTokens.length && query.rankTokens.length > 1) {
-    score += 12;
-    if (normalized.includes(query.normalizedRankPhrase)) {
-      score += 30;
-      exactPhrase = true;
-    } else if (tokensAppearInOrder(normalized, query.rankTokens)) {
-      score += 10;
-      proximity = true;
-    }
-  }
-
-  return { score, matched, exactPhrase, proximity };
-}
-
-function tokensAppearInOrder(normalizedText: string, tokens: readonly string[]): boolean {
-  let fromIndex = 0;
-  for (const token of tokens) {
-    const tokenIndex = normalizedText.indexOf(token, fromIndex);
-    if (tokenIndex < 0) return false;
-    fromIndex = tokenIndex + token.length;
-  }
-  return true;
-}
-
+/** Adds the best symbol results; returns how many scoring symbols were left unmaterialized below them. */
 function addSymbolResults(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
-  lookup: SymbolDefLookup,
-  neighborsBySymbolId: Map<string, SymbolNeighbor[]>,
   query: SearchQueryTerms,
   mode: AgentSearchMode,
-): void {
-  for (const node of snapshot.symbolGraph.nodes.values()) {
-    const sqlObject = isAgentSqlObjectNode(node);
-    if (mode === "sql" && !sqlObject) continue;
-    if (mode === "symbol" && sqlObject) continue;
+  limit: number | undefined,
+): number {
+  const lookup = buildSymbolLookup(snapshot);
+  const index = getSymbolSearchIndex(snapshot);
+  const candidates = collectSymbolCandidates(index, lookup.exportedIds, query, mode !== "symbol");
+  // Symbols that share a handle merge into one result, which only materializing every candidate reproduces.
+  const selected =
+    limit === undefined || index.handleCollisions
+      ? candidates.slots.map((_, position) => position)
+      : selectTopSymbolCandidates(candidates, limit);
+  const neighborsBySymbolId = selected.length ? getSymbolNeighborIndex(snapshot) : undefined;
 
-    const nameMatch = matchTokenScore(node.name, query);
-    const fileMatch = matchTokenScore(normalizeAgentFilePath(snapshot.root, node.file), query);
-    const docMatch = node.docstring ? matchTokenScore(node.docstring, query) : emptyTokenMatch();
-    const score = nameMatch.score * 4 + fileMatch.score + docMatch.score;
-    if (score <= 0) continue;
+  for (const position of selected) {
+    const slot = candidates.slots[position]!;
+    const node = index.nodes[slot]!;
+    const def = index.defs[slot]!;
+    const sqlObject = index.sqlObject[slot] === 1;
+    const fileId = index.fileIds[slot]!;
+    const docId = index.docIds[slot]!;
+    const relFile = index.relativeFiles[fileId]!;
+    const nameMatch = candidates.nameMatches[index.nameIds[slot]!] ?? emptyTokenMatch();
+    const fileMatch = candidates.fileMatches[fileId] ?? emptyTokenMatch();
+    const docMatch = (docId >= 0 ? candidates.docMatches[docId] : undefined) ?? emptyTokenMatch();
 
-    const def = lookup.defById.get(node.id);
-    if (!def) continue;
-    const relFile = normalizeAgentFilePath(snapshot.root, node.file);
-    const handle = sqlObject
-      ? formatAgentSqlHandle({ name: node.name, file: relFile, line: def.range.start.line })
-      : formatAgentSymbolHandle({
-          file: relFile,
-          name: node.name,
-          line: def.range.start.line,
-          column: def.range.start.column,
-        });
     const result = upsertResult(resultMap, {
-      handle,
+      handle: symbolHandleAt(index, slot),
       kind: sqlObject ? "sql_object" : "symbol",
       label: node.name,
       file: relFile,
       range: def.range,
       provenance: createSearchProvenance(relFile, "semantic", "high", snapshot.analysis),
     });
-    result.score += score + (lookup.exportedIds.has(node.id) ? 5 : 0);
+    result.score += candidates.scores[position]!;
     addMatchedRankTerms(result, nameMatch, fileMatch, docMatch);
     if (nameMatch.matched.length) {
       addReason(result, `${sqlObject ? "SQL object" : "symbol"} token match: ${nameMatch.matched.join(", ")}`);
@@ -684,9 +640,10 @@ function addSymbolResults(
     }
     addPhraseReasons(result, nameMatch, "symbol name");
     addPhraseReasons(result, docMatch, "docstring");
-    addSymbolNeighbors(snapshot, result, neighborsBySymbolId.get(node.id) ?? []);
+    addSymbolNeighbors(snapshot, result, neighborsBySymbolId?.get(node.id) ?? []);
     addSymbolFollowUps(result, relFile, def);
   }
+  return candidates.slots.length - selected.length;
 }
 
 function addSqlResults(
@@ -747,16 +704,29 @@ function isSqlObjectSymbol(symbol: SymbolDef): boolean {
   );
 }
 
+/** Candidate positions to turn into results: every one when the caller needs them all, else the best `limit`. */
+function rankFileCandidates(candidates: FileCandidates, limit: number | undefined): number[] {
+  // Files that share a relative path merge into one result, which only materializing every candidate reproduces.
+  if (limit === undefined || !candidates.table.uniqueRelative) return candidates.slots.map((_, position) => position);
+  return selectTopFileCandidates(candidates, limit);
+}
+
+/** Adds the best file results; returns how many scoring files were left unmaterialized below them. */
 function addPathResults(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
-  fileNeighborIndex: Map<string, FileNeighbor[]>,
   query: SearchQueryTerms,
-): void {
-  for (const file of snapshot.files) {
-    const relFile = normalizeAgentFilePath(snapshot.root, file);
-    const pathMatch = matchTokenScore(relFile, query);
-    if (pathMatch.score <= 0) continue;
+  limit: number | undefined,
+): number {
+  const candidates = collectFileCandidates(getSearchFileTable(snapshot.root, snapshot.files), query);
+  const selected = rankFileCandidates(candidates, limit);
+  const fileNeighborIndex = selected.length ? getFileNeighborIndex(snapshot) : undefined;
+
+  for (const position of selected) {
+    const slot = candidates.slots[position]!;
+    const file = candidates.table.files[slot]!;
+    const relFile = candidates.table.relative[slot]!;
+    const pathMatch = candidates.matches[position]!;
 
     const result = upsertResult(resultMap, {
       handle: formatAgentFileHandle({ file: relFile }),
@@ -769,9 +739,10 @@ function addPathResults(
     addMatchedRankTerms(result, pathMatch);
     addReason(result, `path token match: ${pathMatch.matched.join(", ")}`);
     addEvidence(result, { source: "path", label: relFile, file: relFile });
-    addFileNeighbors(snapshot, result, fileNeighborIndex.get(normalizePath(file)) ?? []);
+    addFileNeighbors(snapshot, result, fileNeighborIndex?.get(normalizePath(file)) ?? []);
     addFileFollowUps(result, relFile);
   }
+  return candidates.slots.length - selected.length;
 }
 
 function mergeSearchResults(
@@ -789,20 +760,28 @@ function mergeSearchResults(
   }
 }
 
+type TextResultsOutcome = {
+  candidateResult: QueryIndexCandidateResult | undefined;
+  /** Scoring indexed candidates left unmaterialized below the best `limit`. */
+  unmaterializedCandidates: number;
+};
+
 async function addTextResults(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
   query: SearchQueryTerms,
   includeSnippets: boolean,
   mode: AgentSearchMode,
+  limit: number | undefined,
   queryIndex?: QueryIndexHandle,
-): Promise<QueryIndexCandidateResult | undefined> {
+): Promise<TextResultsOutcome> {
   const projectSnapshotIdentity = snapshot.index.projectSnapshotIdentity;
   const store = queryIndex?.store;
   const diagnostics = queryIndex?.diagnostics;
   if (store && diagnostics && projectSnapshotIdentity) {
     const candidateResultMap = new Map<string, MutableSearchResult>();
     try {
+      let unmaterializedCandidates = 0;
       const candidateResult = store.withReadSnapshot(projectSnapshotIdentity, () => {
         const candidateStarted = performance.now();
         const candidateSearch = findQueryIndexChunkCandidates(store, query.rankTokens, query.normalizedRankPhrase);
@@ -810,12 +789,17 @@ async function addTextResults(
         diagnostics.candidateMs += performance.now() - candidateStarted;
         diagnostics.fileCandidates += new Set(candidateChunks.map((chunk) => chunk.path)).size;
         diagnostics.chunkCandidates += candidateChunks.length;
-        const allowedPaths = new Set(snapshot.files.map((file) => normalizeAgentFilePath(snapshot.root, file)));
-        const scoringStarted = performance.now();
+        const allowedPaths = getSearchFileTable(snapshot.root, snapshot.files).relativeSet;
         for (const candidate of candidateChunks) {
           if (!allowedPaths.has(candidate.path)) {
             throw new Error(`Query index returned an out-of-snapshot path: ${candidate.path}`);
           }
+        }
+        const scoringStarted = performance.now();
+        const selected = rankTextCandidates(candidateChunks, query, mode, limit);
+        unmaterializedCandidates = candidateChunks.length - selected.length;
+        for (const position of selected) {
+          const candidate = candidateChunks[position]!;
           addTextFileResults(
             snapshot,
             candidateResultMap,
@@ -831,7 +815,7 @@ async function addTextResults(
         return candidateSearch;
       });
       mergeSearchResults(resultMap, candidateResultMap);
-      return candidateResult;
+      return { candidateResult, unmaterializedCandidates };
     } catch (error) {
       diagnostics.sidecarState = "unavailable";
       diagnostics.fallbackReason = errorMessage(error);
@@ -854,7 +838,53 @@ async function addTextResults(
     if (!fallback) continue;
     addTextFileResults(snapshot, resultMap, query, includeSnippets, mode, fallback.relFile, fallback.chunks);
   }
-  return undefined;
+  return { candidateResult: undefined, unmaterializedCandidates: 0 };
+}
+
+function textChunkLabel(relFile: string, chunk: { name?: string | undefined; startLine: number }): string {
+  return chunk.name ? `${chunk.name} (${relFile})` : `${relFile}:${chunk.startLine}`;
+}
+
+/** Candidate positions to turn into results: every one when the caller needs them all, else the best `limit`. */
+function rankTextCandidates(
+  candidates: readonly QueryIndexCandidate[],
+  query: SearchQueryTerms,
+  mode: AgentSearchMode,
+  limit: number | undefined,
+): number[] {
+  const every = candidates.map((_, position) => position);
+  if (limit === undefined) return every;
+  // Chunks that start on one line share a handle and merge into one result, which only building every candidate
+  // reproduces.
+  const starts = new Set<string>();
+  for (const candidate of candidates) {
+    const start = `${candidate.path}\0${candidate.startLine}`;
+    if (starts.has(start)) return every;
+    starts.add(start);
+  }
+  const scores = candidates.map(
+    (candidate) =>
+      candidate.score.score + textResultBoost(candidate.score, isDocumentationFile(candidate.path), query, mode),
+  );
+  return selectTopCandidates(candidates.length, limit, (left, right) => {
+    const leftCandidate = candidates[left]!;
+    const rightCandidate = candidates[right]!;
+    const scoreDelta = scores[right]! - scores[left]!;
+    if (scoreDelta !== 0) return scoreDelta;
+    const coverageDelta = rightCandidate.score.matched.length - leftCandidate.score.matched.length;
+    if (coverageDelta !== 0) return coverageDelta;
+    const labelDelta = compareCodeUnits(
+      textChunkLabel(leftCandidate.path, leftCandidate),
+      textChunkLabel(rightCandidate.path, rightCandidate),
+    );
+    if (labelDelta !== 0) return labelDelta;
+    const fileDelta = compareCodeUnits(leftCandidate.path, rightCandidate.path);
+    if (fileDelta !== 0) return fileDelta;
+    return compareCodeUnits(
+      formatAgentChunkHandle({ file: leftCandidate.path, line: leftCandidate.startLine }),
+      formatAgentChunkHandle({ file: rightCandidate.path, line: rightCandidate.startLine }),
+    );
+  });
 }
 
 function addTextFileResults(
@@ -876,7 +906,7 @@ function addTextFileResults(
     const result = upsertResult(resultMap, {
       handle,
       kind: "chunk",
-      label: chunk.name ? `${chunk.name} (${relFile})` : `${relFile}:${chunk.startLine}`,
+      label: textChunkLabel(relFile, chunk),
       file: relFile,
       range: {
         start: { line: chunk.startLine, column: 0 },
@@ -895,13 +925,20 @@ function addTextFileResults(
     addMatchedRankTerms(result, match);
     addReason(result, `text token match: ${match.matched.join(", ")}`);
     addPhraseReasons(result, match, documentationFile ? "docs text" : "text");
-    addEvidence(result, {
+    const evidence: AgentSearchEvidence = {
       source: "chunk",
       label: result.label,
       file: relFile,
       line: chunk.startLine,
-      ...(includeSnippets ? { snippet: makeSnippet(chunk.text, query, candidate?.matchedLine) } : {}),
-    });
+    };
+    if (includeSnippets) {
+      // An indexed candidate reads its text for the first line that scores; that line sits in the snippet.
+      const matchedLine = candidate
+        ? firstMatchingLine(chunk.text, query.rankTokens, query.normalizedRankPhrase)
+        : undefined;
+      evidence.snippet = makeSnippet(chunk.text, query, matchedLine);
+    }
+    addEvidence(result, evidence);
     addFileFollowUps(result, relFile);
   }
 }
@@ -953,10 +990,34 @@ function getSearchCache(snapshot: AgentProjectSnapshot): SearchCache {
     fileText: new Map(),
     normalizedText: new Map(),
     textChunks: new Map(),
+    relativePaths: new Map(),
   };
   SEARCH_CACHES.set(snapshot, created);
   return created;
 }
+
+function getSymbolNeighborIndex(snapshot: AgentProjectSnapshot): Map<string, SymbolNeighbor[]> {
+  const cache = getSearchCache(snapshot);
+  cache.symbolNeighbors ??= buildSymbolNeighborIndex(snapshot);
+  return cache.symbolNeighbors;
+}
+
+function getFileNeighborIndex(snapshot: AgentProjectSnapshot): Map<string, FileNeighbor[]> {
+  const cache = getSearchCache(snapshot);
+  cache.fileNeighbors ??= buildFileNeighborIndex(snapshot);
+  return cache.fileNeighbors;
+}
+
+function relativeSearchPath(snapshot: AgentProjectSnapshot, file: string): string {
+  const { relativePaths } = getSearchCache(snapshot);
+  let relFile = relativePaths.get(file);
+  if (relFile === undefined) {
+    relFile = normalizeAgentFilePath(snapshot.root, file);
+    relativePaths.set(file, relFile);
+  }
+  return relFile;
+}
+
 function getFilesBySymbolName(snapshot: AgentProjectSnapshot): Map<string, Set<string>> {
   const cache = getSearchCache(snapshot);
   if (cache.filesBySymbolName) return cache.filesBySymbolName;
@@ -1259,7 +1320,7 @@ function addSymbolNeighbors(
   neighbors: readonly SymbolNeighbor[],
 ): void {
   for (const neighbor of neighbors) {
-    const relFile = normalizeAgentFilePath(snapshot.root, neighbor.target.file);
+    const relFile = relativeSearchPath(snapshot, neighbor.target.file);
     const key = `${neighbor.key}:${neighbor.target.id}`;
     result.neighbors.set(key, {
       relation: neighbor.relation,
@@ -1275,7 +1336,7 @@ function addFileNeighbors(
   neighbors: readonly FileNeighbor[],
 ): void {
   for (const neighbor of neighbors) {
-    const relFile = normalizeAgentFilePath(snapshot.root, neighbor.file);
+    const relFile = relativeSearchPath(snapshot, neighbor.file);
     result.neighbors.set(`${neighbor.relation}:${relFile}`, {
       relation: neighbor.relation,
       target: relFile,
@@ -1324,12 +1385,14 @@ function capabilityRank(capability: AgentSearchResult["provenance"]["capability"
   return 2;
 }
 
+/** Ranks the materialized results; `unmaterializedCandidates` counts scoring candidates ranked below them. */
 function selectTopResults(
   resultMap: Map<string, MutableSearchResult>,
   limit: number,
+  unmaterializedCandidates: number,
 ): { items: MutableSearchResult[]; totalCandidates: number; omitted: number } {
   const top: MutableSearchResult[] = [];
-  let totalCandidates = 0;
+  let totalCandidates = unmaterializedCandidates;
 
   for (const result of resultMap.values()) {
     if (result.score <= 0) continue;
