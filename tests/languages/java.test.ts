@@ -7,7 +7,7 @@ import { buildProjectIndex, findReferences, goToDefinition } from "../../src/ind
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { defNodeId } from "../../src/graphs/symbol-graph.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/worker/native-extract-worker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/native/source-limits.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
 

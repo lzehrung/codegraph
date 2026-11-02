@@ -8,9 +8,9 @@ import {
   createNativeExtractor,
   DEFAULT_NATIVE_MAX_PROJECTED_DEPTH,
   DEFAULT_NATIVE_MAX_PROJECTED_NODES,
-  DEFAULT_NATIVE_SOURCE_MAX_BYTES,
   runExtractionBatch,
 } from "../src/worker/native-extract-worker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/native/source-limits.js";
 import { buildProjectIndex, buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { cacheSignatureForFile, fileSignature, writeToCache } from "../src/indexer/build-cache/module-cache.js";
 import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";

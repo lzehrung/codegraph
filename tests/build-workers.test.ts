@@ -11,11 +11,8 @@ import {
 } from "../src/indexer/build-workers.js";
 import { attemptParsePreparedFileContext, prepareFileForIndexing } from "../src/indexer/parse-context.js";
 import type { BuildReport } from "../src/indexer/types.js";
-import {
-  createNativeExtractor,
-  DEFAULT_NATIVE_SOURCE_MAX_BYTES,
-  type NativeExtractTask,
-} from "../src/worker/native-extract-worker.js";
+import { createNativeExtractor, type NativeExtractTask } from "../src/worker/native-extract-worker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/native/source-limits.js";
 
 const tempDirs: string[] = [];
 

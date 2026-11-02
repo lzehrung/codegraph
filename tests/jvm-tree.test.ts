@@ -21,7 +21,7 @@ import {
 } from "../src/util/jvm-tree.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { parseSyntaxTree, type JvmLanguageId } from "../src/util/syntax-tree.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/worker/native-extract-worker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/native/source-limits.js";
 
 function treeFor(languageId: JvmLanguageId, source: string): SyntaxTreeLike {
   const tree = parseSyntaxTree(source, supportById(languageId)!).tree;

@@ -31,7 +31,12 @@ import {
   type SyntaxTreeResult,
 } from "../util/syntax-tree.js";
 import { applyCsharpImportDirective, applyJvmImportDirective } from "./imports/import-binding-tables.js";
-import type { ImportDegradedHook, ImportResolverOptions, ResolvedImportTarget } from "./imports/context.js";
+import type {
+  ImportDegradedHook,
+  ImportResolver,
+  ImportResolverOptions,
+  ResolvedImportTarget,
+} from "./imports/context.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./imports/binding-ranges.js";
 import { collectGraphOnlyImports } from "./imports/graph-only.js";
 import { collectJsTextValueRequireImports } from "./imports/js-text-imports.js";
@@ -44,6 +49,98 @@ import { collectNativeCaptureImportBindings } from "./imports/native-captures.js
 import { collectPythonImportsFromNativeMatches } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
 import type { ImportBinding } from "./types.js";
+
+/** Inputs of a file's import resolver: everything that decides where an import specifier resolves. */
+export type ImportResolutionOptions = {
+  graphOptions?: GraphBuildOptions;
+  logLevel?: LogLevel;
+  languageExtensions?: LanguageExtensionMap;
+  workspaceConfig?: WorkspaceConfig;
+  report?: BuildReport;
+  matchPath?: MatchPathFn;
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
+};
+
+/** Resolves the imports of one file, each distinct request once. */
+export type FileImportResolver = {
+  resolve: ImportResolver;
+  /** Every file of each Java or Kotlin package wildcard the resolver matched, by import source. */
+  readonly jvmPackageFiles: ReadonlyMap<string, string[]>;
+};
+
+/** Identity of one resolution request: requests with the same key resolve once per file, to the same target. */
+export function importResolutionKey(
+  from: string,
+  phpImportType?: "class" | "function" | "const",
+  resolverOpts?: ImportResolverOptions,
+): string {
+  return `${from}\0${phpImportType ?? ""}\0${resolverOpts?.resolutionKind ?? ""}\0${resolverOpts?.includeForm ?? ""}\0${resolverOpts?.rubyLoadForm ?? ""}\0${resolverOpts?.jvmPackageWildcard ? "package" : "symbol"}\0${resolverOpts?.pathAttribute ?? ""}\0${resolverOpts?.statementStartIndex ?? ""}`;
+}
+
+/**
+ * The import resolver of one file. `collectImportsForFile` resolves through it while it extracts, and
+ * `finishModuleRecord` resolves the requests a module record deferred through it, so both resolve alike.
+ */
+export async function createFileImportResolver(
+  file: string,
+  projectRoot: string,
+  languageId: string,
+  opts?: ImportResolutionOptions,
+): Promise<FileImportResolver> {
+  let matchPath = opts?.matchPath;
+  if ((languageId === "ts" || languageId === "tsx") && !matchPath) {
+    ({ matchPath } = await loadNearestTsconfigFor(file, projectRoot, opts?.logLevel));
+  }
+  const workspaceConfig = opts?.workspaceConfig ?? (await loadWorkspaceConfig(projectRoot));
+  const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();
+  const jvmPackageFiles = new Map<string, string[]>();
+  const resolve: ImportResolver = async (from, phpImportType, resolverOpts) => {
+    const resolutionKind = resolverOpts?.resolutionKind;
+    const includeForm = resolverOpts?.includeForm;
+    const rubyLoadForm = resolverOpts?.rubyLoadForm;
+    const cacheKey = importResolutionKey(from, phpImportType, resolverOpts);
+    const cached = resolvedImportCache.get(cacheKey);
+    if (cached) return await cached;
+    const resolutionHints = opts?.graphOptions?.resolutionHints;
+    const resolved = (async (): Promise<ResolvedImportTarget> => {
+      const result = await resolveSpecifierTargets(file, from, languageId, {
+        projectRoot,
+        ...(matchPath ? { matchPath } : {}),
+        ...(workspaceConfig ? { workspaceConfig } : {}),
+        resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+        ...(resolutionHints ? { resolutionHints } : {}),
+        ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+        ...(opts?.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
+        ...(opts?.report ? { report: opts.report } : {}),
+        ...(resolverOpts?.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
+        ...(phpImportType ? { phpImportType } : {}),
+        ...(resolutionKind ? { resolutionKind } : {}),
+        ...(includeForm ? { includeForm } : {}),
+        ...(rubyLoadForm ? { rubyLoadForm } : {}),
+        ...(resolverOpts?.pathAttribute ? { pathAttribute: resolverOpts.pathAttribute } : {}),
+        ...(resolverOpts?.statementStartIndex !== undefined
+          ? { statementStartIndex: resolverOpts.statementStartIndex }
+          : {}),
+      });
+      if (result.jvmPackageMatched) {
+        jvmPackageFiles.set(
+          from,
+          result.files.map((target) => target.replace(/\\/g, "/")),
+        );
+      }
+      // JVM package files remain on the star binding; C# namespaces retain a representative.
+      if (result.files.length > 1 && (languageId === "java" || languageId === "kotlin" || languageId === "csharp")) {
+        return result.files[0]!.replace(/\\/g, "/");
+      }
+      const resolvedFile = result.files[0];
+      if (result.files.length === 1 && resolvedFile) return resolvedFile.replace(/\\/g, "/");
+      return { external: result.externalName };
+    })();
+    resolvedImportCache.set(cacheKey, resolved);
+    return await resolved;
+  };
+  return { resolve, jvmPackageFiles };
+}
 
 export async function collectImportsForFile(
   file: string,
@@ -70,6 +167,11 @@ export async function collectImportsForFile(
      * that caller should retry the source instead of reusing it.
      */
     onDegraded?: ImportDegradedHook;
+    /**
+     * Resolves the imports instead of a resolver created for this file. A module record passes one that defers each
+     * distinct request to the main thread (`module-record.ts`); every other caller omits it.
+     */
+    resolver?: FileImportResolver;
   },
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
@@ -159,68 +261,12 @@ export async function collectImportsForFile(
     return imports;
   }
 
-  let matchPath = opts?.matchPath;
-  if ((resolvedSup.id === "ts" || resolvedSup.id === "tsx") && !matchPath) {
-    ({ matchPath } = await loadNearestTsconfigFor(file, projectRoot, opts?.logLevel));
-  }
-  const workspaceConfig = opts?.workspaceConfig ?? (await loadWorkspaceConfig(projectRoot));
-  const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();
-  const jvmPackageFiles = new Map<string, string[]>();
+  const resolver = opts?.resolver ?? (await createFileImportResolver(file, projectRoot, resolvedSup.id, opts));
+  const resolveFrom = resolver.resolve;
+  const jvmPackageFiles = resolver.jvmPackageFiles;
   const jvmDeclaredPackage = jvmLanguageId && directiveTree ? jvmPackageName(directiveTree, jvmLanguageId) : null;
 
   const stylesheetLanguage = ["css", "scss", "less"].includes(resolvedSup.id);
-  const resolveFrom = async (
-    from: string,
-    phpImportType?: "class" | "function" | "const",
-    resolverOpts?: ImportResolverOptions,
-  ): Promise<ResolvedImportTarget> => {
-    const resolutionKind = resolverOpts?.resolutionKind;
-    const includeForm = resolverOpts?.includeForm;
-    const rubyLoadForm = resolverOpts?.rubyLoadForm;
-    const cacheKey = `${from}\0${phpImportType ?? ""}\0${resolutionKind ?? ""}\0${includeForm ?? ""}\0${rubyLoadForm ?? ""}\0${resolverOpts?.jvmPackageWildcard ? "package" : "symbol"}\0${resolverOpts?.pathAttribute ?? ""}\0${resolverOpts?.statementStartIndex ?? ""}`;
-    const cached = resolvedImportCache.get(cacheKey);
-    if (cached) return await cached;
-    const resolutionHints = opts?.graphOptions?.resolutionHints;
-    const resolved = (async (): Promise<ResolvedImportTarget> => {
-      const result = await resolveSpecifierTargets(file, from, resolvedSup.id, {
-        projectRoot,
-        ...(matchPath ? { matchPath } : {}),
-        ...(workspaceConfig ? { workspaceConfig } : {}),
-        resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-        ...(resolutionHints ? { resolutionHints } : {}),
-        ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
-        ...(opts?.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
-        ...(opts?.report ? { report: opts.report } : {}),
-        ...(resolverOpts?.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
-        ...(phpImportType ? { phpImportType } : {}),
-        ...(resolutionKind ? { resolutionKind } : {}),
-        ...(includeForm ? { includeForm } : {}),
-        ...(rubyLoadForm ? { rubyLoadForm } : {}),
-        ...(resolverOpts?.pathAttribute ? { pathAttribute: resolverOpts.pathAttribute } : {}),
-        ...(resolverOpts?.statementStartIndex !== undefined
-          ? { statementStartIndex: resolverOpts.statementStartIndex }
-          : {}),
-      });
-      if (result.jvmPackageMatched) {
-        jvmPackageFiles.set(
-          from,
-          result.files.map((target) => target.replace(/\\/g, "/")),
-        );
-      }
-      // JVM package files remain on the star binding; C# namespaces retain a representative.
-      if (
-        result.files.length > 1 &&
-        (resolvedSup.id === "java" || resolvedSup.id === "kotlin" || resolvedSup.id === "csharp")
-      ) {
-        return result.files[0]!.replace(/\\/g, "/");
-      }
-      const resolvedFile = result.files[0];
-      if (result.files.length === 1 && resolvedFile) return resolvedFile.replace(/\\/g, "/");
-      return { external: result.externalName };
-    })();
-    resolvedImportCache.set(cacheKey, resolved);
-    return await resolved;
-  };
   const languageContext = {
     file,
     projectRoot,

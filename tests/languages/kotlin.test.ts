@@ -9,7 +9,7 @@ import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed
 import type { ImportBinding, ProjectIndex } from "../../src/indexer/types.js";
 import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/worker/native-extract-worker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/native/source-limits.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { KOTLIN_UNICODE_NAMES } from "../helpers/kotlin-unicode-fixture.js";

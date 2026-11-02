@@ -11,7 +11,7 @@ import type { NativeFallbackReason } from "../native/contracts.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
-import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../worker/native-extract-worker.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../native/source-limits.js";
 
 export type ParsedFileContext = {
   source: string;
