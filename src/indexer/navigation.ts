@@ -77,6 +77,12 @@ import {
   resolveModuleExports,
   resolvePhpExportByImportType,
 } from "./navigation-resolve.js";
+import {
+  localExportsNamed,
+  namespaceReexportOwners,
+  referenceModuleTable,
+  reverseReachableModules,
+} from "./reference-query-index.js";
 import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import type { ScopeIndex } from "./scope.js";
@@ -831,8 +837,17 @@ async function findReferencesInternal(
     }
     return false;
   };
-  // Alias uncertainty only affects rename safety; reference and usage queries skip the scan.
-  for (const candidateModule of collectionMode === "rename" ? index.byFile.values() : []) {
+  // Alias uncertainty only affects rename safety; reference and usage queries skip the scan. Only a module that can
+  // resolve one of its exports to the definition or an equivalent declaration can hold such an alias.
+  const aliasProbeModules =
+    collectionMode === "rename"
+      ? reverseReachableModules(
+          index,
+          [definition, ...equivalentDefinitions].map((candidate) => candidate.file),
+          { throughImports: parsedContext.sup.id === "c" },
+        ).modules
+      : [];
+  for (const candidateModule of aliasProbeModules) {
     if (await hasExplicitExportAliasForDefinition(candidateModule)) {
       explicitNamespaceMemberAliasFiles.add(fileIdentityKey(candidateModule.file));
     }
@@ -1067,11 +1082,7 @@ async function findReferencesInternal(
     const namespaceTargetKeys = new Set(
       [definition, ...equivalentDefinitions].map((candidate) => fileIdentityKey(candidate.file)),
     );
-    for (const namespaceOwner of index.byFile.values()) {
-      const reexportsDefinitionAsNamespace = namespaceOwner.exports.some(
-        (entry) => entry.type === "namespaceReexport" && namespaceTargetKeys.has(fileIdentityKey(entry.fromModule)),
-      );
-      if (!reexportsDefinitionAsNamespace) continue;
+    for (const namespaceOwner of namespaceReexportOwners(index, namespaceTargetKeys)) {
       const namespaceOwnerKey = fileIdentityKey(namespaceOwner.file);
       if (namespaceOwnerKey !== fileIdentityKey(definitionFile) && !candidateFileKeys.has(namespaceOwnerKey)) {
         graphLinkedOrphans.set(namespaceOwnerKey, namespaceOwner.file);
@@ -1693,21 +1704,26 @@ async function findReferencesInternal(
     }
   }
 
-  const receiverScannedFiles: FileId[] = [];
+  // The receiver scan visits the index's modules in sorted order and stops at the collection limit, so the files it
+  // visited are a prefix of that table; coverage counts them without listing them.
+  let receiverScannedFileCount = 0;
   if (scansReceiverReferences) {
-    for (const fileId of Array.from(index.byFile.values(), (module) => module.file).sort((left, right) =>
-      left.localeCompare(right),
-    )) {
+    const canonicalNames = new Map<LanguageSupport | undefined, string>();
+    for (const entry of referenceModuleTable(index).entries) {
       if (hasReachedCollectionLimit()) break;
-      receiverScannedFiles.push(fileId);
-      const filter = index.bloomFilters?.get(fileIdentityKey(fileId));
-      const candidateSupport = supportForFileWithoutHeaderSample(fileId, index.languageExtensions);
-      // Bloom filters store folded PHP identifiers in addition to their source spelling.
-      const normalizedName = candidateSupport?.normalizeIdentifier(referenceDef.localName) ?? referenceDef.localName;
-      const canonicalName =
-        candidateSupport?.id === "php" && isPhpCaseInsensitiveSymbolKind(definition.kind)
-          ? foldPhpIdentifierCase(normalizedName)
-          : normalizedName;
+      receiverScannedFileCount += 1;
+      const fileId = entry.file;
+      const filter = index.bloomFilters?.get(entry.key);
+      let canonicalName = canonicalNames.get(entry.support);
+      if (canonicalName === undefined) {
+        // Bloom filters store folded PHP identifiers in addition to their source spelling.
+        const normalizedName = entry.support?.normalizeIdentifier(referenceDef.localName) ?? referenceDef.localName;
+        canonicalName =
+          entry.support?.id === "php" && isPhpCaseInsensitiveSymbolKind(definition.kind)
+            ? foldPhpIdentifierCase(normalizedName)
+            : normalizedName;
+        canonicalNames.set(entry.support, canonicalName);
+      }
       if (filter && !filter.mightContain(canonicalName)) continue;
       const remainingReferences = remainingCollectionSlots();
       const ranges = await collectVerifiedNamedNodeReferences(
@@ -1809,7 +1825,7 @@ async function findReferencesInternal(
 
   await attachReferenceContext(index, refs, opts);
 
-  const scannedFiles = [definitionFile, ...candidateFiles, ...receiverScannedFiles];
+  const scannedFiles = [definitionFile, ...candidateFiles];
   // Top-level implicit-unit names and C# partial / Swift shared-owner members are both bounded
   // by the source-unit relation; an unproven boundary leaves their reference set partial.
   const implicitUnitComplete =
@@ -1844,6 +1860,7 @@ async function findReferencesInternal(
     exportedNames,
     candidateFiles,
     scannedFiles,
+    receiverScannedFileCount,
     truncated,
     strategies: describeReferenceStrategies({
       languageId: parsedContext.sup.id,
@@ -2190,40 +2207,31 @@ async function cppInClassMemberEquivalentDefinitions(
   if (!expectedShape?.signature || !expectedShape.arity) return [];
 
   const equivalents = new Map<string, SymbolDef>();
-  for (const module of index.byFile.values()) {
-    for (const entry of module.exports) {
+  for (const { entry } of localExportsNamed(index, qualifiedName)) {
+    if (entry.target.kind !== SymbolKind.Function || sameDef(entry.target, def, index.languageExtensions)) continue;
+    const candidateParsed = await ensureParsedContextForIndex(index, entry.target.file);
+    const candidateNode = syntaxNodeForDefinition(candidateParsed, entry.target);
+    const candidateShape = entry.target.callable;
+    if (!candidateShape?.signature || !candidateShape.arity) continue;
+    let explicitSpecialization = false;
+    let current: SyntaxNodeLike | null = candidateNode;
+    while (current) {
       if (
-        entry.type !== "local" ||
-        entry.exportedAs !== qualifiedName ||
-        entry.target.kind !== SymbolKind.Function ||
-        sameDef(entry.target, def, index.languageExtensions)
+        current.type === "template_declaration" &&
+        /^\s*template\s*<\s*>/u.test(sliceText(current, candidateParsed.source))
       ) {
-        continue;
+        explicitSpecialization = true;
+        break;
       }
-      const candidateParsed = await ensureParsedContextForIndex(index, entry.target.file);
-      const candidateNode = syntaxNodeForDefinition(candidateParsed, entry.target);
-      const candidateShape = entry.target.callable;
-      if (!candidateShape?.signature || !candidateShape.arity) continue;
-      let explicitSpecialization = false;
-      let current: SyntaxNodeLike | null = candidateNode;
-      while (current) {
-        if (
-          current.type === "template_declaration" &&
-          /^\s*template\s*<\s*>/u.test(sliceText(current, candidateParsed.source))
-        ) {
-          explicitSpecialization = true;
-          break;
-        }
-        current = current.parent;
-      }
-      const arityMatches =
-        candidateShape.arity.minArgs === expectedShape.arity.minArgs &&
-        candidateShape.arity.maxArgs === expectedShape.arity.maxArgs;
-      if (candidateShape.signature !== expectedShape.signature && !(explicitSpecialization && arityMatches)) {
-        continue;
-      }
-      equivalents.set(referenceSiteKey(entry.target.file, entry.target.range), entry.target);
+      current = current.parent;
     }
+    const arityMatches =
+      candidateShape.arity.minArgs === expectedShape.arity.minArgs &&
+      candidateShape.arity.maxArgs === expectedShape.arity.maxArgs;
+    if (candidateShape.signature !== expectedShape.signature && !(explicitSpecialization && arityMatches)) {
+      continue;
+    }
+    equivalents.set(referenceSiteKey(entry.target.file, entry.target.range), entry.target);
   }
   return [...equivalents.values()];
 }
@@ -2266,19 +2274,10 @@ function cppNamespaceFunctionEquivalentDefinitions(
   if (!expectedShape) return [];
 
   const equivalents = new Map<string, SymbolDef>();
-  for (const module of index.byFile.values()) {
-    for (const entry of module.exports) {
-      if (
-        entry.type !== "local" ||
-        entry.exportedAs !== qualifiedName ||
-        entry.target.kind !== SymbolKind.Function ||
-        sameDef(entry.target, def, index.languageExtensions)
-      ) {
-        continue;
-      }
-      if (entry.target.callable?.signature !== expectedShape) continue;
-      equivalents.set(referenceSiteKey(entry.target.file, entry.target.range), entry.target);
-    }
+  for (const { entry } of localExportsNamed(index, qualifiedName)) {
+    if (entry.target.kind !== SymbolKind.Function || sameDef(entry.target, def, index.languageExtensions)) continue;
+    if (entry.target.callable?.signature !== expectedShape) continue;
+    equivalents.set(referenceSiteKey(entry.target.file, entry.target.range), entry.target);
   }
   return [...equivalents.values()];
 }

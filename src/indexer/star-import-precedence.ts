@@ -2,6 +2,7 @@ import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ImportBinding } from "./import-types.js";
 import { csharpShadowedStarsMayHold, resolveImported } from "./navigation-resolve.js";
+import { localExportsNamed } from "./reference-query-index.js";
 import { sameDef } from "./reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 import { createUnionFind } from "../util/collections.js";
@@ -459,13 +460,10 @@ export function findRubyReopenedConstantParts(index: ProjectIndex, def: SymbolDe
   if (!exported) return empty;
   const component = rubyLoadComponent(index, def.file);
   const parts: SymbolDef[] = [];
-  for (const mod of index.byFile.values()) {
-    if (!component.has(fileIdentityKey(mod.file))) continue;
-    for (const entry of mod.exports) {
-      if (entry.type !== "local" || entry.exportedAs !== exported || entry.target.kind !== def.kind) continue;
-      if (sameDef(entry.target, def, index.languageExtensions)) continue;
-      parts.push(entry.target);
-    }
+  for (const { module, entry } of localExportsNamed(index, exported)) {
+    if (!component.has(fileIdentityKey(module.file))) continue;
+    if (entry.target.kind !== def.kind || sameDef(entry.target, def, index.languageExtensions)) continue;
+    parts.push(entry.target);
   }
   return { parts, incomplete: false };
 }

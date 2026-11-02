@@ -33,6 +33,15 @@ import { isJvmPackageSymbolVisible } from "./declaration-visibility.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
 import { scopeNodesFor } from "./scope-nodes.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
+import {
+  coverageFacts,
+  csharpNamespaceImporters,
+  jvmModuleEntries,
+  parserReportFactsFor,
+  referenceModuleTable,
+  reverseReachableModules,
+  type FlaggedModule,
+} from "./reference-query-index.js";
 import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import {
@@ -929,7 +938,11 @@ function jsNamespaceImportReachesDefinition(
   return false;
 }
 
-function importCanReferenceDefinition(
+/**
+ * Whether one import of a module can bind `def` or a namespace that reaches it. Candidate selection tests this on the
+ * imports of the files it can reach, and the candidate-selection parity test runs it on every import of every module.
+ */
+export function importCanReferenceDefinition(
   index: ProjectIndex,
   imp: ImportBinding,
   def: SymbolDef,
@@ -981,7 +994,8 @@ function importCanReferenceDefinition(
   return exportedNames.some((exportedName) => resolvesToDefinition(exportedName));
 }
 
-function moduleExportProbeNames(
+/** The export names a module can answer for `exportedNames`: those names, the names it re-exports, and its `export *` targets'. */
+export function moduleExportProbeNames(
   index: ProjectIndex,
   moduleIndex: ModuleIndex,
   exportedNames: readonly string[],
@@ -1005,17 +1019,24 @@ function moduleExportProbeNames(
   return [...names];
 }
 
+/**
+ * The files that export `def`: its own, and every module of `universe` that resolves one of its export names
+ * to it, re-exports a name of it that the source does not resolve, or reaches it through a forwarded namespace.
+ * `universe` is the set of modules that can answer an export lookup of `def.file` at all
+ * (`reverseReachableModules`), so a module outside it is not tested.
+ */
 function filesExportingDefinition(
   index: ProjectIndex,
   def: SymbolDef,
   exportedNames: readonly string[],
   languageId: string,
+  universe: readonly ModuleIndex[],
 ): string[] {
   const files = new Map<string, string>([[fileIdentityKey(def.file), def.file]]);
   const namespaceLinks: Array<{ sourceFile: string; exportedAs: string; targetFile: string }> = [];
   // Only `export * as name from` makes `resolveExport` answer with a namespace, so a project with none has no link.
   const mayLinkNamespaces = hasNamespaceReexport(index);
-  for (const moduleIndex of index.byFile.values()) {
+  for (const moduleIndex of universe) {
     if (!moduleIndex.exports.length) continue;
     const fileId = moduleIndex.file;
     const visibleExportNames = moduleExportProbeNames(index, moduleIndex, exportedNames);
@@ -1068,43 +1089,175 @@ function filesExportingDefinition(
   }
   return [...files.values()];
 }
-function csharpNamespaceImportTargetsDefinition(index: ProjectIndex, imp: ImportBinding, def: SymbolDef): boolean {
+
+export function csharpNamespaceImportTargetsDefinition(
+  index: ProjectIndex,
+  imp: ImportBinding,
+  def: SymbolDef,
+): boolean {
   if (imp.kind !== "namespace") return false;
   const definitionDirectory = fileIdentityKey(path.posix.dirname(normalizePath(def.file)));
   const targets = csharpNamespaceImportDirectories(index).get(imp) ?? [];
   return targets.some((target) => fileIdentityKey(path.posix.dirname(normalizePath(target))) === definitionDirectory);
 }
 
-function getIndexedReferenceCandidateFiles(
-  index: ProjectIndex,
-  def: SymbolDef,
-  exportedNames: readonly string[],
-  languageId: string,
-): readonly string[] | undefined {
-  if (!index.referenceCandidates) return undefined;
-  const files = new Map<string, string>();
-  for (const exportingFile of filesExportingDefinition(index, def, exportedNames, languageId)) {
-    for (const importingFile of candidateFilesImportingTarget(index.referenceCandidates, exportingFile) ?? []) {
-      files.set(fileIdentityKey(importingFile), importingFile);
+/** Proper ancestor directories of a Python module's path, nearest first. */
+function pythonModuleAncestorDirectories(moduleStem: string): string[] {
+  const directories: string[] = [];
+  let directory = path.posix.dirname(moduleStem);
+  while (directory && !directories.includes(directory)) {
+    directories.push(directory);
+    directory = path.posix.dirname(directory);
+  }
+  return directories;
+}
+
+/** The package spellings (`dir`, `dir/`, `dir/__init__.py`, `dir/__init__.pyi`) an import of a package directory resolves to. */
+function pythonPackageTargetKeys(directory: string): string[] {
+  const trimmed = directory.replace(/\/+$/u, "");
+  return [trimmed, `${trimmed}/`, `${trimmed}/__init__.py`, `${trimmed}/__init__.pyi`].map((target) =>
+    fileIdentityKey(target),
+  );
+}
+
+/**
+ * The files a `from pkg import child` import binds as a submodule of `pkg` when it names the definition's module:
+ * the package directory that holds `child.py` or `child/__init__.py`, as a directory or as its `__init__` file.
+ */
+function pythonSubmodulePackageKeys(definitionFile: string): string[] {
+  const file = normalizePath(definitionFile);
+  if (!file.endsWith(".py") && !file.endsWith(".pyi")) return [];
+  const basename = path.posix.basename(file);
+  const initializer = basename === "__init__.py" || basename === "__init__.pyi";
+  const packageDirectory = initializer ? path.posix.dirname(path.posix.dirname(file)) : path.posix.dirname(file);
+  return pythonPackageTargetKeys(packageDirectory);
+}
+
+/** The modules that import a package which is a proper ancestor of the Python definition's module. */
+function pythonParentPackageImporters(index: ProjectIndex, definitionFile: string): ModuleIndex[] {
+  const file = normalizePath(definitionFile);
+  if (!file.endsWith(".py") && !file.endsWith(".pyi")) return [];
+  const basename = path.posix.basename(file);
+  const moduleStem =
+    basename === "__init__.py" || basename === "__init__.pyi"
+      ? path.posix.dirname(file)
+      : file.slice(0, -path.posix.extname(file).length);
+  const importerIndex = index.referenceCandidates;
+  const importers: ModuleIndex[] = [];
+  const seen = new Set<string>();
+  const visit = (moduleIndex: ModuleIndex | undefined): void => {
+    if (!moduleIndex) return;
+    const key = fileIdentityKey(moduleIndex.file);
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (pythonParentPackageNamespacePaths(moduleIndex, definitionFile).length) importers.push(moduleIndex);
+  };
+  if (!importerIndex) {
+    for (const moduleIndex of index.byFile.values()) visit(moduleIndex);
+    return importers;
+  }
+  for (const directory of pythonModuleAncestorDirectories(moduleStem)) {
+    for (const targetKey of pythonPackageTargetKeys(directory)) {
+      for (const importer of candidateFilesImportingTarget(importerIndex, targetKey) ?? []) {
+        visit(index.byFile.get(fileIdentityKey(importer)));
+      }
     }
   }
-  for (const moduleIndex of index.byFile.values()) {
-    const fileId = moduleIndex.file;
-    if (fileIdentityKey(fileId) === fileIdentityKey(def.file) || files.has(fileIdentityKey(fileId))) continue;
-    if (
-      moduleIndex.imports.some(
-        (imp) =>
-          (languageId === "csharp" && csharpNamespaceImportTargetsDefinition(index, imp, def)) ||
-          ((imp.kind === "star" ||
-            imp.kind === "namespace" ||
-            (imp.kind === "named" && (imp.mechanism === "python" || isJsTsLanguage(languageId)))) &&
-            importCanReferenceDefinition(index, imp, def, exportedNames, languageId)),
-      )
-    ) {
-      files.set(fileIdentityKey(fileId), fileId);
+  return importers;
+}
+
+type ImporterSearch = {
+  index: ProjectIndex;
+  def: SymbolDef;
+  exportedNames: readonly string[];
+  languageId: string;
+  /** The exporting files of `def` (its own included), as listed and as identity keys. */
+  exportingFileIds: readonly string[];
+  exportingFiles: ReadonlySet<string>;
+  /** Identity keys of every file that can answer an export lookup of `def` (`reverseReachableModules`). */
+  reachKeys: ReadonlySet<string>;
+};
+
+/**
+ * The files, other than the definition's own, whose imports can reach `def`, keyed by identity key.
+ *
+ * An importer of an exporting file is tested on all of its imports. A file that imports no exporting
+ * file can still reach the definition through a star, namespace, or (Python or JavaScript-family named)
+ * import of a file that answers for it without exporting it: a barrel's forwarded namespace, a C header
+ * reached through other headers, a Python package that loads the definition's module as an attribute,
+ * or a C# namespace directory. Those files are the importers of `reachKeys`, so the search visits them
+ * and nothing else; an index without an importer table keeps the scan of every module.
+ */
+function importersReachingDefinition(search: ImporterSearch): Map<string, string> {
+  const { index, def, exportedNames, languageId, exportingFileIds, exportingFiles, reachKeys } = search;
+  const definitionKey = fileIdentityKey(def.file);
+  const found = new Map<string, string>();
+  const importerIndex = index.referenceCandidates;
+
+  const importsExportingFile = (moduleIndex: ModuleIndex): boolean =>
+    moduleIndex.imports.some(
+      (imp) => typeof imp.resolved === "string" && exportingFiles.has(fileIdentityKey(imp.resolved)),
+    );
+  const reachesThroughAnyImport = (moduleIndex: ModuleIndex): boolean =>
+    importsExportingFile(moduleIndex) ||
+    moduleIndex.imports.some(
+      (imp) =>
+        (languageId === "csharp" && csharpNamespaceImportTargetsDefinition(index, imp, def)) ||
+        (typeof imp.resolved === "string" && importCanReferenceDefinition(index, imp, def, exportedNames, languageId)),
+    );
+  // Where an import can reach the definition without naming an exporting file, it names a file that answers for the
+  // definition (`reachKeys`), a JVM package wildcard that lists its files, or, in C#, a namespace directory.
+  const indirectKeys: ReadonlySet<string> =
+    languageId === "python" ? new Set([...reachKeys, ...pythonSubmodulePackageKeys(def.file)]) : reachKeys;
+  const importNamesAnsweringFile = (imp: ImportBinding): boolean =>
+    languageId === "csharp" ||
+    (imp.kind === "star" && !!imp.jvmPackageFiles) ||
+    (typeof imp.resolved === "string" && indirectKeys.has(fileIdentityKey(imp.resolved)));
+  const reachesThroughIndirectImport = (moduleIndex: ModuleIndex): boolean =>
+    moduleIndex.imports.some(
+      (imp) =>
+        (languageId === "csharp" && csharpNamespaceImportTargetsDefinition(index, imp, def)) ||
+        ((imp.kind === "star" ||
+          imp.kind === "namespace" ||
+          (imp.kind === "named" && (imp.mechanism === "python" || isJsTsLanguage(languageId)))) &&
+          importNamesAnsweringFile(imp) &&
+          importCanReferenceDefinition(index, imp, def, exportedNames, languageId)),
+    );
+
+  if (!importerIndex) {
+    for (const moduleIndex of index.byFile.values()) {
+      const key = fileIdentityKey(moduleIndex.file);
+      if (key !== definitionKey && reachesThroughAnyImport(moduleIndex)) found.set(key, moduleIndex.file);
+    }
+    return found;
+  }
+
+  const tested = new Set<string>();
+  for (const exportingFile of exportingFileIds) {
+    for (const importer of candidateFilesImportingTarget(importerIndex, exportingFile) ?? []) {
+      const key = fileIdentityKey(importer);
+      if (key === definitionKey || tested.has(key)) continue;
+      tested.add(key);
+      const moduleIndex = index.byFile.get(key);
+      if (moduleIndex && reachesThroughAnyImport(moduleIndex)) found.set(key, importer);
     }
   }
-  return [...files.values()].sort((left, right) => left.localeCompare(right));
+  const testIndirect = (importer: string): void => {
+    const key = fileIdentityKey(importer);
+    if (key === definitionKey || tested.has(key)) return;
+    tested.add(key);
+    const moduleIndex = index.byFile.get(key);
+    if (moduleIndex && reachesThroughIndirectImport(moduleIndex)) found.set(key, importer);
+  };
+  for (const targetKey of indirectKeys) {
+    if (exportingFiles.has(targetKey)) continue;
+    for (const importer of candidateFilesImportingTarget(importerIndex, targetKey) ?? []) testIndirect(importer);
+  }
+  if (languageId === "csharp") {
+    const definitionDirectory = fileIdentityKey(path.posix.dirname(normalizePath(def.file)));
+    for (const importer of csharpNamespaceImporters(index).get(definitionDirectory) ?? []) testIndirect(importer.file);
+  }
+  return found;
 }
 
 export function getCachedReferenceCandidateFiles(
@@ -1113,16 +1266,14 @@ export function getCachedReferenceCandidateFiles(
   exportedNames: readonly string[],
   hasGlobalNameReferences: boolean,
   languageId: string,
-): string[] {
+): readonly string[] {
   if (hasGlobalNameReferences) {
     // Callers only set this for a PHP definition (`buildPhpQualifiedNames` returns names for no
     // other language), and PHP's global-namespace fallback can be referenced from any PHP file
     // without an import, so the import-graph narrowing below cannot apply. Every other language
     // is still a sound, source-free rejection: a PHP symbol can never be referenced from a file
     // whose own language a different parser owns.
-    return Array.from(index.byFile.values(), (module) => module.file)
-      .filter((file) => supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id === "php")
-      .sort((left, right) => left.localeCompare(right));
+    return referenceModuleTable(index).phpFiles;
   }
 
   let cache = referenceCandidateCache.get(index);
@@ -1135,8 +1286,9 @@ export function getCachedReferenceCandidateFiles(
   const cached = cache.get(key);
   if (cached) return cached;
 
+  const definitionKey = fileIdentityKey(def.file);
   const candidates = new Map<string, string>();
-  if (def.isMember) candidates.set(fileIdentityKey(def.file), def.file);
+  if (def.isMember) candidates.set(definitionKey, def.file);
   // Files sharing the definition's compilation unit can name it without any import edge (Go and
   // JVM packages, C# namespaces, Swift modules), so they bypass the import filter below. C#
   // also includes same-directory files that can reach the type only through a qualified name,
@@ -1147,37 +1299,34 @@ export function getCachedReferenceCandidateFiles(
     def.file,
     languageId === "csharp" ? { csharpQualifiedName: true } : undefined,
   ).files) {
-    if (fileIdentityKey(unitPeer) !== fileIdentityKey(def.file)) {
+    if (fileIdentityKey(unitPeer) !== definitionKey) {
       candidates.set(fileIdentityKey(unitPeer), unitPeer);
     }
   }
-  const candidateFileEntries =
-    getIndexedReferenceCandidateFiles(index, def, exportedNames, languageId) ??
-    Array.from(index.byFile.values(), (module) => module.file);
-  const exportingFileIds = filesExportingDefinition(index, def, exportedNames, languageId);
+  const reach = reverseReachableModules(index, [def.file], { danglingNames: exportedNames });
+  const exportingFileIds = filesExportingDefinition(index, def, exportedNames, languageId, reach.modules);
   const exportingFiles = new Set(exportingFileIds.map((file) => fileIdentityKey(file)));
   for (const fileId of exportingFileIds) {
-    if (fileIdentityKey(fileId) !== fileIdentityKey(def.file)) {
+    if (fileIdentityKey(fileId) !== definitionKey) {
       candidates.set(fileIdentityKey(fileId), fileId);
     }
   }
-  for (const fileId of candidateFileEntries) {
-    if (fileIdentityKey(fileId) === fileIdentityKey(def.file)) continue;
-    const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
-    if (!moduleIndex) continue;
-    if (
-      moduleIndex.imports.some((imp) => {
-        if (languageId === "csharp" && csharpNamespaceImportTargetsDefinition(index, imp, def)) return true;
-        if (typeof imp.resolved !== "string") return false;
-        return (
-          exportingFiles.has(fileIdentityKey(imp.resolved)) ||
-          importCanReferenceDefinition(index, imp, def, exportedNames, languageId)
-        );
-      })
-    ) {
-      candidates.set(fileIdentityKey(fileId), fileId);
-    }
-  }
+  // A C `resolveExport` under a tag or ordinary namespace walks the includes of the file it starts from,
+  // so every file that includes the definition's, directly or not, can answer for it.
+  const reachKeys =
+    languageId === "c"
+      ? reverseReachableModules(index, [def.file], { danglingNames: exportedNames, throughImports: true }).keys
+      : reach.keys;
+  const importers = importersReachingDefinition({
+    index,
+    def,
+    exportedNames,
+    languageId,
+    exportingFileIds,
+    exportingFiles,
+    reachKeys,
+  });
+  for (const [importerKey, importer] of importers) candidates.set(importerKey, importer);
 
   // A fully package-qualified use needs no import, even from another compilation unit.
   // Probe both its package root and member name; Java Unicode escapes can hide either spelling.
@@ -1188,25 +1337,22 @@ export function getCachedReferenceCandidateFiles(
       const exported =
         def.isMember ||
         index.byFile
-          .get(fileIdentityKey(def.file))
+          .get(definitionKey)
           ?.exports.some((entry) => entry.type === "local" && sameDef(entry.target, def, index.languageExtensions));
       if (exported) {
-        for (const moduleIndex of index.byFile.values()) {
-          const support = supportForFileWithoutHeaderSample(moduleIndex.file, index.languageExtensions);
-          if (support?.id !== "java" && support?.id !== "kotlin") continue;
-          const samePackage = getPackageDeclarationName(index, moduleIndex.file, support.id) === packageName;
-          if (!isJvmPackageSymbolVisible(def, languageId, support.id, samePackage)) continue;
-          const fileKey = fileIdentityKey(moduleIndex.file);
-          if (candidates.has(fileKey)) continue;
-          const filter = index.bloomFilters?.get(fileKey);
-          const rootProbe = support.normalizeIdentifier(rootName);
-          const nameProbe = support.normalizeIdentifier(def.localName);
+        for (const jvmModule of jvmModuleEntries(index)) {
+          const samePackage = getPackageDeclarationName(index, jvmModule.file, jvmModule.languageId) === packageName;
+          if (!isJvmPackageSymbolVisible(def, languageId, jvmModule.languageId, samePackage)) continue;
+          if (candidates.has(jvmModule.key)) continue;
+          const filter = index.bloomFilters?.get(jvmModule.key);
+          const rootProbe = jvmModule.support.normalizeIdentifier(rootName);
+          const nameProbe = jvmModule.support.normalizeIdentifier(def.localName);
           if (
             !filter ||
             (filter.mightContain(rootProbe) && filter.mightContain(nameProbe)) ||
-            (support.id === "java" && filter.mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN))
+            (jvmModule.languageId === "java" && filter.mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN))
           ) {
-            candidates.set(fileKey, moduleIndex.file);
+            candidates.set(jvmModule.key, jvmModule.file);
           }
         }
       }
@@ -1215,10 +1361,8 @@ export function getCachedReferenceCandidateFiles(
   // A plain package import does not prove its child's attribute, but a same-name use
   // through that package must be checked before coverage can claim completeness.
   if (languageId === "python" && !def.isMember) {
-    for (const moduleIndex of index.byFile.values()) {
-      if (pythonParentPackageNamespacePaths(moduleIndex, def.file).length) {
-        candidates.set(fileIdentityKey(moduleIndex.file), moduleIndex.file);
-      }
+    for (const moduleIndex of pythonParentPackageImporters(index, def.file)) {
+      candidates.set(fileIdentityKey(moduleIndex.file), moduleIndex.file);
     }
   }
   const sorted = [...candidates.values()].sort((left, right) => left.localeCompare(right));
@@ -1453,41 +1597,81 @@ function isUnresolvedIndexedImport(
   return !importCanReferenceDefinition(index, imp, def, exportedNames, languageId);
 }
 
+/**
+ * The flagged files of the candidate list, then the scanned list, then the first `receiverPrefix` modules of the
+ * module table, in the order a Map filled from those three in sequence visits its keys: each file where it was first
+ * listed, spelled as it was listed last. `flaggedPrefix` holds the table's flagged modules in table order, so the
+ * prefix is read from the few flagged files and never listed.
+ */
+function flaggedScanFiles(
+  index: ProjectIndex,
+  candidateFiles: readonly string[],
+  scannedFiles: readonly string[],
+  receiverPrefix: number,
+  flaggedPrefix: readonly FlaggedModule[],
+  isFlagged: (moduleIndex: ModuleIndex) => boolean,
+): Map<string, FileId> {
+  const flagged = new Map<string, FileId>();
+  const consider = (file: FileId): void => {
+    const key = fileIdentityKey(file);
+    const moduleIndex = index.byFile.get(key);
+    if (moduleIndex && isFlagged(moduleIndex)) flagged.set(key, file);
+  };
+  for (const file of candidateFiles) consider(file);
+  for (const file of scannedFiles) consider(file);
+  for (const entry of flaggedPrefix) {
+    if (entry.rank >= receiverPrefix) break;
+    flagged.set(entry.key, entry.file);
+  }
+  return flagged;
+}
+
 function parserDegradedCandidateFiles(
   index: ProjectIndex,
   candidateFiles: readonly string[],
   scannedFiles: readonly string[],
+  receiverPrefix: number,
 ): { files: FileId[]; hasUnlistedCandidate: boolean } {
   const report = index.buildReport?.backend?.parser;
+  const reportFacts = report ? parserReportFactsFor(report) : undefined;
+  const table = receiverPrefix ? referenceModuleTable(index) : undefined;
   const scanned = new Set(scannedFiles.map((file) => fileIdentityKey(file)));
-  const listed = new Set(report?.files.map((entry) => fileIdentityKey(entry.file)) ?? []);
+  const isScanned = (key: string): boolean => {
+    if (scanned.has(key)) return true;
+    const rank = table?.rankByKey.get(key);
+    return rank !== undefined && rank < receiverPrefix;
+  };
   const affected: FileId[] = [];
   const seen = new Set<string>();
-  if (report) {
-    for (const entry of report.files) {
-      const key = fileIdentityKey(entry.file);
-      if (!scanned.has(key) || seen.has(key)) continue;
-      seen.add(key);
-      affected.push(entry.file);
-    }
+  for (const entry of reportFacts?.entries ?? []) {
+    if (!isScanned(entry.key) || seen.has(entry.key)) continue;
+    seen.add(entry.key);
+    affected.push(entry.file);
   }
-  const relevantFiles = new Map<string, FileId>();
-  for (const file of candidateFiles) relevantFiles.set(fileIdentityKey(file), file);
-  for (const file of scannedFiles) relevantFiles.set(fileIdentityKey(file), file);
-  for (const [key, file] of relevantFiles) {
-    const moduleIndex = index.byFile.get(key);
-    if (!moduleIndex || moduleIndex.parseErrorRanges !== undefined || seen.has(key)) continue;
+  const withoutParseInfo = flaggedScanFiles(
+    index,
+    candidateFiles,
+    scannedFiles,
+    receiverPrefix,
+    receiverPrefix ? coverageFacts(index).withoutParseInfo : [],
+    (moduleIndex) => moduleIndex.parseErrorRanges === undefined,
+  );
+  for (const [key, file] of withoutParseInfo) {
+    if (seen.has(key)) continue;
     seen.add(key);
     affected.push(file);
   }
-  if (!report) return { files: affected, hasUnlistedCandidate: false };
+  if (!report || !reportFacts) return { files: affected, hasUnlistedCandidate: false };
 
   let hasUnlistedCandidate = false;
   if (report.total > report.files.length) {
     for (const fileKey of scanned) {
-      if (listed.has(fileKey)) continue;
+      if (reportFacts.listed.has(fileKey)) continue;
       hasUnlistedCandidate = true;
       break;
+    }
+    for (let rank = 0; table && !hasUnlistedCandidate && rank < receiverPrefix; rank += 1) {
+      hasUnlistedCandidate = !reportFacts.listed.has(table.entries[rank]!.key);
     }
   }
   return { files: affected, hasUnlistedCandidate };
@@ -1500,6 +1684,12 @@ export function buildIndexedCandidateCoverage(args: {
   exportedNames: readonly string[];
   candidateFiles: readonly string[];
   scannedFiles: readonly string[];
+  /**
+   * How many files, counted from the start of the index's module table (`referenceModuleTable`), were also
+   * scanned: the receiver scan of a member definition visits the table in order and stops at its limit. They
+   * are not listed in `scannedFiles`, so coverage reads the few files of the table that affect it.
+   */
+  receiverScannedFileCount?: number;
   truncated: boolean;
   /**
    * Reference strategies applicable to this definition and the subset that actually ran.
@@ -1517,6 +1707,7 @@ export function buildIndexedCandidateCoverage(args: {
     exportedNames,
     candidateFiles,
     scannedFiles,
+    receiverScannedFileCount = 0,
     truncated,
     strategies,
     strategyUnavailableFiles = [],
@@ -1531,7 +1722,7 @@ export function buildIndexedCandidateCoverage(args: {
     affectedFiles.push(file);
   };
 
-  const degraded = parserDegradedCandidateFiles(index, candidateFiles, scannedFiles);
+  const degraded = parserDegradedCandidateFiles(index, candidateFiles, scannedFiles, receiverScannedFileCount);
   if (degraded.files.length || degraded.hasUnlistedCandidate) {
     reasons.push("parser_degraded");
     for (const file of degraded.files) addAffected(file);
@@ -1539,21 +1730,17 @@ export function buildIndexedCandidateCoverage(args: {
 
   if (languageId !== "scss") {
     // tree-sitter-scss reports ERROR on supported module syntax; revisit after the planned grammar fork.
-    const parseErrorCandidates = new Map<string, FileId>();
-    for (const file of candidateFiles) parseErrorCandidates.set(fileIdentityKey(file), file);
-    for (const file of scannedFiles) parseErrorCandidates.set(fileIdentityKey(file), file);
-
-    const parseErrorFiles: FileId[] = [];
-    for (const candidateFile of parseErrorCandidates.values()) {
-      const moduleIndex = index.byFile.get(fileIdentityKey(candidateFile));
-      const parseErrorRanges = moduleIndex?.parseErrorRanges;
-      if (!moduleIndex || !parseErrorRanges?.length) continue;
-
-      parseErrorFiles.push(candidateFile);
-    }
-    if (parseErrorFiles.length) {
+    const parseErrorFiles = flaggedScanFiles(
+      index,
+      candidateFiles,
+      scannedFiles,
+      receiverScannedFileCount,
+      receiverScannedFileCount ? coverageFacts(index).withParseErrors : [],
+      (moduleIndex) => !!moduleIndex.parseErrorRanges?.length,
+    );
+    if (parseErrorFiles.size) {
       reasons.push("parse_error");
-      for (const file of parseErrorFiles) addAffected(file);
+      for (const file of parseErrorFiles.values()) addAffected(file);
     }
   }
 
