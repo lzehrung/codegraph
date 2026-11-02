@@ -158,6 +158,14 @@ function flipFirstLetterCase(name: string): string | undefined {
   return undefined;
 }
 
+/**
+ * `readdir` decodes the bytes of a name that is not valid text as U+FFFD (on Windows, an unpaired surrogate too), so the
+ * listed name is a spelling no path reaches, and two such names can read alike. Only the file system can answer for it.
+ */
+function isLossyName(name: string): boolean {
+  return name.includes("\uFFFD");
+}
+
 /** One directory's entries, with the rules that decide which probed names they can answer for. */
 class DirListing {
   private readonly entries = new Map<string, ListingEntry>();
@@ -173,7 +181,10 @@ class DirListing {
   ) {
     let nonAscii = false;
     for (const dirent of dirents) {
-      this.entries.set(dirent.name, { name: dirent.name, kind: entryKind(dirent) });
+      this.entries.set(dirent.name, {
+        name: dirent.name,
+        kind: isLossyName(dirent.name) ? "unresolved" : entryKind(dirent),
+      });
       if (!nonAscii && !isAscii(dirent.name)) nonAscii = true;
     }
     this.hasNonAscii = nonAscii;
@@ -225,7 +236,7 @@ class DirListing {
   private async detectCaseMode(): Promise<CaseMode> {
     let flippedName: string | undefined;
     for (const name of this.entries.keys()) {
-      const flipped = isWindowsHazardousName(name) ? undefined : flipFirstLetterCase(name);
+      const flipped = isWindowsHazardousName(name) || isLossyName(name) ? undefined : flipFirstLetterCase(name);
       if (flipped === undefined) continue;
       // Two entries that differ only by case can exist only where names are case-sensitive.
       if (this.entries.has(flipped)) return "sensitive";

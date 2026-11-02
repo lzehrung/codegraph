@@ -13,11 +13,16 @@ import {
 import { createTempRootRegistry, tryCreateDirectorySymlink, tryCreateFileSymlink } from "./helpers/filesystem.js";
 
 type FakeNode =
-  | { type: "file" }
+  | { type: "file"; lossy?: true }
   | { type: "directory"; children: Map<string, FakeNode>; listable: boolean; searchable: boolean }
   | { type: "symlink"; target: string };
 
 type Resolved = { node: FakeNode; segments: string[] };
+
+/** An entry that `readdir` lists under a decoded name (U+FFFD for bytes that are not text) that no path reaches. */
+function isLossy(node: FakeNode): boolean {
+  return node.type === "file" && !!node.lossy;
+}
 
 function errno(code: string, syscall: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`${code}: ${syscall}`), { code });
@@ -52,8 +57,8 @@ class FakeFs implements FsProbeOps {
     });
   }
 
-  file(relative: string): void {
-    this.put(relative, { type: "file" });
+  file(relative: string, options: { lossy?: boolean } = {}): void {
+    this.put(relative, options.lossy ? { type: "file", lossy: true } : { type: "file" });
   }
 
   symlink(relative: string, target: string): void {
@@ -77,14 +82,14 @@ class FakeFs implements FsProbeOps {
   private find(directory: FakeNode, name: string): { name: string; node: FakeNode } | undefined {
     if (directory.type !== "directory") return undefined;
     const exact = directory.children.get(name);
-    if (exact) return { name, node: exact };
+    if (exact && !isLossy(exact)) return { name, node: exact };
     if (!this.caseInsensitive && !this.normalizationInsensitive) return undefined;
     const fold = (text: string): string => {
       const normalized = this.normalizationInsensitive ? text.normalize("NFD") : text;
       return this.caseInsensitive ? normalized.toLowerCase() : normalized;
     };
     for (const [actual, node] of directory.children) {
-      if (fold(actual) === fold(name)) return { name: actual, node };
+      if (!isLossy(node) && fold(actual) === fold(name)) return { name: actual, node };
     }
     return undefined;
   }
@@ -324,16 +329,29 @@ describe.each([
 
   it("follows links as stat and realpath do and asks the file system for them", async () => {
     const fake = project();
-    fake.symlink("proj/src/linked.ts", "proj/src/beta.ts");
-    fake.symlink("proj/src/dirlink", "proj/src/Widget");
-    fake.symlink("proj/src/dangling.ts", "proj/src/nothing.ts");
+    // A link target is relative to the directory that holds the link, as on a real file system.
+    fake.symlink("proj/src/linked.ts", "beta.ts");
+    fake.symlink("proj/src/dirlink", "Widget");
+    fake.symlink("proj/src/dangling.ts", "nothing.ts");
     const cache = new FsProbeCache(fake);
     for (const name of ["a1", "a2", "a3", "a4"]) await cache.kind(fake.at("proj", "src", name));
-    for (const name of ["linked.ts", "dirlink", "dirlink/index.tsx", "dangling.ts"]) {
+    const expected: Record<string, ProbeKind | null> = {
+      "linked.ts": "file",
+      dirlink: "directory",
+      "dirlink/index.tsx": "file",
+      "dirlink/missing.tsx": null,
+      "dangling.ts": null,
+    };
+    for (const [name, kind] of Object.entries(expected)) {
       const target = fake.at("proj", "src", ...name.split("/"));
-      expect(await cache.kind(target), name).toBe(fake.truthKind(target));
+      expect(fake.truthKind(target), `${name} on the fake`).toBe(kind);
+      expect(await cache.kind(target), name).toBe(kind);
       expect(await cache.realpath(target), name).toBe(fake.truthRealpath(target));
     }
+    expect(fake.truthRealpath(fake.at("proj", "src", "linked.ts"))).toBe(fake.at("proj", "src", "beta.ts"));
+    const throughDirectory = fake.truthRealpath(fake.at("proj", "src", "dirlink", "index.tsx"));
+    expect(throughDirectory).toBe(fake.at("proj", "src", "Widget", "index.tsx"));
+    expect(fake.truthRealpath(fake.at("proj", "src", "dangling.ts"))).toBeNull();
   });
 
   it("falls back to stat for a directory it cannot list", async () => {
@@ -676,5 +694,71 @@ describe.skipIf(process.platform !== "win32")("probe cache over a UNC share", ()
     expect(await cache.kind(fake.at("A.TS"))).toBe("file");
     expect(await cache.kind(fake.at("e.ts"))).toBeNull();
     expect(fake.calls.stat).toBe(statBefore);
+  });
+});
+
+describe("probe cache over names that do not round-trip", () => {
+  it("lets the file system answer for a listed name that holds U+FFFD", async () => {
+    const fake = new FakeFs(false);
+    fake.mkdir("d");
+    fake.file("d/real.ts");
+    // `readdir` lists a file whose name is not valid text under a decoded name, and no path reaches the file by it.
+    fake.file("d/\uFFFD.ts", { lossy: true });
+    const cache = new FsProbeCache(fake);
+    for (const name of ["x1", "x2", "x3", "x4"]) await cache.kind(fake.at("d", name));
+    const lossy = fake.at("d", "\uFFFD.ts");
+    const real = fake.at("d", "real.ts");
+    expect(fake.truthKind(lossy)).toBeNull();
+    expect(fake.truthKind(real)).toBe("file");
+
+    const statBefore = fake.calls.stat;
+    expect(await cache.kind(lossy)).toBeNull();
+    expect(await cache.realpath(lossy)).toBeNull();
+    expect(fake.calls.stat).toBe(statBefore + 1);
+    expect(await cache.kind(real)).toBe("file");
+    expect(await cache.realpath(real)).toBe(fake.truthRealpath(real));
+    expect(await cache.kind(fake.at("d", "missing.ts"))).toBeNull();
+    expect(fake.calls.stat).toBe(statBefore + 1);
+  });
+
+  it("does not take the case rule of a directory from a name that holds U+FFFD", async () => {
+    const fake = new FakeFs(true);
+    fake.mkdir("d");
+    fake.file("d/\uFFFD.ts", { lossy: true });
+    fake.file("d/Real.ts");
+    const cache = new FsProbeCache(fake);
+    for (const name of ["x1", "x2", "x3", "x4"]) await cache.kind(fake.at("d", name));
+    for (const name of ["real.ts", "REAL.TS", "Real.ts", "other.ts"]) {
+      const target = fake.at("d", name);
+      expect(await cache.kind(target), name).toBe(fake.truthKind(target));
+    }
+    expect(fake.truthKind(fake.at("d", "real.ts"))).toBe("file");
+  });
+
+  it.skipIf(process.platform === "win32")("answers a file whose name is not valid UTF-8 as stat does", async () => {
+    const root = await fsp.realpath(await roots.create("dg-probe-raw-name-"));
+    await fsp.writeFile(path.join(root, "real.ts"), "export {};\n", "utf8");
+    // 0xff never occurs in UTF-8, so `readdir` lists this file under a name that no path reaches.
+    const rawName = Buffer.concat([Buffer.from(`${root}${path.sep}`), Buffer.from([0xff, 0x2e, 0x74, 0x73])]);
+    const created = await fsp.writeFile(rawName, "export {};\n").then(
+      () => true,
+      () => false,
+    );
+    // Some file systems refuse names that are not text.
+    if (!created) return;
+    expect(await fsp.readdir(root)).toContain("\uFFFD.ts");
+    const cache = new FsProbeCache();
+    for (const name of ["x1", "x2", "x3", "x4"]) await cache.kind(path.join(root, name));
+    for (const name of ["\uFFFD.ts", "real.ts", "REAL.ts", "missing.ts"]) {
+      const target = path.join(root, name);
+      const stat = await fsp.stat(target).then(
+        (found) => (found.isFile() ? "file" : "directory"),
+        () => null,
+      );
+      const real = await fsp.realpath(target).catch(() => null);
+      expect(await cache.kind(target), name).toBe(stat);
+      expect(await cache.realpath(target), name).toBe(real);
+    }
+    expect(await cache.kind(path.join(root, "\uFFFD.ts"))).toBeNull();
   });
 });
