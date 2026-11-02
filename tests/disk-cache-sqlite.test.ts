@@ -4,13 +4,7 @@ import fsp from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 
-import {
-  buildProjectIndex,
-  buildProjectIndexIncremental,
-  buildSymbolGraphDetailed,
-  findDuplicates,
-  type BuildReport,
-} from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexIncremental, findDuplicates, type BuildReport } from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
 import {
   DUPLICATE_UNIT_CACHE_MAX_ROWS,
@@ -130,10 +124,6 @@ function projectSnapshotPath(root: string): string {
   return path.join(cacheDir(root), "project-index-snapshot.json");
 }
 
-function detailedSymbolGraphPath(root: string): string {
-  return path.join(cacheDir(root), "detailed-symbol-graph.json");
-}
-
 function manifestPath(root: string): string {
   return path.join(cacheDir(root), "manifest.json");
 }
@@ -148,12 +138,6 @@ async function writeBrotliJson(filePath: string, value: unknown): Promise<void> 
     filePath,
     brotliCompressSync(JSON.stringify(value), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
   );
-}
-
-function absolutizeHandle(root: string, value: string): string {
-  const separator = value.indexOf("::");
-  if (separator < 0) return absoluteProjectPath(root, value);
-  return `${absoluteProjectPath(root, value.slice(0, separator))}${value.slice(separator)}`;
 }
 
 function absolutizeModulePayload(root: string, mod: Record<string, unknown>): Record<string, unknown> {
@@ -312,41 +296,6 @@ async function seedAbsoluteProjectSnapshotVersion(root: string, version: 4 | 5):
     ...(Object.keys(bloomFilters).length ? { bloomFilters } : {}),
     ...(projectFiles ? { projectFiles } : {}),
   });
-}
-
-async function seedAbsoluteDetailedSymbolGraphV2(root: string): Promise<string> {
-  const sidecar = await readBrotliJson(detailedSymbolGraphPath(root));
-  const graph = sidecar.graph as {
-    nodes: Array<{ id: string; file: string; name: string }>;
-    edges: Array<Record<string, unknown>>;
-  };
-  const migratedGraph = {
-    nodes: graph.nodes.map((node) => ({
-      ...node,
-      id: absolutizeHandle(root, node.id),
-      file: absoluteProjectPath(root, node.file),
-    })),
-    edges: graph.edges.map((edge) => ({
-      ...edge,
-      from: absolutizeHandle(root, String(edge.from)),
-      to: absolutizeHandle(root, String(edge.to)),
-      ...(edge.site && typeof edge.site === "object"
-        ? {
-            site: {
-              ...(edge.site as object),
-              file: absoluteProjectPath(root, String((edge.site as { file: string }).file)),
-            },
-          }
-        : {}),
-    })),
-  };
-  await writeBrotliJson(detailedSymbolGraphPath(root), {
-    ...sidecar,
-    version: 2,
-    projectRoot: absoluteProjectPath(root, "."),
-    graph: migratedGraph,
-  });
-  return String(sidecar.projectSnapshotIdentity);
 }
 
 describe("disk cache uses sqlite backend", () => {
@@ -1251,20 +1200,25 @@ describe("disk cache uses sqlite backend", () => {
     expect(((rewritten.graph as { nodes: string[] }).nodes ?? []).every((node) => !path.isAbsolute(node))).toBe(true);
   });
 
-  it("invalidates a legacy v2 absolute-path detailed symbol sidecar", async () => {
-    const root = await mkTmpDir("dg-disk-cache-detailed-v2-invalidate-");
+  it("ignores a legacy v2 absolute-path text detailed symbol sidecar", async () => {
+    const root = await mkTmpDir("dg-disk-cache-detailed-v2-ignore-");
     await fsp.writeFile(
       path.join(root, "util.ts"),
       "export function add(a: number, b: number) { return a + b; }\n",
       "utf8",
     );
     const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
-    const graph = await buildSymbolGraphDetailed(index);
-    await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
-    await seedAbsoluteDetailedSymbolGraphV2(root);
+    await writeBrotliJson(path.join(cacheDir(root), "detailed-symbol-graph.json"), {
+      version: 2,
+      projectRoot: absoluteProjectPath(root, "."),
+      projectSnapshotIdentity: index.projectSnapshotIdentity,
+      graph: { nodes: [], edges: [], nodeAliases: [] },
+    });
+    const report: BuildReport = { timings: {} };
 
-    const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index);
+    const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, report);
 
     expect(loaded).toBeNull();
+    expect(report.manifest?.corruptions).toBeUndefined();
   });
 });

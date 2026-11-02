@@ -241,7 +241,7 @@ The tool composes references, direct callers and callees, type relationships, im
 
 ### Call hierarchy
 
-Call `calls` with flat fields `direction` (`"callers"` or `"callees"`), `handle`, optional `depth`, optional `limit`, and optional `includeHeuristic`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 25 and caps at 500.
+Call `calls` with flat fields `direction` (`"callers"` or `"callees"`), `handle`, optional `depth`, optional `limit`, and optional `includeHeuristic`. Depth defaults to 1 and caps at 15; the symbol limit defaults to 25 and caps at 500. A deep request visits each symbol once, nearest level first, and `omittedCounts.symbols` counts the symbols beyond `limit`.
 
 Both directions reuse the server session and freshness gate. Responses group exact project-relative callsites under each related symbol, sort deterministically, and report separate symbol, callsite, and unresolved-site omissions.
 

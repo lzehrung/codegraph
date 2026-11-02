@@ -81,7 +81,7 @@ Filename results are suggestions only.
 - Use narrow queries and small limits. `codegraph search --no-snippets` avoids source you will read separately.
 - Check `truncated`, `omitted`, and `omittedCounts`. A capped result is incomplete; narrow the query or raise its limit.
 - For indexed text search, inspect `candidateCounts.indexedTextChunks` and `omittedCounts.indexedTextChunks` separately from final `omittedCounts.results`; a true `candidateCounts.indexedTextChunksLowerBound` means the candidate counts are incomplete.
-- Dependency, call, and type hierarchy queries default to depth 1. Increase depth for transitive results.
+- Dependency, call, and type hierarchy queries default to depth 1. Increase depth for transitive results: `callers` / `callees` (MCP `calls`) go to depth 15 and `supertypes` / `subtypes` to depth 10, bounded by `--limit` with the rest counted in `omittedCounts.symbols`.
 - For `file` / `get_file`, offsets are 1-based; continue at `page.nextOffset`. Request indexed context with `--include-graph-context` / `includeGraphContext: true`.
 - Calls and type relationships are proven indexed edges, not complete runtime coverage. Missing edges do not prove absence.
 - Check `analysis` and backend reports when present. Skipped oversized files (`sourceTooLarge`) and failed native queries (`queryFailure`) limit coverage; do not infer that missing symbols are absent.

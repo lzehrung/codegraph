@@ -1,5 +1,4 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -61,10 +60,16 @@ vi.mock("node:zlib", { spy: true });
 import { runGit } from "./helpers/git.js";
 import { limitJsonStringLength } from "./helpers/string-limit.js";
 import { createTempProjectRoot, createTempRootRegistry, mkTmpDir, tryCreateFileSymlink } from "./helpers/filesystem.js";
+import type { SnapshotComparableSignature } from "../src/indexer/build-cache/project-snapshot.js";
 import {
+  DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME,
   DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
-  type SnapshotComparableSignature,
-} from "../src/indexer/build-cache/project-snapshot.js";
+} from "../src/indexer/build-cache/detailed-graph-snapshot.js";
+import {
+  detailedSidecarPath,
+  patchDetailedSidecarHeader,
+  readDetailedSidecarHeader,
+} from "./helpers/detailed-sidecar.js";
 import type { SymbolGraph } from "../src/graphs/symbol-graph.js";
 
 /** Newest mtime under a file or directory, used to detect a `dist` build older than its sources. */
@@ -456,9 +461,9 @@ describe("Cache invalidation and strict hashing", () => {
     }
 
     async function writtenVersion(root: string, name: string, cacheFile: string): Promise<unknown> {
-      return name === "manifest.json"
-        ? (await readManifest(root)).version
-        : (await readProjectSnapshot(cacheFile)).version;
+      if (name === "manifest.json") return (await readManifest(root)).version;
+      if (name === DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME) return (await readDetailedSidecarHeader(cacheFile)).version;
+      return (await readProjectSnapshot(cacheFile)).version;
     }
 
     // One entry per cache file, with the writer that produces it.
@@ -467,7 +472,7 @@ describe("Cache invalidation and strict hashing", () => {
       { name: "project-index-snapshot.json", write: (root, index) => rewriteProjectSnapshot(root, index) },
       { name: "bloom-filters.json", write: (root, index) => rewriteProjectSnapshot(root, index) },
       {
-        name: "detailed-symbol-graph.json",
+        name: DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME,
         write: async (root, index) =>
           buildCache.writeDetailedSymbolGraphSnapshot(root, cacheOptions, index, await buildSymbolGraphDetailed(index)),
       },
@@ -2037,21 +2042,24 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
-  it.each([
-    ["array", []],
-    ["primitive string", "corrupt"],
-    ["primitive null", null],
-  ])("reports a malformed %s detailed symbol graph sidecar as corruption", async (_description, corruptedPayload) => {
-    const root = await mkTmpDir("dg-detailed-sidecar-structural-corruption-");
+  /** A project with one function, its disk-cached index, and the detailed sidecar written for them. */
+  async function writeDetailedSidecarFixture(prefix: string): Promise<{ root: string; index: ProjectIndex }> {
+    const root = await mkTmpDir(prefix);
     await fsp.writeFile(path.join(root, "entry.ts"), "export function detailedSnapshot() { return 1; }\n", "utf8");
     const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
     const graph = await buildSymbolGraphDetailed(index);
     await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
+    return { root, index };
+  }
 
-    await writeProjectSnapshot(
-      path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json"),
-      corruptedPayload,
-    );
+  it.each([
+    ["a JSON array", "[]"],
+    ["a JSON string", '"corrupt"'],
+    ["JSON null", "null"],
+    ["an empty file", ""],
+  ])("reports %s in place of the detailed symbol graph sidecar as corruption", async (_description, content) => {
+    const { root, index } = await writeDetailedSidecarFixture("dg-detailed-sidecar-structural-corruption-");
+    await fsp.writeFile(detailedSidecarPath(root), content, "utf8");
     const report: BuildReport = { timings: {} };
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
@@ -2063,9 +2071,30 @@ describe("Cache invalidation and strict hashing", () => {
       );
 
       expect(loaded).toBeNull();
-      expect(report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("detailed-symbol-graph.json"))).toBe(
-        true,
+      expect(
+        report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith(DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME)),
+      ).toBe(true);
+      expect(warnSpy.mock.calls.flat().join(" ")).toContain("Corrupt cache artifact");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("reports a detailed symbol graph sidecar header that does not describe a graph as corruption", async () => {
+    const { root, index } = await writeDetailedSidecarFixture("dg-detailed-sidecar-header-corruption-");
+    await patchDetailedSidecarHeader(detailedSidecarPath(root), { counts: "many" });
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(
+        root,
+        { cache: "disk", logLevel: "debug" },
+        index,
+        report,
       );
+
+      expect(loaded).toBeNull();
+      expect(report.manifest?.corruptions).toHaveLength(1);
       expect(warnSpy.mock.calls.flat().join(" ")).toContain("Corrupt cache artifact");
     } finally {
       warnSpy.mockRestore();
@@ -2073,16 +2102,8 @@ describe("Cache invalidation and strict hashing", () => {
   });
 
   it("reports a detailed symbol graph implementation fingerprint mismatch as invalidation", async () => {
-    const root = await mkTmpDir("dg-detailed-sidecar-identity-mismatch-");
-    await fsp.writeFile(path.join(root, "entry.ts"), "export function detailedSnapshot() { return 1; }\n", "utf8");
-    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
-    const graph = await buildSymbolGraphDetailed(index);
-    await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
-
-    const sidecarPath = path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json");
-    const sidecar = await readProjectSnapshot(sidecarPath);
-    sidecar.implementationFingerprint = "0".repeat(64);
-    await writeProjectSnapshot(sidecarPath, sidecar);
+    const { root, index } = await writeDetailedSidecarFixture("dg-detailed-sidecar-identity-mismatch-");
+    await patchDetailedSidecarHeader(detailedSidecarPath(root), { implementationFingerprint: "0".repeat(64) });
     const report: BuildReport = { timings: {} };
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
@@ -2105,16 +2126,9 @@ describe("Cache invalidation and strict hashing", () => {
   });
 
   it("rejects a previous-version detailed symbol graph sidecar as invalidation, not corruption", async () => {
-    const root = await mkTmpDir("dg-detailed-sidecar-previous-version-");
-    await fsp.writeFile(path.join(root, "entry.ts"), "export function detailedSnapshot() { return 1; }\n", "utf8");
-    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
-    const graph = await buildSymbolGraphDetailed(index);
-    await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
-
-    const sidecarPath = path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json");
-    const sidecar = await readProjectSnapshot(sidecarPath);
-    sidecar.version = DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION - 1;
-    await writeProjectSnapshot(sidecarPath, sidecar);
+    const { root, index } = await writeDetailedSidecarFixture("dg-detailed-sidecar-previous-version-");
+    const sidecarPath = detailedSidecarPath(root);
+    await patchDetailedSidecarHeader(sidecarPath, { version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION - 1 });
     const report: BuildReport = { timings: {} };
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
@@ -2138,25 +2152,23 @@ describe("Cache invalidation and strict hashing", () => {
     // Recovery persists the current schema again instead of leaving the stale version behind.
     const rebuilt = await buildSymbolGraphDetailed(index);
     await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, rebuilt);
-    const refreshed = await readProjectSnapshot(sidecarPath);
-    expect(refreshed.version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
+    expect((await readDetailedSidecarHeader(sidecarPath)).version).toBe(DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION);
   });
 
   describe("with a graph whose text passes the string limit", () => {
-    /** The text, and from it the hash, that the writer built before it fed the hash in pieces: one `JSON.stringify`. */
+    /** The JSON text of the nodes, edges, and aliases: what the persisted graph was once built as, in one string. */
     function wholeGraphText(graph: SymbolGraph): string {
       const descriptor: unknown = Object.getOwnPropertyDescriptor(graph, "nodeAliases")?.value;
       const nodeAliases = descriptor instanceof Map ? [...descriptor.entries()] : [];
       return JSON.stringify({ nodes: [...graph.nodes.values()], edges: graph.edges, nodeAliases });
     }
 
-    function wholeStringHash(identity: string, graph: SymbolGraph): string {
-      return createHash("sha256").update(identity).update("\0").update(wholeGraphText(graph)).digest("hex");
-    }
-
-    async function createOverloadedProject(): Promise<{ root: string; sidecarPath: string }> {
-      // A long absolute path makes the hashed text, which holds absolute ids, longer than the persisted payload.
-      const root = path.join(await mkTmpDir("dg-detailed-hash-"), "a-deliberately-long-directory-name", "project");
+    async function createOverloadedProject(): Promise<string> {
+      const root = path.join(
+        await mkTmpDir("dg-detailed-overloaded-"),
+        "a-deliberately-long-directory-name",
+        "project",
+      );
       await fsp.mkdir(root, { recursive: true });
       await fsp.writeFile(
         path.join(root, "entry.ts"),
@@ -2170,38 +2182,66 @@ describe("Cache invalidation and strict hashing", () => {
         ].join("\n"),
         "utf8",
       );
-      return { root, sidecarPath: path.join(root, ".codegraph", "cache", "index-v1", "detailed-symbol-graph.json") };
+      return root;
     }
 
-    it("persists the graph with the hash one whole-graph string would give", async () => {
-      const { root, sidecarPath } = await createOverloadedProject();
+    /** Forty functions in a chain: tens of kilobytes of JSON text for their nodes and call edges. */
+    async function createChainProject(): Promise<string> {
+      const root = await mkTmpDir("dg-detailed-chain-");
+      const links = 40;
+      await fsp.writeFile(
+        path.join(root, "chain.ts"),
+        Array.from({ length: links }, (_, index) =>
+          index + 1 < links
+            ? `export function link${index}() { return link${index + 1}(); }`
+            : `export function link${index}() { return 1; }`,
+        ).join("\n"),
+        "utf8",
+      );
+      return root;
+    }
+
+    it("persists and reloads a graph whose JSON text passes the string limit", async () => {
+      const root = await createChainProject();
       const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
       const graph = await buildSymbolGraphDetailed(index);
-      const identity = index.projectSnapshotIdentity!;
-      expect(Object.getOwnPropertyDescriptor(graph, "nodeAliases")?.value).toBeInstanceOf(Map);
-      await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
-      const unlimited = await readProjectSnapshot(sidecarPath);
-      const payloadChars = JSON.stringify(unlimited).length;
-      const wholeChars = wholeGraphText(graph).length;
-      expect(unlimited.graphHash).toBe(wholeStringHash(identity, graph));
+      const limitChars = 4_000;
+      // A repository with millions of edges passes V8's string limit with the nodes and edges alone. Here the
+      // limit falls far below the text of this graph, so a sidecar written as JSON text cannot be built.
+      expect(wholeGraphText(graph).length).toBeGreaterThan(limitChars * 3);
 
-      // A limit between the persisted payload and the hashed text: one string for the whole graph cannot be built,
-      // yet the payload still fits.
-      expect(payloadChars).toBeLessThan(wholeChars);
-      await fsp.rm(sidecarPath);
-      const limit = limitJsonStringLength(Math.floor((payloadChars + wholeChars) / 2));
+      const limit = limitJsonStringLength(limitChars);
       try {
         await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
+        const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index);
+
+        if (!loaded) throw new Error("the detailed symbol graph was not persisted under the string limit");
+        expect([...loaded.nodes]).toEqual([...graph.nodes]);
+        expect(loaded.edges).toEqual(graph.edges);
       } finally {
         limit.mockRestore();
       }
-
-      const limited = await readProjectSnapshot(sidecarPath);
-      expect(limited.graphHash).toBe(unlimited.graphHash);
     });
 
-    it("leaves no cache instead of failing when the payload cannot be built either", async () => {
-      const { root, sidecarPath } = await createOverloadedProject();
+    it("persists node aliases and call sites exactly", async () => {
+      const root = await createOverloadedProject();
+      const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      const graph = await buildSymbolGraphDetailed(index);
+      const aliases = Object.getOwnPropertyDescriptor(graph, "nodeAliases")?.value;
+      expect(aliases).toBeInstanceOf(Map);
+      await buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph);
+
+      const loaded = await buildCache.tryLoadDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index);
+
+      if (!loaded) throw new Error("the detailed symbol graph was not persisted");
+      expect(Object.getOwnPropertyDescriptor(loaded, "nodeAliases")?.value).toEqual(aliases);
+      expect([...loaded.nodes]).toEqual([...graph.nodes]);
+      expect(loaded.edges).toEqual(graph.edges);
+      expect(loaded.edges.some((edge) => edge.site !== undefined)).toBe(true);
+    });
+
+    it("leaves no cache instead of failing when not even the header text can be built", async () => {
+      const root = await createOverloadedProject();
       const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
       const graph = await buildSymbolGraphDetailed(index);
       const limit = limitJsonStringLength(200);
@@ -2211,6 +2251,30 @@ describe("Cache invalidation and strict hashing", () => {
         ).resolves.toBeUndefined();
       } finally {
         limit.mockRestore();
+      }
+
+      await expect(fsp.stat(detailedSidecarPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(buildCache.tryLoadDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index)).resolves.toBeNull();
+    });
+
+    it("leaves no cache instead of failing when the sidecar cannot be published", async () => {
+      const root = await createChainProject();
+      const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      const graph = await buildSymbolGraphDetailed(index);
+      const sidecarPath = detailedSidecarPath(root);
+      const originalRename = fsp.rename.bind(fsp);
+      const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+        if (path.resolve(String(target)) === path.resolve(sidecarPath)) {
+          throw Object.assign(new Error("injected publish failure"), { code: "EIO" });
+        }
+        await originalRename(source, target);
+      });
+      try {
+        await expect(
+          buildCache.writeDetailedSymbolGraphSnapshot(root, { cache: "disk" }, index, graph),
+        ).resolves.toBeUndefined();
+      } finally {
+        rename.mockRestore();
       }
 
       await expect(fsp.stat(sidecarPath)).rejects.toMatchObject({ code: "ENOENT" });

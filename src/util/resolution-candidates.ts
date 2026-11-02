@@ -75,9 +75,12 @@ const EXPLICIT_SPECIFIER_EXTENSION_FAMILIES: Record<string, readonly string[]> =
   ".cjs": [".cts", ".d.cts", ".cjs"],
 };
 
-export function getResolutionExtensions(resolutionExtensions?: readonly string[]): string[] {
-  const extensions = resolutionExtensions === undefined ? DEFAULT_RESOLUTION_EXTENSIONS : resolutionExtensions;
-  return Array.from(new Set(extensions));
+const DEFAULT_RESOLUTION_EXTENSION_LIST: readonly string[] = Array.from(new Set(DEFAULT_RESOLUTION_EXTENSIONS));
+
+/** The distinct extensions to try. The default list is shared, so callers must not change what they get back. */
+export function getResolutionExtensions(resolutionExtensions?: readonly string[]): readonly string[] {
+  if (resolutionExtensions === undefined) return DEFAULT_RESOLUTION_EXTENSION_LIST;
+  return Array.from(new Set(resolutionExtensions));
 }
 
 /**
@@ -96,17 +99,32 @@ export function stripKnownResolutionExtension(
   return value.slice(0, -extension.length);
 }
 
-export function listResolutionCandidates(base: string, resolutionExtensions?: readonly string[]): string[] {
+/**
+ * The candidates {@link listResolutionCandidates} lists, one at a time, so a probe that stops at the first hit
+ * builds only the candidates it reads. The order and the removal of repeats are the same.
+ */
+export function* iterateResolutionCandidates(
+  base: string,
+  resolutionExtensions?: readonly string[],
+): Generator<string, void> {
   const extensions = getResolutionExtensions(resolutionExtensions);
   const baseWithoutExt = stripKnownResolutionExtension(base, extensions);
   if (baseWithoutExt === base) {
-    return Array.from(
-      new Set([
-        base,
-        ...extensions.map((extension) => `${base}${extension}`),
-        ...extensions.map((extension) => path.join(base, `index${extension}`)),
-      ]),
-    );
+    const seen = new Set<string>([base]);
+    yield base;
+    for (const extension of extensions) {
+      const candidate = `${base}${extension}`;
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      yield candidate;
+    }
+    for (const extension of extensions) {
+      const candidate = path.join(base, `index${extension}`);
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      yield candidate;
+    }
+    return;
   }
 
   const baseExt = path.extname(base).toLowerCase();
@@ -114,5 +132,9 @@ export function listResolutionCandidates(base: string, resolutionExtensions?: re
   const candidates = compatibleExtensions
     .filter((extension) => extension === baseExt || extensions.includes(extension))
     .map((extension) => `${baseWithoutExt}${extension}`);
-  return candidates.length ? Array.from(new Set(candidates)) : [base];
+  yield* candidates.length ? new Set(candidates) : [base];
+}
+
+export function listResolutionCandidates(base: string, resolutionExtensions?: readonly string[]): string[] {
+  return Array.from(iterateResolutionCandidates(base, resolutionExtensions));
 }

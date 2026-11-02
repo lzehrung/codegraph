@@ -663,7 +663,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         kind: "max",
         max: 1,
         usage:
-          "Usage: codegraph callees <symbol-target> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
+          "Usage: codegraph callees <symbol-target> [--root <path>] [--depth <1-15>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
       },
     ),
   ],
@@ -676,7 +676,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         kind: "max",
         max: 1,
         usage:
-          "Usage: codegraph callers <symbol-target> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
+          "Usage: codegraph callers <symbol-target> [--root <path>] [--depth <1-15>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
       },
     ),
   ],
