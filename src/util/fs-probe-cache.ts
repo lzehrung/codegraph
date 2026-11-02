@@ -284,8 +284,7 @@ export class FsProbeCache {
     if (remembered !== undefined) return remembered;
     const name = nameOf(file);
     const directory = directoryOf(file);
-    // A path that is its own directory is a root, which no listing holds: the file system answers.
-    if (directory === file || !name || name === "." || name === ".." || isWindowsHazardousName(name)) {
+    if (!name || name === "." || name === ".." || isWindowsHazardousName(name)) {
       return this.statKindOf(file, true);
     }
     const state = this.directoryState(directory);
@@ -323,14 +322,7 @@ export class FsProbeCache {
     const name = nameOf(file);
     const directory = directoryOf(file);
     const listing = this.directories.get(directory)?.loaded;
-    if (
-      directory === file ||
-      listing === undefined ||
-      !name ||
-      name === "." ||
-      name === ".." ||
-      isWindowsHazardousName(name)
-    ) {
+    if (listing === undefined || !name || name === "." || name === ".." || isWindowsHazardousName(name)) {
       return this.statRealpathOf(file, true);
     }
     if (listing === MISSING_DIRECTORY) return null;
