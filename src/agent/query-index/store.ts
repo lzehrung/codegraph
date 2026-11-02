@@ -124,14 +124,15 @@ function chunkFromRow(row: Record<string, unknown>): QueryTextChunk | null {
 }
 
 /**
- * The files a retrieval reads, in read order: the stored files among the eligible paths, batch after batch, each batch
- * in path order. A position is an index into `entries`, and the row `json_each` gives for `fileIds`.
+ * The files a retrieval reads, batch after batch: the stored files among the eligible paths, each batch in path order.
  */
 type PathBatchPlan = {
-  /** The stored file id at each position, as a JSON array for `json_each`. */
-  fileIds: string;
-  /** The batch that reads the file at each position, and its path. */
-  entries: ReadonlyArray<{ batch: number; path: string }>;
+  /** The stored file ids of each batch that holds any. */
+  batches: ReadonlyArray<readonly number[]>;
+  /** The same ids as a JSON array of arrays for `json_each`. */
+  batchesJson: string;
+  /** The batch number of each of those arrays; a batch that holds no stored file has none. */
+  batchNumbers: readonly number[];
 };
 
 /** The batches of `paths` that list each file. A file listed in two batches is read in both, as separate reads would. */
@@ -144,6 +145,53 @@ function pathBatches(paths: readonly string[], batchSize: number): Map<string, n
     else if (listed[listed.length - 1] !== batch) listed.push(batch);
   });
   return batches;
+}
+
+/** Raised when a candidate read hands rows back in an order its statement does not get from SQL. */
+class QueryIndexReadOrderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QueryIndexReadOrderError";
+  }
+}
+
+function isNumberArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "number");
+}
+
+/**
+ * The chunk ids of one batch's read, from the JSON its statement builds. The read relies on the files coming in the
+ * order they were listed and a file's chunks in ordinal order, which no ORDER BY promises, so each chunk carries the
+ * position of its file and its ordinal and the whole read is checked before any of it is used. The last row is one
+ * past what any use of the read needs: it is what shows the order inside the file the used rows end in, when that
+ * file holds more matches than the read does.
+ */
+function chunkIdsOfBatchRead(text: string): number[] {
+  const parsed: unknown = JSON.parse(text);
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("chunks" in parsed) ||
+    !("files" in parsed) ||
+    !("ordinals" in parsed)
+  ) {
+    throw new Error("Invalid query index batch read.");
+  }
+  const { chunks, files, ordinals } = parsed;
+  if (!isNumberArray(chunks) || !isNumberArray(files) || !isNumberArray(ordinals)) {
+    throw new Error("Invalid query index batch read.");
+  }
+  if (files.length !== chunks.length || ordinals.length !== chunks.length) {
+    throw new Error("Invalid query index batch read.");
+  }
+  for (let index = 1; index < chunks.length; index += 1) {
+    const file = files[index]!;
+    const previousFile = files[index - 1]!;
+    if (file < previousFile || (file === previousFile && ordinals[index]! <= ordinals[index - 1]!)) {
+      throw new QueryIndexReadOrderError("Query index chunks arrived out of read order.");
+    }
+  }
+  return chunks;
 }
 
 function storedCandidateChunkFromRow(row: Record<string, unknown>): StoredQueryIndexChunk | null {
@@ -165,10 +213,19 @@ export class QueryIndexStore {
   private closed = false;
   private normalizedFiles: Map<string, string> | undefined;
   private normalizedFilesMetadataKey: string | undefined;
+  private readOrderFallbackCount = 0;
 
   /** Whether `close()` has run. Lets callers check lifecycle without touching internals. */
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /**
+   * How many candidate reads gave up the streamed read for ordered statements because SQLite returned rows in another
+   * order. It stays zero unless the SQLite build or its planner breaks the order the streamed read relies on.
+   */
+  get readOrderFallbacks(): number {
+    return this.readOrderFallbackCount;
   }
   constructor(readonly filePath: string) {
     const db = new SqliteDatabase(filePath, { timeout: QUERY_INDEX_BUSY_TIMEOUT_MS });
@@ -427,26 +484,20 @@ export class QueryIndexStore {
    */
   private planPathBatches(paths: readonly string[]): PathBatchPlan {
     const batchesOfPath = pathBatches(paths, QUERY_INDEX_PATH_BATCH_SIZE);
-    const filesOfBatch = new Map<number, Array<{ fileId: number; path: string }>>();
+    const fileIdsOfBatch = new Map<number, number[]>();
     // Stored files come in the order SQLite sorts their paths in, which is the order a batch reads its files in.
     const stored = this.db.prepare("SELECT file_id, path FROM files ORDER BY path").raw().all() as unknown[][];
     for (const [fileId, path] of stored) {
       if (typeof fileId !== "number" || typeof path !== "string") continue;
       for (const batch of batchesOfPath.get(path) ?? []) {
-        const files = filesOfBatch.get(batch);
-        if (files) files.push({ fileId, path });
-        else filesOfBatch.set(batch, [{ fileId, path }]);
+        const fileIds = fileIdsOfBatch.get(batch);
+        if (fileIds) fileIds.push(fileId);
+        else fileIdsOfBatch.set(batch, [fileId]);
       }
     }
-    const fileIds: number[] = [];
-    const entries: Array<{ batch: number; path: string }> = [];
-    for (const batch of [...filesOfBatch.keys()].sort((left, right) => left - right)) {
-      for (const file of filesOfBatch.get(batch) ?? []) {
-        fileIds.push(file.fileId);
-        entries.push({ batch, path: file.path });
-      }
-    }
-    return { fileIds: JSON.stringify(fileIds), entries };
+    const batchNumbers = [...fileIdsOfBatch.keys()].sort((left, right) => left - right);
+    const batches = batchNumbers.map((batch) => fileIdsOfBatch.get(batch) ?? []);
+    return { batches, batchesJson: JSON.stringify(batches), batchNumbers };
   }
 
   /** The stored rows of the given chunks, by chunk id. */
@@ -456,9 +507,10 @@ export class QueryIndexStore {
     const rows = this.db
       .prepare(
         `
-        SELECT chunks.chunk_id AS chunk_id, chunks.ordinal, chunks.kind, chunks.name,
+        SELECT chunks.chunk_id AS chunk_id, files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
                chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
         FROM chunks
+        JOIN files ON files.file_id = chunks.file_id
         WHERE chunks.chunk_id IN (SELECT value FROM json_each(?))
       `,
       )
@@ -469,6 +521,10 @@ export class QueryIndexStore {
     return rowsById;
   }
 
+  /**
+   * The chunks that match the terms in the eligible files, read pass by pass (the phrase, every term together, then
+   * each term alone) in batches of 500 files, each pass kept up to its cap.
+   */
   candidateChunkRetrievalForTerms(
     terms: readonly string[],
     paths: readonly string[],
@@ -482,67 +538,115 @@ export class QueryIndexStore {
     if (!normalizedLimit) {
       return { chunks: [], totalCandidatesLowerBound: false };
     }
-    const candidates = new Map<number, string>();
     const plan = this.planPathBatches(paths);
+    try {
+      return this.readCandidateChunks(terms, paths, plan, normalizedRankPhrase, normalizedLimit, false);
+    } catch (error) {
+      if (!(error instanceof QueryIndexReadOrderError)) throw error;
+      // SQLite returned rows in an order the streamed read does not get from SQL. The read runs again with an ORDER BY
+      // for every batch, which gives the same chunks in an order SQL promises.
+      this.readOrderFallbackCount += 1;
+      return this.readCandidateChunks(terms, paths, plan, normalizedRankPhrase, normalizedLimit, true);
+    }
+  }
+
+  /** Reads the chunks of `candidateChunkRetrievalForTerms`; `ordered` reads every batch with its own ORDER BY. */
+  private readCandidateChunks(
+    terms: readonly string[],
+    paths: readonly string[],
+    plan: PathBatchPlan,
+    normalizedRankPhrase: string,
+    normalizedLimit: number,
+    ordered: boolean,
+  ): QueryIndexCandidateRetrieval {
+    const candidates = new Set<number>();
     let totalCandidatesLowerBound = false;
 
-    // One statement runs through the files in read order and yields each matching chunk as it is reached, so a pass
-    // stops pulling rows once its cap and the single row past it are decided. Each batch is read as a capped read of
-    // its own would be: at most the rows the cap still allows, plus one that only shows whether more were left. The
-    // CROSS JOIN keeps the file list as the outer loop, which puts the rows in read order without a sort, and the
-    // `+chunks.chunk_id` tests keep the planner from looping over chunk ids instead.
-    const collect = (conditions: readonly string[], parameters: readonly string[], maximum: number): void => {
-      if (candidates.size >= maximum || !plan.entries.length) return;
+    // Keeps what one batch's read returns as a capped read of that batch alone would: at most the rows the cap still
+    // allows, plus one that only shows whether more were left, so a read that fills it is only a lower bound. Returns
+    // whether the pass is decided, which it is once the cap is met.
+    const keepBatchRead = (chunkIds: readonly number[], batchNumber: number, maximum: number): boolean => {
+      const requested = maximum - candidates.size + 1;
+      if (chunkIds.length >= requested) totalCandidatesLowerBound = true;
+      for (let index = 0; index < chunkIds.length && index < requested; index += 1) {
+        const chunkId = chunkIds[index]!;
+        if (candidates.has(chunkId)) continue;
+        candidates.add(chunkId);
+        if (candidates.size >= maximum) break;
+      }
+      if (candidates.size < maximum) return false;
+      if ((batchNumber + 1) * QUERY_INDEX_PATH_BATCH_SIZE < paths.length) totalCandidatesLowerBound = true;
+      return true;
+    };
+
+    // The streamed read of a pass is one statement. Its outer loop takes the batches in order, and for each batch a
+    // subquery runs through the batch's files in path order and returns the first `room + 1` chunks that match, `room`
+    // being what the cap leaves when the pass starts, each with the position of its file and its ordinal. A batch is
+    // therefore never asked for more than any read of it could use plus one row, however many chunks match, and it is
+    // not read until the pass reaches it, so a pass stops once its cap is decided. The CROSS JOIN keeps the files as
+    // the outer loop and the `+chunks.chunk_id` tests keep the planner from looping over chunk ids instead, which puts
+    // the rows in read order without a sort. No ORDER BY promises that, so every read is checked as it arrives (see
+    // `chunkIdsOfBatchRead`) and a read that fails the check reruns the whole retrieval with the ordered statements.
+    const collectStreamed = (conditions: readonly string[], parameters: readonly string[], maximum: number): void => {
+      if (candidates.size >= maximum || !plan.batchNumbers.length) return;
+      const room = maximum - candidates.size + 1;
       const rows = this.db
         .prepare(
           `
-          SELECT driver.key, chunks.chunk_id, chunks.ordinal
-          FROM json_each(?) AS driver
-          CROSS JOIN chunks ON chunks.file_id = driver.value
-          WHERE ${conditions.join(" AND ")}
+          SELECT batch.key,
+                 (SELECT json_object(
+                           'chunks', json_group_array(hit.chunk_id),
+                           'files', json_group_array(hit.file),
+                           'ordinals', json_group_array(hit.ordinal))
+                  FROM (
+                    SELECT chunks.chunk_id AS chunk_id, driver.key AS file, chunks.ordinal AS ordinal
+                    FROM json_each(batch.value) AS driver
+                    CROSS JOIN chunks ON chunks.file_id = driver.value
+                    WHERE ${conditions.join(" AND ")}
+                    LIMIT ?
+                  ) AS hit)
+          FROM json_each(?) AS batch
         `,
         )
         .raw()
-        .iterate(plan.fileIds, ...parameters) as Iterable<unknown[]>;
-      let batch = -1;
-      let requested = 0;
-      let read = 0;
-      let lastPosition = -1;
-      let lastOrdinal = -1;
-      for (const [position, chunkId, ordinal] of rows) {
-        if (typeof position !== "number" || typeof chunkId !== "number" || typeof ordinal !== "number") {
-          throw new Error("Invalid query index candidate row.");
-        }
-        // Nothing in SQL promises this order, so a plan that broke it must not change which chunks are kept.
-        if (position < lastPosition || (position === lastPosition && ordinal <= lastOrdinal)) {
-          throw new Error("Query index candidate rows arrived out of read order.");
-        }
-        lastPosition = position;
-        lastOrdinal = ordinal;
-        const entry = plan.entries[position];
-        if (!entry) throw new Error("Query index candidate row names a file outside the read plan.");
-        if (candidates.size >= maximum) {
-          // The cap was met one row short of this batch's read, so this is the row past it that a capped read fetches.
-          if (entry.batch === batch) totalCandidatesLowerBound = true;
-          break;
-        }
-        if (entry.batch !== batch) {
-          batch = entry.batch;
-          requested = maximum - candidates.size + 1;
-          read = 0;
-        }
-        read += 1;
-        // A capped read stops here; the rest of the batch is skipped to reach the next one.
-        if (read > requested) continue;
-        if (read === requested) totalCandidatesLowerBound = true;
-        if (candidates.has(chunkId)) continue;
-        candidates.set(chunkId, entry.path);
-        if (candidates.size >= maximum && read === requested) break;
-      }
-      if (candidates.size >= maximum && (batch + 1) * QUERY_INDEX_PATH_BATCH_SIZE < paths.length) {
-        totalCandidatesLowerBound = true;
+        .iterate(...parameters, room + 1, plan.batchesJson) as Iterable<unknown[]>;
+      let lastKey = -1;
+      for (const [key, read] of rows) {
+        if (typeof key !== "number" || typeof read !== "string") throw new Error("Invalid query index candidate row.");
+        const batchNumber = plan.batchNumbers[key];
+        if (batchNumber === undefined)
+          throw new Error("Query index candidate row names a batch outside the read plan.");
+        if (key <= lastKey) throw new QueryIndexReadOrderError("Query index batches arrived out of read order.");
+        lastKey = key;
+        if (keepBatchRead(chunkIdsOfBatchRead(read), batchNumber, maximum)) break;
       }
     };
+
+    // The ordered read of a pass is a statement per batch with the ORDER BY and LIMIT of a capped read of that batch.
+    // It is slower, because every statement builds the trigram match sets again, and it is what a retrieval falls back
+    // to when the streamed read finds its rows out of order.
+    const collectOrdered = (conditions: readonly string[], parameters: readonly string[], maximum: number): void => {
+      if (candidates.size >= maximum) return;
+      const statement = this.db
+        .prepare(
+          `
+          SELECT chunks.chunk_id
+          FROM chunks
+          JOIN files ON files.file_id = chunks.file_id
+          WHERE chunks.file_id IN (SELECT value FROM json_each(?)) AND ${conditions.join(" AND ")}
+          ORDER BY files.path, chunks.ordinal
+          LIMIT ?
+        `,
+        )
+        .raw();
+      for (const [index, batchNumber] of plan.batchNumbers.entries()) {
+        const requested = maximum - candidates.size + 1;
+        const rows = statement.all(JSON.stringify(plan.batches[index]), ...parameters, requested) as unknown[][];
+        const chunkIds = rows.flatMap(([chunkId]) => (typeof chunkId === "number" ? [chunkId] : []));
+        if (keepBatchRead(chunkIds, batchNumber, maximum)) break;
+      }
+    };
+    const collect = ordered ? collectOrdered : collectStreamed;
 
     const termCondition = (term: string): { condition: string; parameters: string[] } => {
       if (!supportsFtsTrigramTerm(term)) {
@@ -627,10 +731,10 @@ export class QueryIndexStore {
     }
 
     const matches = [...candidates];
-    const rowsByChunkId = this.chunkRowsById(matches.map(([chunkId]) => chunkId));
-    const chunks = matches.flatMap(([chunkId, path]) => {
+    const rowsByChunkId = this.chunkRowsById(matches);
+    const chunks = matches.flatMap((chunkId) => {
       const row = rowsByChunkId.get(chunkId);
-      const chunk = row ? storedCandidateChunkFromRow({ ...row, path }) : null;
+      const chunk = row ? storedCandidateChunkFromRow(row) : null;
       return chunk ? [chunk] : [];
     });
     return {
