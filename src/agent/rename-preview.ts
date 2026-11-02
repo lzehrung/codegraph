@@ -20,7 +20,7 @@ import {
 } from "../indexer/types.js";
 import { supportForFile, supportForFileWithoutHeaderSample } from "../languages.js";
 import type { Range } from "../types.js";
-import { ensureParsedContext } from "../indexer/parse-context.js";
+import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
 import { openConfinedReadableFile } from "../util/confined-file.js";
 import { errorMessage } from "../util/errors.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -788,11 +788,7 @@ async function addScopeConflicts(
   const sameName = (name: string): boolean =>
     name === newName || (foldsName && sassCanonical(name) === sassCanonical(newName));
   try {
-    const parsed = await ensureParsedContext(
-      target.file,
-      snapshot.index.parsed?.get(fileIdentityKey(target.file)),
-      snapshot.index.languageExtensions,
-    );
+    const parsed = await ensureParsedContextForIndex(snapshot.index, target.file);
     const scopeIndex = getCachedScope(snapshot.index, target.file, moduleIndex, parsed);
     const targetBinding = scopeIndex.all.find(
       (binding) =>
@@ -875,11 +871,7 @@ async function addScopeConflicts(
     if (!consumer) continue;
     let collides = false;
     try {
-      const parsed = await ensureParsedContext(
-        reference.file,
-        snapshot.index.parsed?.get(fileIdentityKey(reference.file)),
-        snapshot.index.languageExtensions,
-      );
+      const parsed = await ensureParsedContextForIndex(snapshot.index, reference.file);
       const scopeIndex = getCachedScope(snapshot.index, reference.file, consumer, parsed);
       const activeBinding = scopeIndex.all.find((binding) => binding.import === activeImport);
       const canonicalImportName = parsed.sup.normalizeIdentifier(activeImport.local);
@@ -1066,11 +1058,7 @@ async function collectTextualRenameEdits(
     if (!loaded) continue;
     let parsed;
     try {
-      parsed = await ensureParsedContext(
-        file,
-        input.snapshot.index.parsed?.get(fileIdentityKey(file)),
-        input.snapshot.index.languageExtensions,
-      );
+      parsed = await ensureParsedContextForIndex(input.snapshot.index, file);
     } catch (error: unknown) {
       input.unsafeSites.push({
         location: { file: loaded.displayPath, range: zeroRange() },

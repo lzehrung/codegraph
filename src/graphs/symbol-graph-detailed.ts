@@ -9,16 +9,12 @@ import {
   type NameResolution,
 } from "../indexer/name-resolution.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
-import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/file-prep.js";
+import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
-import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import { detectSFCFramework } from "../languages/sfc.js";
+import type { SyntaxNodeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import { ProjectedSyntaxTree } from "../native/projected-tree.js";
-import {
-  assertNativeRequiredAvailable,
-  getNativeSyntaxTreeExecution,
-  isNativeRequiredUnavailableError,
-} from "../native/tree-sitter-native.js";
+import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from "../native/tree-sitter-native.js";
 
 import { cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { cjsRequireValueBinding, resolveExport } from "../indexer/navigation-resolve.js";
@@ -41,7 +37,8 @@ import {
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
 import { getOrBuildScopeIndex } from "../indexer/navigation-local.js";
-import { ensureParsedContext, type ParsedFileContext } from "../indexer/parse-context.js";
+import type { ParsedFileContext } from "../indexer/parse-context.js";
+import { ensureParsedContextForIndex, tryEnsureParsedContextForIndex } from "../indexer/parsed-cache.js";
 
 import type { CallableIdentity } from "../languages/callable-arity.js";
 import {
@@ -319,7 +316,7 @@ export async function buildSymbolGraphDetailed(
     const fileKey = fileIdentityKey(file);
     const cached = ownershipParsedContexts.get(fileKey);
     if (cached) return cached;
-    const pending = ensureParsedContext(file, index.parsed?.get(fileKey), index.languageExtensions).catch(() => null);
+    const pending = ensureParsedContextForIndex(index, file).catch(() => null);
     ownershipParsedContexts.set(fileKey, pending);
     return pending;
   };
@@ -365,33 +362,18 @@ export async function buildSymbolGraphDetailed(
       if (!(hasFuncOrClass && isImportedOrImports)) continue;
     }
     try {
-      const parsedEntry = index.parsed?.get(fileIdentityKey(file));
-      let sup = parsedEntry?.sup;
-      let src = parsedEntry?.source;
-      let tree: SyntaxTreeLike | undefined = parsedEntry?.tree;
-      if (!sup || src === undefined) {
-        const prep = await prepareSourceInput(file, {
-          languageExtensions: index.languageExtensions,
-        });
-        sup = prep.sup;
-        src = prep.source;
-      }
-      if (sup && !sup.supportsCrossModuleSymbols) {
+      const fileSupport = supportForFileWithoutHeaderSample(file, index.languageExtensions);
+      if (fileSupport && !fileSupport.supportsCrossModuleSymbols && !detectSFCFramework(file)) continue;
+      const fileKey = fileIdentityKey(file);
+      // Register the pending read and parse before another query can request this disk-cached file.
+      const parsed = await tryEnsureParsedContextForIndex(index, file);
+      if (!parsed) {
+        skippedSyntaxTreeFiles += 1;
         continue;
       }
-      if (sup && src !== undefined && !tree) {
-        const nativeTreeExecution = getNativeSyntaxTreeExecution(src, sup);
-        if (nativeTreeExecution.tree) {
-          tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
-        } else {
-          skippedSyntaxTreeFiles += 1;
-          continue;
-        }
-      }
-      if (!sup || src === undefined || !tree) {
-        throw new Error(`Failed to parse ${file}`);
-      }
-      ownershipParsedContexts.set(fileIdentityKey(file), Promise.resolve({ source: src, tree, sup }));
+      const { sup, source: src, tree } = parsed;
+      if (!sup.supportsCrossModuleSymbols) continue;
+      ownershipParsedContexts.set(fileKey, Promise.resolve(parsed));
 
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
       const { aliasToTargetDef, aliasToTargetModule } = buildImportAliasMaps(

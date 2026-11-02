@@ -46,6 +46,15 @@ export type PreparedFileParseAttempt = {
   nativeError?: string;
   jsError?: string;
 };
+
+/** A query parse could not produce a syntax tree, even though the source was readable. */
+export class SyntaxTreeUnavailableError extends Error {
+  constructor(file: string, reason: string) {
+    super(`Failed to reconstruct native syntax tree for ${file}: ${reason}`);
+    this.name = "SyntaxTreeUnavailableError";
+  }
+}
+
 function createGraphOnlySyntaxTree(): SyntaxTreeLike {
   const rootNode: SyntaxTreeLike["rootNode"] = {
     type: "document",
@@ -123,9 +132,7 @@ export function tryParsePreparedFileContext(context: PreparedFileContext): Parse
 export function parsePreparedFileContext(context: PreparedFileContext): ParsedFileContext {
   const attempt = attemptParsePreparedFileContext(context);
   if (attempt.parsed) return attempt.parsed;
-  throw new Error(
-    `Failed to reconstruct native syntax tree for ${context.file}: ${attempt.nativeError ?? attempt.nativeFallbackReason ?? "no tree"}`,
-  );
+  throw new SyntaxTreeUnavailableError(context.file, attempt.nativeError ?? attempt.nativeFallbackReason ?? "no tree");
 }
 
 export async function prepareFileForIndexing(
@@ -184,6 +191,17 @@ export async function prepareFileForIndexing(
 
 export async function parseFile(file: string): Promise<ParsedFileContext> {
   return parsePreparedFileContext(await prepareFileForIndexing(file));
+}
+
+/** Query-time navigation needs the syntax tree, not the indexer's native query captures. */
+export async function parseNavigationContext(
+  file: string,
+  languageExtensions?: LanguageExtensionMap,
+): Promise<ParsedFileContext> {
+  const prepared = await prepareSourceInput(file, { languageExtensions });
+  const context: PreparedFileContext = { file, source: prepared.source, sup: prepared.sup, nativeQueries: null };
+  if (prepared.embeddedBlocks) context.embeddedBlocks = prepared.embeddedBlocks;
+  return parsePreparedFileContext(context);
 }
 
 export async function ensureParsedContext(

@@ -1,7 +1,7 @@
 import picomatch from "picomatch";
 import type { Range } from "../types.js";
-import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
-import { ensureParsedContext } from "./parse-context.js";
+import { toProjectDisplayPath } from "../util/paths.js";
+import { ensureParsedContextForIndex } from "./parsed-cache.js";
 import { getCachedScope } from "./navigation-references.js";
 import { resolveImported } from "./navigation-resolve.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
@@ -171,11 +171,7 @@ async function buildImportCandidates(index: ProjectIndex): Promise<ImportCandida
     if (!moduleIndex.imports.length) continue;
     const file = moduleIndex.file;
     try {
-      const parsed = await ensureParsedContext(
-        file,
-        index.parsed?.get(fileIdentityKey(file)),
-        index.languageExtensions,
-      );
+      const parsed = await ensureParsedContextForIndex(index, file);
       const scope = getCachedScope(index, file, moduleIndex, parsed);
       for (const binding of scope.all) {
         if (!binding.import) continue;

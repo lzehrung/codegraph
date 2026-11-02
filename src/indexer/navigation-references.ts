@@ -12,7 +12,8 @@ import {
   receiverConstructorExpression,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
-import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
+import type { ParsedFileContext } from "./parse-context.js";
+import { ensureParsedContextForIndex } from "./parsed-cache.js";
 import { definitionIdentityKey, sameDef } from "./reference-context.js";
 import { toTreeSitterPosition } from "./shared.js";
 import {
@@ -107,6 +108,63 @@ type ExportFromIdentifier = {
   entry?: ReexportEntry;
 };
 
+type ExportFromItem = {
+  start: number;
+  end: number;
+  sourceSpecifier?: string;
+  sourceEnd?: number;
+  fromSpecifier?: string;
+};
+type ExportFromScan = {
+  items: ExportFromItem[];
+  namespaces: Array<{ start: number; end: number }>;
+};
+
+const exportFromScanCache = new WeakMap<SyntaxTreeLike, ExportFromScan>();
+
+/** Preserve the existing text scan's ranges and match order, but run it once per parsed tree. */
+function exportFromScanFor(parsed: Pick<ParsedFileContext, "source" | "tree">): ExportFromScan {
+  const cached = exportFromScanCache.get(parsed.tree);
+  if (cached) return cached;
+
+  const items: ExportFromItem[] = [];
+  const namespaces: ExportFromScan["namespaces"] = [];
+  EXPORT_FROM_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = EXPORT_FROM_PATTERN.exec(parsed.source))) {
+    const listText = match[1]!;
+    const listOffset = match[0].indexOf(listText);
+    if (listOffset < 0) continue;
+    const listStart = match.index + listOffset;
+    let itemOffset = 0;
+    for (const item of listText.split(",")) {
+      const leadingWhitespace = item.search(/\S/);
+      if (leadingWhitespace >= 0) {
+        const itemText = item.trim();
+        const start = listStart + itemOffset + leadingWhitespace;
+        const sourceSpecifier = EXPORT_FROM_SPECIFIER_PATTERN.exec(itemText)?.[1];
+        items.push({
+          start,
+          end: start + itemText.length,
+          ...(sourceSpecifier
+            ? { sourceSpecifier, sourceEnd: start + sourceSpecifier.length, fromSpecifier: match[3]! }
+            : {}),
+        });
+      }
+      itemOffset += item.length + 1;
+    }
+  }
+  NAMESPACE_EXPORT_PATTERN.lastIndex = 0;
+  while ((match = NAMESPACE_EXPORT_PATTERN.exec(parsed.source))) {
+    const namespace = match[1]!;
+    const start = match.index + match[0].indexOf(namespace);
+    namespaces.push({ start, end: start + namespace.length });
+  }
+  const scan = { items, namespaces };
+  exportFromScanCache.set(parsed.tree, scan);
+  return scan;
+}
+
 export function exportFromIdentifier(
   index: ProjectIndex,
   fileId: string,
@@ -119,56 +177,28 @@ export function exportFromIdentifier(
   const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
   if (!moduleIndex) return null;
 
-  EXPORT_FROM_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = EXPORT_FROM_PATTERN.exec(parsed.source))) {
-    const listText = match[1]!;
-    const listOffset = match[0].indexOf(listText);
-    if (listOffset < 0) continue;
-    const listStart = match.index + listOffset;
-    let itemOffset = 0;
-    for (const item of listText.split(",")) {
-      const leadingWhitespace = item.search(/\S/);
-      if (leadingWhitespace < 0) {
-        itemOffset += item.length + 1;
-        continue;
-      }
-      const itemText = item.trim();
-      const itemStart = listStart + itemOffset + leadingWhitespace;
-      const itemEnd = itemStart + itemText.length;
-      if (startIndex < itemStart || startIndex >= itemEnd) {
-        itemOffset += item.length + 1;
-        continue;
-      }
-
-      const sourceMatch = EXPORT_FROM_SPECIFIER_PATTERN.exec(itemText);
-      if (!sourceMatch) return { isExportFrom: true };
-      const sourceSpecifier = sourceMatch[1]!;
-      const sourceEnd = itemStart + sourceSpecifier.length;
-      if (startIndex >= sourceEnd) return { isExportFrom: true };
-      const fromSpecifier = match[3]!;
-      const matchingEntries = moduleIndex.exports.filter(
-        (candidate): candidate is ReexportEntry =>
-          candidate.type === "reexport" && candidate.sourceSpecifier === sourceSpecifier,
-      );
-      const entry =
-        matchingEntries.find(
-          (candidate) => candidate.moduleSpecifier === fromSpecifier || candidate.fromModule === fromSpecifier,
-        ) ?? (matchingEntries.length === 1 ? matchingEntries[0] : undefined);
-      return { isExportFrom: true, sourceSpecifier, ...(entry ? { entry } : {}) };
-    }
-    itemOffset += listText.length + 1;
+  const scan = exportFromScanFor(parsed);
+  for (const item of scan.items) {
+    if (startIndex < item.start || startIndex >= item.end) continue;
+    const { sourceSpecifier, sourceEnd, fromSpecifier } = item;
+    if (!sourceSpecifier || sourceEnd === undefined || startIndex >= sourceEnd) return { isExportFrom: true };
+    const matchingEntries = moduleIndex.exports.filter(
+      (candidate): candidate is ReexportEntry =>
+        candidate.type === "reexport" && candidate.sourceSpecifier === sourceSpecifier,
+    );
+    const entry =
+      matchingEntries.find(
+        (candidate) => candidate.moduleSpecifier === fromSpecifier || candidate.fromModule === fromSpecifier,
+      ) ?? (matchingEntries.length === 1 ? matchingEntries[0] : undefined);
+    return { isExportFrom: true, sourceSpecifier, ...(entry ? { entry } : {}) };
   }
-  NAMESPACE_EXPORT_PATTERN.lastIndex = 0;
-  while ((match = NAMESPACE_EXPORT_PATTERN.exec(parsed.source))) {
-    const namespace = match[1]!;
-    const namespaceStart = match.index + match[0].indexOf(namespace);
-    if (startIndex >= namespaceStart && startIndex < namespaceStart + namespace.length) {
-      return { isExportFrom: true };
-    }
+  for (const namespace of scan.namespaces) {
+    if (startIndex >= namespace.start && startIndex < namespace.end) return { isExportFrom: true };
   }
   return null;
 }
+
+const filteredScopeOccurrences = new WeakSet<ScopeIndex>();
 
 export function getCachedScope(
   index: ProjectIndex,
@@ -180,6 +210,10 @@ export function getCachedScope(
     tree: SyntaxTreeLike;
   },
 ): ScopeIndex {
+  // One builder for the shared scope cache: it reuses the module's indexed callables.
+  const scopeIndex = getOrBuildScopeIndex(index, fileId, parsedCtx.source, parsedCtx.sup, moduleIndex, parsedCtx.tree);
+  if (filteredScopeOccurrences.has(scopeIndex)) return scopeIndex;
+  filteredScopeOccurrences.add(scopeIndex);
   const keepOccurrence = (binding: Binding, occurrence: Range): boolean => {
     if (exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom) return false;
     if (parsedCtx.sup.id !== "php" || !binding.def || occurrence.start.index === binding.def.start.index) return true;
@@ -190,8 +224,6 @@ export function getCachedScope(
     const node = parsedCtx.tree.rootNode.descendantForIndex(start, start);
     return phpReferenceRoleMatchesKind(node, kind);
   };
-  // One builder for the shared scope cache: it reuses the module's indexed callables.
-  const scopeIndex = getOrBuildScopeIndex(index, fileId, parsedCtx.source, parsedCtx.sup, moduleIndex, parsedCtx.tree);
   for (const binding of scopeIndex.all) {
     binding.occurrences = binding.occurrences.filter((occurrence) => keepOccurrence(binding, occurrence));
   }
@@ -207,11 +239,7 @@ export function getCachedScope(
  */
 async function readPhpDefinitionNames(index: ProjectIndex, definitionFile: string, def: SymbolDef): Promise<string[]> {
   try {
-    const definitionParsed = await ensureParsedContext(
-      definitionFile,
-      index.parsed?.get(fileIdentityKey(definitionFile)),
-      index.languageExtensions,
-    );
+    const definitionParsed = await ensureParsedContextForIndex(index, definitionFile);
     if (definitionParsed.sup.id !== "php") {
       return [];
     }
@@ -282,11 +310,7 @@ async function phpOwnerInfo(
 ): Promise<{ owner: SymbolDef; containerStart: number; containerEnd: number } | null> {
   const module = index.byFile.get(fileIdentityKey(def.file));
   if (!module) return null;
-  const parsed = await ensureParsedContext(
-    def.file,
-    index.parsed?.get(fileIdentityKey(def.file)),
-    index.languageExtensions,
-  );
+  const parsed = await ensureParsedContextForIndex(index, def.file);
   const start = def.range.start;
   const position = toTreeSitterPosition(start);
   let current: SyntaxNodeLike | null = parsed.tree.rootNode.descendantForPosition(position, position);
@@ -431,8 +455,7 @@ async function collectNamedNodeReferences(
   nameEquivalenceUnavailable: boolean;
 } | null> {
   try {
-    const parsedEntry = index.parsed?.get(fileIdentityKey(fileId));
-    const parsed = await ensureParsedContext(fileId, parsedEntry, index.languageExtensions);
+    const parsed = await ensureParsedContextForIndex(index, fileId);
     const identifierTypes = new Set<string>([
       ...parsed.sup.nodeTypes.identifier,
       ...(parsed.sup.nodeTypes.propertyIdentifier ?? []),

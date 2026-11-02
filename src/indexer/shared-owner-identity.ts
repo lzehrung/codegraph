@@ -8,6 +8,7 @@ import { sliceText } from "../util/ast.js";
 import { normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ParsedFileContext } from "./parse-context.js";
+import { cachedParsedContextForIndexSync, ensureParsedContextForIndex } from "./parsed-cache.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "./types.js";
 
 import { definitionIdentityKey } from "./reference-context.js";
@@ -304,7 +305,7 @@ const identityParsedCaches = new WeakMap<ProjectIndex, Map<string, ParsedFileCon
 
 function parsedContextForIdentity(index: ProjectIndex, file: string): ParsedFileContext | null {
   const fileKey = fileIdentityKey(file);
-  const retained = index.parsed?.get(fileKey);
+  const retained = cachedParsedContextForIndexSync(index, file);
   if (retained) return retained;
 
   let cache = identityParsedCaches.get(index);
@@ -331,6 +332,7 @@ function parsedContextForIdentity(index: ProjectIndex, file: string): ParsedFile
     sup,
     nativeQueries: null,
   };
+  void ensureParsedContextForIndex(index, file, context);
   cache.set(fileKey, context);
   return context;
 }

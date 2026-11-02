@@ -69,7 +69,8 @@ import {
   isGoExportedMemberName,
   isSwiftCrossFileHiddenSharedOwnerMember,
 } from "./declaration-visibility.js";
-import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
+import type { ParsedFileContext } from "./parse-context.js";
+import { ensureParsedContextForIndex } from "./parsed-cache.js";
 import {
   csharpLookupName,
   csharpQualifiedNameNode,
@@ -263,11 +264,7 @@ export async function resolveSharedOwnerContainers(params: {
   for (const peer of units) {
     let peerContext: ParsedFileContext;
     try {
-      peerContext = await ensureParsedContext(
-        peer.file,
-        index.parsed?.get(fileIdentityKey(peer.file)),
-        index.languageExtensions,
-      );
+      peerContext = await ensureParsedContextForIndex(index, peer.file);
     } catch {
       continue;
     }
@@ -306,11 +303,7 @@ export async function sharedOwnerMemberUnitComplete(index: ProjectIndex, def: Sy
   if (!def.isMember) return null;
   let context: ParsedFileContext;
   try {
-    context = await ensureParsedContext(
-      def.file,
-      index.parsed?.get(fileIdentityKey(def.file)),
-      index.languageExtensions,
-    );
+    context = await ensureParsedContextForIndex(index, def.file);
   } catch {
     return null;
   }
@@ -339,11 +332,7 @@ export async function findCsharpPartialTypeEquivalents(index: ProjectIndex, def:
   if (!module) return [];
   let context: ParsedFileContext;
   try {
-    context = await ensureParsedContext(
-      def.file,
-      index.parsed?.get(fileIdentityKey(def.file)),
-      index.languageExtensions,
-    );
+    context = await ensureParsedContextForIndex(index, def.file);
   } catch {
     return [];
   }
@@ -1052,7 +1041,7 @@ export async function resolveMemberAccessDefinition(params: {
               base,
             );
             if (receiver && declaresMembers(receiver.def)) {
-              const context = await ensureParsedContext(receiver.def.file, undefined, index.languageExtensions);
+              const context = await ensureParsedContextForIndex(index, receiver.def.file);
               const embedded = goEmbeddedTypeNames(receiver.def.localName, context, context.sup.normalizeIdentifier);
               if (embedded.includes(memberName)) {
                 const ownerModule = index.byFile.get(fileIdentityKey(receiver.def.file));
@@ -1302,7 +1291,7 @@ export async function resolveMemberAccessDefinition(params: {
 
     if (receiver) {
       const objDef = receiver.def;
-      const targetContext = await ensureParsedContext(objDef.file, undefined, index.languageExtensions);
+      const targetContext = await ensureParsedContextForIndex(index, objDef.file);
       const start = objDef.range.start;
       const targetPosition = {
         row: start.line - 1,
@@ -1403,7 +1392,7 @@ export async function resolveMemberAccessDefinition(params: {
           }
           const memberContext =
             memberDef && fileIdentityKey(memberDef.file) !== fileIdentityKey(objDef.file)
-              ? await ensureParsedContext(memberDef.file, undefined, index.languageExtensions)
+              ? await ensureParsedContextForIndex(index, memberDef.file)
               : targetContext;
           if (
             memberDef &&
@@ -1849,7 +1838,7 @@ export async function provenClassifiedReceiverOmitsMember(
 async function keywordClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promise<KeywordClassRef | null> {
   const module = index.byFile.get(fileIdentityKey(def.file));
   if (!module) return null;
-  const context = await ensureParsedContext(def.file, undefined, index.languageExtensions);
+  const context = await ensureParsedContextForIndex(index, def.file);
   const start = def.range.start;
   const position = {
     row: start.line - 1,
@@ -1866,7 +1855,7 @@ async function keywordClassRefFromNode(
   mod: ModuleIndex,
   node: SyntaxNodeLike,
 ): Promise<KeywordClassRef | null> {
-  const context = await ensureParsedContext(mod.file, undefined, index.languageExtensions);
+  const context = await ensureParsedContextForIndex(index, mod.file);
   const memberNode = context.tree.rootNode.descendantForPosition(node.startPosition, node.startPosition);
   const container = findEnclosingClassContainer(memberNode);
   if (!container) return null;
@@ -2109,11 +2098,7 @@ async function resolveKeywordReceiverMember(
 
 /** The parameter list of a Java, Kotlin, or C# method declaration. */
 async function memberParameterList(index: ProjectIndex, def: SymbolDef): Promise<SyntaxNodeLike | null> {
-  const context = await ensureParsedContext(
-    def.file,
-    index.parsed?.get(fileIdentityKey(def.file)),
-    index.languageExtensions,
-  ).catch(() => null);
+  const context = await ensureParsedContextForIndex(index, def.file).catch(() => null);
   const start = def.range.start.index;
   if (!context || start === undefined) return null;
   const declaration = context.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start).parent;
@@ -2150,11 +2135,7 @@ function importedTypeSource(module: ModuleIndex, name: string): string {
 /** Type parameter names declared by a method or any type enclosing it. */
 async function typeParameterNamesAround(index: ProjectIndex, def: SymbolDef): Promise<Set<string>> {
   const names = new Set<string>();
-  const context = await ensureParsedContext(
-    def.file,
-    index.parsed?.get(fileIdentityKey(def.file)),
-    index.languageExtensions,
-  ).catch(() => null);
+  const context = await ensureParsedContextForIndex(index, def.file).catch(() => null);
   const start = def.range.start.index;
   if (!context || start === undefined) return names;
   let current: SyntaxNodeLike | null = context.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start);
@@ -2234,11 +2215,7 @@ export async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, r
   ]);
   if (!leftTypes || !rightTypes || leftTypes.length !== rightTypes.length) return false;
   const sameFile = fileIdentityKey(left.file) === fileIdentityKey(right.file);
-  const leftContext = await ensureParsedContext(
-    left.file,
-    index.parsed?.get(fileIdentityKey(left.file)),
-    index.languageExtensions,
-  ).catch(() => null);
+  const leftContext = await ensureParsedContextForIndex(index, left.file).catch(() => null);
   if (!leftContext) return false;
   for (let at = 0; at < leftTypes.length; at += 1) {
     const text = leftTypes[at]!;
@@ -2255,11 +2232,7 @@ export async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, r
         .split(".")
         .pop() ?? text;
     if (BUILTIN_PARAMETER_TYPES[leftContext.sup.id]?.has(base)) continue;
-    const rightContext = await ensureParsedContext(
-      right.file,
-      index.parsed?.get(fileIdentityKey(right.file)),
-      index.languageExtensions,
-    ).catch(() => null);
+    const rightContext = await ensureParsedContextForIndex(index, right.file).catch(() => null);
     const leftModule = index.byFile.get(fileIdentityKey(left.file));
     const rightModule = index.byFile.get(fileIdentityKey(right.file));
     if (!rightContext || !leftModule || !rightModule) return false;
@@ -2383,11 +2356,7 @@ async function isUninheritedPrivateMember(
     const usePackage = getPackageDeclarationName(index, mod.file, useLanguage === "kotlin" ? "kotlin" : "java");
     if (memberPackage !== usePackage) return true;
   }
-  const parsed = await ensureParsedContext(
-    member.file,
-    index.parsed?.get(fileIdentityKey(member.file)),
-    index.languageExtensions,
-  ).catch(() => null);
+  const parsed = await ensureParsedContextForIndex(index, member.file).catch(() => null);
   const nameNode = parsed?.tree.rootNode.descendantForIndex(start, member.range.end.index ?? start);
   return !!parsed && !!nameNode && isPrivateDeclaration(parsed.sup.id, nameNode);
 }
@@ -2596,11 +2565,7 @@ async function resolveSwiftAliasContainer(index: ProjectIndex, alias: SymbolDef)
     seen.add(key);
     const mod = index.byFile.get(fileIdentityKey(current.file));
     if (!mod) return undefined;
-    const context = await ensureParsedContext(
-      current.file,
-      index.parsed?.get(fileIdentityKey(current.file)),
-      index.languageExtensions,
-    );
+    const context = await ensureParsedContextForIndex(index, current.file);
     if (context.sup.id !== "swift") return undefined;
     const declaration = nameNodeForDef(context, current)?.parent;
     if (declaration?.type !== "typealias_declaration") {
@@ -2664,7 +2629,7 @@ async function resolveReceiverDefinition(
         owner.def,
       );
       if (!field || field.kind !== SymbolKind.Variable || !field.isMember) return null;
-      const fieldContext = await ensureParsedContext(field.file, undefined, index.languageExtensions);
+      const fieldContext = await ensureParsedContextForIndex(index, field.file);
       const name = nameNodeForDef(fieldContext, field);
       let declaration = name?.parent ?? null;
       if (declaration?.type === "variable_declarator") declaration = declaration.parent;
@@ -2774,11 +2739,7 @@ async function resolveReceiverDefinition(
 /** Whether a type-qualified access (`Util.M`) can name `def`: a nested type or a static member. */
 async function reachableThroughTypeName(index: ProjectIndex, def: SymbolDef): Promise<boolean> {
   if (declaresMembers(def)) return true;
-  const context = await ensureParsedContext(
-    def.file,
-    index.parsed?.get(fileIdentityKey(def.file)),
-    index.languageExtensions,
-  );
+  const context = await ensureParsedContextForIndex(index, def.file);
   const nameNode = nameNodeForDef(context, def);
   if (!nameNode) return false;
   return hasStaticModifier(def, context, nearestMemberContainer(nameNode) ?? context.tree.rootNode);
@@ -2798,7 +2759,7 @@ async function resolveMemberDefinitionForBase(
   member: string,
   knownArgumentCount?: number,
 ): Promise<SymbolDef | undefined> {
-  const targetContext = await ensureParsedContext(baseDef.file, undefined, index.languageExtensions);
+  const targetContext = await ensureParsedContextForIndex(index, baseDef.file);
   const start = baseDef.range.start;
   const targetPosition = {
     row: start.line - 1,
@@ -3584,11 +3545,7 @@ async function selectGoReceiverMember(
     [...peers].map(async (file) => {
       const module = index.byFile.get(fileIdentityKey(file));
       if (!module) return null;
-      const context = await ensureParsedContext(
-        file,
-        index.parsed?.get(fileIdentityKey(file)),
-        index.languageExtensions,
-      );
+      const context = await ensureParsedContextForIndex(index, file);
       return context.sup.id === "go" ? { module, context } : null;
     }),
   );
@@ -3770,7 +3727,7 @@ async function pythonClassRefFromDef(
     if (!module) return null;
     const context = loadParsedFile
       ? await loadParsedFile(def.file)
-      : await ensureParsedContext(def.file, undefined, index.languageExtensions);
+      : await ensureParsedContextForIndex(index, def.file);
     if (!context || context.sup.id !== "python") return null;
     const start = def.range.start;
     const position = {

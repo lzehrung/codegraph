@@ -18,6 +18,7 @@ import {
   closestContainingScope,
 } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
+import { cachedParsedContextForIndexSync, ensureParsedContextForIndex } from "./parsed-cache.js";
 import {
   cjsRequireValueBinding,
   csharpShadowedStarsMayHold,
@@ -192,6 +193,14 @@ export function getOrBuildScopeIndex(
   const fileKey = fileIdentityKey(file);
   let scopeIndex = index.scopeCache.get(fileKey);
   if (scopeIndex) return scopeIndex;
+  const shared = cachedParsedContextForIndexSync(index, file);
+  if (shared) {
+    source = shared.source;
+    sup = shared.sup;
+    tree = shared.tree;
+  } else {
+    void ensureParsedContextForIndex(index, file, { source, sup, tree, nativeQueries: null });
+  }
   scopeIndex = buildScopeIndexFromSource(file, source, sup, mod.imports, { tree, locals: mod.locals });
   index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;

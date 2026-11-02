@@ -1,6 +1,6 @@
 import path from "node:path";
 import { getCompilationUnitPeers } from "../indexer/compilation-units.js";
-import { ensureParsedContext } from "../indexer/parse-context.js";
+import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isNativeRequiredUnavailableError } from "../native/runtime.js";
@@ -55,11 +55,7 @@ const factsByModule = new WeakMap<ModuleIndex, Promise<TerraformFileFacts | null
 
 async function computeFacts(index: ProjectIndex, module: ModuleIndex): Promise<TerraformFileFacts | null> {
   try {
-    const parsed = await ensureParsedContext(
-      module.file,
-      index.parsed?.get(fileIdentityKey(module.file)),
-      index.languageExtensions,
-    );
+    const parsed = await ensureParsedContextForIndex(index, module.file);
     if (parsed.sup.id !== TERRAFORM_LANGUAGE_ID) return null;
     return extractTerraformFacts(parsed.tree.rootNode);
   } catch (error) {

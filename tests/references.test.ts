@@ -13,8 +13,15 @@ import {
 } from "../src/indexer/navigation-references.js";
 import { findUsageReferences } from "../src/indexer/navigation.js";
 import { goToDefinition, type ProjectIndex } from "../src/index.js";
+import { buildSymbolGraphDetailed } from "../src/graphs.js";
+import { ensureParsedContextForIndex } from "../src/indexer/parsed-cache.js";
 import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import {
+  __resetNativeTreeSitterBindingForTests,
+  __setNativeTreeSitterBindingForTests,
+} from "../src/native/tree-sitter-native.js";
+import { loadBinding } from "../src/native/runtime.js";
 import {
   createTestIndex,
   createTestIndexFromFiles,
@@ -101,6 +108,178 @@ function markCandidateParserDegraded(index: indexer.ProjectIndex, file: string):
 }
 
 describe("Find References", () => {
+  it("parses disk-cached files once across lookups without full native extraction", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-reference-parse-cache-"));
+    try {
+      const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+      const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+      await fsp.writeFile(
+        sourceFile,
+        "export function first() { return 1; }\nexport function second() { return 2; }\n",
+      );
+      await fsp.writeFile(consumerFile, 'import { first, second } from "./source";\nfirst();\nsecond();\n');
+      const cacheDir = path.join(root, "cache");
+      await indexer.buildProjectIndex(root, { cache: "disk", cacheDir });
+      const index = await indexer.buildProjectIndex(root, { cache: "disk", cacheDir });
+      expect(index.parsed).toBeUndefined();
+
+      const state = loadBinding();
+      if (!state.loaded) throw new Error("Native addon required for reference lookup test");
+      const originalExtract = state.binding.extractLanguage;
+      const originalParse = state.binding.parseSyntaxTree;
+      if (!originalParse) throw new Error("Native syntax-tree parser required for reference lookup test");
+      let extractions = 0;
+      const reads = new Map<string, number>();
+      __setNativeTreeSitterBindingForTests({
+        ...state,
+        binding: {
+          ...state.binding,
+          extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+            extractions += 1;
+            return originalExtract(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+          },
+          parseSyntaxTree: (source, languageId) => {
+            const key = source.includes("function first()") ? "source" : "consumer";
+            reads.set(key, (reads.get(key) ?? 0) + 1);
+            return originalParse(source, languageId);
+          },
+        },
+      });
+      try {
+        const first = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+        const second = await indexer.findReferences(index, { file: sourceFile, line: 2, column: 17 });
+        expect(first.status).toBe("ok");
+        expect(second.status).toBe("ok");
+        if (first.status === "ok" && second.status === "ok") {
+          expect(first.references.map((ref) => ref.file + ":" + ref.range.start.line).sort()).toEqual([
+            consumerFile + ":1",
+            consumerFile + ":2",
+            sourceFile + ":1",
+          ]);
+          expect(second.references.map((ref) => ref.file + ":" + ref.range.start.line).sort()).toEqual([
+            consumerFile + ":1",
+            consumerFile + ":3",
+            sourceFile + ":2",
+          ]);
+        }
+        expect(reads.get("source")).toBe(1);
+        expect(reads.get("consumer")).toBe(1);
+        expect(extractions).toBe(0);
+      } finally {
+        __resetNativeTreeSitterBindingForTests();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  for (const order of [
+    "graph then references",
+    "references then graph",
+    "graph concurrently with references",
+  ] as const) {
+    const graphFirst = order === "graph then references";
+    it(`${order} share each indexed syntax tree`, async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-graph-reference-tree-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(
+          sourceFile,
+          "export function first() { return 1; }\nexport function second() { return 2; }\n",
+        );
+        await fsp.writeFile(consumerFile, 'import { first, second } from "./source";\nfirst();\nsecond();\n');
+        const cacheDir = path.join(root, "cache");
+        await indexer.buildProjectIndex(root, { cache: "disk", cacheDir });
+        const index = await indexer.buildProjectIndex(root, { cache: "disk", cacheDir });
+        expect(index.parsed).toBeUndefined();
+
+        const state = loadBinding();
+        if (!state.loaded) throw new Error("Native addon required for graph/reference reuse test");
+        const originalExtract = state.binding.extractLanguage;
+        const originalParse = state.binding.parseSyntaxTree;
+        if (!originalParse) throw new Error("Native syntax-tree parser required for graph/reference reuse test");
+        let extractions = 0;
+        const reads = new Map<string, number>();
+        __setNativeTreeSitterBindingForTests({
+          ...state,
+          binding: {
+            ...state.binding,
+            extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => {
+              extractions += 1;
+              return originalExtract(source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery);
+            },
+            parseSyntaxTree: (source, languageId) => {
+              const file = source.includes("function first()") ? "source" : "consumer";
+              reads.set(file, (reads.get(file) ?? 0) + 1);
+              return originalParse(source, languageId);
+            },
+          },
+        });
+        try {
+          let result: Awaited<ReturnType<typeof indexer.findReferences>>;
+          if (order === "graph concurrently with references") {
+            let notifyGraphRead!: () => void;
+            const graphReadStarted = new Promise<void>((resolve) => {
+              notifyGraphRead = resolve;
+            });
+            let releaseGraphRead!: () => void;
+            const graphReadGate = new Promise<void>((resolve) => {
+              releaseGraphRead = resolve;
+            });
+            const originalReadFile = fsp.readFile.bind(fsp);
+            let intercepted = false;
+            const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (file, options) => {
+              if (file === sourceFile && !intercepted) {
+                intercepted = true;
+                notifyGraphRead();
+                await graphReadGate;
+              }
+              return originalReadFile(file, options);
+            });
+            try {
+              const graphPromise = buildSymbolGraphDetailed(index);
+              await graphReadStarted;
+              const lookupPromise = indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+              releaseGraphRead();
+              [, result] = await Promise.all([graphPromise, lookupPromise]);
+            } finally {
+              releaseGraphRead();
+              readSpy.mockRestore();
+            }
+          } else {
+            if (graphFirst) await buildSymbolGraphDetailed(index);
+            result = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+            if (!graphFirst) await buildSymbolGraphDetailed(index);
+          }
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(result.references.map((ref) => ref.file + ":" + ref.range.start.line).sort()).toEqual([
+              consumerFile + ":1",
+              consumerFile + ":2",
+              sourceFile + ":1",
+            ]);
+            expect(result.references.some((ref) => ref.file === consumerFile && ref.range.start.line === 3)).toBe(
+              false,
+            );
+          }
+          expect(reads.get("source")).toBe(1);
+          expect(reads.get("consumer")).toBe(1);
+          expect(extractions).toBe(0);
+          for (const file of [sourceFile, consumerFile]) {
+            const parsed = await ensureParsedContextForIndex(index, file);
+            const scopeRoot = index.scopeCache.get(fileIdentityKey(file))?.allScopes[0]?.node;
+            expect(scopeRoot).toBe(parsed.tree.rootNode);
+          }
+        } finally {
+          __resetNativeTreeSitterBindingForTests();
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
   it("marks Python property accessors as strategy-unavailable", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-property-references-"));
     try {
@@ -4230,6 +4409,52 @@ describe("Find References", () => {
     });
   });
   describe("JavaScript and TypeScript export-from references", () => {
+    it("reuses the re-export scan for repeated lookups without dropping re-export sites", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-export-scan-cache-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const barrelFile = path.join(root, "barrel.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export function target() { return 1; }\n");
+        await fsp.writeFile(barrelFile, 'export { target } from "./source";\n');
+        await fsp.writeFile(consumerFile, 'import { target } from "./barrel";\ntarget();\n');
+        const index = await createTestIndexFromFiles(root, [sourceFile, barrelFile, consumerFile]);
+
+        const originalExec = RegExp.prototype.exec;
+        let scanCalls = 0;
+        const spy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (this: RegExp, input: string) {
+          if (this.source.startsWith("\\bexport\\s+") || this.source.startsWith("\\bexport\\s*\\*")) {
+            scanCalls += 1;
+          }
+          return originalExec.call(this, input);
+        });
+        try {
+          const first = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+          const callsAfterFirst = scanCalls;
+          const second = await indexer.findReferences(index, { file: sourceFile, line: 1, column: 17 });
+          expect(first.status).toBe("ok");
+          expect(second).toEqual(first);
+          if (first.status === "ok") {
+            expect(first.references.some((reference) => reference.file === barrelFile && reference.via?.reexport)).toBe(
+              true,
+            );
+            expect(
+              first.references.some((reference) => reference.file === consumerFile && reference.range.start.line === 2),
+            ).toBe(true);
+            expect(
+              first.references.some((reference) => reference.file === consumerFile && reference.range.start.line === 3),
+            ).toBe(false);
+          }
+          expect(callsAfterFirst).toBeGreaterThan(0);
+          expect(scanCalls).toBe(callsAfterFirst);
+        } finally {
+          spy.mockRestore();
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     const sampleCases = [
       {
         label: "TypeScript",
