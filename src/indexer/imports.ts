@@ -335,9 +335,11 @@ export async function collectImportsForFile(
       }
       await finalizeImports();
       // Native capture results are valid even when no bindings match. The CommonJS
-      // require supplement below remains native-owned for TS/TSX.
+      // require supplement below remains native-owned for TS/TSX. Stripping comments only
+      // blanks characters, so a source without the word `require` has no `require(` to find.
       if (
         (resolvedSup.id === "ts" || resolvedSup.id === "tsx") &&
+        resolvedSource.includes("require") &&
         /\brequire\s*\(/.test(stripJsLikeComments(resolvedSource))
       ) {
         await runValueRequireFallback();
