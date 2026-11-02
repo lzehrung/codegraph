@@ -4,9 +4,10 @@ import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js
 import { calculateSeverity, calculateTransitiveSeverity, normalizeSeverityWeights } from "../src/impact/severity.js";
 import { buildCallerRangeIndex, findCallerSymbolId } from "../src/impact/call-compatibility.js";
 import { analyzeTransitiveImpact } from "../src/impact/transitive.js";
-import type { ChangedSymbol, ImpactItem } from "../src/impact/types.js";
+import type { ChangedSymbol, ImpactItem, SeverityWeights } from "../src/impact/types.js";
 import type { Reference } from "../src/indexer/types.js";
 import { SymbolKind, buildProjectIndexFromFiles } from "../src/index.js";
+import { analyzeImpactFromDiff } from "../src/impact/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -54,6 +55,45 @@ describe("PR4 impact audit regressions", () => {
       const edge: Edge = { from: consumer, to: { type: "file", path: source }, raw: source };
       expect(calculateTransitiveSeverity(edge, 1, { transitive: 10 })).toBeGreaterThan(
         calculateTransitiveSeverity(edge, 1),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards custom weights to direct impacts in analyzeImpactFromDiff", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-impact-direct-weights-"));
+    try {
+      const source = path.join(root, "source.ts");
+      const consumer = path.join(root, "consumer.ts");
+      await writeFile(source, "export function run() { return 2; }\n", "utf8");
+      await writeFile(consumer, 'import { run } from "./source.js";\nrun();\n', "utf8");
+      const index = await buildProjectIndexFromFiles(root, [source, consumer], { cache: "off" });
+      const diffText = [
+        "diff --git a/source.ts b/source.ts",
+        "index 1234567..abcdef0 100644",
+        "--- a/source.ts",
+        "+++ b/source.ts",
+        "@@ -1,1 +1,1 @@",
+        "-export function run() { return 1; }",
+        "+export function run() { return 2; }",
+        "",
+      ].join("\n");
+      const directSeverity = async (severityWeights?: Partial<SeverityWeights>): Promise<number> => {
+        const report = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          depth: 0,
+          compact: false,
+          ...(severityWeights ? { severityWeights } : {}),
+        });
+        const item = report.impacted.find((entry) => entry.file.endsWith("consumer.ts"));
+        expect(item).toBeDefined();
+        return item!.severity;
+      };
+      const defaultSeverity = await directSeverity();
+      expect(await directSeverity({ directRef: 10, importAlias: 10, namespaceMember: 10 })).toBeGreaterThan(
+        defaultSeverity,
       );
     } finally {
       await rm(root, { recursive: true, force: true });

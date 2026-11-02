@@ -168,7 +168,15 @@ async function analyzeChangedSymbolReferences(
       reason = "importAlias";
     }
 
-    const severityResult = calculateSeverity(changedSymbol, ref, [reason], 0, index, context.fanInByFile);
+    const severityResult = calculateSeverity(
+      changedSymbol,
+      ref,
+      [reason],
+      0,
+      index,
+      context.fanInByFile,
+      options.severityWeights,
+    );
     const existing = context.impacted.get(ref.file);
     const reasons: ImpactReason[] = existing?.reasons ? [...existing.reasons] : [];
     if (!reasons.includes(reason)) {
