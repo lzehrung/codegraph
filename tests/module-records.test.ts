@@ -285,6 +285,32 @@ describe("module records", () => {
     }
   }, 60_000);
 
+  it("counts a SQL syntax tree alongside a TypeScript tree for keepParsed", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codegraph-module-record-sql-trees-"));
+    try {
+      const ts = path.join(root, "main.ts");
+      const sql = path.join(root, "schema.sql");
+      const json = path.join(root, "settings.json");
+      await Promise.all([
+        fs.promises.writeFile(ts, "export const answer = 42;\n", "utf8"),
+        fs.promises.writeFile(sql, "CREATE TABLE example (id INTEGER);\n", "utf8"),
+        fs.promises.writeFile(json, "{}\n", "utf8"),
+      ]);
+      const report: BuildReport = { timings: {} };
+      const index = await buildProjectIndexFromFiles(root, [ts, sql, json], {
+        useNativeWorkers: true,
+        nativeThreads: 2,
+        keepParsed: true,
+        parsedCacheMaxEntries: 1,
+        report,
+      });
+      expect(report.workerPool?.moduleRecords).toBe(1);
+      expect([...(index.parsed?.keys() ?? [])].map(fileIdentityKey)).toEqual([fileIdentityKey(sql)]);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("keeps the automatic parse window to twice a one-thread worker pool", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codegraph-module-record-window-"));
     try {

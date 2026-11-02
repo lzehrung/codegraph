@@ -1795,8 +1795,8 @@ async function buildIndexFromFileListInProbeCache(
   let parsedCacheMisses = 0;
   if (opts?.keepParsed) {
     for (const file of cacheMisses) {
-      const support = supportForFile(file, opts.languageExtensions);
-      if (support && !isGraphOnlyLanguage(support.id) && support.id !== "sql") parsedCacheMisses += 1;
+      const support = supportForFileWithoutHeaderSample(file, opts.languageExtensions);
+      if (support && !isGraphOnlyLanguage(support.id)) parsedCacheMisses += 1;
     }
   }
   const moduleRecords: ModuleRecordPolicy = {
