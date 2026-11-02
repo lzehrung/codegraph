@@ -24,6 +24,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
+import { BloomFilter, isBloomIdentifierToken } from "../util/bloom-filter.js";
 import {
   getCallCompatibilityLanguageProfile,
   getCallCompatibilityProvider,
@@ -394,18 +395,31 @@ function callTargetNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
   return node.namedChildren.find((child) => !argumentTypes.has(child.type)) ?? null;
 }
 
-function bestGotoNode(target: SyntaxNodeLike, symbolName: string, source: string): SyntaxNodeLike {
-  let best = target;
-  const walk = (node: SyntaxNodeLike): void => {
-    if (sliceText(node, source) === symbolName) {
-      best = node;
+/**
+ * The last node of a call's target, in document order, whose text is one of `names`, for each of those
+ * names the target spells. The target is the first node searched, so a bare `helper` callee matches as
+ * itself and `a.helper` matches its `helper` member.
+ */
+function lastTargetNodesNamed(
+  target: SyntaxNodeLike,
+  source: string,
+  names: ReadonlyMap<string, unknown>,
+): Map<string, SyntaxNodeLike> | null {
+  let found: Map<string, SyntaxNodeLike> | null = null;
+  const pending = [target];
+  while (pending.length) {
+    const node = pending.pop()!;
+    const text = sliceText(node, source);
+    if (names.has(text)) {
+      found ??= new Map();
+      found.set(text, node);
     }
-    for (const child of node.namedChildren ?? []) {
-      walk(child);
+    const children = node.namedChildren ?? [];
+    for (let at = children.length - 1; at >= 0; at -= 1) {
+      pending.push(children[at]!);
     }
-  };
-  walk(target);
-  return best;
+  }
+  return found;
 }
 
 function cppUnqualifiedCallTarget(
@@ -436,19 +450,30 @@ function cppUnqualifiedCallTarget(
   return resolved.definition;
 }
 
-async function collectVerifiedCallsiteReferences(
-  index: ProjectIndex,
-  changedSymbol: ChangedSymbol,
-  maxRefs: number,
-  shouldIncludeReference: (file: string) => boolean,
-  diagnostics: ImpactDiagnostics["callCompatibility"] | undefined,
-  parsedDefinition: ParsedFileContext,
-  equivalentDefinitions: readonly SymbolDef[] | undefined,
-  excludedReferences: ReadonlySet<string>,
-): Promise<Reference[]> {
-  const refs: Reference[] = [];
-  const seen = new Set<string>();
-  const languageId = parsedDefinition.sup.id;
+/** A changed callable whose callsites are found by walking files for calls that name it. */
+type VerifiedCallsiteSweep = {
+  changedSymbol: ChangedSymbol;
+  /** The most callsites the sweep reports. */
+  limit: number;
+  languageId: string;
+  equivalentDefinitions: readonly SymbolDef[] | undefined;
+  /** Callsite keys that are hints already, which the sweep does not report again. */
+  excludedReferences: ReadonlySet<string>;
+};
+
+type VerifiedSweepState = {
+  sweep: VerifiedCallsiteSweep;
+  def: SymbolDef;
+  /** The files a C or C++ function can be called from; every file when this is undefined. */
+  candidateFiles: Set<string> | undefined;
+  /** Whether an identifier filter can rule a file out, which holds for a name the filter stores whole. */
+  filterable: boolean;
+  refs: Reference[];
+  seen: Set<string>;
+};
+
+function startVerifiedSweep(index: ProjectIndex, sweep: VerifiedCallsiteSweep): VerifiedSweepState {
+  const { changedSymbol, languageId, equivalentDefinitions } = sweep;
   const def = changedSymbolToDef(changedSymbol);
   let candidateFiles: Set<string> | undefined;
   if ((languageId === "c" || languageId === "cpp") && changedSymbol.kind === SymbolKind.Function) {
@@ -466,72 +491,162 @@ async function collectVerifiedCallsiteReferences(
       }
     }
   }
+  return {
+    sweep,
+    def,
+    candidateFiles,
+    filterable: isBloomIdentifierToken(changedSymbol.name),
+    refs: [],
+    seen: new Set<string>(),
+  };
+}
+
+function sweepIsFull(state: VerifiedSweepState): boolean {
+  return state.refs.length >= state.sweep.limit;
+}
+
+function probeDigest(digests: Map<string, Buffer>, probe: string): Buffer {
+  let digest = digests.get(probe);
+  if (!digest) {
+    digest = BloomFilter.digestOf(probe);
+    digests.set(probe, digest);
+  }
+  return digest;
+}
+
+/**
+ * Walk one parsed file in document order and give every sweep that is still open the calls whose
+ * callee is spelled as its changed symbol and resolves to its definition.
+ */
+async function sweepParsedFile(
+  index: ProjectIndex,
+  file: string,
+  parsed: ParsedFileContext,
+  states: readonly VerifiedSweepState[],
+): Promise<void> {
+  const statesByName = new Map<string, VerifiedSweepState[]>();
+  for (const state of states) {
+    const name = state.sweep.changedSymbol.name;
+    const sharing = statesByName.get(name);
+    if (sharing) {
+      sharing.push(state);
+    } else {
+      statesByName.set(name, [state]);
+    }
+  }
+
+  let openSweeps = states.length;
+  const pending: SyntaxNodeLike[] = [parsed.tree.rootNode];
+  while (pending.length && openSweeps) {
+    const node = pending.pop()!;
+    const target = callExpressionTypes.has(node.type) ? callTargetNode(node) : null;
+    const calleeNodes = target ? lastTargetNodesNamed(target, parsed.source, statesByName) : null;
+    if (target && calleeNodes) {
+      for (const [name, gotoNode] of calleeNodes) {
+        const looking = (statesByName.get(name) ?? []).filter((state) => !sweepIsFull(state));
+        if (!looking.length) {
+          continue;
+        }
+        const result = await goToDefinition(
+          index,
+          {
+            file,
+            line: gotoNode.startPosition.row + 1,
+            column: gotoNode.startPosition.column + 1,
+          },
+          parsed,
+        );
+        // Navigation rejects invalid C++ arity. Compatibility diagnostics need
+        // the unique lexical/import binding before judging the argument count.
+        const definition =
+          result.status === "ok" ? result.definition : cppUnqualifiedCallTarget(index, file, parsed, target);
+        if (!definition) {
+          continue;
+        }
+        const range = toRange(gotoNode);
+        const key = `${fileIdentityKey(file)}:${range.start.line}:${range.start.column}`;
+        for (const state of looking) {
+          const resolvesToSweep =
+            sameDefinition(definition, state.def) ||
+            state.sweep.equivalentDefinitions?.some((candidate) => sameDefinition(definition, candidate));
+          if (!resolvesToSweep || state.seen.has(key) || state.sweep.excludedReferences.has(key)) {
+            continue;
+          }
+          state.seen.add(key);
+          state.refs.push({ file, range });
+          if (sweepIsFull(state)) {
+            openSweeps -= 1;
+          }
+        }
+      }
+    }
+    const children = node.namedChildren ?? [];
+    for (let at = children.length - 1; at >= 0; at -= 1) {
+      pending.push(children[at]!);
+    }
+  }
+}
+
+/**
+ * Find the callsites of every sweep's callable in one pass over the indexed files. A file whose
+ * identifier filter cannot hold a sweep's callee name is not searched for that sweep, so a file no sweep
+ * can match is never parsed; every other file is parsed and walked once, however many sweeps search it.
+ * A sweep ends once it has reported its limit. Each sweep gets the callsites a search of its own would
+ * find, in the same file and document order.
+ */
+async function collectVerifiedCallsiteReferences(
+  index: ProjectIndex,
+  sweeps: readonly VerifiedCallsiteSweep[],
+  shouldIncludeReference: (file: string) => boolean,
+  diagnostics: ImpactDiagnostics["callCompatibility"] | undefined,
+): Promise<Map<VerifiedCallsiteSweep, Reference[]>> {
+  const states = sweeps.map((sweep) => startVerifiedSweep(index, sweep));
+  const digests = new Map<string, Buffer>();
+  let open = states;
 
   for (const module of index.byFile.values()) {
-    const file = module.file;
-    if (candidateFiles && !candidateFiles.has(fileIdentityKey(file))) continue;
-    if (refs.length >= maxRefs) {
+    if (!open.length) {
       break;
     }
-    if (!shouldIncludeReference(file)) {
+    const file = module.file;
+    const fileKey = fileIdentityKey(file);
+    const wanting = open.filter((state) => !state.candidateFiles || state.candidateFiles.has(fileKey));
+    if (!wanting.length || !shouldIncludeReference(file)) {
       continue;
     }
     const support = supportForFileWithoutHeaderSample(file, index.languageExtensions);
     if (!support || !supportsCallCompatibilityLanguage(support.id)) {
       continue;
     }
-    const parsed = await tryEnsureParsedContext(index, file, diagnostics);
-    if (!parsed) {
+    // A filter is built from the file's identifiers, normalized as its own language normalizes them.
+    const filter = index.bloomFilters?.get(file);
+    const searching = filter
+      ? wanting.filter(
+          (state) =>
+            !state.filterable ||
+            filter.mightContainDigest(
+              probeDigest(digests, support.normalizeIdentifier(state.sweep.changedSymbol.name)),
+            ),
+        )
+      : wanting;
+    if (!searching.length) {
       continue;
     }
-
-    const walk = async (node: SyntaxNodeLike): Promise<void> => {
-      if (refs.length >= maxRefs) {
-        return;
+    const parsed = await tryEnsureParsedContext(index, file, diagnostics);
+    if (!parsed) {
+      // The parse attempt counted one skip; every other sweep that would have searched the file counts its own.
+      for (let skipped = 1; skipped < searching.length; skipped += 1) {
+        incrementSkippedReason(diagnostics, "parse-failed");
       }
-      if (callExpressionTypes.has(node.type)) {
-        const target = callTargetNode(node);
-        if (target) {
-          const gotoNode = bestGotoNode(target, changedSymbol.name, parsed.source);
-          if (sliceText(gotoNode, parsed.source) === changedSymbol.name) {
-            const result = await goToDefinition(
-              index,
-              {
-                file,
-                line: gotoNode.startPosition.row + 1,
-                column: gotoNode.startPosition.column + 1,
-              },
-              parsed,
-            );
-            // Navigation rejects invalid C++ arity. Compatibility diagnostics need
-            // the unique lexical/import binding before judging the argument count.
-            const definition =
-              result.status === "ok" ? result.definition : cppUnqualifiedCallTarget(index, file, parsed, target);
-            if (definition) {
-              if (
-                sameDefinition(definition, def) ||
-                equivalentDefinitions?.some((candidate) => sameDefinition(definition, candidate))
-              ) {
-                const range = toRange(gotoNode);
-                const key = `${fileIdentityKey(file)}:${range.start.line}:${range.start.column}`;
-                if (!seen.has(key) && !excludedReferences.has(key)) {
-                  seen.add(key);
-                  refs.push({ file, range });
-                }
-              }
-            }
-          }
-        }
-      }
-      for (const child of node.namedChildren ?? []) {
-        await walk(child);
-      }
-    };
-
-    await walk(parsed.tree.rootNode);
+      continue;
+    }
+    await sweepParsedFile(index, file, parsed, searching);
+    if (searching.some(sweepIsFull)) {
+      open = open.filter((state) => !sweepIsFull(state));
+    }
   }
 
-  return refs;
+  return new Map(states.map((state) => [state.sweep, state.refs]));
 }
 
 function classifyCompatibility(
@@ -749,6 +864,13 @@ function resetCallCompatibilityHints(changedSymbols: ChangedSymbol[]): void {
     delete changedSymbol.callCompatibility;
   }
 }
+
+/** What a changed symbol still needs after its verified sweep, when it has one, has run. */
+type DeferredCallCompatibility = {
+  sweep: VerifiedCallsiteSweep | null;
+  finish: (verifiedCallsites: readonly Reference[]) => Promise<void>;
+};
+
 export async function attachCallCompatibilityHints(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
@@ -772,6 +894,10 @@ export async function attachCallCompatibilityHints(
   if (diagnostics) {
     diagnostics.supportedLanguages = [...getCallCompatibilitySupportedLanguages()];
   }
+  const shouldIncludeReference = options.shouldIncludeReference ?? (() => true);
+  // Verified sweeps of all symbols share one walk of each file, so the hints that follow a sweep are
+  // finished after every symbol has been prepared.
+  const deferred: DeferredCallCompatibility[] = [];
 
   for (const changedSymbol of changedSymbols) {
     if (!changedSymbol.signatureChanged || !isCallableChangedSymbol(changedSymbol)) {
@@ -883,7 +1009,6 @@ export async function attachCallCompatibilityHints(
       ? options.referenceCache.getUsages(index, referenceDef, { maxReferences: referenceScanLimit })
       : findUsageReferences(index, { def: referenceDef }, { maxReferences: referenceScanLimit }));
     let refs: Reference[] = [];
-    const shouldIncludeReference = options.shouldIncludeReference ?? (() => true);
     if (referenceResult.status === "ok") {
       refs = referenceResult.references.filter((ref) => shouldIncludeReference(ref.file));
     }
@@ -930,22 +1055,21 @@ export async function attachCallCompatibilityHints(
         parsedDefinition.sup.id === "cpp" ||
         referenceResult.status !== "ok" ||
         !consideredCallsites);
-    if (shouldRunVerifiedScan) {
-      const verifiedScanLimit = Math.max(
-        0,
-        Math.min(referenceScanLimit - refs.length, options.maxRefs - consideredCallsites),
-      );
-      if (verifiedScanLimit) {
-        const verifiedCallsites = await collectVerifiedCallsiteReferences(
-          index,
-          changedSymbol,
-          verifiedScanLimit,
-          shouldIncludeReference,
-          diagnostics,
-          parsedDefinition,
-          equivalentDefinitions,
-          seenRefs,
-        );
+    const verifiedScanLimit = shouldRunVerifiedScan
+      ? Math.max(0, Math.min(referenceScanLimit - refs.length, options.maxRefs - consideredCallsites))
+      : 0;
+
+    deferred.push({
+      sweep: verifiedScanLimit
+        ? {
+            changedSymbol,
+            limit: verifiedScanLimit,
+            languageId: parsedDefinition.sup.id,
+            equivalentDefinitions,
+            excludedReferences: seenRefs,
+          }
+        : null,
+      finish: async (verifiedCallsites) => {
         for (const ref of verifiedCallsites) {
           if (consideredCallsites >= options.maxRefs) {
             break;
@@ -957,14 +1081,22 @@ export async function attachCallCompatibilityHints(
           seenRefs.add(key);
           await addHintForReference(ref);
         }
-      }
-    }
 
-    if (hints.length) {
-      changedSymbol.callCompatibility = hints;
-      if (diagnostics) {
-        diagnostics.emittedHints += hints.length;
-      }
-    }
+        if (hints.length) {
+          changedSymbol.callCompatibility = hints;
+          if (diagnostics) {
+            diagnostics.emittedHints += hints.length;
+          }
+        }
+      },
+    });
+  }
+
+  const sweeps = deferred.flatMap(({ sweep }) => (sweep ? [sweep] : []));
+  const verifiedCallsites = sweeps.length
+    ? await collectVerifiedCallsiteReferences(index, sweeps, shouldIncludeReference, diagnostics)
+    : new Map<VerifiedCallsiteSweep, Reference[]>();
+  for (const { sweep, finish } of deferred) {
+    await finish((sweep && verifiedCallsites.get(sweep)) || []);
   }
 }

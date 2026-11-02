@@ -27,6 +27,13 @@ export const ECMASCRIPT_IDENTIFIER_SOURCE = String.raw`[$_\p{ID_Start}](?:[$_\p{
  */
 export const BLOOM_FILTER_IDENTIFIER_SOURCE = String.raw`[A-Za-z0-9_$\u0000-\u0008\u000E-\u001B\u007F-\u009F\u200C\u200D\u0080-\u{10FFFF}]+`;
 
+/**
+ * Non-ASCII code points that end a name where a grammar reads them as whitespace or a line break: Unicode White_Space,
+ * and the zero-width U+200B, U+2060, and U+FEFF that the JavaScript, TypeScript, and Python grammars skip. A filter
+ * stores the pieces of a token split at these in addition to the whole token.
+ */
+export const BLOOM_FILTER_SEPARATOR_SOURCE = String.raw`[\u0085\u00A0\u1680\u2000-\u200B\u2028\u2029\u202F\u205F\u2060\u3000\uFEFF]`;
+
 /** Unicode XID identifiers, with underscores permitted at every position. */
 export const XID_IDENTIFIER_SOURCE = String.raw`[_\p{XID_Start}][_\p{XID_Continue}]*`;
 
