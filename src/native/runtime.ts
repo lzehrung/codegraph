@@ -69,6 +69,8 @@ export function loadBinding(): NativeBindingState {
     resolveFn: require.resolve,
   });
   if (loaded.binding) {
+    // The addon is already loaded, so its native handles need the Windows exit drain even when it is rejected below.
+    markWindowsProcessDrainRequired();
     if (typeof loaded.binding.registerQuerySet !== "function") {
       // An addon from before query sets takes the query text on every extraction call, which this build no longer
       // passes. Treat it as unusable here, where the error names the fix, instead of failing each call.
@@ -76,7 +78,6 @@ export function loadBinding(): NativeBindingState {
       return bindingState;
     }
     const supportedLanguageIds = new Set(loaded.binding.supportedLanguageIds());
-    markWindowsProcessDrainRequired();
     bindingState = {
       loaded: true,
       binding: loaded.binding,

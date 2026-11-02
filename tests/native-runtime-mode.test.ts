@@ -12,6 +12,7 @@ import {
   __setNativeTreeSitterBindingForTests,
 } from "../src/native/tree-sitter-native.js";
 import { loadBinding } from "../src/native/runtime.js";
+import { resetWindowsProcessDrainForTests, windowsProcessDrainIsRequired } from "../src/util/windows-process-drain.js";
 
 describe("required native runtime", () => {
   const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
@@ -37,8 +38,12 @@ describe("required native runtime", () => {
     };
     const load = vi.spyOn(bindingLoader, "loadNativeBinding").mockReturnValue({ binding: legacyBinding, origin });
     __resetNativeTreeSitterBindingForTests();
+    resetWindowsProcessDrainForTests();
     try {
       const state = loadBinding();
+
+      // The rejected addon is already loaded, so its native handles still need the Windows exit drain.
+      expect(windowsProcessDrainIsRequired()).toBe(true);
 
       expect(state.loaded).toBe(false);
       if (state.loaded) throw new Error("An addon without registerQuerySet must not load.");
