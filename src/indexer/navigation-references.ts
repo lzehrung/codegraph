@@ -1792,10 +1792,17 @@ export function buildIndexedCandidateCoverage(args: {
   if (!reasons.length) {
     return { scope: "indexed_candidates", state: "complete" };
   }
+  const rankByKey = affectedFiles.length > 1 ? referenceModuleTable(index).rankByKey : undefined;
+  affectedFiles.sort((left, right) => {
+    const leftRank = rankByKey?.get(fileIdentityKey(left));
+    const rightRank = rankByKey?.get(fileIdentityKey(right));
+    if (leftRank !== undefined && rightRank !== undefined) return leftRank - rightRank;
+    return left.localeCompare(right);
+  });
   return {
     scope: "indexed_candidates",
     state: "partial",
     reasons: REFERENCE_COVERAGE_REASON_ORDER.filter((reason) => reasons.includes(reason)),
-    ...(affectedFiles.length ? { affectedFiles: affectedFiles.sort() } : {}),
+    ...(affectedFiles.length ? { affectedFiles } : {}),
   };
 }
