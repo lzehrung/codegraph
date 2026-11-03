@@ -96,6 +96,26 @@ describe("parse-error reference coverage", () => {
   afterEach(() => {
     __resetNativeTreeSitterBindingForTests();
   });
+  it("returns parse-error affected files in path order", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-order-"));
+    const definition = path.join(root, "definition.ts").replace(/\\/g, "/");
+    const a = path.join(root, "a.ts").replace(/\\/g, "/");
+    const z = path.join(root, "z.ts").replace(/\\/g, "/");
+    try {
+      await fsp.writeFile(definition, "export function name() { return 1; }\n");
+      const broken = 'import { name } from "./definition";\nconst broken = <name;\n';
+      await fsp.writeFile(a, broken);
+      await fsp.writeFile(z, broken);
+      const index = await createTestIndexFromFiles(root, [definition, z, a]);
+      const result = await findReferences(index, { file: definition, line: 1, column: 17 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("reference lookup failed");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([a, z]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(languages.filter((language) => language.name !== "SCSS"))(
     "marks an affected $name file partial when it has an ERROR/MISSING range",
     async (language) => {
